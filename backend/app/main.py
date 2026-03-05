@@ -12,7 +12,11 @@ from app.db.sqlite import init_db
 
 app = FastAPI(title="PhotoStudio Core API", version="0.2.0")
 
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+APP_DIR = os.path.dirname(__file__)
+# Prefer backend/static (project-level) if it exists, иначе fallback to backend/app/static.
+STATIC_DIR_ROOT = os.path.abspath(os.path.join(APP_DIR, "..", "static"))
+STATIC_DIR_APP = os.path.join(APP_DIR, "static")
+STATIC_DIR = STATIC_DIR_ROOT if os.path.isdir(STATIC_DIR_ROOT) else STATIC_DIR_APP
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(os.path.join(STATIC_DIR, "assets"), exist_ok=True)
 os.makedirs(os.path.join(STATIC_DIR, "videos"), exist_ok=True)
