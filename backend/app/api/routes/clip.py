@@ -69,10 +69,13 @@ def _resolve_audio_asset_path(audio_url: str) -> str | None:
 
     parsed = urlparse(audio_url)
     path = parsed.path
-    if not path.startswith("/static/assets/"):
+    if path.startswith("/static/assets/"):
+        filename = os.path.basename(path[len("/static/assets/"):])
+    elif path.startswith("/assets/"):
+        filename = os.path.basename(path[len("/assets/"):])
+    else:
         return None
 
-    filename = os.path.basename(path)
     if not filename:
         return None
 
@@ -153,19 +156,26 @@ def _debug_audio_slice(audio_url: str, resolved_path: str | None) -> None:
     parsed = urlparse(audio_url or "")
     path = parsed.path or ""
     if path.startswith("/static/assets/"):
-        filename = os.path.basename(path)
+        filename = os.path.basename(path[len("/static/assets/"):])
         base = os.path.splitext(filename)[0]
-        if filename and base:
-            dirs = [ASSETS_DIR, ASSETS_DIR_ALT]
-            names = [filename, base, f"{base}.mp3", f"{base}.wav", f"{base}.ogg", f"{base}.m4a"]
-            seen = set()
-            for d in dirs:
-                for n in names:
-                    p = os.path.join(d, n)
-                    if p in seen:
-                        continue
-                    seen.add(p)
-                    candidate_debug.append(p)
+    elif path.startswith("/assets/"):
+        filename = os.path.basename(path[len("/assets/"):])
+        base = os.path.splitext(filename)[0]
+    else:
+        filename = ""
+        base = ""
+
+    if filename and base:
+        dirs = [ASSETS_DIR, ASSETS_DIR_ALT]
+        names = [filename, base, f"{base}.mp3", f"{base}.wav", f"{base}.ogg", f"{base}.m4a"]
+        seen = set()
+        for d in dirs:
+            for n in names:
+                p = os.path.join(d, n)
+                if p in seen:
+                    continue
+                seen.add(p)
+                candidate_debug.append(p)
 
     print("AUDIO SLICE DEBUG")
     print("audioUrl:", audio_url)
@@ -760,7 +770,7 @@ def clip_audio_slice(payload: AudioSliceIn):
     path = _resolve_audio_asset_path(payload.audioUrl)
     if not path:
         _debug_audio_slice(payload.audioUrl, path)
-        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_audioUrl", "hint": "audioUrl_must_point_to_/static/assets/<file>"})
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_audioUrl", "hint": "audioUrl_must_point_to_/static/assets/<file>_or_/assets/<file>"})
 
     _ensure_assets_dir()
     safe_scene = re.sub(r"[^a-zA-Z0-9_-]", "_", scene_id) or "scene"
