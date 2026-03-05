@@ -702,8 +702,16 @@ const scenarioScenes = useMemo(() => {
 
 const scenarioSelected = scenarioScenes[scenarioEditor.selected] || null;
 const scenarioSelectedImageFormat = normalizeSceneImageFormat(scenarioSelected?.imageFormat);
+const globalAudioUrl = useMemo(() => {
+  const audioNodeWithUrl = nodes.find((n) => n.type === "audioNode" && n?.data?.audioUrl);
+  return audioNodeWithUrl?.data?.audioUrl ? String(audioNodeWithUrl.data.audioUrl) : "";
+}, [nodes]);
   const [scenarioImageLoading, setScenarioImageLoading] = useState(false);
   const [scenarioImageError, setScenarioImageError] = useState("");
+  const [scenarioVideoLoading, setScenarioVideoLoading] = useState(false);
+  const [scenarioVideoError, setScenarioVideoError] = useState("");
+  const [scenarioVideoOpen, setScenarioVideoOpen] = useState(false);
+  const [assemblyHint, setAssemblyHint] = useState("");
   const [lightboxUrl, setLightboxUrl] = useState("");
 
   useEffect(() => {
@@ -763,6 +771,98 @@ const scenarioSelectedImageFormat = normalizeSceneImageFormat(scenarioSelected?.
     setScenarioImageError("");
     updateScenarioScene(scenarioEditor.selected, { imageUrl: "" });
   }, [scenarioEditor.selected, updateScenarioScene]);
+
+  const handleScenarioVideoTakeAudio = useCallback(async () => {
+    if (!scenarioSelected) return;
+    if (!globalAudioUrl) {
+      setScenarioVideoError("Не найден общий audioUrl в Audio node");
+      return;
+    }
+    const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
+    const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
+    const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
+
+    setScenarioVideoLoading(true);
+    setScenarioVideoError("");
+    try {
+      const out = await fetchJson("/api/clip/audio-slice", {
+        method: "POST",
+        body: { sceneId, t0, t1, audioUrl: globalAudioUrl },
+      });
+      if (!out?.ok || !out?.audioSliceUrl) throw new Error(out?.hint || out?.code || "audio_slice_failed");
+      updateScenarioScene(scenarioEditor.selected, { audioSliceUrl: String(out.audioSliceUrl || "") });
+    } catch (e) {
+      console.error(e);
+      setScenarioVideoError(String(e?.message || e));
+    } finally {
+      setScenarioVideoLoading(false);
+    }
+  }, [globalAudioUrl, scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
+
+  const handleScenarioGenerateVideo = useCallback(async () => {
+    if (!scenarioSelected?.imageUrl) return;
+    if (scenarioSelected?.lipSync && !scenarioSelected?.audioSliceUrl) {
+      setScenarioVideoError("Для lipSync сначала возьмите аудио");
+      return;
+    }
+
+    const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
+    const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
+    const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
+    const dur = Math.max(0, t1 - t0);
+    const requestedDurationSec = dur <= 5 ? 5 : 10;
+
+    setScenarioVideoLoading(true);
+    setScenarioVideoError("");
+    try {
+      const endpoint = scenarioSelected?.lipSync ? "/api/clip/lipsync" : "/api/clip/video";
+      const out = await fetchJson(endpoint, {
+        method: "POST",
+        body: {
+          sceneId,
+          imageUrl: scenarioSelected.imageUrl,
+          audioSliceUrl: scenarioSelected.audioSliceUrl || "",
+          videoPrompt: scenarioSelected.videoPrompt || "",
+          requestedDurationSec,
+          lipSync: !!scenarioSelected.lipSync,
+          format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
+        },
+      });
+      if (!out?.ok || !out?.videoUrl) throw new Error(out?.hint || out?.code || "video_generation_failed");
+      updateScenarioScene(scenarioEditor.selected, { videoUrl: String(out.videoUrl || "") });
+    } catch (e) {
+      console.error(e);
+      setScenarioVideoError(String(e?.message || e));
+    } finally {
+      setScenarioVideoLoading(false);
+    }
+  }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
+
+  const handleScenarioClearVideo = useCallback(() => {
+    setScenarioVideoError("");
+    updateScenarioScene(scenarioEditor.selected, { videoUrl: "" });
+  }, [scenarioEditor.selected, updateScenarioScene]);
+
+  const handleScenarioAddToVideo = useCallback(() => {
+    if (!scenarioSelected?.imageUrl) return;
+    setScenarioVideoOpen(true);
+    setScenarioVideoError("");
+  }, [scenarioSelected]);
+
+  const handleScenarioAssembly = useCallback(() => {
+    const segments = scenarioScenes
+      .filter((s) => s?.videoUrl)
+      .map((s, idx) => ({
+        sceneId: String(s.id || `s${idx + 1}`),
+        t0: Number(s.t0 ?? s.start ?? 0),
+        t1: Number(s.t1 ?? s.end ?? 0),
+        videoUrl: String(s.videoUrl || ""),
+      }));
+    if (!segments.length) return;
+    const payload = { segments, audioUrl: globalAudioUrl || "" };
+    console.info("assembly_todo_payload", payload);
+    setAssemblyHint("TODO: страница монтажа пока не подключена");
+  }, [globalAudioUrl, scenarioScenes]);
 
   const [edges, setEdges, onEdgesChange] = useEdgesState(defaultEdges);
   const edgesRef = useRef([]);
@@ -972,7 +1072,7 @@ onParse: async (nodeId) => {
         const t0 = Number(s.start ?? s.t0 ?? 0);
         const t1 = Number(s.end ?? s.t1 ?? 0);
         const prompt = String(s.imagePrompt || s.prompt || s.sceneText || `Scene ${idx + 1}`);
-        return { id: s.id || `s${String(idx + 1).padStart(2, "0")}`, start: t0, end: t1, t0, t1, prompt, sceneText: s.sceneText || "", imagePrompt: s.imagePrompt || "", videoPrompt: s.videoPrompt || "", imageUrl: s.imageUrl || "", imageFormat: normalizeSceneImageFormat(s.imageFormat), why: s.why || "" };
+        return { id: s.id || `s${String(idx + 1).padStart(2, "0")}`, start: t0, end: t1, t0, t1, prompt, sceneText: s.sceneText || "", imagePrompt: s.imagePrompt || "", videoPrompt: s.videoPrompt || "", imageUrl: s.imageUrl || "", imageFormat: normalizeSceneImageFormat(s.imageFormat), audioSliceUrl: s.audioSliceUrl || "", videoUrl: s.videoUrl || "", why: s.why || "" };
       })
       .filter((s) => Number.isFinite(s.t0) && Number.isFinite(s.t1) && s.t1 > s.t0);
 
@@ -1367,6 +1467,13 @@ const hydrate = useCallback(() => {
             <div className="clipSB_scenarioHeader">
               <div className="clipSB_scenarioTitle">SCENARIO</div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  className="clipSB_btn clipSB_btnSecondary"
+                  onClick={handleScenarioAssembly}
+                  disabled={!scenarioScenes.some((s) => s?.videoUrl)}
+                >
+                  Монтаж
+                </button>
                 <div className="clipSB_scenarioMeta">
                   {scenarioScenes.length} сцен
                 </div>
@@ -1407,7 +1514,11 @@ const hydrate = useCallback(() => {
                           <div className="clipSB_scenarioItemTime">
                             {fmtTime(s.start)} → {fmtTime(s.end)}
                           </div>
-                          {s.lipSync ? <div className="clipSB_tag">LIP</div> : null}
+                          <div className="clipSB_scenarioTags">
+                            {s.imageUrl ? <div className="clipSB_tag">IMG</div> : null}
+                            {s.videoUrl ? <div className="clipSB_tag clipSB_tagDone">VIDEO ✓</div> : null}
+                            {s.lipSync ? <div className="clipSB_tag">LIP</div> : null}
+                          </div>
                         </div>
                         <div className="clipSB_scenarioItemText">{(s.sceneText || "").slice(0, 90) || "—"}</div>
                       </div>
@@ -1505,6 +1616,11 @@ const hydrate = useCallback(() => {
                         <button className="clipSB_btn clipSB_btnSecondary" onClick={handleClearScenarioImage}>
                           Очистить изображение
                         </button>
+                        {scenarioSelected.imageUrl ? (
+                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioAddToVideo}>
+                            Добавить в Видео
+                          </button>
+                        ) : null}
                       </div>
                       {scenarioImageError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioImageError}</div> : null}
                     </div>
@@ -1518,6 +1634,33 @@ const hydrate = useCallback(() => {
                         onChange={(e) => updateScenarioScene(scenarioEditor.selected, { videoPrompt: e.target.value })}
                       />
                     </div>
+
+                    {scenarioVideoOpen ? (
+                      <div className="clipSB_scenarioEditRow clipSB_videoBlock">
+                        <div className="clipSB_hint" style={{ marginBottom: 8 }}>Видео сцены</div>
+                        <div className="clipSB_videoKv"><span>imageUrl</span><span>{scenarioSelected.imageUrl || "—"}</span></div>
+                        <div className="clipSB_videoKv"><span>audioSliceUrl</span><span>{scenarioSelected.audioSliceUrl || "—"}</span></div>
+                        <div className="clipSB_videoKv"><span>videoUrl</span><span>{scenarioSelected.videoUrl || "—"}</span></div>
+                        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioVideoTakeAudio} disabled={scenarioVideoLoading}>
+                            Взять аудио
+                          </button>
+                          <button
+                            className="clipSB_btn clipSB_btnSecondary"
+                            onClick={handleScenarioGenerateVideo}
+                            disabled={scenarioVideoLoading || !scenarioSelected.imageUrl || (!!scenarioSelected.lipSync && !scenarioSelected.audioSliceUrl)}
+                          >
+                            Сгенерировать видео
+                          </button>
+                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioClearVideo}>
+                            Очистить видео
+                          </button>
+                        </div>
+                        {scenarioVideoLoading ? <div className="clipSB_hint" style={{ marginTop: 6 }}>Генерация видео...</div> : null}
+                        {scenarioVideoError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioVideoError}</div> : null}
+                      </div>
+                    ) : null}
+                    {assemblyHint ? <div className="clipSB_hint" style={{ marginTop: 6 }}>{assemblyHint}</div> : null}
                   </>
                 ) : (
                   <div className="clipSB_empty">Нет выбранной сцены</div>
