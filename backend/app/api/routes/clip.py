@@ -88,9 +88,14 @@ def _ffmpeg_audio_slice(input_path: str, output_path: str, t0: float, t1: float)
     dur = max(0.0, t1 - t0)
     if dur < 0.05:
         dur = 0.05
+
     first_cmd = [
-        "ffmpeg", "-y", "-ss", str(t0), "-to", str(t1), "-i", input_path,
-        "-c", "copy", output_path,
+        "ffmpeg", "-y",
+        "-ss", str(t0),
+        "-to", str(t1),
+        "-i", input_path,
+        "-c", "copy",
+        output_path,
     ]
     try:
         first = subprocess.run(first_cmd, capture_output=True, text=True)
@@ -102,11 +107,21 @@ def _ffmpeg_audio_slice(input_path: str, output_path: str, t0: float, t1: float)
             return True, ""
 
         fallback_cmd = [
-            "ffmpeg", "-y", "-i", input_path, "-ss", str(t0), "-t", str(dur),
-            "-vn", "-acodec", "libmp3lame", "-b:a", "192k", output_path,
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-ss", str(t0),
+            "-t", str(dur),
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-b:a", "192k",
+            output_path,
         ]
         fallback = subprocess.run(fallback_cmd, capture_output=True, text=True)
-        if fallback.returncode == 0 and os.path.isfile(output_path):
+        if (
+            fallback.returncode == 0
+            and os.path.isfile(output_path)
+            and os.path.getsize(output_path) > 1024
+        ):
             return True, ""
 
         err = (fallback.stderr or first.stderr or "ffmpeg_failed").strip()
