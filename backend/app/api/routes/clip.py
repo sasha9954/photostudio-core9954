@@ -18,7 +18,9 @@ from app.engine.gemini_rest import post_generate_content
 
 router = APIRouter()
 
-ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "static", "assets"))
+ASSETS_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "static", "assets")
+)
 
 
 class ClipImageIn(BaseModel):
