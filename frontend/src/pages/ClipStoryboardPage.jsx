@@ -1644,25 +1644,47 @@ const hydrate = useCallback(() => {
                     {scenarioVideoOpen ? (
                       <div className="clipSB_scenarioEditRow clipSB_videoBlock">
                         <div className="clipSB_hint" style={{ marginBottom: 8 }}>Видео сцены</div>
-                        <div className="clipSB_videoKv"><span>imageUrl</span><span>{scenarioSelected.imageUrl || "—"}</span></div>
-                        <div className="clipSB_videoKv"><span>audioSliceUrl</span><span>{scenarioSelected.audioSliceUrl || "—"}</span></div>
-                        <div className="clipSB_videoKv"><span>videoUrl</span><span>{scenarioSelected.videoUrl || "—"}</span></div>
+                        <div className="clipSB_videoPreviewWrap">
+                          {scenarioSelected.videoUrl ? (
+                            <video
+                              className="clipSB_videoPlayer"
+                              controls
+                              playsInline
+                              preload="metadata"
+                              src={scenarioSelected.videoUrl}
+                              poster={scenarioSelected.imageUrl || ""}
+                            />
+                          ) : scenarioSelected.imageUrl ? (
+                            <img className="clipSB_videoPoster" src={scenarioSelected.imageUrl} alt="poster" />
+                          ) : null}
+
+                          {scenarioVideoLoading ? (
+                            <div className="clipSB_videoOverlay">
+                              <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <details className="clipSB_videoDetails">
+                          <summary>Детали</summary>
+                          <div className="clipSB_videoKv"><span>imageUrl</span><span>{scenarioSelected.imageUrl || "—"}</span></div>
+                          <div className="clipSB_videoKv"><span>audioSliceUrl</span><span>{scenarioSelected.audioSliceUrl || "—"}</span></div>
+                          <div className="clipSB_videoKv"><span>videoUrl</span><span>{scenarioSelected.videoUrl || "—"}</span></div>
+                        </details>
                         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioVideoTakeAudio} disabled={scenarioVideoLoading}>
+                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioVideoTakeAudio} disabled={scenarioVideoLoading || !globalAudioUrl}>
                             Взять аудио
                           </button>
                           <button
                             className="clipSB_btn clipSB_btnSecondary"
                             onClick={handleScenarioGenerateVideo}
-                            disabled={scenarioVideoLoading || !scenarioSelected.imageUrl || (!!scenarioSelected.lipSync && !scenarioSelected.audioSliceUrl)}
+                            disabled={scenarioVideoLoading || !scenarioSelected.imageUrl || (scenarioSelected.lipSync && !scenarioSelected.audioSliceUrl)}
                           >
                             Сгенерировать видео
                           </button>
-                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioClearVideo}>
+                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioClearVideo} disabled={scenarioVideoLoading}>
                             Очистить видео
                           </button>
                         </div>
-                        {scenarioVideoLoading ? <div className="clipSB_hint" style={{ marginTop: 6 }}>Генерация видео...</div> : null}
                         {scenarioVideoError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioVideoError}</div> : null}
                       </div>
                     ) : null}

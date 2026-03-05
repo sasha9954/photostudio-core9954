@@ -759,6 +759,58 @@ body.ps_clip_fullscreen .mainCol {
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
 }
 
+.clipSB_videoPreviewWrap{
+  position: relative;
+  width: 100%;
+  height: 220px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(0,0,0,0.25);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+  margin-bottom: 10px;
+}
+
+.clipSB_videoPlayer,
+.clipSB_videoPoster{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display:block;
+}
+
+.clipSB_videoOverlay{
+  position:absolute;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background: rgba(0,0,0,0.35);
+  backdrop-filter: blur(2px);
+  color: rgba(255,255,255,0.92);
+  font-size: 13px;
+}
+
+.clipSB_videoLoadingPulse{
+  animation: clipSBVideoPulse 1.2s ease-in-out infinite;
+}
+
+.clipSB_videoLoadingPulse::after{
+  content: "...";
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  animation: clipSBVideoDots 1s steps(4, end) infinite;
+}
+
+.clipSB_videoDetails{
+  margin-bottom: 4px;
+}
+
+.clipSB_videoDetails summary{
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
 .clipSB_videoKv{
   display: grid;
   grid-template-columns: 110px 1fr;
@@ -770,4 +822,14 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_videoKv span:last-child{
   opacity: 0.85;
   overflow-wrap: anywhere;
+}
+
+@keyframes clipSBVideoPulse {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+
+@keyframes clipSBVideoDots {
+  0% { width: 0; }
+  100% { width: 1.2em; }
 }
