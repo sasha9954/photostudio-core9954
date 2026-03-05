@@ -326,8 +326,10 @@ JSON СХЕМА:
     # Call Gemini with safe model fallback on unsupported-model errors
     resp = post_generate_content(settings.GEMINI_API_KEY, model_used, body, timeout=120)
     combined_error = _combined_error_text(resp if isinstance(resp, dict) else None)
+    first_model = model_used
     first_error = combined_error[:1500] if combined_error else None
-    if _is_model_unsupported_error(combined_error):
+    first_was_unsupported = _is_model_unsupported_error(first_error or "")
+    if first_was_unsupported:
         model_used = _pick_fallback_model(model_used)
         fallback_used = True
         resp = post_generate_content(settings.GEMINI_API_KEY, model_used, body, timeout=120)
@@ -361,14 +363,14 @@ JSON СХЕМА:
             "fallbackUsed": fallback_used,
             "hint": error_hint or raw_text[:1500],
             "error": {
-                "code": "MODEL_UNSUPPORTED" if _is_model_unsupported_error(combined_error or raw_text) else "GENERATION_FAILED",
+                "code": "MODEL_UNSUPPORTED" if first_was_unsupported else "GENERATION_FAILED",
                 "hint": error_hint or raw_text[:1500],
                 "modelUsed": model_used,
                 "fallbackUsed": fallback_used,
                 "firstAttempt": {
-                    "fallbackUsed": False,
+                    "modelUsed": first_model,
                     "hint": first_error,
-                } if first_error and fallback_used else None,
+                } if fallback_used else None,
             },
         }
 
@@ -387,14 +389,14 @@ JSON СХЕМА:
             "fallbackUsed": fallback_used,
             "hint": hint,
             "error": {
-                "code": "MODEL_UNSUPPORTED" if _is_model_unsupported_error(combined_error) else "GENERATION_FAILED",
+                "code": "MODEL_UNSUPPORTED" if first_was_unsupported else "GENERATION_FAILED",
                 "hint": hint,
                 "modelUsed": model_used,
                 "fallbackUsed": fallback_used,
                 "firstAttempt": {
-                    "fallbackUsed": False,
+                    "modelUsed": first_model,
                     "hint": first_error,
-                } if first_error and fallback_used else None,
+                } if fallback_used else None,
             },
         }
 
