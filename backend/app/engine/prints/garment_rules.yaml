@@ -1,0 +1,19 @@
+# Garment rules for Prints engine (fabric projection)
+# These rules help avoid placing prints across front openings like:
+# - shirt placket (buttons), hoodie/zipper, jacket zipper, coat front seam
+#
+# Engine applies a tiny vertical "gap" in the edit mask AND overlay alpha
+# when the placement crosses the center line of the garment photo.
+
+defaults:
+  enabled: true
+  center_seam_gap_px: 2            # VERY subtle, 2px total stripe
+  min_bbox_width_ratio: 0.18       # placement must be wide enough (relative to image width)
+  min_bbox_height_ratio: 0.12      # and tall enough (relative to image height)
+  only_if_crosses_center: true
+
+surfaces:
+  fabric:
+    enabled: true
+  rigid:
+    enabled: false

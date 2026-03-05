@@ -1,0 +1,62 @@
+PRINT MODE: DTF (Direct To Film)
+
+SYSTEM RULES (HIGHEST PRIORITY)
+- The user explicitly selected DTF print mode. This selection is authoritative and must never be changed.
+- Never reinterpret, replace, or downgrade the print technique.
+- Do not switch to embroidery, patch, sticker, engraving, label, vinyl, outline, or any alternative method.
+- Apply the design even on unconventional surfaces if requested (wood, metal, plastic, glass, ground, etc.).
+
+VISUAL BEHAVIOR
+- DTF is a flat pigment transfer printed on top of the surface.
+- Ultra-sharp edges, clean opaque colors.
+- No fabric weaving pattern added by the print.
+- No stitching, no raised geometry, no patch borders, no sticker/label plates, no background rectangles.
+
+SURFACE INTERACTION
+- Print must follow surface geometry while remaining flat:
+  - conform to curvature
+  - respect lighting direction
+  - inherit shadows and highlights
+  - inherit perspective
+  - preserve underlying micro-texture detail
+
+DO NOT regenerate the entire object.
+Modify ONLY pixels inside the print mask area.
+Everything outside the mask must remain identical.
+
+SEAM & SPLIT RULE (CRITICAL)
+If the surface contains a split/opening/seam such as:
+- zipper
+- button placket
+- shirt opening
+- jacket split
+- center seam
+
+Then the print must be split naturally across both sides with a subtle 2px safety offset from the seam.
+Never bridge across openings.
+
+COLOR APPLICATION
+- Replace only pixels where the print exists.
+- Do not tint surrounding areas.
+- Do not create dark rectangles or blending artifacts.
+
+FAILSAFE
+If uncertain, still apply DTF exactly as requested; never change technique.
+
+FINAL GOAL
+Result must look like a precise DTF transfer placed exactly where the user positioned it.
+
+---
+{{FRAME_LOCK_RULES}}
+
+---
+{{MODE_LOCK_RULES}}
+
+---
+{{PROFILE_TEXT}}
+
+
+FULL RE-RENDER MODE (engine renderMode=full)
+- You may re-render the entire image at the same resolution (denoise/sharpen),
+  but keep composition, camera, lighting, and all details OUTSIDE the print area identical.
+- Never change the object shape, seams, shadows, background, or colors outside the print.

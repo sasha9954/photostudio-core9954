@@ -4,7 +4,6 @@ import "./ScenePage.css";
 import { useAuth } from "../app/AuthContext.jsx";
 import { useNavigate, useLocation } from "react-router-dom";
 import { STUDIOS } from "./studiosData.js";
-import { creditsSpend } from "../services/authApi.js";
 import { fetchJson } from "../services/api.js";
 
 
@@ -547,22 +546,8 @@ React.useEffect(() => {
 
     setBusy(true);
     startPanelProgress(activeKind, "generate");
-    setStatus("Списание кредита…");
+    setStatus("Запуск генерации…");
     try {
-      // 1 credit per create in ScenePage
-      const spendRes = await creditsSpend({
-        amount: 1,
-        reason: `SCENE_CREATE_${activeKind.toUpperCase()}`,
-        ref: `${activeKind}_create_${Date.now()}`,
-        meta: { prompt: p.slice(0, 60), format: (formatMap?.[activeKind] || "9:16") },
-      });
-      if (!spendRes?.ok) {
-        setStatus(spendRes?.error?.message || "Не удалось списать кредит.");
-        setBusy(false);
-        stopPanelProgress();
-        return;
-      }
-
       setStatus("Генерация…");
       const res = await fetchJson("/api/scene/generateJob", {
         method: "POST",
@@ -647,20 +632,9 @@ React.useEffect(() => {
     // Apply details costs 1 credit
     setBusy(true);
     startPanelProgress(detailsOpen, "details");
-    setStatus("Списание кредита…");
+    setStatus("Применяем детали…");
     try {
-      const spendRes = await creditsSpend({
-        amount: 1,
-        reason: detailsOpen === "model" ? "SCENE_APPLY_MODEL_DETAILS" : "SCENE_APPLY_LOCATION_DETAILS",
-        ref: detailsOpen === "model" ? "apply_model_details" : "apply_location_details",
-      });
-      if (!spendRes?.ok) {
-        setStatus(spendRes?.error?.message || "Не удалось списать кредит.");
-        stopPanelProgress();
-        return;
-      }
-
-      // 1) persist detail slots into scene draft
+// 1) persist detail slots into scene draft
       let detailUrls = [];
       if (draftModelDetailSlots && detailsOpen === "model") {
         const next = { ...draftModelDetailSlots };

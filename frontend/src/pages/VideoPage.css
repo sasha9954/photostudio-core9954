@@ -27,7 +27,22 @@
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+}
+
+
+.videoCol{
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.videoCol > .videoCard{
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .videoCard{
@@ -342,8 +357,30 @@
   background: rgba(0,0,0,0.18);
 }
 
+.statusBox.grow{
+  /* keep within original card bounds (no stretching the whole page) */
+  flex: 0 0 auto;
+  height: 170px;         /* tweakable */
+  max-height: 170px;
+  display: flex;
+  flex-direction: column;
+}
+
 .statusTitle{ font-weight: 900; opacity: 0.9; }
-.statusText{ margin-top: 8px; opacity: 0.72; line-height: 1.25; }
+.statusText{ margin-top: 8px; opacity: 0.72; line-height: 1.25; white-space: pre-line; overflow: auto; padding-right: 6px; }
+
+.statusSmall{
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.72;
+  font-weight: 800;
+}
+
+/* subtle scrollbars (status/log) */
+.statusText{ scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.16) transparent; }
+.statusText::-webkit-scrollbar{ width: 8px; }
+.statusText::-webkit-scrollbar-thumb{ background: rgba(255,255,255,0.14); border-radius: 10px; }
+.statusText::-webkit-scrollbar-track{ background: transparent; }
 
 .videoPlayer{
   margin-top: 10px;
@@ -353,11 +390,35 @@
   min-height: 340px;
   height: min(520px, 62vh);
 
+  position: relative;
   overflow:hidden;
   display:flex;
   align-items:center;
   justify-content:center;
 }
+
+.genOverlay{
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.35);
+  pointer-events: none;
+}
+
+.genOverlayCard{
+  width: min(360px, 92%);
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(12,14,20,0.78);
+  padding: 14px 14px;
+  backdrop-filter: blur(8px);
+}
+
+.genOverlayTop{ font-weight: 900; opacity: 0.9; }
+.genOverlayText{ margin-top: 10px; font-size: 14px; line-height: 1.25; font-weight: 900; }
+.genOverlayBottom{ margin-top: 10px; font-size: 12px; opacity: 0.72; font-weight: 800; }
 
 .videoPlayer video{
   max-width: 100%;
@@ -602,4 +663,280 @@
   border: 1px solid rgba(255,255,255,0.18);
   box-shadow: 0 18px 60px rgba(0,0,0,0.55);
   background: rgba(0,0,0,0.35);
+}
+
+
+/* --- Clip kind highlights (neon) --- */
+.slotCard.clipKind-uploaded{
+  border-width: 4px;
+  border-style: solid;
+  border-color: rgba(170, 110, 255, 0.65);
+  box-shadow: 0 0 0 1px rgba(170, 110, 255, 0.22), 0 0 14px rgba(170, 110, 255, 0.25);
+}
+.slotCard.clipKind-generated{
+  border-width: 4px;
+  border-style: solid;
+  border-color: rgba(80, 255, 160, 0.7);
+  box-shadow: 0 0 0 1px rgba(80, 255, 160, 0.22), 0 0 14px rgba(80, 255, 160, 0.25);
+}
+.slotCard.clipKind-merged{
+  border-width: 4px;
+  border-style: solid;
+  border-color: rgba(255, 90, 200, 0.75);
+  box-shadow: 0 0 0 1px rgba(255, 90, 200, 0.22), 0 0 14px rgba(255, 90, 200, 0.25);
+}
+
+@keyframes psClipPulse {
+  0%   { transform: translateZ(0) scale(1); filter: brightness(1); }
+  35%  { transform: translateZ(0) scale(1.02); filter: brightness(1.08); }
+  100% { transform: translateZ(0) scale(1); filter: brightness(1); }
+}
+.slotCard.clipPulse{
+  animation: psClipPulse 1.2s ease-in-out 0s 1;
+}
+
+
+
+/* Merge result mini box (below clip strip) */
+.mergeResultBox{
+  position: relative;
+  margin-top: 12px;
+  padding: 12px 12px 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  background: rgba(0,0,0,0.16);
+}
+
+.mergeResultTitle{
+  font-weight: 700;
+  margin-bottom: 8px;
+  opacity: 0.9;
+}
+
+.mergeResultMini{
+  height: 148px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.mergeResultMini video{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+
+/* Hint box under format */
+.hintBox{
+  margin-top: 12px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(0,0,0,0.14);
+}
+
+.hintBox.grow{
+  /* keep within original card bounds (no stretching the whole page) */
+  flex: 0 0 auto;
+  height: 210px;         /* tweakable */
+  max-height: 210px;
+  display: flex;
+  flex-direction: column;
+}
+
+.hintTitle{ font-weight: 900; opacity: 0.9; }
+.hintText{ margin-top: 8px; opacity: 0.70; line-height: 1.25; white-space: pre-line; overflow: auto; padding-right: 6px; }
+
+
+/* Subtle scrollbars (almost invisible) */
+.statusText, .hintText{
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: rgba(255,255,255,0.14) rgba(255,255,255,0.02);
+}
+
+.statusText::-webkit-scrollbar,
+.hintText::-webkit-scrollbar{
+  width: 6px;
+}
+
+.statusText::-webkit-scrollbar-track,
+.hintText::-webkit-scrollbar-track{
+  background: rgba(255,255,255,0.02);
+  border-radius: 999px;
+}
+
+.statusText::-webkit-scrollbar-thumb,
+.hintText::-webkit-scrollbar-thumb{
+  background: rgba(255,255,255,0.10);
+  border-radius: 999px;
+}
+
+.statusText:hover::-webkit-scrollbar-thumb,
+.hintText:hover::-webkit-scrollbar-thumb{
+  background: rgba(255,255,255,0.18);
+}
+
+
+/* clear merged result */
+.mergeClearBtn{
+  position:absolute;
+  top:10px;
+  right:10px;
+  width:28px;
+  height:28px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,0.18);
+  background:rgba(0,0,0,0.28);
+  color:rgba(255,255,255,0.85);
+  font-size:20px;
+  line-height:26px;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:0;
+}
+.mergeClearBtn:hover{
+  background:rgba(0,0,0,0.36);
+  border-color:rgba(255,255,255,0.28);
+}
+
+
+/* ===== Veo / CINEMA mode (neon-blue) ===== */
+.videoPage.veoMode .videoHero,
+.videoPage.veoMode .videoCard,
+.videoPage.veoMode .slotPreview{
+  border-color: rgba(70, 170, 255, 0.28);
+  box-shadow: 0 0 0 1px rgba(70,170,255,0.12), 0 0 18px rgba(40,140,255,0.14);
+}
+
+.videoPage.veoMode .videoCardTitle{
+  color: rgba(185, 225, 255, 0.95);
+}
+
+.videoHintBlue{
+  color: rgba(170, 220, 255, 0.92);
+}
+
+.videoPage.veoMode .slotCard.active{
+  outline: 2px solid rgba(70, 170, 255, 0.70);
+}
+
+.videoPage.veoMode .slotCard.selected{
+  outline: 2px solid rgba(70, 170, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(70,170,255,0.20), 0 0 14px rgba(40,140,255,0.22);
+}
+
+.videoPage.veoMode .glassSelectBtn{
+  border-color: rgba(70, 170, 255, 0.25);
+}
+
+.videoPage.veoMode .videoPrimaryBtn{
+  border-color: rgba(70,170,255,0.40);
+  box-shadow: 0 0 16px rgba(40,140,255,0.18);
+}
+
+/* multi-select marker */
+.slotCard.selected .slotNum{
+  background: rgba(40, 140, 255, 0.20);
+  border-color: rgba(70, 170, 255, 0.38);
+}
+
+
+
+/* ---------- Engine themes (accent neon) ---------- */
+.videoPage{
+  --ps-accent: rgba(185, 140, 255, 0.85);
+  --ps-accent-soft: rgba(185, 140, 255, 0.22);
+  --ps-accent-border: rgba(185, 140, 255, 0.35);
+}
+.videoPage.engine-STANDARD{
+  --ps-accent: rgba(0, 255, 136, 0.92);
+  --ps-accent-soft: rgba(0, 255, 136, 0.18);
+  --ps-accent-border: rgba(0, 255, 136, 0.42);
+}
+.videoPage.engine-ULTRA{
+  /* Veo — сиреневый неон */
+  --ps-accent: rgba(210, 140, 255, 0.92);
+  --ps-accent-soft: rgba(210, 140, 255, 0.20);
+  --ps-accent-border: rgba(210, 140, 255, 0.42);
+}
+
+.videoPage.enginePulse .videoHero,
+.videoPage.enginePulse .videoPanel,
+.videoPage.enginePulse .engineCard,
+.videoPage.enginePulse .slotCard,
+.videoPage.enginePulse .videoBtn.primary{
+  animation: psEnginePulse 0.52s ease-in-out 0s 1;
+}
+@keyframes psEnginePulse{
+  0%{ box-shadow: none; }
+  45%{ box-shadow: 0 0 0 1px var(--ps-accent-border), 0 0 22px var(--ps-accent-soft); }
+  100%{ box-shadow: none; }
+}
+
+/* apply accent */
+.videoHero, .videoPanel{
+  border-color: rgba(255,255,255,0.08);
+}
+.videoPage.engine-STANDARD .videoHero,
+.videoPage.engine-STANDARD .videoPanel,
+.videoPage.engine-ULTRA .videoHero,
+.videoPage.engine-ULTRA .videoPanel{
+  border-color: var(--ps-accent-border);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.0), 0 0 18px var(--ps-accent-soft);
+}
+
+.videoPage.engine-STANDARD .engineCard.active,
+.videoPage.engine-ULTRA .engineCard.active,
+.videoPage.engine-STANDARD .pill.active,
+.videoPage.engine-ULTRA .pill.active,
+.videoPage.engine-STANDARD .slotCard.active,
+.videoPage.engine-ULTRA .slotCard.active{
+  border-color: var(--ps-accent-border) !important;
+  box-shadow: 0 0 0 1px var(--ps-accent-border), 0 0 18px var(--ps-accent-soft) !important;
+}
+
+/* Generate button accent */
+.videoPage.engine-STANDARD .videoBtn.primary,
+.videoPage.engine-ULTRA .videoBtn.primary{
+  border-color: var(--ps-accent-border);
+  box-shadow: 0 0 0 1px var(--ps-accent-border), 0 0 18px var(--ps-accent-soft);
+}
+
+/* ULTRA (Veo) reference checkbox */
+.refCheck{
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 2px solid rgba(255,255,255,0.35);
+  background: rgba(0,0,0,0.25);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.12);
+}
+.refCheck.on{
+  background: rgba(0,255,136,0.85);
+  border-color: rgba(0,255,136,0.95);
+  box-shadow: 0 0 0 1px rgba(0,255,136,0.45), 0 0 14px rgba(0,255,136,0.22);
+}
+
+/* small inline hint in duration row */
+.hintInline{
+  margin-left: 10px;
+  opacity: 0.78;
+  font-size: 12px;
+  line-height: 18px;
+}
+.pill.disabled{
+  opacity: 0.6;
+  cursor: not-allowed;
 }

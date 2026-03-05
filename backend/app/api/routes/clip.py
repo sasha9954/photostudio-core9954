@@ -1,0 +1,300 @@
+from fastapi import APIRouter
+from pydantic import BaseModel
+import requests
+import tempfile
+import subprocess
+import math
+import base64
+import json
+import re
+import os
+
+from app.core.config import settings
+from app.engine.gemini_rest import post_generate_content
+
+router = APIRouter()
+
+
+class BrainIn(BaseModel):
+    audioUrl: str | None = None
+    text: str | None = None
+
+    # brain settings (optional)
+    scenarioKey: str | None = None   # e.g. "beat_rhythm" | "song_meaning"
+    shootKey: str | None = None      # e.g. "cinema"
+    styleKey: str | None = None      # e.g. "realism"
+    freezeStyle: bool | None = None
+
+    # refs (urls) - optional, just for prompt context
+    refCharacter: str | None = None
+    refLocation: str | None = None
+    refStyle: str | None = None
+
+    # informational (optional)
+    audioType: str | None = None     # "song" | "bg"
+    textType: str | None = None      # "lyrics" | "story" | "notes"
+
+
+def _extract_gemini_text(resp: dict) -> str:
+    try:
+        cands = resp.get("candidates") or []
+        if not cands:
+            return ""
+        content = (cands[0] or {}).get("content") or {}
+        parts = content.get("parts") or []
+        texts = []
+        for p in parts:
+            t = p.get("text")
+            if isinstance(t, str) and t.strip():
+                texts.append(t)
+        return "\n".join(texts).strip()
+    except Exception:
+        return ""
+
+
+def _parse_json_from_text(s: str) -> dict | None:
+    if not s:
+        return None
+    s2 = re.sub(r"^```[a-zA-Z0-9_-]*\s*|```\s*$", "", s.strip(), flags=re.M)
+    m = re.search(r"\{[\s\S]*\}", s2)
+    if not m:
+        return None
+    chunk = m.group(0)
+    try:
+        return json.loads(chunk)
+    except Exception:
+        chunk2 = re.sub(r",\s*([}\]])", r"\1", chunk)
+        try:
+            return json.loads(chunk2)
+        except Exception:
+            return None
+
+
+def get_audio_duration(url: str) -> float:
+    """Получаем длительность аудио через ffprobe"""
+    try:
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+            f.write(r.content)
+            path = f.name
+
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        dur = float((result.stdout or "").strip())
+        if math.isfinite(dur) and dur > 0:
+            return float(dur)
+        return 30.0
+    except Exception:
+        return 30.0
+
+
+def _fallback_plan(duration: float, text: str | None):
+    scene_len = 5.0
+    scene_count = max(1, math.ceil(duration / scene_len))
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()] if text else []
+    chunks = []
+    if lines:
+        step = max(1, math.floor(len(lines) / scene_count))
+        for i in range(scene_count):
+            part = lines[i * step : (i + 1) * step]
+            chunks.append(" ".join(part))
+    else:
+        for i in range(scene_count):
+            chunks.append(f"Scene {i+1}")
+
+    scenes = []
+    t = 0.0
+    for i in range(scene_count):
+        ch = chunks[i] if i < len(chunks) else ""
+        t1 = min(duration, t + scene_len)
+        scenes.append({
+            "id": f"s{i+1:02d}",
+            "start": float(t),
+            "end": float(t1),
+            "why": "fallback slicing",
+            "sceneText": ch,
+            "imagePrompt": f"Cinematic scene: {ch}",
+            "videoPrompt": "Cinematic camera movement, dramatic lighting, film grain"
+        })
+        t = t1
+        if t >= duration:
+            break
+    # ensure last end == duration
+    if scenes:
+        scenes[-1]["end"] = float(duration)
+    return scenes
+
+
+def _normalize_scenes(duration: float, scenes: list[dict]) -> list[dict]:
+    """Ensure scenes are valid and cover full duration."""
+    out = []
+    for i, s in enumerate(scenes or []):
+        try:
+            t0 = float(s.get("start", s.get("t0", 0.0)))
+            t1 = float(s.get("end", s.get("t1", 0.0)))
+        except Exception:
+            continue
+        if not (math.isfinite(t0) and math.isfinite(t1)):
+            continue
+        if t1 <= t0:
+            continue
+        out.append({
+            "id": str(s.get("id") or f"s{i+1:02d}"),
+            "start": round(t0, 2),
+            "end": round(t1, 2),
+            "why": str(s.get("why") or ""),
+            "sceneText": str(s.get("sceneText") or ""),
+            "imagePrompt": str(s.get("imagePrompt") or s.get("prompt") or s.get("sceneText") or ""),
+            "videoPrompt": str(s.get("videoPrompt") or ""),
+        })
+    if not out:
+        return out
+    # clamp and sort
+    out.sort(key=lambda x: x["start"])
+    # clamp to [0,duration]
+    for s in out:
+        s["start"] = max(0.0, min(float(duration), float(s["start"])))
+        s["end"] = max(0.0, min(float(duration), float(s["end"])))
+        if s["end"] <= s["start"]:
+            s["end"] = min(float(duration), s["start"] + 0.5)
+    # force first start 0 and last end duration (soft)
+    out[0]["start"] = 0.0
+    out[-1]["end"] = float(duration)
+    # remove overlaps / make monotonic
+    for i in range(1, len(out)):
+        if out[i]["start"] < out[i-1]["end"]:
+            out[i]["start"] = out[i-1]["end"]
+            if out[i]["end"] <= out[i]["start"]:
+                out[i]["end"] = min(float(duration), out[i]["start"] + 0.5)
+    out[-1]["end"] = float(duration)
+    return out
+
+
+@router.post("/clip/plan")
+def clip_plan(payload: BrainIn):
+    """SMART ScenePlan: returns timecoded scenes across whole audio."""
+    text = (payload.text or "").strip()
+
+    duration = 30.0
+    audio_bytes = None
+    audio_mime = "audio/mpeg"
+
+    if payload.audioUrl:
+        duration = get_audio_duration(payload.audioUrl)
+        try:
+            r = requests.get(payload.audioUrl, timeout=30)
+            r.raise_for_status()
+            audio_bytes = r.content
+        except Exception:
+            audio_bytes = None
+
+    # If no key -> fallback
+    if not (settings.GEMINI_API_KEY or "").strip():
+        scenes = _fallback_plan(duration, text)
+        return {"ok": True, "engine": "fallback", "audioDuration": duration, "scenes": scenes, "modelUsed": None, "hint": "no_gemini_key"}
+
+    scenario_key = (payload.scenarioKey or "beat_rhythm").strip()
+    shoot_key = (payload.shootKey or "cinema").strip()
+    style_key = (payload.styleKey or "realism").strip()
+    freeze = bool(payload.freezeStyle)
+
+    rules = f"""Ты — режиссёр монтажа музыкального клипа.
+Нужно построить SMART storyboard по треку и (если дан) тексту.
+Цель: умные таймкоды смены сцен по смыслу вокала/слов и по ритму/биту.
+
+ОБЯЗАТЕЛЬНО:
+- Верни ТОЛЬКО JSON (без пояснений, без Markdown).
+- Длительность трека: ~{duration:.1f} секунд.
+- Сцены должны покрывать ВЕСЬ таймлайн от 0 до {duration:.1f}.
+- Делай ~6–9 сцен на 30–60 сек (адаптируй под длительность).
+- Переходы делай на музыкальных акцентах/снейре (каждый 2-й или 4-й удар), но не дроби бессмысленно.
+- Если есть вокал/слова — границы сцен ставь на смысловых фразах/переходах (куплет/припев/бридж).
+- Стиль: {style_key}. Съёмка: {shoot_key}. FreezeStyle: {freeze}.
+- Если текста нет — всё равно делай осмысленный клиповый план по музыке.
+
+JSON СХЕМА:
+{{
+  "audioDuration": number,
+  "scenes": [
+    {{
+      "id": "s01",
+      "start": number,
+      "end": number,
+      "why": "коротко почему тут переход",
+      "sceneText": "что происходит в кадре",
+      "imagePrompt": "промт для генерации картинки",
+      "videoPrompt": "промт движения камеры/анимации (3–5 сек)"
+    }}
+  ]
+}}
+
+ВАЖНО:
+- start/end в секундах, с 1–2 знаками после запятой.
+- end строго > start.
+- Последняя сцена end = {duration:.1f}.
+"""
+
+    ref_hints = []
+    if payload.refCharacter:
+        ref_hints.append("Есть реф персонажа (character reference).")
+    if payload.refLocation:
+        ref_hints.append("Есть реф локации (location reference).")
+    if payload.refStyle:
+        ref_hints.append("Есть реф стиля (style reference).")
+
+    extra = ""
+    if ref_hints:
+        extra += "\n" + " ".join(ref_hints)
+    if text:
+        extra += "\nТЕКСТ/СМЫСЛ (может быть история или слова песни):\n" + text[:4000]
+
+    parts = [{"text": rules + extra}]
+
+    if audio_bytes:
+        b64 = base64.b64encode(audio_bytes).decode("ascii")
+        parts.append({"inlineData": {"mimeType": audio_mime, "data": b64}})
+
+    body = {
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {"temperature": 0.6, "topP": 0.9, "maxOutputTokens": 2048},
+    }
+
+    model_used = settings.GEMINI_VISION_MODEL if audio_bytes else settings.GEMINI_TEXT_MODEL
+
+    # Call Gemini with safe fallbacks
+    resp = post_generate_content(settings.GEMINI_API_KEY, model_used, body, timeout=120)
+
+    # If http error BUT body may contain JSON in text -> try parse it before fallback
+    if isinstance(resp, dict) and resp.get("__http_error__"):
+        raw_text = resp.get("text") or ""
+        j = _parse_json_from_text(raw_text)
+        if isinstance(j, dict) and isinstance(j.get("scenes"), list):
+            scenes = _normalize_scenes(duration, j.get("scenes") or [])
+            if scenes:
+                return {"ok": True, "engine": "gemini_partial", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": "http_error_but_parsed_json"}
+        scenes = _fallback_plan(duration, text)
+        return {"ok": True, "engine": "fallback", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": raw_text[:1500]}
+
+    # Normal parse
+    text_out = _extract_gemini_text(resp if isinstance(resp, dict) else {})
+    j = _parse_json_from_text(text_out)
+    if not isinstance(j, dict) or "scenes" not in j:
+        scenes = _fallback_plan(duration, text)
+        return {"ok": True, "engine": "fallback", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": (text_out or "")[:1500]}
+
+    scenes = _normalize_scenes(duration, j.get("scenes") or [])
+    if not scenes:
+        scenes = _fallback_plan(duration, text)
+        return {"ok": True, "engine": "fallback", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": "empty_scenes"}
+
+    return {"ok": True, "engine": "gemini", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": None}

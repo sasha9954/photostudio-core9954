@@ -13,6 +13,16 @@ export function AuthProvider({ children }){
     if(res?.ok){
       setUser(res.user);
       setCredits(res.user?.credits ?? 0);
+
+      // Persist last known account identity locally.
+      // Helps keep account-scoped UI state stable across reloads
+      // even if backend /auth/me is temporarily unavailable.
+      try {
+        if (res?.user?.email) localStorage.setItem("ps:lastEmail", String(res.user.email).trim().toLowerCase());
+        if (res?.user?.id) localStorage.setItem("ps:lastUserId", String(res.user.id));
+      } catch {
+        // ignore
+      }
     }else{
       setUser(null);
       setCredits(0);

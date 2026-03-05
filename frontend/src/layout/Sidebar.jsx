@@ -85,6 +85,7 @@ export default function Sidebar() {
         <NavItem to="/transform" icon="🌀" label="Трансформация" protectedRoute isAuthed={isAuthed} onNeedAuth={needAuth} />
         <NavItem to="/models" icon="🧍" label="Модели" protectedRoute isAuthed={isAuthed} onNeedAuth={needAuth} />
         <NavItem to="/prints" icon="🖨️" label="Принты" protectedRoute isAuthed={isAuthed} onNeedAuth={needAuth} />
+        <NavItem to="/studio/storyboard" icon="🧠" label="CLIP / STORYBOARD" protectedRoute isAuthed={isAuthed} onNeedAuth={needAuth} />
         <NavItem to="/tryon" icon="👕" label="Примерочная" protectedRoute isAuthed={isAuthed} onNeedAuth={needAuth} />
 
         <div className="sideSpacer" />

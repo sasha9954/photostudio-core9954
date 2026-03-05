@@ -21,10 +21,19 @@ export default function Header() {
   const loc = useLocation();
   const nav = useNavigate();
   const { user, credits, loading, refresh } = useAuth();
-
-  const pageTitle = PAGE_TITLES[loc.pathname] || "PhotoStudio";
-
-  async function onLogout(){
+  const pageTitle = (() => {
+    const p = loc.pathname || "";
+    if (p.startsWith("/studio/")) {
+      const key = p.split("/")[2] || "";
+      if (key === "lookbook") return "LOOKBOOK";
+      if (key === "video") return "VIDEO";
+      if (key === "prints") return "PRINT / DESIGN";
+      if (key === "storyboard") return "CLIP / STORYBOARD";
+      return "STUDIO";
+    }
+    return PAGE_TITLES[p] || "PhotoStudio";
+  })();
+async function onLogout(){
     try{ await authLogout(); }catch{}
     await refresh();
     nav("/home");

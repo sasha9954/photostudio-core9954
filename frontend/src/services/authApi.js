@@ -13,7 +13,7 @@ export async function authLogout(){
   return fetchJson("/api/auth/logout", { method:"POST" });
 }
 
-export async function creditsTopup({ amount }){
+export async function creditsTopup({ amount, credits, ref, reason }) {
   return fetchJson("/api/credits/topup", { method:"POST", body:{ amount } });
 }
 export async function creditsLedger({ limit=50 }={}){

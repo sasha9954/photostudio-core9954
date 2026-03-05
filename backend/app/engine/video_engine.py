@@ -109,6 +109,7 @@ def _download_image_from_source(source_image: str) -> tuple[bytes, str]:
 
 def _download_reference_images(sources: list[str]) -> list[dict]:
     """Download up to 3 images and convert to Veo referenceImages entries (inlineData)."""
+    """Download up to 3 images and convert to Veo referenceImages entries (bytesBase64Encoded)."""
     out: list[dict] = []
     for src in (sources or [])[:3]:
         b, ext = _download_image_from_source(src)
@@ -117,6 +118,7 @@ def _download_reference_images(sources: list[str]) -> list[dict]:
         out.append(
             {
                 "image": {"inlineData": {"mimeType": mime, "data": base64.b64encode(b).decode("utf-8")}},
+                "image": {"bytesBase64Encoded": base64.b64encode(b).decode("utf-8"), "mimeType": mime},
                 "referenceType": "asset",
             }
         )
@@ -400,6 +402,10 @@ def _veo_request(
       See: https://ai.google.dev/gemini-api/docs/video (referenceImages)
     """
     aspect_ratio = fmt if fmt in {"9:16", "1:1", "16:9"} else "9:16"
+    # Current limitation: Veo 3.1 referenceImages support only 16:9 aspect ratio (Gemini API forums).
+    if reference_sources and aspect_ratio != "16:9":
+        raise RuntimeError(            f"VEO_REF_ASPECT_INVALID: referenceImages currently support only 16:9; got {aspect_ratio}. "            "Switch format to 16:9 or remove extra reference images."        )
+
     base_url = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
     predict_url = f"{base_url}/models/veo-3.1-generate-preview:predictLongRunning"
 
@@ -408,6 +414,7 @@ def _veo_request(
 
     # Build payload in the Vertex-style predictLongRunning format.
     # For reference images, Gemini docs use parameters.referenceImages with inlineData.
+    # For predictLongRunning (Vertex-style), image data uses bytesBase64Encoded (NOT inlineData).
     payload: dict = {
         "instances": [
             {
@@ -427,6 +434,8 @@ def _veo_request(
         if seconds != 8:
             raise RuntimeError(f"VEO_REF_DURATION_INVALID: durationSeconds must be 8 when using referenceImages; got {seconds}")
         payload["parameters"]["referenceImages"] = reference_images
+        # NOTE: predictLongRunning uses Vertex-style payload: referenceImages live in instances[0]
+        payload["instances"][0]["referenceImages"] = reference_images
     else:
         # Back-compat: image-to-video (single start image) using instances.image
         if image_bytes:

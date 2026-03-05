@@ -9,8 +9,9 @@ class Settings(BaseSettings):
 
     # Gemini / Engine
     GEMINI_API_KEY: str = ""
-    GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash-image"
+    GEMINI_IMAGE_MODEL: str = "gemini-3.1-flash-image-preview"
     GEMINI_VISION_MODEL: str = "gemini-2.5-flash"
+    GEMINI_TEXT_MODEL: str = "gemini-2.5-flash"
     ENGINE_DEBUG: bool = False
 
 settings = Settings()

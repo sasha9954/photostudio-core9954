@@ -18,6 +18,7 @@ from app.engine.media_io import fetch_url_to_bytes, bytes_to_b64, sniff_mime_fro
 
 from app.core.tokens import verify_token
 from app.db.sqlite import db
+from app.services.auth_service import add_ledger
 
 COOKIE_NAME = "ps_token"
 router = APIRouter()
@@ -367,6 +368,15 @@ def scene_generate_job(req: Request, body: SceneGenerateJobIn):
     def _run():
         try:
             _scene_job_update(job_id, state="running", progress=5)
+            spent = False
+            # Spend 1 credit ONCE per job (idempotent via ref=job_id)
+            try:
+                add_ledger(uid, -1, f"SCENE_CREATE_{kind.upper()}", ref=job_id)
+                spent = True
+            except ValueError as e:
+                _scene_job_update(job_id, state="error", error=str(e), progress=100)
+                return
+
             base_dataurl = None
             if body.baseUrl:
                 base_dataurl = _url_to_dataurl(body.baseUrl)
@@ -397,6 +407,11 @@ def scene_generate_job(req: Request, body: SceneGenerateJobIn):
 
             _scene_job_update(job_id, state="done", progress=100, result_json=json.dumps({"url": asset_url}, ensure_ascii=False))
         except Exception as e:
+            try:
+                if spent:
+                    add_ledger(uid, +1, "REFUND", ref=f"SCENE:{job_id}")
+            except Exception:
+                pass
             _scene_job_update(job_id, state="error", error=str(e), progress=100)
 
     t = threading.Thread(target=_run, daemon=True)
@@ -426,6 +441,15 @@ def scene_apply_details_job(req: Request, body: SceneApplyDetailsJobIn):
     def _run():
         try:
             _scene_job_update(job_id, state="running", progress=5)
+            spent = False
+            # Spend 1 credit ONCE per job (idempotent via ref=job_id)
+            try:
+                add_ledger(uid, -1, ("SCENE_APPLY_MODEL_DETAILS" if kind=="model" else "SCENE_APPLY_LOCATION_DETAILS"), ref=job_id)
+                spent = True
+            except ValueError as e:
+                _scene_job_update(job_id, state="error", error=str(e), progress=100)
+                return
+
 
             # Load current scene to pick baseUrl if not provided
             with db() as con:
@@ -478,9 +502,13 @@ def scene_apply_details_job(req: Request, body: SceneApplyDetailsJobIn):
 
             _scene_job_update(job_id, state="done", progress=100, result_json=json.dumps({"url": asset_url}, ensure_ascii=False))
         except Exception as e:
+            try:
+                if spent:
+                    add_ledger(uid, +1, "REFUND", ref=f"SCENE:{job_id}")
+            except Exception:
+                pass
             _scene_job_update(job_id, state="error", error=str(e), progress=100)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return {"ok": True, "jobId": job_id}
-

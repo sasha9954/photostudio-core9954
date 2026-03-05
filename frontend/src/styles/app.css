@@ -382,6 +382,49 @@ a{ color: inherit; text-decoration: none; }
   color: rgba(210,220,240,0.72);
 }
 
+.psToast__badge{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  color: rgba(240,245,255,0.92);
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  box-shadow: 0 0 18px rgba(120,170,255,0.10);
+}
+.psToast__badgeMode{
+  font-weight: 800;
+  opacity: 0.88;
+}
+.psToast__badge--violet{
+  border-color: rgba(200,120,255,0.22);
+  background: rgba(200,120,255,0.10);
+  box-shadow: 0 0 18px rgba(200,120,255,0.16);
+}
+.psToast__badge--green{
+  border-color: rgba(90,255,190,0.22);
+  background: rgba(90,255,190,0.10);
+  box-shadow: 0 0 18px rgba(90,255,190,0.16);
+}
+.psToast__badge--cyan{
+  border-color: rgba(80,210,255,0.22);
+  background: rgba(80,210,255,0.10);
+  box-shadow: 0 0 18px rgba(80,210,255,0.16);
+}
+.psToast__badge--blue{
+  border-color: rgba(120,170,255,0.22);
+  background: rgba(120,170,255,0.10);
+  box-shadow: 0 0 18px rgba(120,170,255,0.16);
+}
+.psToast__badge--gray{
+  border-color: rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  box-shadow: none;
+}
+
 .psToast__msg{
   margin-top: 6px;
   padding-left: 6px;

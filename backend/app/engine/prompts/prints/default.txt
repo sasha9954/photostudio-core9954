@@ -1,0 +1,20 @@
+PRINT MODE: {{MODE}}
+
+GOAL
+Apply the provided design inside the user-selected print mask area.
+Do not alter anything outside the mask.
+
+HARD RULES
+- Modify ONLY pixels inside the mask.
+- Preserve the base image identity: colors, geometry, lighting, background.
+- No extra labels/plates/rectangles behind the design.
+- Keep edges clean and consistent with the selected mode.
+
+---
+{{FRAME_LOCK_RULES}}
+
+---
+{{MODE_LOCK_RULES}}
+
+---
+{{PROFILE_TEXT}}

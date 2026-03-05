@@ -1,0 +1,282 @@
+/* TransformationPage — minimal dark cards, no global layout changes */
+.trPage{
+  padding: 16px 18px 28px;
+}
+
+.trHeader{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:14px;
+}
+
+.trTitle{
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+
+.trSub{
+  margin-top: 6px;
+  opacity: .75;
+  font-size: 13px;
+}
+
+.trHeaderActions{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+
+.trBtn{
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.04);
+  color: rgba(255,255,255,.92);
+  cursor:pointer;
+  transition: .15s ease;
+  font-weight: 700;
+  font-size: 13px;
+}
+.trBtn:hover{ background: rgba(255,255,255,.07); }
+.trBtn:disabled{ opacity:.55; cursor: not-allowed; }
+.trBtn.danger{ border-color: rgba(255,80,80,.25); }
+
+.fileBtn input{ display:none; }
+.trBtn.small{ padding: 8px 10px; font-size: 12px; border-radius: 10px; }
+
+.trGrid{
+  display:grid;
+  grid-template-columns: 1.3fr .9fr;
+  gap: 14px;
+  align-items:start;
+}
+
+.card{
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.18);
+  box-shadow: 0 12px 40px rgba(0,0,0,.35);
+}
+
+.trStage{
+  padding: 14px;
+}
+
+.trStageTop{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom: 10px;
+}
+
+.trTip{
+  opacity:.75;
+  font-size: 12px;
+}
+
+.trCanvas{
+  border-radius: 16px;
+  border: 1px dashed rgba(255,255,255,.16);
+  background: rgba(255,255,255,.02);
+  min-height: 520px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+}
+
+.trImg{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  max-height: 720px;
+}
+
+.trEmpty{
+  padding: 22px;
+  opacity:.7;
+  text-align:center;
+  max-width: 420px;
+  font-size: 13px;
+}
+
+.trStatus{
+  margin-top: 10px;
+  font-size: 13px;
+  opacity:.85;
+}
+
+.trSide{
+  display:flex;
+  flex-direction:column;
+  gap: 12px;
+}
+
+.trBlock{
+  padding: 14px;
+}
+
+.trBlockTitle{
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.trRefRow{
+  display:flex;
+  gap: 12px;
+  align-items:flex-start;
+}
+
+.trRefBox{
+  width: 96px;
+  height: 96px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  overflow:hidden;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.trRefImg{ width:100%; height:100%; object-fit:contain; }
+.trRefEmpty{ opacity:.6; font-size:12px; }
+
+.trRefBtns{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.trHint{
+  margin-top: 10px;
+  opacity:.75;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.trPills{
+  display:flex;
+  gap: 8px;
+  flex-wrap:wrap;
+  margin-bottom: 10px;
+}
+
+.trPill{
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  color: rgba(255,255,255,.9);
+  font-weight: 800;
+  cursor:pointer;
+  font-size: 12px;
+}
+.trPill.on{
+  background: rgba(125, 211, 252, .12);
+  border-color: rgba(125, 211, 252, .25);
+}
+
+.trRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 10px;
+  margin: 8px 0 10px;
+}
+
+.trRowLabel{ opacity:.85; font-size: 12px; font-weight: 700; }
+
+.trSelect{
+  width: 220px;
+  max-width: 100%;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.20);
+  color: rgba(255,255,255,.92);
+  outline: none;
+}
+
+.trCheck{
+  display:flex;
+  gap: 10px;
+  align-items:center;
+  font-size: 12px;
+  opacity: .9;
+  margin-bottom: 10px;
+}
+.trCheck input{ width: 16px; height: 16px; }
+
+.trColors{
+  display:flex;
+  gap: 14px;
+  align-items:center;
+  margin-bottom: 12px;
+}
+.trColor{
+  display:flex;
+  gap: 10px;
+  align-items:center;
+}
+.trColorLabel{ font-size:12px; opacity:.85; font-weight:700; }
+
+.trDo{
+  width: 100%;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.06);
+  color: rgba(255,255,255,.95);
+  font-weight: 900;
+  letter-spacing:.3px;
+  cursor:pointer;
+}
+.trDo:hover{ background: rgba(255,255,255,.08); }
+.trDo:disabled{ opacity:.55; cursor:not-allowed; }
+
+.trHistory{
+  display:flex;
+  flex-direction:column;
+  gap: 8px;
+  max-height: 320px;
+  overflow:auto;
+  padding-right: 4px;
+}
+
+.trHistItem{
+  display:flex;
+  gap: 10px;
+  align-items:center;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  cursor:pointer;
+  text-align:left;
+}
+.trHistItem img{
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.10);
+}
+.trHistMeta{ display:flex; flex-direction:column; gap: 3px; }
+.trHistLine{ font-size: 12px; opacity:.9; }
+.trHistLine.small{ font-size: 11px; opacity:.7; }
+
+.trEmptySmall{
+  opacity:.7;
+  font-size: 12px;
+}
+
+@media (max-width: 1100px){
+  .trGrid{ grid-template-columns: 1fr; }
+  .trCanvas{ min-height: 420px; }
+}

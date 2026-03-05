@@ -41,6 +41,25 @@ def post_generate_content(api_key: str, model: str, body: Dict[str, Any], timeou
     if not api_key:
         return {"__http_error__": True, "status": 0, "text": "GEMINI_API_KEY is empty"}
 
+    # Normalize model to a safe ASCII id (no "models/" prefix).
+    m = (model or "").strip()
+    if m.startswith("models/"):
+        m = m[len("models/"):]
+    # If someone passed displayName or a blob containing gemini-*, try to extract it.
+    if "gemini-" in m and not m.startswith("gemini-"):
+        import re as _re
+        mm = _re.search(r"(gemini-[A-Za-z0-9.\-]+)", m)
+        if mm:
+            m = mm.group(1)
+    try:
+        m.encode("ascii")
+    except Exception:
+        m = "gemini-2.5-flash"
+    if not m.startswith("gemini-"):
+        m = "gemini-2.5-flash"
+    model = m
+
+
     url = f"{GEMINI_BASE}/models/{model}:generateContent"
 
     # IMPORTANT:
@@ -62,7 +81,7 @@ def post_generate_content(api_key: str, model: str, body: Dict[str, Any], timeou
             timeout=timeout,
         )
     except Exception as e:
-        return {"__http_error__": True, "status": 0, "text": f"REQUEST_FAILED: {e}"}
+        return {"__http_error__": True, "status": 0, "text": f"REQUEST_FAILED: {e!r}"}
 
     if not r.ok:
         # Try to extract a human readable error

@@ -1,0 +1,65 @@
+DEFAULT:
+  description: Generic print behavior
+  surface: fabric
+  prompt: default.txt
+  garment_rules: true
+  avoid_center_seam: true
+  center_seam_gap_px: 2
+  use_relief_map: true
+  use_anchors_map: true
+  blending:
+    strategy: mask_only_ai
+    edge_softness: 0.4
+    edge_clearance_px: 4
+  thickness: 0.1
+  gloss: 0.2
+  deformation_follow: true
+  edge_softness: 0.4
+  edge_clearance_px: 4
+  remove_underlying: true
+  rules:
+  - Modify ONLY inside the provided mask.
+  - Never redraw the whole image; preserve background and object outside mask.
+DTF:
+  description: Heat transfer film
+  surface: fabric
+  prompt: dtf.txt
+  garment_rules: true
+  avoid_center_seam: true
+  center_seam_gap_px: 2
+  use_relief_map: true
+  use_anchors_map: true
+  blending:
+    strategy: mask_only_ai
+    edge_softness: 0.25
+    edge_clearance_px: 6
+  thickness: 0.2
+  gloss: 0.35
+  deformation_follow: true
+  edge_softness: 0.25
+  edge_clearance_px: 6
+  remove_underlying: true
+  rules:
+  - 'DTF: thin ink/film layer; no patch/emboss/outline.'
+  - Preserve fabric texture; integrate folds and lighting.
+RIGID_DECAL:
+  description: Decal on rigid surface (plastic/metal)
+  surface: rigid
+  prompt: rigid_decal.txt
+  garment_rules: false
+  avoid_center_seam: false
+  use_relief_map: false
+  use_anchors_map: false
+  blending:
+    strategy: mask_only_ai
+    edge_softness: 0.2
+    edge_clearance_px: 4
+  thickness: 0.15
+  gloss: 0.35
+  deformation_follow: false
+  edge_softness: 0.2
+  edge_clearance_px: 4
+  remove_underlying: true
+  rules:
+  - 'Rigid surface: do NOT warp to fabric folds.'
+  - Preserve panel geometry; integrate subtle reflection.

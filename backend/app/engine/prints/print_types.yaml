@@ -1,0 +1,66 @@
+DEFAULT:
+  description: "Generic print behavior"
+  thickness: 0.1
+  gloss: 0.2
+  deformation_follow: true
+  edge_softness: 0.4
+  edge_clearance_px: 4
+  remove_underlying: true
+
+DTF:
+  description: "Heat transfer film"
+  thickness: 0.2
+  gloss: 0.35
+  deformation_follow: true
+  edge_softness: 0.25
+  edge_clearance_px: 6
+  remove_underlying: true
+
+EMBROIDERY:
+  description: "Thread embroidery"
+  thickness: 0.6
+  gloss: 0.15
+  deformation_follow: partial
+  edge_softness: 0.1
+  stitch_simulation: true
+  edge_clearance_px: 8
+  remove_underlying: true
+
+RUBBER_PATCH:
+  description: "Rubber / PVC patch"
+  thickness: 0.9
+  gloss: 0.5
+  deformation_follow: low
+  edge_softness: 0.05
+  emboss: true
+  edge_clearance_px: 10
+  remove_underlying: true
+
+FABRIC_PATCH:
+  description: "Fabric sewn patch"
+  thickness: 0.7
+  gloss: 0.2
+  deformation_follow: medium
+  edge_softness: 0.15
+  seam_shadow: true
+  edge_clearance_px: 8
+  remove_underlying: true
+
+METAL_BADGE:
+  description: "Metal badge"
+  thickness: 1.2
+  gloss: 0.9
+  deformation_follow: false
+  reflections: true
+  edge_softness: 0.02
+  edge_clearance_px: 12
+  remove_underlying: true
+
+SUBLIMATION:
+  description: "Dye sublimation"
+  thickness: 0.0
+  gloss: 0.05
+  deformation_follow: full
+  edge_softness: 0.6
+  edge_clearance_px: 2
+  remove_underlying: true

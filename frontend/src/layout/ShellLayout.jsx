@@ -25,7 +25,79 @@ function formatStudioLabel(studioKey) {
   if (k === "lookbook") return "Lookbook";
   if (k === "scene") return "Сцена";
   if (k === "video") return "Видео";
+  if (k === "prints" || k === "print" || k === "design") return "Принты и дизайн";
   return studioKey || "Studio";
+}
+
+
+function studioMetaFromSource(source){
+  // source can be:
+  // - string: "prints" | "lookbook" | ...
+  // - object: { studioKey: "prints", mode?: "...", to?: "/prints" }
+  // - already formatted string label
+  const raw = source;
+  let studioKey = null;
+  let mode = null;
+  let to = null;
+
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    studioKey = raw.studioKey || raw.studio || raw.key || null;
+    mode = raw.mode || null;
+    to = raw.to || raw.route || null;
+  } else if (typeof raw === "string") {
+    // if looks like JSON, don't show it as-is
+    const s = raw.trim();
+    if (s.startsWith("{") && s.endsWith("}")) {
+      try {
+        const obj = JSON.parse(s);
+        studioKey = obj?.studioKey || obj?.studio || obj?.key || null;
+        mode = obj?.mode || null;
+        to = obj?.to || obj?.route || null;
+      } catch {
+        // ignore
+      }
+    } else {
+      // allow both keys ("prints") and labels ("Принты и дизайн")
+      studioKey = s;
+    }
+  }
+
+  const key = String(studioKey || "").toLowerCase();
+
+  const map = {
+    prints: { label: "Принты и дизайн", to: "/prints", tone: "violet" },
+    "prints-design": { label: "Принты и дизайн", to: "/prints", tone: "violet" },
+    design: { label: "Принты и дизайн", to: "/prints", tone: "violet" },
+    lookbook: { label: "Lookbook", to: "/lookbook", tone: "green" },
+    scene: { label: "Сцена", to: "/scene", tone: "blue" },
+    video: { label: "Видео", to: "/video", tone: "cyan" },
+    studios: { label: "Студии", to: "/studios", tone: "gray" },
+  };
+
+  const meta = map[key];
+  if (meta) {
+    return { studioKey: key, label: meta.label, to: to || meta.to, tone: meta.tone, mode: mode ? String(mode).toUpperCase() : null };
+  }
+
+  // If studioKey is actually a human label, show as neutral badge
+  if (studioKey && typeof studioKey === "string" && studioKey.length <= 32) {
+    return { studioKey: "custom", label: studioKey, to: to || null, tone: "gray", mode: mode ? String(mode).toUpperCase() : null };
+  }
+
+  return null;
+}
+
+
+function _psToText(v) {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    // Prefer readable objects over [object Object]
+    return JSON.stringify(v);
+  } catch {
+    try { return String(v); } catch { return ""; }
+  }
 }
 
 function NotificationCenter() {
@@ -41,9 +113,10 @@ function NotificationCenter() {
     const node = {
       id,
       kind: n?.kind || "info", // info|success|error
-      title: n?.title || "",
-      message: n?.message || "",
-      source: n?.source || null,
+      title: _psToText(n?.title) || "",
+      message: _psToText(n?.message) || "",
+      studioMeta: studioMetaFromSource(n?.source) || null,
+      sourceText: (_psToText(n?.source) || null),
       actions: Array.isArray(n?.actions) ? n.actions : [],
       createdAt: Date.now(),
       ttlMs: Number.isFinite(n?.ttlMs) ? n.ttlMs : 9000,
@@ -92,8 +165,15 @@ function NotificationCenter() {
           <button className="psToast__x" type="button" onClick={() => close(it.id)} aria-label="Закрыть">×</button>
           <div className="psToast__top">
             <div className="psToast__title">{it.title}</div>
-            {it.source ? (
-              <div className="psToast__source">{it.source}</div>
+            {it.studioMeta ? (
+              <div className="psToast__source">
+                <span className={`psToast__badge psToast__badge--${it.studioMeta.tone || "gray"}`}>
+                  {it.studioMeta.label}
+                  {it.studioMeta.mode ? <span className="psToast__badgeMode">· {it.studioMeta.mode}</span> : null}
+                </span>
+              </div>
+            ) : it.sourceText ? (
+              <div className="psToast__source">{it.sourceText}</div>
             ) : null}
           </div>
           {it.message ? <div className="psToast__msg">{it.message}</div> : null}
@@ -266,6 +346,106 @@ function GlobalJobWatcher() {
             notifyError(jobId, { studioKey: "scene", mode, to: "/scene", title: "Ошибка сцены" }, msg);
           }
         }
+
+        // 3) Video jobs: ps_video_activeJob_v1:<accountKey> -> JSON { jobId, t, action? }
+        const vKey = `ps_video_activeJob_v1:${accountKey}`;
+        let vRaw = null;
+        try { vRaw = localStorage.getItem(vKey); } catch {}
+        if (vRaw) {
+          let vJobId = null;
+          let vAction = "";
+          try {
+            const rec = JSON.parse(vRaw);
+            vJobId = rec?.jobId ? String(rec.jobId).trim() : null;
+            vAction = rec?.action ? String(rec.action) : "";
+          } catch {
+            // fallback: old format stores just jobId
+            vJobId = String(vRaw).trim();
+          }
+
+          if (vJobId && !notifiedRef.current.has(vJobId)) {
+            const res = await fetchJson(`/api/video/jobs/${vJobId}`);
+            const job = res?.job;
+            const state = job?.state;
+            const act = String(job?.action || vAction || "").toLowerCase();
+
+            if (state === "done") {
+              // If user left the Video page, we still want the result to appear in clip slots after return.
+              // So we persist job.result.videos into ps_video_clipSlots_v1:<accountKey> here.
+              const vids = (job?.result?.videos && Array.isArray(job.result.videos) ? job.result.videos : [])
+                .concat(job?.result?.url ? [job.result.url] : [])
+                .concat(job?.videos && Array.isArray(job.videos) ? job.videos : [])
+                .filter(Boolean)
+                .map((u) => String(u).trim())
+                .filter((u) => u && !u.startsWith("blob:"));
+
+              if (vids.length) {
+                const clipsKey = `ps_video_clipSlots_v1:${accountKey}`;
+                try {
+    
+                  // If it's a merge job — persist ONLY to merged result (do not pollute clip slots).
+                  if (act === "merge") {
+                    const mergedKey = `ps_video_mergedResult_v1:${accountKey}`;
+                    const first = vids[0] || "";
+                    if (first) {
+                      try { localStorage.setItem(mergedKey, first); } catch {}
+                    }
+                  } else {
+                    // Insert newest clips at the beginning (slot 1), shifting old ones to the right.
+                    const prevRaw = localStorage.getItem(clipsKey) || "[]";
+                    const prevArr = JSON.parse(prevRaw);
+                    const prev = Array.isArray(prevArr) ? prevArr.filter(Boolean).map(String) : [];
+                    const uniqNew = vids.filter((u) => u && !u.startsWith("blob:"));
+
+                    // Remove any occurrences of new urls from previous list to avoid duplicates.
+                    const filteredPrev = prev.filter((u) => !uniqNew.includes(u));
+
+                    const capacity = 9;
+                    const combined = [...uniqNew, ...filteredPrev].slice(0, capacity);
+                    while (combined.length < capacity) combined.push("");
+
+                    localStorage.setItem(clipsKey, JSON.stringify(combined));
+
+                    // Clip meta (optional): align with slots and mark newest as "generated"
+                    const metaKey = `ps_video_clipMeta_v1:${accountKey}`;
+                    try {
+                      const prevMetaRaw = localStorage.getItem(metaKey) || "[]";
+                      const prevMetaArr = JSON.parse(prevMetaRaw);
+                      const prevMeta = Array.isArray(prevMetaArr) ? prevMetaArr : [];
+                      const prevMetaPaired = prev.map((u, i) => ({ u, m: String(prevMeta[i] || "") }));
+                      const filteredMetaPaired = prevMetaPaired.filter((p) => !uniqNew.includes(p.u));
+                      const nextMeta = [
+                        ...uniqNew.map(() => "generated"),
+                        ...filteredMetaPaired.map((p) => p.m),
+                      ].slice(0, capacity);
+                      while (nextMeta.length < capacity) nextMeta.push("");
+                      localStorage.setItem(metaKey, JSON.stringify(nextMeta));
+                    } catch {}
+                  }
+                } catch {
+                  // ignore storage failures
+                }
+              }
+
+              notifiedRef.current.add(vJobId);
+              try { localStorage.removeItem(vKey); } catch {}
+              const title = act === "merge" ? "Видео объединено" : "Видео готово";
+              const msg = vids.length ? "Готово. Итог добавлен в клипы." : "Готово. Перейдите в «Видео».";
+              notifyDone(vJobId, {
+                studioKey: "video",
+                to: "/video",
+                count: 1,
+                title,
+                message: msg,
+              });
+            } else if (state === "error") {
+              const msg = job?.error || "Ошибка видео";
+              notifiedRef.current.add(vJobId);
+              try { localStorage.removeItem(vKey); } catch {}
+              notifyError(vJobId, { studioKey: "video", to: "/video", title: "Ошибка видео" }, msg);
+            }
+          }
+        }
       } catch {
         // ignore transient errors
       } finally {
@@ -296,35 +476,3 @@ export default function ShellLayout(){
     </AuthProvider>
   );
 }
-        // 3) Video jobs
-        try{
-          const raw = localStorage.getItem(`${KEY_VIDEO_ACTIVE_JOB}:${accountKey}`);
-          const st = raw ? JSON.parse(raw) : null;
-          const jobId = st?.jobId;
-          if(jobId){
-            const res = await fetchJson(`/api/video/jobs/${jobId}`);
-            const job = res?.job;
-            if(job?.state === "done"){
-              localStorage.removeItem(`${KEY_VIDEO_ACTIVE_JOB}:${accountKey}`);
-              const title = job?.action === "merge" ? "Видео объединено" : "Видео готово";
-              notify({
-                title,
-                message: "Готово. Перейдите в «Видео».",
-                kind: "success",
-                actionText: "Перейти",
-                actionHref: "/video",
-              });
-            }else if(job?.state === "error"){
-              localStorage.removeItem(`${KEY_VIDEO_ACTIVE_JOB}:${accountKey}`);
-              notify({
-                title: "Ошибка видео",
-                message: job?.error || "Не удалось сделать видео",
-                kind: "error",
-                actionText: "Открыть",
-                actionHref: "/video",
-              });
-            }
-          }
-        }catch{}
-
-

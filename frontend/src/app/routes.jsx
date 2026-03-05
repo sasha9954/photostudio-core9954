@@ -7,6 +7,7 @@ import LoginPage from "../pages/LoginPage.jsx";
 import CreditsPage from "../pages/CreditsPage.jsx";
 import ScenePage from "../pages/ScenePage.jsx";
 import VideoPage from "../pages/VideoPage.jsx";
+import PrintsPage from "../pages/PrintsPage.jsx";
 import StudiosPage from "../pages/StudiosPage.jsx";
 import StudioHostPage from "../pages/StudioHostPage.jsx";
 import AccountPage from "../pages/AccountPage.jsx";
@@ -50,7 +51,7 @@ export default function AppRoutes() {
         <Route path="/video" element={<RequireAuth><VideoPage /></RequireAuth>} />
         <Route path="/transform" element={<RequireAuth><Placeholder title="Трансформация" /></RequireAuth>} />
         <Route path="/models" element={<RequireAuth><Placeholder title="Генерация моделей" /></RequireAuth>} />
-        <Route path="/prints" element={<RequireAuth><Placeholder title="Принты и дизайн" /></RequireAuth>} />
+        <Route path="/prints" element={<RequireAuth><PrintsPage /></RequireAuth>} />
         <Route path="/tryon" element={<RequireAuth><Placeholder title="Примерочная" /></RequireAuth>} />
 
         <Route path="/credits" element={<RequireAuth><CreditsPage /></RequireAuth>} />

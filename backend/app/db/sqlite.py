@@ -1,5 +1,7 @@
 import os
 import sqlite3
+import json
+from datetime import datetime
 from contextlib import contextmanager
 from datetime import datetime
 from app.core.config import settings
@@ -118,3 +120,55 @@ def init_db():
         )""")
         con.execute("""CREATE INDEX IF NOT EXISTS idx_video_jobs_user_time
             ON video_jobs(user_id, updated_at DESC)""")
+
+        # Prints: idempotency cache for apply requests.
+        # Keyed by (user_id, request_id). Stores successful output JSON.
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS prints_cache(
+                user_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                out_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, request_id)
+            )"""
+        )
+
+        con.commit()
+
+
+def get_prints_cache(user_id: str, request_id: str) -> dict | None:
+    request_id = (request_id or "").strip()
+    if not request_id:
+        return None
+    with db() as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT out_json FROM prints_cache WHERE user_id=? AND request_id=? LIMIT 1",
+            (user_id, request_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except Exception:
+            return None
+
+
+def set_prints_cache(user_id: str, request_id: str, out: dict):
+    request_id = (request_id or "").strip()
+    if not request_id:
+        return
+    out_json = json.dumps(out or {}, ensure_ascii=False)
+    now = datetime.utcnow().isoformat()
+    with db() as con:
+        cur = con.cursor()
+        cur.execute(
+            """
+            INSERT INTO prints_cache(user_id, request_id, out_json, created_at)
+            VALUES(?,?,?,?)
+            ON CONFLICT(user_id, request_id) DO UPDATE SET out_json=excluded.out_json
+            """,
+            (user_id, request_id, out_json, now),
+        )
+        con.commit()

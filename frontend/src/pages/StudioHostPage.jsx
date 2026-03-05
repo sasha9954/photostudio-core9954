@@ -2,6 +2,7 @@ import React from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getStudioByKey } from "./studiosData.js";
 import LookbookPage from "./LookbookPage.jsx";
+import ClipStoryboardPage from "./ClipStoryboardPage.jsx";
 import { useAuth } from "../app/AuthContext.jsx";
 
 export default function StudioHostPage() {
@@ -44,6 +45,10 @@ export default function StudioHostPage() {
     // While we normalize URL to include ?mode=..., render nothing to avoid flicker.
     if (!modeParam) return null;
     return <LookbookPage />;
+  }
+
+  if (studio.key === "storyboard") {
+    return <ClipStoryboardPage />;
   }
 
   const returnTo = encodeURIComponent(`/studio/${studio.key}`);

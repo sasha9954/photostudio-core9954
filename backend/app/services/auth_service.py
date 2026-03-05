@@ -87,6 +87,16 @@ def add_ledger(user_id: str, delta: int, reason: str, ref: str = None) -> Dict[s
         # BEGIN IMMEDIATE — чтобы параллельные запросы не прошли чек одновременно.
         con.execute("BEGIN IMMEDIATE")
 
+        # Idempotency: if the same (user_id, reason, ref) was already recorded,
+        # do NOT insert again and do NOT re-check balance.
+        if ref:
+            existing = con.execute(
+                "SELECT id FROM ledger WHERE user_id=? AND reason=? AND ref=? LIMIT 1",
+                (user_id, reason, ref),
+            ).fetchone()
+            if existing:
+                return {"id": existing["id"], "idempotent": True}
+
         row = con.execute(
             "SELECT COALESCE(SUM(delta), 0) AS bal FROM ledger WHERE user_id = ?",
             (user_id,),
