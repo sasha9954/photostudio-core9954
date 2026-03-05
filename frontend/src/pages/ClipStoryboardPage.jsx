@@ -925,7 +925,7 @@ onParse: async (nodeId) => {
       );
 
       // flood to storyboard/results node
-      const targets = edges.filter((e) => e.source === nodeId).map((e) => e.target);
+      const targets = (edges || []).filter((e) => e.source === nodeId).map((e) => e.target);
       return updated.map((x) =>
         targets.includes(x.id) && (x.type === "storyboardNode" || x.type === "resultsNode")
           ? { ...x, data: { ...x.data, scenes } }
