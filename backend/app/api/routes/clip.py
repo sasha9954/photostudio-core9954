@@ -86,13 +86,19 @@ def _resolve_audio_asset_path(audio_url: str) -> str | None:
 
 def _ffmpeg_audio_slice(input_path: str, output_path: str, t0: float, t1: float) -> tuple[bool, str]:
     dur = max(0.0, t1 - t0)
+    if dur < 0.05:
+        dur = 0.05
     first_cmd = [
         "ffmpeg", "-y", "-ss", str(t0), "-to", str(t1), "-i", input_path,
         "-c", "copy", output_path,
     ]
     try:
         first = subprocess.run(first_cmd, capture_output=True, text=True)
-        if first.returncode == 0 and os.path.isfile(output_path):
+        if (
+            first.returncode == 0
+            and os.path.isfile(output_path)
+            and os.path.getsize(output_path) > 1024
+        ):
             return True, ""
 
         fallback_cmd = [
