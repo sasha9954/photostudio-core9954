@@ -118,7 +118,8 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     if ext not in allowed:
         raise HTTPException(status_code=400, detail=f"unsupported_ext:{ext or 'none'}")
 
-    if ct.startswith("audio/") or ext in {".mp3", ".wav", ".ogg", ".m4a"}:
+    audio_ext = {".mp3", ".wav", ".ogg", ".m4a"}
+    if ct.startswith("audio/") or ext in audio_ext:
         ext = ".mp3"
 
     hid = _hash_bytes(raw)
@@ -137,7 +138,10 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     
     duration_sec = None
     if ct.startswith("audio/"):
-        duration_sec = _probe_audio_duration_sec(raw, ext)
+        try:
+            duration_sec = _probe_audio_duration_sec(raw, ".mp3")
+        except Exception:
+            duration_sec = None
 
     url = f"{base}/static/assets/{fn}"
     return {
