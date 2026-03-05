@@ -67,13 +67,18 @@ def _resolve_audio_asset_path(audio_url: str) -> str | None:
 
     parsed = urlparse(raw)
     path = parsed.path or raw
-    marker = "/static/assets/"
+    markers = ["/static/assets/", "/assets/"]
 
-    if path.startswith("/static/assets/"):
-        rel = path[len("/static/assets/") :]
-    elif marker in path:
-        rel = path.split(marker, 1)[1]
-    else:
+    rel = None
+    for marker in markers:
+        if path.startswith(marker):
+            rel = path[len(marker) :]
+            break
+        if marker in path:
+            rel = path.split(marker, 1)[1]
+            break
+
+    if rel is None:
         return None
 
     filename = os.path.basename(rel)
