@@ -55,19 +55,59 @@ def _extract_gemini_text(resp: dict) -> str:
 def _parse_json_from_text(s: str) -> dict | None:
     if not s:
         return None
-    s2 = re.sub(r"^```[a-zA-Z0-9_-]*\s*|```\s*$", "", s.strip(), flags=re.M)
+
+    def _balance_json_tail(chunk: str) -> str:
+        stack = []
+        in_string = False
+        escape = False
+        for ch in chunk:
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch in "[{":
+                stack.append(ch)
+            elif ch in "]}":
+                if stack and ((ch == "]" and stack[-1] == "[") or (ch == "}" and stack[-1] == "{")):
+                    stack.pop()
+        if in_string:
+            chunk += '"'
+        for opener in reversed(stack):
+            chunk += "]" if opener == "[" else "}"
+        return chunk
+
+    s2 = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s.strip(), flags=re.M)
+    s2 = re.sub(r"\s*```\s*$", "", s2, flags=re.M)
     m = re.search(r"\{[\s\S]*\}", s2)
-    if not m:
-        return None
-    chunk = m.group(0)
-    try:
-        return json.loads(chunk)
-    except Exception:
-        chunk2 = re.sub(r",\s*([}\]])", r"\1", chunk)
-        try:
-            return json.loads(chunk2)
-        except Exception:
-            return None
+    chunks_to_try = [m.group(0)] if m else []
+
+    first_brace = s2.find("{")
+    if first_brace >= 0:
+        tail = s2[first_brace:]
+        last_closed = max(tail.rfind("}"), tail.rfind("]"))
+        if last_closed > 0:
+            chunks_to_try.append(tail[: last_closed + 1])
+        chunks_to_try.append(tail)
+
+    seen = set()
+    for chunk in chunks_to_try:
+        if not chunk or chunk in seen:
+            continue
+        seen.add(chunk)
+        for candidate in (chunk, re.sub(r",\s*([}\]])", r"\1", chunk), _balance_json_tail(chunk)):
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
+    return None
 
 
 def _combined_error_text(resp: dict | None) -> str:
@@ -315,9 +355,16 @@ JSON СХЕМА:
         b64 = base64.b64encode(audio_bytes).decode("ascii")
         parts.append({"inlineData": {"mimeType": audio_mime, "data": b64}})
 
+    generation_config = {
+        "temperature": 0.25,
+        "topP": 0.9,
+        "maxOutputTokens": 4096,
+        "responseMimeType": "application/json",
+    }
+
     body = {
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {"temperature": 0.6, "topP": 0.9, "maxOutputTokens": 2048},
+        "generationConfig": generation_config,
     }
 
     model_used = settings.GEMINI_VISION_MODEL if audio_bytes else settings.GEMINI_TEXT_MODEL
@@ -377,6 +424,26 @@ JSON СХЕМА:
     # Normal parse
     text_out = _extract_gemini_text(resp if isinstance(resp, dict) else {})
     j = _parse_json_from_text(text_out)
+    if (not isinstance(j, dict) or "scenes" not in j) and '"scenes"' in (text_out or "") and "{" in (text_out or ""):
+        retry_parts = [
+            {"text": rules + extra + "\n\nReturn ONLY valid JSON, no markdown, no code fences, ensure all braces closed."}
+        ]
+        if audio_bytes:
+            b64 = base64.b64encode(audio_bytes).decode("ascii")
+            retry_parts.append({"inlineData": {"mimeType": audio_mime, "data": b64}})
+        retry_body = {
+            "contents": [{"role": "user", "parts": retry_parts}],
+            "generationConfig": generation_config,
+        }
+        retry_resp = post_generate_content(settings.GEMINI_API_KEY, model_used, retry_body, timeout=120)
+        retry_text = _extract_gemini_text(retry_resp if isinstance(retry_resp, dict) else {})
+        j = _parse_json_from_text(retry_text)
+        if isinstance(retry_resp, dict):
+            retry_error_hint = _combined_error_text(retry_resp)
+            if retry_error_hint:
+                error_hint = (retry_error_hint or "")[:1500]
+        text_out = retry_text or text_out
+
     if not isinstance(j, dict) or "scenes" not in j:
         scenes = _fallback_plan(duration, text)
         hint = (text_out or error_hint or "")[:1500] or None
