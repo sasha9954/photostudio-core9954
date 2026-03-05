@@ -70,6 +70,43 @@ def _parse_json_from_text(s: str) -> dict | None:
             return None
 
 
+def _combined_error_text(resp: dict | None) -> str:
+    if not isinstance(resp, dict):
+        return ""
+    parts = [
+        resp.get("text"),
+        resp.get("error"),
+        resp.get("detail"),
+    ]
+    out = []
+    for part in parts:
+        if part is None:
+            continue
+        if isinstance(part, str):
+            out.append(part)
+        else:
+            out.append(json.dumps(part, ensure_ascii=False))
+    return "\n".join([x for x in out if x]).strip()
+
+
+def _is_model_unsupported_error(text: str) -> bool:
+    s = (text or "").lower()
+    needles = [
+        "not found for api version",
+        "not supported for generatecontent",
+        "model not found",
+    ]
+    return any(n in s for n in needles)
+
+
+def _pick_fallback_model(model_used: str | None) -> str:
+    model = (model_used or "").strip()
+    for candidate in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        if candidate and candidate != model:
+            return candidate
+    return "gemini-2.5-flash"
+
+
 def get_audio_duration(url: str) -> float:
     """Получаем длительность аудио через ffprobe"""
     try:
@@ -201,7 +238,21 @@ def clip_plan(payload: BrainIn):
     # If no key -> fallback
     if not (settings.GEMINI_API_KEY or "").strip():
         scenes = _fallback_plan(duration, text)
-        return {"ok": True, "engine": "fallback", "audioDuration": duration, "scenes": scenes, "modelUsed": None, "hint": "no_gemini_key"}
+        return {
+            "ok": True,
+            "engine": "fallback",
+            "audioDuration": duration,
+            "scenes": scenes,
+            "modelUsed": None,
+            "fallbackUsed": False,
+            "hint": "no_gemini_key",
+            "error": {
+                "code": "GENERATION_FAILED",
+                "hint": "no_gemini_key",
+                "modelUsed": None,
+                "fallbackUsed": False,
+            },
+        }
 
     scenario_key = (payload.scenarioKey or "beat_rhythm").strip()
     shoot_key = (payload.shootKey or "cinema").strip()
@@ -270,9 +321,19 @@ JSON СХЕМА:
     }
 
     model_used = settings.GEMINI_VISION_MODEL if audio_bytes else settings.GEMINI_TEXT_MODEL
+    fallback_used = False
 
-    # Call Gemini with safe fallbacks
+    # Call Gemini with safe model fallback on unsupported-model errors
     resp = post_generate_content(settings.GEMINI_API_KEY, model_used, body, timeout=120)
+    combined_error = _combined_error_text(resp if isinstance(resp, dict) else None)
+    first_error = combined_error[:1500] if combined_error else None
+    if _is_model_unsupported_error(combined_error):
+        model_used = _pick_fallback_model(model_used)
+        fallback_used = True
+        resp = post_generate_content(settings.GEMINI_API_KEY, model_used, body, timeout=120)
+        combined_error = _combined_error_text(resp if isinstance(resp, dict) else None)
+
+    error_hint = (combined_error or "")[:1500] if combined_error else None
 
     # If http error BUT body may contain JSON in text -> try parse it before fallback
     if isinstance(resp, dict) and resp.get("__http_error__"):
@@ -281,20 +342,87 @@ JSON СХЕМА:
         if isinstance(j, dict) and isinstance(j.get("scenes"), list):
             scenes = _normalize_scenes(duration, j.get("scenes") or [])
             if scenes:
-                return {"ok": True, "engine": "gemini_partial", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": "http_error_but_parsed_json"}
+                return {
+                    "ok": True,
+                    "engine": "gemini_partial",
+                    "audioDuration": duration,
+                    "scenes": scenes,
+                    "modelUsed": model_used,
+                    "fallbackUsed": fallback_used,
+                    "hint": "http_error_but_parsed_json",
+                }
         scenes = _fallback_plan(duration, text)
-        return {"ok": True, "engine": "fallback", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": raw_text[:1500]}
+        return {
+            "ok": True,
+            "engine": "fallback",
+            "audioDuration": duration,
+            "scenes": scenes,
+            "modelUsed": model_used,
+            "fallbackUsed": fallback_used,
+            "hint": error_hint or raw_text[:1500],
+            "error": {
+                "code": "MODEL_UNSUPPORTED" if _is_model_unsupported_error(combined_error or raw_text) else "GENERATION_FAILED",
+                "hint": error_hint or raw_text[:1500],
+                "modelUsed": model_used,
+                "fallbackUsed": fallback_used,
+                "firstAttempt": {
+                    "fallbackUsed": False,
+                    "hint": first_error,
+                } if first_error and fallback_used else None,
+            },
+        }
 
     # Normal parse
     text_out = _extract_gemini_text(resp if isinstance(resp, dict) else {})
     j = _parse_json_from_text(text_out)
     if not isinstance(j, dict) or "scenes" not in j:
         scenes = _fallback_plan(duration, text)
-        return {"ok": True, "engine": "fallback", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": (text_out or "")[:1500]}
+        hint = (text_out or error_hint or "")[:1500] or None
+        return {
+            "ok": True,
+            "engine": "fallback",
+            "audioDuration": duration,
+            "scenes": scenes,
+            "modelUsed": model_used,
+            "fallbackUsed": fallback_used,
+            "hint": hint,
+            "error": {
+                "code": "MODEL_UNSUPPORTED" if _is_model_unsupported_error(combined_error) else "GENERATION_FAILED",
+                "hint": hint,
+                "modelUsed": model_used,
+                "fallbackUsed": fallback_used,
+                "firstAttempt": {
+                    "fallbackUsed": False,
+                    "hint": first_error,
+                } if first_error and fallback_used else None,
+            },
+        }
 
     scenes = _normalize_scenes(duration, j.get("scenes") or [])
     if not scenes:
         scenes = _fallback_plan(duration, text)
-        return {"ok": True, "engine": "fallback", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": "empty_scenes"}
+        return {
+            "ok": True,
+            "engine": "fallback",
+            "audioDuration": duration,
+            "scenes": scenes,
+            "modelUsed": model_used,
+            "fallbackUsed": fallback_used,
+            "hint": "empty_scenes",
+            "error": {
+                "code": "GENERATION_FAILED",
+                "hint": "empty_scenes",
+                "modelUsed": model_used,
+                "fallbackUsed": fallback_used,
+            },
+        }
 
-    return {"ok": True, "engine": "gemini", "audioDuration": duration, "scenes": scenes, "modelUsed": model_used, "hint": None}
+    return {
+        "ok": True,
+        "engine": "gemini",
+        "audioDuration": duration,
+        "scenes": scenes,
+        "modelUsed": model_used,
+        "fallbackUsed": fallback_used,
+        "hint": None,
+    }
