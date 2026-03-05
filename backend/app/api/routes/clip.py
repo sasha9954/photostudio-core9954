@@ -9,6 +9,7 @@ import base64
 import json
 import re
 import os
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from PIL import Image, ImageDraw
@@ -31,6 +32,13 @@ class ClipImageIn(BaseModel):
     height: int | None = 1024
 
 
+class AudioSliceIn(BaseModel):
+    sceneId: str
+    t0: float
+    t1: float
+    audioUrl: str
+
+
 def _ensure_assets_dir() -> None:
     os.makedirs(ASSETS_DIR, exist_ok=True)
 
@@ -50,6 +58,51 @@ def _save_bytes_as_asset(raw: bytes, ext: str = "png") -> str:
     with open(fpath, "wb") as f:
         f.write(raw)
     return _asset_url(filename)
+
+
+def _resolve_audio_asset_path(audio_url: str) -> str | None:
+    raw = (audio_url or "").strip()
+    if not raw:
+        return None
+
+    parsed = urlparse(raw)
+    path = parsed.path or raw
+    marker = "/static/assets/"
+
+    if path.startswith("/static/assets/"):
+        rel = path[len("/static/assets/") :]
+    elif marker in path:
+        rel = path.split(marker, 1)[1]
+    else:
+        return None
+
+    filename = os.path.basename(rel)
+    if not filename:
+        return None
+
+    local_path = os.path.join(ASSETS_DIR, filename)
+    return local_path if os.path.isfile(local_path) else None
+
+
+def _ffmpeg_audio_slice(input_path: str, output_path: str, t0: float, t1: float) -> tuple[bool, str]:
+    first_cmd = [
+        "ffmpeg", "-y", "-ss", str(t0), "-to", str(t1), "-i", input_path,
+        "-c", "copy", output_path,
+    ]
+    first = subprocess.run(first_cmd, capture_output=True, text=True)
+    if first.returncode == 0 and os.path.isfile(output_path):
+        return True, ""
+
+    fallback_cmd = [
+        "ffmpeg", "-y", "-ss", str(t0), "-to", str(t1), "-i", input_path,
+        "-vn", "-acodec", "libmp3lame", "-b:a", "192k", output_path,
+    ]
+    fallback = subprocess.run(fallback_cmd, capture_output=True, text=True)
+    if fallback.returncode == 0 and os.path.isfile(output_path):
+        return True, ""
+
+    err = (fallback.stderr or first.stderr or "ffmpeg_failed").strip()
+    return False, err[:500]
 
 
 def _mock_scene_image(scene_id: str, width: int, height: int) -> str:
@@ -615,3 +668,42 @@ def clip_image(payload: ClipImageIn):
             return {"ok": True, "sceneId": scene_id, "imageUrl": image_url, "engine": "mock", "hint": f"gemini_error:{str(e)[:200]}"}
         except Exception:
             return JSONResponse(status_code=500, content={"ok": False, "code": "IMAGE_GENERATION_FAILED", "hint": str(e)[:300]})
+
+
+@router.post("/clip/audio-slice")
+def clip_audio_slice(payload: AudioSliceIn):
+    scene_id = (payload.sceneId or "").strip()
+    if not scene_id:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "sceneId_required"})
+
+    t0 = float(payload.t0)
+    t1 = float(payload.t1)
+    if t0 < 0:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_t0", "hint": "t0_must_be_non_negative"})
+    if t1 <= t0:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_range", "hint": "t1_must_be_greater_than_t0"})
+    if (t1 - t0) > 15.0:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "slice_too_long", "hint": "max_slice_sec_15"})
+
+    input_path = _resolve_audio_asset_path(payload.audioUrl)
+    if not input_path:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_audioUrl", "hint": "audioUrl_must_point_to_/static/assets/<file>"})
+
+    _ensure_assets_dir()
+    safe_scene = re.sub(r"[^a-zA-Z0-9_-]", "_", scene_id) or "scene"
+    t0_ms = int(round(t0 * 1000))
+    t1_ms = int(round(t1 * 1000))
+    filename = f"clip_audio_{safe_scene}_{t0_ms}_{t1_ms}_{uuid4().hex[:8]}.mp3"
+    output_path = os.path.join(ASSETS_DIR, filename)
+
+    ok, err = _ffmpeg_audio_slice(input_path, output_path, t0, t1)
+    if not ok:
+        return JSONResponse(status_code=500, content={"ok": False, "code": "slice_failed", "hint": err})
+
+    return {
+        "ok": True,
+        "audioSliceUrl": _asset_url(filename),
+        "sceneId": scene_id,
+        "t0": t0,
+        "t1": t1,
+    }
