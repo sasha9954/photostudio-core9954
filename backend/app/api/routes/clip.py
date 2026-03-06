@@ -606,37 +606,49 @@ def _validate_planner_scenes_quality(duration: float, scenario_key: str, scenes:
         if is_scene_text_empty and is_image_prompt_empty and is_video_prompt_empty:
             empty_core_scene_count += 1
 
+    warnings: list[str] = []
     rejected_reasons: list[str] = []
     scenario = (scenario_key or "").strip().lower()
     if scenario == "clip":
         if duration >= 12 and scene_count < 2:
-            rejected_reasons.append("scene_count_below_min_for_12s")
+            warnings.append("scene_count_below_min_for_12s")
         if duration >= 20 and scene_count < 3:
-            rejected_reasons.append("scene_count_below_min_for_20s")
+            warnings.append("scene_count_below_min_for_20s")
         if duration >= 30 and scene_count < 4:
-            rejected_reasons.append("scene_count_below_min_for_30s")
+            warnings.append("scene_count_below_min_for_30s")
 
     if scene_count == 1:
         only = scenes[0]
         coverage = max(0.0, float(only.get("end") or 0.0) - float(only.get("start") or 0.0))
-        if duration > 0 and (coverage / duration) >= 0.9:
+        only_scene_text = str(only.get("sceneText") or "").strip()
+        only_image_prompt = str(only.get("imagePrompt") or "").strip()
+        only_video_prompt = str(only.get("videoPrompt") or "").strip()
+        only_core_empty = not only_scene_text and not only_image_prompt and not only_video_prompt
+
+        if duration > 0 and (coverage / duration) >= 0.9 and only_core_empty:
             rejected_reasons.append("single_scene_covers_almost_entire_track")
 
     if empty_scene_text_count > 0:
-        rejected_reasons.append("has_empty_sceneText")
+        warnings.append("has_empty_sceneText")
     if empty_image_prompt_count > 0:
-        rejected_reasons.append("has_empty_imagePrompt")
+        warnings.append("has_empty_imagePrompt")
     if empty_video_prompt_count > 0:
-        rejected_reasons.append("has_empty_videoPrompt")
+        warnings.append("has_empty_videoPrompt")
+
+    if scene_count == 0:
+        rejected_reasons.append("empty_scenes")
     if scene_count > 0 and empty_core_scene_count > (scene_count / 2):
         rejected_reasons.append("more_than_half_scenes_empty_core_fields")
 
     rejected_reason = ",".join(rejected_reasons) if rejected_reasons else None
     return {
+        "scenario": scenario,
         "sceneCount": scene_count,
         "emptySceneTextCount": empty_scene_text_count,
         "emptyImagePromptCount": empty_image_prompt_count,
         "emptyVideoPromptCount": empty_video_prompt_count,
+        "emptyCoreSceneCount": empty_core_scene_count,
+        "warnings": warnings,
         "rejectedReason": rejected_reason,
         "repairRetryUsed": False,
     }
@@ -649,10 +661,13 @@ def clip_plan(payload: BrainIn):
 
     duration, audio_bytes, audio_mime, audio_debug = _load_audio_for_planner(payload.audioUrl)
     empty_validation_debug = {
+        "scenario": (payload.scenarioKey or "").strip().lower(),
         "sceneCount": 0,
         "emptySceneTextCount": 0,
         "emptyImagePromptCount": 0,
         "emptyVideoPromptCount": 0,
+        "emptyCoreSceneCount": 0,
+        "warnings": [],
         "rejectedReason": None,
         "repairRetryUsed": False,
     }
@@ -928,7 +943,7 @@ ATMOSPHERIC / STORY INSERTS:
             scenes = _normalize_scenes(duration, j.get("scenes") or [])
             validation = _validate_planner_scenes_quality(duration, scenario_key, scenes)
             parsed_http_validation = validation
-            if scenes and not validation.get("rejectedReason"):
+            if scenes:
                 return {
                     "ok": True,
                     "engine": "gemini_partial",
@@ -1031,63 +1046,89 @@ ATMOSPHERIC / STORY INSERTS:
         }
 
     if validation.get("rejectedReason"):
-        min_scenes = _minimum_scene_count_for_repair(duration)
-        repair_instruction = f"""
+        is_clip_mode = (scenario_key or "").strip().lower() == "clip"
+        if is_clip_mode:
+            min_scenes = _minimum_scene_count_for_repair(duration)
+            repair_instruction = f"""
 
 REPAIR MODE: предыдущий storyboard отклонён как низкокачественный ({validation.get('rejectedReason')}).
 Исправь план и верни новый валидный JSON.
 ЖЁСТКИЕ ТРЕБОВАНИЯ:
 - Минимум {min_scenes} сцен для этой длительности.
-- sceneText НЕ должен быть пустым ни в одной сцене.
-- imagePrompt НЕ должен быть пустым ни в одной сцене.
-- videoPrompt НЕ должен быть пустым ни в одной сцене.
+- Не оставляй сцены полностью пустыми по core fields (sceneText/imagePrompt/videoPrompt).
+- Старайся сделать sceneText, imagePrompt и videoPrompt содержательными в каждой сцене.
 - Каждая сцена должна быть конкретной и полезной для storyboard.
 - Верни только валидный JSON на русском языке, без markdown.
 """
-        repair_parts = [{"text": rules + extra + repair_instruction}]
-        if audio_bytes:
-            b64 = base64.b64encode(audio_bytes).decode("ascii")
-            repair_parts.append({"inlineData": {"mimeType": audio_mime, "data": b64}})
-        repair_body = {
-            "contents": [{"role": "user", "parts": repair_parts}],
-            "generationConfig": generation_config,
-        }
-        repair_resp = post_generate_content(settings.GEMINI_API_KEY, model_used, repair_body, timeout=120)
-        repair_text = _extract_gemini_text(repair_resp if isinstance(repair_resp, dict) else {})
-        repair_json = _parse_json_from_text(repair_text)
-        repair_scenes = _normalize_scenes(duration, (repair_json or {}).get("scenes") or []) if isinstance(repair_json, dict) else []
-        repair_validation = _validate_planner_scenes_quality(duration, scenario_key, repair_scenes)
-        repair_validation["repairRetryUsed"] = True
+            repair_parts = [{"text": rules + extra + repair_instruction}]
+            if audio_bytes:
+                b64 = base64.b64encode(audio_bytes).decode("ascii")
+                repair_parts.append({"inlineData": {"mimeType": audio_mime, "data": b64}})
+            repair_body = {
+                "contents": [{"role": "user", "parts": repair_parts}],
+                "generationConfig": generation_config,
+            }
+            repair_resp = post_generate_content(settings.GEMINI_API_KEY, model_used, repair_body, timeout=120)
+            repair_text = _extract_gemini_text(repair_resp if isinstance(repair_resp, dict) else {})
+            repair_json = _parse_json_from_text(repair_text)
+            repair_scenes = _normalize_scenes(duration, (repair_json or {}).get("scenes") or []) if isinstance(repair_json, dict) else []
+            repair_validation = _validate_planner_scenes_quality(duration, scenario_key, repair_scenes)
+            repair_validation["repairRetryUsed"] = True
 
-        if repair_scenes and not repair_validation.get("rejectedReason"):
+            if repair_scenes and not repair_validation.get("rejectedReason"):
+                return {
+                    "ok": True,
+                    "engine": "gemini",
+                    "audioDuration": duration,
+                    "scenes": repair_scenes,
+                    "plannerDebug": {"audio": audio_debug, "validation": repair_validation},
+                    "modelUsed": model_used,
+                    "fallbackUsed": fallback_used,
+                    "hint": None if audio_bytes else "plan_built_without_audio_bytes",
+                }
+
+            if scenes:
+                validation["repairRetryUsed"] = True
+                return {
+                    "ok": True,
+                    "engine": "gemini",
+                    "audioDuration": duration,
+                    "scenes": scenes,
+                    "plannerDebug": {"audio": audio_debug, "validation": validation},
+                    "modelUsed": model_used,
+                    "fallbackUsed": fallback_used,
+                    "hint": None if audio_bytes else "plan_built_without_audio_bytes",
+                }
+
+            rejected_reason = repair_validation.get("rejectedReason") or "planner_output_rejected_as_low_quality"
+            fallback_scenes = _fallback_plan(duration, text)
             return {
                 "ok": True,
-                "engine": "gemini",
+                "engine": "fallback",
                 "audioDuration": duration,
-                "scenes": repair_scenes,
+                "scenes": fallback_scenes,
                 "plannerDebug": {"audio": audio_debug, "validation": repair_validation},
                 "modelUsed": model_used,
                 "fallbackUsed": fallback_used,
-                "hint": None if audio_bytes else "plan_built_without_audio_bytes",
+                "hint": "plan_built_without_audio_bytes" if not audio_bytes else f"planner_output_rejected_as_low_quality:{rejected_reason}",
+                "error": {
+                    "code": "GENERATION_FAILED",
+                    "hint": f"planner_output_rejected_as_low_quality:{rejected_reason}",
+                    "modelUsed": model_used,
+                    "fallbackUsed": fallback_used,
+                },
             }
 
-        rejected_reason = repair_validation.get("rejectedReason") or "planner_output_rejected_as_low_quality"
-        fallback_scenes = _fallback_plan(duration, text)
+        # Non-clip scenarios: keep validation in plannerDebug but avoid strict fallback.
         return {
             "ok": True,
-            "engine": "fallback",
+            "engine": "gemini",
             "audioDuration": duration,
-            "scenes": fallback_scenes,
-            "plannerDebug": {"audio": audio_debug, "validation": repair_validation},
+            "scenes": scenes,
+            "plannerDebug": {"audio": audio_debug, "validation": validation},
             "modelUsed": model_used,
             "fallbackUsed": fallback_used,
-            "hint": "plan_built_without_audio_bytes" if not audio_bytes else f"planner_output_rejected_as_low_quality:{rejected_reason}",
-            "error": {
-                "code": "GENERATION_FAILED",
-                "hint": f"planner_output_rejected_as_low_quality:{rejected_reason}",
-                "modelUsed": model_used,
-                "fallbackUsed": fallback_used,
-            },
+            "hint": None if audio_bytes else "plan_built_without_audio_bytes",
         }
 
     return {
