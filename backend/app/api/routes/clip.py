@@ -665,7 +665,7 @@ def clip_plan(payload: BrainIn):
 
     duration, audio_bytes, audio_mime, audio_debug = _load_audio_for_planner(payload.audioUrl)
     empty_validation_debug = {
-        "scenario": (payload.scenarioKey or "").strip().lower(),
+        "scenario": "clip",
         "sceneCount": 0,
         "emptySceneTextCount": 0,
         "emptyImagePromptCount": 0,
@@ -696,7 +696,7 @@ def clip_plan(payload: BrainIn):
             },
         }
 
-    scenario_key = (payload.scenarioKey or "beat_rhythm").strip()
+    scenario_key = "clip"
     shoot_key = (payload.shootKey or "cinema").strip()
     style_key = (payload.styleKey or "realism").strip()
     freeze = bool(payload.freezeStyle)
