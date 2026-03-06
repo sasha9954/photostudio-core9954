@@ -27,6 +27,7 @@ const PORT_COLORS = {
   ref_character: "#73d13d",// green
   ref_location: "#9254de", // purple
   ref_style: "#faad14",    // amber
+  ref_items: "#13c2c2",    // cyan
   plan: "#36cfc9",         // teal
 };
 
@@ -35,8 +36,14 @@ function portColor(key) {
 }
 
 function isBrainInput(handleId) {
-  return handleId === "audio" || handleId === "text" || handleId === "ref_character" || handleId === "ref_location" || handleId === "ref_style";
+  return handleId === "audio" || handleId === "text" || handleId === "ref_character" || handleId === "ref_location" || handleId === "ref_style" || handleId === "ref_items";
 }
+
+const SCENARIO_OPTIONS = [
+  { value: "clip", label: "клип" },
+  { value: "movie", label: "кино" },
+  { value: "ad", label: "реклама" },
+];
 
 // -------------------------
 // helpers
@@ -310,9 +317,10 @@ function BrainNode({ id, data }) {
       <div style={{ position: "absolute", top: 190, left: 18, fontSize: 11, opacity: 0.75, pointerEvents: "none" }}>REF Персонаж</div>
       <div style={{ position: "absolute", top: 230, left: 18, fontSize: 11, opacity: 0.75, pointerEvents: "none" }}>REF Локация</div>
       <div style={{ position: "absolute", top: 270, left: 18, fontSize: 11, opacity: 0.75, pointerEvents: "none" }}>REF Стиль</div>
+      <div style={{ position: "absolute", top: 310, left: 18, fontSize: 11, opacity: 0.75, pointerEvents: "none" }}>REF Предметы</div>
 
       {/* typed output */}
-      <div style={{ position: "absolute", top: 310, right: 18, fontSize: 11, opacity: 0.75, pointerEvents: "none" }}>PLAN</div>
+      <div style={{ position: "absolute", top: 350, right: 18, fontSize: 11, opacity: 0.75, pointerEvents: "none" }}>PLAN</div>
 
       {/* explicit ports (позже удобно валидировать связи) */}
       <Handle type="target" position={Position.Left} id="audio" style={{ top: 116, background: portColor("audio"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
@@ -320,7 +328,8 @@ function BrainNode({ id, data }) {
       <Handle type="target" position={Position.Left} id="ref_character" style={{ top: 196, background: portColor("ref_character"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
       <Handle type="target" position={Position.Left} id="ref_location" style={{ top: 236, background: portColor("ref_location"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
       <Handle type="target" position={Position.Left} id="ref_style" style={{ top: 276, background: portColor("ref_style"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
-      <Handle type="source" position={Position.Right} id="plan" style={{ top: 176, background: portColor("plan"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
+      <Handle type="target" position={Position.Left} id="ref_items" style={{ top: 316, background: portColor("ref_items"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
+      <Handle type="source" position={Position.Right} id="plan" style={{ top: 216, background: portColor("plan"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
 
       <NodeShell
         title="BRAIN"
@@ -337,8 +346,10 @@ function BrainNode({ id, data }) {
             <div className="clipSB_hint" style={{ marginBottom: 6 }}>
               Сценарий
             </div>
-            <select className="clipSB_select" value="clip" disabled>
-              <option value="clip">клип</option>
+            <select className="clipSB_select clipSB_selectLocked" value="clip" disabled aria-disabled="true" tabIndex={-1}>
+              {SCENARIO_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
           </div>
 
@@ -527,7 +538,7 @@ function RefNode({ id, data }) {
         </button>
 
         <div className="clipSB_hint" style={{ marginTop: 10 }}>
-          подключай к BRAIN (персонаж/локация/стиль)
+          подключай к BRAIN (персонаж/локация/стиль/предметы)
         </div>
       </NodeShell>
     </>
@@ -1055,10 +1066,12 @@ onParse: async (nodeId) => {
     const refCharNode = pickSourceNode("ref_character");
     const refLocNode = pickSourceNode("ref_location");
     const refStyleNode = pickSourceNode("ref_style");
+    const refItemsNode = pickSourceNode("ref_items");
 
     const refCharacter = refCharNode?.type === "refNode" && refCharNode?.data?.kind === "ref_character" ? (refCharNode.data?.url || "") : "";
     const refLocation = refLocNode?.type === "refNode" && refLocNode?.data?.kind === "ref_location" ? (refLocNode.data?.url || "") : "";
     const refStyle = refStyleNode?.type === "refNode" && refStyleNode?.data?.kind === "ref_style" ? (refStyleNode.data?.url || "") : "";
+    const refItems = refItemsNode?.type === "refNode" && refItemsNode?.data?.kind === "ref_items" ? (refItemsNode.data?.url || "") : "";
 
     const scenarioKey = "clip";
     const shootKey = brainNow.data?.shootKey || "cinema";
@@ -1081,6 +1094,7 @@ onParse: async (nodeId) => {
       refCharacter: refCharacter || null,
       refLocation: refLocation || null,
       refStyle: refStyle || null,
+      refItems: refItems || null,
       audioType,
     };
 
@@ -1357,6 +1371,8 @@ const hydrate = useCallback(() => {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ЛОКАЦИЯ", icon: "📍", kind: "ref_location", url: "", name: "" } };
     } else if (type === "ref_style") {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — СТИЛЬ", icon: "🎨", kind: "ref_style", url: "", name: "" } };
+    } else if (type === "ref_items") {
+      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПРЕДМЕТЫ", icon: "📦", kind: "ref_items", url: "", name: "" } };
     } else if (type === "storyboard") {
       node = { id, type: "storyboardNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { scenes: [] } };
     } else if (type === "assembly") {
@@ -1474,7 +1490,8 @@ const hydrate = useCallback(() => {
             (h === "text" && src.type === "textNode" && (params.sourceHandle || "") === "text") ||
             (h === "ref_character" && src.type === "refNode" && (params.sourceHandle || "") === "ref_character") ||
             (h === "ref_location" && src.type === "refNode" && (params.sourceHandle || "") === "ref_location") ||
-            (h === "ref_style" && src.type === "refNode" && (params.sourceHandle || "") === "ref_style");
+            (h === "ref_style" && src.type === "refNode" && (params.sourceHandle || "") === "ref_style") ||
+            (h === "ref_items" && src.type === "refNode" && (params.sourceHandle || "") === "ref_items");
 
           if (!ok) return eds;
 
@@ -1874,6 +1891,7 @@ const hydrate = useCallback(() => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_character")}>🧍 REF — Персонаж</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_location")}>📍 REF — Локация</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_style")}>🎨 REF — Стиль</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_items")}>📦 REF — Предметы</button>
               <div className="clipSB_drawerSep" />
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("storyboard")}>🎞️ Storyboard</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("assembly")}>🎬 Сборка</button>

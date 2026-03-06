@@ -222,20 +222,44 @@
 }
 
 .clipSB_select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
   width: 100%;
   border-radius: 12px;
-  padding: 10px 12px;
-  border: none;
+  padding: 10px 38px 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   outline: none;
   color: rgba(255, 255, 255, 0.86);
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background-color: rgba(255, 255, 255, 0.06);
+  background-image:
+    linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.78) 50%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.78) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% - 2px),
+    calc(100% - 10px) calc(50% - 2px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
-/* dropdown у select на Windows часто белый → текст option делаем чёрным */
+.clipSB_select:focus {
+  border-color: rgba(120, 180, 255, 0.45);
+  box-shadow:
+    inset 0 0 0 1px rgba(120, 180, 255, 0.20),
+    0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+/* Native dropdown color support is browser-dependent, keep dark where possible */
 .clipSB_select option {
-  color: #111;
-  background: #fff;
+  color: rgba(245, 247, 255, 0.94);
+  background: #171b26;
+}
+
+.clipSB_selectLocked {
+  pointer-events: none;
+  cursor: default;
+  opacity: 0.82;
 }
 
 .clipSB_input {

@@ -235,6 +235,7 @@ class BrainIn(BaseModel):
     refCharacter: str | None = None
     refLocation: str | None = None
     refStyle: str | None = None
+    refItems: str | None = None
 
     # informational (optional)
     audioType: str | None = None     # "song" | "bg"
@@ -723,6 +724,32 @@ def clip_plan(payload: BrainIn):
 - Даже если песня/текст не на русском, служебные поля planner всё равно должны быть на русском.
 - Поля why, sceneText, lyricFragment, timingReason, imagePrompt, videoPrompt — всегда только русский.
 
+КОНТИНЬЮИТИ И LOCK-ПРАВИЛА (ОБЯЗАТЕЛЬНО):
+A) Если есть refCharacter: это IDENTITY LOCK.
+- Во всех сценах должен сохраняться один и тот же персонаж/персонажи.
+- Нельзя случайно менять внешность, возраст, типаж, образ или идентичность от сцены к сцене.
+
+B) Если есть refLocation: это WORLD LOCK.
+- Сцены должны происходить в одной локации или в естественных вариациях той же среды.
+- Нельзя прыгать в случайные несвязанные места.
+
+C) Если есть refStyle: это STYLE LOCK.
+- Общий визуальный язык, свет, цвет, mood и пластика должны быть едиными для всего клипа.
+- Нельзя превращать клип в набор несвязанных визуальных стилей.
+
+D) Если есть refItems: это PROPS LOCK (props-aware storyboard).
+- Учитывай предметы как важные props и используй их органично.
+- Не нужно вставлять все предметы в каждый кадр.
+- Но если предметы заданы, они обязательно должны влиять на часть сцен и на визуальные решения.
+
+E) Если текста нет:
+- Строй свободный нарратив внутри зафиксированного мира (free narrative inside locked world).
+- Нельзя допускать случайные смысловые, локационные и стилистические скачки.
+
+F) Если текст есть:
+- Текст — это story guidance по смыслу сцен.
+- Но текст не должен ломать continuity: identity/location/style lock сохраняются обязательно.
+
 ПРАВИЛА ПО ВОКАЛУ И LIPSYNC:
 A) ПРИОРИТЕТ АНАЛИЗА ВОКАЛА:
 - Если textType_hint=lyrics ИЛИ audioType_hint=song ИЛИ wantLipSync=true,
@@ -881,6 +908,19 @@ ATMOSPHERIC / STORY INSERTS:
 - Остальную часть припева показывай через rhythm montage / atmosphere / story inserts.
 - Clip mode должен быть музыкальным клипом, а не karaoke и не talking head.
 - Баланс для clip mode: немного lipSync, немного performance, много клипового монтажа, немного истории/атмосферы.
+
+РАБОТА С ФЛАГОМ wantLipSync:
+- Если wantLipSync=false:
+  * Строй клип в первую очередь по beat/rhythm/energy/transitions.
+  * Текст (если есть) используй как слабую смысловую подсказку, не как жёсткий диктант.
+  * Это монтажный музыкальный клип.
+  * Во всех сценах isLipSync=false.
+
+- Если wantLipSync=true:
+  * Только performance/lipSync сцены строй по полным vocal phrases.
+  * Нельзя обрывать фразу, слово или предложение в lipSync-сцене.
+  * Остальные сцены между lipSync-сценами строй по beat/energy/montage/atmosphere/story inserts.
+  * Клип должен оставаться музыкальным клипом, а не сплошным talking head.
 """
 
     ref_hints = []
@@ -890,6 +930,8 @@ ATMOSPHERIC / STORY INSERTS:
         ref_hints.append("Есть реф локации (location reference).")
     if payload.refStyle:
         ref_hints.append("Есть реф стиля (style reference).")
+    if payload.refItems:
+        ref_hints.append("Есть реф предметов (items/props reference).")
 
     extra = ""
     if ref_hints:
