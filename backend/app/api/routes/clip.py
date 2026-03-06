@@ -1007,7 +1007,7 @@ def clip_plan(payload: BrainIn):
             },
         )
 
-    has_visual_inputs = bool(audio_bytes or character_images)
+    has_visual_inputs = bool(audio_bytes or character_images or location_images)
     if has_visual_inputs:
         model_used = getattr(settings, "GEMINI_VISION_MODEL", None) or "gemini-1.5-flash"
     else:
@@ -1080,18 +1080,24 @@ Location reference images:
 
 If reference images exist they override imagination.
 
-LANGUAGE RULES
+IMPORTANT LANGUAGE ENFORCEMENT
 
-Scene descriptions must be written in Russian.
+All human-readable descriptive output must be written in Russian.
 
-Fields that must be Russian:
+The following fields must ALWAYS be in Russian:
 - visualDescription
 - reason
 - camera
 - motion
 - lipSyncText
+- sections.type
+- sections.energy
+- vocalPhrases.text
+- energyEvents.description
 
-Field visualPrompt should remain in English because it will be used for image generation.
+Only visualPrompt may remain in English because it is intended for image generation.
+
+If any of the required descriptive fields are returned in English, the output is invalid.
 """
 
     user_input = {
