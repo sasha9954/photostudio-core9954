@@ -796,4 +796,5 @@ def clip_audio_slice(payload: AudioSliceIn):
         "t0": t0,
         "t1": t1,
         "duration": round(t1 - t0, 3),
+        "audioSliceBackendDurationSec": round(t1 - t0, 3),
     }

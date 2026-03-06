@@ -122,10 +122,26 @@ function fmtTimeWithMs(seconds) {
 }
 
 function fmtSecAndMs(seconds) {
+  if (seconds == null || seconds === "") return "—";
   const s = Number(seconds);
   if (!Number.isFinite(s)) return "—";
   const ms = Math.round(s * 1000);
   return `${s.toFixed(3)}s (${ms}ms)`;
+}
+
+function normalizeDurationSec(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function resolveAssetUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw) || raw.startsWith("data:")) return raw;
+  if (raw.startsWith("/static/assets/") || raw.startsWith("/assets/")) return `${API_BASE}${raw}`;
+  if (raw.startsWith("static/assets/")) return `${API_BASE}/${raw}`;
+  return raw;
 }
 
 const SCENE_IMAGE_FORMATS = ["9:16", "1:1", "16:9"];
@@ -727,8 +743,9 @@ const scenarioSelectedExpectedSliceSec = Number(
 );
 const globalAudioUrl = useMemo(() => {
   const audioNodeWithUrl = nodes.find((n) => n.type === "audioNode" && n?.data?.audioUrl);
-  return audioNodeWithUrl?.data?.audioUrl ? String(audioNodeWithUrl.data.audioUrl) : "";
+  return audioNodeWithUrl?.data?.audioUrl ? resolveAssetUrl(audioNodeWithUrl.data.audioUrl) : "";
 }, [nodes]);
+const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSelected?.audioSliceUrl), [scenarioSelected?.audioSliceUrl]);
   const [scenarioImageLoading, setScenarioImageLoading] = useState(false);
   const [scenarioImageError, setScenarioImageError] = useState("");
   const [scenarioVideoLoading, setScenarioVideoLoading] = useState(false);
@@ -827,6 +844,7 @@ const globalAudioUrl = useMemo(() => {
         audioSliceT0: outT0,
         audioSliceT1: outT1,
         audioSliceExpectedDurationSec: expectedDuration,
+        audioSliceBackendDurationSec: normalizeDurationSec(out?.audioSliceBackendDurationSec ?? out?.duration),
         audioSliceActualDurationSec: null,
         audioSliceLoadError: "",
       });
@@ -1146,7 +1164,8 @@ onParse: async (nodeId) => {
           audioSliceT0: Number(s.audioSliceT0 ?? t0),
           audioSliceT1: Number(s.audioSliceT1 ?? t1),
           audioSliceExpectedDurationSec: Number(s.audioSliceExpectedDurationSec ?? Math.max(0, t1 - t0)),
-          audioSliceActualDurationSec: Number.isFinite(Number(s.audioSliceActualDurationSec)) ? Number(s.audioSliceActualDurationSec) : null,
+          audioSliceBackendDurationSec: normalizeDurationSec(s.audioSliceBackendDurationSec),
+          audioSliceActualDurationSec: normalizeDurationSec(s.audioSliceActualDurationSec),
           audioSliceLoadError: s.audioSliceLoadError || "",
           videoUrl: s.videoUrl || "",
           why: s.why || "",
@@ -1737,27 +1756,28 @@ const hydrate = useCallback(() => {
 
                       <div className="clipSB_audioDebugSection">
                         <div className="clipSB_hint" style={{ marginBottom: 6 }}>Срез по сцене (audioSliceUrl)</div>
-                        {scenarioSelected.audioSliceUrl ? (
+                        {scenarioSelectedAudioSliceUrl ? (
                           <audio
-                            key={`slice-${String(scenarioSelected.id || scenarioEditor.selected)}-${String(scenarioSelected.audioSliceUrl || "")}`}
+                            key={`slice-${String(scenarioSelected.id || scenarioEditor.selected)}-${String(scenarioSelectedAudioSliceUrl || "")}`}
                             className="clipSB_audioPlayer"
                             controls
                             preload="metadata"
-                            src={scenarioSelected.audioSliceUrl}
+                            src={scenarioSelectedAudioSliceUrl}
                             onLoadedMetadata={handleScenarioSliceLoadedMetadata}
                             onError={handleScenarioSliceAudioError}
                           />
                         ) : (
                           <div className="clipSB_hint">Срез ещё не создан. Нажмите «Взять аудио».</div>
                         )}
-                        <div className="clipSB_audioDebugUrl">{scenarioSelected.audioSliceUrl || "—"}</div>
+                        <div className="clipSB_audioDebugUrl">{scenarioSelectedAudioSliceUrl || "—"}</div>
                       </div>
 
                       <div className="clipSB_audioDebugGrid">
                         <div className="clipSB_videoKv"><span>t0</span><span>{fmtSecAndMs(Number(scenarioSelected.audioSliceT0 ?? scenarioSelectedT0))}</span></div>
                         <div className="clipSB_videoKv"><span>t1</span><span>{fmtSecAndMs(Number(scenarioSelected.audioSliceT1 ?? scenarioSelectedT1))}</span></div>
                         <div className="clipSB_videoKv"><span>expected duration</span><span>{fmtSecAndMs(scenarioSelectedExpectedSliceSec)}</span></div>
-                        <div className="clipSB_videoKv"><span>actual duration</span><span>{fmtSecAndMs(Number(scenarioSelected.audioSliceActualDurationSec))}</span></div>
+                        <div className="clipSB_videoKv"><span>backend duration</span><span>{fmtSecAndMs(scenarioSelected.audioSliceBackendDurationSec)}</span></div>
+                        <div className="clipSB_videoKv"><span>actual duration</span><span>{fmtSecAndMs(scenarioSelected.audioSliceActualDurationSec)}</span></div>
                       </div>
 
                       {scenarioSelected.audioSliceLoadError ? (
