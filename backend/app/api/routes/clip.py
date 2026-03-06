@@ -454,16 +454,24 @@ def _normalize_scenes(duration: float, scenes: list[dict]) -> list[dict]:
         wants_lipsync = is_lipsync or scene_type == "lipSync"
         missing_vocal_phrase = not lyric_fragment
         instrumental_slice = audio_type == "instrumental" or not has_vocals
-        if wants_lipsync and (instrumental_slice or missing_vocal_phrase):
+        seg_duration = t1 - t0
+        too_short_lipsync = seg_duration < 1.0
+        short_with_lyric = seg_duration < 1.5 and bool(lyric_fragment)
+        if wants_lipsync and (instrumental_slice or missing_vocal_phrase or too_short_lipsync or short_with_lyric):
             only_missing_phrase_issue = missing_vocal_phrase and audio_type != "instrumental" and has_vocals
             if not only_missing_phrase_issue:
                 has_vocals = False
             is_lipsync = False
-            scene_type = "visual_rhythm"
+            scene_type = "vocal" if (audio_type != "instrumental" and has_vocals) else "visual_rhythm"
             performance_type = "cinematic_visual"
             if shot_type == "mouth_closeup":
                 shot_type = "medium"
-            fallback_reason = "lipSync disabled: vocal phrase not confirmed for this segment"
+            if too_short_lipsync and missing_vocal_phrase:
+                fallback_reason = "lipSync disabled: segment too short and lyricFragment is empty"
+            elif short_with_lyric:
+                fallback_reason = "lipSync disabled: segment too short for a coherent vocal phrase"
+            else:
+                fallback_reason = "lipSync disabled: vocal phrase not confirmed for this segment"
             timing_reason = f"{timing_reason}; {fallback_reason}" if timing_reason else fallback_reason
 
         out.append({
@@ -588,10 +596,20 @@ C) Если сцена lipSync (isLipSync=true или sceneType=lipSync):
 - выбирай t0/t1 только вокруг целой вокальной фразы;
 - начало не должно попадать в середину слова;
 - конец не должен обрывать слово/слог;
+- segment должен покрывать цельную исполняемую фразу, пригодную для синхронизации губ;
+- segment нельзя делать слишком коротким, если фраза ещё продолжается;
+- нельзя резать в середине слова, слога или дыхания;
+- предпочитай законченные микро-фразы, а не обрезанные фрагменты;
 - для lipSync тайминга используй ЧИСЛЕННЫЕ ГРАНИЦЫ:
   t0 = start_of_vocal_phrase - 0.15..0.30 sec,
   t1 = end_of_vocal_phrase + 0.10..0.25 sec;
+- prefer duration roughly 2.0–6.0 sec when possible;
+- avoid ultra-short segments unless the vocal phrase is truly short;
+- if phrase is longer, prefer complete expressive fragment rather than clipped fragment;
+- t0 should align just before audible phrase onset;
+- t1 should align just after phrase resolution / breath / phrase tail;
 - lyricFragment должен содержать короткий фрагмент исполняемой фразы;
+- lyricFragment должен описывать именно тот фрагмент, который реально исполняется в диапазоне t0/t1;
 - sceneText и videoPrompt ОБЯЗАНЫ явно описывать singing performance;
 - в videoPrompt укажи эмоцию, интенсивность, дистанцию камеры и mouth-visible framing.
 
@@ -606,6 +624,25 @@ C) Если сцена lipSync (isLipSync=true или sceneType=lipSync):
 D) Если lipSync=false:
 - ориентируй t0/t1 на ритм, бит, переходы, дропы и изменение энергии;
 - выбирай музыкально цельные куски, не режь между сильными долями без причины.
+
+E) Для sceneType=visual_rhythm:
+- segment должен начинаться и заканчиваться на музыкально устойчивой точке;
+- избегай случайного реза между сильными долями;
+- если есть явный переход / drop / accent / bar boundary — предпочитай его как границу;
+- prefer stable boundaries near 2-beat / 4-beat / bar-like accents;
+- avoid jittery timing such as meaningless 0.7–1.1 sec cuts unless explicitly justified.
+
+F) КАЧЕСТВО И СОГЛАСОВАННОСТЬ ПОЛЕЙ:
+- Если sceneType="lipSync":
+  * lyricFragment MUST NOT be empty
+  * hasVocals MUST be true
+  * performanceType MUST be "singing_performance"
+  * shotType MUST be one of: medium | closeup | mouth_closeup
+  * timingReason должен объяснять, почему этот кусок удобен для lip-sync
+- Если sceneType="visual_rhythm":
+  * lyricFragment may be empty
+  * shotType может быть широким (wide/medium/other non-lipsync framing)
+  * timingReason должен объяснять музыкальную причину выбора границ
 
 JSON СХЕМА:
 {{
