@@ -234,19 +234,6 @@ function AudioNode({ id, data }) {
     <>
       <Handle type="source" position={Position.Right} id="audio" className="clipSB_handle" style={{ background: portColor("audio"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
       <NodeShell title="AUDIO" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎧</span>} className="clipSB_nodeAudio">
-        <div className="clipSB_row" style={{ marginBottom: 8 }}>
-          <div className="clipSB_rowLabel" style={{ fontSize: 12, opacity: 0.85 }}>Тип</div>
-          <select
-            className="clipSB_select"
-            style={{ width: "100%", marginTop: 6 }}
-            value={data?.audioType || "bg"}
-            onChange={(e) => data?.onAudioType?.(id, e.target.value)}
-          >
-            <option value="bg">бит / фон</option>
-            <option value="song">песня (вокал + музыка)</option>
-          </select>
-        </div>
-
           {data?.uploading ? (
             <div className="clipSB_btn clipSB_btnMuted">Загрузка…</div>
           ) : data?.audioName ? (
@@ -318,7 +305,7 @@ function TextNode({ id, data }) {
 }
 
 function BrainNode({ id, data }) {
-  const scenario = data?.scenarioKey || "song_meaning";
+  const scenario = "clip";
   const shoot = data?.shootKey || "cinema";
   const style = data?.styleKey || "realism";
   const freezeStyle = !!data?.freezeStyle;
@@ -365,18 +352,9 @@ function BrainNode({ id, data }) {
             <div className="clipSB_hint" style={{ marginBottom: 6 }}>
               Сценарий
             </div>
-            <select
-              className="clipSB_select"
-              value={scenario}
-              onChange={(e) => data?.onScenario?.(id, e.target.value)}
-            >
-              <option value="song_meaning">по смыслу</option>
-              <option value="beats">по биту/ритму</option>
-              <option value="verses">по куплетам/припевам</option>
-              <option value="mini_story">мини‑история</option>
-              <option value="dynamic">динамичный монтаж</option>
-              <option value="clip">клип (performance + монтаж)</option>
-            </select>
+            <div className="clipSB_small" style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(255,255,255,0.04)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)" }}>
+              Режим: <b>{scenario}</b>
+            </div>
           </div>
 
           <div>
@@ -457,12 +435,12 @@ function BrainNode({ id, data }) {
               onChange={(e) => data?.onWantLipSync?.(id, e.target.checked)}
               style={{ width: 16, height: 16 }}
             />
-            <span>Липсинк — добавить сцены с ртом (1–3)</span>
+            <span>LipSync — добавить performance-вставки с фразами вокала</span>
           </label>
         </div>
 
         <div className="clipSB_small" style={{ marginTop: 10 }}>
-          Следующий шаг: кнопка “Разобрать” → ScenePlan (таймкоды/описания).
+          Сейчас работаем только в режиме «клип»: с LipSync — больше фраз/performance, без LipSync — монтаж по биту и энергии.
         </div>
 
         <div style={{ marginTop: 10 }}>
@@ -689,7 +667,7 @@ useEffect(() => {
         id: "audio",
         type: "audioNode",
         position: { x: 120, y: 120 },
-        data: { audioUrl: "", audioName: "", uploading: false, audioType: "bg" },
+        data: { audioUrl: "", audioName: "", uploading: false },
       },
       {
         id: "text",
@@ -701,7 +679,7 @@ useEffect(() => {
         id: "brain",
         type: "brainNode",
         position: { x: 520, y: 200 },
-        data: { mode: "song_meaning" },
+        data: { mode: "clip", scenarioKey: "clip" },
       },
       {
         id: "assembly",
@@ -966,9 +944,6 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
             ...base,
             data: {
               ...base.data,
-              onAudioType: (nodeId, value) => {
-                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, audioType: value } } : x)));
-              },
               onUpload: async (nodeId, file) => {
                 // optimistic ui
                 setNodes((prev) =>
@@ -1037,8 +1012,8 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
               onMode: (nodeId, value) => {
                 setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x)));
               },
-              onScenario: (nodeId, value) => {
-                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, scenarioKey: value } } : x)));
+              onScenario: (nodeId) => {
+                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, scenarioKey: "clip" } } : x)));
               },
               onShoot: (nodeId, value) => {
                 setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, shootKey: value } } : x)));
@@ -1106,14 +1081,14 @@ onParse: async (nodeId) => {
     const refLocation = refLocNode?.type === "refNode" && refLocNode?.data?.kind === "ref_location" ? (refLocNode.data?.url || "") : "";
     const refStyle = refStyleNode?.type === "refNode" && refStyleNode?.data?.kind === "ref_style" ? (refStyleNode.data?.url || "") : "";
 
-    const scenarioKey = brainNow.data?.scenarioKey || "beat_rhythm";
+    const scenarioKey = "clip";
     const shootKey = brainNow.data?.shootKey || "cinema";
     const styleKey = brainNow.data?.styleKey || "realism";
     const freezeStyle = !!brainNow.data?.freezeStyle;
     const wantLipSync = !!brainNow.data?.wantLipSync;
 
     const audioUrl = audioNode?.type === "audioNode" ? (audioNode.data?.audioUrl || "") : "";
-    const audioType = audioNode?.type === "audioNode" ? (audioNode.data?.audioType || "bg") : null; // bg | song
+    const audioType = wantLipSync ? "song" : "bg"; // clip-only auto mapping from wantLipSync
     const textType = textNode?.type === "textNode" ? (textNode.data?.textType || "story") : null; // story | lyrics | notes
     const textValue = textNode?.type === "textNode" ? String(textNode.data?.textValue || "") : "";
 
@@ -1381,11 +1356,11 @@ const hydrate = useCallback(() => {
 
     let node;
     if (type === "audio") {
-      node = { id, type: "audioNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { audioUrl: "", audioName: "", uploading: false, audioType: "bg" } };
+      node = { id, type: "audioNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { audioUrl: "", audioName: "", uploading: false } };
     } else if (type === "text") {
       node = { id, type: "textNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { textValue: "", textType: "story" } };
     } else if (type === "brain") {
-      node = { id, type: "brainNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: "song_meaning", scenarioKey: "song_meaning", shootKey: "cinema", styleKey: "realism", freezeStyle: false, clipSec: 30 } };
+      node = { id, type: "brainNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: "clip", scenarioKey: "clip", shootKey: "cinema", styleKey: "realism", freezeStyle: false, clipSec: 30 } };
     } else if (type === "ref_character") {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПЕРСОНАЖ", icon: "🧍", kind: "ref_character", url: "", name: "" } };
     } else if (type === "ref_location") {
