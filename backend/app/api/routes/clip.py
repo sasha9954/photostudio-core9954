@@ -2047,6 +2047,43 @@ Scenes must show progression through space and time.
 If the character moves through a location, the environment perspective must evolve accordingly.
 Show movement progression clearly: moving through environment, approaching target, stopping near target, then reacting.
 
+SPATIAL ORIENTATION RULE:
+When a character moves toward a distant object, location, or target
+(such as a fire, light, building, person, or landmark),
+the spatial orientation of the scene must reflect that direction.
+
+Prefer compositions where:
+- the character faces the direction of travel
+- the target object is ahead of the character
+- the viewer can visually understand the direction of movement
+
+Avoid compositions where the character walks toward the camera
+while the destination remains behind them,
+unless the storyboard explicitly requires that composition.
+
+TARGET CONSISTENCY RULE:
+If a scene includes a distant target or object of interest,
+such as a fire, light, building, vehicle, or person,
+the target should remain spatially consistent across scenes.
+
+As the character approaches:
+- the target gradually appears closer
+- the character moves toward the target
+- the spatial relationship remains consistent
+
+Do not randomly reposition the target relative to the character.
+
+APPROACH SHOT RULE:
+When a character approaches a distant target,
+use cinematic compositions that clearly communicate movement direction.
+
+Preferred approaches include:
+- back view (character walking away from camera)
+- over-the-shoulder view
+- side tracking shot
+
+These compositions visually reinforce the direction of travel.
+
 STATIC FRAME PREVENTION:
 If two scenes are narratively similar, their camera composition must still be visibly different.
 Never produce consecutive scenes that look like identical frames with only textual differences.
