@@ -38,6 +38,7 @@ class ClipImageRefsIn(BaseModel):
     location: list[str] = Field(default_factory=list)
     style: list[str] = Field(default_factory=list)
     props: list[str] = Field(default_factory=list)
+    propAnchorLabel: str | None = None
 
 
 class AudioSliceIn(BaseModel):
@@ -234,6 +235,93 @@ def _normalize_ref_list(items, max_items: int = 8) -> list[str]:
         if url:
             out.append(url)
     return out[:max_items]
+
+
+def _clean_anchor_label(label: str | None) -> str:
+    v = str(label or "").strip()
+    v = re.sub(r"\s+", " ", v)
+    return v[:120]
+
+
+def _build_prop_anchor(label: str | None) -> dict | None:
+    cleaned = _clean_anchor_label(label)
+    if not cleaned:
+        return None
+    return {
+        "label": cleaned,
+        "source": "ref",
+    }
+
+
+def _infer_prop_anchor_label(props_images: list[dict], api_key: str, model_used: str) -> str:
+    if not props_images:
+        return ""
+    prompt = (
+        "You must identify one single object shown across all reference photos. "
+        "Treat all photos as different angles/details of the SAME object. "
+        "Return STRICT JSON only: {\"label\":\"...\"}. "
+        "Label must be short, stable, concrete, in English (2-6 words), no punctuation, no alternatives. "
+        "If uncertain, output a stable fallback generic object label."
+    )
+    parts = [{"text": prompt}, *props_images]
+    body = {
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "temperature": 0.0,
+            "responseMimeType": "application/json",
+        },
+    }
+    resp = post_generate_content(api_key, model_used, body, timeout=60)
+    raw = _extract_gemini_text(resp if isinstance(resp, dict) else {})
+    parsed = _parse_json_from_text(raw)
+    label = ""
+    if isinstance(parsed, dict):
+        label = _clean_anchor_label(parsed.get("label"))
+    if not label:
+        label = "anchored reference object"
+    return label
+
+
+def _enforce_prop_anchor_text(text: str, prop_anchor_label: str, *, lang: str) -> str:
+    clean_text = str(text or "").strip()
+    label = _clean_anchor_label(prop_anchor_label)
+    if not label:
+        return clean_text
+
+    if lang == "ru":
+        anchor_phrase = f"объект из референса: {label}"
+        conflict_terms = [
+            r"equipment\s+bag",
+            r"generic\s+equipment",
+            r"toolbox",
+            r"backpack",
+            r"\bbag\b",
+            r"рюкзак",
+            r"сумк[аеиу]",
+            r"ящик\s+с\s+инструментами",
+        ]
+    else:
+        anchor_phrase = f"the {label} from reference"
+        conflict_terms = [
+            r"equipment\s+bag",
+            r"generic\s+equipment",
+            r"toolbox",
+            r"backpack",
+            r"\bbag\b",
+        ]
+
+    out = clean_text
+    for pattern in conflict_terms:
+        out = re.sub(pattern, anchor_phrase, out, flags=re.I)
+
+    if re.search(re.escape(label), out, flags=re.I) or re.search(r"from\s+reference|из\s+референс", out, flags=re.I):
+        return out.strip()
+
+    if not out:
+        return anchor_phrase
+
+    suffix = f" В кадре сохраняется {anchor_phrase}." if lang == "ru" else f" Keep {anchor_phrase} visible."
+    return (out + suffix).strip()
 
 
 def _guess_image_mime(url: str, headers: dict, raw: bytes) -> str:
@@ -1005,6 +1093,12 @@ def clip_plan(payload: BrainIn):
         if inline_part:
             location_images.append(inline_part)
 
+    props_images = []
+    for ref_url in props_refs:
+        inline_part = _load_reference_image_inline(ref_url)
+        if inline_part:
+            props_images.append(inline_part)
+
     print("CLIP DEBUG character_refs:", character_refs)
     print("CLIP DEBUG attached character images:", len(character_images))
     print("CLIP DEBUG location_refs:", location_refs)
@@ -1017,6 +1111,7 @@ def clip_plan(payload: BrainIn):
         "locationImagesAttached": len(location_images),
         "styleRefCount": len(style_refs),
         "propsRefCount": len(props_refs),
+        "propsImagesAttached": len(props_images),
     }
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
@@ -1033,7 +1128,11 @@ def clip_plan(payload: BrainIn):
             },
         )
 
-    has_visual_inputs = bool(audio_bytes or character_images or location_images)
+    prop_anchor_label = _infer_prop_anchor_label(props_images, api_key, "gemini-1.5-flash") if props_images else ""
+    prop_anchor = _build_prop_anchor(prop_anchor_label)
+    refs_debug["propAnchor"] = prop_anchor
+
+    has_visual_inputs = bool(audio_bytes or character_images or location_images or props_images)
     if has_visual_inputs:
         model_used = getattr(settings, "GEMINI_VISION_MODEL", None) or "gemini-1.5-flash"
     else:
@@ -1055,6 +1154,19 @@ Hard rules:
 - lipSyncText must be non-empty only when there is real vocal phrase in that scene.
 - If no audio is available, still build coherent storyboard from text+refs.
 - If no text/refs, still build coherent storyboard from audio only.
+
+MASTER WORLD CONTEXT (session-level):
+- Character: from character refs if present
+- Location: from location refs if present
+- Style: from style refs if present
+- Prop anchor: {prop_anchor_label or "none"}
+All scenes must respect this world context.
+
+STRICT OBJECT LOCK:
+- If props refs exist, they define one anchored prop identity for the whole session.
+- Treat multiple props photos as different angles/details of the same object.
+- Never reinterpret, replace, rename, generalize, or downgrade anchored prop identity.
+- If scene wording conflicts with prop anchor identity, prop anchor identity wins.
 
 SOURCE PRIORITY RULES
 
@@ -1269,6 +1381,7 @@ If any of the required descriptive fields are returned in English, the output is
             "style": style_refs,
             "props": props_refs,
         },
+        "propAnchor": prop_anchor,
     }
 
     parts = [{"text": system_rules}]
@@ -1280,6 +1393,11 @@ If any of the required descriptive fields are returned in English, the output is
     if location_images:
         parts.append({"text": "Location reference images. These images define the world and environment of the clip."})
         parts.extend(location_images)
+
+    if props_images:
+        parts.append({"text": "Props reference images. All images depict the SAME single object identity from different angles/details."})
+        parts.extend(props_images)
+        parts.append({"text": f"Session prop anchor label: {prop_anchor_label}"})
 
     parts.append({"text": "Input payload:\n" + json.dumps(user_input, ensure_ascii=False)})
 
@@ -1400,7 +1518,7 @@ If any of the required descriptive fields are returned in English, the output is
                     "model": {
                         "modelUsed": model_used,
                         "hasVisualInputs": has_visual_inputs,
-                        "hasVisualRefsAttached": bool(character_images or location_images),
+                        "hasVisualRefsAttached": bool(character_images or location_images or props_images),
                     },
                     "refsDebug": refs_debug,
                     "validation": {
@@ -1429,6 +1547,12 @@ If any of the required descriptive fields are returned in English, the output is
         lip_sync_text = str(s.get("lipSyncText") or "").strip()
         lyric_fragment = str(s.get("lyricFragment") or lip_sync_text).strip()
         video_prompt = str(s.get("videoPrompt") or visual_prompt or visual_desc).strip()
+        reason_text = str(s.get("reason") or "").strip()
+        if prop_anchor_label:
+            visual_prompt = _enforce_prop_anchor_text(visual_prompt, prop_anchor_label, lang="en")
+            video_prompt = _enforce_prop_anchor_text(video_prompt, prop_anchor_label, lang="en")
+            visual_desc = _enforce_prop_anchor_text(visual_desc, prop_anchor_label, lang="ru")
+            reason_text = _enforce_prop_anchor_text(reason_text, prop_anchor_label, lang="ru")
         scene_type = str(s.get("sceneType") or "visual_rhythm").strip() or "visual_rhythm"
         normalized_scenes.append({
             **s,
@@ -1439,7 +1563,7 @@ If any of the required descriptive fields are returned in English, the output is
             "sceneText": visual_desc,
             "imagePrompt": visual_prompt,
             "videoPrompt": video_prompt,
-            "why": str(s.get("reason") or "").strip(),
+            "why": reason_text,
             "sceneType": scene_type,
             "isLipSync": bool(lip_sync_text),
             "lipSyncText": lip_sync_text,
@@ -1458,12 +1582,13 @@ If any of the required descriptive fields are returned in English, the output is
         "vocalPhrases": plan.get("vocalPhrases") if isinstance(plan.get("vocalPhrases"), list) else [],
         "energyEvents": plan.get("energyEvents") if isinstance(plan.get("energyEvents"), list) else [],
         "scenes": normalized_scenes,
+        "propAnchor": prop_anchor,
         "plannerDebug": {
             "audio": audio_debug,
             "model": {
                 "modelUsed": model_used,
                 "hasVisualInputs": has_visual_inputs,
-                "hasVisualRefsAttached": bool(character_images or location_images),
+                "hasVisualRefsAttached": bool(character_images or location_images or props_images),
             },
             "refsDebug": refs_debug,
             "validation": {
@@ -1496,6 +1621,7 @@ def clip_image(payload: ClipImageIn):
     location_refs = _normalize_ref_list(getattr(refs_obj, "location", None))
     style_refs = _normalize_ref_list(getattr(refs_obj, "style", None))
     props_refs = _normalize_ref_list(getattr(refs_obj, "props", None))
+    prop_anchor_label = _clean_anchor_label(getattr(refs_obj, "propAnchorLabel", None))
 
     character_images = []
     for ref_url in character_refs:
@@ -1521,6 +1647,11 @@ def clip_image(payload: ClipImageIn):
         if inline_part:
             props_images.append(inline_part)
 
+    if props_images and not prop_anchor_label:
+        api_key_for_anchor = (settings.GEMINI_API_KEY or "").strip()
+        if api_key_for_anchor:
+            prop_anchor_label = _infer_prop_anchor_label(props_images, api_key_for_anchor, "gemini-1.5-flash")
+
     refs_debug = {
         "characterRefCount": len(character_refs),
         "characterImagesAttached": len(character_images),
@@ -1530,6 +1661,7 @@ def clip_image(payload: ClipImageIn):
         "styleImagesAttached": len(style_images),
         "propsRefCount": len(props_refs),
         "propsImagesAttached": len(props_images),
+        "propAnchorLabel": prop_anchor_label or None,
     }
 
     has_visual_refs_attached = bool(character_images or location_images or style_images or props_images)
@@ -1570,6 +1702,7 @@ def clip_image(payload: ClipImageIn):
             "Character refs cannot be overridden by scene text. Location refs cannot be overridden by scene text. Style refs cannot be overridden by scene text or generic visual prompt. Props refs cannot be overridden by scene text or generic visual prompt. "
             "If style refs are absent, styleKey/style may influence the image as fallback. "
             "PROP PRIORITY RULES: if props reference images are attached, props refs define exact object identity. Scene text may describe how the object is used and where it is placed, but must not redefine, replace, or rename what the object is. If text conflicts with props refs, props refs win. If props refs are absent, text may define scene objects. "
+            "STRICT OBJECT LOCK: The prop reference image defines the exact prop identity for this session. The prop must remain the same object across all scenes. Never reinterpret, replace, rename, generalize, or downgrade it into another object. "
             "CHARACTER IDENTITY LOCK: preserve facial structure, hairstyle, body proportions, skin tone, facial hair, gender, and age appearance. Do not redesign the person. "
             "CHARACTER DETAIL LOCK: preserve clothing type/colors, logos/brand marks, accessories, hairstyle, and carried items unless scene text explicitly changes wardrobe. "
             "PROP CONSISTENCY: maintain prop design, materials, dimensions, cables/attachments, brand markings, and wear/texture. Do not redesign props. "
@@ -1602,6 +1735,12 @@ def clip_image(payload: ClipImageIn):
             parts.append({"text": "Props reference images. These are key scene objects. Keep them prominent when relevant; if only one prop is attached, treat it as primary and do not omit it."})
             parts.extend(props_images)
             parts.append({"text": "The prop identity is defined by the reference images and must not be replaced."})
+            if prop_anchor_label:
+                parts.append({"text": f"Session prop anchor label: {prop_anchor_label}. Keep exactly this prop identity."})
+
+        if prop_anchor_label:
+            prompt = _enforce_prop_anchor_text(prompt, prop_anchor_label, lang="en")
+            scene_text = _enforce_prop_anchor_text(scene_text, prop_anchor_label, lang="ru")
 
         scene_payload = {
             "sceneId": scene_id,
@@ -1611,6 +1750,7 @@ def clip_image(payload: ClipImageIn):
             "resolution": f"{width}x{height}",
             "sceneText": scene_text,
             "visualPrompt": prompt,
+            "propAnchorLabel": prop_anchor_label or None,
         }
         parts.append({"text": "Scene payload:\n" + json.dumps(scene_payload, ensure_ascii=False)})
 

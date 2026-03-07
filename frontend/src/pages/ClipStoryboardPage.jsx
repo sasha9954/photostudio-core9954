@@ -164,6 +164,7 @@ function normalizeImageRefs(refsLike) {
     location: toUrlList(refsObj.location),
     style: toUrlList(refsObj.style),
     props: toUrlList(refsObj.props),
+    propAnchorLabel: String(refsObj.propAnchorLabel || refsObj.propAnchor?.label || "").trim() || undefined,
   };
 }
 
@@ -1372,7 +1373,13 @@ onParse: async (nodeId) => {
                   rejectedReason: validation.rejectedReason || null,
                   repairRetryUsed: !!validation.repairRetryUsed,
                   audioHint: out?.plannerDebug?.audio?.hint || null,
-                  refs: { character: characterRefs, location: locationRefs, props: propsRefs, style: styleRefs },
+                  refs: {
+                    character: characterRefs,
+                    location: locationRefs,
+                    props: propsRefs,
+                    style: styleRefs,
+                    propAnchorLabel: String(out?.propAnchor?.label || "").trim() || undefined,
+                  },
                   settings: { scenarioKey, shootKey, styleKey, freezeStyle },
                 },
               },
