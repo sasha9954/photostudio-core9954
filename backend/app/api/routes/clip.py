@@ -289,7 +289,7 @@ def _enforce_prop_anchor_text(text: str, prop_anchor_label: str, *, lang: str) -
         return clean_text
 
     if lang == "ru":
-        anchor_phrase = f"объект из референса: {label}"
+        anchor_phrase = f"тот же предмет из референса ({label})"
         conflict_terms = [
             r"equipment\s+bag",
             r"generic\s+equipment",
@@ -314,13 +314,13 @@ def _enforce_prop_anchor_text(text: str, prop_anchor_label: str, *, lang: str) -
     for pattern in conflict_terms:
         out = re.sub(pattern, anchor_phrase, out, flags=re.I)
 
-    if re.search(re.escape(label), out, flags=re.I) or re.search(r"from\s+reference|из\s+референс", out, flags=re.I):
+    if re.search(re.escape(label), out, flags=re.I) or re.search(r"from\s+reference|из\s+референса", out, flags=re.I):
         return out.strip()
 
     if not out:
         return anchor_phrase
 
-    suffix = f" В кадре сохраняется {anchor_phrase}." if lang == "ru" else f" Keep {anchor_phrase} visible."
+    suffix = f" В кадре остаётся {anchor_phrase}." if lang == "ru" else f" Keep {anchor_phrase} visible."
     return (out + suffix).strip()
 
 
@@ -372,6 +372,7 @@ class BrainRefsIn(BaseModel):
     location: list[RefUrlItem] = []
     props: list[RefUrlItem] = []
     style: RefUrlItem | list[RefUrlItem] | None = None
+    propAnchorLabel: str | None = None
 
 
 class BrainIn(BaseModel):
@@ -387,6 +388,7 @@ class BrainIn(BaseModel):
 
     # refs (urls)
     refs: BrainRefsIn | None = None
+    propAnchorLabel: str | None = None
     characterRefs: list[RefUrlItem] | None = None
     character_refs: list[str] | None = None
     locationRefs: list[RefUrlItem] | None = None
@@ -1128,9 +1130,21 @@ def clip_plan(payload: BrainIn):
             },
         )
 
-    prop_anchor_label = _infer_prop_anchor_label(props_images, api_key, "gemini-1.5-flash") if props_images else ""
+    prop_anchor_label = _clean_anchor_label(
+        getattr(refs_obj, "propAnchorLabel", None) or getattr(payload, "propAnchorLabel", None)
+    )
+    prop_anchor_source = "payload" if prop_anchor_label else "fallback"
+    if props_images and not prop_anchor_label:
+        anchor_model = (getattr(settings, "GEMINI_VISION_MODEL", None) or "gemini-1.5-flash").strip()
+        prop_anchor_label = _infer_prop_anchor_label(props_images, api_key, anchor_model)
+        prop_anchor_source = "inferred" if prop_anchor_label else "fallback"
+
     prop_anchor = _build_prop_anchor(prop_anchor_label)
+    if prop_anchor:
+        prop_anchor["source"] = prop_anchor_source
     refs_debug["propAnchor"] = prop_anchor
+    refs_debug["propAnchorLabel"] = prop_anchor_label or None
+    refs_debug["propAnchorSource"] = prop_anchor_source
 
     has_visual_inputs = bool(audio_bytes or character_images or location_images or props_images)
     if has_visual_inputs:
@@ -1647,10 +1661,13 @@ def clip_image(payload: ClipImageIn):
         if inline_part:
             props_images.append(inline_part)
 
+    prop_anchor_source = "payload" if prop_anchor_label else "fallback"
     if props_images and not prop_anchor_label:
         api_key_for_anchor = (settings.GEMINI_API_KEY or "").strip()
+        anchor_model = (getattr(settings, "GEMINI_VISION_MODEL", None) or "gemini-1.5-flash").strip()
         if api_key_for_anchor:
-            prop_anchor_label = _infer_prop_anchor_label(props_images, api_key_for_anchor, "gemini-1.5-flash")
+            prop_anchor_label = _infer_prop_anchor_label(props_images, api_key_for_anchor, anchor_model)
+            prop_anchor_source = "inferred" if prop_anchor_label else "fallback"
 
     refs_debug = {
         "characterRefCount": len(character_refs),
@@ -1662,6 +1679,7 @@ def clip_image(payload: ClipImageIn):
         "propsRefCount": len(props_refs),
         "propsImagesAttached": len(props_images),
         "propAnchorLabel": prop_anchor_label or None,
+        "propAnchorSource": prop_anchor_source,
     }
 
     has_visual_refs_attached = bool(character_images or location_images or style_images or props_images)
