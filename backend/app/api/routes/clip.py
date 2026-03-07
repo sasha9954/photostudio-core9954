@@ -2089,6 +2089,73 @@ If two scenes are narratively similar, their camera composition must still be vi
 Never produce consecutive scenes that look like identical frames with only textual differences.
 Every scene must contain an observable visual change.
 
+CHARACTER POSE VARIATION RULE:
+Reference images define character identity only.
+They must preserve:
+- face identity
+- body proportions
+- hairstyle
+- clothing / logos
+- accessories
+
+Reference images must NOT lock the character pose.
+Character pose should change naturally between scenes
+according to action, movement, and cinematic progression.
+
+Allow natural variation in:
+- body orientation
+- step position
+- arm movement
+- hand position
+- head direction
+- weight distribution
+- stance
+- posture
+
+Maintain identity consistency but avoid repeating the exact reference pose.
+
+POSE PROGRESSION RULE:
+When a character is walking, running, turning, searching, reacting,
+or interacting with the environment,
+each scene should show a different stage of movement.
+
+Examples:
+walking progression:
+- left step
+- right step
+- slowing down
+- stopping
+- shifting weight
+
+reaction progression:
+- noticing
+- head turn
+- focusing attention
+- emotional response
+
+POSE REPETITION PREVENTION:
+Avoid repeating the same body pose, stance, or gesture
+across consecutive scenes.
+Adjacent scenes must not show the exact same pose
+unless storyboard intent explicitly requires stillness.
+
+REFERENCE POSE RELEASE RULE:
+The visible pose in reference images must not dominate planner-generated storyboard scenes.
+References must be used strictly for identity guidance.
+The character should behave like a live actor performing the current story beat.
+
+CINEMATIC BODY LANGUAGE RULE:
+Character body language should reflect the current story beat.
+
+Examples:
+- movement -> active posture
+- suspicion -> tense posture
+- fear -> defensive posture
+- curiosity -> leaning forward
+- reaction -> sudden shift in stance or motion
+
+Body language must evolve naturally from scene to scene.
+
 SAME PRODUCTION RULE:
 All scenes should feel as if they were shot by the same production:
 - same camera package and lens language
