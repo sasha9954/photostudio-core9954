@@ -310,6 +310,27 @@ function normalizeRefData(data, kindHint = "") {
   };
 }
 
+function normalizeClipImageRefsPayload(refs = {}) {
+  const toUrlList = (items) => (Array.isArray(items)
+    ? items
+      .map((item) => (typeof item === "string" ? item : item?.url))
+      .map((url) => String(url || "").trim())
+      .filter(Boolean)
+    : []);
+
+  const normalized = {
+    character: toUrlList(refs?.character),
+    location: toUrlList(refs?.location),
+    style: toUrlList(refs?.style),
+    props: toUrlList(refs?.props),
+  };
+
+  const propAnchorLabel = String(refs?.propAnchorLabel || "").trim();
+  if (propAnchorLabel) normalized.propAnchorLabel = propAnchorLabel;
+
+  return normalized;
+}
+
 function stripFunctionsDeep(value) {
   if (typeof value === "function") return undefined;
   if (Array.isArray(value)) {
@@ -1019,7 +1040,7 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
           sceneText,
           width,
           height,
-          refs: scenarioBrainRefs,
+          refs: normalizeClipImageRefsPayload(scenarioBrainRefs),
         },
       });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
