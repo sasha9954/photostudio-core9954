@@ -337,6 +337,10 @@ function normalizeClipImageRefsPayload(refs = {}) {
   const sessionStyleAnchor = String(refs?.sessionStyleAnchor || "").trim();
   if (sessionStyleAnchor) normalized.sessionStyleAnchor = sessionStyleAnchor;
 
+  if (refs?.previousContinuityMemory && typeof refs.previousContinuityMemory === "object") {
+    normalized.previousContinuityMemory = refs.previousContinuityMemory;
+  }
+
   return normalized;
 }
 
@@ -1037,6 +1041,10 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
     const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
     const prompt = String(scenarioSelected.imagePrompt || scenarioSelected.visualPrompt || scenarioSelected.prompt || "").trim();
     const sceneText = String(scenarioSelected.sceneText || scenarioSelected.visualDescription || "").trim();
+    const previousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
+    const previousContinuityMemory = scenarioSelected.previousContinuityMemory
+      || previousScene?.continuityMemory
+      || null;
     const imageFormat = normalizeSceneImageFormat(scenarioSelected.imageFormat);
     const { width, height } = getSceneImageSize(imageFormat);
     if (!prompt) {
@@ -1055,7 +1063,10 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
           sceneText,
           width,
           height,
-          refs: normalizeClipImageRefsPayload(scenarioBrainRefs),
+          refs: normalizeClipImageRefsPayload({
+            ...scenarioBrainRefs,
+            previousContinuityMemory,
+          }),
         },
       });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
@@ -1066,7 +1077,7 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
     } finally {
       setScenarioImageLoading(false);
     }
-  }, [scenarioSelected, scenarioEditor.selected, scenarioBrainRefs, updateScenarioScene]);
+  }, [scenarioSelected, scenarioEditor.selected, scenarioScenes, scenarioBrainRefs, updateScenarioScene]);
 
   const handleClearScenarioImage = useCallback(() => {
     setScenarioImageError("");
@@ -1459,6 +1470,8 @@ onParse: async (nodeId) => {
           beatAnchor: s.beatAnchor || "",
           performanceType: s.performanceType || "cinematic_visual",
           shotType: s.shotType || "",
+          continuityMemory: s.continuityMemory && typeof s.continuityMemory === "object" ? s.continuityMemory : null,
+          previousContinuityMemory: s.previousContinuityMemory && typeof s.previousContinuityMemory === "object" ? s.previousContinuityMemory : null,
         };
       })
       .filter((s) => Number.isFinite(s.t0) && Number.isFinite(s.t1) && s.t1 > s.t0);

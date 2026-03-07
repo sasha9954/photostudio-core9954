@@ -535,20 +535,49 @@ def _trim_continuity_value(value: str, limit: int = 220) -> str:
 
 
 def _build_scene_continuity_memory(*, scene: dict, session_world_anchors: dict[str, str], prop_anchor_label: str) -> dict[str, str]:
-    scene_text = _trim_continuity_value(scene.get("sceneText") or scene.get("visualDescription") or scene.get("prompt") or "")
-    visual_prompt = _trim_continuity_value(scene.get("imagePrompt") or scene.get("visualPrompt") or scene.get("prompt") or "")
-    reason = _trim_continuity_value(scene.get("why") or scene.get("reason") or "")
-    scene_combo = _trim_continuity_value("; ".join([x for x in [scene_text, visual_prompt, reason] if x]), 280)
+
+    location = _trim_continuity_value(
+        session_world_anchors.get("location")
+        or "same established world/location identity, architecture/set identity, and environment geometry"
+    )
+    style_anchor = _trim_continuity_value(session_world_anchors.get("style") or "")
+
+    lighting = _trim_continuity_value(
+        f"persistent lighting logic from established world: {style_anchor}"
+        if style_anchor
+        else "same lighting source logic, direction style, and contrast/softness feel"
+    )
+    color_palette = _trim_continuity_value(
+        f"persistent production palette/grade mood from style anchor: {style_anchor}"
+        if style_anchor
+        else "same dominant grade and palette mood (warm/cold/neon/desaturated)"
+    )
+
+    world_state_candidates = []
+    for token in [scene.get("worldState"), scene.get("eventState"), scene.get("atmosphere"), scene.get("timeOfDay")]:
+        cleaned = _trim_continuity_value(token or "", 180)
+        if cleaned:
+            world_state_candidates.append(cleaned)
+    world_state = _trim_continuity_value(
+        "; ".join(dict.fromkeys(world_state_candidates)),
+        240,
+    )
+    if not world_state:
+        world_state = "same persistent world condition: weather/time-of-day/event-state remain coherent; update only scene-local action"
 
     return {
-        "location": _trim_continuity_value(session_world_anchors.get("location") or "same established location identity and environment geometry"),
-        "lighting": _trim_continuity_value(session_world_anchors.get("style") or "same lighting logic from previous scene"),
-        "colorPalette": _trim_continuity_value(session_world_anchors.get("style") or "same production palette and grade mood"),
-        "cameraLanguage": _trim_continuity_value("same production camera package and cinematic language; vary framing for scene progression"),
-        "characterState": _trim_continuity_value(session_world_anchors.get("character") or "same character identity, wardrobe and visual traits"),
-        "worldState": _trim_continuity_value(scene_combo or "same weather/time atmosphere and event continuity"),
+        "location": location,
+        "lighting": lighting,
+        "colorPalette": color_palette,
+        "cameraLanguage": _trim_continuity_value(
+            "same production camera language and lens feel (handheld/smooth/locked/depth style); vary framing for progression"
+        ),
+        "characterState": _trim_continuity_value(
+            session_world_anchors.get("character") or "same character identity, wardrobe, and persistent visual traits"
+        ),
+        "worldState": world_state,
         "propState": _trim_continuity_value(
-            f"same persistent prop identity: {prop_anchor_label}" if prop_anchor_label else "same persistent important props and scale class"
+            f"same persistent prop identities and scale class: {prop_anchor_label}" if prop_anchor_label else "same important prop identities and scale class"
         ),
     }
 
@@ -2812,6 +2841,18 @@ def clip_image(payload: ClipImageIn):
         if previous_continuity_memory:
             parts.append({
                 "text": "Previous scene continuity memory (persistent state to inherit; keep as soft continuity reference, not composition clone):\n" + json.dumps(previous_continuity_memory, ensure_ascii=False)
+            })
+            parts.append({
+                "text": (
+                    "CONTINUITY EXECUTION RULES:\n"
+                    "PERSIST from continuity memory: world/location identity, lighting logic, color palette/grade, camera language, character identity, key props, and global event/world condition.\n"
+                    "CHANGE for the current scene: action beat, pose, expression, blocking, framing, camera distance/angle, and moment progression.\n"
+                    "Do not copy previous composition or freeze previous pose. This must feel like the next cinematic moment in the same film world."
+                )
+            })
+        else:
+            parts.append({
+                "text": "No previous continuity memory for this scene (opening beat). Establish a strong persistent world baseline that later scenes can inherit."
             })
 
         scene_payload = {
