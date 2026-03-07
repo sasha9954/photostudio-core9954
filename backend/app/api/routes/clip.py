@@ -1056,6 +1056,52 @@ Hard rules:
 - If no audio is available, still build coherent storyboard from text+refs.
 - If no text/refs, still build coherent storyboard from audio only.
 
+SOURCE PRIORITY RULES
+
+Use the following source priority:
+
+1. character reference images define exact person identity
+2. location reference images define exact world/location identity
+3. style reference images define season, weather, palette, atmosphere, and visual language
+4. props reference images define exact object identity
+5. scene text defines action, emotion, placement, interaction, and narrative meaning
+6. audio defines timing, rhythm, energy, lipsync structure, and scene intensity
+7. shoot mode defines camera language
+8. styleKey is only a fallback when no style reference images are present
+9. free imagination is allowed only when no higher-priority source defines that element
+
+Higher-priority sources must never be overridden by lower-priority ones.
+
+PER-SOURCE INTERPRETATION LOCKS
+
+CHARACTER refs:
+- text may change pose/action/emotion
+- text must not change who the person is
+
+LOCATION refs:
+- text may change position within the same place
+- text must not change the place itself
+
+STYLE refs:
+- text may change dramatic emphasis
+- text must not replace season/weather/palette defined by style refs
+
+PROPS refs:
+- text may describe prop use/placement
+- text must not rename or replace the object
+
+AUDIO:
+- may control scene timing, pacing, emotion intensity, and lipsync
+- must not redefine character/location/prop identity
+
+SHOOT MODE:
+- may control camera framing and movement language
+- must not redefine world identity or character identity
+
+STYLE KEY:
+- use only if style refs are absent
+- if style refs exist, style refs win
+
 REFERENCE PRIORITY RULES
 
 If character reference images are attached:
@@ -1180,6 +1226,8 @@ If any of the required descriptive fields are returned in English, the output is
 
     user_input = {
         "mode": mode,
+        "shootMode": payload.shootKey or payload.mode or "",
+        "styleKey": payload.styleKey or "",
         "audioUrl": payload.audioUrl or "",
         "audioDurationHintSec": duration,
         "text": text,
@@ -1485,6 +1533,10 @@ def clip_image(payload: ClipImageIn):
             "LOCATION WORLD LOCK: keep architecture style, building proportions, street layout, materials/textures, signage style, and cultural environment as the same location. "
             "TIME PERIOD CONSISTENCY: architecture, vehicles, clothing, signage, and technology must remain in the same historical era. "
             "REFERENCE RULES: use all provided references as source of truth. Character references define the same person. Location references define the same world and architecture. Style references define weather, season, palette, atmosphere, and cinematic language. Props references define key objects. "
+            "SOURCE PRIORITY RULES: Character references define who the person is. Location references define where the scene exists. Style references define season, weather, palette, atmosphere and visual language. Props references define exact object identity. Scene text defines action, emotion, narrative, interaction and placement. Visual prompt defines composition and shot content. Audio (if available) defines timing, rhythm, intensity, and lipsync energy. Shoot mode defines camera language. styleKey/style field is fallback style only when no style references exist. Free imagination is lowest priority and is allowed only when no higher-priority source defines that element. "
+            "If any lower-priority input conflicts with higher-priority references, higher-priority references win. Higher-priority sources must never be overridden by lower-priority ones. "
+            "Character refs cannot be overridden by scene text. Location refs cannot be overridden by scene text. Style refs cannot be overridden by scene text or generic visual prompt. Props refs cannot be overridden by scene text or generic visual prompt. "
+            "If style refs are absent, styleKey/style may influence the image as fallback. "
             "PROP PRIORITY RULES: if props reference images are attached, props refs define exact object identity. Scene text may describe how the object is used and where it is placed, but must not redefine, replace, or rename what the object is. If text conflicts with props refs, props refs win. If props refs are absent, text may define scene objects. "
             "CHARACTER IDENTITY LOCK: preserve facial structure, hairstyle, body proportions, skin tone, facial hair, gender, and age appearance. Do not redesign the person. "
             "CHARACTER DETAIL LOCK: preserve clothing type/colors, logos/brand marks, accessories, hairstyle, and carried items unless scene text explicitly changes wardrobe. "
@@ -1522,6 +1574,7 @@ def clip_image(payload: ClipImageIn):
         scene_payload = {
             "sceneId": scene_id,
             "style": style,
+            "styleKey": style,
             "aspectRatio": aspect_ratio,
             "resolution": f"{width}x{height}",
             "sceneText": scene_text,
