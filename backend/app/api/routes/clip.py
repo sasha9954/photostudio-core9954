@@ -1465,19 +1465,19 @@ def clip_image(payload: ClipImageIn):
         model = settings.GEMINI_IMAGE_MODEL or "gemini-2.5-flash-image-preview"
 
         system_prompt = (
-            "Generate ONE still image for this scene. "
-            "Use character + location + style + props references together when provided; references are source of truth. "
-            "Character references define the SAME person; keep identical face identity, gender, body type, and outfit unless scene explicitly changes wardrobe. "
-            "Location references define the same world/environment and must not be replaced. "
-            "Style references define season, weather, palette, texture, and atmosphere; this style mood must visibly influence the generated image and must not be dropped. "
-            "If style references indicate winter / snow / cold season / icy environment, the generated image must clearly reflect those conditions. "
-            "Do not replace a style-defined seasonal look with a generic neutral look. "
-            "Props references define key scene objects. Include props prominently whenever relevant. "
-            "If a single prop is attached, treat it as an important primary object, not optional decoration. "
-            "Do not silently omit the key prop if the scene can logically contain it. "
-            "Do not redesign the character. Do not replace the environment. Do not invent another person. "
-            "Keep frame consistent with scene description and visual prompt. "
-            "Scene text may be Russian and visual prompt may be English; use both if available, with visual prompt driving composition and action."
+            "You are a professional film cinematographer and visual director. "
+            "Generate ONE cinematic still frame for a music video scene that looks like a high-budget photograph shot on location (never a collage/composite look). "
+            "Use all provided references as source of truth. Character references define the exact same person; location references define the same world and architecture; "
+            "style references define season, weather, palette, atmosphere, and visual language; props references define key objects that must appear clearly. "
+            "CHARACTER IDENTITY LOCK: preserve facial identity, structure, proportions, hairstyle, age, and gender. Keep outfit unless scene text explicitly changes wardrobe. "
+            "LOCATION PRESERVATION: preserve architecture, layout, landmarks, and spatial composition; rebuild in high-detail cinematic quality with realistic textures, depth, and atmosphere. "
+            "STYLE APPLICATION: apply style references explicitly. If style indicates winter/snow/cold/icy conditions, the frame must visibly show those conditions and matching cold lighting. "
+            "PROPS INTEGRATION: do not hide or omit key props; if only one prop exists, treat it as a primary visual object and integrate it naturally with character/environment. "
+            "ENVIRONMENT INTEGRATION: character must share the same lighting direction, intensity, temperature, color grading, ambient light, reflections, and shadows as the environment. "
+            "GROUND CONTACT: ensure physical grounding (e.g., compressed snow/footprints/contact shadows depending on surface). "
+            "ATMOSPHERE + QUALITY: use cinematic lighting, air depth, subtle haze/light scattering, realistic depth of field, filmic grading, and natural textures. Avoid plastic skin, flat light, and pasted-subject look. "
+            "FINAL RULE: output must look like a real professional film frame, not a synthetic composite. "
+            "Scene text may be Russian and visual prompt may be English; use both when available, with visual prompt defining composition and action and scene text defining narrative context."
         )
 
         parts = [{"text": system_prompt}]
