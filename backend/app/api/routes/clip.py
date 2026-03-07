@@ -1215,7 +1215,7 @@ def clip_plan(payload: BrainIn):
     lighting_anchor = (
         "light direction, softness, exposure and color temperature must match the lighting implied by style reference images"
         if style_refs
-        else "natural outdoor cinematic lighting"
+        else "environment-driven cinematic lighting derived from the location and world state"
     )
     location_anchor = (
         "architecture style, street geometry, paving materials and environmental aging must match location reference images"
@@ -2354,7 +2354,7 @@ def clip_image(payload: ClipImageIn):
     lighting_anchor = (
         "light direction, softness, exposure and color temperature must match the lighting implied by style reference images"
         if style_refs
-        else "natural outdoor cinematic lighting"
+        else "environment-driven cinematic lighting derived from the location and world state"
     )
     location_anchor = (
         "architecture style, street geometry, paving materials and environmental aging must match location reference images"
