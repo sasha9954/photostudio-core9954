@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     KIE_BASE_URL: str = "https://api.kie.ai/api/v1"
     KIE_VIDEO_MODEL_SINGLE: str = "kling-2.6/image-to-video"
     KIE_VIDEO_MODEL_CONTINUOUS: str = "kling/v2-5-turbo-image-to-video-pro"
-    KIE_VIDEO_MODEL_LIPSYNC: str = ""
+    KIE_VIDEO_MODEL_LIPSYNC: str = "kling/ai-avatar-pro"
     KIE_CALLBACK_URL: str = ""
     KIE_POLL_INTERVAL_SEC: int = 5
     KIE_POLL_TIMEOUT_SEC: int = 300

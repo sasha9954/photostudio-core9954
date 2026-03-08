@@ -1414,7 +1414,7 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoLoading(true);
     setScenarioVideoError("");
     try {
-      const endpoint = scenarioSelected?.lipSync ? "/api/clip/lipsync" : "/api/clip/video";
+      const endpoint = "/api/clip/video";
       const out = await fetchJson(endpoint, {
         method: "POST",
         body: {
@@ -1428,6 +1428,9 @@ Aspect ratio: ${imageFormat}`,
           transitionType,
           requestedDurationSec,
           lipSync: !!scenarioSelected.lipSync,
+          renderMode: scenarioSelected.renderMode || (scenarioSelected.lipSync ? "avatar_lipsync" : "standard_video"),
+          shotType: scenarioSelected.shotType || "",
+          sceneType: scenarioSelected.sceneType || "",
           format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
           // TODO: Switch fully to transition-aware backend endpoint once available.
         },
@@ -1791,6 +1794,14 @@ onClipSec: (nodeId, value) => {
                         sceneType: s.sceneType || "visual_rhythm",
                         hasVocals: !!s.hasVocals,
                         isLipSync: !!(s.isLipSync ?? s.lipSync),
+                        lipSync: !!(s.lipSync ?? s.isLipSync),
+                        renderMode: s.renderMode || (s.isLipSync || s.lipSync ? "avatar_lipsync" : "standard_video"),
+                        sceneRenderProvider: s.provider || "kie",
+                        sceneRenderModel: s.model || "",
+                        requestedDurationSec: normalizeDurationSec(s.requestedDurationSec ?? Math.max(0, t1 - t0)),
+                        audioSliceStartSec: Number(s.audioSliceStartSec ?? t0),
+                        audioSliceEndSec: Number(s.audioSliceEndSec ?? t1),
+                        mouthVisible: s.mouthVisible ?? null,
                         lyricFragment: s.lyricFragment || "",
                         timingReason: s.timingReason || s.why || "",
                         beatAnchor: s.beatAnchor || "",

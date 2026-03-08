@@ -71,6 +71,9 @@ class ClipVideoIn(BaseModel):
     transitionActionPrompt: str | None = None
     format: str | None = "9:16"
     lipSync: bool | None = False
+    renderMode: str | None = None
+    sceneType: str | None = None
+    shotType: str | None = None
     audioSliceUrl: str | None = None
 
 
@@ -1852,6 +1855,146 @@ def _build_planning_semantics(
     }
 
 
+def _normalize_lipsync_shot_type(value: str | None) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "close": "close_up",
+        "closeup": "close_up",
+        "close_up": "close_up",
+        "mouth_closeup": "close_up",
+        "medium": "medium_close",
+        "medium_close": "medium_close",
+        "mediumclose": "medium_close",
+        "waist": "waist_up",
+        "waistup": "waist_up",
+        "waist_up": "waist_up",
+    }
+    return aliases.get(raw, "waist_up")
+
+
+def _build_lipsync_avatar_prompt(base_prompt: str, shot_type: str) -> str:
+    shot = _normalize_lipsync_shot_type(shot_type)
+    shot_phrase = {
+        "close_up": "close-up framing",
+        "medium_close": "medium close framing",
+        "waist_up": "waist-up framing",
+    }.get(shot, "waist-up framing")
+    constraints = (
+        f"character singing to camera, {shot_phrase}, clear visible mouth, natural facial motion, "
+        "no extreme head turns, no hands blocking mouth, cinematic lighting, identity preserved"
+    )
+    if base_prompt.strip():
+        return f"{base_prompt.strip()}, {constraints}"
+    return constraints
+
+
+def _apply_lipsync_performance_rules(*, scenes: list[dict], duration: float, vocal_phrases: list[dict], want_lipsync: bool) -> list[dict]:
+    if not scenes:
+        return []
+
+    normalized_vocal_phrases: list[tuple[float, float]] = []
+    for phr in vocal_phrases or []:
+        try:
+            start = float(phr.get("start"))
+            end = float(phr.get("end"))
+        except Exception:
+            continue
+        if not (math.isfinite(start) and math.isfinite(end)):
+            continue
+        if end <= start:
+            continue
+        normalized_vocal_phrases.append((max(0.0, start), min(float(duration), end)))
+
+    window_size = 30.0
+    per_window_target = 3
+    selected_ids: set[str] = set()
+
+    def score_scene(scene: dict, win_start: float, win_end: float) -> float:
+        s0 = float(scene.get("start") or 0.0)
+        s1 = float(scene.get("end") or 0.0)
+        overlap = max(0.0, min(s1, win_end) - max(s0, win_start))
+        if overlap <= 0.0:
+            return -1.0
+        dur = max(0.0, s1 - s0)
+        duration_score = 1.0 - min(1.0, abs(dur - 4.0) / 2.0)
+        vocal_bonus = 1.0 if bool(scene.get("hasVocals") or scene.get("lyricFragment")) else 0.0
+        return overlap + duration_score + vocal_bonus
+
+    if want_lipsync:
+        t = 0.0
+        while t < float(duration):
+            win_start = t
+            win_end = min(float(duration), t + window_size)
+            candidates = sorted(
+                scenes,
+                key=lambda sc: score_scene(sc, win_start, win_end),
+                reverse=True,
+            )
+            picked = 0
+            for scene in candidates:
+                if picked >= per_window_target:
+                    break
+                sid = str(scene.get("id") or "")
+                if not sid or sid in selected_ids:
+                    continue
+                if score_scene(scene, win_start, win_end) <= 0:
+                    continue
+                selected_ids.add(sid)
+                picked += 1
+            t += window_size
+
+    updated: list[dict] = []
+    phrase_idx = 0
+    for i, scene in enumerate(scenes):
+        obj = dict(scene)
+        sid = str(obj.get("id") or f"scene_{i+1:03d}")
+        s0 = float(obj.get("start") or 0.0)
+        s1 = float(obj.get("end") or 0.0)
+        seg_dur = max(0.0, s1 - s0)
+        is_lipsync_scene = bool(want_lipsync and sid in selected_ids)
+
+        if is_lipsync_scene:
+            shot_type = _normalize_lipsync_shot_type(obj.get("shotType"))
+            obj["type"] = "performance"
+            obj["sceneType"] = "performance"
+            obj["lipSync"] = True
+            obj["isLipSync"] = True
+            obj["renderMode"] = "avatar_lipsync"
+            obj["provider"] = "kie"
+            obj["model"] = "kling/ai-avatar-pro"
+            obj["shotType"] = shot_type
+            obj["mouthVisible"] = True
+            obj["requestedDurationSec"] = round(max(3.0, min(5.0, seg_dur if seg_dur > 0 else 4.0)), 3)
+
+            while phrase_idx < len(normalized_vocal_phrases) and normalized_vocal_phrases[phrase_idx][1] <= s0:
+                phrase_idx += 1
+            phrase = normalized_vocal_phrases[phrase_idx] if phrase_idx < len(normalized_vocal_phrases) else None
+            if phrase:
+                a0 = max(s0, phrase[0])
+                a1 = min(s1, phrase[1])
+                if a1 - a0 < 0.2:
+                    a0 = s0
+                    a1 = min(s1, s0 + min(5.0, max(3.0, seg_dur)))
+            else:
+                a0 = s0
+                a1 = min(s1, s0 + min(5.0, max(3.0, seg_dur if seg_dur > 0 else 4.0)))
+            obj["audioSliceStartSec"] = round(a0, 3)
+            obj["audioSliceEndSec"] = round(max(a0 + 0.2, a1), 3)
+            obj["prompt"] = _build_lipsync_avatar_prompt(str(obj.get("prompt") or obj.get("videoPrompt") or ""), shot_type)
+            obj["videoPrompt"] = obj["prompt"]
+            obj["transitionType"] = "single"
+        else:
+            obj["type"] = obj.get("type") or "cinematic"
+            obj["lipSync"] = False
+            obj["isLipSync"] = False
+            obj["renderMode"] = "standard_video"
+            obj["provider"] = "kie"
+
+        updated.append(obj)
+
+    return updated
+
+
 @router.post("/clip/plan")
 def clip_plan(payload: BrainIn):
     """Gemini-first clip planner: Gemini analyzes audio/text/refs and returns strict JSON storyboard."""
@@ -3570,6 +3713,13 @@ If any of the required descriptive fields are returned in English, the output is
         previous_scene = s
         previous_continuity_memory = continuity_memory
 
+    normalized_scenes = _apply_lipsync_performance_rules(
+        scenes=normalized_scenes,
+        duration=float(audio_duration),
+        vocal_phrases=plan.get("vocalPhrases") if isinstance(plan.get("vocalPhrases"), list) else [],
+        want_lipsync=bool(payload.wantLipSync),
+    )
+
     return {
         "ok": True,
         "engine": "gemini",
@@ -4120,15 +4270,18 @@ def clip_video(payload: ClipVideoIn):
 
     scene_id = str(payload.sceneId or "").strip() or "scene"
     transition_type = _normalize_clip_video_transition_type(payload.transitionType)
-    is_lipsync = bool(payload.lipSync is True)
+    render_mode = str(payload.renderMode or "").strip().lower()
+    is_lipsync = bool(payload.lipSync is True or render_mode == "avatar_lipsync")
     audio_slice_url = str(payload.audioSliceUrl or "").strip()
     image_url = str(payload.imageUrl or "").strip()
     start_image_url = str(payload.startImageUrl or "").strip()
     end_image_url = str(payload.endImageUrl or "").strip()
     output_format = str(payload.format or "9:16").strip() or "9:16"
 
-    if is_lipsync:
+    if render_mode == "avatar_lipsync" or is_lipsync:
         mode = "lipsync"
+    elif render_mode == "standard_video":
+        mode = "continuous" if _is_clip_video_transition_mode(transition_type, start_image_url, end_image_url) else "single"
     elif _is_clip_video_transition_mode(transition_type, start_image_url, end_image_url):
         mode = "continuous"
     else:
@@ -4139,6 +4292,8 @@ def clip_video(payload: ClipVideoIn):
         effective_prompt = str(payload.transitionActionPrompt or payload.videoPrompt or "").strip()
     else:
         effective_prompt = str(payload.videoPrompt or payload.transitionActionPrompt or "").strip()
+    if mode == "lipsync":
+        effective_prompt = _build_lipsync_avatar_prompt(effective_prompt, str(payload.shotType or ""))
     if not effective_prompt:
         effective_prompt = "cinematic motion, natural movement"
 
@@ -4270,7 +4425,10 @@ def clip_video(payload: ClipVideoIn):
         requested_duration = float(payload.requestedDurationSec or 5)
     except Exception:
         requested_duration = 5.0
-    requested_duration = max(1, min(10, requested_duration))
+    if mode == "lipsync":
+        requested_duration = max(3, min(5, requested_duration))
+    else:
+        requested_duration = max(1, min(10, requested_duration))
     # Provider supports only 5s / 10s variants.
     provider_duration = "5" if requested_duration <= 5.0 else "10"
     provider_duration_sec = int(provider_duration)
