@@ -1,4 +1,9 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 class Settings(BaseSettings):
     PS_ENV: str = "dev"
@@ -25,8 +30,12 @@ class Settings(BaseSettings):
     KIE_POLL_TIMEOUT_SEC: int = 300
 
     model_config = {
-        "env_file": ".env",
+        "env_file": str(ENV_FILE),
         "env_file_encoding": "utf-8",
     }
 
 settings = Settings()
+
+# temporary debug
+print("[CONFIG] env_file =", ENV_FILE)
+print("[CONFIG] KIE_API_KEY loaded =", bool(settings.KIE_API_KEY))
