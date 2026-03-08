@@ -312,18 +312,36 @@ function getSceneTransitionPrompt(scene) {
   return String(scene?.transitionActionPrompt || scene?.videoPrompt || "").trim();
 }
 
-function getSceneVideoPoster(scene) {
+function getSceneStartImageSource(scene, previousScene) {
+  if (resolveSceneTransitionType(scene) !== "continuous") return "none";
+  const inheritPreviousEndAsStart = !!scene?.inheritPreviousEndAsStart;
+  const previousEndImageUrl = String(previousScene?.endImageUrl || "").trim();
+  const manualStartImageUrl = String(scene?.startImageUrl || "").trim();
+  if (inheritPreviousEndAsStart && previousEndImageUrl) return "previous_end";
+  if (manualStartImageUrl) return "manual";
+  return "none";
+}
+
+function getEffectiveSceneStartImage(scene, previousScene) {
+  if (resolveSceneTransitionType(scene) !== "continuous") return String(scene?.startImageUrl || "").trim();
+  if (getSceneStartImageSource(scene, previousScene) === "previous_end") {
+    return String(previousScene?.endImageUrl || "").trim();
+  }
+  return String(scene?.startImageUrl || "").trim();
+}
+
+function getSceneVideoPoster(scene, previousScene = null) {
   const transitionType = resolveSceneTransitionType(scene);
   if (transitionType === "continuous") {
-    return String(scene?.startImageUrl || scene?.endImageUrl || scene?.imageUrl || "").trim();
+    return String(getEffectiveSceneStartImage(scene, previousScene) || scene?.endImageUrl || scene?.imageUrl || "").trim();
   }
   return String(scene?.imageUrl || "").trim();
 }
 
-function getSceneListThumb(scene) {
+function getSceneListThumb(scene, previousScene = null) {
   const transitionType = resolveSceneTransitionType(scene);
   if (transitionType === "continuous") {
-    return String(scene?.startImageUrl || scene?.endImageUrl || scene?.imageUrl || "").trim();
+    return String(getEffectiveSceneStartImage(scene, previousScene) || scene?.endImageUrl || scene?.imageUrl || "").trim();
   }
   return String(scene?.imageUrl || "").trim();
 }
@@ -1146,6 +1164,12 @@ const scenarioScenes = useMemo(() => {
 
 const scenarioSelected = scenarioScenes[scenarioEditor.selected] || null;
 const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelected);
+const scenarioPreviousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
+const scenarioSelectedCanInheritPreviousEnd = scenarioSelectedTransitionType === "continuous"
+  && !!scenarioPreviousScene
+  && !!String(scenarioPreviousScene?.endImageUrl || "").trim();
+const scenarioSelectedEffectiveStartImageUrl = getEffectiveSceneStartImage(scenarioSelected, scenarioPreviousScene);
+const scenarioSelectedStartImageSource = getSceneStartImageSource(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedImageFormat = normalizeSceneImageFormat(scenarioSelected?.imageFormat);
 const scenarioSelectedIndexLabel = Number.isFinite(scenarioEditor.selected) ? scenarioEditor.selected + 1 : 0;
 const scenarioSelectedT0 = Number(scenarioSelected?.t0 ?? scenarioSelected?.start ?? 0);
@@ -1159,7 +1183,6 @@ const globalAudioUrlRaw = useMemo(() => {
 }, [nodes]);
 const globalAudioUrlResolved = useMemo(() => resolveAssetUrl(globalAudioUrlRaw), [globalAudioUrlRaw]);
 const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSelected?.audioSliceUrl), [scenarioSelected?.audioSliceUrl]);
-const scenarioPreviousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
 const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   ? "endImageUrl"
   : scenarioPreviousScene?.imageUrl
@@ -1206,6 +1229,9 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
 
     const transitionType = resolveSceneTransitionType(scenarioSelected);
     const normalizedSlot = slot === "start" || slot === "end" ? slot : "single";
+    if (transitionType === "continuous" && normalizedSlot === "start" && !!scenarioSelected?.inheritPreviousEndAsStart) {
+      return;
+    }
     const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
     const sceneText = String(scenarioSelected.sceneText || scenarioSelected.visualDescription || "").trim();
     const previousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
@@ -1276,6 +1302,9 @@ Aspect ratio: ${imageFormat}`,
     setScenarioImageError("");
     const transitionType = resolveSceneTransitionType(scenarioSelected);
     const normalizedSlot = slot === "start" || slot === "end" ? slot : "single";
+    if (transitionType === "continuous" && normalizedSlot === "start" && !!scenarioSelected?.inheritPreviousEndAsStart) {
+      return;
+    }
     if (transitionType === "continuous" && normalizedSlot === "start") {
       updateScenarioScene(scenarioEditor.selected, { startImageUrl: "" });
       return;
@@ -1347,10 +1376,10 @@ Aspect ratio: ${imageFormat}`,
   const handleScenarioGenerateVideo = useCallback(async () => {
     const transitionType = resolveSceneTransitionType(scenarioSelected);
     const frameImageUrl = String(scenarioSelected?.imageUrl || "").trim();
-    const startImageUrl = String(scenarioSelected?.startImageUrl || "").trim();
+    const effectiveStartImageUrl = String(scenarioSelectedEffectiveStartImageUrl || "").trim();
     const endImageUrl = String(scenarioSelected?.endImageUrl || "").trim();
     const hasImageForVideo = transitionType === "continuous"
-      ? !!(startImageUrl || endImageUrl || frameImageUrl)
+      ? !!(effectiveStartImageUrl || endImageUrl || frameImageUrl)
       : !!frameImageUrl;
 
     if (!hasImageForVideo) return;
@@ -1373,8 +1402,8 @@ Aspect ratio: ${imageFormat}`,
         method: "POST",
         body: {
           sceneId,
-          imageUrl: frameImageUrl || startImageUrl || endImageUrl,
-          startImageUrl,
+          imageUrl: frameImageUrl || effectiveStartImageUrl || endImageUrl,
+          startImageUrl: effectiveStartImageUrl,
           endImageUrl,
           audioSliceUrl: scenarioSelected.audioSliceUrl || "",
           videoPrompt: scenarioSelected.videoPrompt || "",
@@ -1404,12 +1433,12 @@ Aspect ratio: ${imageFormat}`,
   const handleScenarioAddToVideo = useCallback(() => {
     const transitionType = resolveSceneTransitionType(scenarioSelected);
     const hasImage = transitionType === "continuous"
-      ? !!(scenarioSelected?.startImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl)
+      ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl)
       : !!scenarioSelected?.imageUrl;
     if (!hasImage) return;
     setScenarioVideoOpen(true);
     setScenarioVideoError("");
-  }, [scenarioSelected]);
+  }, [scenarioSelected, scenarioSelectedEffectiveStartImageUrl]);
 
   const handleScenarioAssembly = useCallback(() => {
     const segments = scenarioScenes
@@ -1723,6 +1752,8 @@ onClipSec: (nodeId, value) => {
                         imageUrl: s.imageUrl || "",
                         startImageUrl: s.startImageUrl || "",
                         endImageUrl: s.endImageUrl || "",
+                        inheritPreviousEndAsStart: !!s.inheritPreviousEndAsStart,
+                        startFrameSource: s.startFrameSource === "previous_end" ? "previous_end" : "manual",
                         imageFormat: normalizeSceneImageFormat(s.imageFormat),
                         audioSliceUrl: s.audioSliceUrl || "",
                         audioSliceT0: Number(s.audioSliceT0 ?? t0),
@@ -2249,22 +2280,25 @@ const hydrate = useCallback(() => {
 
             <div className="clipSB_scenarioBody">
               <div className="clipSB_scenarioList">
-                {scenarioScenes.map((s, i) => (
-                  <button
+                {scenarioScenes.map((s, i) => {
+                  const previousScene = i > 0 ? scenarioScenes[i - 1] : null;
+                  const sceneThumb = getSceneListThumb(s, previousScene);
+                  return (
+                    <button
                     key={s.id || i}
                     className={"clipSB_scenarioItem" + (i === scenarioEditor.selected ? " isActive" : "")}
                     onClick={() => setScenarioEditor((x) => ({ ...x, selected: i }))}
                   >
                     <div className="clipSB_scenarioItemInner">
-                      {getSceneListThumb(s) ? (
+                      {sceneThumb ? (
                         <img
-                          src={getSceneListThumb(s)}
+                          src={sceneThumb}
                           alt="scene"
                           className="clipSB_scenarioThumb"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            setLightboxUrl(getSceneListThumb(s));
+                            setLightboxUrl(sceneThumb);
                           }}
                         />
                       ) : (
@@ -2277,7 +2311,7 @@ const hydrate = useCallback(() => {
                           </div>
                           <div className="clipSB_scenarioTags">
                             <div className="clipSB_tag">{getSceneTypeBadge(resolveSceneTransitionType(s))}</div>
-                            {getSceneListThumb(s) ? <div className="clipSB_tag">IMG</div> : null}
+                            {sceneThumb ? <div className="clipSB_tag">IMG</div> : null}
                             {s.videoUrl ? <div className="clipSB_tag clipSB_tagDone">VIDEO ✓</div> : null}
                             {s.lipSync ? <div className="clipSB_tag">LIP</div> : null}
                           </div>
@@ -2285,8 +2319,9 @@ const hydrate = useCallback(() => {
                         <div className="clipSB_scenarioItemText">{(s.sceneText || "").slice(0, 90) || "—"}</div>
                       </div>
                     </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
 
               <div className="clipSB_scenarioEdit">
@@ -2382,25 +2417,56 @@ const hydrate = useCallback(() => {
                             ))}
                           </div>
 
+                          <div className="clipSB_scenarioEditRow" style={{ marginBottom: 8 }}>
+                            <label className="clipSB_check" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                              <input
+                                type="checkbox"
+                                checked={!!scenarioSelected.inheritPreviousEndAsStart}
+                                onChange={(e) => updateScenarioScene(scenarioEditor.selected, {
+                                  inheritPreviousEndAsStart: !!e.target.checked,
+                                  startFrameSource: e.target.checked ? "previous_end" : "manual",
+                                })}
+                                disabled={!scenarioSelectedCanInheritPreviousEnd}
+                              />
+                              <span>Взять END предыдущей сцены как START этой</span>
+                            </label>
+                          </div>
+
                           <div className="clipSB_hint" style={{ marginBottom: 6 }}>START FRAME IMAGE</div>
+                          <div className="clipSB_hint" style={{ marginBottom: 6 }}>
+                            Источник: {scenarioSelectedStartImageSource === "previous_end" ? "предыдущий END" : scenarioSelectedStartImageSource === "manual" ? "manual" : "none"}
+                          </div>
                           <div className="clipSB_scenarioPreviewWrap">
-                            {scenarioSelected.startImageUrl ? (
+                            {scenarioSelectedEffectiveStartImageUrl ? (
                               <img
-                                src={scenarioSelected.startImageUrl}
+                                src={scenarioSelectedEffectiveStartImageUrl}
                                 alt="start frame preview"
                                 className="clipSB_scenarioPreview"
-                                onClick={() => setLightboxUrl(scenarioSelected.startImageUrl)}
+                                onClick={() => setLightboxUrl(scenarioSelectedEffectiveStartImageUrl)}
                               />
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Start preview отсутствует</div>
                             )}
                           </div>
                           <div style={{ display: "flex", gap: 8, marginTop: 8, marginBottom: 10 }}>
-                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleGenerateScenarioImage("start")} disabled={scenarioImageLoading}>
+                            <button
+                              className="clipSB_btn clipSB_btnSecondary"
+                              onClick={() => handleGenerateScenarioImage("start")}
+                              disabled={scenarioImageLoading || !!scenarioSelected.inheritPreviousEndAsStart}
+                            >
                               {scenarioImageLoading ? "Генерация..." : "Сгенерировать start"}
                             </button>
-                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleClearScenarioImage("start")}>Очистить start</button>
+                            <button
+                              className="clipSB_btn clipSB_btnSecondary"
+                              onClick={() => handleClearScenarioImage("start")}
+                              disabled={!!scenarioSelected.inheritPreviousEndAsStart}
+                            >
+                              Очистить start
+                            </button>
                           </div>
+                          {scenarioSelected.inheritPreviousEndAsStart ? (
+                            <div className="clipSB_hint" style={{ marginBottom: 10 }}>START берётся из предыдущей сцены</div>
+                          ) : null}
 
                           <div className="clipSB_hint" style={{ marginBottom: 6 }}>END FRAME IMAGE</div>
                           <div className="clipSB_scenarioPreviewWrap">
@@ -2420,7 +2486,7 @@ const hydrate = useCallback(() => {
                               {scenarioImageLoading ? "Генерация..." : "Сгенерировать end"}
                             </button>
                             <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleClearScenarioImage("end")}>Очистить end</button>
-                            {(scenarioSelected.startImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) ? (
+                            {(scenarioSelectedEffectiveStartImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) ? (
                               <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioAddToVideo}>Добавить в Видео</button>
                             ) : null}
                           </div>
@@ -2506,6 +2572,8 @@ const hydrate = useCallback(() => {
                         <span>performanceType</span><span>{String(scenarioSelected.performanceType || "") || "—"}</span>
                         <span>shotType</span><span>{String(scenarioSelected.shotType || "") || "—"}</span>
                         <span>previousSceneImageSource</span><span>{scenarioPreviousSceneImageSource}</span>
+                        <span>inheritPreviousEndAsStart</span><span>{String(!!scenarioSelected.inheritPreviousEndAsStart)}</span>
+                        <span>startFrameSource</span><span>{scenarioSelectedStartImageSource}</span>
                       </div>
                     </div>
 
@@ -2574,10 +2642,10 @@ const hydrate = useCallback(() => {
                               playsInline
                               preload="metadata"
                               src={scenarioSelected.videoUrl}
-                              poster={getSceneVideoPoster(scenarioSelected)}
+                              poster={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
                             />
-                          ) : getSceneVideoPoster(scenarioSelected) ? (
-                            <img className="clipSB_videoPoster" src={getSceneVideoPoster(scenarioSelected)} alt="poster" />
+                          ) : getSceneVideoPoster(scenarioSelected, scenarioPreviousScene) ? (
+                            <img className="clipSB_videoPoster" src={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)} alt="poster" />
                           ) : null}
 
                           {scenarioVideoLoading ? (
@@ -2589,7 +2657,7 @@ const hydrate = useCallback(() => {
                         <details className="clipSB_videoDetails">
                           <summary>Детали</summary>
                           <div className="clipSB_videoKv"><span>imageUrl</span><span>{scenarioSelected.imageUrl || "—"}</span></div>
-                          <div className="clipSB_videoKv"><span>startImageUrl</span><span>{scenarioSelected.startImageUrl || "—"}</span></div>
+                          <div className="clipSB_videoKv"><span>startImageUrl</span><span>{scenarioSelectedEffectiveStartImageUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>endImageUrl</span><span>{scenarioSelected.endImageUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>transitionActionPrompt</span><span>{scenarioSelected.transitionActionPrompt || scenarioSelected.videoPrompt || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>audioSliceUrl</span><span>{scenarioSelected.audioSliceUrl || "—"}</span></div>
@@ -2602,7 +2670,7 @@ const hydrate = useCallback(() => {
                           <button
                             className="clipSB_btn clipSB_btnSecondary"
                             onClick={handleScenarioGenerateVideo}
-                            disabled={scenarioVideoLoading || !(scenarioSelectedTransitionType === "continuous" ? (scenarioSelected.startImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) : scenarioSelected.imageUrl) || (scenarioSelected.lipSync && !scenarioSelected.audioSliceUrl)}
+                            disabled={scenarioVideoLoading || !(scenarioSelectedTransitionType === "continuous" ? (scenarioSelectedEffectiveStartImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) : scenarioSelected.imageUrl) || (scenarioSelected.lipSync && !scenarioSelected.audioSliceUrl)}
                           >
                             Сгенерировать видео
                           </button>
