@@ -240,6 +240,39 @@ def _is_localhost_url(url: str) -> bool:
     return host in {"127.0.0.1", "localhost", "0.0.0.0"}
 
 
+def _extract_asset_filename_from_url(url: str) -> str:
+    try:
+        path = (urlparse(str(url or "").strip()).path or "").strip()
+    except Exception:
+        return ""
+
+    marker = "/static/assets/"
+    if marker not in path:
+        return ""
+
+    tail = path.split(marker, 1)[1]
+    filename = os.path.basename(tail)
+    return filename.strip()
+
+
+def _normalize_source_image_url_for_kie(source_image_url: str) -> str:
+    source_image_url = str(source_image_url or "").strip()
+    if not source_image_url:
+        return ""
+    if not _is_localhost_url(source_image_url):
+        return source_image_url
+
+    public_base_url = str(settings.PUBLIC_BASE_URL or "").strip()
+    if not public_base_url or _is_localhost_url(public_base_url):
+        return source_image_url
+
+    filename = _extract_asset_filename_from_url(source_image_url)
+    if not filename:
+        return source_image_url
+
+    return _asset_url(filename)
+
+
 def _kie_wait_for_video_result(task_id: str, *, poll_interval_sec: int, poll_timeout_sec: int) -> tuple[str | None, str | None, str | None]:
     started = time.time()
     while time.time() - started < poll_timeout_sec:
@@ -4026,6 +4059,11 @@ def clip_video(payload: ClipVideoIn):
         source_image_url = image_url or start_image_url or end_image_url
     else:
         source_image_url = start_image_url or image_url or end_image_url
+
+    public_base_url = str(settings.PUBLIC_BASE_URL or "").strip()
+    source_image_url = _normalize_source_image_url_for_kie(source_image_url)
+    print(f"[CLIP VIDEO] public_base_url={public_base_url}")
+    print(f"[CLIP VIDEO] normalized_source_image_url={source_image_url}")
 
     if not source_image_url:
         return JSONResponse(
