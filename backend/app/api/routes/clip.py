@@ -3952,7 +3952,10 @@ def clip_audio_slice(payload: AudioSliceIn):
 @router.post("/clip/video")
 def clip_video(payload: ClipVideoIn):
     if not (settings.KIE_API_KEY or "").strip():
-        return {"ok": False, "code": "KIE_NOT_CONFIGURED", "hint": "missing_KIE_API_KEY"}
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "code": "KIE_NOT_CONFIGURED", "hint": "missing_KIE_API_KEY"},
+        )
 
     transition_type = str(payload.transitionType or "single").strip().lower()
     scene_id = str(payload.sceneId or "").strip() or "scene"
@@ -3964,27 +3967,92 @@ def clip_video(payload: ClipVideoIn):
         source_image_url = str(payload.startImageUrl or payload.imageUrl or payload.endImageUrl or "").strip()
         effective_prompt = str(payload.transitionActionPrompt or payload.videoPrompt or "").strip()
 
+    if not effective_prompt:
+        effective_prompt = "cinematic motion, natural movement"
+
     if not source_image_url:
-        return {"ok": False, "code": "BAD_REQUEST", "hint": "imageUrl_or_startImageUrl_required"}
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "code": "BAD_REQUEST", "hint": "imageUrl_or_startImageUrl_required"},
+        )
 
     requested_duration = float(payload.requestedDurationSec or 5)
+    requested_duration = max(1, min(10, requested_duration))
     duration = "5" if requested_duration <= 5 else "10"
+
+    print("[KIE] scene:", scene_id)
+    print("[KIE] transition:", transition_type)
+    print("[KIE] source_image:", source_image_url)
+    print("[KIE] duration:", duration)
 
     task_id, create_err = _kie_create_video_task(
         image_url=source_image_url,
-        prompt=effective_prompt or "cinematic motion",
+        prompt=effective_prompt,
         duration=duration,
     )
     if create_err or not task_id:
-        return {"ok": False, "code": "KIE_TASK_CREATE_FAILED", "hint": create_err or "create_task_failed"}
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "code": "KIE_TASK_CREATE_FAILED", "hint": create_err or "create_task_failed"},
+        )
 
-    video_url, wait_code, wait_hint = _kie_wait_for_video_result(
-        task_id,
-        poll_interval_sec=max(1, int(settings.KIE_POLL_INTERVAL_SEC or 5)),
-        poll_timeout_sec=max(10, int(settings.KIE_POLL_TIMEOUT_SEC or 300)),
-    )
+    print("[KIE] task created:", task_id)
+
+    poll_interval_sec = max(1, int(settings.KIE_POLL_INTERVAL_SEC or 5))
+    poll_timeout_sec = max(10, int(settings.KIE_POLL_TIMEOUT_SEC or 300))
+    started = time.time()
+
+    video_url = None
+    wait_code = None
+    wait_hint = None
+
+    while time.time() - started < poll_timeout_sec:
+        data, err = _kie_query_task(task_id)
+        if err:
+            wait_code = "KIE_TASK_FAILED"
+            wait_hint = err
+            break
+
+        status = _extract_task_status(data or {})
+        print("[KIE] polling status:", status)
+
+        if status in {"success", "succeeded", "done", "completed"}:
+            video_url = _extract_video_url_from_kie_payload(data)
+            if not video_url and isinstance(data, dict):
+                video_url = _extract_video_url_from_kie_payload(data.get("data"))
+            if not video_url:
+                wait_code = "KIE_RESULT_MISSING"
+                wait_hint = "result_url_not_found_in_kie_payload"
+            break
+
+        if status in {"failed", "error", "canceled", "cancelled"}:
+            wait_code = "KIE_TASK_FAILED"
+            wait_hint = f"kie_task_status_{status}"
+            break
+
+        time.sleep(poll_interval_sec)
+
+    if not wait_code and not video_url:
+        wait_code = "KIE_TASK_TIMEOUT"
+        wait_hint = f"poll_timeout_{poll_timeout_sec}s"
+
     if wait_code or not video_url:
-        return {"ok": False, "code": wait_code or "KIE_TASK_FAILED", "hint": wait_hint or "video_generation_failed"}
+        print("[KIE] error:", wait_code, wait_hint)
+        status_code = {
+            "KIE_TASK_TIMEOUT": 504,
+            "KIE_RESULT_MISSING": 500,
+            "KIE_TASK_FAILED": 500,
+        }.get(wait_code or "", 500)
+        return JSONResponse(
+            status_code=status_code,
+            content={"ok": False, "code": wait_code or "KIE_TASK_FAILED", "hint": wait_hint or "video_generation_failed"},
+        )
+
+    print("[KIE] video url:", video_url)
+
+    mode = "single_image"
+    if transition_type == "continuous":
+        mode = "single_image_fallback"
 
     return {
         "ok": True,
@@ -3993,5 +4061,5 @@ def clip_video(payload: ClipVideoIn):
         "provider": "kie",
         "model": settings.KIE_VIDEO_MODEL_SINGLE,
         "taskId": task_id,
-        "mode": "single_image",
+        "mode": mode,
     }
