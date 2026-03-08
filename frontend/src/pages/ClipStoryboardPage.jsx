@@ -1423,7 +1423,7 @@ Aspect ratio: ${imageFormat}`,
     } finally {
       setScenarioVideoLoading(false);
     }
-  }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
+  }, [scenarioEditor.selected, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");

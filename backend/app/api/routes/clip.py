@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import requests
+from requests import RequestException
 import tempfile
 import subprocess
 import math
@@ -11,6 +12,7 @@ import re
 import os
 import io
 import mimetypes
+import time
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -55,6 +57,174 @@ class AudioSliceIn(BaseModel):
     t0: float
     t1: float
     audioUrl: str
+
+
+class ClipVideoIn(BaseModel):
+    sceneId: str
+    imageUrl: str | None = None
+    videoPrompt: str | None = None
+    requestedDurationSec: int | float | None = 5
+    transitionType: str | None = "single"
+    startImageUrl: str | None = None
+    endImageUrl: str | None = None
+    transitionActionPrompt: str | None = None
+    format: str | None = "9:16"
+
+
+def _kie_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {settings.KIE_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def _extract_task_id(data: dict) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    candidates = [
+        data.get("taskId"),
+        data.get("task_id"),
+        ((data.get("data") or {}).get("taskId") if isinstance(data.get("data"), dict) else None),
+        ((data.get("data") or {}).get("task_id") if isinstance(data.get("data"), dict) else None),
+    ]
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _extract_task_status(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    candidates = [
+        data.get("status"),
+        data.get("state"),
+        data.get("taskStatus"),
+        ((data.get("data") or {}).get("status") if isinstance(data.get("data"), dict) else None),
+        ((data.get("data") or {}).get("state") if isinstance(data.get("data"), dict) else None),
+        ((data.get("data") or {}).get("taskStatus") if isinstance(data.get("data"), dict) else None),
+    ]
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return ""
+
+
+def _extract_video_url_from_kie_payload(payload: object) -> str | None:
+    if isinstance(payload, str):
+        raw = payload.strip()
+        if not raw:
+            return None
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return raw
+        if raw.startswith("{") or raw.startswith("["):
+            try:
+                return _extract_video_url_from_kie_payload(json.loads(raw))
+            except Exception:
+                return None
+        return None
+
+    if isinstance(payload, list):
+        for item in payload:
+            url = _extract_video_url_from_kie_payload(item)
+            if url:
+                return url
+        return None
+
+    if isinstance(payload, dict):
+        result_urls = payload.get("resultUrls") or payload.get("result_urls")
+        if isinstance(result_urls, list):
+            for item in result_urls:
+                if isinstance(item, str) and item.startswith(("http://", "https://")):
+                    return item
+
+        direct_keys = [
+            "videoUrl", "video_url", "url", "downloadUrl", "download_url",
+            "src", "mp4",
+        ]
+        for key in direct_keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                return value
+
+        nested_keys = ["data", "output", "result", "resultJson", "result_json", "response"]
+        for key in nested_keys:
+            if key in payload:
+                url = _extract_video_url_from_kie_payload(payload.get(key))
+                if url:
+                    return url
+    return None
+
+
+def _kie_create_video_task(*, image_url: str, prompt: str, duration: str) -> tuple[str | None, str | None]:
+    endpoint = f"{settings.KIE_BASE_URL.rstrip('/')}/jobs/createTask"
+    body = {
+        "model": settings.KIE_VIDEO_MODEL_SINGLE,
+        "input": {
+            "prompt": prompt,
+            "image_urls": [image_url],
+            "sound": False,
+            "duration": duration,
+        },
+    }
+    callback_url = (settings.KIE_CALLBACK_URL or "").strip()
+    if callback_url:
+        body["callBackUrl"] = callback_url
+
+    try:
+        resp = requests.post(endpoint, headers=_kie_headers(), json=body, timeout=60)
+        if resp.status_code >= 400:
+            return None, f"createTask_http_{resp.status_code}:{resp.text[:300]}"
+        data = resp.json()
+    except RequestException as exc:
+        return None, f"createTask_request_error:{str(exc)[:300]}"
+    except Exception as exc:
+        return None, f"createTask_parse_error:{str(exc)[:300]}"
+
+    task_id = _extract_task_id(data)
+    if not task_id:
+        return None, f"createTask_task_id_missing:{str(data)[:300]}"
+    return task_id, None
+
+
+def _kie_query_task(task_id: str) -> tuple[dict | None, str | None]:
+    endpoint = f"{settings.KIE_BASE_URL.rstrip('/')}/jobs/recordInfo"
+    try:
+        resp = requests.get(endpoint, headers=_kie_headers(), params={"taskId": task_id}, timeout=60)
+        if resp.status_code >= 400:
+            return None, f"queryTask_http_{resp.status_code}:{resp.text[:300]}"
+        data = resp.json()
+        if not isinstance(data, dict):
+            return None, f"queryTask_malformed:{str(data)[:300]}"
+        return data, None
+    except RequestException as exc:
+        return None, f"queryTask_request_error:{str(exc)[:300]}"
+    except Exception as exc:
+        return None, f"queryTask_parse_error:{str(exc)[:300]}"
+
+
+def _kie_wait_for_video_result(task_id: str, *, poll_interval_sec: int, poll_timeout_sec: int) -> tuple[str | None, str | None, str | None]:
+    started = time.time()
+    while time.time() - started < poll_timeout_sec:
+        data, err = _kie_query_task(task_id)
+        if err:
+            return None, "KIE_TASK_FAILED", err
+
+        status = _extract_task_status(data or {})
+        if status in {"success", "succeeded", "done", "completed"}:
+            video_url = _extract_video_url_from_kie_payload(data)
+            if not video_url and isinstance(data, dict):
+                video_url = _extract_video_url_from_kie_payload(data.get("data"))
+            if not video_url:
+                return None, "KIE_RESULT_MISSING", "result_url_not_found_in_kie_payload"
+            return video_url, None, None
+
+        if status in {"failed", "error", "canceled", "cancelled"}:
+            return None, "KIE_TASK_FAILED", f"kie_task_status_{status}"
+
+        time.sleep(max(1, int(poll_interval_sec)))
+
+    return None, "KIE_TASK_TIMEOUT", f"poll_timeout_{poll_timeout_sec}s"
 
 
 def _ensure_assets_dir() -> None:
@@ -3776,4 +3946,52 @@ def clip_audio_slice(payload: AudioSliceIn):
         "t1": t1,
         "duration": round(t1 - t0, 3),
         "audioSliceBackendDurationSec": round(t1 - t0, 3),
+    }
+
+
+@router.post("/clip/video")
+def clip_video(payload: ClipVideoIn):
+    if not (settings.KIE_API_KEY or "").strip():
+        return {"ok": False, "code": "KIE_NOT_CONFIGURED", "hint": "missing_KIE_API_KEY"}
+
+    transition_type = str(payload.transitionType or "single").strip().lower()
+    scene_id = str(payload.sceneId or "").strip() or "scene"
+
+    if transition_type in {"single", "hard_cut"}:
+        source_image_url = str(payload.imageUrl or "").strip()
+        effective_prompt = str(payload.videoPrompt or payload.transitionActionPrompt or "").strip()
+    else:
+        source_image_url = str(payload.startImageUrl or payload.imageUrl or payload.endImageUrl or "").strip()
+        effective_prompt = str(payload.transitionActionPrompt or payload.videoPrompt or "").strip()
+
+    if not source_image_url:
+        return {"ok": False, "code": "BAD_REQUEST", "hint": "imageUrl_or_startImageUrl_required"}
+
+    requested_duration = float(payload.requestedDurationSec or 5)
+    duration = "5" if requested_duration <= 5 else "10"
+
+    task_id, create_err = _kie_create_video_task(
+        image_url=source_image_url,
+        prompt=effective_prompt or "cinematic motion",
+        duration=duration,
+    )
+    if create_err or not task_id:
+        return {"ok": False, "code": "KIE_TASK_CREATE_FAILED", "hint": create_err or "create_task_failed"}
+
+    video_url, wait_code, wait_hint = _kie_wait_for_video_result(
+        task_id,
+        poll_interval_sec=max(1, int(settings.KIE_POLL_INTERVAL_SEC or 5)),
+        poll_timeout_sec=max(10, int(settings.KIE_POLL_TIMEOUT_SEC or 300)),
+    )
+    if wait_code or not video_url:
+        return {"ok": False, "code": wait_code or "KIE_TASK_FAILED", "hint": wait_hint or "video_generation_failed"}
+
+    return {
+        "ok": True,
+        "sceneId": scene_id,
+        "videoUrl": video_url,
+        "provider": "kie",
+        "model": settings.KIE_VIDEO_MODEL_SINGLE,
+        "taskId": task_id,
+        "mode": "single_image",
     }
