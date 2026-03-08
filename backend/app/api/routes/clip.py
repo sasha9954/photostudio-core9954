@@ -3077,9 +3077,10 @@ If any of the required descriptive fields are returned in English, the output is
             visual_desc = _enforce_prop_anchor_text(visual_desc, prop_anchor_label, lang="ru")
             reason_text = _enforce_prop_anchor_text(reason_text, prop_anchor_label, lang="ru")
 
-        raw_transition_type = s.get("transitionType")
-        transition_type = _normalize_transition_type(raw_transition_type)
-        if not str(raw_transition_type or "").strip():
+        raw_transition_type = str(s.get("transitionType") or "").strip().lower()
+        if raw_transition_type in _TRANSITION_TYPES:
+            transition_type = raw_transition_type
+        else:
             transition_type = _infer_transition_type(s)
 
         scene_type = str(s.get("sceneType") or "visual_rhythm").strip() or "visual_rhythm"
@@ -3100,8 +3101,22 @@ If any of the required descriptive fields are returned in English, the output is
             if not transition_action_prompt:
                 transition_action_prompt = str(s.get("reason") or s.get("motion") or s.get("visualDescription") or "").strip()
 
+            video_prompt = (
+                transition_action_prompt
+                or str(s.get("videoPrompt") or "").strip()
+                or reason_text
+                or str(s.get("motion") or "").strip()
+                or visual_desc
+            )
+
         elif transition_type in {"single", "hard_cut"}:
             frame_prompt = str(s.get("framePrompt") or s.get("visualPrompt") or s.get("visualDescription") or "").strip()
+
+        if transition_type == "continuous":
+            prompt_value = end_frame_prompt or start_frame_prompt or visual_prompt or visual_desc
+        else:
+            prompt_value = frame_prompt or visual_prompt or visual_desc
+
         continuity_memory = _sanitize_continuity_memory(s.get("continuityMemory"))
         if not continuity_memory:
             continuity_memory = _build_scene_continuity_memory(
@@ -3127,7 +3142,7 @@ If any of the required descriptive fields are returned in English, the output is
             "endFramePrompt": end_frame_prompt,
             "framePrompt": frame_prompt,
             "transitionActionPrompt": transition_action_prompt,
-            "prompt": frame_prompt or visual_prompt or visual_desc,
+            "prompt": prompt_value,
             "sceneDelta": scene_delta,
             "sceneText": visual_desc,
             "imagePrompt": visual_prompt,
