@@ -257,6 +257,29 @@ function resolveAssetUrl(url) {
 
 const SCENE_IMAGE_FORMATS = ["9:16", "1:1", "16:9"];
 const DEFAULT_SCENE_IMAGE_FORMAT = "9:16";
+const PARSE_PROGRESS_PHRASES = [
+  "Анализирую входы",
+  "Собираю смысл сцены",
+  "Проверяю AUDIO / TEXT / REF",
+  "Строю логику клипа",
+  "Ищу переходы между сценами",
+  "Определяю ритм и структуру",
+  "Подготавливаю storyboard",
+];
+
+function formatParseTimer(seconds) {
+  const safe = Math.max(0, Math.floor(Number(seconds) || 0));
+  const mm = Math.floor(safe / 60);
+  const ss = safe % 60;
+  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+
+function estimateSceneCount(durationSec) {
+  const raw = Number(durationSec);
+  const safeDuration = Number.isFinite(raw) && raw > 0 ? raw : 30;
+  const estimated = Math.round(safeDuration / 4);
+  return Math.max(4, Math.min(24, estimated));
+}
 
 function normalizeSceneImageFormat(format) {
   return SCENE_IMAGE_FORMATS.includes(format) ? format : DEFAULT_SCENE_IMAGE_FORMAT;
@@ -522,6 +545,56 @@ function BrainNode({ id, data }) {
   const audioSecRaw = Number(data?.audioDurationSec || 0);
   const audioSec = Number.isFinite(audioSecRaw) && audioSecRaw > 0 ? audioSecRaw : 0;
   const clipSec = clipMode === "auto" ? (audioSec > 0 ? Math.round(audioSec) : 30) : manualSec;
+  const isParsing = !!data?.isParsing;
+  const wasParsingRef = useRef(false);
+  const [progressPhraseIndex, setProgressPhraseIndex] = useState(0);
+  const [parseElapsedSeconds, setParseElapsedSeconds] = useState(0);
+  const [progressDots, setProgressDots] = useState(0);
+  const [estimatedSceneCount, setEstimatedSceneCount] = useState(() => estimateSceneCount(clipSec));
+
+  useEffect(() => {
+    if (isParsing && !wasParsingRef.current) {
+      setProgressPhraseIndex(0);
+      setParseElapsedSeconds(0);
+      setProgressDots(0);
+      setEstimatedSceneCount(estimateSceneCount(clipSec));
+      wasParsingRef.current = true;
+      return;
+    }
+    if (!isParsing && wasParsingRef.current) {
+      setProgressPhraseIndex(0);
+      setParseElapsedSeconds(0);
+      setProgressDots(0);
+      wasParsingRef.current = false;
+    }
+  }, [clipSec, isParsing]);
+
+  useEffect(() => {
+    if (!isParsing) return undefined;
+    const phraseIntervalId = window.setInterval(() => {
+      setProgressPhraseIndex((prev) => (prev + 1) % PARSE_PROGRESS_PHRASES.length);
+    }, 2500);
+    return () => window.clearInterval(phraseIntervalId);
+  }, [isParsing]);
+
+  useEffect(() => {
+    if (!isParsing) return undefined;
+    const timerIntervalId = window.setInterval(() => {
+      setParseElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => window.clearInterval(timerIntervalId);
+  }, [isParsing]);
+
+  useEffect(() => {
+    if (!isParsing) return undefined;
+    const dotsIntervalId = window.setInterval(() => {
+      setProgressDots((prev) => (prev + 1) % 4);
+    }, 500);
+    return () => window.clearInterval(dotsIntervalId);
+  }, [isParsing]);
+
+  const progressPhrase = PARSE_PROGRESS_PHRASES[progressPhraseIndex] || PARSE_PROGRESS_PHRASES[0];
+  const progressSuffix = ".".repeat(progressDots);
 
   return (
     <>
@@ -691,7 +764,7 @@ function BrainNode({ id, data }) {
           )}
         </div>
 
-        {data?.isParsing ? (
+        {isParsing ? (
           <button className="clipSB_btn clipSB_btnMuted" onClick={() => data?.onStopParse?.(id)} style={{ marginTop: 10 }}>
             Остановить
           </button>
@@ -701,8 +774,26 @@ function BrainNode({ id, data }) {
           </button>
         )}
 
-        {data?.isParsing ? (
-          <div className="clipSB_small" style={{ marginTop: 8, opacity: 0.9 }}>Думаю над сценами…</div>
+        {isParsing ? (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "rgba(255,255,255,0.04)",
+              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
+            }}
+          >
+            <div style={{ color: "rgba(255,255,255,0.92)", fontSize: 13, lineHeight: 1.35 }}>
+              {progressPhrase}{progressSuffix}
+            </div>
+            <div className="clipSB_small" style={{ marginTop: 6, opacity: 0.85 }}>
+              Время: {formatParseTimer(parseElapsedSeconds)}
+            </div>
+            <div className="clipSB_small" style={{ marginTop: 2, opacity: 0.85 }}>
+              Примерно сцен: {estimatedSceneCount}
+            </div>
+          </div>
         ) : data?.lastParseError ? (
           <div className="clipSB_small" style={{ marginTop: 8, color: "#ff7875" }}>Ошибка: {String(data.lastParseError)}</div>
         ) : null}
