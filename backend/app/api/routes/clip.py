@@ -3958,6 +3958,9 @@ def clip_video(payload: ClipVideoIn):
         )
 
     transition_type = str(payload.transitionType or "single").strip().lower()
+    allowed_transition_types = {"single", "hard_cut", "continuous"}
+    if transition_type not in allowed_transition_types:
+        transition_type = "single"
     scene_id = str(payload.sceneId or "").strip() or "scene"
 
     if transition_type in {"single", "hard_cut"}:
@@ -3976,7 +3979,10 @@ def clip_video(payload: ClipVideoIn):
             content={"ok": False, "code": "BAD_REQUEST", "hint": "imageUrl_or_startImageUrl_required"},
         )
 
-    requested_duration = float(payload.requestedDurationSec or 5)
+    try:
+        requested_duration = float(payload.requestedDurationSec or 5)
+    except Exception:
+        requested_duration = 5.0
     requested_duration = max(1, min(10, requested_duration))
     duration = "5" if requested_duration <= 5 else "10"
 
