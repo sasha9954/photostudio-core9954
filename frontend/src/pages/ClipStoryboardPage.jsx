@@ -549,14 +549,14 @@ function BrainNode({ id, data }) {
   const wasParsingRef = useRef(false);
   const [progressPhraseIndex, setProgressPhraseIndex] = useState(0);
   const [parseElapsedSeconds, setParseElapsedSeconds] = useState(0);
-  const [progressDots, setProgressDots] = useState(0);
+  const [progressDots, setProgressDots] = useState(1);
   const [estimatedSceneCount, setEstimatedSceneCount] = useState(() => estimateSceneCount(clipSec));
 
   useEffect(() => {
     if (isParsing && !wasParsingRef.current) {
       setProgressPhraseIndex(0);
       setParseElapsedSeconds(0);
-      setProgressDots(0);
+      setProgressDots(1);
       setEstimatedSceneCount(estimateSceneCount(clipSec));
       wasParsingRef.current = true;
       return;
@@ -588,7 +588,7 @@ function BrainNode({ id, data }) {
   useEffect(() => {
     if (!isParsing) return undefined;
     const dotsIntervalId = window.setInterval(() => {
-      setProgressDots((prev) => (prev + 1) % 4);
+      setProgressDots((prev) => (prev % 3) + 1);
     }, 500);
     return () => window.clearInterval(dotsIntervalId);
   }, [isParsing]);
@@ -797,7 +797,7 @@ function BrainNode({ id, data }) {
         ) : data?.lastParseError ? (
           <div className="clipSB_small" style={{ marginTop: 8, color: "#ff7875" }}>Ошибка: {String(data.lastParseError)}</div>
         ) : null}
-        {(!data?.isParsing && !data?.lastParseError && data?.scenePlan?.engine) ? (
+        {(!isParsing && !data?.lastParseError && data?.scenePlan?.engine) ? (
           <div className="clipSB_small" style={{ marginTop: 8, opacity: 0.95 }}>
             <div>
               engine: <b>{String(data.scenePlan.engine)}</b>
@@ -1529,7 +1529,7 @@ onClipSec: (nodeId, value) => {
                   parseTimeoutRef.current = null;
                   activeParseNodeRef.current = null;
                   setNodes((prev) => prev.map((x) => (x.id === nodeId
-                    ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null } }
+                    ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null, lastParseError: null } }
                     : x)));
                   notify({ type: "warning", message: "Разбор занял слишком много времени" });
                 }, 95000);
@@ -1710,7 +1710,7 @@ onClipSec: (nodeId, value) => {
                   if (err?.name === "AbortError") {
                     if (timeoutTriggered) return;
                     setNodes((prev) => prev.map((x) => (x.id === nodeId
-                      ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null } }
+                      ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null, lastParseError: null } }
                       : x)));
                     return;
                   }
