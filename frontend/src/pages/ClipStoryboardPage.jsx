@@ -1784,7 +1784,14 @@ onClipSec: (nodeId, value) => {
                         audioSliceUrl: s.audioSliceUrl || "",
                         audioSliceT0: Number(s.audioSliceStartSec ?? s.audioSliceT0 ?? t0),
                         audioSliceT1: Number(s.audioSliceEndSec ?? s.audioSliceT1 ?? t1),
-                        audioSliceExpectedDurationSec: Number(s.audioSliceExpectedDurationSec ?? Math.max(0, t1 - t0)),
+                        audioSliceExpectedDurationSec: Number(
+                          s.audioSliceExpectedDurationSec ??
+                            Math.max(
+                              0,
+                              Number(s.audioSliceEndSec ?? s.audioSliceT1 ?? t1) -
+                                Number(s.audioSliceStartSec ?? s.audioSliceT0 ?? t0)
+                            )
+                        ),
                         audioSliceBackendDurationSec: normalizeDurationSec(s.audioSliceBackendDurationSec),
                         audioSliceActualDurationSec: normalizeDurationSec(s.audioSliceActualDurationSec),
                         audioSliceLoadError: s.audioSliceLoadError || "",
