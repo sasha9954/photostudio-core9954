@@ -4117,6 +4117,21 @@ def clip_video(payload: ClipVideoIn):
     video_url = None
     wait_code = None
     wait_hint = None
+    wait_details = None
+
+    fail_statuses = {"failed", "fail", "error", "canceled", "cancelled"}
+    fail_detail_keys = [
+        "message",
+        "error",
+        "reason",
+        "failReason",
+        "fail_reason",
+        "msg",
+        "data",
+        "result",
+        "resultJson",
+        "output",
+    ]
 
     while time.time() - started < poll_timeout_sec:
         data, err = _kie_query_task(task_id)
@@ -4128,6 +4143,34 @@ def clip_video(payload: ClipVideoIn):
         status = _extract_task_status(data or {})
         print("[KIE] polling status:", status)
 
+        if status in fail_statuses:
+            try:
+                print("[KIE] polling raw:", json.dumps(data, ensure_ascii=False)[:4000])
+            except Exception:
+                print("[KIE] polling raw:", str(data)[:4000])
+
+            fail_details = {}
+            if isinstance(data, dict):
+                for key in fail_detail_keys:
+                    value = data.get(key)
+                    if value not in (None, "", [], {}):
+                        fail_details[key] = value
+
+                nested_data = data.get("data")
+                if isinstance(nested_data, dict):
+                    for key in fail_detail_keys:
+                        value = nested_data.get(key)
+                        if value not in (None, "", [], {}):
+                            fail_details[f"data.{key}"] = value
+
+            if fail_details:
+                try:
+                    print("[KIE] fail details:", json.dumps(fail_details, ensure_ascii=False)[:4000])
+                except Exception:
+                    print("[KIE] fail details:", str(fail_details)[:4000])
+            else:
+                print("[KIE] fail details:", "not_found")
+
         if status in {"success", "succeeded", "done", "completed"}:
             video_url = _extract_video_url_from_kie_payload(data)
             if not video_url and isinstance(data, dict):
@@ -4137,9 +4180,10 @@ def clip_video(payload: ClipVideoIn):
                 wait_hint = "result_url_not_found_in_kie_payload"
             break
 
-        if status in {"failed", "error", "canceled", "cancelled"}:
+        if status in fail_statuses:
             wait_code = "KIE_TASK_FAILED"
             wait_hint = f"kie_task_status_{status}"
+            wait_details = str(data)[:1000]
             break
 
         time.sleep(poll_interval_sec)
@@ -4157,7 +4201,12 @@ def clip_video(payload: ClipVideoIn):
         }.get(wait_code or "", 500)
         return JSONResponse(
             status_code=status_code,
-            content={"ok": False, "code": wait_code or "KIE_TASK_FAILED", "hint": wait_hint or "video_generation_failed", "details": "KIE task did not return a playable video URL."},
+            content={
+                "ok": False,
+                "code": wait_code or "KIE_TASK_FAILED",
+                "hint": wait_hint or "video_generation_failed",
+                "details": wait_details or "KIE task did not return a playable video URL.",
+            },
         )
 
     print("[KIE] video url:", video_url)
