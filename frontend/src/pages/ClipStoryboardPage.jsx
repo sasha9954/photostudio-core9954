@@ -375,6 +375,10 @@ function serializeNodesForStorage(nodes) {
       ? normalizeRefData(n.data || {}, n?.data?.kind || "")
       : (n.data || {});
     const data = stripFunctionsDeep(normalizedData) || {};
+    if (n.type === "brainNode") {
+      delete data.isParsing;
+      delete data.activeParseToken;
+    }
     return {
       id: n.id,
       type: n.type,
@@ -382,6 +386,14 @@ function serializeNodesForStorage(nodes) {
       data,
     };
   });
+}
+
+function notify(detail) {
+  try {
+    window.dispatchEvent(new CustomEvent("ps:notify", { detail }));
+  } catch {
+    // ignore
+  }
 }
 
 
@@ -679,9 +691,15 @@ function BrainNode({ id, data }) {
           )}
         </div>
 
-        <button className="clipSB_btn" onClick={() => data?.onParse?.(id)} disabled={!!data?.isParsing} style={{ marginTop: 10 }}>
-          Разобрать (бесплатно)
-        </button>
+        {data?.isParsing ? (
+          <button className="clipSB_btn clipSB_btnMuted" onClick={() => data?.onStopParse?.(id)} style={{ marginTop: 10 }}>
+            Остановить
+          </button>
+        ) : (
+          <button className="clipSB_btn" onClick={() => data?.onParse?.(id)} style={{ marginTop: 10 }}>
+            Разобрать (бесплатно)
+          </button>
+        )}
 
         {data?.isParsing ? (
           <div className="clipSB_small" style={{ marginTop: 8, opacity: 0.9 }}>Думаю над сценами…</div>
@@ -889,6 +907,9 @@ export default function ClipStoryboardPage() {
   const isHydratingRef = useRef(true);
   const selectedEdgeRef = useRef(null);
   const parseTokenRef = useRef(0);
+  const parseControllerRef = useRef(null);
+  const parseTimeoutRef = useRef(null);
+  const activeParseNodeRef = useRef(null);
 
   const [lastSavedAt, setLastSavedAt] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1375,187 +1396,244 @@ onClipSec: (nodeId, value) => {
                 const safe = Number.isFinite(num) ? Math.max(5, Math.min(3600, Math.floor(num))) : 30;
                 setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, clipSec: safe } } : x)));
               },
-onParse: async (nodeId) => {
-  const brainCurrent = nodesRef.current.find((x) => x.id === nodeId);
-  if (brainCurrent?.data?.isParsing) return;
-
-  const parseToken = parseTokenRef.current + 1;
-  parseTokenRef.current = parseToken;
-
-  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, isParsing: true, activeParseToken: parseToken } } : x)));
-
-  try {
-    const planInput = collectBrainPlannerInput({ brainNodeId: nodeId, nodesList: nodesRef.current, edgesList: edgesRef.current });
-    const {
-      signature: plannerInputSignature,
-      mode,
-      textValue,
-      audioUrl,
-      characterRefs,
-      locationRefs,
-      propsRefs,
-      styleRefs,
-      styleRef,
-      scenarioKey,
-      shootKey,
-      styleKey,
-      freezeStyle,
-      wantLipSync,
-    } = planInput;
-
-    const audioType = wantLipSync ? "song" : "bg"; // clip-only auto mapping from wantLipSync
-
-    const payload = {
-      audioUrl: audioUrl || null,
-      text: textValue || null,
-      mode,
-      scenarioKey,
-      shootKey,
-      styleKey,
-      freezeStyle,
-      wantLipSync,
-      refs: {
-        character: characterRefs,
-        location: locationRefs,
-        props: propsRefs,
-        style: styleRefs,
-      },
-      characterRefs,
-      locationRefs,
-      propsRefs,
-      styleRef,
-      audioType,
-    };
-
-    const res = await fetch(`${API_BASE}/api/clip/plan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const out = await res.json().catch(() => ({}));
-    if (!res.ok || !out?.ok) throw new Error(out?.detail || out?.hint || "clip_plan_failed");
-
-    if (parseTokenRef.current !== parseToken) return;
-    const latestInput = collectBrainPlannerInput({ brainNodeId: nodeId, nodesList: nodesRef.current, edgesList: edgesRef.current });
-    if (latestInput.signature !== plannerInputSignature) return;
-
-    const audioDuration = Number(out?.audioDuration || 30);
-    const scenesRaw = Array.isArray(out?.scenes) ? out.scenes : [];
-    const validation = out?.plannerDebug?.validation || {};
-
-    // Map to storyboard format (t0/t1/prompt)
-    const scenes = scenesRaw
-      .map((s, idx) => {
-        const t0 = Number(s.start ?? s.t0 ?? 0);
-        const t1 = Number(s.end ?? s.t1 ?? 0);
-        const prompt = String(s.imagePrompt || s.prompt || s.sceneText || `Scene ${idx + 1}`);
-        return {
-          id: s.id || `s${String(idx + 1).padStart(2, "0")}`,
-          start: t0,
-          end: t1,
-          t0,
-          t1,
-          prompt,
-          sceneText: s.sceneText || "",
-          imagePrompt: s.imagePrompt || "",
-          videoPrompt: s.videoPrompt || "",
-          imageUrl: s.imageUrl || "",
-          imageFormat: normalizeSceneImageFormat(s.imageFormat),
-          audioSliceUrl: s.audioSliceUrl || "",
-          audioSliceT0: Number(s.audioSliceT0 ?? t0),
-          audioSliceT1: Number(s.audioSliceT1 ?? t1),
-          audioSliceExpectedDurationSec: Number(s.audioSliceExpectedDurationSec ?? Math.max(0, t1 - t0)),
-          audioSliceBackendDurationSec: normalizeDurationSec(s.audioSliceBackendDurationSec),
-          audioSliceActualDurationSec: normalizeDurationSec(s.audioSliceActualDurationSec),
-          audioSliceLoadError: s.audioSliceLoadError || "",
-          videoUrl: s.videoUrl || "",
-          why: s.why || "",
-          audioType: s.audioType || "mixed",
-          sceneType: s.sceneType || "visual_rhythm",
-          hasVocals: !!s.hasVocals,
-          isLipSync: !!(s.isLipSync ?? s.lipSync),
-          lyricFragment: s.lyricFragment || "",
-          timingReason: s.timingReason || s.why || "",
-          beatAnchor: s.beatAnchor || "",
-          performanceType: s.performanceType || "cinematic_visual",
-          shotType: s.shotType || "",
-          continuityMemory: s.continuityMemory && typeof s.continuityMemory === "object" ? s.continuityMemory : null,
-          previousContinuityMemory: s.previousContinuityMemory && typeof s.previousContinuityMemory === "object" ? s.previousContinuityMemory : null,
-        };
-      })
-      .filter((s) => Number.isFinite(s.t0) && Number.isFinite(s.t1) && s.t1 > s.t0);
-
-    setNodes((prev) => {
-      const updated = prev.map((x) =>
-        x.id === nodeId
-          ? {
-              ...x,
-              data: {
-                ...x.data,
-                scenes,
-                isParsing: false,
-                activeParseToken: parseToken,
-                lastParseError: null,
-                lastPlanMeta: {
-                  engine: out.engine || "gemini",
-                  modelUsed: out.modelUsed || null,
-                  fallbackUsed: !!out.fallbackUsed,
-                  hint: out.hint || null,
-                  error: out.error || null,
-                  sceneCount: Number(validation.sceneCount ?? scenes.length),
-                  warnings: Array.isArray(validation.warnings) ? validation.warnings : [],
-                  rejectedReason: validation.rejectedReason || null,
-                  repairRetryUsed: !!validation.repairRetryUsed,
-                  audioHint: out?.plannerDebug?.audio?.hint || null,
-                  plannerInputSignature,
-                },
-                scenePlan: {
-                  engine: out.engine || "gemini",
-                  modelUsed: out.modelUsed || null,
-                  hint: out.hint || null,
-                  audioDuration,
-                  scenes,
-                  sceneCount: Number(validation.sceneCount ?? scenes.length),
-                  warnings: Array.isArray(validation.warnings) ? validation.warnings : [],
-                  rejectedReason: validation.rejectedReason || null,
-                  repairRetryUsed: !!validation.repairRetryUsed,
-                  audioHint: out?.plannerDebug?.audio?.hint || null,
-                  refs: {
-                    character: characterRefs,
-                    location: locationRefs,
-                    props: propsRefs,
-                    style: styleRefs,
-                    propAnchorLabel: String(out?.propAnchor?.label || "").trim() || undefined,
-                    sessionCharacterAnchor: String(out?.sessionWorldAnchors?.character || "").trim() || undefined,
-                    sessionLocationAnchor: String(out?.sessionWorldAnchors?.location || "").trim() || undefined,
-                    sessionStyleAnchor: String(out?.sessionWorldAnchors?.style || "").trim() || undefined,
-                    sessionBaseline: out?.sessionBaseline && typeof out.sessionBaseline === "object"
-                      ? out.sessionBaseline
-                      : undefined,
-                  },
-                  settings: { scenarioKey, shootKey, styleKey, freezeStyle },
-                },
-                plannerInputSignature,
+              onStopParse: (nodeId) => {
+                if (parseTimeoutRef.current) {
+                  clearTimeout(parseTimeoutRef.current);
+                  parseTimeoutRef.current = null;
+                }
+                if (parseControllerRef.current) {
+                  parseControllerRef.current.abort();
+                  parseControllerRef.current = null;
+                }
+                activeParseNodeRef.current = null;
+                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, isParsing: false } } : x)));
               },
-            }
-          : x
-      );
+              onParse: async (nodeId) => {
+                const brainCurrent = nodesRef.current.find((x) => x.id === nodeId);
+                if (brainCurrent?.data?.isParsing) return;
 
-      // flood to storyboard/results node
-      const targets = (edgesRef.current || []).filter((e) => e.source === nodeId).map((e) => e.target);
-      return updated.map((x) =>
-        targets.includes(x.id) && (x.type === "storyboardNode" || x.type === "resultsNode")
-          ? { ...x, data: { ...x.data, scenes } }
-          : x
-      );
-    });
-  } catch (err) {
-    if (parseTokenRef.current !== parseToken) return;
-    console.error(err);
-    setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: parseToken, lastParseError: String(err?.message || err) } } : x)));
-  }
-},
+                if (parseTimeoutRef.current) {
+                  clearTimeout(parseTimeoutRef.current);
+                  parseTimeoutRef.current = null;
+                }
+                if (parseControllerRef.current) {
+                  parseControllerRef.current.abort();
+                  parseControllerRef.current = null;
+                }
+
+                const parseToken = parseTokenRef.current + 1;
+                parseTokenRef.current = parseToken;
+                const controller = new AbortController();
+                parseControllerRef.current = controller;
+                activeParseNodeRef.current = nodeId;
+                let timeoutTriggered = false;
+
+                const timeoutId = setTimeout(() => {
+                  if (parseTokenRef.current !== parseToken) return;
+                  timeoutTriggered = true;
+                  controller.abort();
+                  parseControllerRef.current = null;
+                  parseTimeoutRef.current = null;
+                  activeParseNodeRef.current = null;
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, isParsing: false } } : x)));
+                  notify({ type: "warning", message: "Разбор занял слишком много времени" });
+                }, 95000);
+                parseTimeoutRef.current = timeoutId;
+
+                setNodes((prev) => prev.map((x) => (x.id === nodeId ? {
+                  ...x,
+                  data: { ...x.data, isParsing: true, activeParseToken: parseToken, lastParseError: null },
+                } : x)));
+
+                try {
+                  const planInput = collectBrainPlannerInput({ brainNodeId: nodeId, nodesList: nodesRef.current, edgesList: edgesRef.current });
+                  const {
+                    signature: plannerInputSignature,
+                    mode,
+                    textValue,
+                    audioUrl,
+                    characterRefs,
+                    locationRefs,
+                    propsRefs,
+                    styleRefs,
+                    styleRef,
+                    scenarioKey,
+                    shootKey,
+                    styleKey,
+                    freezeStyle,
+                    wantLipSync,
+                  } = planInput;
+
+                  const audioType = wantLipSync ? "song" : "bg";
+
+                  const payload = {
+                    audioUrl: audioUrl || null,
+                    text: textValue || null,
+                    mode,
+                    scenarioKey,
+                    shootKey,
+                    styleKey,
+                    freezeStyle,
+                    wantLipSync,
+                    refs: {
+                      character: characterRefs,
+                      location: locationRefs,
+                      props: propsRefs,
+                      style: styleRefs,
+                    },
+                    characterRefs,
+                    locationRefs,
+                    propsRefs,
+                    styleRef,
+                    audioType,
+                  };
+
+                  const res = await fetch(`${API_BASE}/api/clip/plan`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal,
+                  });
+
+                  const out = await res.json().catch(() => ({}));
+                  if (!res.ok || !out?.ok) throw new Error(out?.detail || out?.hint || "clip_plan_failed");
+
+                  if (parseTokenRef.current !== parseToken) return;
+                  const latestInput = collectBrainPlannerInput({ brainNodeId: nodeId, nodesList: nodesRef.current, edgesList: edgesRef.current });
+                  if (latestInput.signature !== plannerInputSignature) return;
+
+                  const audioDuration = Number(out?.audioDuration || 30);
+                  const scenesRaw = Array.isArray(out?.scenes) ? out.scenes : [];
+                  const validation = out?.plannerDebug?.validation || {};
+
+                  const scenes = scenesRaw
+                    .map((s, idx) => {
+                      const t0 = Number(s.start ?? s.t0 ?? 0);
+                      const t1 = Number(s.end ?? s.t1 ?? 0);
+                      const prompt = String(s.imagePrompt || s.prompt || s.sceneText || `Scene ${idx + 1}`);
+                      return {
+                        id: s.id || `s${String(idx + 1).padStart(2, "0")}`,
+                        start: t0,
+                        end: t1,
+                        t0,
+                        t1,
+                        prompt,
+                        sceneText: s.sceneText || "",
+                        imagePrompt: s.imagePrompt || "",
+                        videoPrompt: s.videoPrompt || "",
+                        imageUrl: s.imageUrl || "",
+                        imageFormat: normalizeSceneImageFormat(s.imageFormat),
+                        audioSliceUrl: s.audioSliceUrl || "",
+                        audioSliceT0: Number(s.audioSliceT0 ?? t0),
+                        audioSliceT1: Number(s.audioSliceT1 ?? t1),
+                        audioSliceExpectedDurationSec: Number(s.audioSliceExpectedDurationSec ?? Math.max(0, t1 - t0)),
+                        audioSliceBackendDurationSec: normalizeDurationSec(s.audioSliceBackendDurationSec),
+                        audioSliceActualDurationSec: normalizeDurationSec(s.audioSliceActualDurationSec),
+                        audioSliceLoadError: s.audioSliceLoadError || "",
+                        videoUrl: s.videoUrl || "",
+                        why: s.why || "",
+                        audioType: s.audioType || "mixed",
+                        sceneType: s.sceneType || "visual_rhythm",
+                        hasVocals: !!s.hasVocals,
+                        isLipSync: !!(s.isLipSync ?? s.lipSync),
+                        lyricFragment: s.lyricFragment || "",
+                        timingReason: s.timingReason || s.why || "",
+                        beatAnchor: s.beatAnchor || "",
+                        performanceType: s.performanceType || "cinematic_visual",
+                        shotType: s.shotType || "",
+                        continuityMemory: s.continuityMemory && typeof s.continuityMemory === "object" ? s.continuityMemory : null,
+                        previousContinuityMemory: s.previousContinuityMemory && typeof s.previousContinuityMemory === "object" ? s.previousContinuityMemory : null,
+                      };
+                    })
+                    .filter((s) => Number.isFinite(s.t0) && Number.isFinite(s.t1) && s.t1 > s.t0);
+
+                  setNodes((prev) => {
+                    const updated = prev.map((x) =>
+                      x.id === nodeId
+                        ? {
+                            ...x,
+                            data: {
+                              ...x.data,
+                              scenes,
+                              isParsing: false,
+                              activeParseToken: parseToken,
+                              lastParseError: null,
+                              lastPlanMeta: {
+                                engine: out.engine || "gemini",
+                                modelUsed: out.modelUsed || null,
+                                fallbackUsed: !!out.fallbackUsed,
+                                hint: out.hint || null,
+                                error: out.error || null,
+                                sceneCount: Number(validation.sceneCount ?? scenes.length),
+                                warnings: Array.isArray(validation.warnings) ? validation.warnings : [],
+                                rejectedReason: validation.rejectedReason || null,
+                                repairRetryUsed: !!validation.repairRetryUsed,
+                                audioHint: out?.plannerDebug?.audio?.hint || null,
+                                plannerInputSignature,
+                              },
+                              scenePlan: {
+                                engine: out.engine || "gemini",
+                                modelUsed: out.modelUsed || null,
+                                hint: out.hint || null,
+                                audioDuration,
+                                scenes,
+                                sceneCount: Number(validation.sceneCount ?? scenes.length),
+                                warnings: Array.isArray(validation.warnings) ? validation.warnings : [],
+                                rejectedReason: validation.rejectedReason || null,
+                                repairRetryUsed: !!validation.repairRetryUsed,
+                                audioHint: out?.plannerDebug?.audio?.hint || null,
+                                refs: {
+                                  character: characterRefs,
+                                  location: locationRefs,
+                                  props: propsRefs,
+                                  style: styleRefs,
+                                  propAnchorLabel: String(out?.propAnchor?.label || "").trim() || undefined,
+                                  sessionCharacterAnchor: String(out?.sessionWorldAnchors?.character || "").trim() || undefined,
+                                  sessionLocationAnchor: String(out?.sessionWorldAnchors?.location || "").trim() || undefined,
+                                  sessionStyleAnchor: String(out?.sessionWorldAnchors?.style || "").trim() || undefined,
+                                  sessionBaseline: out?.sessionBaseline && typeof out.sessionBaseline === "object"
+                                    ? out.sessionBaseline
+                                    : undefined,
+                                },
+                                settings: { scenarioKey, shootKey, styleKey, freezeStyle },
+                              },
+                              plannerInputSignature,
+                            },
+                          }
+                        : x
+                    );
+
+                    const targets = (edgesRef.current || []).filter((e) => e.source === nodeId).map((e) => e.target);
+                    return updated.map((x) =>
+                      targets.includes(x.id) && (x.type === "storyboardNode" || x.type === "resultsNode")
+                        ? { ...x, data: { ...x.data, scenes } }
+                        : x
+                    );
+                  });
+                } catch (err) {
+                  if (parseTokenRef.current !== parseToken) return;
+                  if (err?.name === "AbortError") {
+                    if (timeoutTriggered) return;
+                    return;
+                  }
+                  console.error(err);
+                  notify({ type: "error", message: "Ошибка разбора сцены" });
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId
+                    ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: parseToken, lastParseError: String(err?.message || err) } }
+                    : x)));
+                } finally {
+                  clearTimeout(timeoutId);
+                  if (parseTimeoutRef.current === timeoutId) {
+                    parseTimeoutRef.current = null;
+                  }
+                  if (parseControllerRef.current === controller) {
+                    parseControllerRef.current = null;
+                  }
+                  if (activeParseNodeRef.current === nodeId) {
+                    activeParseNodeRef.current = null;
+                  }
+                }
+              },
             },
           };
         }
@@ -1694,6 +1772,8 @@ const hydrate = useCallback(() => {
               : "clip";
             data.mode = mode;
             data.scenarioKey = scenarioKey;
+            data.isParsing = false;
+            delete data.activeParseToken;
           }
 
           if (n.type === "audioNode") {
@@ -1777,6 +1857,27 @@ const hydrate = useCallback(() => {
   useEffect(() => {
     hydrate();
   }, [hydrate]);
+
+  // hydration safety: parsing should never restore after reload/session restore
+  useEffect(() => {
+    setNodes((prev) => prev.map((node) => (
+      node?.type === "brainNode" && node?.data?.isParsing
+        ? { ...node, data: { ...node.data, isParsing: false } }
+        : node
+    )));
+  }, [setNodes]);
+
+  useEffect(() => () => {
+    if (parseTimeoutRef.current) {
+      clearTimeout(parseTimeoutRef.current);
+      parseTimeoutRef.current = null;
+    }
+    if (parseControllerRef.current) {
+      parseControllerRef.current.abort();
+      parseControllerRef.current = null;
+    }
+    activeParseNodeRef.current = null;
+  }, []);
 
   // re-hydrate when session changes (logout/login without full reload)
   useEffect(() => {
