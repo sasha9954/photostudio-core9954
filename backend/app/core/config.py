@@ -24,4 +24,9 @@ class Settings(BaseSettings):
     KIE_POLL_INTERVAL_SEC: int = 5
     KIE_POLL_TIMEOUT_SEC: int = 300
 
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+    }
+
 settings = Settings()
