@@ -204,10 +204,12 @@ def _kie_create_video_task(*, model: str, image_url: str, start_image_url: str |
     if normalized_mode == "continuous":
         start = str(start_image_url or image_url or "").strip()
         end = str(end_image_url or image_url or "").strip()
-        input_payload["image_urls"] = [start, end]
+        input_payload["image_url"] = start
+        input_payload["tail_image_url"] = end
         payload_preview = json.dumps(input_payload, ensure_ascii=False, separators=(",", ":"))[:500]
         print(f"[CLIP VIDEO] continuous_model={model}")
-        print(f"[CLIP VIDEO] continuous_images = {[start, end]}")
+        print(f"[CLIP VIDEO] continuous_image_url={start}")
+        print(f"[CLIP VIDEO] continuous_tail_image_url={end}")
         print(f"[CLIP VIDEO] continuous_provider_input_keys={sorted(list(input_payload.keys()))}")
         print(f"[CLIP VIDEO] continuous_provider_payload_preview={payload_preview}")
     else:
