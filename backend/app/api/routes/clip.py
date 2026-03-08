@@ -202,7 +202,14 @@ def _kie_create_video_task(*, model: str, image_url: str, start_image_url: str |
     endpoint = f"{settings.KIE_BASE_URL.rstrip('/')}/jobs/createTask"
 
     normalized_mode = str(mode or "single").strip().lower()
-    input_payload = {"prompt": prompt, "sound": bool(send_audio), "duration": duration}
+    if normalized_mode == "lipsync":
+        input_payload = {
+            "image_url": str(image_url or "").strip(),
+            "audio_url": str(audio_url or "").strip(),
+            "prompt": str(prompt or "").strip(),
+        }
+    else:
+        input_payload = {"prompt": prompt, "sound": bool(send_audio), "duration": duration}
 
     if normalized_mode == "continuous":
         start = str(start_image_url or image_url or "").strip()
@@ -215,17 +222,17 @@ def _kie_create_video_task(*, model: str, image_url: str, start_image_url: str |
         print(f"[CLIP VIDEO] continuous_tail_image_url={end}")
         print(f"[CLIP VIDEO] continuous_provider_input_keys={sorted(list(input_payload.keys()))}")
         print(f"[CLIP VIDEO] continuous_provider_payload_preview={payload_preview}")
-    else:
+    elif normalized_mode != "lipsync":
         input_payload["image_urls"] = [image_url]
 
-    if (aspect_ratio or "").strip():
+    if normalized_mode != "lipsync" and (aspect_ratio or "").strip():
         input_payload["aspect_ratio"] = str(aspect_ratio).strip()
 
     body = {
         "model": model,
         "input": input_payload,
     }
-    if send_audio and (audio_url or "").strip():
+    if normalized_mode != "lipsync" and send_audio and (audio_url or "").strip():
         body["input"]["audio_url"] = str(audio_url).strip()
 
     print(f"[CLIP VIDEO] provider_payload_has_audio={bool(body['input'].get('audio_url'))}")
@@ -1980,8 +1987,9 @@ def _apply_lipsync_performance_rules(*, scenes: list[dict], duration: float, voc
                 a1 = min(s1, s0 + min(5.0, max(3.0, seg_dur if seg_dur > 0 else 4.0)))
             obj["audioSliceStartSec"] = round(a0, 3)
             obj["audioSliceEndSec"] = round(max(a0 + 0.2, a1), 3)
-            obj["prompt"] = _build_lipsync_avatar_prompt(str(obj.get("prompt") or obj.get("videoPrompt") or ""), shot_type)
-            obj["videoPrompt"] = obj["prompt"]
+            base_prompt = str(obj.get("prompt") or obj.get("videoPrompt") or "").strip()
+            obj["prompt"] = base_prompt
+            obj["videoPrompt"] = base_prompt
             obj["transitionType"] = "single"
         else:
             obj["type"] = obj.get("type") or "cinematic"
