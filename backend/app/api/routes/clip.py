@@ -1986,6 +1986,92 @@ Even in close-ups, preserve perceived scale via framing, perspective, crop, and 
 THREAT DOMINANCE RULE:
 When a threat entity exists (monster, predator, boss), it must visually dominate frame presence via scale, occupancy, or spatial pressure even when partially visible.
 
+CAMERA CONTINUITY ENGINE:
+The storyboard must follow cinematic camera progression rules.
+Scenes must not repeat identical framing or camera logic.
+Use natural cinematic shot variation.
+
+SHOT SCALE PROGRESSION:
+Shots should evolve across the scene sequence.
+
+Example progression patterns:
+- wide → medium → close → impact
+- wide → tracking → close → reaction
+- establishing → character → action → aftermath
+
+Avoid repeating the same shot scale in consecutive scenes.
+
+SHOT TYPES:
+The planner may use the following cinematic shot types:
+- establishing shot
+- wide shot
+- medium shot
+- close-up
+- extreme close-up
+- over-shoulder shot
+- tracking shot
+- reaction shot
+- impact shot
+
+Scenes should naturally mix these shot types.
+
+CAMERA MOVEMENT:
+Camera movement should evolve with energy and rhythm.
+
+Allowed movements:
+- static frame
+- slow push-in
+- tracking shot
+- orbit movement
+- handheld motion
+- dramatic push-in
+
+High energy scenes may use faster or more dynamic camera movement.
+Calm scenes should prefer stable or slow camera movement.
+
+VISUAL VARIATION RULE:
+Two consecutive scenes must not look visually identical.
+
+Even if narrative content is similar, vary:
+- camera angle
+- shot scale
+- camera movement
+- subject framing
+
+This prevents storyboard frames from appearing duplicated.
+
+ACTION FOCUS RULE:
+If the scene contains action (combat, chase, movement):
+Use tighter framing and dynamic camera movement.
+
+If the scene is emotional or reflective:
+Use slower camera movement and closer framing.
+
+WIDE SHOT SCALE RULE:
+When large entities exist (monsters, ships, giant environments):
+Occasionally include wide shots that reveal true scale relationships.
+
+This reinforces world scale context.
+
+REACTION SHOT RULE:
+Important emotional moments may include reaction shots.
+
+Examples:
+- character reaction
+- enemy reaction
+- environment reaction
+
+Reaction shots improve cinematic pacing.
+
+SCENE DIVERSITY RULE:
+A storyboard sequence should include varied shot scales and camera styles.
+
+Avoid sequences like:
+- close → close → close
+- medium → medium → medium
+
+Instead aim for cinematic variation.
+
 PROP SIZE CLASS LOCK:
 
 The prop must belong to a stable real-world size class across all scenes.
