@@ -1159,6 +1159,14 @@ const globalAudioUrlRaw = useMemo(() => {
 }, [nodes]);
 const globalAudioUrlResolved = useMemo(() => resolveAssetUrl(globalAudioUrlRaw), [globalAudioUrlRaw]);
 const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSelected?.audioSliceUrl), [scenarioSelected?.audioSliceUrl]);
+const scenarioPreviousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
+const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
+  ? "endImageUrl"
+  : scenarioPreviousScene?.imageUrl
+    ? "imageUrl"
+    : scenarioPreviousScene?.startImageUrl
+      ? "startImageUrl"
+      : "none";
   const [scenarioImageLoading, setScenarioImageLoading] = useState(false);
   const [scenarioImageError, setScenarioImageError] = useState("");
   const [scenarioVideoLoading, setScenarioVideoLoading] = useState(false);
@@ -1201,7 +1209,12 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
     const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
     const sceneText = String(scenarioSelected.sceneText || scenarioSelected.visualDescription || "").trim();
     const previousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
-    const previousSceneImageUrl = String(previousScene?.imageUrl || "").trim();
+    const previousSceneImageUrl = String(
+      previousScene?.endImageUrl
+      || previousScene?.imageUrl
+      || previousScene?.startImageUrl
+      || ""
+    ).trim();
     const previousContinuityMemory = scenarioSelected.previousContinuityMemory
       || previousScene?.continuityMemory
       || null;
@@ -2492,6 +2505,7 @@ const hydrate = useCallback(() => {
                         <span>beatAnchor</span><span>{String(scenarioSelected.beatAnchor || "") || "—"}</span>
                         <span>performanceType</span><span>{String(scenarioSelected.performanceType || "") || "—"}</span>
                         <span>shotType</span><span>{String(scenarioSelected.shotType || "") || "—"}</span>
+                        <span>previousSceneImageSource</span><span>{scenarioPreviousSceneImageSource}</span>
                       </div>
                     </div>
 
