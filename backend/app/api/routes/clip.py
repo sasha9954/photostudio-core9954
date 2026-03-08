@@ -195,22 +195,19 @@ def _extract_video_url_from_kie_payload(payload: object) -> str | None:
     return None
 
 
-def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False, aspect_ratio: str | None = None, mode: str = "single") -> tuple[str | None, str | None]:
+def _kie_create_video_task(*, model: str, image_url: str, start_image_url: str | None = None, end_image_url: str | None = None, prompt: str = "", duration: str = "5", audio_url: str | None = None, send_audio: bool = False, aspect_ratio: str | None = None, mode: str = "single") -> tuple[str | None, str | None]:
     endpoint = f"{settings.KIE_BASE_URL.rstrip('/')}/jobs/createTask"
 
     normalized_mode = str(mode or "single").strip().lower()
     input_payload = {"prompt": prompt, "sound": bool(send_audio), "duration": duration}
 
     if normalized_mode == "continuous":
-        continuous_image_field = str(os.getenv("KIE_VIDEO_CONTINUOUS_IMAGE_FIELD", "image_url") or "image_url").strip().lower()
-        if continuous_image_field == "image_urls":
-            input_payload["image_urls"] = [image_url]
-        else:
-            continuous_image_field = "image_url"
-            input_payload["image_url"] = image_url
+        start = str(start_image_url or image_url or "").strip()
+        end = str(end_image_url or image_url or "").strip()
+        input_payload["image_urls"] = [start, end]
         payload_preview = json.dumps(input_payload, ensure_ascii=False, separators=(",", ":"))[:500]
         print(f"[CLIP VIDEO] continuous_model={model}")
-        print(f"[CLIP VIDEO] continuous_image_field={continuous_image_field}")
+        print(f"[CLIP VIDEO] continuous_images = {[start, end]}")
         print(f"[CLIP VIDEO] continuous_provider_input_keys={sorted(list(input_payload.keys()))}")
         print(f"[CLIP VIDEO] continuous_provider_payload_preview={payload_preview}")
     else:
@@ -326,6 +323,39 @@ def _normalize_source_image_url_for_kie(source_image_url: str) -> str:
         return source_image_url
 
     return _asset_url(filename)
+
+
+def _prepare_provider_image_url(source_url: str) -> tuple[str, str | None]:
+    source = str(source_url or "").strip()
+    if not source:
+        return "", None
+
+    image_bytes = None
+    image_ext = None
+    image_read_error = None
+    try:
+        image_bytes, image_ext = _download_image_from_source(source)
+    except Exception as exc:
+        image_bytes = None
+        image_read_error = str(exc)
+
+    if image_bytes is not None:
+        ext = (image_ext or "jpg").lower().replace(".", "")
+        mime = mimetypes.types_map.get(f".{ext}", "image/jpeg")
+        upload_filename = f"clip_source_{uuid4().hex}.{ext if ext in {'jpg', 'jpeg', 'png', 'webp'} else 'jpg'}"
+        uploaded_image_url, upload_err = _kie_upload_image_bytes(
+            image_bytes=image_bytes,
+            filename=upload_filename,
+            mime_type=mime,
+        )
+        if upload_err or not uploaded_image_url:
+            return "", upload_err or "upload_failed"
+        return uploaded_image_url, None
+
+    if _is_localhost_url(source):
+        return "", f"localhost_image_read_failed:{(image_read_error or 'read_failed')[:300]}"
+
+    return source, None
 
 
 def _kie_wait_for_video_result(task_id: str, *, poll_interval_sec: int, poll_timeout_sec: int) -> tuple[str | None, str | None, str | None]:
@@ -4135,49 +4165,51 @@ def clip_video(payload: ClipVideoIn):
             },
         )
 
-    image_bytes = None
-    image_ext = None
-    image_read_error = None
-    try:
-        image_bytes, image_ext = _download_image_from_source(source_image_url)
-    except Exception as exc:
-        image_bytes = None
-        image_read_error = str(exc)
-
-    provider_image_url = source_image_url
-    if image_bytes is not None:
-        print("[CLIP VIDEO] image_source=local_file")
-        ext = (image_ext or "jpg").lower().replace(".", "")
-        mime = mimetypes.types_map.get(f".{ext}", "image/jpeg")
-        upload_filename = f"clip_source_{uuid4().hex}.{ext if ext in {'jpg', 'jpeg', 'png', 'webp'} else 'jpg'}"
-        uploaded_image_url, upload_err = _kie_upload_image_bytes(
-            image_bytes=image_bytes,
-            filename=upload_filename,
-            mime_type=mime,
+    provider_image_url, provider_image_err = _prepare_provider_image_url(source_image_url)
+    if provider_image_err or not provider_image_url:
+        err_text = provider_image_err or "provider_image_prepare_failed"
+        is_local_error = "localhost" in err_text
+        return JSONResponse(
+            status_code=400 if is_local_error else 500,
+            content={
+                "ok": False,
+                "code": "KIE_LOCAL_IMAGE_READ_FAILED" if is_local_error else "KIE_UPLOAD_FAILED",
+                "hint": "provider_requires_public_or_uploaded_asset" if is_local_error else "provider_file_upload_error",
+                "details": err_text,
+            },
         )
-        if upload_err or not uploaded_image_url:
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "ok": False,
-                    "code": "KIE_UPLOAD_FAILED",
-                    "hint": "provider_file_upload_error",
-                    "details": upload_err or "upload_failed",
-                },
-            )
-        provider_image_url = uploaded_image_url
-        print("[CLIP VIDEO] image_source=uploaded_local_bytes")
-        print(f"[CLIP VIDEO] uploaded_image_url={uploaded_image_url}")
-    else:
-        print("[CLIP VIDEO] image_source=url")
-        if _is_localhost_url(source_image_url):
+
+    provider_start_image_url = ""
+    provider_end_image_url = ""
+    if mode == "continuous":
+        start_source_image_url = str(start_image_url or "").strip()
+        end_source_image_url = str(end_image_url or "").strip()
+
+        if not start_source_image_url:
+            start_source_image_url = str(image_url or "").strip()
+            print("[CLIP VIDEO] continuous_start_fallback=image_url")
+        if not end_source_image_url:
+            end_source_image_url = str(image_url or "").strip()
+            print("[CLIP VIDEO] continuous_end_fallback=image_url")
+
+        start_source_image_url = _normalize_source_image_url_for_kie(start_source_image_url)
+        end_source_image_url = _normalize_source_image_url_for_kie(end_source_image_url)
+
+        provider_start_image_url, provider_start_err = _prepare_provider_image_url(start_source_image_url)
+        provider_end_image_url, provider_end_err = _prepare_provider_image_url(end_source_image_url)
+
+        if provider_start_err or provider_end_err or not provider_start_image_url or not provider_end_image_url:
+            details = "; ".join([
+                f"start={provider_start_err or ('missing' if not provider_start_image_url else 'ok')}",
+                f"end={provider_end_err or ('missing' if not provider_end_image_url else 'ok')}",
+            ])
             return JSONResponse(
                 status_code=400,
                 content={
                     "ok": False,
-                    "code": "KIE_LOCAL_IMAGE_READ_FAILED",
-                    "hint": "provider_requires_public_or_uploaded_asset",
-                    "details": f"localhost image could not be read from disk for KIE upload flow: {(image_read_error or 'read_failed')[:300]}",
+                    "code": "KIE_CONTINUOUS_IMAGE_PREP_FAILED",
+                    "hint": "provider_requires_uploaded_or_public_images",
+                    "details": details,
                 },
             )
 
@@ -4252,6 +4284,9 @@ def clip_video(payload: ClipVideoIn):
     print(f"[CLIP VIDEO] image_url={image_url}")
     print(f"[CLIP VIDEO] start_image_url={start_image_url}")
     print(f"[CLIP VIDEO] end_image_url={end_image_url}")
+    if mode == "continuous":
+        print(f"[CLIP VIDEO] provider_start_image_url={provider_start_image_url}")
+        print(f"[CLIP VIDEO] provider_end_image_url={provider_end_image_url}")
     print(f"[CLIP VIDEO] transition_action_prompt={str(payload.transitionActionPrompt or '').strip()[:300]}")
     print(f"[CLIP VIDEO] video_prompt={str(payload.videoPrompt or '').strip()[:300]}")
     print(f"[CLIP VIDEO] has_audio_slice={bool(audio_slice_url)}")
@@ -4260,6 +4295,8 @@ def clip_video(payload: ClipVideoIn):
     task_id, create_err = _kie_create_video_task(
         model=selected_model,
         image_url=provider_image_url,
+        start_image_url=provider_start_image_url,
+        end_image_url=provider_end_image_url,
         prompt=effective_prompt,
         duration=provider_duration,
         audio_url=audio_slice_url,
