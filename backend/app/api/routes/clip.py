@@ -159,17 +159,14 @@ def _extract_video_url_from_kie_payload(payload: object) -> str | None:
     return None
 
 
-def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False, image_base64: str | None = None) -> tuple[str | None, str | None]:
+def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False) -> tuple[str | None, str | None]:
     endpoint = f"{settings.KIE_BASE_URL.rstrip('/')}/jobs/createTask"
     input_payload = {
         "prompt": prompt,
         "sound": bool(send_audio),
         "duration": duration,
     }
-    if (image_base64 or "").strip():
-        input_payload["image"] = str(image_base64).strip()
-    else:
-        input_payload["image_urls"] = [image_url]
+    input_payload["image_urls"] = [image_url]
 
     body = {
         "model": model,
@@ -4089,12 +4086,21 @@ def clip_video(payload: ClipVideoIn):
     except Exception:
         image_bytes = None
 
-    image_base64 = None
     if image_bytes is not None:
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
         print("[CLIP VIDEO] image_source=local_file")
     else:
         print("[CLIP VIDEO] image_source=url")
+
+    if _is_localhost_url(source_image_url) and image_bytes is not None:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "code": "KIE_LOCAL_IMAGE_UPLOAD_NOT_IMPLEMENTED",
+                "hint": "provider_requires_supported_image_transport",
+                "details": "Local image bytes were loaded successfully, but KIE createTask does not yet support the current base64 payload format in this route. Use a public URL or implement the provider's supported upload/base64 schema.",
+            },
+        )
 
     if mode == "lipsync" and not audio_slice_url:
         return JSONResponse(
@@ -4158,7 +4164,6 @@ def clip_video(payload: ClipVideoIn):
     task_id, create_err = _kie_create_video_task(
         model=selected_model,
         image_url=source_image_url,
-        image_base64=image_base64,
         prompt=effective_prompt,
         duration=duration,
         audio_url=audio_slice_url,
