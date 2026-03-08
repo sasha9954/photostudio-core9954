@@ -3727,6 +3727,12 @@ If any of the required descriptive fields are returned in English, the output is
         vocal_phrases=plan.get("vocalPhrases") if isinstance(plan.get("vocalPhrases"), list) else [],
         want_lipsync=bool(payload.wantLipSync),
     )
+    lip_sync_scenes = []
+    for scene in normalized_scenes:
+        if not isinstance(scene, dict):
+            continue
+        if bool(scene.get("lipSync") or scene.get("isLipSync") or str(scene.get("renderMode") or "").strip().lower() == "avatar_lipsync"):
+            lip_sync_scenes.append(scene)
 
     return {
         "ok": True,
@@ -3764,6 +3770,28 @@ If any of the required descriptive fields are returned in English, the output is
                 "rejectedReason": validation_rejected_reason,
                 "repairRetryUsed": retry_used,
                 "warnings": validation_warnings,
+            },
+            "summary": {
+                "totalSceneCount": len(normalized_scenes),
+                "totalLipSyncCandidatesSelected": len(lip_sync_scenes),
+            },
+            "lipSyncDebug": {
+                "wantLipSync": bool(payload.wantLipSync),
+                "lipSyncSceneCount": len(lip_sync_scenes),
+                "lipSyncSceneIds": [str(scene.get("id") or "") for scene in lip_sync_scenes if str(scene.get("id") or "").strip()],
+                "lipSyncScenes": [
+                    {
+                        "sceneId": str(scene.get("id") or ""),
+                        "lipSync": bool(scene.get("lipSync")),
+                        "isLipSync": bool(scene.get("isLipSync")),
+                        "renderMode": str(scene.get("renderMode") or ""),
+                        "sceneType": str(scene.get("sceneType") or ""),
+                        "shotType": str(scene.get("shotType") or ""),
+                        "audioSliceStartSec": scene.get("audioSliceStartSec"),
+                        "audioSliceEndSec": scene.get("audioSliceEndSec"),
+                    }
+                    for scene in lip_sync_scenes
+                ],
             },
         },
     }
@@ -4295,6 +4323,15 @@ def clip_video(payload: ClipVideoIn):
     else:
         mode = "single"
 
+    print(
+        "[CLIP VIDEO ROUTING] "
+        f"sceneId={scene_id} "
+        f"lipSync={bool(payload.lipSync)} "
+        f"renderMode={render_mode or 'n/a'} "
+        f"transitionType={transition_type} "
+        f"resolved_mode={mode}"
+    )
+
     effective_prompt = ""
     if mode == "continuous":
         effective_prompt = str(payload.transitionActionPrompt or payload.videoPrompt or "").strip()
@@ -4428,6 +4465,8 @@ def clip_video(payload: ClipVideoIn):
                 "details": f"No model configured for mode={mode}.",
             },
         )
+
+    print(f"[CLIP VIDEO ROUTING] selected_model={selected_model}")
 
     try:
         requested_duration = float(payload.requestedDurationSec or 5)

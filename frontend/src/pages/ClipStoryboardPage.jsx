@@ -159,6 +159,16 @@ function getSceneUiDescription(scene) {
   return "";
 }
 
+
+function isLipSyncScene(scene) {
+  if (!scene || typeof scene !== "object") return false;
+  return !!(
+    scene.lipSync === true
+    || scene.isLipSync === true
+    || String(scene.renderMode || "").trim().toLowerCase() === "avatar_lipsync"
+  );
+}
+
 function stableRefsSignature(refs = []) {
   return refs
     .map((item) => String(item?.url || "").trim())
@@ -1181,6 +1191,7 @@ const scenarioScenes = useMemo(() => {
 
 const scenarioSelected = scenarioScenes[scenarioEditor.selected] || null;
 const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelected);
+const scenarioSelectedIsLipSync = isLipSyncScene(scenarioSelected);
 const scenarioPreviousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
 const scenarioSelectedCanInheritPreviousEnd = scenarioSelectedTransitionType === "continuous"
   && !!scenarioPreviousScene
@@ -1240,6 +1251,7 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
       return { ...n, data: { ...n.data, scenes: nextScenes } };
     }));
   }, [scenarioNode?.id, setNodes]);
+
 
   const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
     if (!scenarioSelected) return;
@@ -1400,7 +1412,10 @@ Aspect ratio: ${imageFormat}`,
       : !!frameImageUrl;
 
     if (!hasImageForVideo) return;
-    if (scenarioSelected?.lipSync && !scenarioSelected?.audioSliceUrl) {
+    const effectiveLipSync = isLipSyncScene(scenarioSelected);
+    const effectiveRenderMode = scenarioSelected?.renderMode || (effectiveLipSync ? "avatar_lipsync" : "standard_video");
+
+    if (effectiveLipSync && !scenarioSelected?.audioSliceUrl) {
       setScenarioVideoError("Для lipSync сначала возьмите аудио");
       return;
     }
@@ -1415,6 +1430,15 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoError("");
     try {
       const endpoint = "/api/clip/video";
+      console.log("[CLIP VIDEO REQUEST]", {
+        sceneId,
+        lipSync: effectiveLipSync,
+        renderMode: effectiveRenderMode,
+        shotType: scenarioSelected?.shotType || "",
+        audioSliceUrl: scenarioSelected?.audioSliceUrl || "",
+        requestedDurationSec,
+        transitionType,
+      });
       const out = await fetchJson(endpoint, {
         method: "POST",
         body: {
@@ -1427,8 +1451,8 @@ Aspect ratio: ${imageFormat}`,
           transitionActionPrompt: getSceneTransitionPrompt(scenarioSelected),
           transitionType,
           requestedDurationSec,
-          lipSync: !!scenarioSelected.lipSync,
-          renderMode: scenarioSelected.renderMode || (scenarioSelected.lipSync ? "avatar_lipsync" : "standard_video"),
+          lipSync: effectiveLipSync,
+          renderMode: effectiveRenderMode,
           shotType: scenarioSelected.shotType || "",
           sceneType: scenarioSelected.sceneType || "",
           format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
@@ -2354,7 +2378,7 @@ const hydrate = useCallback(() => {
                             <div className="clipSB_tag">{getSceneTypeBadge(resolveSceneTransitionType(s))}</div>
                             {sceneThumb ? <div className="clipSB_tag">IMG</div> : null}
                             {s.videoUrl ? <div className="clipSB_tag clipSB_tagDone">VIDEO ✓</div> : null}
-                            {s.lipSync ? <div className="clipSB_tag">LIP</div> : null}
+                            {isLipSyncScene(s) ? <div className="clipSB_tag">LS</div> : null}
                           </div>
                         </div>
                         <div className="clipSB_scenarioItemText">{getSceneUiDescription(s).slice(0, 90)}</div>
@@ -2382,14 +2406,18 @@ const hydrate = useCallback(() => {
                       <label className="clipSB_check" style={{ display: "flex", gap: 10, alignItems: "center" }}>
                         <input
                           type="checkbox"
-                          checked={!!scenarioSelected.lipSync}
-                          onChange={(e) => updateScenarioScene(scenarioEditor.selected, { lipSync: !!e.target.checked })}
+                          checked={scenarioSelectedIsLipSync}
+                          onChange={(e) => updateScenarioScene(scenarioEditor.selected, {
+                            lipSync: !!e.target.checked,
+                            isLipSync: !!e.target.checked,
+                            renderMode: e.target.checked ? "avatar_lipsync" : "standard_video",
+                          })}
                         />
                         <span>Этот кадр под липсинк (рот/лицо видно)</span>
                       </label>
                     </div>
 
-                    {scenarioSelected.lipSync ? (
+                    {scenarioSelectedIsLipSync ? (
                       <div className="clipSB_scenarioEditRow">
                         <div className="clipSB_hint">Текст для губ (коротко)</div>
                         <input
@@ -2777,7 +2805,7 @@ const hydrate = useCallback(() => {
                           <button
                             className="clipSB_btn clipSB_btnSecondary"
                             onClick={handleScenarioGenerateVideo}
-                            disabled={scenarioVideoLoading || !(scenarioSelectedTransitionType === "continuous" ? (scenarioSelectedEffectiveStartImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) : scenarioSelected.imageUrl) || (scenarioSelected.lipSync && !scenarioSelected.audioSliceUrl)}
+                            disabled={scenarioVideoLoading || !(scenarioSelectedTransitionType === "continuous" ? (scenarioSelectedEffectiveStartImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) : scenarioSelected.imageUrl) || (scenarioSelectedIsLipSync && !scenarioSelected.audioSliceUrl)}
                           >
                             Сгенерировать видео
                           </button>
