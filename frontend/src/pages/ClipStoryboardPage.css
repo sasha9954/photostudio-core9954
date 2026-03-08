@@ -868,9 +868,10 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_videoFrameImg{
   width:100%;
   height:90px;
-  object-fit:cover;
+  object-fit:contain;
   border-radius:6px;
   cursor:pointer;
+  background: rgba(0,0,0,0.25);
 }
 
 .clipSB_videoFramePlaceholder{
