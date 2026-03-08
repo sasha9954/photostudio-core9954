@@ -586,7 +586,7 @@ def _extract_entity_scale_anchors(raw: dict | None) -> dict[str, float]:
         except Exception:
             continue
         if num > 0:
-            anchors[name] = round(num, 3)
+            anchors[name] = round(num, 2)
     return anchors
 
 
@@ -601,12 +601,12 @@ def _detect_world_scale_context(*, text: str, scenes: list[dict], session_world_
     ).lower()
     if any(k in tokens for k in ["planet", "spaceship", "starship", "cosmic", "orbit", "galaxy", "space"]):
         return "space_scale"
-    if any(k in tokens for k in ["tiny human", "tiny person", "insect", "blade of grass", "macro world", "micro"]):
+    if any(k in tokens for k in ["tiny human", "tiny person", "insect", "ant", "beetle", "spider", "ladybug", "blade of grass", "macro world", "micro"]):
         return "micro_world"
-    if any(k in tokens for k in ["giant", "towering", "colossal", "titan", "kaiju"]):
-        return "hero_vs_giant"
     if any(k in tokens for k in ["dragon", "hydra", "myth", "mythic", "leviathan", "behemoth"]):
         return "mythic_world"
+    if any(k in tokens for k in ["giant", "towering", "colossal", "titan", "kaiju", "monster", "beast", "colossus", "mech", "giant creature", "massive creature"]):
+        return "hero_vs_giant"
     if any(k in tokens for k in ["horse", "elephant", "predator", "beast", "wolf", "animal"]):
         return "animal_scale"
     return "human_world"
@@ -3222,6 +3222,7 @@ def clip_image(payload: ClipImageIn):
             "Do not randomly rescale anchored entities between shots.\n"
             "In close-up framing, preserve perceived scale using perspective, crop, partial-body cues, and foreground/background layering.\n"
             "Threat entities (monster/predator/boss) must visually dominate frame presence through scale, occupancy, or spatial pressure even when partially visible.\n\n"
+            "Wide shots should clearly reveal the relative size relationship between anchored entities whenever possible.\n\n"
             "PHYSICAL SCALE RULES:\n\n"
             "Keep the prop at the same realistic real-world size across all frames.\n"
             "The object must remain physically plausible relative to the person.\n"
