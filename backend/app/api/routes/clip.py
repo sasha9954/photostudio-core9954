@@ -44,6 +44,8 @@ class ClipImageRefsIn(BaseModel):
     sessionLocationAnchor: str | None = None
     sessionStyleAnchor: str | None = None
     sessionBaseline: dict | None = None
+    worldScaleContext: str | None = None
+    entityScaleAnchors: dict | None = None
     previousContinuityMemory: dict | None = None
     previousSceneImageUrl: str | None = None
 
@@ -556,6 +558,79 @@ def _derive_production_scale(*, session_world_anchors: dict[str, str], scene: di
     return "same established concert production scale class from opening scenes"
 
 
+_WORLD_SCALE_CONTEXTS = {
+    "human_world",
+    "hero_vs_giant",
+    "micro_world",
+    "animal_scale",
+    "space_scale",
+    "mythic_world",
+}
+
+
+def _normalize_world_scale_context(value: str | None) -> str:
+    ctx = str(value or "").strip().lower()
+    return ctx if ctx in _WORLD_SCALE_CONTEXTS else ""
+
+
+def _extract_entity_scale_anchors(raw: dict | None) -> dict[str, float]:
+    if not isinstance(raw, dict):
+        return {}
+    anchors: dict[str, float] = {}
+    for key, value in raw.items():
+        name = re.sub(r"[^a-zA-Z0-9_\-]", "", str(key or "").strip().lower())
+        if not name:
+            continue
+        try:
+            num = float(value)
+        except Exception:
+            continue
+        if num > 0:
+            anchors[name] = round(num, 3)
+    return anchors
+
+
+def _detect_world_scale_context(*, text: str, scenes: list[dict], session_world_anchors: dict[str, str]) -> str:
+    tokens = " ".join(
+        [
+            str(text or ""),
+            " ".join(str((session_world_anchors or {}).get(k) or "") for k in ["location", "style"]),
+            " ".join(str((s or {}).get("visualDescription") or "") for s in scenes[:4]),
+            " ".join(str((s or {}).get("visualPrompt") or "") for s in scenes[:4]),
+        ]
+    ).lower()
+    if any(k in tokens for k in ["planet", "spaceship", "starship", "cosmic", "orbit", "galaxy", "space"]):
+        return "space_scale"
+    if any(k in tokens for k in ["tiny human", "tiny person", "insect", "blade of grass", "macro world", "micro"]):
+        return "micro_world"
+    if any(k in tokens for k in ["giant", "towering", "colossal", "titan", "kaiju"]):
+        return "hero_vs_giant"
+    if any(k in tokens for k in ["dragon", "hydra", "myth", "mythic", "leviathan", "behemoth"]):
+        return "mythic_world"
+    if any(k in tokens for k in ["horse", "elephant", "predator", "beast", "wolf", "animal"]):
+        return "animal_scale"
+    return "human_world"
+
+
+def _default_entity_scale_anchors(context: str) -> dict[str, float]:
+    defaults = {
+        "human_world": {"human": 1.0},
+        "hero_vs_giant": {"hero": 1.0, "threat": 6.0},
+        "micro_world": {"human": 0.1, "insect": 3.0, "environment": 10.0},
+        "animal_scale": {"human": 1.0, "large_animal": 4.0},
+        "space_scale": {"human": 1.0, "fighter": 20.0, "capital_ship": 300.0},
+        "mythic_world": {"human": 1.0, "mythic_creature": 12.0},
+    }
+    return dict(defaults.get(context) or {"human": 1.0})
+
+
+def _format_entity_scale_anchors(anchors: dict[str, float]) -> str:
+    if not anchors:
+        return ""
+    ordered = sorted(anchors.items(), key=lambda kv: kv[1])
+    return ", ".join(f"{k}:{v:g}" for k, v in ordered)
+
+
 def _build_scene_continuity_memory(*, scene: dict, session_world_anchors: dict[str, str], prop_anchor_label: str) -> dict[str, str]:
 
     location = _trim_continuity_value(
@@ -601,6 +676,8 @@ def _build_scene_continuity_memory(*, scene: dict, session_world_anchors: dict[s
         "propState": _trim_continuity_value(
             f"same persistent prop identities and scale class: {prop_anchor_label}" if prop_anchor_label else "same important prop identities and scale class"
         ),
+        "worldScaleContext": _trim_continuity_value(str((scene or {}).get("worldScaleContext") or "same persistent world scale context"), 120),
+        "entityScaleAnchors": _trim_continuity_value(str((scene or {}).get("entityScaleAnchors") or "same entity relative size anchors across scenes"), 220),
         "productionScale": _trim_continuity_value(
             _derive_production_scale(session_world_anchors=session_world_anchors, scene=scene),
             220,
@@ -615,7 +692,7 @@ def _sanitize_continuity_memory(memory: dict | None) -> dict[str, str] | None:
     if not isinstance(memory, dict):
         return None
     cleaned = {}
-    for key in ["location", "lighting", "colorPalette", "cameraLanguage", "characterState", "worldState", "propState", "productionScale", "audienceState"]:
+    for key in ["location", "lighting", "colorPalette", "cameraLanguage", "characterState", "worldState", "propState", "worldScaleContext", "entityScaleAnchors", "productionScale", "audienceState"]:
         value = _trim_continuity_value(memory.get(key) or "")
         if value:
             cleaned[key] = value
@@ -1897,6 +1974,18 @@ Apply consistent haze, moisture, light scattering and atmospheric depth to:
 
 Do not keep the subject artificially crisp if the environment is soft, hazy, cold, wet, snowy, or diffuse-lit.
 
+WORLD SCALE CONTEXT LOCK:
+The storyboard must use one fixed worldScaleContext for the entire session (human_world, hero_vs_giant, micro_world, animal_scale, space_scale, or mythic_world).
+Detect it from text/refs and keep it stable across scenes.
+
+ENTITY SCALE ANCHOR LOCK:
+Define fixed relative scale anchors (entityScaleAnchors) and preserve them across every scene.
+Do not randomly rescale entities between shots.
+Even in close-ups, preserve perceived scale via framing, perspective, crop, and depth layering.
+
+THREAT DOMINANCE RULE:
+When a threat entity exists (monster, predator, boss), it must visually dominate frame presence via scale, occupancy, or spatial pressure even when partially visible.
+
 PROP SIZE CLASS LOCK:
 
 The prop must belong to a stable real-world size class across all scenes.
@@ -2439,6 +2528,13 @@ For each scene, fill continuityMemory with short structured persistent state sum
 continuityMemory captures persistent world setup for the next scene (location, lighting, color palette, camera language, character state, world state, prop state, production scale, audience state).
 This is continuity reference, NOT composition lock.
 Do not force exact pose/framing repetition.
+WORLD SCALE CONTEXT REQUIREMENT:
+Detect and return one stable session-level worldScaleContext from: human_world, hero_vs_giant, micro_world, animal_scale, space_scale, mythic_world.
+Define entityScaleAnchors as stable relative size anchors (for example hero:1, monster:6).
+Do not randomly rescale anchored entities across scenes.
+In close-ups, scale must still be implied through framing, perspective, crop logic, and foreground/background separation.
+If a threat entity exists (monster/predator/boss), enforce threat visual dominance via scale, spatial occupation, or presence even when partially visible.
+
 
 Response schema (all keys required):
 {{
@@ -2446,6 +2542,8 @@ Response schema (all keys required):
   "sections": [{{"start": number, "end": number, "type": string, "energy": string}}],
   "vocalPhrases": [{{"start": number, "end": number, "text": string}}],
   "energyEvents": [{{"time": number, "type": string, "description": string}}],
+  "worldScaleContext": string,
+  "entityScaleAnchors": {{"entity_name": number}},
   "scenes": [{{
     "id": "scene_001",
     "start": number,
@@ -2465,7 +2563,9 @@ Response schema (all keys required):
       "cameraLanguage": string,
       "characterState": string,
       "worldState": string,
-      "propState": string
+      "propState": string,
+      "worldScaleContext": string,
+      "entityScaleAnchors": string
     }}
   }}]
 }}
@@ -2726,6 +2826,14 @@ If any of the required descriptive fields are returned in English, the output is
     audio_duration = _resolve_timeline_duration(plan)
     track["durationSec"] = audio_duration
     scenes = plan.get("scenes") or []
+    world_scale_context = _normalize_world_scale_context(plan.get("worldScaleContext"))
+    if not world_scale_context:
+        world_scale_context = _detect_world_scale_context(text=text, scenes=scenes, session_world_anchors=session_world_anchors)
+
+    entity_scale_anchors = _extract_entity_scale_anchors(plan.get("entityScaleAnchors"))
+    if not entity_scale_anchors:
+        entity_scale_anchors = _default_entity_scale_anchors(world_scale_context)
+    entity_scale_anchor_text = _format_entity_scale_anchors(entity_scale_anchors)
 
     normalized_scenes = []
     previous_scene = None
@@ -2739,6 +2847,8 @@ If any of the required descriptive fields are returned in English, the output is
         "weather": weather_anchor,
         "surface": surface_anchor,
         "propAnchorLabel": prop_anchor_label or None,
+        "worldScaleContext": world_scale_context,
+        "entityScaleAnchors": entity_scale_anchors,
         "productionScale": _derive_production_scale(session_world_anchors=session_world_anchors, scene=scenes[0] if scenes else {}),
         "audienceState": "same event audience identity, crowd scale class, density logic, and front-row geometry across all scenes",
     }
@@ -2762,6 +2872,8 @@ If any of the required descriptive fields are returned in English, the output is
             continuity_memory = _build_scene_continuity_memory(
                 scene={
                     **s,
+                    "worldScaleContext": world_scale_context,
+                    "entityScaleAnchors": entity_scale_anchor_text,
                     "sceneText": visual_desc,
                     "imagePrompt": visual_prompt,
                     "why": reason_text,
@@ -2787,6 +2899,8 @@ If any of the required descriptive fields are returned in English, the output is
             "lyricFragment": lyric_fragment,
             "continuityMemory": continuity_memory,
             "previousContinuityMemory": previous_continuity_memory,
+            "worldScaleContext": world_scale_context,
+            "entityScaleAnchors": entity_scale_anchors,
             "productionScale": (session_baseline or {}).get("productionScale") if isinstance(session_baseline, dict) else None,
             "audienceState": (session_baseline or {}).get("audienceState") if isinstance(session_baseline, dict) else None,
         }
@@ -2805,6 +2919,8 @@ If any of the required descriptive fields are returned in English, the output is
         "sections": plan.get("sections") if isinstance(plan.get("sections"), list) else [],
         "vocalPhrases": plan.get("vocalPhrases") if isinstance(plan.get("vocalPhrases"), list) else [],
         "energyEvents": plan.get("energyEvents") if isinstance(plan.get("energyEvents"), list) else [],
+        "worldScaleContext": world_scale_context,
+        "entityScaleAnchors": entity_scale_anchors,
         "scenes": normalized_scenes,
         "propAnchor": prop_anchor,
         "sessionWorldAnchors": {
@@ -2858,6 +2974,21 @@ def clip_image(payload: ClipImageIn):
     session_location_anchor = str(getattr(refs_obj, "sessionLocationAnchor", "") or "").strip()
     session_style_anchor = str(getattr(refs_obj, "sessionStyleAnchor", "") or "").strip()
     session_baseline = getattr(refs_obj, "sessionBaseline", None)
+    world_scale_context = _normalize_world_scale_context(getattr(refs_obj, "worldScaleContext", None))
+    if not world_scale_context and isinstance(session_baseline, dict):
+        world_scale_context = _normalize_world_scale_context((session_baseline or {}).get("worldScaleContext"))
+    entity_scale_anchors = _extract_entity_scale_anchors(getattr(refs_obj, "entityScaleAnchors", None))
+    if not entity_scale_anchors and isinstance(session_baseline, dict):
+        entity_scale_anchors = _extract_entity_scale_anchors((session_baseline or {}).get("entityScaleAnchors"))
+    if not world_scale_context:
+        world_scale_context = _detect_world_scale_context(
+            text=f"{scene_text} {scene_delta}",
+            scenes=[],
+            session_world_anchors={"location": session_location_anchor, "style": session_style_anchor},
+        )
+    if not entity_scale_anchors:
+        entity_scale_anchors = _default_entity_scale_anchors(world_scale_context)
+    entity_scale_anchor_text = _format_entity_scale_anchors(entity_scale_anchors)
     previous_continuity_memory = _sanitize_continuity_memory(getattr(refs_obj, "previousContinuityMemory", None))
     previous_scene_image_url = str(getattr(refs_obj, "previousSceneImageUrl", "") or "").strip()
     previous_scene_image_inline = _load_reference_image_inline(previous_scene_image_url) if previous_scene_image_url else None
@@ -2908,6 +3039,8 @@ def clip_image(payload: ClipImageIn):
         "sessionCharacterAnchor": session_character_anchor or None,
         "sessionLocationAnchor": session_location_anchor or None,
         "sessionStyleAnchor": session_style_anchor or None,
+        "worldScaleContext": world_scale_context or None,
+        "entityScaleAnchors": entity_scale_anchors,
         "hasSessionBaseline": bool(isinstance(session_baseline, dict) and session_baseline),
         "hasPreviousContinuityMemory": bool(previous_continuity_memory),
         "hasPreviousSceneImage": bool(previous_scene_image_inline),
@@ -3082,6 +3215,13 @@ def clip_image(payload: ClipImageIn):
             + f"Environment anchor: {environment_anchor}\n"
             + f"Weather anchor: {weather_anchor}\n"
             + f"Surface anchor: {surface_anchor}\n\n"
+            "WORLD SCALE CONTEXT RULES:\n\n"
+            f"World scale context: {world_scale_context}.\n"
+            f"Entity scale anchors: {entity_scale_anchor_text}.\n"
+            "Keep these anchors stable across all scenes.\n"
+            "Do not randomly rescale anchored entities between shots.\n"
+            "In close-up framing, preserve perceived scale using perspective, crop, partial-body cues, and foreground/background layering.\n"
+            "Threat entities (monster/predator/boss) must visually dominate frame presence through scale, occupancy, or spatial pressure even when partially visible.\n\n"
             "PHYSICAL SCALE RULES:\n\n"
             "Keep the prop at the same realistic real-world size across all frames.\n"
             "The object must remain physically plausible relative to the person.\n"
@@ -3198,6 +3338,8 @@ def clip_image(payload: ClipImageIn):
             "sessionLocationAnchor": session_location_anchor or None,
             "sessionStyleAnchor": session_style_anchor or None,
             "previousContinuityMemory": previous_continuity_memory,
+            "worldScaleContext": world_scale_context,
+            "entityScaleAnchors": entity_scale_anchors,
             "productionScale": (session_baseline or {}).get("productionScale") if isinstance(session_baseline, dict) else None,
             "audienceState": (session_baseline or {}).get("audienceState") if isinstance(session_baseline, dict) else None,
             "styleAnchor": style_anchor,
