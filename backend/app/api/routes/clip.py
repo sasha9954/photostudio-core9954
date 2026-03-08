@@ -69,6 +69,8 @@ class ClipVideoIn(BaseModel):
     endImageUrl: str | None = None
     transitionActionPrompt: str | None = None
     format: str | None = "9:16"
+    lipSync: bool | None = False
+    audioSliceUrl: str | None = None
 
 
 def _kie_headers() -> dict:
@@ -156,10 +158,10 @@ def _extract_video_url_from_kie_payload(payload: object) -> str | None:
     return None
 
 
-def _kie_create_video_task(*, image_url: str, prompt: str, duration: str) -> tuple[str | None, str | None]:
+def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False) -> tuple[str | None, str | None]:
     endpoint = f"{settings.KIE_BASE_URL.rstrip('/')}/jobs/createTask"
     body = {
-        "model": settings.KIE_VIDEO_MODEL_SINGLE,
+        "model": model,
         "input": {
             "prompt": prompt,
             "image_urls": [image_url],
@@ -167,6 +169,8 @@ def _kie_create_video_task(*, image_url: str, prompt: str, duration: str) -> tup
             "duration": duration,
         },
     }
+    if send_audio and (audio_url or "").strip():
+        body["input"]["audio_url"] = str(audio_url).strip()
     callback_url = (settings.KIE_CALLBACK_URL or "").strip()
     if callback_url:
         body["callBackUrl"] = callback_url
@@ -201,6 +205,26 @@ def _kie_query_task(task_id: str) -> tuple[dict | None, str | None]:
         return None, f"queryTask_request_error:{str(exc)[:300]}"
     except Exception as exc:
         return None, f"queryTask_parse_error:{str(exc)[:300]}"
+
+
+def _normalize_clip_video_transition_type(value: str | None) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not raw:
+        return "single"
+    aliases = {
+        "single": "single",
+        "hard_cut": "single",
+        "hardcut": "single",
+        "transition": "transition",
+        "continuous": "continuous",
+    }
+    return aliases.get(raw, "single")
+
+
+def _is_clip_video_transition_mode(transition_type: str, start_image_url: str, end_image_url: str) -> bool:
+    if transition_type in {"continuous", "transition"}:
+        return True
+    return bool(start_image_url and end_image_url)
 
 
 def _kie_wait_for_video_result(task_id: str, *, poll_interval_sec: int, poll_timeout_sec: int) -> tuple[str | None, str | None, str | None]:
@@ -3954,29 +3978,76 @@ def clip_video(payload: ClipVideoIn):
     if not (settings.KIE_API_KEY or "").strip():
         return JSONResponse(
             status_code=500,
-            content={"ok": False, "code": "KIE_NOT_CONFIGURED", "hint": "missing_KIE_API_KEY"},
+            content={"ok": False, "code": "KIE_NOT_CONFIGURED", "hint": "missing_KIE_API_KEY", "details": "Set KIE_API_KEY in environment."},
         )
 
-    transition_type = str(payload.transitionType or "single").strip().lower()
-    allowed_transition_types = {"single", "hard_cut", "continuous"}
-    if transition_type not in allowed_transition_types:
-        transition_type = "single"
     scene_id = str(payload.sceneId or "").strip() or "scene"
+    transition_type = _normalize_clip_video_transition_type(payload.transitionType)
+    is_lipsync = bool(payload.lipSync is True)
+    audio_slice_url = str(payload.audioSliceUrl or "").strip()
+    image_url = str(payload.imageUrl or "").strip()
+    start_image_url = str(payload.startImageUrl or "").strip()
+    end_image_url = str(payload.endImageUrl or "").strip()
+    output_format = str(payload.format or "9:16").strip() or "9:16"
 
-    if transition_type in {"single", "hard_cut"}:
-        source_image_url = str(payload.imageUrl or "").strip()
-        effective_prompt = str(payload.videoPrompt or payload.transitionActionPrompt or "").strip()
+    if is_lipsync:
+        mode = "lipsync"
+    elif _is_clip_video_transition_mode(transition_type, start_image_url, end_image_url):
+        mode = "continuous"
     else:
-        source_image_url = str(payload.startImageUrl or payload.imageUrl or payload.endImageUrl or "").strip()
-        effective_prompt = str(payload.transitionActionPrompt or payload.videoPrompt or "").strip()
+        mode = "single"
 
+    effective_prompt = ""
+    if mode == "continuous":
+        effective_prompt = str(payload.transitionActionPrompt or payload.videoPrompt or "").strip()
+    else:
+        effective_prompt = str(payload.videoPrompt or payload.transitionActionPrompt or "").strip()
     if not effective_prompt:
         effective_prompt = "cinematic motion, natural movement"
+
+    if mode == "single":
+        source_image_url = image_url or start_image_url or end_image_url
+    else:
+        source_image_url = start_image_url or image_url or end_image_url
 
     if not source_image_url:
         return JSONResponse(
             status_code=400,
-            content={"ok": False, "code": "BAD_REQUEST", "hint": "imageUrl_or_startImageUrl_required"},
+            content={
+                "ok": False,
+                "code": "VIDEO_SOURCE_IMAGE_REQUIRED",
+                "hint": "imageUrl_or_startImageUrl_required",
+                "details": "Provide imageUrl for single mode or startImageUrl/endImageUrl for transition modes.",
+            },
+        )
+
+    if mode == "lipsync" and not audio_slice_url:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "code": "LIPSYNC_AUDIO_REQUIRED",
+                "hint": "audioSliceUrl_required_when_lipSync_true",
+                "details": "lipSync=true requires a non-empty audioSliceUrl.",
+            },
+        )
+
+    if mode == "lipsync":
+        selected_model = (settings.KIE_VIDEO_MODEL_LIPSYNC or settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
+    elif mode == "continuous":
+        selected_model = (settings.KIE_VIDEO_MODEL_CONTINUOUS or settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
+    else:
+        selected_model = (settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
+
+    if not selected_model:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "code": "KIE_MODEL_NOT_CONFIGURED",
+                "hint": "video_model_is_empty",
+                "details": f"No model configured for mode={mode}.",
+            },
         )
 
     try:
@@ -3986,20 +4057,35 @@ def clip_video(payload: ClipVideoIn):
     requested_duration = max(1, min(10, requested_duration))
     duration = "5" if requested_duration <= 5 else "10"
 
-    print("[KIE] scene:", scene_id)
-    print("[KIE] transition:", transition_type)
-    print("[KIE] source_image:", source_image_url)
-    print("[KIE] duration:", duration)
+    send_audio_to_provider = mode == "lipsync"
+
+    print(f"[CLIP VIDEO] mode={mode}")
+    print(f"[CLIP VIDEO] selected_model={selected_model}")
+    print(f"[CLIP VIDEO] duration={duration}")
+    print(f"[CLIP VIDEO] format={output_format}")
+    print(f"[CLIP VIDEO] image_url={image_url}")
+    print(f"[CLIP VIDEO] start_image_url={start_image_url}")
+    print(f"[CLIP VIDEO] end_image_url={end_image_url}")
+    print(f"[CLIP VIDEO] has_audio_slice={bool(audio_slice_url)}")
+    print(f"[CLIP VIDEO] sending_audio_to_provider={send_audio_to_provider}")
 
     task_id, create_err = _kie_create_video_task(
+        model=selected_model,
         image_url=source_image_url,
         prompt=effective_prompt,
         duration=duration,
+        audio_url=audio_slice_url,
+        send_audio=send_audio_to_provider,
     )
     if create_err or not task_id:
         return JSONResponse(
             status_code=500,
-            content={"ok": False, "code": "KIE_TASK_CREATE_FAILED", "hint": create_err or "create_task_failed"},
+            content={
+                "ok": False,
+                "code": "KIE_CREATE_TASK_FAILED",
+                "hint": "provider_create_task_error",
+                "details": create_err or "create_task_failed",
+            },
         )
 
     print("[KIE] task created:", task_id)
@@ -4051,21 +4137,17 @@ def clip_video(payload: ClipVideoIn):
         }.get(wait_code or "", 500)
         return JSONResponse(
             status_code=status_code,
-            content={"ok": False, "code": wait_code or "KIE_TASK_FAILED", "hint": wait_hint or "video_generation_failed"},
+            content={"ok": False, "code": wait_code or "KIE_TASK_FAILED", "hint": wait_hint or "video_generation_failed", "details": "KIE task did not return a playable video URL."},
         )
 
     print("[KIE] video url:", video_url)
-
-    mode = "single_image"
-    if transition_type == "continuous":
-        mode = "single_image_fallback"
 
     return {
         "ok": True,
         "sceneId": scene_id,
         "videoUrl": video_url,
         "provider": "kie",
-        "model": settings.KIE_VIDEO_MODEL_SINGLE,
+        "model": selected_model,
         "taskId": task_id,
         "mode": mode,
     }
