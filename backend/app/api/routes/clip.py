@@ -4378,14 +4378,14 @@ def clip_video(payload: ClipVideoIn):
                 },
             )
 
-    if mode == "lipsync" and not audio_slice_url:
+    if (mode == "lipsync" or render_mode == "avatar_lipsync") and not audio_slice_url:
         return JSONResponse(
             status_code=400,
             content={
                 "ok": False,
                 "code": "LIPSYNC_AUDIO_REQUIRED",
-                "hint": "audioSliceUrl_required_when_lipSync_true",
-                "details": "lipSync=true requires a non-empty audioSliceUrl.",
+                "hint": "audioSliceUrl_required_for_avatar_lipsync",
+                "details": "LipSync scenes require audioSliceUrl for avatar generation.",
             },
         )
 
