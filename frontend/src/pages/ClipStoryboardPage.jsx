@@ -151,9 +151,6 @@ function getSceneUiDescription(scene) {
     scene.reason,
     scene.lyricFragment,
     scene.timingReason,
-    scene.imagePrompt,
-    scene.framePrompt,
-    scene.prompt,
   ];
   for (const candidate of candidates) {
     const value = String(candidate || "").trim();
@@ -1412,7 +1409,7 @@ Aspect ratio: ${imageFormat}`,
     const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
     const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
     const dur = Math.max(0, t1 - t0);
-    const requestedDurationSec = dur <= 5 ? 5 : 10;
+    const requestedDurationSec = dur;
 
     setScenarioVideoLoading(true);
     setScenarioVideoError("");
