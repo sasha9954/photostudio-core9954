@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     KIE_API_KEY: str = ""
     KIE_BASE_URL: str = "https://api.kie.ai/api/v1"
     KIE_VIDEO_MODEL_SINGLE: str = "kling-2.6/image-to-video"
-    KIE_VIDEO_MODEL_CONTINUOUS: str = "kling-2.5/pro/image-to-video"
+    KIE_VIDEO_MODEL_CONTINUOUS: str = ""
     KIE_VIDEO_MODEL_LIPSYNC: str = ""
     KIE_CALLBACK_URL: str = ""
     KIE_POLL_INTERVAL_SEC: int = 5

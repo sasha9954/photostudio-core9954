@@ -195,14 +195,27 @@ def _extract_video_url_from_kie_payload(payload: object) -> str | None:
     return None
 
 
-def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False, aspect_ratio: str | None = None) -> tuple[str | None, str | None]:
+def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False, aspect_ratio: str | None = None, mode: str = "single") -> tuple[str | None, str | None]:
     endpoint = f"{settings.KIE_BASE_URL.rstrip('/')}/jobs/createTask"
-    input_payload = {
-        "prompt": prompt,
-        "sound": bool(send_audio),
-        "duration": duration,
-    }
-    input_payload["image_urls"] = [image_url]
+
+    normalized_mode = str(mode or "single").strip().lower()
+    input_payload = {"prompt": prompt, "sound": bool(send_audio), "duration": duration}
+
+    if normalized_mode == "continuous":
+        continuous_image_field = str(os.getenv("KIE_VIDEO_CONTINUOUS_IMAGE_FIELD", "image_url") or "image_url").strip().lower()
+        if continuous_image_field == "image_urls":
+            input_payload["image_urls"] = [image_url]
+        else:
+            continuous_image_field = "image_url"
+            input_payload["image_url"] = image_url
+        payload_preview = json.dumps(input_payload, ensure_ascii=False, separators=(",", ":"))[:500]
+        print(f"[CLIP VIDEO] continuous_model={model}")
+        print(f"[CLIP VIDEO] continuous_image_field={continuous_image_field}")
+        print(f"[CLIP VIDEO] continuous_provider_input_keys={sorted(list(input_payload.keys()))}")
+        print(f"[CLIP VIDEO] continuous_provider_payload_preview={payload_preview}")
+    else:
+        input_payload["image_urls"] = [image_url]
+
     if (aspect_ratio or "").strip():
         input_payload["aspect_ratio"] = str(aspect_ratio).strip()
 
@@ -4197,6 +4210,17 @@ def clip_video(payload: ClipVideoIn):
             },
         )
 
+    if mode == "continuous" and not selected_model:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "code": "KIE_CONTINUOUS_MODEL_UNVERIFIED",
+                "hint": "provider_model_format_unknown",
+                "details": "Set KIE_VIDEO_MODEL_CONTINUOUS to a provider-verified model string for continuous mode.",
+            },
+        )
+
     if not selected_model:
         return JSONResponse(
             status_code=500,
@@ -4241,6 +4265,7 @@ def clip_video(payload: ClipVideoIn):
         audio_url=audio_slice_url,
         send_audio=send_audio_to_provider,
         aspect_ratio=output_format,
+        mode=mode,
     )
     if create_err or not task_id:
         return JSONResponse(
