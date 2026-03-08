@@ -3202,6 +3202,9 @@ If reference images exist they override imagination.
 IMPORTANT LANGUAGE ENFORCEMENT
 
 All human-readable descriptive output must be written in Russian.
+Return all user-facing scene descriptions strictly in Russian.
+Do not output English for storyboard scene descriptions.
+Prompts for generation may remain technical if needed, but UI scene descriptions must be Russian.
 
 The following fields must ALWAYS be in Russian:
 - visualDescription
@@ -3490,6 +3493,7 @@ If any of the required descriptive fields are returned in English, the output is
                 prop_anchor_label=prop_anchor_label,
             )
         scene_delta = _build_scene_delta(s, previous_scene)
+        scene_text_ru = visual_desc or reason_text or lyric_fragment
         scene_obj = {
             **s,
             "id": str(s.get("id") or f"scene_{idx + 1:03d}"),
@@ -3502,7 +3506,7 @@ If any of the required descriptive fields are returned in English, the output is
             "transitionActionPrompt": transition_action_prompt,
             "prompt": prompt_value,
             "sceneDelta": scene_delta,
-            "sceneText": visual_desc,
+            "sceneText": scene_text_ru,
             "imagePrompt": image_prompt_value,
             "videoPrompt": video_prompt,
             "why": reason_text,
@@ -4178,7 +4182,7 @@ def clip_video(payload: ClipVideoIn):
     if mode == "lipsync":
         selected_model = (settings.KIE_VIDEO_MODEL_LIPSYNC or "").strip()
     elif mode == "continuous":
-        selected_model = (settings.KIE_VIDEO_MODEL_CONTINUOUS or settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
+        selected_model = (settings.KIE_VIDEO_MODEL_CONTINUOUS or "").strip()
     else:
         selected_model = (settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
 
@@ -4209,17 +4213,23 @@ def clip_video(payload: ClipVideoIn):
     except Exception:
         requested_duration = 5.0
     requested_duration = max(1, min(10, requested_duration))
-    duration = "5" if requested_duration <= 5 else "10"
+    # Provider supports only 5s / 10s variants.
+    provider_duration = "5" if requested_duration <= 5.0 else "10"
+    provider_duration_sec = int(provider_duration)
 
     send_audio_to_provider = mode == "lipsync"
 
     print(f"[CLIP VIDEO] mode={mode}")
     print(f"[CLIP VIDEO] selected_model={selected_model}")
-    print(f"[CLIP VIDEO] duration={duration}")
+    print(f"[CLIP VIDEO] requested_duration_sec={requested_duration}")
+    print(f"[CLIP VIDEO] provider_duration_sec={provider_duration_sec}")
+    print(f"[CLIP VIDEO] duration={provider_duration}")
     print(f"[CLIP VIDEO] format={output_format}")
     print(f"[CLIP VIDEO] image_url={image_url}")
     print(f"[CLIP VIDEO] start_image_url={start_image_url}")
     print(f"[CLIP VIDEO] end_image_url={end_image_url}")
+    print(f"[CLIP VIDEO] transition_action_prompt={str(payload.transitionActionPrompt or '').strip()[:300]}")
+    print(f"[CLIP VIDEO] video_prompt={str(payload.videoPrompt or '').strip()[:300]}")
     print(f"[CLIP VIDEO] has_audio_slice={bool(audio_slice_url)}")
     print(f"[CLIP VIDEO] sending_audio_to_provider={send_audio_to_provider}")
 
@@ -4227,7 +4237,7 @@ def clip_video(payload: ClipVideoIn):
         model=selected_model,
         image_url=provider_image_url,
         prompt=effective_prompt,
-        duration=duration,
+        duration=provider_duration,
         audio_url=audio_slice_url,
         send_audio=send_audio_to_provider,
         aspect_ratio=output_format,
@@ -4354,4 +4364,6 @@ def clip_video(payload: ClipVideoIn):
         "model": selected_model,
         "taskId": task_id,
         "mode": mode,
+        "requestedDurationSec": round(requested_duration, 3),
+        "providerDurationSec": provider_duration_sec,
     }

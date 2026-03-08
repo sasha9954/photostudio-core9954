@@ -142,6 +142,26 @@ function normalizeDurationSec(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function getSceneUiDescription(scene) {
+  if (!scene || typeof scene !== "object") return "";
+  const candidates = [
+    scene.sceneText,
+    scene.visualDescription,
+    scene.why,
+    scene.reason,
+    scene.lyricFragment,
+    scene.timingReason,
+    scene.imagePrompt,
+    scene.framePrompt,
+    scene.prompt,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
 function stableRefsSignature(refs = []) {
   return refs
     .map((item) => String(item?.url || "").trim())
@@ -998,7 +1018,7 @@ function StoryboardPlanNode({ id, data }) {
             {scenes.map((s, idx) => (
               <div key={idx} className="clipSB_planRow">
                 <div className="clipSB_planTime">{s.t0}s → {s.t1}s</div>
-                <div className="clipSB_planText">{s.sceneText || s.imagePrompt || s.prompt}</div>
+                <div className="clipSB_planText">{getSceneUiDescription(s)}</div>
               </div>
             ))}
           </div>
@@ -1416,7 +1436,13 @@ Aspect ratio: ${imageFormat}`,
         },
       });
       if (!out?.ok || !out?.videoUrl) throw new Error(out?.hint || out?.code || "video_generation_failed");
-      updateScenarioScene(scenarioEditor.selected, { videoUrl: String(out.videoUrl || "") });
+      updateScenarioScene(scenarioEditor.selected, {
+        videoUrl: String(out.videoUrl || ""),
+        mode: String(out.mode || ""),
+        model: String(out.model || ""),
+        requestedDurationSec: normalizeDurationSec(out.requestedDurationSec),
+        providerDurationSec: normalizeDurationSec(out.providerDurationSec),
+      });
     } catch (e) {
       console.error(e);
       setScenarioVideoError(String(e?.message || e));
@@ -2316,7 +2342,7 @@ const hydrate = useCallback(() => {
                             {s.lipSync ? <div className="clipSB_tag">LIP</div> : null}
                           </div>
                         </div>
-                        <div className="clipSB_scenarioItemText">{(s.sceneText || "").slice(0, 90) || "—"}</div>
+                        <div className="clipSB_scenarioItemText">{getSceneUiDescription(s).slice(0, 90)}</div>
                       </div>
                     </div>
                     </button>
