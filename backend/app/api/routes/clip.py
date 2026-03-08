@@ -120,6 +120,42 @@ def _kie_upload_image_bytes(*, image_bytes: bytes, filename: str, mime_type: str
     return image_url, None
 
 
+def _kie_upload_audio_bytes(*, audio_bytes: bytes, filename: str, mime_type: str) -> tuple[str | None, str | None]:
+    upload_url = os.getenv("KIE_UPLOAD_URL", "https://kieai.redpandaai.co/api/file-base64-upload").strip()
+    upload_path = os.getenv("KIE_UPLOAD_AUDIO_PATH", "audio/photostudio").strip() or "audio/photostudio"
+
+    if not upload_url:
+        return None, "upload_url_is_empty"
+
+    safe_filename = str(filename or "source.mp3").strip() or "source.mp3"
+    safe_mime = str(mime_type or "audio/mpeg").strip() or "audio/mpeg"
+    b64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+    payload = {
+        "base64Data": f"data:{safe_mime};base64,{b64}",
+        "uploadPath": upload_path,
+        "fileName": safe_filename,
+    }
+
+    try:
+        resp = requests.post(upload_url, headers=_kie_headers(), json=payload, timeout=60)
+        if resp.status_code >= 400:
+            return None, f"upload_http_{resp.status_code}:{resp.text[:300]}"
+        data = resp.json()
+    except RequestException as exc:
+        return None, f"upload_request_error:{str(exc)[:300]}"
+    except Exception as exc:
+        return None, f"upload_parse_error:{str(exc)[:300]}"
+
+    audio_url = None
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        audio_url = (data["data"].get("downloadUrl") or data["data"].get("url") or "").strip()
+
+    if not audio_url:
+        return None, f"upload_url_missing:{str(data)[:300]}"
+    return audio_url, None
+
+
 def _extract_task_id(data: dict) -> str | None:
     if not isinstance(data, dict):
         return None
@@ -368,6 +404,86 @@ def _prepare_provider_image_url(source_url: str) -> tuple[str, str | None]:
         return "", f"localhost_image_read_failed:{(image_read_error or 'read_failed')[:300]}"
 
     return source, None
+
+
+def _is_public_media_url(url: str) -> bool:
+    source = str(url or "").strip()
+    if not source:
+        return False
+    parsed = urlparse(source)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return not _is_localhost_url(source)
+
+
+def _read_audio_bytes_from_source(source_url: str) -> tuple[bytes | None, str | None, str | None, str | None]:
+    source = str(source_url or "").strip()
+    if not source:
+        return None, None, None, "audio_source_is_empty"
+
+    resolved_local_path = _resolve_audio_asset_path(source)
+    if resolved_local_path:
+        try:
+            with open(resolved_local_path, "rb") as f:
+                audio_bytes = f.read()
+            ext = os.path.splitext(resolved_local_path)[1].lower().replace(".", "") or "mp3"
+            mime = mimetypes.types_map.get(f".{ext}", "audio/mpeg")
+            return audio_bytes, ext, mime, None
+        except Exception as exc:
+            return None, None, None, f"local_audio_read_error:{str(exc)[:300]}"
+
+    parsed = urlparse(source)
+    if parsed.scheme in {"http", "https"}:
+        try:
+            resp = requests.get(source, timeout=60)
+            if resp.status_code >= 400:
+                return None, None, None, f"audio_http_{resp.status_code}:{resp.text[:300]}"
+            audio_bytes = resp.content or b""
+            if not audio_bytes:
+                return None, None, None, "audio_http_empty_body"
+            content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            ext = os.path.splitext(parsed.path or "")[1].lower().replace(".", "")
+            if not ext and content_type:
+                guessed_ext = mimetypes.guess_extension(content_type) or ""
+                ext = guessed_ext.lower().replace(".", "")
+            if not ext:
+                ext = "mp3"
+            mime = content_type or mimetypes.types_map.get(f".{ext}", "audio/mpeg")
+            return audio_bytes, ext, mime, None
+        except RequestException as exc:
+            return None, None, None, f"audio_request_error:{str(exc)[:300]}"
+        except Exception as exc:
+            return None, None, None, f"audio_read_error:{str(exc)[:300]}"
+
+    return None, None, None, "audio_source_unsupported"
+
+
+def _prepare_provider_audio_url(source_url: str) -> tuple[str, str | None]:
+    source = str(source_url or "").strip()
+    if not source:
+        return "", "audio_source_is_empty"
+
+    if _is_public_media_url(source):
+        return source, None
+
+    audio_bytes, audio_ext, audio_mime, audio_err = _read_audio_bytes_from_source(source)
+    if audio_err or not audio_bytes:
+        return "", audio_err or "audio_read_failed"
+
+    normalized_ext = (audio_ext or "mp3").lower().replace(".", "")
+    if normalized_ext not in {"mp3", "wav", "ogg", "m4a", "aac", "flac"}:
+        normalized_ext = "mp3"
+    upload_filename = f"clip_source_audio_{uuid4().hex}.{normalized_ext}"
+    upload_mime = str(audio_mime or mimetypes.types_map.get(f".{normalized_ext}", "audio/mpeg")).strip() or "audio/mpeg"
+
+    uploaded_audio_url, upload_err = _kie_upload_audio_bytes(
+        audio_bytes=audio_bytes,
+        filename=upload_filename,
+        mime_type=upload_mime,
+    )
+    if upload_err or not uploaded_audio_url:
+        return "", upload_err or "audio_upload_failed"
+    return uploaded_audio_url, None
 
 
 def _kie_wait_for_video_result(task_id: str, *, poll_interval_sec: int, poll_timeout_sec: int) -> tuple[str | None, str | None, str | None]:
@@ -4426,6 +4542,28 @@ def clip_video(payload: ClipVideoIn):
             },
         )
 
+    provider_audio_url = audio_slice_url
+    if mode == "lipsync":
+        is_public_audio_url = _is_public_media_url(audio_slice_url)
+        print(f"[CLIP LIPSYNC AUDIO] source_audio_url={audio_slice_url}")
+        print(f"[CLIP LIPSYNC AUDIO] is_public_audio_url={is_public_audio_url}")
+
+        provider_audio_url, provider_audio_err = _prepare_provider_audio_url(audio_slice_url)
+        if provider_audio_err or not provider_audio_url:
+            err_text = provider_audio_err or "provider_audio_prepare_failed"
+            print(f"[CLIP LIPSYNC AUDIO] audio_prepare_error={err_text}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "code": "LIPSYNC_AUDIO_PREP_FAILED",
+                    "hint": "provider_requires_public_audio_url",
+                    "details": err_text,
+                },
+            )
+
+        print(f"[CLIP LIPSYNC AUDIO] provider_audio_url={provider_audio_url}")
+
     if mode == "lipsync":
         selected_model = (settings.KIE_VIDEO_MODEL_LIPSYNC or "").strip()
     elif mode == "continuous":
@@ -4498,6 +4636,8 @@ def clip_video(payload: ClipVideoIn):
     print(f"[CLIP VIDEO] video_prompt={str(payload.videoPrompt or '').strip()[:300]}")
     print(f"[CLIP VIDEO] has_audio_slice={bool(audio_slice_url)}")
     print(f"[CLIP VIDEO] sending_audio_to_provider={send_audio_to_provider}")
+    if mode == "lipsync":
+        print(f"[CLIP VIDEO] provider_audio_url={provider_audio_url}")
 
     task_id, create_err = _kie_create_video_task(
         model=selected_model,
@@ -4506,7 +4646,7 @@ def clip_video(payload: ClipVideoIn):
         end_image_url=provider_end_image_url,
         prompt=effective_prompt,
         duration=provider_duration,
-        audio_url=audio_slice_url,
+        audio_url=provider_audio_url,
         send_audio=send_audio_to_provider,
         aspect_ratio=output_format,
         mode=mode,
