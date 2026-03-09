@@ -40,6 +40,11 @@ backend/app/static/videos/
 backend/app/static/frames/
 backend/app/static/tmp/
 
+backend/static/assets/
+backend/static/videos/
+backend/static/frames/
+backend/static/tmp/
+
 # ---------- Node / Frontend ----------
 node_modules/
 frontend/node_modules/
