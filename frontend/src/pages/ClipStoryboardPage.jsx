@@ -1072,7 +1072,10 @@ function AssemblyNode({ id, data }) {
   const isAssembling = !!data?.isAssembling;
   const canAssemble = !!data?.canAssemble;
   const status = data?.status || "empty";
+  const result = data?.result || null;
   const finalVideoUrl = String(data?.result?.finalVideoUrl || "").trim();
+  const resultSceneCount = Number(result?.sceneCount || 0);
+  const audioApplied = !!result?.audioApplied;
 
   return (
     <>
@@ -1101,17 +1104,33 @@ function AssemblyNode({ id, data }) {
           ) : null}
         </div>
 
-        {isAssembling ? <div className="clipSB_hint" style={{ marginTop: 8 }}>⚙ Собираем клип...</div> : null}
+        {isAssembling ? (
+          <div className="clipSB_assemblyProgress">
+            <div className="clipSB_assemblyProgressTitle">Сборка видео...</div>
+            <div className="clipSB_assemblyProgressSub">Подготавливаем итоговый ролик</div>
+            <div className="clipSB_assemblyProgressTrack">
+              <div className="clipSB_assemblyProgressBar" />
+            </div>
+          </div>
+        ) : null}
 
-        {status === "empty" ? <div className="clipSB_hint" style={{ marginTop: 8 }}>Нужна хотя бы одна готовая видео-сцена</div> : null}
+        {status === "empty" ? <div className="clipSB_assemblyNote">Нужна хотя бы одна готовая видео-сцена</div> : null}
         {data?.infoMessage ? <div className="clipSB_hint" style={{ marginTop: 8 }}>{data.infoMessage}</div> : null}
-        {status === "error" && data?.errorMessage ? <div className="clipSB_hint" style={{ marginTop: 8, color: "#ff8a8a" }}>{data.errorMessage}</div> : null}
+        {status === "error" && data?.errorMessage ? (
+          <div className="clipSB_assemblyErrorBlock">
+            <div className="clipSB_assemblyErrorTitle">Ошибка сборки</div>
+            <div className="clipSB_assemblyErrorText">{data.errorMessage}</div>
+          </div>
+        ) : null}
 
         {status === "done" && finalVideoUrl ? (
           <div className="clipSB_assemblyResult">
-            <div className="clipSB_small" style={{ marginTop: 10 }}>Клип готов</div>
+            <div className="clipSB_assemblyDoneTitle">✅ Клип готов</div>
+            <div className="clipSB_assemblyDoneMeta">
+              {resultSceneCount > 0 ? `${resultSceneCount} сцен` : `${data?.readyScenes || 0} сцен`} • {audioApplied ? "аудио добавлено" : "без аудио"}
+            </div>
             <video className="clipSB_videoPlayer" controls playsInline preload="metadata" src={finalVideoUrl} style={{ marginTop: 8 }} />
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <div className="clipSB_assemblyActions">
               <a className="clipSB_btn clipSB_btnLink" href={finalVideoUrl} target="_blank" rel="noreferrer">Открыть</a>
               <a className="clipSB_btn clipSB_btnLink" href={finalVideoUrl} download>Скачать mp4</a>
             </div>
@@ -1630,8 +1649,13 @@ Aspect ratio: ${imageFormat}`,
       if (!res.ok) throw new Error(String(out?.detail || out?.message || out?.error || `HTTP ${res.status}`));
       const finalVideoUrl = String(out?.finalVideoUrl || out?.videoUrl || out?.url || "").trim();
       if (!finalVideoUrl) throw new Error("Сборка завершена, но finalVideoUrl не получен");
-      setAssemblyResult({ finalVideoUrl });
+      setAssemblyResult({
+        finalVideoUrl,
+        audioApplied: !!out?.audioApplied,
+        sceneCount: Number(out?.sceneCount || assemblyPayload.scenes.length || 0),
+      });
       setAssemblyBuildState("done");
+      setNodes((prev) => [...prev]);
     } catch (e) {
       if (e?.name === "AbortError") {
         setAssemblyBuildState("idle");
@@ -1654,7 +1678,7 @@ Aspect ratio: ${imageFormat}`,
       }
       setIsAssembling(false);
     }
-  }, [assemblyPayload, isAssembling]);
+  }, [assemblyPayload, isAssembling, setNodes]);
 
   const handleAssemblyStop = useCallback(() => {
     assemblyAbortControllerRef.current?.abort();
@@ -1668,6 +1692,46 @@ Aspect ratio: ${imageFormat}`,
     if (!hasVideoScenes) return "empty";
     return "ready";
   }, [isAssembling, assemblyBuildState, assemblyPayload.scenes.length, assemblyResult?.finalVideoUrl]);
+
+  useEffect(() => {
+    const estimatedDurationSec = assemblyPayload.scenes.reduce(
+      (sum, scene) => sum + (Number(scene.requestedDurationSec) || 0),
+      0
+    );
+    setNodes((prev) => prev.map((n) => {
+      if (n.type !== "assemblyNode") return n;
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          totalScenes: storyboardScenesForAssembly.length,
+          readyScenes: assemblyPayload.scenes.length,
+          hasAudio: !!assemblyPayload.audioUrl,
+          format: assemblyPayload.format,
+          durationSec: estimatedDurationSec,
+          canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
+          isAssembling,
+          status: assemblyStatus,
+          result: assemblyResult,
+          errorMessage: assemblyError,
+          infoMessage: assemblyInfo,
+          onAssemble: handleAssemblyBuild,
+          onStopAssemble: handleAssemblyStop,
+        },
+      };
+    }));
+  }, [
+    assemblyPayload,
+    storyboardScenesForAssembly.length,
+    isAssembling,
+    assemblyStatus,
+    assemblyResult,
+    assemblyError,
+    assemblyInfo,
+    handleAssemblyBuild,
+    handleAssemblyStop,
+    setNodes,
+  ]);
 
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);

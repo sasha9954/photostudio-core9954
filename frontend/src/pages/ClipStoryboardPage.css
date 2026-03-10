@@ -256,6 +256,11 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin-top: 4px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 .clipSB_assemblyRow {
@@ -264,6 +269,12 @@
   justify-content: space-between;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.72);
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.clipSB_assemblyRow:last-child {
+  border-bottom: none;
 }
 
 .clipSB_assemblyRow strong {
@@ -273,6 +284,105 @@
 .clipSB_btnMuted {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.clipSB_assemblyProgress {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(90, 125, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(120, 160, 255, 0.26);
+}
+
+.clipSB_assemblyProgressTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(231, 238, 255, 0.95);
+}
+
+.clipSB_assemblyProgressSub {
+  margin-top: 4px;
+  font-size: 11px;
+  color: rgba(221, 231, 255, 0.72);
+}
+
+.clipSB_assemblyProgressTrack {
+  margin-top: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.clipSB_assemblyProgressBar {
+  height: 100%;
+  width: 55%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(126, 167, 255, 0.65), rgba(105, 235, 255, 0.8));
+  animation: clipSB_progressPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes clipSB_progressPulse {
+  0% { transform: translateX(-20%); opacity: 0.68; }
+  50% { transform: translateX(35%); opacity: 1; }
+  100% { transform: translateX(95%); opacity: 0.68; }
+}
+
+.clipSB_assemblyNote {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.clipSB_assemblyErrorBlock {
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 82, 82, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 126, 126, 0.28);
+}
+
+.clipSB_assemblyErrorTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 187, 187, 0.95);
+}
+
+.clipSB_assemblyErrorText {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: rgba(255, 212, 212, 0.9);
+}
+
+.clipSB_assemblyResult {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(90, 255, 165, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(111, 229, 163, 0.24);
+}
+
+.clipSB_assemblyDoneTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(219, 255, 234, 0.96);
+}
+
+.clipSB_assemblyDoneMeta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: rgba(201, 245, 220, 0.8);
+}
+
+.clipSB_assemblyActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .clipSB_textarea {
