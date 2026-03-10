@@ -28,14 +28,10 @@
   height: 100%;
 }
 
-/* Dashed animated edges */
+/* Edge readability */
 .clipSB_canvas .react-flow__edge-path,
 .clipSB_canvas .react-flow__connection-path {
-  stroke-dasharray: 6 6;
-  animation: clipDash 1s linear infinite;
-}
-@keyframes clipDash {
-  to { stroke-dashoffset: -12; }
+  transition: stroke-width 140ms ease, filter 160ms ease, opacity 140ms ease;
 }
 
 /* HUD */
@@ -538,7 +534,9 @@
 }
 
 .react-flow__edge:hover .react-flow__edge-path {
-  stroke-width: 2.6;
+  stroke-width: var(--clip-edge-hover-width, 2.35);
+  filter: var(--clip-edge-hover-filter, drop-shadow(0 0 4px rgba(120, 180, 255, 0.26)));
+  opacity: 1;
 }
 
 
