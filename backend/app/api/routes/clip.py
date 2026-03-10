@@ -216,7 +216,7 @@ def _extract_video_url_from_kie_payload(payload: object) -> str | None:
 
         output = payload.get("output")
         if isinstance(output, dict):
-            url = output.get("video_url") or output.get("url")
+            url = output.get("video_url") or output.get("url") or output.get("video")
             if isinstance(url, str) and url.startswith("http"):
                 return url
 
