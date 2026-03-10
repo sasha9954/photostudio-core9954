@@ -129,6 +129,13 @@ function getEdgePresentation(input) {
   };
 }
 
+function withSelectedEdge(edgesList, selectedEdgeId) {
+  return edgesList.map((edge) => ({
+    ...edge,
+    selected: !!selectedEdgeId && edge.id === selectedEdgeId,
+  }));
+}
+
 const SCENARIO_OPTIONS = [
   { value: "clip", label: "клип" },
   { value: "kino", label: "кино" },
@@ -2719,6 +2726,7 @@ const hydrate = useCallback(() => {
             sourceHandle: e.sourceHandle || null,
             target: e.target,
             targetHandle: e.targetHandle || null,
+            className: presentation.className,
             style: presentation.style,
             animated: presentation.animated,
             data: { ...(e.data || {}), kind: presentation.kind },
@@ -2953,7 +2961,7 @@ const hydrate = useCallback(() => {
             sourceType: src.type,
             targetType: dst.type,
           });
-          return addEdge({ ...params, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
 
         // --- validate PLAN route: BRAIN(plan) -> STORYBOARD(plan_in) ---
@@ -2967,7 +2975,7 @@ const hydrate = useCallback(() => {
               sourceType: src.type,
               targetType: dst.type,
             });
-            return addEdge({ ...params, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+            return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
           }
         }
 
@@ -2978,7 +2986,7 @@ const hydrate = useCallback(() => {
           sourceType: src.type,
           targetType: dst.type,
         });
-        return addEdge({ ...params, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, eds);
+        return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, eds);
       });
     },
     [setEdges, nodes]
@@ -2986,8 +2994,15 @@ const hydrate = useCallback(() => {
 
   const onEdgeClick = useCallback((evt, edge) => {
     evt?.stopPropagation?.();
-    selectedEdgeRef.current = edge?.id || null;
-  }, []);
+    const nextSelected = edge?.id || null;
+    selectedEdgeRef.current = nextSelected;
+    setEdges((eds) => withSelectedEdge(eds, nextSelected));
+  }, [setEdges]);
+
+  const onPaneClick = useCallback(() => {
+    selectedEdgeRef.current = null;
+    setEdges((eds) => withSelectedEdge(eds, null));
+  }, [setEdges]);
 
   useEffect(() => {
     const onKeyDown = (e) => {
@@ -3584,7 +3599,8 @@ const hydrate = useCallback(() => {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onEdgeClick={onEdgeClick}
-          defaultEdgeOptions={{ style: { strokeDasharray: "6 6" } }}
+          onPaneClick={onPaneClick}
+          defaultEdgeOptions={{ style: { strokeDasharray: "6 6" }, interactionWidth: 30 }}
           connectionLineStyle={{ strokeDasharray: "6 6" }}
           fitView
           minZoom={0.2}

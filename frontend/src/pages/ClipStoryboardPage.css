@@ -541,15 +541,22 @@
   stroke-dashoffset: 0;
 }
 
-.clipSB_edge .react-flow__edge-path {
+.react-flow__edge.clipSB_edge > .react-flow__edge-path {
   animation: clipSBEdgeFlow var(--clip-edge-dash-duration, 1.2s) linear infinite;
   will-change: stroke-dashoffset;
   stroke-linecap: round;
+  pointer-events: stroke;
 }
 
-.react-flow__edge:hover .react-flow__edge-path {
+.react-flow__edge.clipSB_edge:hover > .react-flow__edge-path {
   stroke-width: var(--clip-edge-hover-width, 2.35);
   filter: var(--clip-edge-hover-filter, drop-shadow(0 0 4px rgba(120, 180, 255, 0.26)));
+  opacity: 1;
+}
+
+.react-flow__edge.selected.clipSB_edge > .react-flow__edge-path {
+  stroke-width: calc(var(--clip-edge-hover-width, 2.35) + 0.25px);
+  filter: drop-shadow(0 0 8px currentColor);
   opacity: 1;
 }
 
