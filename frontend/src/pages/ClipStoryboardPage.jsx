@@ -22,14 +22,16 @@ import { useNavigate } from "react-router-dom";
 // typed ports + colors (for clear wiring)
 // -------------------------
 const PORT_COLORS = {
-  audio: "#ff5f7d",
-  text: "#8bb8ff",
-  ref_character: "#34d5d7",
-  ref_location: "#b37bff",
-  ref_style: "#ffc25b",
-  ref_items: "#93dd6f",
-  plan: "#4dd8ff",
-  assembly: "#6aa8ff",
+  audio: "#ff6a6a",
+  text: "#5bd3ff",
+  ref_character: "#b26cff",
+  ref_location: "#b26cff",
+  ref_style: "#b26cff",
+  ref_items: "#b26cff",
+  plan: "#ffd84d",
+  brain_to_storyboard: "#ffd84d",
+  storyboard_to_assembly: "#55ff9a",
+  assembly: "#55ff9a",
   brain: "#c480ff",
 };
 
@@ -42,38 +44,38 @@ function isBrainInput(handleId) {
 }
 
 const EDGE_STYLE_BY_KIND = {
-  audio: { color: PORT_COLORS.audio, strokeWidth: 2.1, opacity: 0.9, hoverFilter: "drop-shadow(0 0 4px rgba(255, 95, 125, 0.3))" },
-  text: { color: PORT_COLORS.text, strokeWidth: 2.0, opacity: 0.9, hoverFilter: "drop-shadow(0 0 4px rgba(139, 184, 255, 0.28))" },
-  ref_character: { color: PORT_COLORS.ref_character, strokeWidth: 2.1, opacity: 0.88, hoverFilter: "drop-shadow(0 0 4px rgba(52, 213, 215, 0.28))" },
-  ref_location: { color: PORT_COLORS.ref_location, strokeWidth: 2.1, opacity: 0.88, hoverFilter: "drop-shadow(0 0 4px rgba(179, 123, 255, 0.26))" },
-  ref_style: { color: PORT_COLORS.ref_style, strokeWidth: 2.1, opacity: 0.88, hoverFilter: "drop-shadow(0 0 4px rgba(255, 194, 91, 0.26))" },
-  ref_items: { color: PORT_COLORS.ref_items, strokeWidth: 2.1, opacity: 0.88, hoverFilter: "drop-shadow(0 0 4px rgba(147, 221, 111, 0.26))" },
+  audio: { color: PORT_COLORS.audio, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  text: { color: PORT_COLORS.text, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_character: { color: PORT_COLORS.ref_character, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_location: { color: PORT_COLORS.ref_location, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_style: { color: PORT_COLORS.ref_style, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_items: { color: PORT_COLORS.ref_items, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   plan: {
     color: PORT_COLORS.plan,
     strokeWidth: 2.4,
-    strokeDasharray: "6 4",
     opacity: 0.98,
     animatedDash: true,
-    hoverFilter: "drop-shadow(0 0 5px rgba(77, 216, 255, 0.34))",
+  },
+  brain_to_storyboard: {
+    color: PORT_COLORS.brain_to_storyboard,
+    strokeWidth: 2.4,
+    opacity: 0.98,
+    animatedDash: true,
   },
   storyboard_to_assembly: {
-    color: PORT_COLORS.assembly,
+    color: PORT_COLORS.storyboard_to_assembly,
     strokeWidth: 2.6,
-    strokeDasharray: "8 5",
     opacity: 1,
     animatedDash: true,
-    filter: "drop-shadow(0 0 3px rgba(106, 168, 255, 0.42))",
   },
   brain_to_assembly: {
     color: PORT_COLORS.brain,
     strokeWidth: 2.3,
-    strokeDasharray: "4 3",
     opacity: 0.95,
     animatedDash: true,
-    hoverFilter: "drop-shadow(0 0 5px rgba(196, 128, 255, 0.34))",
   },
-  assembly: { color: PORT_COLORS.assembly, strokeWidth: 2.2, opacity: 0.92, hoverFilter: "drop-shadow(0 0 4px rgba(106, 168, 255, 0.32))" },
-  default: { color: "#8c8c8c", strokeWidth: 2, opacity: 0.84, hoverFilter: "drop-shadow(0 0 4px rgba(160, 160, 160, 0.24))" },
+  assembly: { color: PORT_COLORS.assembly, strokeWidth: 2.2, opacity: 0.95, animatedDash: true },
+  default: { color: "#8c8c8c", strokeWidth: 2, opacity: 0.9, animatedDash: true },
 };
 
 function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "", targetType = "", existingKind = "" }) {
@@ -102,14 +104,15 @@ function getEdgePresentation(input) {
     className: `clipSB_edge clipSB_edge--${kind}`,
     style: {
       stroke: visual.color,
+      color: visual.color,
       strokeWidth: visual.strokeWidth,
-      strokeDasharray: visual.strokeDasharray || "none",
+      strokeDasharray: visual.strokeDasharray || "6 6",
       opacity: visual.opacity ?? 0.9,
-      filter: visual.filter || "none",
-      "--clip-edge-hover-filter": visual.hoverFilter || visual.filter || "drop-shadow(0 0 4px rgba(120, 180, 255, 0.26))",
+      filter: visual.filter || "drop-shadow(0 0 6px currentColor)",
+      "--clip-edge-hover-filter": visual.hoverFilter || visual.filter || "drop-shadow(0 0 6px currentColor)",
       "--clip-edge-hover-width": `${(visual.strokeWidth + 0.35).toFixed(2)}`,
-      "--clip-edge-dash-duration": visual.animatedDash ? "4.8s" : "0s",
-      "--clip-edge-dash-distance": visual.animatedDash ? "-28" : "0",
+      "--clip-edge-dash-duration": visual.animatedDash ? "1.2s" : "0s",
+      "--clip-edge-dash-distance": visual.animatedDash ? "-20" : "0",
     },
   };
 }
