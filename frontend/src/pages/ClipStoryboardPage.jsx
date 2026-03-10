@@ -22,13 +22,15 @@ import { useNavigate } from "react-router-dom";
 // typed ports + colors (for clear wiring)
 // -------------------------
 const PORT_COLORS = {
-  audio: "#ff4d4f",        // red
-  text: "#40a9ff",         // blue
-  ref_character: "#73d13d",// green
-  ref_location: "#9254de", // purple
-  ref_style: "#faad14",    // amber
-  ref_items: "#13c2c2",    // cyan
-  plan: "#36cfc9",         // teal
+  audio: "#ff5f7d",
+  text: "#8bb8ff",
+  ref_character: "#34d5d7",
+  ref_location: "#b37bff",
+  ref_style: "#ffc25b",
+  ref_items: "#93dd6f",
+  plan: "#4dd8ff",
+  assembly: "#6aa8ff",
+  brain: "#c480ff",
 };
 
 function portColor(key) {
@@ -999,7 +1001,7 @@ function RefNode({ id, data }) {
         title={title}
         onClose={() => data?.onRemoveNode?.(id)}
         icon={<span aria-hidden>{icon}</span>}
-        className="clipSB_nodeRef"
+        className={`clipSB_nodeRef clipSB_nodeRef--${kind}`}
       >
         <div className="clipSB_refGrid" style={{ marginBottom: 10 }}>
           {refs.map((item, idx) => (
@@ -1105,7 +1107,7 @@ function AssemblyNode({ id, data }) {
 
   return (
     <>
-      <Handle type="target" position={Position.Left} />
+      <Handle type="target" position={Position.Left} className="clipSB_handle" style={{ background: portColor("assembly"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
       <NodeShell
         title="ASSEMBLY"
         onClose={() => data?.onRemoveNode?.(id)}
@@ -1198,6 +1200,7 @@ export default function ClipStoryboardPage() {
   const parseControllerRef = useRef(null);
   const parseTimeoutRef = useRef(null);
   const activeParseNodeRef = useRef(null);
+  const scenarioItemRefs = useRef(new Map());
 
   const [lastSavedAt, setLastSavedAt] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1263,9 +1266,9 @@ useEffect(() => {
 
   const defaultEdges = useMemo(
     () => [
-      { id: "e-audio-brain", source: "audio", target: "brain" },
-      { id: "e-text-brain", source: "text", target: "brain" },
-      { id: "e-brain-assembly", source: "brain", target: "assembly" },
+      { id: "e-audio-brain", source: "audio", sourceHandle: "audio", target: "brain", targetHandle: "audio", style: { stroke: portColor("audio"), strokeWidth: 2 }, data: { kind: "audio" } },
+      { id: "e-text-brain", source: "text", sourceHandle: "text", target: "brain", targetHandle: "text", style: { stroke: portColor("text"), strokeWidth: 2 }, data: { kind: "text" } },
+      { id: "e-brain-assembly", source: "brain", target: "assembly", style: { stroke: portColor("assembly"), strokeWidth: 2 }, data: { kind: "assembly" } },
     ],
     []
   );
@@ -1304,6 +1307,12 @@ const scenarioScenes = useMemo(() => {
   const arr = scenarioNode?.data?.scenes;
   return Array.isArray(arr) ? arr : [];
 }, [scenarioNode]);
+
+const recommendedNextSceneIndex = useMemo(() => {
+  if (!Array.isArray(scenarioScenes) || scenarioScenes.length === 0) return -1;
+  const currentIdx = Number.isFinite(scenarioEditor.selected) ? scenarioEditor.selected : -1;
+  return scenarioScenes.findIndex((scene, idx) => idx > currentIdx && !String(scene?.videoUrl || "").trim());
+}, [scenarioEditor.selected, scenarioScenes]);
 
 const scenarioSelected = scenarioScenes[scenarioEditor.selected] || null;
 const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelected);
@@ -1372,6 +1381,17 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
       setScenarioEditor((prev) => ({ ...prev, selected: 0 }));
     }
   }, [scenarioEditor.open, scenarioEditor.selected, scenarioScenes.length]);
+
+  useEffect(() => {
+    if (!scenarioEditor.open) return;
+    const node = scenarioItemRefs.current.get(scenarioEditor.selected);
+    if (!node) return;
+    try {
+      node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    } catch {
+      node.scrollIntoView();
+    }
+  }, [scenarioEditor.open, scenarioEditor.selected]);
 
   const updateScenarioScene = useCallback((idx, patch) => {
     if (!scenarioNode?.id || idx < 0) return;
@@ -2890,7 +2910,13 @@ const hydrate = useCallback(() => {
                   return (
                     <button
                     key={s.id || i}
-                    className={"clipSB_scenarioItem" + (i === scenarioEditor.selected ? " isActive" : "")}
+                    ref={(node) => {
+                      if (node) scenarioItemRefs.current.set(i, node);
+                      else scenarioItemRefs.current.delete(i);
+                    }}
+                    className={"clipSB_scenarioItem"
+                      + (i === scenarioEditor.selected ? " isActive" : "")
+                      + (i === recommendedNextSceneIndex ? " isRecommended" : "")}
                     onClick={() => setScenarioEditor((x) => ({ ...x, selected: i }))}
                   >
                     <div className="clipSB_scenarioItemInner">
@@ -2917,6 +2943,7 @@ const hydrate = useCallback(() => {
                             <div className="clipSB_tag">{getSceneTypeBadge(resolveSceneTransitionType(s))}</div>
                             {sceneThumb ? <div className="clipSB_tag">IMG</div> : null}
                             {s.videoUrl ? <div className="clipSB_tag clipSB_tagDone">VIDEO ✓</div> : null}
+                            {i === recommendedNextSceneIndex ? <div className="clipSB_tag clipSB_tagNext">NEXT</div> : null}
                             {isLipSyncScene(s) ? <div className="clipSB_tag">LS</div> : null}
                           </div>
                         </div>
