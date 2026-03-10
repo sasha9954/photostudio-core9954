@@ -511,11 +511,17 @@
 
 /* Handles */
 .clipSB_handle {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 999px;
-  border: 2px solid rgba(0, 0, 0, 0.65);
+  border: 2px solid rgba(255, 255, 255, 0.42);
   background: rgba(120, 255, 220, 0.95);
+  transition: transform 160ms ease, filter 180ms ease;
+}
+
+.clipSB_handle:hover {
+  transform: scale(1.08);
+  filter: brightness(1.08);
 }
 
 /* Make node selection look nice */
@@ -538,6 +544,7 @@
 .clipSB_edge .react-flow__edge-path {
   animation: clipSBEdgeFlow var(--clip-edge-dash-duration, 1.2s) linear infinite;
   will-change: stroke-dashoffset;
+  stroke-linecap: round;
 }
 
 .react-flow__edge:hover .react-flow__edge-path {

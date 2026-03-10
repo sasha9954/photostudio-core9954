@@ -22,21 +22,33 @@ import { useNavigate } from "react-router-dom";
 // typed ports + colors (for clear wiring)
 // -------------------------
 const PORT_COLORS = {
-  audio: "#ff6a6a",
-  text: "#5bd3ff",
-  ref_character: "#b26cff",
-  ref_location: "#b26cff",
-  ref_style: "#b26cff",
-  ref_items: "#b26cff",
-  plan: "#ffd84d",
-  brain_to_storyboard: "#ffd84d",
-  storyboard_to_assembly: "#55ff9a",
-  assembly: "#55ff9a",
+  audio: "#ff5f7d",
+  text: "#8bb8ff",
+  ref_character: "#34d5d7",
+  ref_location: "#b37bff",
+  ref_style: "#ffc25b",
+  ref_items: "#93dd6f",
+  plan: "#4dd8ff",
+  brain_to_storyboard: "#4dd8ff",
+  storyboard_to_assembly: "#6aa8ff",
+  assembly: "#6aa8ff",
   brain: "#c480ff",
 };
 
 function portColor(key) {
   return PORT_COLORS[key] || "#8c8c8c";
+}
+
+function handleStyle(kind, extra = {}) {
+  const color = portColor(kind);
+  return {
+    background: color,
+    width: 12,
+    height: 12,
+    border: "2px solid rgba(255,255,255,0.42)",
+    boxShadow: `0 0 0 1px rgba(0,0,0,0.55), 0 0 10px ${color}99`,
+    ...extra,
+  };
 }
 
 function isBrainInput(handleId) {
@@ -110,8 +122,8 @@ function getEdgePresentation(input) {
       opacity: visual.opacity ?? 0.9,
       filter: visual.filter || "drop-shadow(0 0 6px currentColor)",
       "--clip-edge-hover-filter": visual.hoverFilter || visual.filter || "drop-shadow(0 0 6px currentColor)",
-      "--clip-edge-hover-width": `${(visual.strokeWidth + 0.35).toFixed(2)}`,
-      "--clip-edge-dash-duration": visual.animatedDash ? "1.2s" : "0s",
+      "--clip-edge-hover-width": `${(visual.strokeWidth + 0.4).toFixed(2)}`,
+      "--clip-edge-dash-duration": visual.animatedDash ? "1.35s" : "0s",
       "--clip-edge-dash-distance": visual.animatedDash ? "-20" : "0",
     },
   };
@@ -690,7 +702,7 @@ function AudioNode({ id, data }) {
 
   return (
     <>
-      <Handle type="source" position={Position.Right} id="audio" className="clipSB_handle" style={{ background: portColor("audio"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
+      <Handle type="source" position={Position.Right} id="audio" className="clipSB_handle" style={handleStyle("audio")} />
       <NodeShell title="AUDIO" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎧</span>} className="clipSB_nodeAudio">
           {data?.uploading ? (
             <div className="clipSB_btn clipSB_btnMuted">Загрузка…</div>
@@ -726,7 +738,7 @@ function AudioNode({ id, data }) {
 function TextNode({ id, data }) {
   return (
     <>
-      <Handle type="source" position={Position.Right} id="text" className="clipSB_handle" style={{ background: portColor("text"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
+      <Handle type="source" position={Position.Right} id="text" className="clipSB_handle" style={handleStyle("text")} />
       <NodeShell title="TEXT" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>📄</span>} className="clipSB_nodeText">
         <div className="clipSB_textWrap">
           <textarea
@@ -828,13 +840,13 @@ function BrainNode({ id, data }) {
       <div style={{ position: "absolute", top: 350, right: 18, fontSize: 11, opacity: 0.75, pointerEvents: "none" }}>PLAN</div>
 
       {/* explicit ports (позже удобно валидировать связи) */}
-      <Handle type="target" position={Position.Left} id="audio" style={{ top: 116, background: portColor("audio"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
-      <Handle type="target" position={Position.Left} id="text" style={{ top: 156, background: portColor("text"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
-      <Handle type="target" position={Position.Left} id="ref_character" style={{ top: 196, background: portColor("ref_character"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
-      <Handle type="target" position={Position.Left} id="ref_location" style={{ top: 236, background: portColor("ref_location"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
-      <Handle type="target" position={Position.Left} id="ref_style" style={{ top: 276, background: portColor("ref_style"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
-      <Handle type="target" position={Position.Left} id="ref_items" style={{ top: 316, background: portColor("ref_items"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
-      <Handle type="source" position={Position.Right} id="plan" style={{ top: 216, background: portColor("plan"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
+      <Handle type="target" position={Position.Left} id="audio" className="clipSB_handle" style={handleStyle("audio", { top: 116 })} />
+      <Handle type="target" position={Position.Left} id="text" className="clipSB_handle" style={handleStyle("text", { top: 156 })} />
+      <Handle type="target" position={Position.Left} id="ref_character" className="clipSB_handle" style={handleStyle("ref_character", { top: 196 })} />
+      <Handle type="target" position={Position.Left} id="ref_location" className="clipSB_handle" style={handleStyle("ref_location", { top: 236 })} />
+      <Handle type="target" position={Position.Left} id="ref_style" className="clipSB_handle" style={handleStyle("ref_style", { top: 276 })} />
+      <Handle type="target" position={Position.Left} id="ref_items" className="clipSB_handle" style={handleStyle("ref_items", { top: 316 })} />
+      <Handle type="source" position={Position.Right} id="plan" className="clipSB_handle" style={handleStyle("plan", { top: 216 })} />
 
       <NodeShell
         title="BRAIN"
@@ -1072,7 +1084,7 @@ function RefNode({ id, data }) {
 
   return (
     <>
-      <Handle type="source" position={Position.Right} id={kind} className="clipSB_handle" style={{ background: portColor(kind), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
+      <Handle type="source" position={Position.Right} id={kind} className="clipSB_handle" style={handleStyle(kind)} />
       <NodeShell
         title={title}
         onClose={() => data?.onRemoveNode?.(id)}
@@ -1141,8 +1153,8 @@ function StoryboardPlanNode({ id, data }) {
   const scenes = data?.scenes || [];
   return (
     <>
-      <Handle type="target" position={Position.Left} id="plan_in" className="clipSB_handle" style={{ background: portColor("plan"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
-      <Handle type="source" position={Position.Right} id="plan_out" className="clipSB_handle" style={{ background: portColor("plan"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
+      <Handle type="target" position={Position.Left} id="plan_in" className="clipSB_handle" style={handleStyle("plan")} />
+      <Handle type="source" position={Position.Right} id="plan_out" className="clipSB_handle" style={handleStyle("storyboard_to_assembly")} />
       <NodeShell
         title="STORYBOARD"
         onClose={() => data?.onRemoveNode?.(id)}
@@ -1183,7 +1195,7 @@ function AssemblyNode({ id, data }) {
 
   return (
     <>
-      <Handle type="target" position={Position.Left} className="clipSB_handle" style={{ background: portColor("assembly"), width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)" }} />
+      <Handle type="target" position={Position.Left} id="assembly_in" className="clipSB_handle" style={handleStyle("assembly")} />
       <NodeShell
         title="ASSEMBLY"
         onClose={() => data?.onRemoveNode?.(id)}
