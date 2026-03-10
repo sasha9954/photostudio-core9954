@@ -1106,7 +1106,7 @@ function AssemblyNode({ id, data }) {
 
         {isAssembling ? (
           <div className="clipSB_assemblyProgress">
-            <div className="clipSB_assemblyProgressTitle">Сборка видео...</div>
+            <div className="clipSB_assemblyProgressTitle">⚙ Собираем клип...</div>
             <div className="clipSB_assemblyProgressSub">Подготавливаем итоговый ролик</div>
             <div className="clipSB_assemblyProgressTrack">
               <div className="clipSB_assemblyProgressBar" />
@@ -1115,7 +1115,7 @@ function AssemblyNode({ id, data }) {
         ) : null}
 
         {status === "empty" ? <div className="clipSB_assemblyNote">Нужна хотя бы одна готовая видео-сцена</div> : null}
-        {data?.infoMessage ? <div className="clipSB_hint" style={{ marginTop: 8 }}>{data.infoMessage}</div> : null}
+        {data?.infoMessage ? <div className="clipSB_assemblyNote">{data.infoMessage}</div> : null}
         {status === "error" && data?.errorMessage ? (
           <div className="clipSB_assemblyErrorBlock">
             <div className="clipSB_assemblyErrorTitle">Ошибка сборки</div>
@@ -1127,7 +1127,7 @@ function AssemblyNode({ id, data }) {
           <div className="clipSB_assemblyResult">
             <div className="clipSB_assemblyDoneTitle">✅ Клип готов</div>
             <div className="clipSB_assemblyDoneMeta">
-              {resultSceneCount > 0 ? `${resultSceneCount} сцен` : `${data?.readyScenes || 0} сцен`} • {audioApplied ? "аудио добавлено" : "без аудио"}
+              Сцен: {resultSceneCount > 0 ? resultSceneCount : Number(data?.readyScenes || 0)} • Аудио: {audioApplied ? "добавлено" : "нет"}
             </div>
             <video className="clipSB_videoPlayer" controls playsInline preload="metadata" src={finalVideoUrl} style={{ marginTop: 8 }} />
             <div className="clipSB_assemblyActions">
