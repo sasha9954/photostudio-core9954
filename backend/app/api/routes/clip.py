@@ -429,6 +429,22 @@ def _is_clip_video_transition_mode(transition_type: str, start_image_url: str, e
     return bool(start_image_url and end_image_url)
 
 
+def _is_back_view_scene_prompt(prompt: str | None) -> bool:
+    normalized_prompt = str(prompt or "").strip().lower()
+    if not normalized_prompt:
+        return False
+
+    back_view_markers = [
+        "from behind",
+        "back view",
+        "walking away",
+        "rear shot",
+        "rear tracking shot",
+        "character seen from behind",
+    ]
+    return any(marker in normalized_prompt for marker in back_view_markers)
+
+
 def _is_localhost_url(url: str) -> bool:
     try:
         host = (urlparse(str(url or "").strip()).hostname or "").strip().lower()
@@ -4557,6 +4573,16 @@ def clip_video(payload: ClipVideoIn):
         mode = "continuous"
     else:
         mode = "single"
+
+    guard_prompt = " ".join([
+        str(payload.videoPrompt or "").strip(),
+        str(payload.transitionActionPrompt or "").strip(),
+    ]).strip()
+    if mode == "lipsync" and _is_back_view_scene_prompt(guard_prompt):
+        payload.lipSync = False
+        is_lipsync = False
+        mode = "continuous"
+        print("[CLIP LIPSYNC GUARD] lipsync disabled because face is not visible in scene prompt")
 
     if mode == "lipsync":
         if not (settings.PIAPI_API_KEY or "").strip():
