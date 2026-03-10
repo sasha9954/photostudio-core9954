@@ -1397,6 +1397,8 @@ export default function ClipStoryboardPage() {
   const scenarioItemRefs = useRef(new Map());
   const scenarioVideoSectionRef = useRef(null);
   const scenarioVideoCardRef = useRef(null);
+  const scenarioVideoScrollTimerRef = useRef(null);
+  const scenarioVideoScrollRafRef = useRef(0);
   const scenarioVideoPollTimerRef = useRef(null);
   const scenarioActiveVideoJobRef = useRef(null);
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
@@ -1613,6 +1615,17 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
       node.scrollIntoView();
     }
   }, [scenarioEditor.open, scenarioEditor.selected]);
+
+  useEffect(() => () => {
+    if (scenarioVideoScrollRafRef.current) {
+      cancelAnimationFrame(scenarioVideoScrollRafRef.current);
+      scenarioVideoScrollRafRef.current = 0;
+    }
+    if (scenarioVideoScrollTimerRef.current) {
+      clearTimeout(scenarioVideoScrollTimerRef.current);
+      scenarioVideoScrollTimerRef.current = null;
+    }
+  }, []);
 
   const updateScenarioScene = useCallback((idx, patch) => {
     if (!scenarioNode?.id || idx < 0) return;
@@ -1991,22 +2004,44 @@ Aspect ratio: ${imageFormat}`,
   }, [scenarioEditor.selected, updateScenarioScene]);
 
   const handleScenarioAddToVideo = useCallback(() => {
+    const scrollToVideoBlock = (attemptsLeft = 3) => {
+      const node = scenarioVideoCardRef.current || scenarioVideoSectionRef.current;
+      if (node) {
+        try {
+          node.scrollIntoView({ block: "center", behavior: "smooth" });
+        } catch {
+          node.scrollIntoView();
+        }
+        return;
+      }
+      if (attemptsLeft <= 0) return;
+      scenarioVideoScrollRafRef.current = requestAnimationFrame(() => {
+        scenarioVideoScrollTimerRef.current = window.setTimeout(() => {
+          scrollToVideoBlock(attemptsLeft - 1);
+        }, 0);
+      });
+    };
+
     const transitionType = resolveSceneTransitionType(scenarioSelected);
     const hasImage = transitionType === "continuous"
       ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl)
       : !!scenarioSelected?.imageUrl;
     if (!hasImage) return;
+
+    if (scenarioVideoScrollRafRef.current) {
+      cancelAnimationFrame(scenarioVideoScrollRafRef.current);
+      scenarioVideoScrollRafRef.current = 0;
+    }
+    if (scenarioVideoScrollTimerRef.current) {
+      clearTimeout(scenarioVideoScrollTimerRef.current);
+      scenarioVideoScrollTimerRef.current = null;
+    }
+
     setScenarioVideoOpen(true);
     setScenarioVideoError("");
     setScenarioVideoFocusPulse(true);
     window.setTimeout(() => setScenarioVideoFocusPulse(false), 1200);
-    const node = scenarioVideoCardRef.current || scenarioVideoSectionRef.current;
-    if (!node) return;
-    try {
-      node.scrollIntoView({ block: "center", behavior: "smooth" });
-    } catch {
-      node.scrollIntoView();
-    }
+    scrollToVideoBlock();
   }, [scenarioSelected, scenarioSelectedEffectiveStartImageUrl]);
 
   const storyboardScenesForAssembly = useMemo(() => extractStoryboardScenesFromNodes(nodes), [nodes]);
