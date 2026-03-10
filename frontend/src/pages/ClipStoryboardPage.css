@@ -531,6 +531,18 @@
 .react-flow__edge-path {
   stroke: rgba(120, 255, 220, 0.75);
   stroke-width: 2;
+  stroke-dashoffset: 0;
+}
+
+.clipSB_edge--plan .react-flow__edge-path,
+.clipSB_edge--storyboard_to_assembly .react-flow__edge-path,
+.clipSB_edge--brain_to_assembly .react-flow__edge-path {
+  animation: clipSBEdgeFlow var(--clip-edge-dash-duration, 4.8s) linear infinite;
+  will-change: stroke-dashoffset;
+}
+
+.clipSB_edge--storyboard_to_assembly .react-flow__edge-path {
+  filter: drop-shadow(0 0 4px rgba(106, 168, 255, 0.44));
 }
 
 .react-flow__edge:hover .react-flow__edge-path {
@@ -540,6 +552,16 @@
 }
 
 
+
+
+@keyframes clipSBEdgeFlow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--clip-edge-dash-distance, -28);
+  }
+}
 
 
 /* Hide global sidebar only on Clip/Storyboard */

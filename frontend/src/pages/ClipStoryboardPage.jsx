@@ -48,14 +48,30 @@ const EDGE_STYLE_BY_KIND = {
   ref_location: { color: PORT_COLORS.ref_location, strokeWidth: 2.1, opacity: 0.88, hoverFilter: "drop-shadow(0 0 4px rgba(179, 123, 255, 0.26))" },
   ref_style: { color: PORT_COLORS.ref_style, strokeWidth: 2.1, opacity: 0.88, hoverFilter: "drop-shadow(0 0 4px rgba(255, 194, 91, 0.26))" },
   ref_items: { color: PORT_COLORS.ref_items, strokeWidth: 2.1, opacity: 0.88, hoverFilter: "drop-shadow(0 0 4px rgba(147, 221, 111, 0.26))" },
-  plan: { color: PORT_COLORS.plan, strokeWidth: 2.4, strokeDasharray: "6 4", opacity: 0.98, hoverFilter: "drop-shadow(0 0 5px rgba(77, 216, 255, 0.34))" },
+  plan: {
+    color: PORT_COLORS.plan,
+    strokeWidth: 2.4,
+    strokeDasharray: "6 4",
+    opacity: 0.98,
+    animatedDash: true,
+    hoverFilter: "drop-shadow(0 0 5px rgba(77, 216, 255, 0.34))",
+  },
   storyboard_to_assembly: {
     color: PORT_COLORS.assembly,
     strokeWidth: 2.6,
+    strokeDasharray: "8 5",
     opacity: 1,
+    animatedDash: true,
     filter: "drop-shadow(0 0 3px rgba(106, 168, 255, 0.42))",
   },
-  brain_to_assembly: { color: PORT_COLORS.brain, strokeWidth: 2.3, strokeDasharray: "4 3", opacity: 0.95, hoverFilter: "drop-shadow(0 0 5px rgba(196, 128, 255, 0.34))" },
+  brain_to_assembly: {
+    color: PORT_COLORS.brain,
+    strokeWidth: 2.3,
+    strokeDasharray: "4 3",
+    opacity: 0.95,
+    animatedDash: true,
+    hoverFilter: "drop-shadow(0 0 5px rgba(196, 128, 255, 0.34))",
+  },
   assembly: { color: PORT_COLORS.assembly, strokeWidth: 2.2, opacity: 0.92, hoverFilter: "drop-shadow(0 0 4px rgba(106, 168, 255, 0.32))" },
   default: { color: "#8c8c8c", strokeWidth: 2, opacity: 0.84, hoverFilter: "drop-shadow(0 0 4px rgba(160, 160, 160, 0.24))" },
 };
@@ -92,6 +108,8 @@ function getEdgePresentation(input) {
       filter: visual.filter || "none",
       "--clip-edge-hover-filter": visual.hoverFilter || visual.filter || "drop-shadow(0 0 4px rgba(120, 180, 255, 0.26))",
       "--clip-edge-hover-width": `${(visual.strokeWidth + 0.35).toFixed(2)}`,
+      "--clip-edge-dash-duration": visual.animatedDash ? "4.8s" : "0s",
+      "--clip-edge-dash-distance": visual.animatedDash ? "-28" : "0",
     },
   };
 }
