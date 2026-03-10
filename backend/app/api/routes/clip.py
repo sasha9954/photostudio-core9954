@@ -13,6 +13,7 @@ import os
 import io
 import mimetypes
 import time
+import threading
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -90,6 +91,10 @@ class AssembleClipIn(BaseModel):
     audioUrl: str | None = None
     format: str | None = "9:16"
     scenes: list[AssembleSceneIn]
+
+
+CLIP_ASSEMBLE_JOBS: dict[str, dict] = {}
+CLIP_ASSEMBLE_JOBS_LOCK = threading.Lock()
 
 
 def _kie_headers() -> dict:
@@ -4680,29 +4685,60 @@ def clip_audio_slice(payload: AudioSliceIn):
 
 
 
-@router.post("/clip/assemble")
-def clip_assemble(payload: AssembleClipIn):
-    scenes = payload.scenes or []
-    if not scenes:
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "code": "BAD_REQUEST", "hint": "scenes_required_and_must_be_non_empty"},
-        )
+def _update_clip_assemble_job(job_id: str, **updates):
+    with CLIP_ASSEMBLE_JOBS_LOCK:
+        job = CLIP_ASSEMBLE_JOBS.get(job_id)
+        if not job:
+            return
+        job.update(updates)
 
+
+def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
+    scenes = payload.scenes or []
     _ensure_assets_dir()
     temp_files: list[str] = []
     generated_temp_assets: list[str] = []
     prepared_scenes: list[tuple[str, float]] = []
     final_path: str | None = None
 
+    total_scenes = len(scenes)
+    print(f"[CLIP ASSEMBLE] job start {job_id}")
+    _update_clip_assemble_job(
+        job_id,
+        status="running",
+        stage="preparing",
+        label="preparing scenes",
+        progressPercent=5,
+        current=0,
+        total=total_scenes,
+    )
+
     try:
         for idx, scene in enumerate(scenes):
+            with CLIP_ASSEMBLE_JOBS_LOCK:
+                should_stop = CLIP_ASSEMBLE_JOBS.get(job_id, {}).get("status") == "stopped"
+            if should_stop:
+                _update_clip_assemble_job(job_id, stage="stopped", label="stopped")
+                return
+
+            stage_label = f"scene {idx + 1}/{total_scenes}"
+            print(f"[CLIP ASSEMBLE] stage=preparing label={stage_label}")
+            progress = 10
+            if total_scenes > 0:
+                progress = 10 + int(((idx + 1) / total_scenes) * 60)
+            _update_clip_assemble_job(
+                job_id,
+                status="running",
+                stage="preparing",
+                label=stage_label,
+                current=idx + 1,
+                total=total_scenes,
+                progressPercent=max(10, min(70, progress)),
+            )
+
             scene_url = str(scene.videoUrl or "").strip()
             if not scene_url:
-                return JSONResponse(
-                    status_code=400,
-                    content={"ok": False, "code": "BAD_REQUEST", "hint": f"scene_{idx}_videoUrl_required"},
-                )
+                raise RuntimeError(f"scene_{idx}_videoUrl_required")
 
             scene_path, scene_err = _resolve_media_input(scene_url, temp_files)
             if scene_err or not scene_path:
@@ -4710,10 +4746,7 @@ def clip_assemble(payload: AssembleClipIn):
 
             scene_duration, probe_err = _ffprobe_duration(scene_path)
             if probe_err == "ffprobe_missing_install_and_add_to_PATH":
-                return JSONResponse(
-                    status_code=500,
-                    content={"ok": False, "code": "FFPROBE_MISSING", "hint": probe_err},
-                )
+                raise RuntimeError("FFPROBE_MISSING")
             if probe_err or scene_duration is None:
                 continue
 
@@ -4743,19 +4776,24 @@ def clip_assemble(payload: AssembleClipIn):
             ])
             if not ffmpeg_ok:
                 if ffmpeg_err == "ffmpeg_missing_install_and_add_to_PATH":
-                    return JSONResponse(
-                        status_code=500,
-                        content={"ok": False, "code": "FFMPEG_MISSING", "hint": ffmpeg_err},
-                    )
+                    raise RuntimeError("FFMPEG_MISSING")
                 continue
 
             prepared_scenes.append((trimmed_path, trim_duration))
 
         if not prepared_scenes:
-            return JSONResponse(
-                status_code=400,
-                content={"ok": False, "code": "ASSEMBLE_NO_VALID_SCENES", "hint": "no_scene_video_could_be_read"},
-            )
+            raise RuntimeError("ASSEMBLE_NO_VALID_SCENES")
+
+        print("[CLIP ASSEMBLE] stage=concat")
+        _update_clip_assemble_job(
+            job_id,
+            status="running",
+            stage="concat",
+            label="concat scenes",
+            progressPercent=80,
+            current=len(prepared_scenes),
+            total=total_scenes,
+        )
 
         concat_list_fd, concat_list_path = tempfile.mkstemp(prefix="clip_concat_", suffix=".txt")
         os.close(concat_list_fd)
@@ -4779,24 +4817,28 @@ def clip_assemble(payload: AssembleClipIn):
         ])
         if not concat_ok:
             if concat_err == "ffmpeg_missing_install_and_add_to_PATH":
-                return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": concat_err})
-            return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": concat_err})
+                raise RuntimeError("FFMPEG_MISSING")
+            raise RuntimeError(f"ASSEMBLE_FAILED:{concat_err}")
 
         final_filename = f"clip_final_{uuid4().hex}.mp4"
         final_path = os.path.join(str(ASSETS_DIR), final_filename)
         audio_applied = False
-        notice = None
 
         audio_url = str(payload.audioUrl or "").strip()
         if audio_url:
+            print("[CLIP ASSEMBLE] stage=audio_mux")
+            _update_clip_assemble_job(
+                job_id,
+                status="running",
+                stage="audio_mux",
+                label="adding audio",
+                progressPercent=92,
+            )
             audio_path, audio_err = _resolve_media_input(audio_url, temp_files)
             if not audio_err and audio_path:
                 audio_probe, audio_probe_err = _ffprobe_duration(audio_path)
                 if audio_probe_err == "ffprobe_missing_install_and_add_to_PATH":
-                    return JSONResponse(
-                        status_code=500,
-                        content={"ok": False, "code": "FFPROBE_MISSING", "hint": audio_probe_err},
-                    )
+                    raise RuntimeError("FFPROBE_MISSING")
                 if not audio_probe_err and audio_probe is not None:
                     audio_ok, audio_ffmpeg_err = _run_ffmpeg([
                         "ffmpeg", "-y",
@@ -4812,47 +4854,63 @@ def clip_assemble(payload: AssembleClipIn):
                     if audio_ok:
                         audio_applied = True
                     else:
-                        notice = "audio skipped"
                         if audio_ffmpeg_err == "ffmpeg_missing_install_and_add_to_PATH":
-                            return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": audio_ffmpeg_err})
+                            raise RuntimeError("FFMPEG_MISSING")
                         copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
                         if not copy_ok:
                             if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                                return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": copy_err})
-                            return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": copy_err})
+                                raise RuntimeError("FFMPEG_MISSING")
+                            raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
                 else:
-                    notice = "audio skipped"
                     copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
                     if not copy_ok:
                         if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                            return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": copy_err})
-                        return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": copy_err})
+                            raise RuntimeError("FFMPEG_MISSING")
+                        raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
             else:
-                notice = "audio skipped"
                 copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
                 if not copy_ok:
                     if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                        return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": copy_err})
-                    return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": copy_err})
+                        raise RuntimeError("FFMPEG_MISSING")
+                    raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
         else:
             copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
             if not copy_ok:
                 if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                    return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": copy_err})
-                return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": copy_err})
+                    raise RuntimeError("FFMPEG_MISSING")
+                raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
 
         if not os.path.isfile(final_path):
-            return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": "final_file_not_created"})
+            raise RuntimeError("final_file_not_created")
 
-        response = {
-            "ok": True,
-            "finalVideoUrl": _build_public_static_url(final_filename),
-            "sceneCount": len(prepared_scenes),
-            "audioApplied": audio_applied,
-        }
-        if notice:
-            response["notice"] = notice
-        return response
+        final_video_url = _build_public_static_url(final_filename)
+        print(f"[CLIP ASSEMBLE] done {final_video_url}")
+        _update_clip_assemble_job(
+            job_id,
+            status="done",
+            stage="done",
+            label="done",
+            progressPercent=100,
+            finalVideoUrl=final_video_url,
+            audioApplied=audio_applied,
+            sceneCount=len(prepared_scenes),
+            error=None,
+        )
+    except Exception as exc:
+        with CLIP_ASSEMBLE_JOBS_LOCK:
+            is_stopped = CLIP_ASSEMBLE_JOBS.get(job_id, {}).get("status") == "stopped"
+        if is_stopped:
+            _update_clip_assemble_job(job_id, stage="stopped", label="stopped")
+            return
+        message = str(exc)[:500]
+        print(f"[CLIP ASSEMBLE] error {message}")
+        _update_clip_assemble_job(
+            job_id,
+            status="error",
+            stage="error",
+            label="error",
+            error=message,
+        )
     finally:
         for pth in generated_temp_assets:
             try:
@@ -4866,6 +4924,62 @@ def clip_assemble(payload: AssembleClipIn):
                     os.remove(pth)
             except Exception:
                 pass
+
+
+@router.post("/clip/assemble")
+def clip_assemble(payload: AssembleClipIn):
+    scenes = payload.scenes or []
+    if not scenes:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "code": "BAD_REQUEST", "hint": "scenes_required_and_must_be_non_empty"},
+        )
+
+    job_id = uuid4().hex
+    with CLIP_ASSEMBLE_JOBS_LOCK:
+        CLIP_ASSEMBLE_JOBS[job_id] = {
+            "jobId": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "label": "queued",
+            "current": 0,
+            "total": len(scenes),
+            "progressPercent": 0,
+            "finalVideoUrl": None,
+            "audioApplied": False,
+            "sceneCount": 0,
+            "error": None,
+        }
+
+    threading.Thread(target=_run_clip_assemble_job, args=(job_id, payload), daemon=True).start()
+    return {"ok": True, "jobId": job_id}
+
+
+@router.get("/clip/assemble/status/{job_id}")
+def clip_assemble_status(job_id: str):
+    safe_job_id = str(job_id or "").strip()
+    with CLIP_ASSEMBLE_JOBS_LOCK:
+        job = CLIP_ASSEMBLE_JOBS.get(safe_job_id)
+        if not job:
+            return JSONResponse(
+                status_code=404,
+                content={"ok": False, "code": "ASSEMBLE_JOB_NOT_FOUND", "hint": "job_id_not_found_or_expired"},
+            )
+        return {"ok": True, **job}
+
+
+@router.post("/clip/assemble/stop/{job_id}")
+def clip_assemble_stop(job_id: str):
+    safe_job_id = str(job_id or "").strip()
+    with CLIP_ASSEMBLE_JOBS_LOCK:
+        job = CLIP_ASSEMBLE_JOBS.get(safe_job_id)
+        if not job:
+            return JSONResponse(
+                status_code=404,
+                content={"ok": False, "code": "ASSEMBLE_JOB_NOT_FOUND", "hint": "job_id_not_found_or_expired"},
+            )
+        job.update({"status": "stopped", "stage": "stopped", "label": "stopped", "error": None})
+    return {"ok": True, "jobId": safe_job_id, "status": "stopped"}
 
 
 @router.post("/clip/video")
