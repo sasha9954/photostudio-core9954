@@ -445,6 +445,25 @@ def _is_back_view_scene_prompt(prompt: str | None) -> bool:
     return any(marker in normalized_prompt for marker in back_view_markers)
 
 
+def _is_face_too_small_for_lipsync(prompt: str | None) -> bool:
+    normalized_prompt = str(prompt or "").strip().lower()
+    if not normalized_prompt:
+        return False
+
+    distance_markers = [
+        "wide shot",
+        "long shot",
+        "extreme long shot",
+        "figure becomes small",
+        "distant figure",
+        "character far away",
+        "silhouette in distance",
+        "tiny figure",
+    ]
+
+    return any(marker in normalized_prompt for marker in distance_markers)
+
+
 def _is_localhost_url(url: str) -> bool:
     try:
         host = (urlparse(str(url or "").strip()).hostname or "").strip().lower()
@@ -4578,11 +4597,17 @@ def clip_video(payload: ClipVideoIn):
         str(payload.videoPrompt or "").strip(),
         str(payload.transitionActionPrompt or "").strip(),
     ]).strip()
-    if mode == "lipsync" and _is_back_view_scene_prompt(guard_prompt):
-        payload.lipSync = False
-        is_lipsync = False
-        mode = "continuous"
-        print("[CLIP LIPSYNC GUARD] lipsync disabled because face is not visible in scene prompt")
+    if mode == "lipsync":
+        if _is_back_view_scene_prompt(guard_prompt):
+            payload.lipSync = False
+            is_lipsync = False
+            mode = "continuous"
+            print("[CLIP LIPSYNC GUARD] disabled (back view scene)")
+        elif _is_face_too_small_for_lipsync(guard_prompt):
+            payload.lipSync = False
+            is_lipsync = False
+            mode = "continuous"
+            print("[CLIP LIPSYNC GUARD] disabled (face too small / distant shot)")
 
     if mode == "lipsync":
         if not (settings.PIAPI_API_KEY or "").strip():
