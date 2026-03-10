@@ -1094,13 +1094,13 @@ def _adapt_outfit_prompt_for_character_refs(text: str, *, has_character_refs: bo
     adapted = value
     # Prefer visual character reference for wardrobe identity instead of text color guesses.
     adapted = re.sub(
-        r"\bwearing\s+(?:a|an|the)?\s*(?:[a-z]+\s+){0,3}(\w+\s+tracksuit)\b",
+        r"\bwearing\s+(?:a|an|the)?\s*(?:[a-z]+\s+){0,4}(tracksuit|hoodie|jacket|sportswear|outfit|suit)\b",
         r"wearing the same \1 from the character reference",
         adapted,
         flags=re.IGNORECASE,
     )
 
-    if "character reference" in adapted.lower() and "preserve the exact outfit color" not in adapted.lower():
+    if has_character_refs and "preserve the exact outfit color" not in adapted.lower():
         adapted = (
             f"{adapted}. preserve the exact outfit color, material, and logo placement from the character reference"
             if adapted
@@ -4728,6 +4728,7 @@ def clip_video(payload: ClipVideoIn):
     Do not change the color of the outfit.
     Do not redraw, distort, remove, or hallucinate logos or clothing patterns.
     Do not modify the design of the hoodie or pants during motion.
+    Keep the lower-body clothing appearance stable during motion.
 
     Motion should feel emotional, musical, and alive, but controlled enough to keep the outfit and logos intact.
     """
