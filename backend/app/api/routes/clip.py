@@ -210,6 +210,25 @@ def _extract_video_url_from_kie_payload(payload: object) -> str | None:
         return None
 
     if isinstance(payload, dict):
+        video_url = payload.get("video_url")
+        if isinstance(video_url, str) and video_url.startswith("http"):
+            return video_url
+
+        output = payload.get("output")
+        if isinstance(output, dict):
+            url = output.get("video_url") or output.get("url")
+            if isinstance(url, str) and url.startswith("http"):
+                return url
+
+        if isinstance(output, str) and output.startswith("http"):
+            return output
+
+        data = payload.get("data")
+        if isinstance(data, dict):
+            nested = _extract_video_url_from_kie_payload(data)
+            if nested:
+                return nested
+
         result_urls = payload.get("resultUrls") or payload.get("result_urls")
         if isinstance(result_urls, list):
             for item in result_urls:
