@@ -1070,7 +1070,7 @@ function StoryboardPlanNode({ id, data }) {
 
 function AssemblyNode({ id, data }) {
   const isAssembling = !!data?.isAssembling;
-  const canAssemble = !!data?.canAssemble && !isAssembling;
+  const canAssemble = !!data?.canAssemble;
   const status = data?.status || "empty";
   const finalVideoUrl = String(data?.result?.finalVideoUrl || "").trim();
 
@@ -1621,7 +1621,12 @@ Aspect ratio: ${imageFormat}`,
         body: JSON.stringify(assemblyPayload),
         signal: abortController.signal,
       });
-      const out = await res.json();
+      let out = null;
+      try {
+        out = await res.json();
+      } catch {
+        out = null;
+      }
       if (!res.ok) throw new Error(String(out?.detail || out?.message || out?.error || `HTTP ${res.status}`));
       const finalVideoUrl = String(out?.finalVideoUrl || out?.videoUrl || out?.url || "").trim();
       if (!finalVideoUrl) throw new Error("Сборка завершена, но finalVideoUrl не получен");
