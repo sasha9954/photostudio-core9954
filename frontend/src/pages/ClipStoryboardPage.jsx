@@ -1069,8 +1069,8 @@ function StoryboardPlanNode({ id, data }) {
 }
 
 function AssemblyNode({ id, data }) {
-  const isBuilding = !!data?.isBuilding;
-  const canAssemble = !!data?.canAssemble && !isBuilding;
+  const isAssembling = !!data?.isAssembling;
+  const canAssemble = !!data?.canAssemble && !isAssembling;
   const status = data?.status || "empty";
   const finalVideoUrl = String(data?.result?.finalVideoUrl || "").trim();
 
@@ -1090,9 +1090,18 @@ function AssemblyNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Длительность</span><strong>~{Math.round(Number(data?.durationSec || 0))} сек</strong></div>
         </div>
 
-        <button className={`clipSB_btn ${!canAssemble ? "clipSB_btnMuted" : ""}`} onClick={data?.onAssemble} disabled={!canAssemble} style={{ marginTop: 10 }}>
-          {isBuilding ? "Собираем клип..." : "Собрать клип"}
-        </button>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button className={`clipSB_btn ${!canAssemble ? "clipSB_btnMuted" : ""}`} onClick={data?.onAssemble} disabled={!canAssemble}>
+            {isAssembling ? "Собираем клип..." : "Собрать клип"}
+          </button>
+          {isAssembling ? (
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={data?.onStopAssemble}>
+              ⏹ stop
+            </button>
+          ) : null}
+        </div>
+
+        {isAssembling ? <div className="clipSB_hint" style={{ marginTop: 8 }}>⚙ assembling clip...</div> : null}
 
         {status === "empty" ? <div className="clipSB_hint" style={{ marginTop: 8 }}>Нужны готовые видео-сцены и подключённое аудио</div> : null}
         {data?.infoMessage ? <div className="clipSB_hint" style={{ marginTop: 8 }}>{data.infoMessage}</div> : null}
@@ -1275,6 +1284,7 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   const [assemblyError, setAssemblyError] = useState("");
   const [assemblyInfo, setAssemblyInfo] = useState("");
   const [assemblyResult, setAssemblyResult] = useState(null);
+  const [isAssembling, setIsAssembling] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState("");
 
   useEffect(() => {
@@ -1569,6 +1579,7 @@ Aspect ratio: ${imageFormat}`,
   }), [assemblyPayload]);
 
   const lastAssemblyPayloadSignatureRef = useRef("");
+  const assemblyAbortControllerRef = useRef(null);
 
   useEffect(() => {
     if (!assemblyPayloadSignature) return;
@@ -1582,31 +1593,51 @@ Aspect ratio: ${imageFormat}`,
 
     lastAssemblyPayloadSignatureRef.current = assemblyPayloadSignature;
 
-    if (assemblyBuildState === "building") return;
+    if (isAssembling) return;
 
     setAssemblyResult(null);
     setAssemblyError("");
     setAssemblyInfo("");
     setAssemblyBuildState("idle");
-  }, [assemblyPayloadSignature, assemblyBuildState]);
+  }, [assemblyPayloadSignature, isAssembling]);
 
   const handleAssemblyBuild = useCallback(async () => {
+    if (isAssembling) return;
     if (!assemblyPayload.scenes.length || !assemblyPayload.audioUrl) return;
 
+    const abortController = new AbortController();
+    assemblyAbortControllerRef.current = abortController;
+    setIsAssembling(true);
     setAssemblyBuildState("building");
     setAssemblyError("");
     setAssemblyInfo("");
     setAssemblyResult(null);
     try {
-      const out = await fetchJson("/api/clip/assemble", {
+      const res = await fetch(`${API_BASE}/api/clip/assemble`, {
         method: "POST",
-        body: assemblyPayload,
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(assemblyPayload),
+        signal: abortController.signal,
       });
+      const text = await res.text();
+      let out = null;
+      try {
+        out = text ? JSON.parse(text) : null;
+      } catch {
+        out = { raw: text };
+      }
+      if (!res.ok) throw new Error(String(out?.detail || out?.message || out?.error || `HTTP ${res.status}`));
       const finalVideoUrl = String(out?.finalVideoUrl || out?.videoUrl || out?.url || "").trim();
       if (!finalVideoUrl) throw new Error("Сборка завершена, но finalVideoUrl не получен");
       setAssemblyResult({ finalVideoUrl });
       setAssemblyBuildState("done");
     } catch (e) {
+      if (e?.name === "AbortError") {
+        setAssemblyBuildState("idle");
+        setAssemblyInfo("Сборка остановлена");
+        return;
+      }
       const message = String(e?.message || e);
       if (/HTTP\s*404|not\s*found/i.test(message)) {
         setAssemblyBuildState("ready");
@@ -1617,18 +1648,27 @@ Aspect ratio: ${imageFormat}`,
       setAssemblyBuildState("error");
       setAssemblyResult(null);
       setAssemblyError(message);
+    } finally {
+      if (assemblyAbortControllerRef.current === abortController) {
+        assemblyAbortControllerRef.current = null;
+      }
+      setIsAssembling(false);
     }
-  }, [assemblyPayload]);
+  }, [assemblyPayload, isAssembling]);
+
+  const handleAssemblyStop = useCallback(() => {
+    assemblyAbortControllerRef.current?.abort();
+  }, []);
 
   const assemblyStatus = useMemo(() => {
     const hasVideoScenes = assemblyPayload.scenes.length > 0;
     const hasAudio = !!assemblyPayload.audioUrl;
-    if (assemblyBuildState === "building") return "building";
+    if (isAssembling) return "building";
     if (assemblyBuildState === "done" && assemblyResult?.finalVideoUrl) return "done";
     if (assemblyBuildState === "error") return "error";
     if (!hasVideoScenes || !hasAudio) return "empty";
     return "ready";
-  }, [assemblyBuildState, assemblyPayload.audioUrl, assemblyPayload.scenes.length, assemblyResult?.finalVideoUrl]);
+  }, [isAssembling, assemblyBuildState, assemblyPayload.audioUrl, assemblyPayload.scenes.length, assemblyResult?.finalVideoUrl]);
 
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
@@ -2141,12 +2181,13 @@ onClipSec: (nodeId, value) => {
               format: assemblyPayload.format,
               durationSec: estimatedDurationSec,
               canAssemble: assemblyPayload.scenes.length > 0 && !!assemblyPayload.audioUrl,
-              isBuilding: assemblyBuildState === "building",
+              isAssembling,
               status: assemblyStatus,
               result: assemblyResult,
               errorMessage: assemblyError,
               infoMessage: assemblyInfo,
               onAssemble: handleAssemblyBuild,
+              onStopAssemble: handleAssemblyStop,
             },
           };
         }
@@ -2158,12 +2199,13 @@ return base;
       edges,
       storyboardScenesForAssembly.length,
       assemblyPayload,
-      assemblyBuildState,
+      isAssembling,
       assemblyStatus,
       assemblyResult,
       assemblyError,
       assemblyInfo,
       handleAssemblyBuild,
+      handleAssemblyStop,
     ]
   );
 
