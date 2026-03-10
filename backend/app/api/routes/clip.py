@@ -96,6 +96,9 @@ class AssembleClipIn(BaseModel):
 CLIP_ASSEMBLE_JOBS: dict[str, dict] = {}
 CLIP_ASSEMBLE_JOBS_LOCK = threading.Lock()
 
+CLIP_VIDEO_JOBS: dict[str, dict] = {}
+CLIP_VIDEO_JOBS_LOCK = threading.Lock()
+
 
 def _kie_headers() -> dict:
     return {
@@ -4982,6 +4985,90 @@ def clip_assemble_stop(job_id: str):
             )
         job.update({"status": "stopped", "stage": "stopped", "label": "stopped", "error": None, "updatedAt": time.time()})
     return {"ok": True, "jobId": safe_job_id, "status": "stopped"}
+
+
+def _normalize_clip_video_response_payload(response_obj) -> tuple[dict, int]:
+    if isinstance(response_obj, JSONResponse):
+        status_code = int(getattr(response_obj, "status_code", 500) or 500)
+        body_raw = getattr(response_obj, "body", b"{}")
+        try:
+            parsed = json.loads(body_raw.decode("utf-8")) if isinstance(body_raw, (bytes, bytearray)) else dict(body_raw or {})
+        except Exception:
+            parsed = {"ok": False, "code": "VIDEO_RESPONSE_PARSE_FAILED", "hint": "invalid_json_response"}
+        return parsed if isinstance(parsed, dict) else {"ok": False}, status_code
+
+    if isinstance(response_obj, dict):
+        return response_obj, 200
+
+    return {"ok": False, "code": "VIDEO_RESPONSE_INVALID", "hint": "unexpected_response_type"}, 500
+
+
+def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
+    with CLIP_VIDEO_JOBS_LOCK:
+        job = CLIP_VIDEO_JOBS.get(job_id)
+        if not job:
+            return
+        job.update({"status": "running", "updatedAt": time.time()})
+
+    try:
+        response_obj = clip_video(payload)
+        out, status_code = _normalize_clip_video_response_payload(response_obj)
+        status = "done" if status_code < 400 and bool(out.get("ok")) else "error"
+        with CLIP_VIDEO_JOBS_LOCK:
+            job = CLIP_VIDEO_JOBS.get(job_id)
+            if not job:
+                return
+            job.update({
+                "status": status,
+                "videoUrl": str(out.get("videoUrl") or "").strip(),
+                "mode": str(out.get("mode") or "").strip(),
+                "model": str(out.get("model") or "").strip(),
+                "providerJobId": str(out.get("taskId") or job.get("providerJobId") or "").strip(),
+                "requestedDurationSec": out.get("requestedDurationSec"),
+                "providerDurationSec": out.get("providerDurationSec"),
+                "error": None if status == "done" else str(out.get("details") or out.get("hint") or out.get("code") or f"HTTP_{status_code}"),
+                "updatedAt": time.time(),
+            })
+    except Exception as exc:
+        with CLIP_VIDEO_JOBS_LOCK:
+            job = CLIP_VIDEO_JOBS.get(job_id)
+            if not job:
+                return
+            job.update({"status": "error", "error": str(exc), "updatedAt": time.time()})
+
+
+@router.post("/clip/video/start")
+def clip_video_start(payload: ClipVideoIn):
+    scene_id = str(payload.sceneId or "").strip() or "scene"
+    job_id = uuid4().hex
+    with CLIP_VIDEO_JOBS_LOCK:
+        CLIP_VIDEO_JOBS[job_id] = {
+            "ok": True,
+            "jobId": job_id,
+            "sceneId": scene_id,
+            "providerJobId": None,
+            "status": "queued",
+            "videoUrl": None,
+            "mode": None,
+            "model": None,
+            "requestedDurationSec": None,
+            "providerDurationSec": None,
+            "error": None,
+            "updatedAt": time.time(),
+        }
+
+    threading.Thread(target=_run_clip_video_job, args=(job_id, payload), daemon=True).start()
+    return {"ok": True, "jobId": job_id, "sceneId": scene_id, "status": "queued"}
+
+
+@router.get("/clip/video/status/{job_id}")
+def clip_video_status(job_id: str):
+    safe_job_id = str(job_id or "").strip()
+    with CLIP_VIDEO_JOBS_LOCK:
+        job = CLIP_VIDEO_JOBS.get(safe_job_id)
+        if not job:
+            return {"ok": False, "status": "not_found", "code": "VIDEO_JOB_NOT_FOUND", "hint": "job_id_not_found_or_expired"}
+        return {"ok": True, **job}
 
 
 @router.post("/clip/video")

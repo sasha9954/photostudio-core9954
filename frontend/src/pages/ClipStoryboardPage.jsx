@@ -443,6 +443,90 @@ function getSceneTransitionPrompt(scene) {
   return String(scene?.transitionActionPrompt || scene?.videoPrompt || "").trim();
 }
 
+const SCENE_ROLE_FLOW = ["establishing", "reveal", "escalation", "hidden_detail", "payoff", "ending"];
+
+function normalizeSceneRole(role, idx = 0) {
+  const raw = String(role || "").trim().toLowerCase();
+  if (SCENE_ROLE_FLOW.includes(raw)) return raw;
+  return SCENE_ROLE_FLOW[Math.max(0, idx) % SCENE_ROLE_FLOW.length];
+}
+
+function normalizeForDupCheck(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNearDuplicateSceneText(a, b) {
+  const ta = normalizeForDupCheck(a);
+  const tb = normalizeForDupCheck(b);
+  if (!ta || !tb) return false;
+  if (ta === tb) return true;
+  const wa = new Set(ta.split(" ").filter(Boolean));
+  const wb = new Set(tb.split(" ").filter(Boolean));
+  if (!wa.size || !wb.size) return false;
+  let common = 0;
+  wa.forEach((w) => {
+    if (wb.has(w)) common += 1;
+  });
+  const ratio = common / Math.max(wa.size, wb.size);
+  return ratio >= 0.82;
+}
+
+function getRoleDiversityDirective(sceneRole) {
+  const role = normalizeSceneRole(sceneRole);
+  if (role === "establishing") return "Role: establishing. Show clear geography and baseline spatial relations of the same place.";
+  if (role === "reveal") return "Role: reveal. Expose a new meaningful layer of the same scene without changing location geometry.";
+  if (role === "escalation") return "Role: escalation. Increase tension with motion, framing or light shift, not by adding new major objects.";
+  if (role === "hidden_detail") return "Role: hidden detail. Focus on subtle detail that was present but unnoticed in the same scene.";
+  if (role === "payoff") return "Role: payoff. Deliver the strongest visual consequence of previous beats in the same world.";
+  return "Role: ending. Resolve the moment with visual closure while preserving scene continuity.";
+}
+
+function enforceSceneDiversityLocal(rawScenes) {
+  const scenes = Array.isArray(rawScenes) ? rawScenes : [];
+  return scenes.map((scene, idx) => {
+    const prev = idx > 0 ? scenes[idx - 1] : null;
+    const sceneRole = normalizeSceneRole(scene?.sceneRole, idx);
+    const currentText = String(scene?.sceneText || scene?.visualDescription || scene?.why || "").trim();
+    const prevText = String(prev?.sceneText || prev?.visualDescription || prev?.why || "").trim();
+    const isNearDup = isNearDuplicateSceneText(currentText, prevText);
+    const roleDirective = getRoleDiversityDirective(sceneRole);
+    const baseFramePrompt = String(scene?.framePrompt || scene?.imagePrompt || scene?.prompt || "").trim();
+    const baseVideoPrompt = String(scene?.videoPrompt || scene?.transitionActionPrompt || "").trim();
+
+    const patch = {
+      sceneRole,
+      framePrompt: baseFramePrompt ? `${baseFramePrompt}\n${roleDirective}` : roleDirective,
+      videoPrompt: baseVideoPrompt ? `${baseVideoPrompt}\n${roleDirective}` : roleDirective,
+    };
+
+    if (isNearDup && currentText) {
+      patch.sceneText = `${currentText} (${sceneRole.replace("_", " ")} beat; add new visual meaning relative to previous shot).`;
+    }
+
+    return { ...scene, ...patch };
+  });
+}
+
+function buildContinuousContinuityBridge({ scene, previousScene }) {
+  const roleDirective = getRoleDiversityDirective(scene?.sceneRole);
+  const baseline = [
+    "Continuous bridge between START and END of the SAME scene/time window.",
+    "Treat start and end images as one uninterrupted environment.",
+    "Do NOT introduce any new major objects, characters, vehicles, machines, buildings, or terrain features.",
+    "Do NOT alter core landscape geometry, topology, architecture layout, or object count.",
+    "No sudden appearing/disappearing subjects that are absent in both anchor frames.",
+    "Allowed: smooth camera motion, subtle natural motion, atmosphere, dust, light shift, micro-physics.",
+    roleDirective,
+  ];
+  const prevMemory = String(previousScene?.continuityMemory?.summary || scene?.previousContinuityMemory?.summary || "").trim();
+  if (prevMemory) baseline.push(`Carry continuity memory: ${prevMemory}`);
+  return baseline.join(" ");
+}
+
 function getSceneRequestedDurationSec(scene) {
   const explicit = normalizeDurationSec(scene?.requestedDurationSec);
   if (explicit != null) return explicit;
@@ -1302,6 +1386,7 @@ export default function ClipStoryboardPage() {
   const navigate = useNavigate();
   const accountKey = useMemo(() => getAccountKey(user) || "guest", [user]);
   const STORE_KEY = useMemo(() => `ps:clipStoryboard:v1:${accountKey}`, [accountKey]);
+  const VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:videoJob:v1:${accountKey}`, [accountKey]);
 
   const didHydrateRef = useRef(false);
   const isHydratingRef = useRef(true);
@@ -1310,6 +1395,11 @@ export default function ClipStoryboardPage() {
   const parseTimeoutRef = useRef(null);
   const activeParseNodeRef = useRef(null);
   const scenarioItemRefs = useRef(new Map());
+  const scenarioVideoSectionRef = useRef(null);
+  const scenarioVideoCardRef = useRef(null);
+  const scenarioVideoPollTimerRef = useRef(null);
+  const scenarioActiveVideoJobRef = useRef(null);
+  const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
 
   const [lastSavedAt, setLastSavedAt] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1501,7 +1591,6 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
 
   useEffect(() => {
     setScenarioVideoError("");
-    setScenarioVideoLoading(false);
     setScenarioVideoOpen(false);
   }, [scenarioEditor.selected]);
 
@@ -1536,6 +1625,95 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
     }));
   }, [scenarioNode?.id, setNodes]);
 
+  const stopScenarioVideoPolling = useCallback(() => {
+    if (scenarioVideoPollTimerRef.current) {
+      clearTimeout(scenarioVideoPollTimerRef.current);
+      scenarioVideoPollTimerRef.current = null;
+    }
+  }, []);
+
+  const persistActiveVideoJob = useCallback((job) => {
+    if (!job || !job.jobId) {
+      safeDel(VIDEO_JOB_STORE_KEY);
+      return;
+    }
+    safeSet(VIDEO_JOB_STORE_KEY, JSON.stringify(job));
+  }, [VIDEO_JOB_STORE_KEY]);
+
+  const clearActiveVideoJob = useCallback(() => {
+    scenarioActiveVideoJobRef.current = null;
+    safeDel(VIDEO_JOB_STORE_KEY);
+    stopScenarioVideoPolling();
+    setScenarioVideoLoading(false);
+  }, [VIDEO_JOB_STORE_KEY, stopScenarioVideoPolling]);
+
+  const startScenarioVideoPolling = useCallback((jobMeta) => {
+    if (!jobMeta?.jobId) return;
+    scenarioActiveVideoJobRef.current = { ...jobMeta };
+    persistActiveVideoJob(scenarioActiveVideoJobRef.current);
+    setScenarioVideoLoading(true);
+    stopScenarioVideoPolling();
+
+    const tick = async () => {
+      try {
+        const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(jobMeta.jobId)}`, { method: "GET" });
+        if (!out?.ok) throw new Error(out?.hint || out?.code || "video_status_failed");
+        const status = String(out?.status || "").toLowerCase();
+        const nextMeta = {
+          ...(scenarioActiveVideoJobRef.current || {}),
+          jobId: jobMeta.jobId,
+          providerJobId: String(out?.providerJobId || scenarioActiveVideoJobRef.current?.providerJobId || ""),
+          sceneId: String(out?.sceneId || scenarioActiveVideoJobRef.current?.sceneId || ""),
+          status,
+        };
+        scenarioActiveVideoJobRef.current = nextMeta;
+        persistActiveVideoJob(nextMeta);
+
+        if (status === "done") {
+          const sceneId = String(nextMeta.sceneId || "");
+          const idx = scenarioScenes.findIndex((x) => String(x?.id || "") === sceneId);
+          if (idx >= 0) {
+            updateScenarioScene(idx, {
+              videoUrl: String(out?.videoUrl || ""),
+              mode: String(out?.mode || ""),
+              model: String(out?.model || ""),
+              requestedDurationSec: normalizeDurationSec(out?.requestedDurationSec),
+              providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
+            });
+          }
+          clearActiveVideoJob();
+          return;
+        }
+
+        if (status === "error" || status === "stopped" || status === "not_found") {
+          setScenarioVideoError(String(out?.error || out?.hint || "video_job_failed"));
+          clearActiveVideoJob();
+          return;
+        }
+
+        scenarioVideoPollTimerRef.current = setTimeout(tick, 1800);
+      } catch (e) {
+        console.error(e);
+        scenarioVideoPollTimerRef.current = setTimeout(tick, 2400);
+      }
+    };
+
+    scenarioVideoPollTimerRef.current = setTimeout(tick, 250);
+  }, [clearActiveVideoJob, persistActiveVideoJob, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
+
+  useEffect(() => () => stopScenarioVideoPolling(), [stopScenarioVideoPolling]);
+
+  useEffect(() => {
+    const raw = safeGet(VIDEO_JOB_STORE_KEY);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed?.jobId) return;
+      startScenarioVideoPolling(parsed);
+    } catch {
+      safeDel(VIDEO_JOB_STORE_KEY);
+    }
+  }, [VIDEO_JOB_STORE_KEY, startScenarioVideoPolling]);
 
   const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
     if (!scenarioSelected) return;
@@ -1728,19 +1906,18 @@ Aspect ratio: ${imageFormat}`,
     const dur = Math.max(0, t1 - t0);
     const requestedDurationSec = dur;
 
+    const continuityBridgePrompt = transitionType === "continuous"
+      ? buildContinuousContinuityBridge({ scene: scenarioSelected, previousScene: scenarioPreviousScene })
+      : "";
+
     setScenarioVideoLoading(true);
     setScenarioVideoError("");
     try {
-      const endpoint = "/api/clip/video";
-      console.log("[CLIP VIDEO REQUEST]", {
-        sceneId,
-        lipSync: effectiveLipSync,
-        renderMode: effectiveRenderMode,
-        shotType: scenarioSelected?.shotType || "",
-        audioSliceUrl: scenarioSelected?.audioSliceUrl || "",
-        requestedDurationSec,
-        transitionType,
-      });
+      const endpoint = "/api/clip/video/start";
+      const transitionActionPrompt = [
+        continuityBridgePrompt,
+        getSceneTransitionPrompt(scenarioSelected),
+      ].filter(Boolean).join("\n");
       const out = await fetchJson(endpoint, {
         method: "POST",
         body: {
@@ -1750,7 +1927,7 @@ Aspect ratio: ${imageFormat}`,
           endImageUrl,
           audioSliceUrl: scenarioSelected.audioSliceUrl || "",
           videoPrompt: scenarioSelected.videoPrompt || "",
-          transitionActionPrompt: getSceneTransitionPrompt(scenarioSelected),
+          transitionActionPrompt,
           transitionType,
           requestedDurationSec,
           lipSync: effectiveLipSync,
@@ -1758,25 +1935,55 @@ Aspect ratio: ${imageFormat}`,
           shotType: scenarioSelected.shotType || "",
           sceneType: scenarioSelected.sceneType || "",
           format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
-          // TODO: Switch fully to transition-aware backend endpoint once available.
         },
       });
-      if (!out?.ok || !out?.videoUrl) throw new Error(out?.hint || out?.code || "video_generation_failed");
+
+      if (out?.ok && out?.jobId) {
+        startScenarioVideoPolling({
+          jobId: String(out.jobId),
+          providerJobId: String(out.providerJobId || ""),
+          sceneId,
+          status: "queued",
+        });
+        return;
+      }
+
+      // Fallback for environments where async endpoints are not available yet.
+      const legacyOut = await fetchJson("/api/clip/video", {
+        method: "POST",
+        body: {
+          sceneId,
+          imageUrl: frameImageUrl || effectiveStartImageUrl || endImageUrl,
+          startImageUrl: effectiveStartImageUrl,
+          endImageUrl,
+          audioSliceUrl: scenarioSelected.audioSliceUrl || "",
+          videoPrompt: scenarioSelected.videoPrompt || "",
+          transitionActionPrompt,
+          transitionType,
+          requestedDurationSec,
+          lipSync: effectiveLipSync,
+          renderMode: effectiveRenderMode,
+          shotType: scenarioSelected.shotType || "",
+          sceneType: scenarioSelected.sceneType || "",
+          format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
+        },
+      });
+      if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || "video_generation_failed");
       updateScenarioScene(scenarioEditor.selected, {
-        videoUrl: String(out.videoUrl || ""),
-        mode: String(out.mode || ""),
-        model: String(out.model || ""),
-        requestedDurationSec: normalizeDurationSec(out.requestedDurationSec),
-        providerDurationSec: normalizeDurationSec(out.providerDurationSec),
+        videoUrl: String(legacyOut.videoUrl || ""),
+        mode: String(legacyOut.mode || ""),
+        model: String(legacyOut.model || ""),
+        requestedDurationSec: normalizeDurationSec(legacyOut.requestedDurationSec),
+        providerDurationSec: normalizeDurationSec(legacyOut.providerDurationSec),
       });
       openNextSceneWithoutVideo(scenarioEditor.selected);
+      setScenarioVideoLoading(false);
     } catch (e) {
       console.error(e);
       setScenarioVideoError(String(e?.message || e));
-    } finally {
       setScenarioVideoLoading(false);
     }
-  }, [openNextSceneWithoutVideo, scenarioEditor.selected, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
+  }, [openNextSceneWithoutVideo, scenarioEditor.selected, scenarioPreviousScene, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, startScenarioVideoPolling, updateScenarioScene]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
@@ -1791,6 +1998,15 @@ Aspect ratio: ${imageFormat}`,
     if (!hasImage) return;
     setScenarioVideoOpen(true);
     setScenarioVideoError("");
+    setScenarioVideoFocusPulse(true);
+    window.setTimeout(() => setScenarioVideoFocusPulse(false), 1200);
+    const node = scenarioVideoCardRef.current || scenarioVideoSectionRef.current;
+    if (!node) return;
+    try {
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
+    } catch {
+      node.scrollIntoView();
+    }
   }, [scenarioSelected, scenarioSelectedEffectiveStartImageUrl]);
 
   const storyboardScenesForAssembly = useMemo(() => extractStoryboardScenesFromNodes(nodes), [nodes]);
@@ -2342,8 +2558,9 @@ onClipSec: (nodeId, value) => {
                   const audioDuration = Number(out?.audioDuration || 30);
                   const scenesRaw = Array.isArray(out?.scenes) ? out.scenes : [];
                   const validation = out?.plannerDebug?.validation || {};
+                  const diverseScenesRaw = enforceSceneDiversityLocal(scenesRaw);
 
-                  const scenes = scenesRaw
+                  const scenes = diverseScenesRaw
                     .map((s, idx) => {
                       const t0 = Number(s.start ?? s.t0 ?? 0);
                       const t1 = Number(s.end ?? s.t1 ?? 0);
@@ -2351,6 +2568,7 @@ onClipSec: (nodeId, value) => {
                       const transitionType = resolveSceneTransitionType(s);
                       return {
                         id: s.id || `s${String(idx + 1).padStart(2, "0")}`,
+                        sceneRole: normalizeSceneRole(s.sceneRole, idx),
                         start: t0,
                         end: t1,
                         t0,
@@ -3441,7 +3659,7 @@ const hydrate = useCallback(() => {
                     </div>
 
                     {scenarioVideoOpen ? (
-                      <div className="clipSB_scenarioEditRow clipSB_videoBlock">
+                      <div ref={scenarioVideoCardRef} className={`clipSB_scenarioEditRow clipSB_videoBlock${scenarioVideoFocusPulse ? " clipSB_videoBlockPulse" : ""}`}>
                         <div className="clipSB_hint" style={{ marginBottom: 8 }}>Видео сцены</div>
                         {scenarioSelectedTransitionType === "continuous" ? (
                           <div className="clipSB_videoPipelineRow">

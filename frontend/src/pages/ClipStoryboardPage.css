@@ -1246,3 +1246,19 @@ body.ps_clip_fullscreen .mainCol {
   0% { width: 0; }
   100% { width: 1.2em; }
 }
+
+.clipSB_videoBlock{
+  border:1px solid rgba(106,168,255,.24);
+  background:rgba(106,168,255,.06);
+  border-radius:12px;
+  padding:12px;
+}
+
+.clipSB_videoBlockPulse{
+  animation: clipSBVideoBlockPulse 1.1s ease;
+}
+
+@keyframes clipSBVideoBlockPulse {
+  0% { box-shadow: 0 0 0 0 rgba(106,168,255,.55); }
+  100% { box-shadow: 0 0 0 14px rgba(106,168,255,0); }
+}
