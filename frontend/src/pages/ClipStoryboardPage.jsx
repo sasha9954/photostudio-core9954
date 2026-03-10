@@ -1092,7 +1092,7 @@ function AssemblyNode({ id, data }) {
 
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button className={`clipSB_btn ${!canAssemble ? "clipSB_btnMuted" : ""}`} onClick={data?.onAssemble} disabled={!canAssemble}>
-            {isAssembling ? "Собираем клип..." : "Собрать клип"}
+            {isAssembling ? "⚙ Собираем клип..." : "Собрать клип"}
           </button>
           {isAssembling ? (
             <button className="clipSB_btn clipSB_btnSecondary" onClick={data?.onStopAssemble}>
@@ -1101,9 +1101,9 @@ function AssemblyNode({ id, data }) {
           ) : null}
         </div>
 
-        {isAssembling ? <div className="clipSB_hint" style={{ marginTop: 8 }}>⚙ assembling clip...</div> : null}
+        {isAssembling ? <div className="clipSB_hint" style={{ marginTop: 8 }}>⚙ Собираем клип...</div> : null}
 
-        {status === "empty" ? <div className="clipSB_hint" style={{ marginTop: 8 }}>Нужны готовые видео-сцены и подключённое аудио</div> : null}
+        {status === "empty" ? <div className="clipSB_hint" style={{ marginTop: 8 }}>Нужна хотя бы одна готовая видео-сцена</div> : null}
         {data?.infoMessage ? <div className="clipSB_hint" style={{ marginTop: 8 }}>{data.infoMessage}</div> : null}
         {status === "error" && data?.errorMessage ? <div className="clipSB_hint" style={{ marginTop: 8, color: "#ff8a8a" }}>{data.errorMessage}</div> : null}
 
@@ -1603,7 +1603,7 @@ Aspect ratio: ${imageFormat}`,
 
   const handleAssemblyBuild = useCallback(async () => {
     if (isAssembling) return;
-    if (!assemblyPayload.scenes.length || !assemblyPayload.audioUrl) return;
+    if (!assemblyPayload.scenes.length) return;
 
     const abortController = new AbortController();
     assemblyAbortControllerRef.current = abortController;
@@ -1613,20 +1613,15 @@ Aspect ratio: ${imageFormat}`,
     setAssemblyInfo("");
     setAssemblyResult(null);
     try {
-      const res = await fetch(`${API_BASE}/api/clip/assemble`, {
+      const assembleUrl = API_BASE ? `${API_BASE}/api/clip/assemble` : "/api/clip/assemble";
+      const res = await fetch(assembleUrl, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(assemblyPayload),
         signal: abortController.signal,
       });
-      const text = await res.text();
-      let out = null;
-      try {
-        out = text ? JSON.parse(text) : null;
-      } catch {
-        out = { raw: text };
-      }
+      const out = await res.json();
       if (!res.ok) throw new Error(String(out?.detail || out?.message || out?.error || `HTTP ${res.status}`));
       const finalVideoUrl = String(out?.finalVideoUrl || out?.videoUrl || out?.url || "").trim();
       if (!finalVideoUrl) throw new Error("Сборка завершена, но finalVideoUrl не получен");
@@ -1662,13 +1657,12 @@ Aspect ratio: ${imageFormat}`,
 
   const assemblyStatus = useMemo(() => {
     const hasVideoScenes = assemblyPayload.scenes.length > 0;
-    const hasAudio = !!assemblyPayload.audioUrl;
     if (isAssembling) return "building";
     if (assemblyBuildState === "done" && assemblyResult?.finalVideoUrl) return "done";
     if (assemblyBuildState === "error") return "error";
-    if (!hasVideoScenes || !hasAudio) return "empty";
+    if (!hasVideoScenes) return "empty";
     return "ready";
-  }, [isAssembling, assemblyBuildState, assemblyPayload.audioUrl, assemblyPayload.scenes.length, assemblyResult?.finalVideoUrl]);
+  }, [isAssembling, assemblyBuildState, assemblyPayload.scenes.length, assemblyResult?.finalVideoUrl]);
 
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
@@ -2180,7 +2174,7 @@ onClipSec: (nodeId, value) => {
               hasAudio: !!assemblyPayload.audioUrl,
               format: assemblyPayload.format,
               durationSec: estimatedDurationSec,
-              canAssemble: assemblyPayload.scenes.length > 0 && !!assemblyPayload.audioUrl,
+              canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
               isAssembling,
               status: assemblyStatus,
               result: assemblyResult,
