@@ -1556,6 +1556,40 @@ Aspect ratio: ${imageFormat}`,
     });
   }, [globalAudioUrlRaw, storyboardScenesForAssembly]);
 
+  const assemblyPayloadSignature = useMemo(() => JSON.stringify({
+    audioUrl: assemblyPayload.audioUrl,
+    format: assemblyPayload.format,
+    scenes: assemblyPayload.scenes.map((s) => ({
+      sceneId: s.sceneId,
+      videoUrl: s.videoUrl,
+      requestedDurationSec: s.requestedDurationSec,
+      transitionType: s.transitionType,
+      order: s.order,
+    })),
+  }), [assemblyPayload]);
+
+  const lastAssemblyPayloadSignatureRef = useRef("");
+
+  useEffect(() => {
+    if (!assemblyPayloadSignature) return;
+
+    if (!lastAssemblyPayloadSignatureRef.current) {
+      lastAssemblyPayloadSignatureRef.current = assemblyPayloadSignature;
+      return;
+    }
+
+    if (lastAssemblyPayloadSignatureRef.current === assemblyPayloadSignature) return;
+
+    lastAssemblyPayloadSignatureRef.current = assemblyPayloadSignature;
+
+    if (assemblyBuildState === "building") return;
+
+    setAssemblyResult(null);
+    setAssemblyError("");
+    setAssemblyInfo("");
+    setAssemblyBuildState("idle");
+  }, [assemblyPayloadSignature, assemblyBuildState]);
+
   const handleAssemblyBuild = useCallback(async () => {
     if (!assemblyPayload.scenes.length || !assemblyPayload.audioUrl) return;
 
