@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     KIE_POLL_INTERVAL_SEC: int = 5
     KIE_POLL_TIMEOUT_SEC: int = 300
 
+    # PiAPI / OmniHuman lip-sync generation
+    PIAPI_API_KEY: str = ""
+    PIAPI_BASE_URL: str = "https://api.piapi.ai/api/v1"
+    PIAPI_OMNIHUMAN_MODEL: str = "omni-human"
+    PIAPI_OMNIHUMAN_TASK: str = "omni-human-1.5"
+    PIAPI_POLL_INTERVAL_SEC: int = 5
+    PIAPI_POLL_TIMEOUT_SEC: int = 300
+
     model_config = {
         "env_file": str(ENV_FILE),
         "env_file_encoding": "utf-8",

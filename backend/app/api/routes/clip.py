@@ -312,6 +312,84 @@ def _kie_query_task(task_id: str) -> tuple[dict | None, str | None]:
         return None, f"queryTask_parse_error:{str(exc)[:300]}"
 
 
+def _piapi_headers() -> dict:
+    return {
+        "X-API-Key": str(settings.PIAPI_API_KEY or "").strip(),
+        "Content-Type": "application/json",
+    }
+
+
+def _piapi_create_omnihuman_task(*, image_url: str, audio_url: str, prompt: str) -> tuple[str | None, str | None]:
+    endpoint = f"{settings.PIAPI_BASE_URL.rstrip('/')}/task"
+    body = {
+        "model": str(settings.PIAPI_OMNIHUMAN_MODEL or "omni-human").strip() or "omni-human",
+        "task_type": str(settings.PIAPI_OMNIHUMAN_TASK or "omni-human-1.5").strip() or "omni-human-1.5",
+        "input": {
+            "image_url": str(image_url or "").strip(),
+            "audio_url": str(audio_url or "").strip(),
+            "prompt": str(prompt or "").strip(),
+            "fast_mode": True,
+        },
+    }
+
+    try:
+        resp = requests.post(endpoint, headers=_piapi_headers(), json=body, timeout=60)
+        if resp.status_code >= 400:
+            return None, f"createTask_http_{resp.status_code}:{resp.text[:300]}"
+        data = resp.json()
+    except RequestException as exc:
+        return None, f"createTask_request_error:{str(exc)[:300]}"
+    except Exception as exc:
+        return None, f"createTask_parse_error:{str(exc)[:300]}"
+
+    task_id = _extract_task_id(data)
+    if not task_id:
+        return None, f"createTask_task_id_missing:{str(data)[:300]}"
+    return task_id, None
+
+
+def _piapi_get_task(task_id: str) -> tuple[dict | None, str | None]:
+    endpoint = f"{settings.PIAPI_BASE_URL.rstrip('/')}/task/{task_id}"
+    try:
+        resp = requests.get(endpoint, headers=_piapi_headers(), timeout=60)
+        if resp.status_code >= 400:
+            return None, f"queryTask_http_{resp.status_code}:{resp.text[:300]}"
+        data = resp.json()
+        if not isinstance(data, dict):
+            return None, f"queryTask_malformed:{str(data)[:300]}"
+        return data, None
+    except RequestException as exc:
+        return None, f"queryTask_request_error:{str(exc)[:300]}"
+    except Exception as exc:
+        return None, f"queryTask_parse_error:{str(exc)[:300]}"
+
+
+def _piapi_wait_for_omnihuman_video(task_id: str, *, poll_interval_sec: int, poll_timeout_sec: int) -> tuple[str | None, str | None, str | None]:
+    started = time.time()
+    fail_statuses = {"failed", "fail", "error", "canceled", "cancelled"}
+
+    while time.time() - started < poll_timeout_sec:
+        data, err = _piapi_get_task(task_id)
+        if err:
+            return None, "PIAPI_TASK_FAILED", err
+
+        status = _extract_task_status(data or {})
+        if status in {"success", "succeeded", "done", "completed"}:
+            video_url = _extract_video_url_from_kie_payload(data)
+            if not video_url and isinstance(data, dict):
+                video_url = _extract_video_url_from_kie_payload(data.get("data"))
+            if not video_url:
+                return None, "PIAPI_RESULT_MISSING", "result_url_not_found_in_piapi_payload"
+            return video_url, None, None
+
+        if status in fail_statuses:
+            return None, "PIAPI_TASK_FAILED", f"piapi_task_status_{status}"
+
+        time.sleep(max(1, int(poll_interval_sec)))
+
+    return None, "PIAPI_TASK_TIMEOUT", f"poll_timeout_{poll_timeout_sec}s"
+
+
 def _normalize_clip_video_transition_type(value: str | None) -> str:
     raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     if not raw:
@@ -2083,8 +2161,8 @@ def _apply_lipsync_performance_rules(*, scenes: list[dict], duration: float, voc
             obj["lipSync"] = True
             obj["isLipSync"] = True
             obj["renderMode"] = "avatar_lipsync"
-            obj["provider"] = "kie"
-            obj["model"] = "kling/ai-avatar-pro"
+            obj["provider"] = "piapi"
+            obj["model"] = "omni-human-1.5"
             obj["shotType"] = shot_type
             obj["mouthVisible"] = True
             obj["requestedDurationSec"] = round(max(3.0, min(5.0, seg_dur if seg_dur > 0 else 4.0)), 3)
@@ -4414,12 +4492,6 @@ def clip_audio_slice(payload: AudioSliceIn):
 
 @router.post("/clip/video")
 def clip_video(payload: ClipVideoIn):
-    if not (settings.KIE_API_KEY or "").strip():
-        return JSONResponse(
-            status_code=500,
-            content={"ok": False, "code": "KIE_NOT_CONFIGURED", "hint": "missing_KIE_API_KEY", "details": "Set KIE_API_KEY in environment."},
-        )
-
     scene_id = str(payload.sceneId or "").strip() or "scene"
     transition_type = _normalize_clip_video_transition_type(payload.transitionType)
     render_mode = str(payload.renderMode or "").strip().lower()
@@ -4438,6 +4510,18 @@ def clip_video(payload: ClipVideoIn):
         mode = "continuous"
     else:
         mode = "single"
+
+    if mode == "lipsync":
+        if not (settings.PIAPI_API_KEY or "").strip():
+            return JSONResponse(
+                status_code=500,
+                content={"ok": False, "code": "PIAPI_NOT_CONFIGURED", "hint": "missing_PIAPI_API_KEY", "details": "Set PIAPI_API_KEY in environment."},
+            )
+    elif not (settings.KIE_API_KEY or "").strip():
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "code": "KIE_NOT_CONFIGURED", "hint": "missing_KIE_API_KEY", "details": "Set KIE_API_KEY in environment."},
+        )
 
     print(
         "[CLIP VIDEO ROUTING] "
@@ -4565,22 +4649,11 @@ def clip_video(payload: ClipVideoIn):
         print(f"[CLIP LIPSYNC AUDIO] provider_audio_url={provider_audio_url}")
 
     if mode == "lipsync":
-        selected_model = (settings.KIE_VIDEO_MODEL_LIPSYNC or "").strip()
+        selected_model = str(settings.PIAPI_OMNIHUMAN_TASK or "omni-human-1.5").strip() or "omni-human-1.5"
     elif mode == "continuous":
         selected_model = (settings.KIE_VIDEO_MODEL_CONTINUOUS or "").strip()
     else:
         selected_model = (settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
-
-    if mode == "lipsync" and not selected_model:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "ok": False,
-                "code": "KIE_MODEL_NOT_CONFIGURED",
-                "hint": "lipsync_model_is_empty",
-                "details": "Set KIE_VIDEO_MODEL_LIPSYNC for lipSync mode.",
-            },
-        )
 
     if mode == "continuous" and not selected_model:
         return JSONResponse(
@@ -4593,7 +4666,7 @@ def clip_video(payload: ClipVideoIn):
             },
         )
 
-    if not selected_model:
+    if mode != "lipsync" and not selected_model:
         return JSONResponse(
             status_code=500,
             content={
@@ -4614,7 +4687,6 @@ def clip_video(payload: ClipVideoIn):
         requested_duration = max(3, min(5, requested_duration))
     else:
         requested_duration = max(1, min(10, requested_duration))
-    # Provider supports only 5s / 10s variants.
     provider_duration = "5" if requested_duration <= 5.0 else "10"
     provider_duration_sec = int(provider_duration)
 
@@ -4639,137 +4711,103 @@ def clip_video(payload: ClipVideoIn):
     if mode == "lipsync":
         print(f"[CLIP VIDEO] provider_audio_url={provider_audio_url}")
 
-    task_id, create_err = _kie_create_video_task(
-        model=selected_model,
-        image_url=provider_image_url,
-        start_image_url=provider_start_image_url,
-        end_image_url=provider_end_image_url,
-        prompt=effective_prompt,
-        duration=provider_duration,
-        audio_url=provider_audio_url,
-        send_audio=send_audio_to_provider,
-        aspect_ratio=output_format,
-        mode=mode,
-    )
-    if create_err or not task_id:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "ok": False,
-                "code": "KIE_CREATE_TASK_FAILED",
-                "hint": "provider_create_task_error",
-                "details": create_err or "create_task_failed",
-            },
+    if mode == "lipsync":
+        task_id, create_err = _piapi_create_omnihuman_task(
+            image_url=provider_image_url,
+            audio_url=provider_audio_url,
+            prompt=effective_prompt,
         )
+        if create_err or not task_id:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "ok": False,
+                    "code": "PIAPI_CREATE_TASK_FAILED",
+                    "hint": "provider_create_task_error",
+                    "details": create_err or "create_task_failed",
+                },
+            )
 
-    print("[KIE] task created:", task_id)
-
-    poll_interval_sec = max(1, int(settings.KIE_POLL_INTERVAL_SEC or 5))
-    poll_timeout_sec = max(10, int(settings.KIE_POLL_TIMEOUT_SEC or 300))
-    started = time.time()
-
-    video_url = None
-    wait_code = None
-    wait_hint = None
-    wait_details = None
-
-    fail_statuses = {"failed", "fail", "error", "canceled", "cancelled"}
-    fail_detail_keys = [
-        "message",
-        "error",
-        "reason",
-        "failReason",
-        "fail_reason",
-        "msg",
-        "data",
-        "result",
-        "resultJson",
-        "output",
-    ]
-
-    while time.time() - started < poll_timeout_sec:
-        data, err = _kie_query_task(task_id)
-        if err:
-            wait_code = "KIE_TASK_FAILED"
-            wait_hint = err
-            break
-
-        status = _extract_task_status(data or {})
-        print("[KIE] polling status:", status)
-
-        if status in fail_statuses:
-            try:
-                print("[KIE] polling raw:", json.dumps(data, ensure_ascii=False)[:4000])
-            except Exception:
-                print("[KIE] polling raw:", str(data)[:4000])
-
-            fail_details = {}
-            if isinstance(data, dict):
-                for key in fail_detail_keys:
-                    value = data.get(key)
-                    if value not in (None, "", [], {}):
-                        fail_details[key] = value
-
-                nested_data = data.get("data")
-                if isinstance(nested_data, dict):
-                    for key in fail_detail_keys:
-                        value = nested_data.get(key)
-                        if value not in (None, "", [], {}):
-                            fail_details[f"data.{key}"] = value
-
-            if fail_details:
-                try:
-                    print("[KIE] fail details:", json.dumps(fail_details, ensure_ascii=False)[:4000])
-                except Exception:
-                    print("[KIE] fail details:", str(fail_details)[:4000])
-            else:
-                print("[KIE] fail details:", "not_found")
-
-        if status in {"success", "succeeded", "done", "completed"}:
-            video_url = _extract_video_url_from_kie_payload(data)
-            if not video_url and isinstance(data, dict):
-                video_url = _extract_video_url_from_kie_payload(data.get("data"))
-            if not video_url:
-                wait_code = "KIE_RESULT_MISSING"
-                wait_hint = "result_url_not_found_in_kie_payload"
-            break
-
-        if status in fail_statuses:
-            wait_code = "KIE_TASK_FAILED"
-            wait_hint = f"kie_task_status_{status}"
-            wait_details = str(data)[:1000]
-            break
-
-        time.sleep(poll_interval_sec)
-
-    if not wait_code and not video_url:
-        wait_code = "KIE_TASK_TIMEOUT"
-        wait_hint = f"poll_timeout_{poll_timeout_sec}s"
-
-    if wait_code or not video_url:
-        print("[KIE] error:", wait_code, wait_hint)
-        status_code = {
-            "KIE_TASK_TIMEOUT": 504,
-            "KIE_RESULT_MISSING": 500,
-            "KIE_TASK_FAILED": 500,
-        }.get(wait_code or "", 500)
-        return JSONResponse(
-            status_code=status_code,
-            content={
-                "ok": False,
-                "code": wait_code or "KIE_TASK_FAILED",
-                "hint": wait_hint or "video_generation_failed",
-                "details": wait_details or "KIE task did not return a playable video URL.",
-            },
+        print("[PIAPI] task created:", task_id)
+        poll_interval_sec = max(1, int(settings.PIAPI_POLL_INTERVAL_SEC or 5))
+        poll_timeout_sec = max(10, int(settings.PIAPI_POLL_TIMEOUT_SEC or 300))
+        video_url, wait_code, wait_hint = _piapi_wait_for_omnihuman_video(
+            task_id,
+            poll_interval_sec=poll_interval_sec,
+            poll_timeout_sec=poll_timeout_sec,
         )
+        if wait_code or not video_url:
+            print("[PIAPI] error:", wait_code, wait_hint)
+            status_code = {
+                "PIAPI_TASK_TIMEOUT": 504,
+                "PIAPI_RESULT_MISSING": 500,
+                "PIAPI_TASK_FAILED": 500,
+            }.get(wait_code or "", 500)
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "ok": False,
+                    "code": wait_code or "PIAPI_TASK_FAILED",
+                    "hint": wait_hint or "video_generation_failed",
+                    "details": "PIAPI OmniHuman task did not return a playable video URL.",
+                },
+            )
+        print("[PIAPI] video url:", video_url)
+    else:
+        task_id, create_err = _kie_create_video_task(
+            model=selected_model,
+            image_url=provider_image_url,
+            start_image_url=provider_start_image_url,
+            end_image_url=provider_end_image_url,
+            prompt=effective_prompt,
+            duration=provider_duration,
+            audio_url=provider_audio_url,
+            send_audio=send_audio_to_provider,
+            aspect_ratio=output_format,
+            mode=mode,
+        )
+        if create_err or not task_id:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "ok": False,
+                    "code": "KIE_CREATE_TASK_FAILED",
+                    "hint": "provider_create_task_error",
+                    "details": create_err or "create_task_failed",
+                },
+            )
 
-    print("[KIE] video url:", video_url)
+        print("[KIE] task created:", task_id)
+        poll_interval_sec = max(1, int(settings.KIE_POLL_INTERVAL_SEC or 5))
+        poll_timeout_sec = max(10, int(settings.KIE_POLL_TIMEOUT_SEC or 300))
+        video_url, wait_code, wait_hint = _kie_wait_for_video_result(
+            task_id,
+            poll_interval_sec=poll_interval_sec,
+            poll_timeout_sec=poll_timeout_sec,
+        )
+        if wait_code or not video_url:
+            print("[KIE] error:", wait_code, wait_hint)
+            status_code = {
+                "KIE_TASK_TIMEOUT": 504,
+                "KIE_RESULT_MISSING": 500,
+                "KIE_TASK_FAILED": 500,
+            }.get(wait_code or "", 500)
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "ok": False,
+                    "code": wait_code or "KIE_TASK_FAILED",
+                    "hint": wait_hint or "video_generation_failed",
+                    "details": "KIE task did not return a playable video URL.",
+                },
+            )
+        print("[KIE] video url:", video_url)
 
     return {
         "ok": True,
         "sceneId": scene_id,
         "videoUrl": video_url,
-        "provider": "kie",
+        "provider": "piapi" if mode == "lipsync" else "kie",
         "model": selected_model,
         "taskId": task_id,
         "mode": mode,
