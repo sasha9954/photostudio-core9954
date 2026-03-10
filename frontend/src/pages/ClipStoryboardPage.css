@@ -538,7 +538,7 @@
 }
 
 .react-flow__edge:hover .react-flow__edge-path {
-  stroke: rgba(120, 255, 220, 0.95);
+  stroke-width: 2.6;
 }
 
 

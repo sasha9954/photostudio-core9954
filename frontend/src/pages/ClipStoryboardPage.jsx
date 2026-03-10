@@ -41,6 +41,50 @@ function isBrainInput(handleId) {
   return handleId === "audio" || handleId === "text" || handleId === "ref_character" || handleId === "ref_location" || handleId === "ref_style" || handleId === "ref_items";
 }
 
+const EDGE_STYLE_BY_KIND = {
+  audio: { color: PORT_COLORS.audio, strokeWidth: 2.1 },
+  text: { color: PORT_COLORS.text, strokeWidth: 2.1 },
+  ref_character: { color: PORT_COLORS.ref_character, strokeWidth: 2.1 },
+  ref_location: { color: PORT_COLORS.ref_location, strokeWidth: 2.1 },
+  ref_style: { color: PORT_COLORS.ref_style, strokeWidth: 2.1 },
+  ref_items: { color: PORT_COLORS.ref_items, strokeWidth: 2.1 },
+  plan: { color: PORT_COLORS.plan, strokeWidth: 2.4 },
+  storyboard_to_assembly: { color: PORT_COLORS.assembly, strokeWidth: 2.35 },
+  brain_to_assembly: { color: PORT_COLORS.brain, strokeWidth: 2.25 },
+  assembly: { color: PORT_COLORS.assembly, strokeWidth: 2.2 },
+  default: { color: "#8c8c8c", strokeWidth: 2 },
+};
+
+function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "", targetType = "", existingKind = "" }) {
+  if (targetType === "brainNode" && isBrainInput(targetHandle)) return targetHandle;
+
+  if (sourceType === "brainNode" && sourceHandle === "plan" && targetType === "storyboardNode" && targetHandle === "plan_in") {
+    return "plan";
+  }
+
+  if (sourceType === "storyboardNode" && sourceHandle === "plan_out" && targetType === "assemblyNode") {
+    return "storyboard_to_assembly";
+  }
+
+  if (sourceType === "brainNode" && targetType === "assemblyNode") return "brain_to_assembly";
+  if (existingKind && EDGE_STYLE_BY_KIND[existingKind]) return existingKind;
+  if (targetType === "assemblyNode") return "assembly";
+  return "default";
+}
+
+function getEdgePresentation(input) {
+  const kind = detectEdgeKind(input);
+  const visual = EDGE_STYLE_BY_KIND[kind] || EDGE_STYLE_BY_KIND.default;
+  return {
+    kind,
+    animated: false,
+    style: {
+      stroke: visual.color,
+      strokeWidth: visual.strokeWidth,
+    },
+  };
+}
+
 const SCENARIO_OPTIONS = [
   { value: "clip", label: "клип" },
   { value: "kino", label: "кино" },
@@ -1266,9 +1310,31 @@ useEffect(() => {
 
   const defaultEdges = useMemo(
     () => [
-      { id: "e-audio-brain", source: "audio", sourceHandle: "audio", target: "brain", targetHandle: "audio", style: { stroke: portColor("audio"), strokeWidth: 2 }, data: { kind: "audio" } },
-      { id: "e-text-brain", source: "text", sourceHandle: "text", target: "brain", targetHandle: "text", style: { stroke: portColor("text"), strokeWidth: 2 }, data: { kind: "text" } },
-      { id: "e-brain-assembly", source: "brain", target: "assembly", style: { stroke: portColor("assembly"), strokeWidth: 2 }, data: { kind: "assembly" } },
+      {
+        id: "e-audio-brain",
+        source: "audio",
+        sourceHandle: "audio",
+        target: "brain",
+        targetHandle: "audio",
+        ...getEdgePresentation({ sourceType: "audioNode", sourceHandle: "audio", targetType: "brainNode", targetHandle: "audio" }),
+        data: { kind: "audio" },
+      },
+      {
+        id: "e-text-brain",
+        source: "text",
+        sourceHandle: "text",
+        target: "brain",
+        targetHandle: "text",
+        ...getEdgePresentation({ sourceType: "textNode", sourceHandle: "text", targetType: "brainNode", targetHandle: "text" }),
+        data: { kind: "text" },
+      },
+      {
+        id: "e-brain-assembly",
+        source: "brain",
+        target: "assembly",
+        ...getEdgePresentation({ sourceType: "brainNode", targetType: "assemblyNode" }),
+        data: { kind: "brain_to_assembly" },
+      },
     ],
     []
   );
@@ -2593,7 +2659,27 @@ const hydrate = useCallback(() => {
         });
       const cleanEdges = savedEdges
         .filter((e) => e && typeof e.id === "string" && e.source && e.target)
-        .map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null, style: e.style, animated: e.animated, data: e.data }));
+        .map((e) => {
+          const sourceNode = cleanNodes.find((n) => n.id === e.source);
+          const targetNode = cleanNodes.find((n) => n.id === e.target);
+          const presentation = getEdgePresentation({
+            sourceHandle: e.sourceHandle || "",
+            targetHandle: e.targetHandle || "",
+            sourceType: sourceNode?.type || "",
+            targetType: targetNode?.type || "",
+            existingKind: e?.data?.kind || "",
+          });
+          return {
+            id: e.id,
+            source: e.source,
+            sourceHandle: e.sourceHandle || null,
+            target: e.target,
+            targetHandle: e.targetHandle || null,
+            style: presentation.style,
+            animated: presentation.animated,
+            data: { ...(e.data || {}), kind: presentation.kind },
+          };
+        });
 
       const hydratedNodes = cleanNodes.length ? cleanNodes : defaultNodes;
       const hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
@@ -2817,7 +2903,13 @@ const hydrate = useCallback(() => {
 
           // remove old edge(s) that already occupy the same handle
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === h));
-          return addEdge({ ...params, animated: false, style: { stroke: portColor(h), strokeWidth: 2 }, data: { kind: h } }, cleaned);
+          const presentation = getEdgePresentation({
+            sourceHandle: params.sourceHandle || "",
+            targetHandle: h,
+            sourceType: src.type,
+            targetType: dst.type,
+          });
+          return addEdge({ ...params, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
 
         // --- validate PLAN route: BRAIN(plan) -> STORYBOARD(plan_in) ---
@@ -2825,12 +2917,24 @@ const hydrate = useCallback(() => {
           if (dst.type === "storyboardNode" && (params.targetHandle || "") === "plan_in") {
             // only one plan edge into storyboard
             const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === "plan_in"));
-            return addEdge({ ...params, animated: false, style: { stroke: portColor("plan"), strokeWidth: 2 }, data: { kind: "plan" } }, cleaned);
+            const presentation = getEdgePresentation({
+              sourceHandle: params.sourceHandle || "",
+              targetHandle: params.targetHandle || "",
+              sourceType: src.type,
+              targetType: dst.type,
+            });
+            return addEdge({ ...params, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
           }
         }
 
         // default: allow
-        return addEdge({ ...params, animated: false }, eds);
+        const presentation = getEdgePresentation({
+          sourceHandle: params.sourceHandle || "",
+          targetHandle: params.targetHandle || "",
+          sourceType: src.type,
+          targetType: dst.type,
+        });
+        return addEdge({ ...params, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, eds);
       });
     },
     [setEdges, nodes]
