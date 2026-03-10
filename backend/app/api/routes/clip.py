@@ -77,6 +77,21 @@ class ClipVideoIn(BaseModel):
     audioSliceUrl: str | None = None
 
 
+class AssembleSceneIn(BaseModel):
+    sceneId: str | None = None
+    videoUrl: str
+    requestedDurationSec: int | float | None = None
+    providerDurationSec: int | float | None = None
+    mode: str | None = None
+    model: str | None = None
+
+
+class AssembleClipIn(BaseModel):
+    audioUrl: str | None = None
+    format: str | None = "9:16"
+    scenes: list[AssembleSceneIn]
+
+
 def _kie_headers() -> dict:
     return {
         "Authorization": f"Bearer {settings.KIE_API_KEY}",
@@ -745,6 +760,98 @@ def _ffmpeg_audio_slice(input_path: str, output_path: str, t0: float, t1: float)
         return False, err[:500]
     except FileNotFoundError:
         return False, "ffmpeg_missing_install_and_add_to_PATH"
+
+
+def _run_ffmpeg(cmd: list[str]) -> tuple[bool, str]:
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        return False, "ffmpeg_missing_install_and_add_to_PATH"
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout or "ffmpeg_failed").strip()[:500]
+    return True, ""
+
+
+def _ffprobe_duration(path: str) -> tuple[float | None, str | None]:
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None, "ffprobe_missing_install_and_add_to_PATH"
+    if proc.returncode != 0:
+        return None, (proc.stderr or proc.stdout or "ffprobe_failed").strip()[:500]
+    try:
+        duration = float((proc.stdout or "").strip())
+    except Exception:
+        return None, "ffprobe_duration_parse_failed"
+    if duration <= 0:
+        return None, "ffprobe_duration_non_positive"
+    return duration, None
+
+
+def _resolve_media_input(url: str, temp_files: list[str]) -> tuple[str | None, str | None]:
+    source = str(url or "").strip()
+    if not source:
+        return None, "media_url_empty"
+
+    def _resolve_static_path(path_value: str) -> str | None:
+        if path_value.startswith("/static/assets/"):
+            name = os.path.basename(path_value[len("/static/assets/"):])
+        elif path_value.startswith("/assets/"):
+            name = os.path.basename(path_value[len("/assets/"):])
+        elif path_value.startswith("static/assets/"):
+            name = os.path.basename(path_value[len("static/assets/"):])
+        else:
+            return None
+        if not name:
+            return None
+        candidate = os.path.join(str(ASSETS_DIR), name)
+        if os.path.isfile(candidate):
+            return candidate
+        return None
+
+    if os.path.isfile(source):
+        return source, None
+
+    parsed = urlparse(source)
+    path = parsed.path or ""
+    static_candidate = _resolve_static_path(path or source)
+    if static_candidate:
+        return static_candidate, None
+
+    is_http = parsed.scheme in {"http", "https"}
+    if not is_http:
+        return None, "unsupported_media_url"
+
+    try:
+        response = requests.get(source, timeout=60)
+        response.raise_for_status()
+    except RequestException as exc:
+        return None, f"download_failed:{str(exc)[:220]}"
+
+    suffix = os.path.splitext(path)[1] or ".bin"
+    fd, temp_path = tempfile.mkstemp(prefix="clip_assemble_", suffix=suffix)
+    os.close(fd)
+    with open(temp_path, "wb") as f:
+        f.write(response.content)
+    temp_files.append(temp_path)
+    return temp_path, None
+
+
+def _build_public_static_url(filename: str) -> str:
+    return _asset_url(filename)
 
 
 def _debug_audio_slice(audio_url: str, resolved_path: str | None) -> None:
@@ -4570,6 +4677,159 @@ def clip_audio_slice(payload: AudioSliceIn):
         "duration": round(t1 - t0, 3),
         "audioSliceBackendDurationSec": round(t1 - t0, 3),
     }
+
+
+
+@router.post("/clip/assemble")
+def clip_assemble(payload: AssembleClipIn):
+    scenes = payload.scenes or []
+    if not scenes:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "code": "BAD_REQUEST", "hint": "scenes_required_and_must_be_non_empty"},
+        )
+
+    _ensure_assets_dir()
+    temp_files: list[str] = []
+    prepared_scenes: list[tuple[str, float]] = []
+
+    try:
+        for idx, scene in enumerate(scenes):
+            scene_url = str(scene.videoUrl or "").strip()
+            if not scene_url:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "code": "BAD_REQUEST", "hint": f"scene_{idx}_videoUrl_required"},
+                )
+
+            scene_path, scene_err = _resolve_media_input(scene_url, temp_files)
+            if scene_err or not scene_path:
+                continue
+
+            scene_duration, probe_err = _ffprobe_duration(scene_path)
+            if probe_err or scene_duration is None:
+                continue
+
+            requested = scene.requestedDurationSec
+            if requested is None:
+                requested = scene.providerDurationSec
+            if requested is None:
+                requested = 5
+            try:
+                requested_duration = max(0.1, float(requested))
+            except Exception:
+                requested_duration = 5.0
+
+            trim_duration = min(scene_duration, requested_duration)
+            trimmed_filename = f"clip_assembled_scene_{idx}_{uuid4().hex}.mp4"
+            trimmed_path = os.path.join(str(ASSETS_DIR), trimmed_filename)
+            ffmpeg_ok, ffmpeg_err = _run_ffmpeg([
+                "ffmpeg", "-y",
+                "-i", scene_path,
+                "-t", f"{trim_duration:.3f}",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-preset", "veryfast",
+                "-an",
+                trimmed_path,
+            ])
+            if not ffmpeg_ok:
+                if ffmpeg_err == "ffmpeg_missing_install_and_add_to_PATH":
+                    return JSONResponse(
+                        status_code=500,
+                        content={"ok": False, "code": "FFMPEG_MISSING", "hint": ffmpeg_err},
+                    )
+                continue
+
+            prepared_scenes.append((trimmed_path, trim_duration))
+
+        if not prepared_scenes:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "ASSEMBLE_NO_VALID_SCENES", "hint": "no_scene_video_could_be_read"},
+            )
+
+        concat_list_fd, concat_list_path = tempfile.mkstemp(prefix="clip_concat_", suffix=".txt")
+        os.close(concat_list_fd)
+        temp_files.append(concat_list_path)
+        with open(concat_list_path, "w", encoding="utf-8") as f:
+            for pth, _ in prepared_scenes:
+                escaped = pth.replace("'", "'\''")
+                f.write(f"file '{escaped}'\n")
+
+        assembled_no_audio = os.path.join(str(ASSETS_DIR), f"clip_final_base_{uuid4().hex}.mp4")
+        concat_ok, concat_err = _run_ffmpeg([
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_list_path,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-preset", "veryfast",
+            assembled_no_audio,
+        ])
+        if not concat_ok:
+            if concat_err == "ffmpeg_missing_install_and_add_to_PATH":
+                return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": concat_err})
+            return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": concat_err})
+
+        final_filename = f"clip_final_{uuid4().hex}.mp4"
+        final_path = os.path.join(str(ASSETS_DIR), final_filename)
+        audio_applied = False
+        notice = None
+
+        audio_url = str(payload.audioUrl or "").strip()
+        if audio_url:
+            audio_path, audio_err = _resolve_media_input(audio_url, temp_files)
+            if not audio_err and audio_path:
+                audio_probe, audio_probe_err = _ffprobe_duration(audio_path)
+                if not audio_probe_err and audio_probe is not None:
+                    audio_ok, audio_ffmpeg_err = _run_ffmpeg([
+                        "ffmpeg", "-y",
+                        "-i", assembled_no_audio,
+                        "-i", audio_path,
+                        "-map", "0:v:0",
+                        "-map", "1:a:0",
+                        "-c:v", "copy",
+                        "-c:a", "aac",
+                        "-shortest",
+                        final_path,
+                    ])
+                    if audio_ok:
+                        audio_applied = True
+                    else:
+                        notice = "audio skipped"
+                        if audio_ffmpeg_err == "ffmpeg_missing_install_and_add_to_PATH":
+                            return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": audio_ffmpeg_err})
+                        _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+                else:
+                    notice = "audio skipped"
+                    _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+            else:
+                notice = "audio skipped"
+                _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+        else:
+            _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+
+        if not os.path.isfile(final_path):
+            return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": "final_file_not_created"})
+
+        response = {
+            "ok": True,
+            "finalVideoUrl": _build_public_static_url(final_filename),
+            "sceneCount": len(prepared_scenes),
+            "audioApplied": audio_applied,
+        }
+        if notice:
+            response["notice"] = notice
+        return response
+    finally:
+        for pth in temp_files:
+            try:
+                if os.path.isfile(pth):
+                    os.remove(pth)
+            except Exception:
+                pass
 
 
 @router.post("/clip/video")
