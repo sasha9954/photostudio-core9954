@@ -1073,7 +1073,7 @@ function AssemblyNode({ id, data }) {
   const canAssemble = !!data?.canAssemble;
   const status = data?.status || "empty";
   const result = data?.result || null;
-  const finalVideoUrl = String(data?.result?.finalVideoUrl || "").trim();
+  const finalVideoUrl = resolveAssetUrl(data?.result?.finalVideoUrl);
   const resultSceneCount = Number(result?.sceneCount || 0);
   const audioApplied = !!result?.audioApplied;
 
@@ -1107,9 +1107,18 @@ function AssemblyNode({ id, data }) {
         {isAssembling ? (
           <div className="clipSB_assemblyProgress">
             <div className="clipSB_assemblyProgressTitle">⚙ Собираем клип...</div>
-            <div className="clipSB_assemblyProgressSub">Подготавливаем итоговый ролик</div>
+            <div className="clipSB_assemblyProgressSub">{data?.assemblyStageLabel || "Подготавливаем итоговый ролик"}</div>
+            {Number(data?.assemblyStageCurrent || 0) > 0 && Number(data?.assemblyStageTotal || 0) > 0 ? (
+              <div className="clipSB_assemblyProgressSub">{Number(data?.assemblyStageCurrent || 0)} из {Number(data?.assemblyStageTotal || 0)}</div>
+            ) : null}
+            {data?.assemblyStage ? (
+              <div className="clipSB_assemblyProgressSub">Этап: {data.assemblyStage}</div>
+            ) : null}
             <div className="clipSB_assemblyProgressTrack">
-              <div className="clipSB_assemblyProgressBar" />
+              <div
+                className="clipSB_assemblyProgressBar"
+                style={{ width: `${Math.max(6, Math.min(100, Number(data?.progressPercent || 0)))}%` }}
+              />
             </div>
           </div>
         ) : null}
@@ -1304,6 +1313,12 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   const [assemblyInfo, setAssemblyInfo] = useState("");
   const [assemblyResult, setAssemblyResult] = useState(null);
   const [isAssembling, setIsAssembling] = useState(false);
+  const [assemblyJobId, setAssemblyJobId] = useState("");
+  const [assemblyProgressPercent, setAssemblyProgressPercent] = useState(0);
+  const [assemblyStage, setAssemblyStage] = useState("");
+  const [assemblyStageLabel, setAssemblyStageLabel] = useState("");
+  const [assemblyStageCurrent, setAssemblyStageCurrent] = useState(0);
+  const [assemblyStageTotal, setAssemblyStageTotal] = useState(0);
   const [lightboxUrl, setLightboxUrl] = useState("");
 
   useEffect(() => {
@@ -1599,6 +1614,7 @@ Aspect ratio: ${imageFormat}`,
 
   const lastAssemblyPayloadSignatureRef = useRef("");
   const assemblyAbortControllerRef = useRef(null);
+  const assemblyPollTimerRef = useRef(null);
 
   useEffect(() => {
     if (!assemblyPayloadSignature) return;
@@ -1618,7 +1634,92 @@ Aspect ratio: ${imageFormat}`,
     setAssemblyError("");
     setAssemblyInfo("");
     setAssemblyBuildState("idle");
+    setAssemblyJobId("");
+    setAssemblyProgressPercent(0);
+    setAssemblyStage("");
+    setAssemblyStageLabel("");
+    setAssemblyStageCurrent(0);
+    setAssemblyStageTotal(0);
   }, [assemblyPayloadSignature, isAssembling]);
+
+  const stopAssemblyPolling = useCallback(() => {
+    if (assemblyPollTimerRef.current) {
+      clearInterval(assemblyPollTimerRef.current);
+      assemblyPollTimerRef.current = null;
+    }
+  }, []);
+
+  const startAssemblyPolling = useCallback((jobId) => {
+    if (!jobId) return;
+    stopAssemblyPolling();
+    const statusUrl = API_BASE
+      ? `${API_BASE}/api/clip/assemble/status/${encodeURIComponent(jobId)}`
+      : `/api/clip/assemble/status/${encodeURIComponent(jobId)}`;
+
+    const tick = async () => {
+      try {
+        const res = await fetch(statusUrl, { credentials: "include" });
+        let out = null;
+        try {
+          out = await res.json();
+        } catch {
+          out = null;
+        }
+        if (!res.ok) throw new Error(String(out?.detail || out?.message || out?.hint || `HTTP ${res.status}`));
+
+        const status = String(out?.status || "").toLowerCase();
+        setAssemblyProgressPercent(Number(out?.progressPercent || 0));
+        setAssemblyStage(String(out?.stage || ""));
+        setAssemblyStageLabel(String(out?.label || ""));
+        setAssemblyStageCurrent(Number(out?.current || 0));
+        setAssemblyStageTotal(Number(out?.total || 0));
+
+        if (status === "done") {
+          stopAssemblyPolling();
+          const finalVideoUrl = String(out?.finalVideoUrl || "").trim();
+          if (!finalVideoUrl) throw new Error("Сборка завершена, но finalVideoUrl не получен");
+          setAssemblyResult({
+            finalVideoUrl,
+            audioApplied: !!out?.audioApplied,
+            sceneCount: Number(out?.sceneCount || assemblyPayload.scenes.length || 0),
+          });
+          setAssemblyBuildState("done");
+          setAssemblyInfo("");
+          setIsAssembling(false);
+          setNodes((prev) => [...prev]);
+          return;
+        }
+
+        if (status === "error") {
+          stopAssemblyPolling();
+          setAssemblyBuildState("error");
+          setAssemblyError(String(out?.error || "Ошибка сборки"));
+          setIsAssembling(false);
+          return;
+        }
+
+        if (status === "stopped") {
+          stopAssemblyPolling();
+          setAssemblyBuildState("idle");
+          setAssemblyInfo("Сборка остановлена");
+          setIsAssembling(false);
+          return;
+        }
+      } catch (e) {
+        stopAssemblyPolling();
+        setAssemblyBuildState("error");
+        setAssemblyError(String(e?.message || e || "Ошибка запроса статуса"));
+        setIsAssembling(false);
+      }
+    };
+
+    tick();
+    assemblyPollTimerRef.current = setInterval(tick, 900);
+  }, [assemblyPayload.scenes.length, setNodes, stopAssemblyPolling]);
+
+  useEffect(() => {
+    return () => stopAssemblyPolling();
+  }, [stopAssemblyPolling]);
 
   const handleAssemblyBuild = useCallback(async () => {
     if (isAssembling) return;
@@ -1626,11 +1727,19 @@ Aspect ratio: ${imageFormat}`,
 
     const abortController = new AbortController();
     assemblyAbortControllerRef.current = abortController;
-    setIsAssembling(true);
-    setAssemblyBuildState("building");
     setAssemblyError("");
     setAssemblyInfo("");
     setAssemblyResult(null);
+    setAssemblyProgressPercent(0);
+    setAssemblyStage("");
+    setAssemblyStageLabel("");
+    setAssemblyStageCurrent(0);
+    setAssemblyStageTotal(0);
+    setAssemblyJobId("");
+
+    setIsAssembling(true);
+    setAssemblyBuildState("building");
+
     try {
       const assembleUrl = API_BASE ? `${API_BASE}/api/clip/assemble` : "/api/clip/assemble";
       const res = await fetch(assembleUrl, {
@@ -1647,42 +1756,42 @@ Aspect ratio: ${imageFormat}`,
         out = null;
       }
       if (!res.ok) throw new Error(String(out?.detail || out?.message || out?.error || `HTTP ${res.status}`));
-      const finalVideoUrl = String(out?.finalVideoUrl || out?.videoUrl || out?.url || "").trim();
-      if (!finalVideoUrl) throw new Error("Сборка завершена, но finalVideoUrl не получен");
-      setAssemblyResult({
-        finalVideoUrl,
-        audioApplied: !!out?.audioApplied,
-        sceneCount: Number(out?.sceneCount || assemblyPayload.scenes.length || 0),
-      });
-      setAssemblyBuildState("done");
-      setNodes((prev) => [...prev]);
+      const jobId = String(out?.jobId || "").trim();
+      if (!jobId) throw new Error("Сборка запущена, но jobId не получен");
+
+      setAssemblyJobId(jobId);
+      startAssemblyPolling(jobId);
     } catch (e) {
       if (e?.name === "AbortError") {
         setAssemblyBuildState("idle");
         setAssemblyInfo("Сборка остановлена");
         return;
       }
-      const message = String(e?.message || e);
-      if (/HTTP\s*404|not\s*found/i.test(message)) {
-        setAssemblyBuildState("ready");
-        setAssemblyInfo("Endpoint /api/clip/assemble пока не подключён. Payload для сборки уже готов.");
-        console.info("assembly_payload_preview", assemblyPayload);
-        return;
-      }
       setAssemblyBuildState("error");
       setAssemblyResult(null);
-      setAssemblyError(message);
+      setAssemblyError(String(e?.message || e));
+      setIsAssembling(false);
     } finally {
       if (assemblyAbortControllerRef.current === abortController) {
         assemblyAbortControllerRef.current = null;
       }
-      setIsAssembling(false);
     }
-  }, [assemblyPayload, isAssembling, setNodes]);
+  }, [assemblyPayload, isAssembling, startAssemblyPolling]);
 
   const handleAssemblyStop = useCallback(() => {
     assemblyAbortControllerRef.current?.abort();
-  }, []);
+    stopAssemblyPolling();
+    if (assemblyJobId) {
+      const stopUrl = API_BASE
+        ? `${API_BASE}/api/clip/assemble/stop/${encodeURIComponent(assemblyJobId)}`
+        : `/api/clip/assemble/stop/${encodeURIComponent(assemblyJobId)}`;
+      fetch(stopUrl, { method: "POST", credentials: "include" }).catch(() => {});
+    }
+    setIsAssembling(false);
+    setAssemblyBuildState("idle");
+    setAssemblyInfo("Сборка остановлена");
+    setAssemblyJobId("");
+  }, [assemblyJobId, stopAssemblyPolling]);
 
   const assemblyStatus = useMemo(() => {
     const hasVideoScenes = assemblyPayload.scenes.length > 0;
@@ -1715,6 +1824,12 @@ Aspect ratio: ${imageFormat}`,
           result: assemblyResult,
           errorMessage: assemblyError,
           infoMessage: assemblyInfo,
+          assemblyJobId,
+          progressPercent: assemblyProgressPercent,
+          assemblyStage,
+          assemblyStageLabel,
+          assemblyStageCurrent,
+          assemblyStageTotal,
           onAssemble: handleAssemblyBuild,
           onStopAssemble: handleAssemblyStop,
         },
@@ -1728,6 +1843,12 @@ Aspect ratio: ${imageFormat}`,
     assemblyResult,
     assemblyError,
     assemblyInfo,
+    assemblyJobId,
+    assemblyProgressPercent,
+    assemblyStage,
+    assemblyStageLabel,
+    assemblyStageCurrent,
+    assemblyStageTotal,
     handleAssemblyBuild,
     handleAssemblyStop,
     setNodes,
@@ -2249,6 +2370,12 @@ onClipSec: (nodeId, value) => {
               result: assemblyResult,
               errorMessage: assemblyError,
               infoMessage: assemblyInfo,
+              assemblyJobId,
+              progressPercent: assemblyProgressPercent,
+              assemblyStage,
+              assemblyStageLabel,
+              assemblyStageCurrent,
+              assemblyStageTotal,
               onAssemble: handleAssemblyBuild,
               onStopAssemble: handleAssemblyStop,
             },
@@ -2267,6 +2394,12 @@ return base;
       assemblyResult,
       assemblyError,
       assemblyInfo,
+      assemblyJobId,
+      assemblyProgressPercent,
+      assemblyStage,
+      assemblyStageLabel,
+      assemblyStageCurrent,
+      assemblyStageTotal,
       handleAssemblyBuild,
       handleAssemblyStop,
     ]
