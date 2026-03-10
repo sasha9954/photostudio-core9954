@@ -4685,6 +4685,23 @@ def clip_video(payload: ClipVideoIn):
             },
         )
 
+    if selected_model == "omni-human-1.5" and mode == "lipsync":
+        effective_prompt += """
+    The character should perform naturally with subtle human motion.
+    Allow small natural head movement, facial expression changes, and slight upper body motion to convey emotion.
+    Avoid strong body rotations, avoid turning the hips or legs sideways, and avoid large pose changes.
+
+    Keep the body mostly facing the camera with gentle natural movement.
+    Movement should be minimal but alive, not static.
+
+    Preserve the clothing exactly as in the reference image.
+    Preserve all visible logos and clothing details.
+    Do not redraw, distort, remove, or hallucinate logos or clothing patterns.
+    Do not modify the design of the hoodie or pants during motion.
+
+    Motion should feel natural and emotional but controlled, avoiding movements that would hide or distort clothing details.
+    """
+
     if mode != "lipsync" and not selected_model:
         return JSONResponse(
             status_code=500,
