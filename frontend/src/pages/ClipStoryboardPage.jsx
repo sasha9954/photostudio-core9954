@@ -345,10 +345,6 @@ function canGenerateComfyImage(plannerInput = {}) {
   return VISUAL_ANCHOR_ROLES.some((role) => Array.isArray(refsByRole[role]) && refsByRole[role].length > 0);
 }
 
-function countMeaningfulVisualAnchors(refsByRole = {}) {
-  return VISUAL_ANCHOR_ROLES.filter((role) => Array.isArray(refsByRole[role]) && refsByRole[role].length > 0).length;
-}
-
 function inferPropAnchorLabel(refsByRole = {}) {
   const firstProp = (Array.isArray(refsByRole.props) ? refsByRole.props : [])[0];
   const name = String(firstProp?.name || "").trim();
@@ -376,6 +372,12 @@ function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } = {}) {
     promptBlocksUsed: promptBasis ? 4 : 0,
     promptBasis,
     usedPrimaryImage: plannerInput?.primaryImageAnchor?.url || "",
+    pipelineFlow: [
+      "brain uses all meaningful refs for scene planning",
+      "brain emits per-scene imagePrompt + videoPrompt + continuity",
+      "scene image is generated first",
+      "scene video uses generated image + scene video prompt + scene rules",
+    ],
   };
 }
 
@@ -453,6 +455,11 @@ function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {} } = {
       referenceDescriptions: plannerMeta.referenceSummary?.byRole || {},
       referenceSummary: plannerMeta.referenceSummary?.text || "",
       sceneParticipantsSummary: [scenePrimary, ...sceneSecondary].join(", "),
+      hasSceneImage: false,
+      sceneImageStatus: "pending_generation",
+      hasSceneVideo: false,
+      sceneVideoStatus: "pending_scene_image",
+      sceneOutputRule: "scene image is generated first; scene video uses generated image + video prompt + scene rules",
       lyricFragment: plannerInput.narrativeSource.includes("audio") ? "audio-guided beat" : "",
       timingReason: plannerInput.timelineSource,
       beatAnchor: plannerInput.timelineSource === "audio rhythm" ? "audio_bar" : "logic_step",
@@ -3349,7 +3356,6 @@ onClipSec: (nodeId, value) => {
           const timelineSource = meaningfulAudio ? 'audio rhythm' : 'logical timing';
 
           const meaningfulRefRoles = Object.entries(refsByRole).filter(([, refs]) => refs.length > 0).map(([role]) => role);
-          const meaningfulVisualAnchorCount = countMeaningfulVisualAnchors(refsByRole);
           const sceneRoleModel = deriveSceneRoles({ refsByRole });
           const castLabels = sceneRoleModel.cast.length ? sceneRoleModel.cast.join(' + ') : 'none connected';
 
@@ -3365,14 +3371,14 @@ onClipSec: (nodeId, value) => {
           const warnings = [];
           const critical = [];
           if (narrativeSource === 'none') critical.push('Недостаточно входных данных');
-          if (narrativeSource === 'audio') warnings.push('Сюжет будет выведен из аудио');
-          if (narrativeSource === 'text') warnings.push('Тайминг будет логическим, без музыкального ритма');
-          if (outputValue === 'comfy image' && !canGenerateComfyImage({ refsByRole })) {
-            critical.push('Для comfy image нужен минимум один image anchor');
+          if (meaningfulRefRoles.length > 0) {
+            warnings.push('Все подключённые ref-ноды участвуют в построении сцен');
           }
-          if (outputValue === 'comfy image' && meaningfulVisualAnchorCount > 1) {
-            warnings.push('Для comfy image будет выбран 1 главный image anchor');
+          if (!canGenerateComfyImage({ refsByRole }) && (meaningfulText || meaningfulAudio)) {
+            warnings.push('Визуальные сцены будут синтезированы из текста, аудио и режима');
           }
+          if (!meaningfulText && (meaningfulAudio || meaningfulRefRoles.length > 0)) warnings.push('Сюжет будет выведен из аудио и референсов');
+          if (!meaningfulAudio && meaningfulText) warnings.push('Таймфреймы будут построены логически, без музыкального ритма');
           if (outputValue === 'comfy text' && !hasComfyTextPrompt({ meaningfulText })) {
             warnings.push('Для comfy text желательно добавить richer text prompt');
           }
@@ -3419,6 +3425,7 @@ onClipSec: (nodeId, value) => {
             styleCompact: `${stylePreset}${refsByRole.style.length ? ' + ref' : ''}`,
             sourceArbitration: narrativeSource,
             outputMode: outputValue,
+            pipelineFlow: 'brain → per-scene prompts/rules → scene image → scene video',
           };
 
           return {
@@ -3494,6 +3501,7 @@ onClipSec: (nodeId, value) => {
                           refsByRoleSummary: referenceSummary,
                           plannerMeta: { ...plannerMeta, globalContinuity },
                           debugFields,
+                          pipelineFlow: debugFields.pipelineFlow,
                           parseStatus: 'ready',
                         },
                       }
@@ -4651,10 +4659,10 @@ const hydrate = useCallback(() => {
                     ))}
                   </div>
                   {active === 'SCENES' ? (
-                    scenes.length ? <div className="clipSB_planList">{scenes.map((sc) => <div key={sc.sceneId} className="clipSB_planRow"><div className="clipSB_planTime">{sc.title}</div><div className="clipSB_planText">{sc.description}<br/>primary: {sc.primaryRole} • secondary: {(sc.secondaryRoles || []).join(', ')}<br/>continuity: {sc.continuity}</div></div>)}</div> : <div className="clipSB_empty">Нет mock сцен. Нажми «Разобрать» в COMFY BRAIN.</div>
+                    scenes.length ? <div className="clipSB_planList">{scenes.map((sc) => <div key={sc.sceneId} className="clipSB_planRow"><div className="clipSB_planTime">{sc.title}</div><div className="clipSB_planText">{sc.description}<br/>primary: {sc.primaryRole} • secondary: {(sc.secondaryRoles || []).join(', ')}<br/>continuity: {sc.continuity}<br/>scene output: {sc.sceneOutputRule || 'scene image first'}</div></div>)}</div> : <div className="clipSB_empty">Нет mock сцен. Нажми «Разобрать» в COMFY BRAIN.</div>
                   ) : null}
                   {active === 'PROMPT' ? <div className="clipSB_comfyPrompt"><div className="clipSB_small">{scenes[0]?.imagePrompt || 'no image prompt'}<br />{scenes[0]?.videoPrompt || 'no video prompt'}</div><pre className="clipSB_comfyPromptPre">{JSON.stringify(scenes[0] || {}, null, 2)}</pre></div> : null}
-                  {active === 'DEBUG' ? <div className="clipSB_comfyDebug"><div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'} • {node?.data?.output || 'comfy image'}</div><div className="clipSB_small">narrative source: {node?.data?.narrativeSource || 'none'}</div><div className="clipSB_small">style preset: {node?.data?.stylePreset || 'realism'}</div><div className="clipSB_small">primary role: {node?.data?.debugFields?.primaryRole || 'character_1'}</div><div className="clipSB_small">secondary roles: {(node?.data?.debugFields?.secondaryRoles || []).join(', ') || 'none'}</div><div className="clipSB_small">cast: {(node?.data?.debugFields?.cast || []).join(', ') || 'none'}</div><div className="clipSB_small">prompt length: {node?.data?.debugFields?.promptLength || 0} • lines: {node?.data?.debugFields?.promptLines || 0}</div><div className="clipSB_small">warnings: {(Array.isArray(node?.data?.warnings) ? node.data.warnings.join(' | ') : '') || 'none'}</div></div> : null}
+                  {active === 'DEBUG' ? <div className="clipSB_comfyDebug"><div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'} • {node?.data?.output || 'comfy image'}</div><div className="clipSB_small">narrative source: {node?.data?.narrativeSource || 'none'}</div><div className="clipSB_small">style preset: {node?.data?.stylePreset || 'realism'}</div><div className="clipSB_small">primary role: {node?.data?.debugFields?.primaryRole || 'character_1'}</div><div className="clipSB_small">secondary roles: {(node?.data?.debugFields?.secondaryRoles || []).join(', ') || 'none'}</div><div className="clipSB_small">cast: {(node?.data?.debugFields?.cast || []).join(', ') || 'none'}</div><div className="clipSB_small">prompt length: {node?.data?.debugFields?.promptLength || 0} • lines: {node?.data?.debugFields?.promptLines || 0}</div><div className="clipSB_small">pipeline: {(Array.isArray(node?.data?.pipelineFlow) ? node.data.pipelineFlow.join(' → ') : (Array.isArray(node?.data?.debugFields?.pipelineFlow) ? node.data.debugFields.pipelineFlow.join(' → ') : 'brain → scene image → scene video'))}</div><div className="clipSB_small">warnings: {(Array.isArray(node?.data?.warnings) ? node.data.warnings.join(' | ') : '') || 'none'}</div></div> : null}
                   {active === 'VIDEO' ? <div className="clipSB_previewCard"><div className="clipSB_small">future mp4 preview block • status: demo</div></div> : null}
                 </div>
               );
