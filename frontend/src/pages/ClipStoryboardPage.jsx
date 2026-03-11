@@ -4202,10 +4202,12 @@ const hydrate = useCallback(() => {
               <button className="clipSB_drawerClose" onClick={() => setDrawerOpen(false)} title="Закрыть">×</button>
             </div>
             <div className="clipSB_drawerList">
+              <div className="clipSB_drawerGroupTitle">БАЗОВЫЕ НОДЫ</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("audio")}>🎧 Аудио</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("text")}>📄 Текст</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("brain")}>🧠 Мозг</button>
               <div className="clipSB_drawerSep" />
+              <div className="clipSB_drawerGroupTitle">ОБЫЧНЫЕ REFS</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_character")}>🧍 REF — Персонаж</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_location")}>📍 REF — Локация</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_style")}>🎨 REF — Стиль</button>
@@ -4222,6 +4224,7 @@ const hydrate = useCallback(() => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("refAnimal")}>🐾 ANIMAL</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("refGroup")}>👥 GROUP / COLLECTIVE</button>
               <div className="clipSB_drawerSep" />
+              <div className="clipSB_drawerGroupTitle">СЦЕНЫ / СБОРКА</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("storyboard")}>🎞️ Storyboard</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("assembly")}>🎬 Сборка</button>
             </div>
