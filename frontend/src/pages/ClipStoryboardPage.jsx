@@ -25,6 +25,7 @@ const PORT_COLORS = {
   audio: "#ff5f7d",
   text: "#8bb8ff",
   ref_character: "#34d5d7",
+  ref_character_1: "#34d5d7",
   ref_character_2: "#00bcd4",
   ref_character_3: "#26c6da",
   ref_animal: "#ffb74d",
@@ -32,6 +33,7 @@ const PORT_COLORS = {
   ref_location: "#b37bff",
   ref_style: "#ffc25b",
   ref_items: "#93dd6f",
+  ref_props: "#93dd6f",
   plan: "#4dd8ff",
   comfy_plan: "#4dd8ff",
   comfy_storyboard: "#6aa8ff",
@@ -81,9 +83,11 @@ const EDGE_STYLE_BY_KIND = {
   audio: { color: PORT_COLORS.audio, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   text: { color: PORT_COLORS.text, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   ref_character: { color: PORT_COLORS.ref_character, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_character_1: { color: PORT_COLORS.ref_character_1, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   ref_location: { color: PORT_COLORS.ref_location, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   ref_style: { color: PORT_COLORS.ref_style, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   ref_items: { color: PORT_COLORS.ref_items, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_props: { color: PORT_COLORS.ref_props, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   ref_character_2: { color: PORT_COLORS.ref_character_2, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   ref_character_3: { color: PORT_COLORS.ref_character_3, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   ref_animal: { color: PORT_COLORS.ref_animal, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
@@ -1375,8 +1379,7 @@ function ComfyStoryboardNode({ id, data }) {
   return (
     <>
       <Handle type="target" position={Position.Left} id="comfy_plan" className="clipSB_handle" style={handleStyle('comfy_plan')} />
-      <Handle type="source" position={Position.Right} id="comfy_storyboard_out" className="clipSB_handle" style={handleStyle('comfy_storyboard', { top: 48 })} />
-      <Handle type="source" position={Position.Right} id="comfy_scene_video_out" className="clipSB_handle" style={handleStyle('comfy_video', { top: 86 })} />
+      <Handle type="source" position={Position.Right} id="comfy_scene_video_out" className="clipSB_handle" style={handleStyle('comfy_video', { top: 56 })} />
       <NodeShell title="COMFY STORYBOARD" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧩</span>} className="clipSB_nodeComfyStoryboard">
         <div className="clipSB_badge">PREVIEW</div>
         <div className="clipSB_small">scene count: {scenes.length || Number(data?.sceneCount || 0)}</div>
@@ -1421,14 +1424,42 @@ function RefGroupNode({ id, data }) {
 }
 
 function RefLiteNode({ id, data, title, className, handleId, modes, animal = false, group = false }) {
+  const outfitConsistency = data?.outfitConsistency || (data?.sameOutfit ? 'same outfit' : 'varied outfit');
   return (
     <>
       <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
       <NodeShell title={title} onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧷</span>} className={className}>
+        <div className="clipSB_refSourceMeta">
+          <span className="clipSB_badge clipSB_refSourceBadge">REF SOURCE</span>
+          <span className="clipSB_refSourceCount">refs: {Number(data?.refsCount || 0)}</span>
+        </div>
+        <div className="clipSB_refSourcePreview">preview placeholder</div>
         <select className="clipSB_select" value={data?.mode || modes[0]} onChange={(e) => data?.onField?.(id, 'mode', e.target.value)}>{modes.map((m)=><option key={m} value={m}>{m}</option>)}</select>
         {!animal && !group ? <input className="clipSB_input" placeholder="name" value={data?.name || ''} onChange={(e)=>data?.onField?.(id,'name',e.target.value)} style={{ marginTop: 8 }} /> : null}
+        {!animal && !group ? <div className="clipSB_toggleRow"><label><input type="checkbox" checked={!!data?.identityLock} onChange={(e)=>data?.onField?.(id,'identityLock',e.target.checked)} /> identity lock</label></div> : null}
+        {!animal && !group ? (
+          <select className="clipSB_select" value={data?.priority || 'normal'} onChange={(e)=>data?.onField?.(id,'priority',e.target.value)} style={{ marginTop: 8 }}>
+            <option value="low">low</option><option value="normal">normal</option><option value="high">high</option>
+          </select>
+        ) : null}
         {animal ? <input className="clipSB_input" placeholder="species hint" value={data?.speciesHint || ''} onChange={(e)=>data?.onField?.(id,'speciesHint',e.target.value)} style={{ marginTop: 8 }} /> : null}
+        {animal ? <div className="clipSB_toggleRow"><label><input type="checkbox" checked={!!data?.scaleLock} onChange={(e)=>data?.onField?.(id,'scaleLock',e.target.checked)} /> scale lock</label></div> : null}
+        {animal ? (
+          <select className="clipSB_select" value={data?.behavior || 'neutral'} onChange={(e)=>data?.onField?.(id,'behavior',e.target.value)} style={{ marginTop: 8 }}>
+            <option value="calm">calm</option><option value="neutral">neutral</option><option value="aggressive">aggressive</option><option value="playful">playful</option>
+          </select>
+        ) : null}
+        {group ? (
+          <select className="clipSB_select" value={data?.density || 'medium'} onChange={(e)=>data?.onField?.(id,'density',e.target.value)} style={{ marginTop: 8 }}>
+            <option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
+          </select>
+        ) : null}
         {group ? <input className="clipSB_input" placeholder="formation" value={data?.formation || ''} onChange={(e)=>data?.onField?.(id,'formation',e.target.value)} style={{ marginTop: 8 }} /> : null}
+        {group ? (
+          <select className="clipSB_select" value={outfitConsistency} onChange={(e)=>data?.onField?.(id,'outfitConsistency',e.target.value)} style={{ marginTop: 8 }}>
+            <option value="same outfit">same outfit</option><option value="varied outfit">varied outfit</option>
+          </select>
+        ) : null}
         <textarea className="clipSB_textarea" placeholder="notes" value={data?.notes || ''} onChange={(e)=>data?.onField?.(id,'notes',e.target.value)} style={{ marginTop: 8, minHeight: 64 }} />
       </NodeShell>
     </>
@@ -3387,7 +3418,7 @@ const hydrate = useCallback(() => {
     } else if (type === "refAnimal") {
       node = { id, type: "refAnimal", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'single animal', speciesHint: '', scaleLock: false, behavior: 'neutral', notes: '' } };
     } else if (type === "refGroup") {
-      node = { id, type: "refGroup", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'crowd', density: 'medium', formation: '', sameOutfit: false, notes: '' } };
+      node = { id, type: "refGroup", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'crowd', density: 'medium', formation: '', outfitConsistency: 'varied outfit', notes: '' } };
     } else {
       return;
     }
@@ -4134,14 +4165,16 @@ const hydrate = useCallback(() => {
               const active = comfyEditor.tab || 'SCENES';
               return (
                 <div>
-                  <div className="clipSB_inlineBtns" style={{ marginBottom: 12 }}>
+                  <div className="clipSB_comfyTabs" style={{ marginBottom: 12 }}>
                     {['SCENES','PROMPT','DEBUG','VIDEO'].map((tab) => (
-                      <button key={tab} className="clipSB_btn clipSB_btnSecondary" onClick={() => setComfyEditor((s) => ({ ...s, tab }))}>{tab}</button>
+                      <button key={tab} className={`clipSB_btn clipSB_btnSecondary clipSB_comfyTab ${active === tab ? 'isActive' : ''}`} onClick={() => setComfyEditor((s) => ({ ...s, tab }))}>{tab}</button>
                     ))}
                   </div>
-                  {active === 'SCENES' ? <div className="clipSB_planList">{scenes.map((sc) => <div key={sc.sceneId} className="clipSB_planRow"><div className="clipSB_planTime">{sc.title}</div><div className="clipSB_planText">{sc.description}<br/>primary: {sc.primaryRole} • secondary: {(sc.secondaryRoles || []).join(', ')}<br/>continuity: {sc.continuity}</div></div>)}</div> : null}
-                  {active === 'PROMPT' ? <div className="clipSB_small">{scenes[0]?.imagePrompt || 'no image prompt'}<br />{scenes[0]?.videoPrompt || 'no video prompt'}<pre>{JSON.stringify(scenes[0] || {}, null, 2)}</pre></div> : null}
-                  {active === 'DEBUG' ? <div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'}<br/>workflow preset: comfy-default<br/>prompt length: {JSON.stringify(scenes).length}<br/>cast roles used: character_1, character_2, character_3, animal, group<br/>refs used: location, style, props</div> : null}
+                  {active === 'SCENES' ? (
+                    scenes.length ? <div className="clipSB_planList">{scenes.map((sc) => <div key={sc.sceneId} className="clipSB_planRow"><div className="clipSB_planTime">{sc.title}</div><div className="clipSB_planText">{sc.description}<br/>primary: {sc.primaryRole} • secondary: {(sc.secondaryRoles || []).join(', ')}<br/>continuity: {sc.continuity}</div></div>)}</div> : <div className="clipSB_empty">Нет mock сцен. Нажми «Разобрать» в COMFY BRAIN.</div>
+                  ) : null}
+                  {active === 'PROMPT' ? <div className="clipSB_comfyPrompt"><div className="clipSB_small">{scenes[0]?.imagePrompt || 'no image prompt'}<br />{scenes[0]?.videoPrompt || 'no video prompt'}</div><pre className="clipSB_comfyPromptPre">{JSON.stringify(scenes[0] || {}, null, 2)}</pre></div> : null}
+                  {active === 'DEBUG' ? <div className="clipSB_comfyDebug"><div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'}</div><div className="clipSB_small">workflow preset: comfy-default</div><div className="clipSB_small">prompt length: {JSON.stringify(scenes).length}</div><div className="clipSB_small">cast: character_1, character_2, character_3, animal, group</div><div className="clipSB_small">refs: location, style, props</div></div> : null}
                   {active === 'VIDEO' ? <div className="clipSB_previewCard"><div className="clipSB_small">future mp4 preview block • status: demo</div></div> : null}
                 </div>
               );
