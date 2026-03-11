@@ -307,6 +307,7 @@ const REFERENCE_HANDLE_TO_ROLE = {
 };
 
 const ROLE_PRIORITY = ["character_1", "character_2", "character_3", "animal", "group", "location", "props", "style"];
+const VISUAL_ANCHOR_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
 
 function normalizeRenderProfile(value) {
   const normalized = String(value || "").trim().toLowerCase();
@@ -341,8 +342,11 @@ function hasComfyTextPrompt(plannerInput = {}) {
 
 function canGenerateComfyImage(plannerInput = {}) {
   const refsByRole = plannerInput?.refsByRole || {};
-  const visualRoles = ["character_1", "character_2", "character_3", "animal", "group", "location", "props", "style"];
-  return visualRoles.some((role) => Array.isArray(refsByRole[role]) && refsByRole[role].length > 0);
+  return VISUAL_ANCHOR_ROLES.some((role) => Array.isArray(refsByRole[role]) && refsByRole[role].length > 0);
+}
+
+function countMeaningfulVisualAnchors(refsByRole = {}) {
+  return VISUAL_ANCHOR_ROLES.filter((role) => Array.isArray(refsByRole[role]) && refsByRole[role].length > 0).length;
 }
 
 function inferPropAnchorLabel(refsByRole = {}) {
@@ -3345,6 +3349,7 @@ onClipSec: (nodeId, value) => {
           const timelineSource = meaningfulAudio ? 'audio rhythm' : 'logical timing';
 
           const meaningfulRefRoles = Object.entries(refsByRole).filter(([, refs]) => refs.length > 0).map(([role]) => role);
+          const meaningfulVisualAnchorCount = countMeaningfulVisualAnchors(refsByRole);
           const sceneRoleModel = deriveSceneRoles({ refsByRole });
           const castLabels = sceneRoleModel.cast.length ? sceneRoleModel.cast.join(' + ') : 'none connected';
 
@@ -3364,6 +3369,9 @@ onClipSec: (nodeId, value) => {
           if (narrativeSource === 'text') warnings.push('Тайминг будет логическим, без музыкального ритма');
           if (outputValue === 'comfy image' && !canGenerateComfyImage({ refsByRole })) {
             critical.push('Для comfy image нужен минимум один image anchor');
+          }
+          if (outputValue === 'comfy image' && meaningfulVisualAnchorCount > 1) {
+            warnings.push('Для comfy image будет выбран 1 главный image anchor');
           }
           if (outputValue === 'comfy text' && !hasComfyTextPrompt({ meaningfulText })) {
             warnings.push('Для comfy text желательно добавить richer text prompt');
