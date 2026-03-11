@@ -1,4 +1,4 @@
-# COMFY BRAIN Canon Specification (v1.1)
+# COMFY BRAIN Canon Specification (v1.2)
 
 ## 1) Mission of COMFY BRAIN
 
@@ -188,7 +188,79 @@ Typical cadence:
 
 ---
 
-## 6) Narrative Source Arbitration
+## 6) TEXT Handling Canon
+
+### 6.1 Canonical definition of `TEXT`
+
+`TEXT` is **not** only “onscreen text” and **not** required to be a full screenplay.
+
+`TEXT` is a narrative/creative control input and may represent:
+- full script;
+- short genre brief;
+- mood or premise hint;
+- plot task;
+- ad thesis;
+- director instruction;
+- constraint;
+- desired story type.
+
+### 6.2 Narrative authority of meaningful `TEXT`
+
+If `TEXT` is meaningful, COMFY BRAIN must treat it as the **primary narrative driver**.
+
+It must not demote meaningful text to a decorative caption layer.
+
+### 6.3 Mode-specific `TEXT` usage
+
+- `clip`: `TEXT` defines narrative superstructure, genre frame, and story mission over musical rhythm.
+- `kino`: `TEXT` defines dramaturgy, causal logic, and cinematic intent.
+- `reklama`: `TEXT` defines thesis, promise, persuasion angle, and product mission.
+- `scenario`: `TEXT` defines storyboard/beat structure and script-oriented scene objectives.
+
+### 6.4 Empty `TEXT` behavior
+
+If `TEXT` is empty or non-meaningful:
+- brain must switch narrative synthesis to `AUDIO` + refs + mode logic;
+- brain must emit warning `WARN_NO_TEXT_BRIEF`.
+
+---
+
+## 7) AUDIO Handling Canon
+
+### 7.1 Supported audio intent classes
+
+`AUDIO` may represent:
+- song;
+- instrumental;
+- ad voiceover;
+- narration / spoken story;
+- spoken mixed audio;
+- ambient / background / atmosphere.
+
+### 7.2 Mandatory audio analysis obligations
+
+When meaningful `AUDIO` exists, COMFY BRAIN must:
+- infer likely audio type;
+- detect temporal segments;
+- derive timing guidance for scene boundaries;
+- detect energy, mood, phrasing, emotional shifts, silence zones, and spoken blocks where applicable.
+
+### 7.3 Critical anti-literal rule
+
+COMFY BRAIN must **not blindly retell song lyrics**.
+
+It must build a cinematic or narrative scene plan over the music, avoiding literal line-by-line lyric reenactment unless explicitly required by text mission.
+
+### 7.4 Mode-specific `AUDIO` usage
+
+- `clip`: audio is primary rhythm and segmentation driver.
+- `kino`: audio is mood/tempo support, not dominant dramatic authority.
+- `reklama`: audio supports emphasis, memorability, and persuasive pacing.
+- `scenario`: audio provides timing context when relevant, but is not always dominant.
+
+---
+
+## 8) Narrative Source Arbitration
 
 This section answers: **where does COMFY BRAIN take story meaning from?**
 
@@ -203,7 +275,19 @@ Narrative mission is always explicit in plan metadata, even when inferred.
 
 ---
 
-## 7) Source Priority Rules
+## 9) Text + Audio Synthesis Principle
+
+When both meaningful `TEXT` and meaningful `AUDIO` are present, COMFY BRAIN must apply this canonical synthesis:
+- `TEXT` sets narrative mission, genre frame, and scenario objective;
+- `AUDIO` sets rhythm, pacing, time-framing, and emotional contour;
+- planning result is a cinematic non-literal scene sequence;
+- brain must not degrade into literal lyric retelling.
+
+This principle is mandatory across all modes and resolves hybrid-input behavior as first-class canon.
+
+---
+
+## 10) Source Priority Rules
 
 Canonical priority stack (decision order):
 1. `MODE` defines thinking model.
@@ -223,7 +307,7 @@ Conflict handling:
 
 ---
 
-## 8) Ref Usage Rules
+## 11) Ref Usage Rules
 
 Role map:
 - `CHARACTER_1`: lead identity anchor
@@ -253,7 +337,7 @@ Continuity behavior:
 
 ---
 
-## 9) `comfy image` Restrictions
+## 12) `comfy image` Restrictions
 
 Current limitation: `comfy image` accepts only **one image per scene**.
 
@@ -272,7 +356,7 @@ Brain must explicitly retain non-selected refs as textual constraints, not drop 
 
 ---
 
-## 10) `comfy text` Rules
+## 13) `comfy text` Rules
 
 For `OUTPUT = comfy text`, brain prioritizes rich textual planning structure:
 - detailed scene descriptions;
@@ -285,7 +369,7 @@ For `OUTPUT = comfy text`, brain prioritizes rich textual planning structure:
 
 ---
 
-## 11) Scene Types Canon
+## 14) Scene Types Canon
 
 COMFY BRAIN plans scenes as **functional scene types**, not only chronological chunks.
 
@@ -308,7 +392,7 @@ Mode influence:
 
 ---
 
-## 12) Continuity Classes
+## 15) Continuity Classes
 
 Canonical continuity classes:
 - **identity continuity** — stable recognition of characters/animal/group across scenes.
@@ -326,7 +410,7 @@ Mode tuning examples:
 
 ---
 
-## 13) Fallback Rules
+## 16) Fallback Rules
 
 ### Case A: meaningful `TEXT + AUDIO + REFS`
 - full synthesis mode;
@@ -366,15 +450,15 @@ Mode tuning examples:
 
 ---
 
-## 14) Warnings & Errors
+## 17) Warnings & Errors
 
-### 14.1 Errors (blocking)
+### 17.1 Errors (blocking)
 - `ERR_NO_INPUT_DATA` — no meaningful text/audio/refs.
 - `ERR_OUTPUT_IMAGE_NO_ANCHOR` — `comfy image` selected but no scene anchor derivable.
 - `ERR_MODE_INVALID` — unsupported mode value.
 - `ERR_OUTPUT_INVALID` — unsupported output value.
 
-### 14.2 Warnings (non-blocking)
+### 17.2 Warnings (non-blocking)
 - `WARN_NO_TEXT_BRIEF` — narrative objective auto-generated.
 - `WARN_NO_AUDIO_PACING` — logical timing used instead of audio timing.
 - `WARN_SPARSE_REFS` — world/cast partially synthesized.
@@ -387,7 +471,7 @@ Warnings must be shown in UI summary and stored in generated plan metadata.
 
 ---
 
-## 15) `comfyPlan` Output Contract
+## 18) `comfyPlan` Output Contract
 
 COMFY BRAIN emits one structured object:
 - `planMeta`
@@ -396,7 +480,7 @@ COMFY BRAIN emits one structured object:
 - `warnings[]`
 - `errors[]`
 
-### 15.1 `planMeta` (recommended fields)
+### 18.1 `planMeta` (recommended fields)
 - `mode`
 - `output`
 - `stylePreset`
@@ -405,13 +489,13 @@ COMFY BRAIN emits one structured object:
 - `narrativeSource` (`text`, `audio`, `hybrid`, `mode+refs`, `none`)
 - `inputCoverage`
 
-### 15.2 `globalContinuity`
+### 18.2 `globalContinuity`
 - cast registry
 - world/style locks
 - recurring props
 - continuity constraints by class
 
-### 15.3 `scenes[]` (recommended per-scene schema)
+### 18.3 `scenes[]` (recommended per-scene schema)
 - `sceneId`
 - `sceneType`
 - `t0`, `t1`
@@ -431,7 +515,7 @@ COMFY BRAIN emits one structured object:
 - `primaryImageAnchor` (required for `comfy image`, optional otherwise)
 - `textualRefGuidance[]`
 
-### 15.4 Contract constraints
+### 18.4 Contract constraints
 - every scene must include a narrative reason;
 - scene ranges are monotonic and non-overlapping;
 - for `comfy image`, max one image anchor per scene;
@@ -440,7 +524,7 @@ COMFY BRAIN emits one structured object:
 
 ---
 
-## 16) Future Integration Notes
+## 19) Future Integration Notes
 
 This canon is normative for:
 - Brain UI configuration behavior;
@@ -459,6 +543,6 @@ Integration constraints:
 7. Treat non-script text briefs as fully valid narrative drivers.
 
 Status:
-- normative canon for COMFY BRAIN v1.1;
+- normative canon for COMFY BRAIN v1.2;
 - implementation-agnostic by design;
 - baseline for future backend/frontend/storyboard implementation phases.
