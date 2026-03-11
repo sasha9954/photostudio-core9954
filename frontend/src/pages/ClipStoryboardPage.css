@@ -674,12 +674,17 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_drawer {
   z-index: 3000;
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 290px;
-  height: 100%;
+  top: 12px;
+  left: 12px;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  height: min(860px, calc(100vh - 24px));
+  max-height: calc(100vh - 24px);
   padding: 14px;
-  background: rgba(10, 12, 18, 0.92);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 12, 18, 0.94);
   box-shadow: 12px 0 30px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.07);
 }
 
@@ -713,6 +718,29 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_drawerList {
   display: grid;
   gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+  padding-bottom: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(150, 190, 255, 0.55) rgba(255,255,255,0.08);
+}
+
+.clipSB_drawerList::-webkit-scrollbar {
+  width: 9px;
+}
+
+.clipSB_drawerList::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+}
+
+.clipSB_drawerList::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(120, 170, 255, 0.72), rgba(120, 255, 255, 0.55));
+  border: 2px solid rgba(10, 12, 18, 0.9);
 }
 
 .clipSB_drawerSep {
@@ -1277,7 +1305,7 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_input { width:100%; border-radius:10px; border:1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.04); color:#fff; padding:8px 10px; box-sizing:border-box; }
 .clipSB_inlineBtns { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
 .clipSB_previewCard { margin-top:8px; border-radius: 12px; padding: 10px; min-height: 120px; background: rgba(255,255,255,.04); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); display:flex; align-items:center; justify-content:center; }
-.clipSB_drawerGroupTitle { font-size: 11px; letter-spacing: .08em; color: rgba(255,255,255,.58); margin: 4px 2px; }
+.clipSB_drawerGroupTitle { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: rgba(255,255,255,.62); margin: 4px 2px; text-transform: uppercase; }
 
 .clipSB_refSourceMeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .clipSB_refSourceBadge { margin-bottom: 0; }
