@@ -1,20 +1,20 @@
-# COMFY BRAIN Canon Specification (v1)
+# COMFY BRAIN Canon Specification (v1.1)
 
 ## 1) Mission of COMFY BRAIN
 
 COMFY BRAIN is the **story and scene planner** of the PHOTOSTUDIO CLIP COMFY pipeline.
 
-It is **not** an image generator and **not** a passive form of settings. It is a decision layer that:
+It is **not** an image generator and **not** a passive settings form. It is a decision layer that:
 - ingests all available creative inputs;
-- determines the primary source of narrative truth for the current run;
+- determines the narrative mission source;
 - enforces continuity across scenes;
 - derives timeline and scene segmentation;
 - emits a structured `comfyPlan` for COMFY STORYBOARD.
 
 Core mandate:
 1. transform messy multimodal input into a coherent sequence of scene intents;
-2. preserve identity/world/style consistency;
-3. map planning decisions to output format constraints (`comfy image` vs `comfy text`).
+2. preserve identity/world/style continuity;
+3. adapt planning strategy to selected output type (`comfy image` vs `comfy text`).
 
 ---
 
@@ -33,7 +33,7 @@ Supported input channels:
 - `PROPS`
 
 Input semantic roles:
-- **Narrative task / genre / restrictions:** primarily `TEXT`
+- **Narrative mission / genre / restrictions:** primarily `TEXT`
 - **Rhythm / timing / emotional pacing:** primarily `AUDIO`
 - **Cast identity:** `CHARACTER_1/2/3`, `ANIMAL`, `GROUP`
 - **World anchor:** `LOCATION`
@@ -44,9 +44,47 @@ Input semantic roles:
 
 ---
 
-## 3) Public UI Contract for COMFY BRAIN
+## 3) Meaningful Input Definition
 
-### 3.1 Visible controls (public)
+### 3.1 Meaningful `TEXT`
+
+`TEXT` is meaningful when all following conditions are met:
+- not empty after normalization (trim, whitespace cleanup);
+- contains at least one usable creative signal: genre, premise, plot task, ad thesis, constraint, director instruction, or target story type;
+- not classified as garbage/random noise (e.g., accidental characters with no semantic intent).
+
+### 3.2 Meaningful `AUDIO`
+
+`AUDIO` is meaningful when all following conditions are met:
+- file is accessible and valid for decoding;
+- decoded stream is non-empty;
+- duration is above minimal analysis threshold;
+- signal quality is sufficient for at least coarse segmentation.
+
+### 3.3 Meaningful `REF`
+
+A reference node is meaningful when all following conditions are met:
+- contains at least one valid image asset;
+- image is accessible (not broken link/missing blob);
+- image is not an empty placeholder.
+
+A reference class (`CHARACTER_1`, `LOCATION`, etc.) is meaningful if at least one meaningful ref exists in that class.
+
+### 3.4 No Meaningful Input
+
+“No meaningful input” means:
+- no meaningful `TEXT`, and
+- no meaningful `AUDIO`, and
+- no meaningful refs across all ref classes.
+
+This state is blocking and must produce an error.
+
+---
+
+## 4) Public UI Contract
+
+### 4.1 Visible controls (public)
+
 Public Brain UI must expose:
 - `MODE`: `clip | kino | reklama | scenario`
 - `OUTPUT`: `comfy image | comfy text`
@@ -55,7 +93,8 @@ Public Brain UI must expose:
 - continuity toggle(s) / summary panel (optional)
 - warnings/status area (required)
 
-### 3.2 Internal-only controls (not primary public knobs)
+### 4.2 Internal-only controls (not primary public knobs)
+
 Must stay internal:
 - duration strategy
 - scene split strategy
@@ -64,161 +103,137 @@ Must stay internal:
 - anchor selection rules
 - reference prioritization internals
 
-### 3.3 Duration policy correction (mandatory canon rule)
-Legacy approach where **duration is a main public manual control** is considered non-canonical.
+### 4.3 Duration policy
+
+Legacy approach where **duration is a main public manual control** is non-canonical.
 
 Canonical rule:
 - duration is an **internal derived parameter**;
-- it is automatically computed from: audio presence/type/length, mode, text structure, pacing density, and scene complexity.
+- it is computed from audio presence/type/length, mode, text structure, pacing density, and scene complexity.
 
-`OUTPUT` selection (`comfy image` / `comfy text`) is mandatory and has higher UI importance than manual duration.
+`OUTPUT` selection (`comfy image` / `comfy text`) is mandatory and has high UI prominence.
 
 ---
 
-## 4) Mode Canon (real behavior, not labels)
+## 5) Mode Canon
 
-### 4.1 `clip`
+### 5.1 `clip`
+
 Planning intent: music/video-clip logic with rhythmic visual storytelling.
 
 Brain behavior:
 - scene splitting follows beat/phrase/energy transitions when audio exists;
-- text is interpreted as creative direction (genre, premise, imagery), not literal subtitles;
-- supports narrative-over-song approach (non-literal visual story over lyrics);
-- prioritizes dynamic transitions around peaks/drops/chorus-like rises;
+- text is interpreted as creative direction, not literal subtitles;
+- supports narrative-over-song approach;
+- prioritizes dynamic transitions near peaks/drops/chorus rises;
 - tolerates symbolic montage and associative edits.
 
 Typical cadence:
 - short-to-medium scenes;
-- higher visual turnover;
-- continuity softened in favor of energy and emotional momentum.
+- high visual turnover;
+- timeline continuity may be softened for energy.
 
-### 4.2 `kino`
+### 5.2 `kino`
+
 Planning intent: cinematic, director-style storytelling.
 
 Brain behavior:
 - longer, logically connected scenes;
-- stronger cause-effect scene transitions;
-- continuity pressure is high (character state, space, time-of-day, wardrobe cues);
-- audio influences mood pacing but does not dominate dramatic logic;
-- text instructions are interpreted as screenplay-level guidance.
+- stronger cause-effect transitions;
+- high continuity pressure (identity, space, time context);
+- audio supports mood pacing but does not dominate dramatic logic;
+- text is interpreted as screenplay-grade guidance.
 
 Typical cadence:
 - medium-to-long scenes;
 - fewer abrupt cuts;
-- stronger dramatic arc and visual coherence.
+- stronger dramatic arc and coherence.
 
-### 4.3 `reklama`
+### 5.3 `reklama`
+
 Planning intent: persuasive short-form structure around product/message.
 
-Brain behavior:
-- prioritizes selling point, hook, and persuasive visual proof;
-- enforces dense structure with minimal wasted beats;
-- scenes are organized around claim → support → payoff / CTA logic;
-- if no explicit ad thesis exists, emits warning and synthesizes a provisional thesis from text/audio/refs.
+Brain behavior (mandatory extraction targets):
+- identify **hero product / hero object / hero idea**;
+- define **audience promise**;
+- plan **visual proof**;
+- include **emotional hook**;
+- include **persuasive payoff**;
+- land on a **final ad beat (CTA-like beat)**.
+
+Additional canonical requirements:
+- if explicit ad thesis is missing, brain must not silently produce “just pretty scenes”;
+- must emit warning `WARN_REKLAMA_NO_THESIS`;
+- must synthesize a provisional thesis when enough signal exists (text/audio/refs).
 
 Typical cadence:
 - compact scenes;
 - high semantic density;
-- deliberate focus on product/idea visibility.
+- deliberate product/idea visibility continuity.
 
-### 4.4 `scenario`
+### 5.4 `scenario`
+
 Planning intent: storyboard-author mode for logical narrative decomposition.
 
 Brain behavior:
 - emphasizes explicit story beats, scene objectives, and continuity notes;
-- outputs clearer pre-production-ready sequencing;
+- outputs pre-production-ready sequencing;
 - less beat-reactive than `clip`, more structural than `kino`;
 - text is treated as script brief first, stylistic influence second.
 
 Typical cadence:
 - balanced scene duration;
 - explicit beat boundaries;
-- planning clarity prioritized over raw visual dynamism.
+- structural continuity prioritized.
 
 ---
 
-## 5) TEXT Handling Canon
+## 6) Narrative Source Arbitration
 
-`TEXT` is treated as a **creative brief / directing intent**, not only “onscreen text”.
+This section answers: **where does COMFY BRAIN take story meaning from?**
 
-TEXT can define:
-- genre and tone;
-- story objective;
-- restrictions and must-have elements;
-- target emotional trajectory.
+Canonical arbitration:
+1. If meaningful `TEXT` exists → `TEXT` defines narrative mission.
+2. If meaningful `TEXT` is absent but meaningful `AUDIO` exists → derive narrative mission from `AUDIO`.
+3. If meaningful `TEXT` + meaningful `AUDIO` both exist → `TEXT` defines story mission, `AUDIO` defines rhythm/time framing.
+4. If only meaningful refs exist → synthesize narrative mission from `MODE` + refs.
+5. If nothing meaningful exists → blocking error (`ERR_NO_INPUT_DATA`).
 
-Mode-specific text interpretation:
-- `clip`: text sets narrative superstructure over rhythmic audio scaffolding;
-- `kino`: text sets dramaturgy, character logic, and cinematic intent;
-- `reklama`: text sets offer/thesis/audience persuasion angle;
-- `scenario`: text sets beat-by-beat structural and storyboard requirements.
-
-If `TEXT` is empty:
-- Brain derives intent from `AUDIO` and refs;
-- generates auto-brief assumptions;
-- raises warning: “No text brief; narrative objective auto-generated.”
+Narrative mission is always explicit in plan metadata, even when inferred.
 
 ---
 
-## 6) AUDIO Handling Canon
-
-Supported audio categories:
-- song
-- instrumental
-- ad voiceover
-- narration / spoken story
-- spoken mixed audio
-- ambient background / atmosphere
-
-Audio analysis responsibilities:
-1. infer likely audio type;
-2. detect temporal segments (energy, phrasing, emotional shifts, silence breaks, spoken blocks);
-3. derive timing guidance for scene boundaries.
-
-Critical non-literal rule:
-- Brain must **not** blindly retell song lyrics.
-- It should build an interesting cinematic narrative layer aligned with rhythm/emotion.
-
-Mode-specific audio usage:
-- `clip`: primary driver for segmentation and energetic pacing;
-- `kino`: secondary driver; supports mood and tempo around story logic;
-- `reklama`: supports memorability and emphasis points for claims;
-- `scenario`: used as timing context when relevant, not as dominant structural authority.
-
-Combined `TEXT + AUDIO` principle:
-- audio provides rhythm/frame;
-- text provides genre/story mission;
-- brain synthesizes non-literal, cinematic scene plan.
-
----
-
-## 7) Source Arbitration & Priority Rules
+## 7) Source Priority Rules
 
 Canonical priority stack (decision order):
-1. `MODE` defines thinking strategy.
-2. `TEXT` defines narrative mission, constraints, genre intent.
-3. `AUDIO` defines temporal rhythm and emotional contour.
-4. `REFS` define cast/world/style/props anchors.
-5. `OUTPUT` defines packing/formatting strategy of final plan.
+1. `MODE` defines thinking model.
+2. `OUTPUT` defines planning strategy and packaging constraints.
+3. `TEXT` defines narrative task, intent, and constraints.
+4. `AUDIO` defines timing, rhythm, and pacing contour.
+5. `REFS` define cast/world/style/props anchors.
+
+Interpretation notes:
+- `OUTPUT = comfy image | comfy text` affects not only final format but planning depth and representation strategy.
+- `OUTPUT` is therefore a high-priority planning control, not a post-processing option.
 
 Conflict handling:
 - if text narrative conflicts with raw lyric semantics, prefer text mission and audio rhythm;
 - if refs conflict with text tone, preserve identity anchors while adapting scene semantics;
-- if style ref conflicts with selected UI style preset, prefer frozen style if freeze enabled; otherwise blend with explicit warning.
+- if style ref conflicts with selected style preset, prefer frozen style when freeze is enabled; otherwise blend with warning.
 
 ---
 
-## 8) Reference Usage Rules (REFS)
+## 8) Ref Usage Rules
 
 Role map:
 - `CHARACTER_1`: lead identity anchor
 - `CHARACTER_2`: secondary lead
 - `CHARACTER_3`: tertiary/support cast
 - `ANIMAL`: animal actor anchor
-- `GROUP`: collective ensemble/t crowd anchor
+- `GROUP`: collective ensemble/crowd anchor
 - `LOCATION`: world/place anchor
 - `STYLE`: visual language/style lock
-- `PROPS`: object anchor continuity
+- `PROPS`: object continuity anchors
 
 Reference classes:
 - **Identity anchors:** characters, animal, group
@@ -228,134 +243,177 @@ Reference classes:
 
 Missing refs behavior:
 - partial refs are valid;
-- absent classes are synthesized from text/audio mode context;
-- never block planning solely due to missing optional refs.
+- absent classes are synthesized from text/audio/mode context;
+- planning must not fail solely due to missing optional refs.
 
 Continuity behavior:
 - identity anchors persist unless scene intent explicitly changes state;
-- location continuity is maintained unless transition beat demands relocation;
-- props tagged as recurring are propagated across relevant scenes.
+- location continuity is maintained unless transition beat requires relocation;
+- recurring props are propagated through relevant scenes.
 
 ---
 
-## 9) `comfy image` Restrictions Canon
+## 9) `comfy image` Restrictions
 
-Current limitation: COMFY IMAGE accepts only **one image per scene**.
+Current limitation: `comfy image` accepts only **one image per scene**.
 
-Mandatory planning rule per scene:
+Mandatory per-scene rule:
 - select exactly one `primaryImageAnchor`;
-- all additional refs are converted to textual constraints/guidance.
+- convert additional refs into textual guidance.
 
-Selection heuristic for primary anchor (descending):
-1. scene lead actor (usually `CHARACTER_1`) when identity is central;
-2. location when environment is dominant;
-3. key prop when object-centric beat;
+Selection heuristic (descending):
+1. lead actor (`CHARACTER_1`) when identity is central;
+2. location when environment dominates;
+3. key prop for object-centric beat;
 4. animal when animal is narrative focus;
-5. group when ensemble action defines the scene.
+5. group when ensemble action defines scene.
 
-Brain must explicitly note that non-selected refs are retained as textual guidance, not discarded.
+Brain must explicitly retain non-selected refs as textual constraints, not drop them.
 
 ---
 
-## 10) `comfy text` Rules Canon
+## 10) `comfy text` Rules
 
-For `OUTPUT = comfy text`, Brain shifts emphasis to rich textual structure:
+For `OUTPUT = comfy text`, brain prioritizes rich textual planning structure:
 - detailed scene descriptions;
 - cast/world/style articulation;
 - continuity notes;
-- camera and staging intent;
+- camera/staging intent;
 - mood and beat rationale.
 
-`comfy text` output should be a structured scene package, not a short single-line prompt.
+`comfy text` output is a structured scene package, not a one-line prompt.
 
 ---
 
-## 11) Fallback Rules (Incomplete Data Scenarios)
+## 11) Scene Types Canon
 
-### Case A: `TEXT + AUDIO + REFS`
+COMFY BRAIN plans scenes as **functional scene types**, not only chronological chunks.
+
+Canonical scene type set (extensible):
+- `hero_intro` — introduces hero subject/product/idea.
+- `world_establish` — establishes location/world logic.
+- `emotion_beat` — delivers emotional charge shift.
+- `conflict_beat` — introduces tension/problem/contrast.
+- `transition` — bridges state/location/time changes.
+- `chorus_peak` — high-energy peak (often audio-driven).
+- `product_focus` — explicit product/offer demonstration.
+- `payoff` — resolves setup with reward/proof.
+- `finale` — closes narrative arc and leaves final imprint.
+
+Mode influence:
+- `clip` may cycle more through `transition` + `chorus_peak`;
+- `kino` emphasizes `world_establish` + `conflict_beat` + `payoff`;
+- `reklama` requires `hero_intro`/`product_focus`/`payoff`/`finale` coverage;
+- `scenario` emphasizes explicit functional progression and traceable beat logic.
+
+---
+
+## 12) Continuity Classes
+
+Canonical continuity classes:
+- **identity continuity** — stable recognition of characters/animal/group across scenes.
+- **world continuity** — coherent space/location/world rules.
+- **style continuity** — stable visual language and render intent.
+- **prop continuity** — persistent object presence/state when narratively relevant.
+- **mood continuity** — emotional trajectory coherence.
+- **timeline continuity** — coherent temporal progression and causal order.
+
+Mode tuning examples:
+- `clip` may relax timeline continuity for energy while keeping identity legible;
+- `kino` strengthens identity/world continuity;
+- `reklama` strengthens product visibility continuity and promise-proof continuity;
+- `scenario` strengthens structural/timeline continuity.
+
+---
+
+## 13) Fallback Rules
+
+### Case A: meaningful `TEXT + AUDIO + REFS`
 - full synthesis mode;
-- text sets mission, audio sets timing, refs lock identity/world/style.
+- text sets mission, audio sets timing, refs lock anchors.
 
-### Case B: `TEXT + AUDIO`, few refs
+### Case B: meaningful `TEXT + AUDIO`, sparse refs
 - generate world/cast defaults from text;
-- audio-driven timeline retained;
-- emit warning on weak identity anchoring.
+- keep audio-driven timeline;
+- emit warning for weak identity anchors.
 
-### Case C: only `AUDIO`
+### Case C: only meaningful `AUDIO`
 - infer mood/arc from audio dynamics;
-- auto-generate narrative hypothesis;
-- emit warning: story objective inferred.
+- synthesize narrative mission from audio;
+- emit warning: story objective inferred from audio.
 
-### Case D: only `TEXT`
-- build logical (non-musical) timeline;
-- scene durations derived from semantic complexity;
+### Case D: only meaningful `TEXT`
+- build logical non-musical timeline;
+- derive durations from semantic complexity;
 - emit warning: no audio pacing source.
 
-### Case E: only `REFS`
-- create visual/world continuity skeleton;
-- generate neutral objective unless mode implies stronger defaults;
+### Case E: only meaningful refs
+- build visual/world continuity skeleton;
+- synthesize mission from mode + refs;
 - emit warning: missing explicit narrative brief.
 
 ### Case F: no meaningful input
 - planning blocked;
-- emit error: insufficient source data.
+- emit error `ERR_NO_INPUT_DATA`.
 
-### Case G: `mode = reklama` without ad thesis
-- emit warning (or validation error if strict mode enabled): missing selling thesis;
-- synthesize provisional thesis from text/audio/refs if possible.
+### Case G: `mode = reklama` without explicit thesis
+- emit warning `WARN_REKLAMA_NO_THESIS`;
+- synthesize provisional thesis if enough signal exists.
 
-### Case H: `output = comfy image` with no meaningful ref and no text
-- emit warning: weak visual anchor quality;
-- allow fallback to auto-generated anchor from inferred world only if audio/text carries enough signal, else block.
-
----
-
-## 12) Warnings & Errors Canon (Mayaki)
-
-### 12.1 Errors (blocking)
-- `ERR_NO_INPUT_DATA`: no text, no audio, no refs.
-- `ERR_OUTPUT_IMAGE_NO_ANCHOR`: output is `comfy image` but no anchor can be derived.
-- `ERR_MODE_INVALID`: unsupported mode value.
-- `ERR_OUTPUT_INVALID`: unsupported output value.
-
-### 12.2 Warnings (non-blocking)
-- `WARN_NO_TEXT_BRIEF`: narrative objective auto-generated.
-- `WARN_NO_AUDIO_PACING`: logical timing used instead of musical timing.
-- `WARN_SPARSE_REFS`: world/cast partially auto-synthesized.
-- `WARN_IMAGE_SINGLE_ANCHOR_RULE`: only one image anchor will be used per scene.
-- `WARN_REKLAMA_NO_THESIS`: ad thesis missing, provisional thesis inferred.
-- `WARN_AUDIO_ONLY_STORY_INFERRED`: story created from audio mood/structure.
-- `WARN_STYLE_CONFLICT_BLEND`: style sources conflict; blended strategy used.
-
-Warnings must be surfaced in UI summary and embedded in metadata of the generated plan.
+### Case H: `output = comfy image` with no meaningful anchor
+- emit warning for weak visual anchor quality;
+- if anchor cannot be derived from any meaningful source, emit blocking `ERR_OUTPUT_IMAGE_NO_ANCHOR`.
 
 ---
 
-## 13) `comfyPlan` Output Contract (to COMFY STORYBOARD)
+## 14) Warnings & Errors
 
-COMFY BRAIN outputs one structured object:
+### 14.1 Errors (blocking)
+- `ERR_NO_INPUT_DATA` — no meaningful text/audio/refs.
+- `ERR_OUTPUT_IMAGE_NO_ANCHOR` — `comfy image` selected but no scene anchor derivable.
+- `ERR_MODE_INVALID` — unsupported mode value.
+- `ERR_OUTPUT_INVALID` — unsupported output value.
+
+### 14.2 Warnings (non-blocking)
+- `WARN_NO_TEXT_BRIEF` — narrative objective auto-generated.
+- `WARN_NO_AUDIO_PACING` — logical timing used instead of audio timing.
+- `WARN_SPARSE_REFS` — world/cast partially synthesized.
+- `WARN_IMAGE_SINGLE_ANCHOR_RULE` — one image anchor per scene limitation applied.
+- `WARN_REKLAMA_NO_THESIS` — ad thesis absent, provisional thesis inferred.
+- `WARN_AUDIO_ONLY_STORY_INFERRED` — narrative mission inferred from audio.
+- `WARN_STYLE_CONFLICT_BLEND` — style conflict resolved by blend.
+
+Warnings must be shown in UI summary and stored in generated plan metadata.
+
+---
+
+## 15) `comfyPlan` Output Contract
+
+COMFY BRAIN emits one structured object:
 - `planMeta`
 - `globalContinuity`
 - `scenes[]`
 - `warnings[]`
 - `errors[]`
 
-### 13.1 `planMeta` (recommended fields)
+### 15.1 `planMeta` (recommended fields)
 - `mode`
 - `output`
 - `stylePreset`
 - `durationDerivedSec`
 - `timelineSource` (`audio`, `text`, `hybrid`, `refs-only`)
-- `inputCoverage` (what channels were present)
+- `narrativeSource` (`text`, `audio`, `hybrid`, `mode+refs`, `none`)
+- `inputCoverage`
 
-### 13.2 `globalContinuity`
+### 15.2 `globalContinuity`
 - cast registry
 - world/style locks
 - recurring props
-- continuity constraints
+- continuity constraints by class
 
-### 13.3 `scenes[]` (recommended per-scene schema)
+### 15.3 `scenes[]` (recommended per-scene schema)
 - `sceneId`
+- `sceneType`
 - `t0`, `t1`
 - `sceneGoal`
 - `storyBeat`
@@ -373,31 +431,34 @@ COMFY BRAIN outputs one structured object:
 - `primaryImageAnchor` (required for `comfy image`, optional otherwise)
 - `textualRefGuidance[]`
 
-### 13.4 Contract constraints
-- every scene must include a narrative reason (`reasonWhyThisSceneExists`);
-- time ranges must be monotonic and non-overlapping;
-- for `comfy image`, each scene has max one image anchor;
-- warnings/errors always returned, even if empty arrays.
+### 15.4 Contract constraints
+- every scene must include a narrative reason;
+- scene ranges are monotonic and non-overlapping;
+- for `comfy image`, max one image anchor per scene;
+- warnings/errors always returned (including empty arrays when none);
+- scene sequence must be traceable by scene function (`sceneType`).
 
 ---
 
-## 14) Implementation Notes for Future Integration (non-code)
+## 16) Future Integration Notes
 
-This canon is the source document for:
-- Brain UI configuration model;
-- frontend local planning logic;
-- payload builder;
-- COMFY STORYBOARD adapter;
-- migration mapping from legacy engine behavior.
+This canon is normative for:
+- Brain UI configuration behavior;
+- frontend planning orchestration;
+- payload builders;
+- COMFY STORYBOARD adapters;
+- migration from legacy planning behavior.
 
 Integration constraints:
 1. Do not expose derived duration as primary public control.
-2. Always expose `OUTPUT` selection (`comfy image` / `comfy text`).
+2. Always expose `OUTPUT` selection (`comfy image` / `comfy text`) as high-priority control.
 3. Keep planning deterministic enough for reproducibility with same inputs.
-4. Preserve warning/error semantics end-to-end (Brain UI → payload → storyboard).
-5. Implement mode behavior as genuinely distinct planning strategies, not preset labels.
+4. Preserve warning/error semantics end-to-end.
+5. Implement mode behavior as truly distinct thinking strategies.
+6. Keep narrative source arbitration explicit in metadata.
+7. Treat non-script text briefs as fully valid narrative drivers.
 
-Status of this document:
-- normative canon for COMFY BRAIN behavior;
+Status:
+- normative canon for COMFY BRAIN v1.1;
 - implementation-agnostic by design;
-- must be treated as baseline for subsequent engine/frontend/backend tasks.
+- baseline for future backend/frontend/storyboard implementation phases.
