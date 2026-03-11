@@ -1420,19 +1420,19 @@ function ComfyVideoPreviewNode({ id, data }) {
 }
 
 function RefCharacter2Node({ id, data }) {
-  return <RefLiteNode id={id} data={data} title="CHARACTER 2" className="clipSB_nodeRef2" handleId="ref_character_2" modes={['ally','enemy','partner','singer','support']} />;
+  return <RefLiteNode id={id} data={data} title="CHARACTER 2" className="clipSB_nodeRef2" handleId="ref_character_2" />;
 }
 function RefCharacter3Node({ id, data }) {
-  return <RefLiteNode id={id} data={data} title="CHARACTER 3" className="clipSB_nodeRef3" handleId="ref_character_3" modes={['ally','enemy','secondary','backup','crowd leader']} />;
+  return <RefLiteNode id={id} data={data} title="CHARACTER 3" className="clipSB_nodeRef3" handleId="ref_character_3" />;
 }
 function RefAnimalNode({ id, data }) {
-  return <RefLiteNode id={id} data={data} title="ANIMAL" className="clipSB_nodeRefAnimal" handleId="ref_animal" modes={['single animal','pair','pet','mount','wildlife']} animal />;
+  return <RefLiteNode id={id} data={data} title="ANIMAL" className="clipSB_nodeRefAnimal" handleId="ref_animal" />;
 }
 function RefGroupNode({ id, data }) {
-  return <RefLiteNode id={id} data={data} title="GROUP / COLLECTIVE" className="clipSB_nodeRefGroup" handleId="ref_group" modes={['crowd','team','band','choir','dancers','unit']} group />;
+  return <RefLiteNode id={id} data={data} title="GROUP / COLLECTIVE" className="clipSB_nodeRefGroup" handleId="ref_group" />;
 }
 
-function RefLiteNode({ id, data, title, className, handleId, modes, animal = false, group = false }) {
+function RefLiteNode({ id, data, title, className, handleId }) {
   const inputRef = useRef(null);
   const maxFiles = 5;
   const refs = Array.isArray(data?.refs)
@@ -1446,7 +1446,6 @@ function RefLiteNode({ id, data, title, className, handleId, modes, animal = fal
       .slice(0, maxFiles)
     : [];
   const canAddMore = refs.length < maxFiles;
-  const outfitConsistency = data?.outfitConsistency || (data?.sameOutfit ? 'same outfit' : 'varied outfit');
 
   const openPicker = () => {
     if (!canAddMore) return;
@@ -1464,22 +1463,19 @@ function RefLiteNode({ id, data, title, className, handleId, modes, animal = fal
     <>
       <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
       <NodeShell title={title} onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧷</span>} className={className}>
-        <div className="clipSB_refSourceMeta">
-          <span className="clipSB_badge clipSB_refSourceBadge">REF SOURCE</span>
-          <span className="clipSB_refSourceCount">refs: {refs.length}/{maxFiles}</span>
-        </div>
-        <div className="clipSB_refSourcePreviewWrap">
+        <div className="clipSB_refLitePreview">
           {!refs.length ? (
-            <div className="clipSB_refSourcePreview clipSB_refSourcePreviewEmpty">
-              <div>Нет фото</div>
-              <div>Добавь 1–5 референсов</div>
+            <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && openPicker()}>
+              <span className="clipSB_refLiteEmptyPlus">+</span>
+              <span>нет изображений</span>
+              <span>добавь фото</span>
             </div>
           ) : (
-            <div className="clipSB_refSourcePreviewGrid">
+            <div className="clipSB_refGrid clipSB_refLiteGrid">
               {refs.map((item, idx) => (
                 <div className="clipSB_refThumb" key={`${item.url}-${idx}`}>
                   <button
-                    className="clipSB_refSourcePreviewOpen"
+                    className="clipSB_refLiteOpen"
                     onClick={() => data?.onOpenLightbox?.(item.url)}
                     title="Открыть фото"
                   >
@@ -1494,14 +1490,24 @@ function RefLiteNode({ id, data, title, className, handleId, modes, animal = fal
                   </button>
                 </div>
               ))}
+              {canAddMore ? (
+                <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">
+                  +
+                </button>
+              ) : null}
             </div>
           )}
         </div>
-        <div className="clipSB_refSourceActions">
+        <div className="clipSB_fileRow" style={{ marginTop: 8 }}>
+          <div className="clipSB_fileName" title={refs.map((x) => x.name || x.url).join(", ")}>
+            {refs.length ? `${refs.length}/${maxFiles} изображ.` : "нет изображений"}
+          </div>
+        </div>
+        <div className="clipSB_refLiteActions">
           <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading}>
-            {data?.uploading ? 'Загрузка…' : 'Добавить фото'}
+            {data?.uploading ? 'Загрузка…' : refs.length ? 'Добавить фото' : 'Загрузить фото'}
           </button>
-          {!canAddMore ? <div className="clipSB_small">Лимит 5/5</div> : null}
+          {!canAddMore ? <div className="clipSB_small" style={{ marginTop: 0 }}>Лимит 5/5</div> : null}
         </div>
         <input
           ref={inputRef}
@@ -1511,33 +1517,9 @@ function RefLiteNode({ id, data, title, className, handleId, modes, animal = fal
           style={{ display: "none" }}
           onChange={onInputChange}
         />
-        <select className="clipSB_select" value={data?.mode || modes[0]} onChange={(e) => data?.onField?.(id, 'mode', e.target.value)}>{modes.map((m)=><option key={m} value={m}>{m}</option>)}</select>
-        {!animal && !group ? <input className="clipSB_input" placeholder="name" value={data?.name || ''} onChange={(e)=>data?.onField?.(id,'name',e.target.value)} style={{ marginTop: 8 }} /> : null}
-        {!animal && !group ? <div className="clipSB_toggleRow"><label><input type="checkbox" checked={!!data?.identityLock} onChange={(e)=>data?.onField?.(id,'identityLock',e.target.checked)} /> identity lock</label></div> : null}
-        {!animal && !group ? (
-          <select className="clipSB_select" value={data?.priority || 'normal'} onChange={(e)=>data?.onField?.(id,'priority',e.target.value)} style={{ marginTop: 8 }}>
-            <option value="low">low</option><option value="normal">normal</option><option value="high">high</option>
-          </select>
-        ) : null}
-        {animal ? <input className="clipSB_input" placeholder="species hint" value={data?.speciesHint || ''} onChange={(e)=>data?.onField?.(id,'speciesHint',e.target.value)} style={{ marginTop: 8 }} /> : null}
-        {animal ? <div className="clipSB_toggleRow"><label><input type="checkbox" checked={!!data?.scaleLock} onChange={(e)=>data?.onField?.(id,'scaleLock',e.target.checked)} /> scale lock</label></div> : null}
-        {animal ? (
-          <select className="clipSB_select" value={data?.behavior || 'neutral'} onChange={(e)=>data?.onField?.(id,'behavior',e.target.value)} style={{ marginTop: 8 }}>
-            <option value="calm">calm</option><option value="neutral">neutral</option><option value="aggressive">aggressive</option><option value="playful">playful</option>
-          </select>
-        ) : null}
-        {group ? (
-          <select className="clipSB_select" value={data?.density || 'medium'} onChange={(e)=>data?.onField?.(id,'density',e.target.value)} style={{ marginTop: 8 }}>
-            <option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
-          </select>
-        ) : null}
-        {group ? <input className="clipSB_input" placeholder="formation" value={data?.formation || ''} onChange={(e)=>data?.onField?.(id,'formation',e.target.value)} style={{ marginTop: 8 }} /> : null}
-        {group ? (
-          <select className="clipSB_select" value={outfitConsistency} onChange={(e)=>data?.onField?.(id,'outfitConsistency',e.target.value)} style={{ marginTop: 8 }}>
-            <option value="same outfit">same outfit</option><option value="varied outfit">varied outfit</option>
-          </select>
-        ) : null}
-        <textarea className="clipSB_textarea" placeholder="notes" value={data?.notes || ''} onChange={(e)=>data?.onField?.(id,'notes',e.target.value)} style={{ marginTop: 8, minHeight: 64 }} />
+        <div className="clipSB_hint" style={{ marginTop: 8 }}>
+          Загрузи до 5 фото, порядок учитывается · подключай к COMFY BRAIN
+        </div>
       </NodeShell>
     </>
   );
