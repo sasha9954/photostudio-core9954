@@ -1310,19 +1310,40 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_refSourceMeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .clipSB_refSourceBadge { margin-bottom: 0; }
 .clipSB_refSourceCount { font-size: 11px; color: rgba(255,255,255,.62); }
+.clipSB_refSourcePreviewWrap { margin-bottom: 8px; }
 .clipSB_refSourcePreview {
-  margin-bottom: 8px;
   border-radius: 10px;
   border: 1px dashed rgba(255,255,255,.2);
   background: rgba(255,255,255,.03);
-  min-height: 42px;
+  min-height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
   color: rgba(255,255,255,.52);
-  text-transform: uppercase;
-  letter-spacing: .06em;
+}
+.clipSB_refSourcePreviewEmpty {
+  flex-direction: column;
+  gap: 2px;
+}
+.clipSB_refSourcePreviewGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.clipSB_refSourcePreviewOpen {
+  display: block;
+  border: 0;
+  padding: 0;
+  width: 100%;
+  background: transparent;
+  cursor: pointer;
+}
+.clipSB_refSourceActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .clipSB_comfyTabs { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }

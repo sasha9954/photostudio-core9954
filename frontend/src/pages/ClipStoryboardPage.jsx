@@ -729,6 +729,15 @@ async function uploadAsset(file) {
   return await res.json();
 }
 
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("file_read_failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function normalizeRefData(data, kindHint = "") {
   const kind = String(data?.kind || kindHint || "");
   const maxFiles = kind === "ref_style" ? 1 : 5;
@@ -1424,16 +1433,84 @@ function RefGroupNode({ id, data }) {
 }
 
 function RefLiteNode({ id, data, title, className, handleId, modes, animal = false, group = false }) {
+  const inputRef = useRef(null);
+  const maxFiles = 5;
+  const refs = Array.isArray(data?.refs)
+    ? data.refs
+      .map((item) => ({
+        url: String(item?.url || "").trim(),
+        name: String(item?.name || "").trim(),
+        type: String(item?.type || "").trim(),
+      }))
+      .filter((item) => !!item.url)
+      .slice(0, maxFiles)
+    : [];
+  const canAddMore = refs.length < maxFiles;
   const outfitConsistency = data?.outfitConsistency || (data?.sameOutfit ? 'same outfit' : 'varied outfit');
+
+  const openPicker = () => {
+    if (!canAddMore) return;
+    inputRef.current?.click();
+  };
+
+  const onInputChange = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    await data?.onPickImage?.(id, files);
+    e.target.value = "";
+  };
+
   return (
     <>
       <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
       <NodeShell title={title} onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧷</span>} className={className}>
         <div className="clipSB_refSourceMeta">
           <span className="clipSB_badge clipSB_refSourceBadge">REF SOURCE</span>
-          <span className="clipSB_refSourceCount">refs: {Number(data?.refsCount || 0)}</span>
+          <span className="clipSB_refSourceCount">refs: {refs.length}/{maxFiles}</span>
         </div>
-        <div className="clipSB_refSourcePreview">preview placeholder</div>
+        <div className="clipSB_refSourcePreviewWrap">
+          {!refs.length ? (
+            <div className="clipSB_refSourcePreview clipSB_refSourcePreviewEmpty">
+              <div>Нет фото</div>
+              <div>Добавь 1–5 референсов</div>
+            </div>
+          ) : (
+            <div className="clipSB_refSourcePreviewGrid">
+              {refs.map((item, idx) => (
+                <div className="clipSB_refThumb" key={`${item.url}-${idx}`}>
+                  <button
+                    className="clipSB_refSourcePreviewOpen"
+                    onClick={() => data?.onOpenLightbox?.(item.url)}
+                    title="Открыть фото"
+                  >
+                    <img src={resolveAssetUrl(item.url)} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" />
+                  </button>
+                  <button
+                    className="clipSB_refThumbRemove"
+                    title="Удалить фото"
+                    onClick={() => data?.onRemoveImage?.(id, idx)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="clipSB_refSourceActions">
+          <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading}>
+            {data?.uploading ? 'Загрузка…' : 'Добавить фото'}
+          </button>
+          {!canAddMore ? <div className="clipSB_small">Лимит 5/5</div> : null}
+        </div>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/jpg,image/webp"
+          multiple
+          style={{ display: "none" }}
+          onChange={onInputChange}
+        />
         <select className="clipSB_select" value={data?.mode || modes[0]} onChange={(e) => data?.onField?.(id, 'mode', e.target.value)}>{modes.map((m)=><option key={m} value={m}>{m}</option>)}</select>
         {!animal && !group ? <input className="clipSB_input" placeholder="name" value={data?.name || ''} onChange={(e)=>data?.onField?.(id,'name',e.target.value)} style={{ marginTop: 8 }} /> : null}
         {!animal && !group ? <div className="clipSB_toggleRow"><label><input type="checkbox" checked={!!data?.identityLock} onChange={(e)=>data?.onField?.(id,'identityLock',e.target.checked)} /> identity lock</label></div> : null}
@@ -3108,12 +3185,84 @@ onClipSec: (nodeId, value) => {
           };
         }
 
-        if (n.type === "comfyVideoPreview" || n.type === "refCharacter2" || n.type === "refCharacter3" || n.type === "refAnimal" || n.type === "refGroup") {
+        if (n.type === "comfyVideoPreview") {
           return {
             ...base,
             data: {
               ...base.data,
               onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
+            },
+          };
+        }
+
+        if (n.type === "refCharacter2" || n.type === "refCharacter3" || n.type === "refAnimal" || n.type === "refGroup") {
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
+              onOpenLightbox: (url) => setLightboxUrl(resolveAssetUrl(url)),
+              onPickImage: async (nodeId, filesRaw) => {
+                const files = Array.isArray(filesRaw) ? filesRaw : (filesRaw ? [filesRaw] : []);
+                if (!files.length) return;
+                const allowTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: true } } : x)));
+                try {
+                  const targetNode = nodesRef.current.find((x) => x.id === nodeId);
+                  const prevRefs = Array.isArray(targetNode?.data?.refs)
+                    ? targetNode.data.refs
+                      .map((item) => ({
+                        url: String(item?.url || "").trim(),
+                        name: String(item?.name || "").trim(),
+                        type: String(item?.type || "").trim(),
+                      }))
+                      .filter((item) => !!item.url)
+                      .slice(0, 5)
+                    : [];
+                  const room = Math.max(0, 5 - prevRefs.length);
+                  const queue = files.slice(0, room);
+                  const uploadedRefs = [];
+                  for (const oneFile of queue) {
+                    if (!allowTypes.has(String(oneFile?.type || "").toLowerCase())) continue;
+                    try {
+                      const dataUrl = await readFileAsDataUrl(oneFile);
+                      if (!dataUrl) continue;
+                      uploadedRefs.push({
+                        url: dataUrl,
+                        name: oneFile.name || "ref",
+                        type: oneFile.type || "image/jpeg",
+                        kind: "local",
+                      });
+                    } catch (err) {
+                      console.error(err);
+                    }
+                  }
+                  if (!uploadedRefs.length) return;
+                  setNodes((prev) => prev.map((x) => {
+                    if (x.id !== nodeId) return x;
+                    const oldRefs = Array.isArray(x?.data?.refs)
+                      ? x.data.refs
+                        .map((item) => ({
+                          url: String(item?.url || "").trim(),
+                          name: String(item?.name || "").trim(),
+                          type: String(item?.type || "").trim(),
+                        }))
+                        .filter((item) => !!item.url)
+                        .slice(0, 5)
+                      : [];
+                    return { ...x, data: { ...x.data, refs: oldRefs.concat(uploadedRefs).slice(0, 5) } };
+                  }));
+                } finally {
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: false } } : x)));
+                }
+              },
+              onRemoveImage: (nodeId, idx) => setNodes((prev) => prev.map((x) => {
+                if (x.id !== nodeId) return x;
+                const refs = Array.isArray(x?.data?.refs)
+                  ? x.data.refs.filter((_, i) => i !== idx)
+                  : [];
+                return { ...x, data: { ...x.data, refs } };
+              })),
             },
           };
         }
@@ -3412,13 +3561,13 @@ const hydrate = useCallback(() => {
     } else if (type === "comfyVideoPreview") {
       node = { id, type: "comfyVideoPreview", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { previewStatus: 'idle', previewUrl: '', workflowPreset: 'comfy-default', format: '9:16', duration: 0 } };
     } else if (type === "refCharacter2") {
-      node = { id, type: "refCharacter2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '' } };
+      node = { id, type: "refCharacter2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], uploading: false } };
     } else if (type === "refCharacter3") {
-      node = { id, type: "refCharacter3", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '' } };
+      node = { id, type: "refCharacter3", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], uploading: false } };
     } else if (type === "refAnimal") {
-      node = { id, type: "refAnimal", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'single animal', speciesHint: '', scaleLock: false, behavior: 'neutral', notes: '' } };
+      node = { id, type: "refAnimal", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'single animal', speciesHint: '', scaleLock: false, behavior: 'neutral', notes: '', refs: [], uploading: false } };
     } else if (type === "refGroup") {
-      node = { id, type: "refGroup", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'crowd', density: 'medium', formation: '', outfitConsistency: 'varied outfit', notes: '' } };
+      node = { id, type: "refGroup", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'crowd', density: 'medium', formation: '', outfitConsistency: 'varied outfit', notes: '', refs: [], uploading: false } };
     } else {
       return;
     }
