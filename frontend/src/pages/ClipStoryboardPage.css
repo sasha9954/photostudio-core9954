@@ -1262,3 +1262,19 @@ body.ps_clip_fullscreen .mainCol {
   0% { box-shadow: 0 0 0 0 rgba(106,168,255,.55); }
   100% { box-shadow: 0 0 0 14px rgba(106,168,255,0); }
 }
+
+.clipSB_nodeComfyBrain { --node-accent: rgba(77, 216, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(77,216,255,.24), 0 0 22px rgba(77,216,255,.18); }
+.clipSB_nodeComfyStoryboard { --node-accent: rgba(106, 168, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(106,168,255,.24), 0 0 22px rgba(106,168,255,.18); }
+.clipSB_nodeComfyVideo { --node-accent: rgba(125, 249, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(125,249,255,.24), 0 0 22px rgba(125,249,255,.18); }
+.clipSB_nodeRef2 { --node-accent: rgba(0, 188, 212, 0.78); box-shadow: inset 0 0 0 1px rgba(0,188,212,.24), 0 0 18px rgba(0,188,212,.18); }
+.clipSB_nodeRef3 { --node-accent: rgba(38, 198, 218, 0.78); box-shadow: inset 0 0 0 1px rgba(38,198,218,.24), 0 0 18px rgba(38,198,218,.18); }
+.clipSB_nodeRefAnimal { --node-accent: rgba(255, 183, 77, 0.78); box-shadow: inset 0 0 0 1px rgba(255,183,77,.24), 0 0 18px rgba(255,183,77,.18); }
+.clipSB_nodeRefGroup { --node-accent: rgba(240, 98, 146, 0.78); box-shadow: inset 0 0 0 1px rgba(240,98,146,.24), 0 0 18px rgba(240,98,146,.18); }
+
+.clipSB_badge { display:inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 11px; background: rgba(255,255,255,.08); margin-bottom: 8px; }
+.clipSB_grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.clipSB_toggleRow { display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color: rgba(255,255,255,.8); }
+.clipSB_input { width:100%; border-radius:10px; border:1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.04); color:#fff; padding:8px 10px; box-sizing:border-box; }
+.clipSB_inlineBtns { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
+.clipSB_previewCard { margin-top:8px; border-radius: 12px; padding: 10px; min-height: 120px; background: rgba(255,255,255,.04); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); display:flex; align-items:center; justify-content:center; }
+.clipSB_drawerGroupTitle { font-size: 11px; letter-spacing: .08em; color: rgba(255,255,255,.58); margin: 4px 2px; }

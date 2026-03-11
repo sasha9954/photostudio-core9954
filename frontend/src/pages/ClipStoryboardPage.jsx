@@ -25,10 +25,17 @@ const PORT_COLORS = {
   audio: "#ff5f7d",
   text: "#8bb8ff",
   ref_character: "#34d5d7",
+  ref_character_2: "#00bcd4",
+  ref_character_3: "#26c6da",
+  ref_animal: "#ffb74d",
+  ref_group: "#f06292",
   ref_location: "#b37bff",
   ref_style: "#ffc25b",
   ref_items: "#93dd6f",
   plan: "#4dd8ff",
+  comfy_plan: "#4dd8ff",
+  comfy_storyboard: "#6aa8ff",
+  comfy_video: "#7df9ff",
   brain_to_storyboard: "#4dd8ff",
   storyboard_to_assembly: "#6aa8ff",
   assembly: "#6aa8ff",
@@ -55,6 +62,21 @@ function isBrainInput(handleId) {
   return handleId === "audio" || handleId === "text" || handleId === "ref_character" || handleId === "ref_location" || handleId === "ref_style" || handleId === "ref_items";
 }
 
+function isComfyBrainInput(handleId) {
+  return [
+    "audio",
+    "text",
+    "ref_character_1",
+    "ref_character_2",
+    "ref_character_3",
+    "ref_animal",
+    "ref_group",
+    "ref_location",
+    "ref_style",
+    "ref_props",
+  ].includes(handleId);
+}
+
 const EDGE_STYLE_BY_KIND = {
   audio: { color: PORT_COLORS.audio, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   text: { color: PORT_COLORS.text, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
@@ -62,6 +84,13 @@ const EDGE_STYLE_BY_KIND = {
   ref_location: { color: PORT_COLORS.ref_location, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   ref_style: { color: PORT_COLORS.ref_style, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
   ref_items: { color: PORT_COLORS.ref_items, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_character_2: { color: PORT_COLORS.ref_character_2, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_character_3: { color: PORT_COLORS.ref_character_3, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_animal: { color: PORT_COLORS.ref_animal, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  ref_group: { color: PORT_COLORS.ref_group, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
+  comfy_plan: { color: PORT_COLORS.comfy_plan, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
+  comfy_storyboard: { color: PORT_COLORS.comfy_storyboard, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
+  comfy_video: { color: PORT_COLORS.comfy_video, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
   plan: {
     color: PORT_COLORS.plan,
     strokeWidth: 2.4,
@@ -92,6 +121,15 @@ const EDGE_STYLE_BY_KIND = {
 
 function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "", targetType = "", existingKind = "" }) {
   if (targetType === "brainNode" && isBrainInput(targetHandle)) return targetHandle;
+  if (targetType === "comfyBrain" && isComfyBrainInput(targetHandle)) return targetHandle;
+
+  if (sourceType === "comfyBrain" && sourceHandle === "comfy_plan" && targetType === "comfyStoryboard" && targetHandle === "comfy_plan") {
+    return "comfy_plan";
+  }
+
+  if (sourceType === "comfyStoryboard" && sourceHandle === "comfy_scene_video_out" && targetType === "comfyVideoPreview" && targetHandle === "comfy_scene_video_out") {
+    return "comfy_video";
+  }
 
   if (sourceType === "brainNode" && sourceHandle === "plan" && targetType === "storyboardNode" && targetHandle === "plan_in") {
     return "plan";
@@ -247,6 +285,52 @@ function getSceneUiDescription(scene) {
     if (value) return value;
   }
   return "";
+}
+
+
+function buildMockComfyScenes() {
+  return [
+    {
+      sceneId: 'c1',
+      title: 'Intro Pulse',
+      description: 'Неоновый старт с мягким движением камеры и акцентом на ритм.',
+      primaryRole: 'character_1',
+      secondaryRoles: ['character_2', 'group'],
+      continuity: 'Сохранять холодную палитру и frontal framing.',
+      imagePrompt: 'cinematic portrait, neon rim light, premium dark studio',
+      videoPrompt: 'slow dolly-in, beat synced cuts, high contrast',
+    },
+    {
+      sceneId: 'c2',
+      title: 'Conflict Beat',
+      description: 'Столкновение персонажей, контраст по позам и движению.',
+      primaryRole: 'character_2',
+      secondaryRoles: ['character_3'],
+      continuity: 'Не менять стиль костюмов и ключевой свет.',
+      imagePrompt: 'dramatic two-shot, cinematic frame, moody background',
+      videoPrompt: 'whip pan transition, medium close-up, kinetic energy',
+    },
+    {
+      sceneId: 'c3',
+      title: 'Animal Accent',
+      description: 'Ввод животного как эмоционального якоря кадра.',
+      primaryRole: 'animal',
+      secondaryRoles: ['character_1'],
+      continuity: 'Соблюдать scale-lock и поведенческий профиль.',
+      imagePrompt: 'stylized animal companion, soft glow edges, detailed fur',
+      videoPrompt: 'gentle orbit camera, natural motion, shallow depth of field',
+    },
+    {
+      sceneId: 'c4',
+      title: 'Final Collective',
+      description: 'Финальный групповой кадр с формированием композиции.',
+      primaryRole: 'group',
+      secondaryRoles: ['character_1', 'character_2', 'character_3'],
+      continuity: 'Удерживать formation и outfit consistency.',
+      imagePrompt: 'group composition, premium fashion styling, dramatic backlight',
+      videoPrompt: 'wide master shot, crane up, finale energy',
+    },
+  ];
 }
 
 function getScenarioSceneStableKey(scene, idx) {
@@ -1247,6 +1331,110 @@ function RefNode({ id, data }) {
   );
 }
 
+
+function ComfyBrainNode({ id, data }) {
+  const mode = data?.mode || 'clip';
+  const styleKey = data?.styleKey || 'realism';
+  const shotLogic = data?.shotLogic || 'cinematic';
+  const freezeStyle = !!data?.freezeStyle;
+  const autoDuration = data?.autoDuration !== false;
+  const manualDuration = Number(data?.manualDuration || 30);
+  const parseStatus = data?.parseStatus || 'idle';
+
+  return (
+    <>
+      {['audio','text','ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group','ref_location','ref_style','ref_props'].map((h, i) => (
+        <Handle key={h} type="target" position={Position.Left} id={h} className="clipSB_handle" style={handleStyle(h === 'ref_props' ? 'ref_items' : h, { top: 36 + i * 18 })} />
+      ))}
+      <Handle type="source" position={Position.Right} id="comfy_plan" className="clipSB_handle" style={handleStyle('comfy_plan')} />
+      <NodeShell title="COMFY BRAIN" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧠</span>} className="clipSB_nodeComfyBrain">
+        <div className="clipSB_badge">UI ONLY / PHASE 1</div>
+        <div className="clipSB_grid2">
+          <select className="clipSB_select" value={mode} onChange={(e) => data?.onMode?.(id, e.target.value)}>
+            <option value="clip">clip</option><option value="kino">kino</option><option value="reklama">reklama</option><option value="scenario">scenario</option>
+          </select>
+          <select className="clipSB_select" value={styleKey} onChange={(e) => data?.onStyle?.(id, e.target.value)}>
+            <option value="realism">realism</option><option value="film">film</option><option value="neon">neon</option><option value="glossy">glossy</option><option value="soft">soft</option>
+          </select>
+        </div>
+        <select className="clipSB_select" value={shotLogic} onChange={(e) => data?.onShotLogic?.(id, e.target.value)} style={{ marginTop: 8 }}>
+          <option value="cinematic">cinematic</option><option value="music-video">music-video</option><option value="documentary">documentary</option><option value="pov">pov</option><option value="static">static</option>
+        </select>
+        <div className="clipSB_toggleRow"><label><input type="checkbox" checked={freezeStyle} onChange={(e) => data?.onFreezeStyle?.(id, e.target.checked)} /> freezeStyle</label><label><input type="checkbox" checked={autoDuration} onChange={(e) => data?.onAutoDuration?.(id, e.target.checked)} /> auto duration</label></div>
+        <input className="clipSB_input" type="number" min={5} max={3600} disabled={autoDuration} value={manualDuration} onChange={(e) => data?.onManualDuration?.(id, e.target.value)} />
+        <button className="clipSB_btn" style={{ marginTop: 8 }} onClick={() => data?.onParse?.(id)}>Разобрать</button>
+        <div className="clipSB_small">status: {parseStatus}{data?.parsedAt ? ` • ${data.parsedAt}` : ''}</div>
+        <div className="clipSB_small">refs: {Number(data?.connectedRefsCount || 0)} • cast: {Number(data?.connectedCastCount || 0)} • audio: {data?.hasAudio ? 'yes' : 'no'} • text: {data?.hasText ? 'yes' : 'no'}</div>
+      </NodeShell>
+    </>
+  );
+}
+
+function ComfyStoryboardNode({ id, data }) {
+  const scenes = Array.isArray(data?.mockScenes) ? data.mockScenes : [];
+  return (
+    <>
+      <Handle type="target" position={Position.Left} id="comfy_plan" className="clipSB_handle" style={handleStyle('comfy_plan')} />
+      <Handle type="source" position={Position.Right} id="comfy_storyboard_out" className="clipSB_handle" style={handleStyle('comfy_storyboard', { top: 48 })} />
+      <Handle type="source" position={Position.Right} id="comfy_scene_video_out" className="clipSB_handle" style={handleStyle('comfy_video', { top: 86 })} />
+      <NodeShell title="COMFY STORYBOARD" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧩</span>} className="clipSB_nodeComfyStoryboard">
+        <div className="clipSB_badge">PREVIEW</div>
+        <div className="clipSB_small">scene count: {scenes.length || Number(data?.sceneCount || 0)}</div>
+        <div className="clipSB_small">mode: {data?.mode || 'clip'}</div>
+        <div className="clipSB_inlineBtns">
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenComfy?.(id, 'SCENES')}>Сценарий</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenComfy?.(id, 'PROMPT')}>Промт</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenComfy?.(id, 'DEBUG')}>DEBUG</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenComfy?.(id, 'VIDEO')}>Видео</button>
+        </div>
+        <div className="clipSB_planList">{scenes.slice(0,3).map((s)=> <div key={s.sceneId} className="clipSB_planRow"><div className="clipSB_planTime">{s.sceneId}</div><div className="clipSB_planText">{s.title}</div></div>)}</div>
+      </NodeShell>
+    </>
+  );
+}
+
+function ComfyVideoPreviewNode({ id, data }) {
+  return (
+    <>
+      <Handle type="target" position={Position.Left} id="comfy_scene_video_out" className="clipSB_handle" style={handleStyle('comfy_video')} />
+      <NodeShell title="COMFY VIDEO PREVIEW" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎬</span>} className="clipSB_nodeComfyVideo">
+        <div className="clipSB_badge">MP4 PREVIEW</div>
+        <div className="clipSB_previewCard">{data?.previewUrl ? <video src={data.previewUrl} controls className="clipSB_videoPlayer" /> : <div className="clipSB_small">No preview yet</div>}</div>
+        <div className="clipSB_small">{data?.previewStatus || 'idle'} • {data?.workflowPreset || 'comfy-default'} • {data?.format || '9:16'} • {data?.duration || 0}s</div>
+        <div className="clipSB_inlineBtns"><button className="clipSB_btn clipSB_btnSecondary">Preview</button><button className="clipSB_btn clipSB_btnSecondary">Open</button><button className="clipSB_btn clipSB_btnSecondary">Download</button></div>
+      </NodeShell>
+    </>
+  );
+}
+
+function RefCharacter2Node({ id, data }) {
+  return <RefLiteNode id={id} data={data} title="CHARACTER 2" className="clipSB_nodeRef2" handleId="ref_character_2" modes={['ally','enemy','partner','singer','support']} />;
+}
+function RefCharacter3Node({ id, data }) {
+  return <RefLiteNode id={id} data={data} title="CHARACTER 3" className="clipSB_nodeRef3" handleId="ref_character_3" modes={['ally','enemy','secondary','backup','crowd leader']} />;
+}
+function RefAnimalNode({ id, data }) {
+  return <RefLiteNode id={id} data={data} title="ANIMAL" className="clipSB_nodeRefAnimal" handleId="ref_animal" modes={['single animal','pair','pet','mount','wildlife']} animal />;
+}
+function RefGroupNode({ id, data }) {
+  return <RefLiteNode id={id} data={data} title="GROUP / COLLECTIVE" className="clipSB_nodeRefGroup" handleId="ref_group" modes={['crowd','team','band','choir','dancers','unit']} group />;
+}
+
+function RefLiteNode({ id, data, title, className, handleId, modes, animal = false, group = false }) {
+  return (
+    <>
+      <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
+      <NodeShell title={title} onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧷</span>} className={className}>
+        <select className="clipSB_select" value={data?.mode || modes[0]} onChange={(e) => data?.onField?.(id, 'mode', e.target.value)}>{modes.map((m)=><option key={m} value={m}>{m}</option>)}</select>
+        {!animal && !group ? <input className="clipSB_input" placeholder="name" value={data?.name || ''} onChange={(e)=>data?.onField?.(id,'name',e.target.value)} style={{ marginTop: 8 }} /> : null}
+        {animal ? <input className="clipSB_input" placeholder="species hint" value={data?.speciesHint || ''} onChange={(e)=>data?.onField?.(id,'speciesHint',e.target.value)} style={{ marginTop: 8 }} /> : null}
+        {group ? <input className="clipSB_input" placeholder="formation" value={data?.formation || ''} onChange={(e)=>data?.onField?.(id,'formation',e.target.value)} style={{ marginTop: 8 }} /> : null}
+        <textarea className="clipSB_textarea" placeholder="notes" value={data?.notes || ''} onChange={(e)=>data?.onField?.(id,'notes',e.target.value)} style={{ marginTop: 8, minHeight: 64 }} />
+      </NodeShell>
+    </>
+  );
+}
+
 function StoryboardPlanNode({ id, data }) {
   const scenes = data?.scenes || [];
   const isStale = !!data?.isStale;
@@ -1412,6 +1600,11 @@ const [scenarioEditor, setScenarioEditor] = useState({
   nodeId: null,
   selected: 0,
 });
+const [comfyEditor, setComfyEditor] = useState({
+  open: false,
+  nodeId: null,
+  tab: 'SCENES',
+});
 
 // Open scenario overlay from node button (custom event)
 useEffect(() => {
@@ -1427,6 +1620,18 @@ useEffect(() => {
 
   window.addEventListener("ps:clipOpenScenario", handler);
   return () => window.removeEventListener("ps:clipOpenScenario", handler);
+}, []);
+
+useEffect(() => {
+  const handler = (e) => {
+    setComfyEditor({
+      open: true,
+      nodeId: e?.detail?.nodeId || null,
+      tab: e?.detail?.tab || 'SCENES',
+    });
+  };
+  window.addEventListener('ps:clipOpenComfyStoryboard', handler);
+  return () => window.removeEventListener('ps:clipOpenComfyStoryboard', handler);
 }, []);
 
 // Fullscreen canvas on this page (hide global sidebar)
@@ -2821,6 +3026,67 @@ onClipSec: (nodeId, value) => {
           };
         }
 
+
+        if (n.type === "comfyBrain") {
+          const incoming = (edgesRef.current || []).filter((e) => e.target === n.id);
+          const handles = new Set(incoming.map((e) => String(e.targetHandle || '')));
+          const connectedRefsCount = ['ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group','ref_location','ref_style','ref_props'].filter((h) => handles.has(h)).length;
+          const connectedCastCount = ['ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group'].filter((h) => handles.has(h)).length;
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              connectedRefsCount,
+              connectedCastCount,
+              hasAudio: handles.has('audio'),
+              hasText: handles.has('text'),
+              onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
+              onMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x))),
+              onStyle: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, styleKey: value } } : x))),
+              onShotLogic: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, shotLogic: value } } : x))),
+              onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
+              onAutoDuration: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, autoDuration: !!checked } } : x))),
+              onManualDuration: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, manualDuration: Math.max(5, Math.min(3600, Number(value) || 30)) } } : x))),
+              onParse: (nodeId) => {
+                const now = new Date().toLocaleTimeString();
+                const mockScenes = buildMockComfyScenes();
+                setNodes((prev) => prev.map((x) => {
+                  if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: 'готово', parsedAt: now, mockScenes } };
+                  return x;
+                }));
+                const comfyStoryTargets = (edgesRef.current || []).filter((e) => e.source === nodeId && e.sourceHandle === 'comfy_plan').map((e) => e.target);
+                if (comfyStoryTargets.length) {
+                  setNodes((prev) => prev.map((x) => (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard')
+                    ? { ...x, data: { ...x.data, mockScenes, sceneCount: mockScenes.length, mode: n.data?.mode || 'clip', parseStatus: 'ready' } }
+                    : x));
+                }
+              },
+            },
+          };
+        }
+
+        if (n.type === "comfyStoryboard") {
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              onOpenComfy: (nodeId, tab = 'SCENES') => {
+                try { window.dispatchEvent(new CustomEvent('ps:clipOpenComfyStoryboard', { detail: { nodeId, tab } })); } catch (e) {}
+              },
+            },
+          };
+        }
+
+        if (n.type === "comfyVideoPreview" || n.type === "refCharacter2" || n.type === "refCharacter3" || n.type === "refAnimal" || n.type === "refGroup") {
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
+            },
+          };
+        }
+
         if (n.type === "assemblyNode") {
           const estimatedDurationSec = assemblyPayload.scenes.reduce(
             (sum, scene) => sum + (Number(scene.requestedDurationSec) || 0),
@@ -3108,6 +3374,20 @@ const hydrate = useCallback(() => {
       node = { id, type: "storyboardNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { scenes: [] } };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
+    } else if (type === "comfyBrain") {
+      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', styleKey: 'realism', shotLogic: 'cinematic', autoDuration: true, manualDuration: 30, parseStatus: 'idle' } };
+    } else if (type === "comfyStoryboard") {
+      node = { id, type: "comfyStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mockScenes: [], sceneCount: 0, mode: 'clip' } };
+    } else if (type === "comfyVideoPreview") {
+      node = { id, type: "comfyVideoPreview", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { previewStatus: 'idle', previewUrl: '', workflowPreset: 'comfy-default', format: '9:16', duration: 0 } };
+    } else if (type === "refCharacter2") {
+      node = { id, type: "refCharacter2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '' } };
+    } else if (type === "refCharacter3") {
+      node = { id, type: "refCharacter3", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '' } };
+    } else if (type === "refAnimal") {
+      node = { id, type: "refAnimal", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'single animal', speciesHint: '', scaleLock: false, behavior: 'neutral', notes: '' } };
+    } else if (type === "refGroup") {
+      node = { id, type: "refGroup", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'crowd', density: 'medium', formation: '', sameOutfit: false, notes: '' } };
     } else {
       return;
     }
@@ -3211,20 +3491,24 @@ const hydrate = useCallback(() => {
       refNode: RefNode,
       storyboardNode: StoryboardPlanNode,
       assemblyNode: AssemblyNode,
+      comfyBrain: ComfyBrainNode,
+      comfyStoryboard: ComfyStoryboardNode,
+      comfyVideoPreview: ComfyVideoPreviewNode,
+      refCharacter2: RefCharacter2Node,
+      refCharacter3: RefCharacter3Node,
+      refAnimal: RefAnimalNode,
+      refGroup: RefGroupNode,
     }),
     []
   );
 
   const onConnect = useCallback(
     (params) => {
-      // simple connection validation to avoid conflicts:
-      // BRAIN reads ONLY by targetHandle (audio/text/ref_*). One connection per handle.
       setEdges((eds) => {
         const src = nodes.find((n) => n.id === params.source);
         const dst = nodes.find((n) => n.id === params.target);
         if (!src || !dst) return eds;
 
-        // --- validate connections into BRAIN ---
         if (dst.type === "brainNode") {
           const h = params.targetHandle || "";
           const ok =
@@ -3234,42 +3518,59 @@ const hydrate = useCallback(() => {
             (h === "ref_location" && src.type === "refNode" && (params.sourceHandle || "") === "ref_location") ||
             (h === "ref_style" && src.type === "refNode" && (params.sourceHandle || "") === "ref_style") ||
             (h === "ref_items" && src.type === "refNode" && (params.sourceHandle || "") === "ref_items");
-
           if (!ok) return eds;
-
-          // remove old edge(s) that already occupy the same handle
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === h));
-          const presentation = getEdgePresentation({
-            sourceHandle: params.sourceHandle || "",
-            targetHandle: h,
-            sourceType: src.type,
-            targetType: dst.type,
-          });
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: h, sourceType: src.type, targetType: dst.type });
           return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
 
-        // --- validate PLAN route: BRAIN(plan) -> STORYBOARD(plan_in) ---
-        if (src.type === "brainNode" && (params.sourceHandle || "") === "plan") {
-          if (dst.type === "storyboardNode" && (params.targetHandle || "") === "plan_in") {
-            // only one plan edge into storyboard
-            const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === "plan_in"));
-            const presentation = getEdgePresentation({
-              sourceHandle: params.sourceHandle || "",
-              targetHandle: params.targetHandle || "",
-              sourceType: src.type,
-              targetType: dst.type,
-            });
-            return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          }
+        if (dst.type === 'comfyBrain') {
+          const h = params.targetHandle || '';
+          const ok =
+            (h === 'audio' && src.type === 'audioNode' && (params.sourceHandle || '') === 'audio') ||
+            (h === 'text' && src.type === 'textNode' && (params.sourceHandle || '') === 'text') ||
+            (h === 'ref_character_1' && src.type === 'refNode' && (params.sourceHandle || '') === 'ref_character') ||
+            (h === 'ref_character_2' && src.type === 'refCharacter2' && (params.sourceHandle || '') === 'ref_character_2') ||
+            (h === 'ref_character_3' && src.type === 'refCharacter3' && (params.sourceHandle || '') === 'ref_character_3') ||
+            (h === 'ref_animal' && src.type === 'refAnimal' && (params.sourceHandle || '') === 'ref_animal') ||
+            (h === 'ref_group' && src.type === 'refGroup' && (params.sourceHandle || '') === 'ref_group') ||
+            (h === 'ref_location' && src.type === 'refNode' && (params.sourceHandle || '') === 'ref_location') ||
+            (h === 'ref_style' && src.type === 'refNode' && (params.sourceHandle || '') === 'ref_style') ||
+            (h === 'ref_props' && src.type === 'refNode' && (params.sourceHandle || '') === 'ref_items');
+          if (!ok) return eds;
+          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === h));
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: h, sourceType: src.type, targetType: dst.type });
+          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
 
-        // default: allow
-        const presentation = getEdgePresentation({
-          sourceHandle: params.sourceHandle || "",
-          targetHandle: params.targetHandle || "",
-          sourceType: src.type,
-          targetType: dst.type,
-        });
+        if (src.type === "brainNode" && (params.sourceHandle || "") === "plan") {
+          if (dst.type === "storyboardNode" && (params.targetHandle || "") === "plan_in") {
+            const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === "plan_in"));
+            const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
+            return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          }
+          return eds;
+        }
+
+        if (src.type === 'comfyBrain' && (params.sourceHandle || '') === 'comfy_plan') {
+          if (dst.type !== 'comfyStoryboard' || (params.targetHandle || '') !== 'comfy_plan') return eds;
+          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === 'comfy_plan'));
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
+          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+        }
+
+        if (src.type === 'comfyStoryboard' && (params.sourceHandle || '') === 'comfy_scene_video_out') {
+          if (dst.type !== 'comfyVideoPreview' || (params.targetHandle || '') !== 'comfy_scene_video_out') return eds;
+          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === 'comfy_scene_video_out'));
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
+          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+        }
+
+        if (src.type === 'comfyStoryboard' || src.type === 'comfyBrain' || src.type === 'comfyVideoPreview' || dst.type === 'comfyStoryboard' || dst.type === 'comfyBrain' || dst.type === 'comfyVideoPreview') {
+          return eds;
+        }
+
+        const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
         return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, eds);
       });
     },
@@ -3820,6 +4121,35 @@ const hydrate = useCallback(() => {
         </div>
       ) : null}
 
+      {comfyEditor.open ? (
+        <div className="clipSB_scenarioOverlay" onClick={() => setComfyEditor((s) => ({ ...s, open: false }))}>
+          <div className="clipSB_scenarioPanel" onClick={(e) => e.stopPropagation()}>
+            <div className="clipSB_scenarioHeader">
+              <div className="clipSB_scenarioTitle">COMFY STORYBOARD</div>
+              <button className="clipSB_iconBtn" onClick={() => setComfyEditor((s) => ({ ...s, open: false }))}>×</button>
+            </div>
+            {(() => {
+              const node = nodes.find((n) => n.id === comfyEditor.nodeId && n.type === 'comfyStoryboard');
+              const scenes = Array.isArray(node?.data?.mockScenes) ? node.data.mockScenes : [];
+              const active = comfyEditor.tab || 'SCENES';
+              return (
+                <div>
+                  <div className="clipSB_inlineBtns" style={{ marginBottom: 12 }}>
+                    {['SCENES','PROMPT','DEBUG','VIDEO'].map((tab) => (
+                      <button key={tab} className="clipSB_btn clipSB_btnSecondary" onClick={() => setComfyEditor((s) => ({ ...s, tab }))}>{tab}</button>
+                    ))}
+                  </div>
+                  {active === 'SCENES' ? <div className="clipSB_planList">{scenes.map((sc) => <div key={sc.sceneId} className="clipSB_planRow"><div className="clipSB_planTime">{sc.title}</div><div className="clipSB_planText">{sc.description}<br/>primary: {sc.primaryRole} • secondary: {(sc.secondaryRoles || []).join(', ')}<br/>continuity: {sc.continuity}</div></div>)}</div> : null}
+                  {active === 'PROMPT' ? <div className="clipSB_small">{scenes[0]?.imagePrompt || 'no image prompt'}<br />{scenes[0]?.videoPrompt || 'no video prompt'}<pre>{JSON.stringify(scenes[0] || {}, null, 2)}</pre></div> : null}
+                  {active === 'DEBUG' ? <div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'}<br/>workflow preset: comfy-default<br/>prompt length: {JSON.stringify(scenes).length}<br/>cast roles used: character_1, character_2, character_3, animal, group<br/>refs used: location, style, props</div> : null}
+                  {active === 'VIDEO' ? <div className="clipSB_previewCard"><div className="clipSB_small">future mp4 preview block • status: demo</div></div> : null}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      ) : null}
+
       {lightboxUrl ? (
         <div className="clipSB_lightbox" onClick={() => setLightboxUrl("")}>
           <img
@@ -3847,6 +4177,17 @@ const hydrate = useCallback(() => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_location")}>📍 REF — Локация</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_style")}>🎨 REF — Стиль</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_items")}>📦 REF — Предметы</button>
+              <div className="clipSB_drawerSep" />
+              <div className="clipSB_drawerGroupTitle">COMFY FLOW</div>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyBrain")}>🧠 COMFY BRAIN</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyStoryboard")}>🧩 COMFY STORYBOARD</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyVideoPreview")}>🎬 COMFY VIDEO PREVIEW</button>
+              <div className="clipSB_drawerSep" />
+              <div className="clipSB_drawerGroupTitle">COMFY CAST / REFS</div>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("refCharacter2")}>👤 CHARACTER 2</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("refCharacter3")}>👤 CHARACTER 3</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("refAnimal")}>🐾 ANIMAL</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("refGroup")}>👥 GROUP / COLLECTIVE</button>
               <div className="clipSB_drawerSep" />
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("storyboard")}>🎞️ Storyboard</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("assembly")}>🎬 Сборка</button>
