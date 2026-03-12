@@ -4924,20 +4924,48 @@ def clip_image(payload: ClipImageIn):
 
         parts = [{"text": system_prompt}]
 
+        role_attach_order: list[str] = []
+        attached_counts_by_role: dict[str, int] = {role: 0 for role in comfy_roles}
+        skipped_roles: list[dict[str, Any]] = []
+
+        ordered_cast_roles: list[str] = []
+        if hero_entity_id and hero_entity_id in scene_active_roles:
+            ordered_cast_roles.append(hero_entity_id)
+        ordered_cast_roles.extend([role for role in support_entity_ids if role in scene_active_roles and role != hero_entity_id])
+        ordered_cast_roles.extend([
+            role for role in scene_active_roles
+            if role not in ordered_cast_roles and role not in {"location", "style", "props"}
+        ])
+        ordered_world_roles = [role for role in ["location", "style", "props"] if role in scene_active_roles]
+        ordered_roles_for_attach = ordered_cast_roles + ordered_world_roles
+
+        for role in ordered_roles_for_attach:
+            role_parts = comfy_inline_parts_by_role.get(role) or []
+            role_urls = comfy_refs_by_role.get(role) or []
+            role_attach_order.append(role)
+            if role_parts:
+                parts.append({"text": f"COMFY role reference images for {role}."})
+                parts.extend(role_parts)
+                attached_counts_by_role[role] = len(role_parts)
+            elif role_urls:
+                skipped_roles.append({"role": role, "reason": "inline_load_failed", "urlCount": len(role_urls)})
+            else:
+                skipped_roles.append({"role": role, "reason": "no_urls"})
+
         if character_images:
-            parts.append({"text": "Character reference images. All depict the SAME main character."})
+            parts.append({"text": "Legacy character reference images (compatibility path)."})
             parts.extend(character_images)
 
         if location_images:
-            parts.append({"text": "Location reference images. These define the same world/environment."})
+            parts.append({"text": "Legacy location reference images (compatibility path)."})
             parts.extend(location_images)
 
         if style_images:
-            parts.append({"text": "Style reference images. These define season, weather, palette, texture, atmosphere, and overall visual language. Apply them explicitly and visibly in the final frame."})
+            parts.append({"text": "Legacy style reference images (compatibility path)."})
             parts.extend(style_images)
 
         if props_images:
-            parts.append({"text": "Props reference images. These are key scene objects. Keep them prominent when relevant; if only one prop is attached, treat it as primary and do not omit it."})
+            parts.append({"text": "Legacy props reference images (compatibility path)."})
             parts.extend(props_images)
             parts.append({"text": "The prop identity is defined by the reference images and must not be replaced."})
             if prop_anchor_label:
@@ -5149,6 +5177,7 @@ def clip_image(payload: ClipImageIn):
         }
         text_parts_total = sum(1 for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str))
         image_parts_total = sum(1 for part in parts if isinstance(part, dict) and isinstance(part.get("inlineData"), dict))
+        hero_attached = bool(hero_entity_id and attached_counts_by_role.get(hero_entity_id, 0) > 0)
         model_parts_summary = {
             "textParts": text_parts_total,
             "imageParts": image_parts_total,
@@ -5158,7 +5187,18 @@ def clip_image(payload: ClipImageIn):
             "styleParts": len(style_images) + len(comfy_inline_parts_by_role.get("style") or []),
             "propsParts": len(props_images) + len(comfy_inline_parts_by_role.get("props") or []),
             "previousSceneParts": 1 if previous_scene_image_inline else 0,
+            "heroEntityId": hero_entity_id or None,
+            "heroAttached": hero_attached,
+            "attachOrder": role_attach_order,
+            "attachedCountsByRole": attached_counts_by_role,
+            "skippedRoles": skipped_roles,
+            "activeRoles": scene_active_roles,
         }
+        refs_debug["attachOrder"] = role_attach_order
+        refs_debug["attachedCountsByRole"] = attached_counts_by_role
+        refs_debug["heroAttached"] = hero_attached
+        refs_debug["heroEntityId"] = hero_entity_id or None
+        refs_debug["skippedRoles"] = skipped_roles
         print("[COMFY IMAGE DEBUG] model parts summary=" + json.dumps(model_parts_summary, ensure_ascii=False))
         resp = post_generate_content(api_key, model, body, timeout=120)
         decoded = _decode_gemini_image(resp if isinstance(resp, dict) else {})

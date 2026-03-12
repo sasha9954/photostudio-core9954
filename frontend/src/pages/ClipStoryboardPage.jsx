@@ -859,6 +859,20 @@ function normalizeClipImageRefsPayload(refs = {}) {
   if (Array.isArray(refs?.secondaryRoles)) {
     normalized.secondaryRoles = refs.secondaryRoles.map((role) => String(role || "").trim()).filter(Boolean);
   }
+  const heroEntityId = String(refs?.heroEntityId || "").trim();
+  if (heroEntityId) normalized.heroEntityId = heroEntityId;
+  if (Array.isArray(refs?.supportEntityIds)) {
+    normalized.supportEntityIds = refs.supportEntityIds.map((role) => String(role || "").trim()).filter(Boolean);
+  }
+  if (Array.isArray(refs?.mustAppear)) {
+    normalized.mustAppear = refs.mustAppear.map((role) => String(role || "").trim()).filter(Boolean);
+  }
+  if (Array.isArray(refs?.mustNotAppear)) {
+    normalized.mustNotAppear = refs.mustNotAppear.map((role) => String(role || "").trim()).filter(Boolean);
+  }
+  if (typeof refs?.environmentLock === "boolean") normalized.environmentLock = refs.environmentLock;
+  if (typeof refs?.styleLock === "boolean") normalized.styleLock = refs.styleLock;
+  if (typeof refs?.identityLock === "boolean") normalized.identityLock = refs.identityLock;
 
   return normalized;
 }
@@ -882,6 +896,13 @@ function buildComfySceneRefsPayload({
   refDirectives = null,
   primaryRole = "",
   secondaryRoles = [],
+  heroEntityId = "",
+  supportEntityIds = [],
+  mustAppear = [],
+  mustNotAppear = [],
+  environmentLock = null,
+  styleLock = null,
+  identityLock = null,
 } = {}) {
   const pickUrls = (roles = []) => roles
     .flatMap((role) => (Array.isArray(refsByRole?.[role]) ? refsByRole[role] : []))
@@ -928,6 +949,13 @@ function buildComfySceneRefsPayload({
     refDirectives: refDirectives && typeof refDirectives === 'object' ? refDirectives : undefined,
     primaryRole: String(primaryRole || "").trim(),
     secondaryRoles: Array.isArray(secondaryRoles) ? secondaryRoles : undefined,
+    heroEntityId: String(heroEntityId || "").trim(),
+    supportEntityIds: Array.isArray(supportEntityIds) ? supportEntityIds : undefined,
+    mustAppear: Array.isArray(mustAppear) ? mustAppear : undefined,
+    mustNotAppear: Array.isArray(mustNotAppear) ? mustNotAppear : undefined,
+    environmentLock: typeof environmentLock === 'boolean' ? environmentLock : undefined,
+    styleLock: typeof styleLock === 'boolean' ? styleLock : undefined,
+    identityLock: typeof identityLock === 'boolean' ? identityLock : undefined,
   });
 }
 
@@ -2488,6 +2516,13 @@ const comfyShowVideoSection = Boolean(
         refDirectives: comfySelectedScene?.refDirectives && typeof comfySelectedScene.refDirectives === 'object' ? comfySelectedScene.refDirectives : null,
         primaryRole: comfySelectedScene?.primaryRole || "",
         secondaryRoles: Array.isArray(comfySelectedScene?.secondaryRoles) ? comfySelectedScene.secondaryRoles : [],
+        heroEntityId: comfySelectedScene?.heroEntityId || "",
+        supportEntityIds: Array.isArray(comfySelectedScene?.supportEntityIds) ? comfySelectedScene.supportEntityIds : [],
+        mustAppear: Array.isArray(comfySelectedScene?.mustAppear) ? comfySelectedScene.mustAppear : [],
+        mustNotAppear: Array.isArray(comfySelectedScene?.mustNotAppear) ? comfySelectedScene.mustNotAppear : [],
+        environmentLock: typeof comfySelectedScene?.environmentLock === 'boolean' ? comfySelectedScene.environmentLock : null,
+        styleLock: typeof comfySelectedScene?.styleLock === 'boolean' ? comfySelectedScene.styleLock : null,
+        identityLock: typeof comfySelectedScene?.identityLock === 'boolean' ? comfySelectedScene.identityLock : null,
       };
       const refsForImageRequest = buildComfySceneRefsPayload(refsPayloadForImage);
 
@@ -2500,6 +2535,21 @@ const comfyShowVideoSection = Boolean(
       console.log("[COMFY DEBUG FRONT] /clip/image refs payload refsByRole counts", summarizeRefsByRole(refsPayloadForImage?.refsByRole));
       console.log("[COMFY DEBUG FRONT] /clip/image final refs before request", refsForImageRequest);
       console.log("[COMFY DEBUG FRONT] /clip/image final refsByRole counts before request", summarizeRefsByRole(refsForImageRequest?.refsByRole));
+      console.log("[COMFY DEBUG FRONT] /clip/image final role contract", {
+        heroEntityId: refsForImageRequest?.heroEntityId || null,
+        refsUsed: refsForImageRequest?.refsUsed || [],
+        primaryRole: refsForImageRequest?.primaryRole || null,
+        secondaryRoles: refsForImageRequest?.secondaryRoles || [],
+        supportEntityIds: refsForImageRequest?.supportEntityIds || [],
+        mustAppear: refsForImageRequest?.mustAppear || [],
+        mustNotAppear: refsForImageRequest?.mustNotAppear || [],
+        environmentLock: refsForImageRequest?.environmentLock,
+        styleLock: refsForImageRequest?.styleLock,
+        identityLock: refsForImageRequest?.identityLock,
+      });
+      console.log("[COMFY DEBUG FRONT] /clip/image final refsByRole urls", Object.fromEntries(
+        Object.entries(refsForImageRequest?.refsByRole || {}).map(([role, urls]) => [role, Array.isArray(urls) ? urls : []])
+      ));
 
       const out = await fetchJson('/api/clip/image', {
         method: 'POST',
