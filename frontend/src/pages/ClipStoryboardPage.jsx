@@ -3134,7 +3134,7 @@ onClipSec: (nodeId, value) => {
                     const scenes = buildMockComfyScenes(plannerMeta);
                     response = { ok: true, planMeta: plannerMeta, globalContinuity: scenes[0]?.plannerMeta?.globalContinuity || "", scenes, warnings: plannerMeta.warnings, errors: [], debug: {} };
                   } else {
-                    response = await fetchJson(`/api/clip/comfy/plan`, { method: "POST", body: JSON.stringify(payload) });
+                    response = await fetchJson(`/api/clip/comfy/plan`, { method: "POST", body: payload });
                   }
                   console.log("[COMFY PARSE] response", response);
                 } catch (err) {
