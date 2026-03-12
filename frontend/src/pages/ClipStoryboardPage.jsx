@@ -361,6 +361,29 @@ function getSceneUiDescription(scene) {
   return "";
 }
 
+function getScenarioSceneStableKey(scene, idx) {
+  if (!scene || typeof scene !== "object") return `scene-${idx}`;
+  const explicitId = String(scene.id || scene.sceneId || "").trim();
+  if (explicitId) return explicitId;
+
+  const start = Number(scene.t0 ?? scene.start);
+  const end = Number(scene.t1 ?? scene.end);
+  if (Number.isFinite(start) && Number.isFinite(end)) {
+    return `time-${start}-${end}`;
+  }
+
+  return `scene-${idx}`;
+}
+
+function isLipSyncScene(scene) {
+  if (!scene || typeof scene !== "object") return false;
+  return !!(
+    scene.lipSync === true
+    || scene.isLipSync === true
+    || String(scene.renderMode || "").trim().toLowerCase() === "avatar_lipsync"
+  );
+}
+
 function stableRefsSignature(refs = []) {
   return refs
     .map((item) => String(item?.url || "").trim())
@@ -850,15 +873,20 @@ function notify(detail) {
 async function getAudioDurationSec(url) {
   // Browser-side duration probe (metadata only)
   return await new Promise((resolve) => {
+    const safeUrl = String(url || "").trim();
+    if (!safeUrl) {
+      resolve(null);
+      return;
+    }
     try {
       const a = new Audio();
       a.preload = "metadata";
       a.onloadedmetadata = () => {
-        const d = Number.isFinite(a.duration) ? a.duration : null;
-        resolve(d);
+        const duration = a && Number.isFinite(a.duration) ? a.duration : null;
+        resolve(duration);
       };
       a.onerror = () => resolve(null);
-      a.src = url;
+      a.src = safeUrl;
     } catch {
       resolve(null);
     }
@@ -1977,9 +2005,10 @@ Aspect ratio: ${imageFormat}`,
 
   const handleScenarioSliceLoadedMetadata = useCallback((event) => {
     if (!scenarioSelected) return;
-    const duration = Number(event?.currentTarget?.duration);
+    const mediaEl = event?.currentTarget || event?.target || null;
+    const duration = mediaEl && Number.isFinite(mediaEl.duration) ? Number(mediaEl.duration) : null;
     updateScenarioScene(scenarioEditor.selected, {
-      audioSliceActualDurationSec: Number.isFinite(duration) ? duration : null,
+      audioSliceActualDurationSec: duration,
       audioSliceLoadError: "",
     });
   }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
