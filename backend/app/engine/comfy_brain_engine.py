@@ -187,17 +187,23 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     refs_presence = {k: len(v) for k, v in normalized["refsByRole"].items()}
     debug_signature = "COMFY_DEBUG_STEP_V1"
     module_file = __file__
+    # TEMP HARD DEBUG STEP (REMOVE AFTER CONFIRMATION):
+    # VERIFY EXACT FILE + EXACT MODEL for COMFY planner requests.
+    hard_debug_disable_fallback = True
     logger.info("[COMFY PLAN] request summary mode=%s output=%s style=%s", normalized["mode"], normalized["output"], normalized["stylePreset"])
     logger.info("[COMFY PLAN] text/audio/refs presence text=%s audio=%s refs=%s", bool(normalized["text"]), bool(normalized["audioUrl"]), refs_presence)
     logger.warning("[%s] run_comfy_plan entered module_file=%s", debug_signature, module_file)
+    print(f"[{debug_signature}] ENTER run_comfy_plan")
+    print(f"[{debug_signature}] FILE = {module_file}")
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
-    # TEMP DEBUG STEP: hard pin model to verify exact model request in logs.
+    # TEMP DEBUG STEP: hard pin model to remove ambiguity for diagnostic run.
     requested_model = "gemini-2.5-flash"
     logger.warning("[%s] hard_requested_model=%s", debug_signature, requested_model)
     logger.warning("[%s] effective_model_before_request=%s", debug_signature, requested_model)
+    print(f"[{debug_signature}] HARD MODEL = {requested_model}")
     if not api_key:
-        return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["GEMINI_API_KEY missing"], "debug": {"debugSignature": debug_signature, "moduleFile": module_file, "requestedModel": requested_model, "effectiveModel": None, "httpStatus": None, "rawPreview": "", "normalizedPayload": normalized}}
+        return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["GEMINI_API_KEY missing"], "debug": {"debugSignature": debug_signature, "moduleFile": module_file, "requestedModel": requested_model, "effectiveModel": None, "httpStatus": None, "rawPreview": "", "normalizedPayload": normalized, "fallbackFrom": None, "normalizedScenesCount": 0}}
 
     body = {
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4},
@@ -208,7 +214,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
     errors: list[str] = []
 
-    if diagnostics["httpStatus"] == 404 and requested_model != FALLBACK_GEMINI_MODEL:
+    if not hard_debug_disable_fallback and diagnostics["httpStatus"] == 404 and requested_model != FALLBACK_GEMINI_MODEL:
         logger.info("[COMFY PLAN] fallback_from=%s fallback_to=%s", requested_model, FALLBACK_GEMINI_MODEL)
         warnings.append(f"gemini_model_fallback:{requested_model}->{FALLBACK_GEMINI_MODEL}")
         parsed_fb, diagnostics_fb = _call_gemini_plan(api_key, FALLBACK_GEMINI_MODEL, body)
@@ -249,16 +255,21 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "httpStatus": diagnostics.get("httpStatus"),
             "rawPreview": diagnostics.get("rawPreview") or "",
             "normalizedPayload": normalized,
+            "fallbackFrom": diagnostics.get("fallbackFrom"),
+            "normalizedScenesCount": len(scenes),
         },
     }
     first_scene = scenes[0] if scenes else {}
     logger.info(
-        "[COMFY PLAN] result ok=%s scenes=%s warnings=%s errors=%s normalizedScenesCount=%s firstSceneId=%s firstSceneTitle=%s",
+        "[%s] result ok=%s scenes=%s warnings=%s errors=%s requestedModel=%s effectiveModel=%s httpStatus=%s firstSceneId=%s firstSceneTitle=%s",
+        debug_signature,
         result["ok"],
         len(scenes),
         len(result["warnings"]),
         len(result["errors"]),
-        len(scenes),
+        result["debug"].get("requestedModel"),
+        result["debug"].get("effectiveModel"),
+        result["debug"].get("httpStatus"),
         first_scene.get("sceneId") if isinstance(first_scene, dict) else None,
         first_scene.get("title") if isinstance(first_scene, dict) else None,
     )
