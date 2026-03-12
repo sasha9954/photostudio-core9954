@@ -4400,6 +4400,7 @@ def _build_comfy_image_prompt_assembly(
         role_blocks.append("Props/items anchor is connected and must preserve object identity.")
 
     profile_contract_lines: list[str] = []
+    visual_profile_lines: list[str] = []
     forbidden_changes: list[str] = []
     active_roles = [str(r or "").strip() for r in (contract.get("activeRoles") or []) if str(r or "").strip() in COMFY_REF_ROLES]
     for role in active_roles:
@@ -4408,6 +4409,15 @@ def _build_comfy_image_prompt_assembly(
         forb = profile.get("forbiddenChanges") if isinstance(profile.get("forbiddenChanges"), list) else []
         if inv:
             profile_contract_lines.append(f"- {role}: " + "; ".join(str(x) for x in inv[:4]))
+        visual_profile = profile.get("visualProfile") if isinstance(profile.get("visualProfile"), dict) else {}
+        if visual_profile:
+            visual_bits = []
+            for k, v in list(visual_profile.items())[:6]:
+                value = str(v or "").strip()
+                if value:
+                    visual_bits.append(f"{k}={value}")
+            if visual_bits:
+                visual_profile_lines.append(f"- {role}: " + "; ".join(visual_bits))
         if forb:
             forbidden_changes.extend([f"{role}:{str(x)}" for x in forb])
 
@@ -4462,7 +4472,15 @@ def _build_comfy_image_prompt_assembly(
         "narrativeSource": str((planner_meta or {}).get("narrativeSource") or "").strip(),
     }
 
+    identity_layer_block = "\n".join([
+        "IDENTITY LAYER (PRIORITY 1):",
+        f"- hero entity: {contract.get('heroEntityId') or 'none'}",
+        f"- active roles: {', '.join(active_roles) or 'none'}",
+        "- preserve face/hair/body/outfit/accessories and forbidden identity changes from references",
+    ] + (visual_profile_lines or ["- no detailed visualProfile extracted"]))
+
     scene_meaning_block = "\n".join([
+        "SCENE LAYER (PRIORITY 2):",
         "SCENE MEANING:",
         f"- scene delta: {scene_delta}",
         f"- scene text/context: {scene_text or text_input or ''}",
@@ -4490,6 +4508,7 @@ def _build_comfy_image_prompt_assembly(
     ])
 
     assembled_prompt = "\n\n".join([
+        identity_layer_block,
         scene_meaning_block,
         continuity_block,
         "CAST / ENTITY ANCHORS:\n" + ("\n".join(role_blocks) if role_blocks else "- none explicitly connected"),
@@ -5077,7 +5096,7 @@ def clip_image(payload: ClipImageIn):
             effective_style_anchor=effective_style_anchor,
             scene_id=scene_id,
             scene_contract=scene_contract,
-            reference_profiles=reference_profiles_summary,
+            reference_profiles=reference_profiles,
         )
         assembled_prompt = comfy_assembled_prompt
         refs_debug["comfyAssemblyDebug"] = comfy_assembly_debug

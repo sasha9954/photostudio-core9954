@@ -43,6 +43,15 @@ export function normalizeComfyScenePrompts(scene = {}) {
   const videoPromptSyncStatus = [PROMPT_SYNC_STATUS.synced, PROMPT_SYNC_STATUS.needsSync, PROMPT_SYNC_STATUS.syncing, PROMPT_SYNC_STATUS.syncError].includes(scene?.videoPromptSyncStatus)
     ? scene.videoPromptSyncStatus
     : computePromptSync({ ru: videoPromptRu, en: videoPromptEn });
+  const refsUsed = Array.isArray(scene?.refsUsed)
+    ? scene.refsUsed.map((role) => String(role || "").trim()).filter(Boolean)
+    : [];
+  const primaryRole = String(scene?.primaryRole || "").trim();
+  const fallbackHero = primaryRole || refsUsed[0] || "";
+  const heroEntityId = String(scene?.heroEntityId || fallbackHero).trim();
+  const mustAppear = Array.isArray(scene?.mustAppear)
+    ? scene.mustAppear.map((role) => String(role || "").trim()).filter(Boolean)
+    : (heroEntityId ? [heroEntityId] : refsUsed);
   return {
     ...scene,
     imagePromptRu,
@@ -51,6 +60,10 @@ export function normalizeComfyScenePrompts(scene = {}) {
     videoPromptEn,
     imagePrompt: imagePromptEn,
     videoPrompt: videoPromptEn,
+    refsUsed,
+    primaryRole,
+    heroEntityId,
+    mustAppear,
     videoPanelOpen: Boolean(scene?.videoPanelOpen || String(scene?.videoUrl || "").trim()),
     imagePromptSyncStatus,
     videoPromptSyncStatus,

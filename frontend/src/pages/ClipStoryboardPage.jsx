@@ -2501,7 +2501,22 @@ const comfyShowVideoSection = Boolean(
         || comfyPreviousScene?.startImageUrl
         || ""
       ).trim();
-      const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || {};
+      const liveDerived = deriveComfyBrainState({
+        nodeId: comfyNode?.id,
+        nodeData: comfyNode?.data || {},
+        nodesNow: nodesRef.current || [],
+        edgesNow: edgesRef.current || [],
+        normalizeRefDataFn: normalizeRefData,
+      });
+      const plannerInput = {
+        ...(comfyNode?.data?.plannerMeta?.plannerInput || {}),
+        text: liveDerived?.meaningfulText || comfyNode?.data?.plannerMeta?.plannerInput?.text || "",
+        audioUrl: liveDerived?.meaningfulAudio || comfyNode?.data?.plannerMeta?.plannerInput?.audioUrl || "",
+        audioDurationSec: liveDerived?.meaningfulAudioDurationSec || comfyNode?.data?.plannerMeta?.plannerInput?.audioDurationSec || null,
+        refsByRole: liveDerived?.refsByRole || comfyNode?.data?.plannerMeta?.plannerInput?.refsByRole || {},
+        mode: liveDerived?.modeValue || comfyNode?.data?.plannerMeta?.plannerInput?.mode || "",
+        stylePreset: liveDerived?.stylePreset || comfyNode?.data?.plannerMeta?.plannerInput?.stylePreset || "",
+      };
       const refsByRoleForImage = plannerInput?.refsByRole || comfyRefsByRole;
       const refsPayloadForImage = {
         refsByRole: refsByRoleForImage,
@@ -2590,7 +2605,7 @@ ${contextPrompt}`.trim(),
     } finally {
       setComfyImageLoading(false);
     }
-  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfyPreviousScene?.endImageUrl, comfyPreviousScene?.imageUrl, comfyPreviousScene?.startImageUrl, comfyRefsByRole, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, updateComfyScene]);
+  }, [comfyNode?.data, comfyNode?.id, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfyPreviousScene?.endImageUrl, comfyPreviousScene?.imageUrl, comfyPreviousScene?.startImageUrl, comfyRefsByRole, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, normalizeRefData, updateComfyScene]);
 
   const handleComfyDeleteImage = useCallback(() => {
     setComfyImageError('');
