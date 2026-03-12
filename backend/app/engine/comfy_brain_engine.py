@@ -161,12 +161,30 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- music_plus_text: lyrics semantics must be ignored completely. TEXT node is the narrative driver for plot/events/world/objects/characters/story beats. AUDIO controls pacing, scene timing, montage rhythm, energy and emotional modulation. If lyrics conflict with TEXT, ignore lyrics semantics and follow TEXT. If TEXT is empty, fall back to a neutral music-driven storyboard without lyrics meaning.\n"
         "- Non-compliance is an error: for music_only and music_plus_text never claim lyric semantics drove the story."
     )
+    segmentation_rules = (
+        "SCENE SEGMENTATION RULES (HIGHEST PRIORITY):\n"
+        "- Scene boundaries must follow meaningful phrase endings and real transition points.\n"
+        "- Prefer cuts at: (1) vocal/semantic phrase ending, (2) musical phrase ending, (3) clear energy/rhythm/arrangement transition, (4) end of a visual micro-action, (5) emotional intention change.\n"
+        "- Never split into equal-sized time blocks (forbidden: mechanical 5s, 10s, or evenly spaced chunks).\n"
+        "- Duration is only a guardrail, not the main segmentation driver.\n"
+        "- Guardrails: avoid <2.0s unless there is a strong accent cut; avoid >8.0s unless one continuous meaningful phrase/action justifies it.\n"
+        "- If a scene exceeds 8.0s, include an explicit justification in sceneNarrativeStep or continuity.\n"
+        "- Boundaries should feel cinematic and natural, not grid-based.\n"
+    )
+    audio_mode_segmentation = (
+        "AUDIO MODE SEGMENTATION FOCUS:\n"
+        "- lyrics_music: boundaries can follow lyric/sentence/sung-line endings plus music transitions.\n"
+        "- music_only: ignore lyrics meaning; boundaries follow musical phrasing, energy shifts, rhythmic transitions, and structure only.\n"
+        "- music_plus_text: ignore lyrics meaning; boundaries follow musical phrasing + meaningful TEXT chunks, synced to transition points.\n"
+    )
 
     return (
         "You are COMFY storyboard planner. Return strict JSON only.\n"
         "Fields: ok, planMeta, globalContinuity, scenes, warnings, errors, debug.\n"
         f"Selected audioStoryMode={audio_story_mode}.\n"
         f"{audio_story_rules}\n"
+        f"{segmentation_rules}\n"
+        f"{audio_mode_segmentation}\n"
         "AUDIO is primary source for rhythm, emotional contour, dramatic shifts and timing.\n"
         "If INPUT.audioDurationSec is provided and > 0, scene timeline MUST stay inside [0, audioDurationSec].\n"
         "TEXT is optional support that clarifies intent.\n"
@@ -175,6 +193,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePrompt,videoPrompt,refsUsed.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
+        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected.\n"
         f"INPUT={json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -292,6 +311,40 @@ def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
     }
 
 
+def _build_segmentation_debug(scenes: list[dict[str, Any]], audio_story_mode: str, timing_debug: dict[str, Any]) -> dict[str, Any]:
+    durations = [max(0.0, _to_float(scene.get("durationSec")) or 0.0) for scene in scenes]
+    avg_duration = (sum(durations) / len(durations)) if durations else 0.0
+    max_duration = max(durations) if durations else 0.0
+    min_duration = min(durations) if durations else 0.0
+    short_count = sum(1 for d in durations if 0.0 < d < 2.0)
+    long_count = sum(1 for d in durations if d > 8.0)
+
+    suspicious_even_chunks = False
+    if len(durations) >= 3 and avg_duration > 0:
+        max_delta = max(abs(d - avg_duration) for d in durations)
+        suspicious_even_chunks = max_delta <= 0.35
+
+    mode_reason_map = {
+        "lyrics_music": "semantic_and_vocal_phrases_with_music_transitions",
+        "music_only": "music_phrase_energy_and_structure_transitions",
+        "music_plus_text": "text_meaning_chunks_synced_to_music_transitions",
+    }
+    mode_reason = mode_reason_map.get(audio_story_mode, "music_driven_transitions")
+
+    return {
+        "averageSceneDurationSec": _round_sec(avg_duration),
+        "maxSceneDurationSec": _round_sec(max_duration),
+        "minSceneDurationSec": _round_sec(min_duration),
+        "shortSceneCountUnder2Sec": short_count,
+        "longSceneCountOver8Sec": long_count,
+        "normalizationApplied": bool(timing_debug.get("normalizationApplied")),
+        "normalizationReason": timing_debug.get("normalizationReason"),
+        "segmentationMode": "phrase_transition_oriented",
+        "segmentationReason": mode_reason,
+        "suspiciousEqualChunking": suspicious_even_chunks,
+    }
+
+
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
     refs_presence = {k: len(v) for k, v in normalized["refsByRole"].items()}
@@ -351,6 +404,9 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
     scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(raw_scenes)]
     scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
+    segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
+    if segmentation_debug.get("suspiciousEqualChunking"):
+        warnings.append("segmentation_suspicious_equal_chunks")
     logger.info("[COMFY PLAN] normalized scenes count=%s", len(scenes))
 
     parsed_errors = parsed.get("errors") if isinstance(parsed.get("errors"), list) else []
@@ -387,6 +443,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "fallbackFrom": diagnostics.get("fallbackFrom"),
             "normalizedScenesCount": len(scenes),
             "timing": timing_debug,
+            "segmentation": segmentation_debug,
         },
     }
     if timing_debug.get("normalizationApplied"):
