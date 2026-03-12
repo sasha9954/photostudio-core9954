@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any
 
 from app.core.config import settings
@@ -8,6 +13,126 @@ from app.engine.gemini_rest import post_generate_content
 
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
 HUMAN_ROLES = {"character_1", "character_2", "character_3", "group"}
+
+
+def _resolve_reference_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme in {"http", "https"}:
+        return raw
+    if raw.startswith("//"):
+        return f"http:{raw}"
+    base = (settings.PUBLIC_BASE_URL or "http://127.0.0.1:8000").rstrip("/")
+    if raw.startswith("/"):
+        return f"{base}{raw}"
+    return f"{base}/{raw}"
+
+
+def _extract_mime_type(url: str, headers: dict[str, str], data: bytes) -> str:
+    header_mime = str(headers.get("content-type") or "").split(";")[0].strip().lower()
+    if header_mime.startswith("image/"):
+        return header_mime
+    guessed_from_url, _ = mimetypes.guess_type(url)
+    if guessed_from_url and guessed_from_url.startswith("image/"):
+        return guessed_from_url
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+def _load_image_inline_part(url: str) -> tuple[dict[str, Any] | None, str | None]:
+    resolved = _resolve_reference_url(url)
+    if not resolved:
+        return None, "image_download_failed"
+    req = urllib.request.Request(resolved, headers={"User-Agent": "photostudio-gemini-vision/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read()
+            headers = {str(k).lower(): str(v) for k, v in resp.headers.items()}
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return None, "image_download_failed"
+    except Exception:
+        return None, "image_download_failed"
+
+    if not data:
+        return None, "image_download_failed"
+
+    mime_type = _extract_mime_type(resolved, headers, data)
+    if not mime_type:
+        return None, "image_download_failed"
+
+    return {
+        "inlineData": {
+            "mimeType": mime_type,
+            "data": base64.b64encode(data).decode("ascii"),
+        }
+    }, None
+
+
+def _vision_profile_prompt(role: str, entity_type: str) -> str:
+    schemas = {
+        "human": (
+            "visualProfile must include keys: genderPresentation, ageRange, hair, face, bodyType, outfit, accessories, dominantColors"
+        ),
+        "animal": (
+            "visualProfile must include keys: species, breedLikeAppearance, coat, bodyType, sizeClass, morphology"
+        ),
+        "object": (
+            "visualProfile must include keys: objectCategory, silhouette, material, dominantColors, distinctiveDetails, scaleClass"
+        ),
+        "location": (
+            "visualProfile must include keys: environmentType, architecture, surfaceState, weatherSeasonCues, worldAnchors"
+        ),
+        "style": (
+            "visualProfile must include keys: palette, contrast, lensFeel, grade, atmosphere"
+        ),
+    }
+    visual_profile_requirements = schemas.get(entity_type, "visualProfile must include stable identifying cues for this role")
+    return (
+        "You are a strict visual profiler. Respond with JSON only (no markdown, no prose). "
+        "Return exactly one object with keys: entityType, visualProfile, invariants, allowedVariations, forbiddenChanges, confidence. "
+        "entityType must be one of: human, animal, object, location, style. "
+        "invariants/allowedVariations/forbiddenChanges must be arrays of short strings. "
+        "confidence must be one of: low, medium, high. "
+        f"Role: {role}. Expected entityType: {entity_type}. "
+        f"{visual_profile_requirements}. "
+        "Do not include any other top-level keys."
+    )
+
+
+def _extract_json_text_from_vision_response(resp: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    candidates = resp.get("candidates") if isinstance(resp.get("candidates"), list) else []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        parts_out = (((candidate.get("content") or {}).get("parts")) or [])
+        if not isinstance(parts_out, list):
+            continue
+        for part in parts_out:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                text = part.get("text") or ""
+                if text:
+                    chunks.append(text)
+    text = "\n".join(chunks).strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        while lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    return text
 
 
 def _guess_entity_type(role: str) -> str:
@@ -126,14 +251,21 @@ def _try_build_visual_profile_with_gemini(role: str, items: list[dict[str, str]]
         return None, None, "missing_urls"
 
     model = (getattr(settings, "GEMINI_VISION_MODEL", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
-    prompt = (
-        "Analyze reference images and return strict JSON only. "
-        "Schema: {visualProfile: object, invariants: string[], allowedVariations: string[], forbiddenChanges: string[], confidence: 'low'|'medium'|'high'}. "
-        f"Role={role}. Entity type should reflect role semantics and preserve identity continuity contracts."
-    )
+    entity_type = _guess_entity_type(role)
+    prompt = _vision_profile_prompt(role, entity_type)
     parts: list[dict[str, Any]] = [{"text": prompt}]
+    loaded_images = 0
+    image_errors: list[str] = []
     for url in image_urls:
-        parts.append({"fileData": {"mimeType": "image/jpeg", "fileUri": url}})
+        image_part, image_error = _load_image_inline_part(url)
+        if image_part:
+            parts.append(image_part)
+            loaded_images += 1
+        elif image_error:
+            image_errors.append(image_error)
+
+    if loaded_images == 0:
+        return None, model, (image_errors[0] if image_errors else "no_valid_images_loaded")
 
     body = {
         "contents": [{"role": "user", "parts": parts}],
@@ -148,11 +280,7 @@ def _try_build_visual_profile_with_gemini(role: str, items: list[dict[str, str]]
 
     text = ""
     try:
-        candidates = resp.get("candidates") if isinstance(resp.get("candidates"), list) else []
-        if candidates:
-            parts_out = (((candidates[0] or {}).get("content") or {}).get("parts") or [])
-            if isinstance(parts_out, list):
-                text = "".join(str(p.get("text") or "") for p in parts_out if isinstance(p, dict)).strip()
+        text = _extract_json_text_from_vision_response(resp)
     except Exception:
         text = ""
 
@@ -165,6 +293,10 @@ def _try_build_visual_profile_with_gemini(role: str, items: list[dict[str, str]]
         return None, model, "vision_invalid_json"
 
     if not isinstance(parsed, dict):
+        return None, model, "vision_invalid_payload"
+
+    parsed_entity_type = str(parsed.get("entityType") or "").strip().lower()
+    if parsed_entity_type and parsed_entity_type not in {"human", "animal", "object", "location", "style"}:
         return None, model, "vision_invalid_payload"
 
     out = {
