@@ -189,7 +189,8 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     logger.info("[COMFY PLAN] text/audio/refs presence text=%s audio=%s refs=%s", bool(normalized["text"]), bool(normalized["audioUrl"]), refs_presence)
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
-    requested_model = (settings.GEMINI_TEXT_MODEL or FALLBACK_GEMINI_MODEL).strip()
+    requested_model = "gemini-2.5-flash"
+    print("[COMFY PLAN] HARD MODEL =", requested_model)
     logger.info("[COMFY PLAN] requested_model=%s", requested_model)
     logger.info("[COMFY PLAN] effective_model_before_request=%s", requested_model)
     if not api_key:
