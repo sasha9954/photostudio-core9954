@@ -4299,7 +4299,18 @@ def _normalize_scene_entity_contract_for_image(
     style_lock: bool | None,
     identity_lock: bool | None,
 ) -> dict[str, Any]:
-    active_roles = _resolve_scene_active_roles_for_image(refs_used, ref_directives, available_refs_by_role, primary_role)
+    resolved_roles = _resolve_scene_active_roles_for_image(refs_used, ref_directives, available_refs_by_role, primary_role)
+    resolved_roles = [role for role in resolved_roles if role in COMFY_REF_ROLES]
+    must = [str(r or "").strip() for r in (must_appear or []) if str(r or "").strip() in COMFY_REF_ROLES]
+    must = list(dict.fromkeys(must))
+    must_not = [str(r or "").strip() for r in (must_not_appear or []) if str(r or "").strip() in COMFY_REF_ROLES]
+    must_not = list(dict.fromkeys(must_not))
+
+    active_roles: list[str] = []
+    for role in resolved_roles + must:
+        if role in COMFY_REF_ROLES and role not in must_not and role not in active_roles:
+            active_roles.append(role)
+
     hero = str(hero_entity_id or primary_role or "").strip()
     if hero not in COMFY_REF_ROLES or hero not in active_roles:
         hero = active_roles[0] if active_roles else ""
@@ -4308,17 +4319,14 @@ def _normalize_scene_entity_contract_for_image(
     supports = [r for r in supports if r in COMFY_REF_ROLES and r in active_roles and r != hero]
     supports = list(dict.fromkeys(supports))
 
-    must = [str(r or "").strip() for r in (must_appear or []) if str(r or "").strip() in COMFY_REF_ROLES]
+    must = list(dict.fromkeys([r for r in must if r in active_roles]))
     if not must:
         must = [hero] + supports if hero else list(active_roles)
     must = list(dict.fromkeys([r for r in must if r in active_roles]))
 
-    must_not = [str(r or "").strip() for r in (must_not_appear or []) if str(r or "").strip() in COMFY_REF_ROLES]
-    must_not = list(dict.fromkeys(must_not))
-
     degraded_roles: list[str] = []
-    for role in must:
-        if len(available_refs_by_role.get(role) or []) == 0:
+    for role in resolved_roles + must:
+        if role in COMFY_REF_ROLES and len(available_refs_by_role.get(role) or []) == 0 and role not in degraded_roles:
             degraded_roles.append(role)
 
     return {
@@ -4331,6 +4339,7 @@ def _normalize_scene_entity_contract_for_image(
         "styleLock": bool(style_lock if style_lock is not None else "style" in active_roles),
         "identityLock": bool(identity_lock if identity_lock is not None else any(r in active_roles for r in ["character_1","character_2","character_3","group","animal","props"])),
         "degradedRoles": degraded_roles,
+        "resolvedRoles": resolved_roles,
     }
 
 
@@ -4412,6 +4421,17 @@ def _build_comfy_image_prompt_assembly(
         "- camera/pose may change, identity may not change",
     ] + (profile_contract_lines or ["- no active profile contracts"]))
 
+    priority_contract_block = "\n".join([
+        "HERO PRIORITY CONTRACT (STRICT):",
+        "- hero identity is highest-priority visual truth",
+        "- props identity must be preserved exactly when connected",
+        "- location defines environment/world identity",
+        "- style layer controls palette/lighting/cinematic treatment only",
+        "- style cannot override actor identity, outfit identity, hair identity, animal coat/species identity, object silhouette/material/color, or world anchors",
+        "- previous generated scene image is continuity reference, not identity override",
+        "- camera/pose/composition may change; identity cannot change",
+    ])
+
     forbidden_changes_block = "\n".join([
         "FORBIDDEN CHANGES:",
         *([f"- {line}" for line in forbidden_changes] or ["- none"]) 
@@ -4485,6 +4505,7 @@ def _build_comfy_image_prompt_assembly(
         f"- world scale context: {world_scale_context}\n"
         f"- entity scale anchors: {entity_scale_anchor_text}",
         anti_collage_block,
+        priority_contract_block,
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
         forbidden_changes_block,
         source_control_block,
@@ -4535,6 +4556,7 @@ def _build_comfy_image_prompt_assembly(
         "refsByRole": refs_by_role,
         "rolesActive": connected_summary["activeRoles"],
         "identityLockBlockPreview": identity_lock_block,
+        "priorityContractBlockPreview": priority_contract_block,
         "forbiddenChangesBlockPreview": forbidden_changes_block,
         "antiCollageBlockPreview": anti_collage_block,
         "finalImagePromptPreview": _shorten_text(assembled_prompt, 1800),
@@ -4600,6 +4622,11 @@ def clip_image(payload: ClipImageIn):
     scene_refs_used = getattr(refs_obj, "refsUsed", None)
     scene_ref_directives = getattr(refs_obj, "refDirectives", None)
     scene_primary_role = str(getattr(refs_obj, "primaryRole", "") or "").strip()
+    scene_secondary_roles = [
+        str(role or "").strip()
+        for role in (getattr(refs_obj, "secondaryRoles", None) or [])
+        if str(role or "").strip()
+    ]
     scene_contract = _normalize_scene_entity_contract_for_image(
         primary_role=scene_primary_role,
         secondary_roles=scene_secondary_roles,
@@ -4614,11 +4641,39 @@ def clip_image(payload: ClipImageIn):
         style_lock=getattr(refs_obj, "styleLock", None),
         identity_lock=getattr(refs_obj, "identityLock", None),
     )
-    scene_active_roles = scene_contract.get("activeRoles") or []
+    scene_active_roles = [
+        str(role or "").strip()
+        for role in (scene_contract.get("activeRoles") or [])
+        if str(role or "").strip() in comfy_roles
+    ]
+    scene_contract["activeRoles"] = scene_active_roles
     must_not_appear_roles = set(scene_contract.get("mustNotAppear") or [])
-    if must_not_appear_roles:
-        scene_active_roles = [role for role in scene_active_roles if role not in must_not_appear_roles]
-        scene_contract["activeRoles"] = scene_active_roles
+
+    hero_entity_id = str(scene_contract.get("heroEntityId") or "").strip()
+    if hero_entity_id not in scene_active_roles:
+        hero_entity_id = scene_active_roles[0] if scene_active_roles else ""
+
+    support_entity_ids = [
+        str(role or "").strip()
+        for role in (scene_contract.get("supportEntityIds") or [])
+        if str(role or "").strip() in scene_active_roles and str(role or "").strip() != hero_entity_id
+    ]
+    support_entity_ids = list(dict.fromkeys(support_entity_ids))
+
+    must_appear_roles = [
+        str(role or "").strip()
+        for role in (scene_contract.get("mustAppear") or [])
+        if str(role or "").strip() in scene_active_roles
+    ]
+    if not must_appear_roles:
+        must_appear_roles = [hero_entity_id] + support_entity_ids if hero_entity_id else list(scene_active_roles)
+    must_appear_roles = list(dict.fromkeys([role for role in must_appear_roles if role in scene_active_roles]))
+
+    scene_contract["heroEntityId"] = hero_entity_id
+    scene_contract["supportEntityIds"] = support_entity_ids
+    scene_contract["mustAppear"] = must_appear_roles
+    dropped_by_must_not_appear = sorted([role for role in (scene_contract.get("resolvedRoles") or []) if role in must_not_appear_roles])
+
     if scene_active_roles:
         comfy_refs_by_role = {
             role: (comfy_refs_by_role.get(role) or []) if role in scene_active_roles else []
@@ -4634,17 +4689,14 @@ def clip_image(payload: ClipImageIn):
     print("[COMFY IMAGE DEBUG] refsByRole counts=" + json.dumps(comfy_counts, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] refsByRole raw=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] connected active roles=" + json.dumps(connected_active_roles, ensure_ascii=False))
-    scene_secondary_roles = [
-        str(role or "").strip()
-        for role in (getattr(refs_obj, "secondaryRoles", None) or [])
-        if str(role or "").strip()
-    ]
     print("[COMFY IMAGE DEBUG] scene refsUsed=" + json.dumps(scene_refs_used, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene refDirectives=" + json.dumps(scene_ref_directives, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene primaryRole=" + json.dumps(scene_primary_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene secondaryRoles=" + json.dumps(scene_secondary_roles, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene contract=" + json.dumps(scene_contract, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene active roles=" + json.dumps(scene_active_roles, ensure_ascii=False))
+    if dropped_by_must_not_appear:
+        print("[COMFY IMAGE DEBUG] scene droppedByMustNotAppear=" + json.dumps(dropped_by_must_not_appear, ensure_ascii=False))
     if scene_contract.get("degradedRoles"):
         print("[COMFY IMAGE DEBUG] WARNING scene_selected_role_without_valid_reference=" + json.dumps(scene_contract.get("degradedRoles"), ensure_ascii=False))
     for role in comfy_roles:
@@ -4737,6 +4789,8 @@ def clip_image(payload: ClipImageIn):
         "styleLock": bool(scene_contract.get("styleLock")),
         "degradedConsistency": bool(scene_contract.get("degradedRoles")),
         "degradedRoles": scene_contract.get("degradedRoles") or [],
+        "droppedByMustNotAppear": dropped_by_must_not_appear,
+        "resolvedRoles": scene_contract.get("resolvedRoles") or [],
         "rawRefsByRole": {role: len((getattr(refs_obj, "refsByRole", {}) or {}).get(role) or []) for role in comfy_roles},
         "filteredRefsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
         "referenceProfilesSummary": reference_profiles_summary,
