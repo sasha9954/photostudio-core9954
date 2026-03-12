@@ -3327,7 +3327,7 @@ onClipSec: (nodeId, value) => {
             if (derived.audioStoryMode === 'lyrics_music' && derived.meaningfulAudio) warnings.push('Audio story mode: lyrics+music (можно использовать смысл слов песни).');
             if (derived.audioStoryMode === 'music_only' && derived.meaningfulAudio) warnings.push('Audio story mode: music_only (lyrics игнорируются, сюжет только из музыки/энергии).');
             if (derived.audioStoryMode === 'music_plus_text' && derived.meaningfulAudio) warnings.push('Audio story mode: music_plus_text (lyrics игнорируются, сюжет берётся из TEXT).');
-            if (derived.audioStoryMode === 'music_plus_text' && !derived.meaningfulText) warnings.push('music_plus_text выбран, но TEXT пустой: lyrics будут проигнорированы, storyboard будет построен только по музыке/энергии');
+            if (derived.audioStoryMode === 'music_plus_text' && derived.meaningfulAudio && !derived.meaningfulText) warnings.push('music_plus_text выбран, но TEXT пустой: lyrics будут проигнорированы, storyboard будет построен только по музыке/энергии');
             if (derived.outputValue === 'comfy text' && !String(derived.meaningfulText || '').trim()) warnings.push('Для comfy text желательно добавить richer text prompt');
             if (derived.modeValue === 'reklama' && !derived.meaningfulText) warnings.push('Для reklama желательно добавить рекламный тезис в TEXT');
 
