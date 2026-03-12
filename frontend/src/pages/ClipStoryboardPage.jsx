@@ -2258,10 +2258,12 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
         method: 'POST',
         body: {
           sceneId,
-          sceneDelta: imagePrompt,
-          contextPrompt,
-          mode: String(comfyNode?.data?.mode || 'clip'),
-          stylePreset: String(comfyNode?.data?.stylePreset || 'realism'),
+          prompt: imagePrompt,
+          sceneDelta: `${imagePrompt}
+
+${contextPrompt}`.trim(),
+          sceneText: contextPrompt,
+          style: String(comfyNode?.data?.stylePreset || 'realism'),
           width: 1024,
           height: 1792,
           refs: buildComfySceneRefsPayload({
