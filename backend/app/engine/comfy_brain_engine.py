@@ -8,6 +8,9 @@ from app.engine.gemini_rest import post_generate_content
 logger = logging.getLogger(__name__)
 
 
+FALLBACK_GEMINI_MODEL = "gemini-2.5-flash"
+
+
 def _clean_refs_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, list[dict[str, str]]]:
     roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
     src = refs_by_role if isinstance(refs_by_role, dict) else {}
@@ -95,6 +98,30 @@ def _extract_json(raw: str) -> dict[str, Any] | None:
     return None
 
 
+def _call_gemini_plan(api_key: str, model: str, body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    logger.info("[COMFY PLAN] gemini request start model=%s", model)
+    resp = post_generate_content(api_key, model, body, timeout=120)
+    raw = _extract_text(resp if isinstance(resp, dict) else {})
+    raw_preview = raw[:3000] if raw else str((resp or {}).get("text") or "")[:3000]
+    http_status = int(resp.get("status") or 0) if isinstance(resp, dict) and resp.get("__http_error__") else None
+    diagnostics = {
+        "requestedModel": model,
+        "effectiveModel": model,
+        "httpStatus": http_status,
+        "rawPreview": raw_preview,
+    }
+    if isinstance(resp, dict) and resp.get("__http_error__"):
+        logger.warning("[COMFY PLAN] gemini http error model=%s status=%s", model, resp.get("status"))
+        return {}, diagnostics
+
+    parsed = _extract_json(raw)
+    if not isinstance(parsed, dict):
+        logger.warning("[COMFY PLAN] gemini invalid json model=%s", model)
+        return {"errors": ["gemini_invalid_json"]}, diagnostics
+
+    return parsed, diagnostics
+
+
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
     refs_presence = {k: len(v) for k, v in normalized["refsByRole"].items()}
@@ -102,25 +129,33 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     logger.info("[COMFY PLAN] text/audio/refs presence text=%s audio=%s refs=%s", bool(normalized["text"]), bool(normalized["audioUrl"]), refs_presence)
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
-    model = (settings.GEMINI_TEXT_MODEL or "gemini-2.5-flash").strip()
+    requested_model = (settings.GEMINI_TEXT_MODEL or FALLBACK_GEMINI_MODEL).strip()
     if not api_key:
-        return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["GEMINI_API_KEY missing"], "debug": {"normalizedPayload": normalized}}
+        return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["GEMINI_API_KEY missing"], "debug": {"requestedModel": requested_model, "effectiveModel": None, "httpStatus": None, "rawPreview": "", "normalizedPayload": normalized}}
 
     body = {
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4},
         "contents": [{"role": "user", "parts": [{"text": build_comfy_planner_prompt(normalized)}]}],
     }
-    logger.info("[COMFY PLAN] gemini request start model=%s", model)
-    resp = post_generate_content(api_key, model, body, timeout=120)
-    raw = _extract_text(resp if isinstance(resp, dict) else {})
-    logger.info("[COMFY PLAN] gemini raw response %s", raw[:1500])
 
-    parsed = _extract_json(raw)
-    warnings = []
-    errors = []
-    if isinstance(resp, dict) and resp.get("__http_error__"):
-        errors.append(f"gemini_http_error:{resp.get('status')}")
-    if not isinstance(parsed, dict):
+    parsed, diagnostics = _call_gemini_plan(api_key, requested_model, body)
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    if diagnostics["httpStatus"] == 404 and requested_model != FALLBACK_GEMINI_MODEL:
+        warnings.append(f"gemini_model_fallback:{requested_model}->{FALLBACK_GEMINI_MODEL}")
+        parsed_fb, diagnostics_fb = _call_gemini_plan(api_key, FALLBACK_GEMINI_MODEL, body)
+        diagnostics = {
+            **diagnostics_fb,
+            "requestedModel": requested_model,
+            "effectiveModel": diagnostics_fb.get("effectiveModel") or FALLBACK_GEMINI_MODEL,
+            "fallbackFrom": requested_model,
+        }
+        parsed = parsed_fb
+
+    if diagnostics.get("httpStatus"):
+        errors.append(f"gemini_http_error:{diagnostics['httpStatus']}")
+    elif isinstance(parsed, dict) and "errors" in parsed and parsed.get("errors") == ["gemini_invalid_json"]:
         errors.append("gemini_invalid_json")
         parsed = {}
 
@@ -134,7 +169,14 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         "scenes": scenes,
         "warnings": (parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []) + warnings,
         "errors": (parsed.get("errors") if isinstance(parsed.get("errors"), list) else []) + errors,
-        "debug": parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {"normalizedPayload": normalized, "geminiRaw": raw[:3000]},
+        "debug": {
+            "requestedModel": diagnostics.get("requestedModel") or requested_model,
+            "effectiveModel": diagnostics.get("effectiveModel") or requested_model,
+            "httpStatus": diagnostics.get("httpStatus"),
+            "rawPreview": diagnostics.get("rawPreview") or "",
+            "normalizedPayload": normalized,
+            **(parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {}),
+        },
     }
     logger.info("[COMFY PLAN] warnings/errors warnings=%s errors=%s", result["warnings"], result["errors"])
     return result
