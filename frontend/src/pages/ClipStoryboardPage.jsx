@@ -1899,10 +1899,11 @@ const comfyScenes = useMemo(() => {
 const comfySelectedIndex = Number.isFinite(comfyEditor.selected) ? comfyEditor.selected : 0;
 const comfySafeIndex = comfySelectedIndex < 0 ? 0 : Math.min(comfySelectedIndex, Math.max(0, comfyScenes.length - 1));
 const comfySelectedScene = comfyScenes[comfySafeIndex] || null;
-const comfyModeMeta = getModeDisplayMeta(comfyNode?.data?.mode || "clip");
-const comfyStyleMeta = getStyleDisplayMeta(comfyNode?.data?.stylePreset || "realism");
-const comfyRefsByRole = (comfyNode?.data?.plannerMeta?.plannerInput?.refsByRole && typeof comfyNode?.data?.plannerMeta?.plannerInput?.refsByRole === "object")
-  ? comfyNode.data.plannerMeta.plannerInput.refsByRole
+const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || {};
+const comfyModeMeta = getModeDisplayMeta(plannerInput?.mode || comfyNode?.data?.mode || "clip");
+const comfyStyleMeta = getStyleDisplayMeta(plannerInput?.stylePreset || comfyNode?.data?.stylePreset || "realism");
+const comfyRefsByRole = (plannerInput?.refsByRole && typeof plannerInput?.refsByRole === "object")
+  ? plannerInput.refsByRole
   : {};
 const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1] || null) : null;
   const [scenarioImageLoading, setScenarioImageLoading] = useState(false);
