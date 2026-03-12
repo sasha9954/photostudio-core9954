@@ -1859,23 +1859,18 @@ function ComfyStoryboardNode({ id, data }) {
   const scenes = Array.isArray(data?.mockScenes) ? data.mockScenes : [];
   const modeMeta = getModeDisplayMeta(data?.mode || 'clip');
   const styleMeta = getStyleDisplayMeta(data?.stylePreset || 'realism');
+  const summaryScene = scenes[0] || null;
   return (
     <>
       <Handle type="target" position={Position.Left} id="comfy_plan" className="clipSB_handle" style={handleStyle('comfy_plan')} />
       <Handle type="source" position={Position.Right} id="comfy_scene_video_out" className="clipSB_handle" style={handleStyle('comfy_video', { top: 56 })} />
-      <NodeShell title="COMFY STORYBOARD" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧩</span>} className="clipSB_nodeComfyStoryboard">
-        <div className="clipSB_badge">PREVIEW</div>
+      <NodeShell title="COMFY STORYBOARD" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧩</span>} className="clipSB_nodeComfyStoryboard"> 
+        <div className="clipSB_badge">EDITOR READY</div>
         <div className="clipSB_small">scene count: {scenes.length || Number(data?.sceneCount || 0)}</div>
-        <div className="clipSB_small">mode: {modeMeta.labelRu} • output: {data?.output || 'comfy image'}</div>
-        <div className="clipSB_small">style: {styleMeta.labelRu}</div>
-        <div className="clipSB_small">narrative: {data?.narrativeSource || 'none'} • timeline: {data?.timelineSource || 'logic'}</div>
-        <div className="clipSB_inlineBtns">
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenComfy?.(id, 'SCENES')}>Сценарий</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenComfy?.(id, 'PROMPT')}>Промт</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenComfy?.(id, 'DEBUG')}>DEBUG</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenComfy?.(id, 'VIDEO')}>Видео</button>
-        </div>
-        <div className="clipSB_planList">{scenes.slice(0,3).map((s)=> <div key={s.sceneId} className="clipSB_planRow"><div className="clipSB_planTime">{s.sceneId}</div><div className="clipSB_planText">{s.title}</div></div>)}</div>
+        <div className="clipSB_small">mode: {modeMeta.labelRu} • style: {styleMeta.labelRu}</div>
+        <div className="clipSB_small">status: {data?.parseStatus || 'idle'} • output: {data?.output || 'comfy image'}</div>
+        <div className="clipSB_small">narrative: {summaryScene?.sceneNarrativeStep || data?.narrativeSource || 'none'} • timeline: {data?.timelineSource || 'logic'}</div>
+        <button className="clipSB_btn" style={{ marginTop: 10 }} onClick={() => data?.onOpenComfy?.(id)}>Сценарий</button>
       </NodeShell>
     </>
   );
@@ -2169,7 +2164,7 @@ const [scenarioEditor, setScenarioEditor] = useState({
 const [comfyEditor, setComfyEditor] = useState({
   open: false,
   nodeId: null,
-  tab: 'SCENES',
+  selected: 0,
 });
 
 // Open scenario overlay from node button (custom event)
@@ -2193,7 +2188,7 @@ useEffect(() => {
     setComfyEditor({
       open: true,
       nodeId: e?.detail?.nodeId || null,
-      tab: e?.detail?.tab || 'SCENES',
+      selected: 0,
     });
   };
   window.addEventListener('ps:clipOpenComfyStoryboard', handler);
@@ -3863,8 +3858,8 @@ onClipSec: (nodeId, value) => {
             ...base,
             data: {
               ...base.data,
-              onOpenComfy: (nodeId, tab = 'SCENES') => {
-                try { window.dispatchEvent(new CustomEvent('ps:clipOpenComfyStoryboard', { detail: { nodeId, tab } })); } catch (e) {}
+              onOpenComfy: (nodeId) => {
+                try { window.dispatchEvent(new CustomEvent('ps:clipOpenComfyStoryboard', { detail: { nodeId } })); } catch (e) {}
               },
             },
           };
@@ -4987,30 +4982,131 @@ const hydrate = useCallback(() => {
       ) : null}
 
       {comfyEditor.open ? (
-        <div className="clipSB_scenarioOverlay" onClick={() => setComfyEditor((s) => ({ ...s, open: false }))}>
+        <div className="clipSB_scenarioOverlay" onClick={() => setComfyEditor((state) => ({ ...state, open: false }))}>
           <div className="clipSB_scenarioPanel" onClick={(e) => e.stopPropagation()}>
-            <div className="clipSB_scenarioHeader">
-              <div className="clipSB_scenarioTitle">COMFY STORYBOARD</div>
-              <button className="clipSB_iconBtn" onClick={() => setComfyEditor((s) => ({ ...s, open: false }))}>×</button>
-            </div>
             {(() => {
               const node = nodes.find((n) => n.id === comfyEditor.nodeId && n.type === 'comfyStoryboard');
               const scenes = Array.isArray(node?.data?.mockScenes) ? node.data.mockScenes : [];
-              const active = comfyEditor.tab || 'SCENES';
+              const selectedIdx = Number.isFinite(comfyEditor.selected) ? comfyEditor.selected : 0;
+              const safeIdx = selectedIdx < 0 ? 0 : Math.min(selectedIdx, Math.max(0, scenes.length - 1));
+              const selectedScene = scenes[safeIdx] || null;
+              const modeMeta = getModeDisplayMeta(node?.data?.mode || 'clip');
+              const styleMeta = getStyleDisplayMeta(node?.data?.stylePreset || 'realism');
+              const pipelineFlow = Array.isArray(node?.data?.pipelineFlow)
+                ? node.data.pipelineFlow.join(' → ')
+                : (Array.isArray(node?.data?.debugFields?.pipelineFlow) ? node.data.debugFields.pipelineFlow.join(' → ') : 'brain → scene image → scene video');
               return (
-                <div>
-                  <div className="clipSB_comfyTabs" style={{ marginBottom: 12 }}>
-                    {['SCENES','PROMPT','DEBUG','VIDEO'].map((tab) => (
-                      <button key={tab} className={`clipSB_btn clipSB_btnSecondary clipSB_comfyTab ${active === tab ? 'isActive' : ''}`} onClick={() => setComfyEditor((s) => ({ ...s, tab }))}>{tab}</button>
-                    ))}
+                <>
+                  <div className="clipSB_scenarioHeader">
+                    <div>
+                      <div className="clipSB_scenarioTitle">COMFY STORYBOARD</div>
+                      <div className="clipSB_scenarioMeta">{modeMeta.labelRu} • {styleMeta.labelRu} • сцен: {scenes.length}</div>
+                    </div>
+                    <button className="clipSB_iconBtn" onClick={() => setComfyEditor((state) => ({ ...state, open: false }))}>×</button>
                   </div>
-                  {active === 'SCENES' ? (
-                    scenes.length ? <div className="clipSB_planList">{scenes.map((sc) => <div key={sc.sceneId} className="clipSB_planRow"><div className="clipSB_planTime">{sc.title}</div><div className="clipSB_planText">{sc.description}<br/>primary: {sc.primaryRole} • secondary: {(sc.secondaryRoles || []).join(', ')}<br/>continuity: {sc.continuity}<br/>scene output: {sc.sceneOutputRule || 'scene image first'}</div></div>)}</div> : <div className="clipSB_empty">Нет mock сцен. Нажми «Разобрать» в COMFY BRAIN.</div>
-                  ) : null}
-                  {active === 'PROMPT' ? <div className="clipSB_comfyPrompt"><div className="clipSB_small">{scenes[0]?.imagePrompt || 'no image prompt'}<br />{scenes[0]?.videoPrompt || 'no video prompt'}</div><pre className="clipSB_comfyPromptPre">{JSON.stringify(scenes[0] || {}, null, 2)}</pre></div> : null}
-                  {active === 'DEBUG' ? <div className="clipSB_comfyDebug"><div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'} • {node?.data?.output || 'comfy image'}</div><div className="clipSB_small">narrative source: {node?.data?.narrativeSource || 'none'}</div><div className="clipSB_small">style preset: {node?.data?.stylePreset || 'realism'}</div><div className="clipSB_small">mode intent: {node?.data?.debugFields?.modeIntent || 'none'}</div><div className="clipSB_small">mode bias: {node?.data?.debugFields?.modePromptBias || 'none'}</div><div className="clipSB_small">scene strategy: {node?.data?.debugFields?.modeSceneStrategy || 'none'}</div><div className="clipSB_small">continuity bias: {node?.data?.debugFields?.modeContinuityBias || 'none'}</div><div className="clipSB_small">planning mindset: {node?.data?.debugFields?.planningMindset || 'none'}</div><div className="clipSB_small">style summary: {node?.data?.debugFields?.styleSummary || 'none'}</div><div className="clipSB_small">style continuity: {node?.data?.debugFields?.styleContinuity || 'none'}</div><div className="clipSB_small">story control mode: {node?.data?.debugFields?.storyControlMode || 'insufficient_input'}</div><div className="clipSB_small">story mission: {node?.data?.debugFields?.storyMissionSummary || 'none'}</div><div className="clipSB_small">text narrative role: {node?.data?.debugFields?.textNarrativeRole || 'none'}</div><div className="clipSB_small">audio narrative role: {node?.data?.debugFields?.audioNarrativeRole || 'none'}</div><div className="clipSB_small">primary role: {node?.data?.debugFields?.primaryRole || 'character_1'}</div><div className="clipSB_small">secondary roles: {(node?.data?.debugFields?.secondaryRoles || []).join(', ') || 'none'}</div><div className="clipSB_small">cast: {(node?.data?.debugFields?.cast || []).join(', ') || 'none'}</div><div className="clipSB_small">prompt length: {node?.data?.debugFields?.promptLength || 0} • lines: {node?.data?.debugFields?.promptLines || 0}</div><div className="clipSB_small">pipeline: {(Array.isArray(node?.data?.pipelineFlow) ? node.data.pipelineFlow.join(' → ') : (Array.isArray(node?.data?.debugFields?.pipelineFlow) ? node.data.debugFields.pipelineFlow.join(' → ') : 'brain → scene image → scene video'))}</div><div className="clipSB_small">warnings: {(Array.isArray(node?.data?.warnings) ? node.data.warnings.join(' | ') : '') || 'none'}</div></div> : null}
-                  {active === 'VIDEO' ? <div className="clipSB_previewCard"><div className="clipSB_small">future mp4 preview block • status: demo</div></div> : null}
-                </div>
+
+                  <div className="clipSB_scenarioBody">
+                    <div className="clipSB_scenarioList">
+                      {!scenes.length ? (
+                        <div className="clipSB_empty">Нет mock сцен. Нажми «Разобрать» в COMFY BRAIN.</div>
+                      ) : scenes.map((scene, index) => (
+                        <button
+                          key={scene.sceneId || `comfy-${index}`}
+                          className={`clipSB_scenarioItem ${safeIdx === index ? 'isActive' : ''}`}
+                          onClick={() => setComfyEditor((state) => ({ ...state, selected: index }))}
+                        >
+                          <div className="clipSB_scenarioItemTop">
+                            <div className="clipSB_scenarioItemTime">{scene.sceneId || `scene ${index + 1}`}</div>
+                            <span className="clipSB_tag">{scene.sceneType || 'scene'}</span>
+                          </div>
+                          <div className="clipSB_scenarioItemText">{scene.title || `Сцена ${index + 1}`}</div>
+                          <div className="clipSB_small">{scene.sceneNarrativeStep || scene.sceneGoal || scene.description || '—'}</div>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="clipSB_scenarioEdit">
+                      {!selectedScene ? (
+                        <div className="clipSB_empty">Выбери сцену слева.</div>
+                      ) : (
+                        <>
+                          <div className="clipSB_comfySection">
+                            <div className="clipSB_hint">Описание сцены</div>
+                            <div className="clipSB_comfyGrid">
+                              <div className="clipSB_comfyKv"><span>title</span><strong>{selectedScene.title || '—'}</strong></div>
+                              <div className="clipSB_comfyKv"><span>sceneType</span><strong>{selectedScene.sceneType || '—'}</strong></div>
+                              <div className="clipSB_comfyKv"><span>sceneNarrativeStep</span><strong>{selectedScene.sceneNarrativeStep || '—'}</strong></div>
+                              <div className="clipSB_comfyKv"><span>sceneGoal</span><strong>{selectedScene.sceneGoal || '—'}</strong></div>
+                              <div className="clipSB_comfyKv"><span>storyMission</span><strong>{selectedScene.storyMission || node?.data?.storyMissionSummary || '—'}</strong></div>
+                              <div className="clipSB_comfyKv"><span>sceneOutputRule</span><strong>{selectedScene.sceneOutputRule || 'scene image first'}</strong></div>
+                              <div className="clipSB_comfyKv"><span>primaryRole</span><strong>{selectedScene.primaryRole || node?.data?.debugFields?.primaryRole || 'character_1'}</strong></div>
+                              <div className="clipSB_comfyKv"><span>secondaryRoles</span><strong>{(selectedScene.secondaryRoles || node?.data?.debugFields?.secondaryRoles || []).join(', ') || 'none'}</strong></div>
+                              <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>continuity</span><strong>{selectedScene.continuity || node?.data?.plannerMeta?.globalContinuity || '—'}</strong></div>
+                            </div>
+                          </div>
+
+                          <div className="clipSB_comfySection">
+                            <div className="clipSB_hint">Промт для фото</div>
+                            <div className="clipSB_comfyPrompt">{selectedScene.imagePrompt || 'no image prompt'}</div>
+                          </div>
+
+                          <div className="clipSB_comfySection">
+                            <div className="clipSB_hint">Промт для видео</div>
+                            <div className="clipSB_comfyPrompt">{selectedScene.videoPrompt || 'no video prompt'}</div>
+                          </div>
+
+                          <div className="clipSB_comfySection">
+                            <div className="clipSB_hint">Continuity / правила</div>
+                            <div className="clipSB_small">storyControlMode: {node?.data?.storyControlMode || node?.data?.debugFields?.storyControlMode || 'insufficient_input'}</div>
+                            <div className="clipSB_small">pipelineFlow: {pipelineFlow}</div>
+                          </div>
+
+                          <div className="clipSB_comfyActions">
+                            <button className="clipSB_btn clipSB_btnSecondary">Сделать фото</button>
+                            <button className="clipSB_btn clipSB_btnSecondary">Добавить в видео</button>
+                            <button className="clipSB_btn clipSB_btnSecondary">Очистить фото</button>
+                            <button className="clipSB_btn clipSB_btnSecondary">Очистить видео</button>
+                          </div>
+
+                          <div className="clipSB_comfyStatusGrid">
+                            <div className="clipSB_comfySection">
+                              <div className="clipSB_hint">Статус фото</div>
+                              <div className="clipSB_small">imageUrl: {selectedScene.imageUrl || '—'}</div>
+                              <div className="clipSB_small">endImageUrl: {selectedScene.endImageUrl || '—'}</div>
+                            </div>
+                            <div className="clipSB_comfySection">
+                              <div className="clipSB_hint">Статус видео</div>
+                              <div className="clipSB_small">videoUrl: {selectedScene.videoUrl || '—'}</div>
+                              <div className="clipSB_small">audioSliceUrl: {selectedScene.audioSliceUrl || '—'}</div>
+                            </div>
+                          </div>
+
+                          <div className="clipSB_comfySection">
+                            <div className="clipSB_hint">DEBUG</div>
+                            <div className="clipSB_comfyDebug">
+                              <div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'} • {node?.data?.output || 'comfy image'}</div>
+                              <div className="clipSB_small">narrative source: {node?.data?.narrativeSource || 'none'}</div>
+                              <div className="clipSB_small">style preset: {node?.data?.stylePreset || 'realism'}</div>
+                              <div className="clipSB_small">mode intent: {node?.data?.debugFields?.modeIntent || 'none'}</div>
+                              <div className="clipSB_small">mode bias: {node?.data?.debugFields?.modePromptBias || 'none'}</div>
+                              <div className="clipSB_small">scene strategy: {node?.data?.debugFields?.modeSceneStrategy || 'none'}</div>
+                              <div className="clipSB_small">continuity bias: {node?.data?.debugFields?.modeContinuityBias || 'none'}</div>
+                              <div className="clipSB_small">planning mindset: {node?.data?.debugFields?.planningMindset || 'none'}</div>
+                              <div className="clipSB_small">style summary: {node?.data?.debugFields?.styleSummary || 'none'}</div>
+                              <div className="clipSB_small">style continuity: {node?.data?.debugFields?.styleContinuity || 'none'}</div>
+                              <div className="clipSB_small">story mission: {node?.data?.debugFields?.storyMissionSummary || 'none'}</div>
+                              <div className="clipSB_small">text narrative role: {node?.data?.debugFields?.textNarrativeRole || 'none'}</div>
+                              <div className="clipSB_small">audio narrative role: {node?.data?.debugFields?.audioNarrativeRole || 'none'}</div>
+                              <div className="clipSB_small">cast: {(node?.data?.debugFields?.cast || []).join(', ') || 'none'}</div>
+                              <div className="clipSB_small">prompt length: {node?.data?.debugFields?.promptLength || 0} • lines: {node?.data?.debugFields?.promptLines || 0}</div>
+                              <div className="clipSB_small">warnings: {(Array.isArray(node?.data?.warnings) ? node.data.warnings.join(' | ') : '') || 'none'}</div>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </>
               );
             })()}
           </div>
