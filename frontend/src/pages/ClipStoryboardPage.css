@@ -1474,10 +1474,72 @@ body.ps_clip_fullscreen .mainCol {
   gap: 8px;
 }
 
+.clipSB_tagOk {
+  background: rgba(147,221,111,.14);
+  color: rgba(218,246,199,.98);
+  border: 1px solid rgba(147,221,111,.35);
+}
+
+.clipSB_comfyPanel {
+  width: min(1280px, calc(100vw - 48px));
+  max-width: min(1280px, calc(100vw - 48px));
+}
+
+.clipSB_comfySceneList {
+  min-width: 320px;
+}
+
+.clipSB_comfyReadyIcons {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clipSB_comfyEditor {
+  gap: 10px;
+}
+
+.clipSB_comfyInfoGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.clipSB_comfyTextarea {
+  min-height: 120px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.clipSB_comfyPreviewBox,
+.clipSB_comfyVideoBase {
+  border-radius: 12px;
+  min-height: 220px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.28);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.clipSB_comfyPreviewImg {
+  width: 100%;
+  max-height: 380px;
+  object-fit: contain;
+  display: block;
+}
+
+.clipSB_comfyPreviewEmpty {
+  font-size: 12px;
+  color: rgba(255,255,255,.58);
+}
+
 @media (max-width: 960px) {
   .clipSB_comfyGrid,
   .clipSB_comfyStatusGrid,
-  .clipSB_comfyDebug {
+  .clipSB_comfyDebug,
+  .clipSB_comfyInfoGrid {
     grid-template-columns: 1fr;
   }
 }
