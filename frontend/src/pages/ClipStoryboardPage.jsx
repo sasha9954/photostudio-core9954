@@ -2384,6 +2384,7 @@ const comfyShowVideoSection = Boolean(
         || comfyPreviousScene?.startImageUrl
         || ""
       ).trim();
+      const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || {};
       const out = await fetchJson('/api/clip/image', {
         method: 'POST',
         body: {
@@ -2393,18 +2394,18 @@ const comfyShowVideoSection = Boolean(
 
 ${contextPrompt}`.trim(),
           sceneText: contextPrompt,
-          style: String(comfyNode?.data?.stylePreset || 'realism'),
+          style: String(plannerInput?.stylePreset || comfyNode?.data?.stylePreset || 'realism'),
           width: 1024,
           height: 1792,
           refs: buildComfySceneRefsPayload({
-            refsByRole: comfyRefsByRole,
+            refsByRole: plannerInput?.refsByRole || comfyRefsByRole,
             previousSceneImageUrl,
             previousContinuityMemory: comfySelectedScene?.continuity ? { continuity: comfySelectedScene.continuity } : null,
-            propAnchorLabel: inferPropAnchorLabel(comfyRefsByRole),
-            text: comfyNode?.data?.text || "",
-            audioUrl: comfyNode?.data?.audioUrl || "",
-            mode: comfyNode?.data?.mode || "",
-            stylePreset: comfyNode?.data?.stylePreset || "",
+            propAnchorLabel: inferPropAnchorLabel(plannerInput?.refsByRole || comfyRefsByRole),
+            text: plannerInput?.text || comfyNode?.data?.text || "",
+            audioUrl: plannerInput?.audioUrl || comfyNode?.data?.audioUrl || "",
+            mode: plannerInput?.mode || comfyNode?.data?.mode || "",
+            stylePreset: plannerInput?.stylePreset || comfyNode?.data?.stylePreset || "",
             sceneId,
             sceneGoal: comfySelectedScene?.sceneGoal || "",
             sceneNarrativeStep: comfySelectedScene?.sceneNarrativeStep || "",
