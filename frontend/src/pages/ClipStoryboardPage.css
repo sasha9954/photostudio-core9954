@@ -1567,9 +1567,11 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_comfyEditor > .clipSB_videoBlock,
 .clipSB_comfyEditor > .clipSB_scenarioEditRow,
 .clipSB_comfyEditor > details.clipSB_scenarioEditRow {
-  width: 100%;
-  max-width: 100%;
+  width: min(100%, 980px);
+  max-width: min(100%, 980px);
   min-width: 0;
+  margin-left: auto;
+  margin-right: auto;
   box-sizing: border-box;
 }
 
