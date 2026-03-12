@@ -1534,6 +1534,14 @@ body.ps_clip_fullscreen .mainCol {
   max-width: min(1280px, calc(100vw - 48px));
 }
 
+.clipSB_comfyBody {
+  grid-template-columns: clamp(280px, 24vw, 340px) minmax(0, 1fr);
+}
+
+.clipSB_comfySidebar {
+  min-width: 0;
+}
+
 .clipSB_comfySceneList {
   min-width: 288px;
 }
@@ -1553,6 +1561,10 @@ body.ps_clip_fullscreen .mainCol {
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.clipSB_comfyWorkspace {
+  min-width: 0;
 }
 
 .clipSB_comfyEditor > * {
@@ -1663,6 +1675,15 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 @media (max-width: 960px) {
+  .clipSB_comfyBody {
+    grid-template-columns: 1fr;
+  }
+
+  .clipSB_comfySidebar {
+    border-right: none;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+
   .clipSB_comfyGrid,
   .clipSB_comfyStatusGrid,
   .clipSB_comfyDebug,

@@ -4754,8 +4754,8 @@ const hydrate = useCallback(() => {
               <button className="clipSB_iconBtn" onClick={() => setComfyEditor((state) => ({ ...state, open: false }))}>×</button>
             </div>
 
-            <div className="clipSB_scenarioBody">
-              <div className="clipSB_scenarioList clipSB_comfySceneList">
+            <div className="clipSB_scenarioBody clipSB_comfyBody">
+              <div className="clipSB_scenarioList clipSB_comfySceneList clipSB_comfySidebar">
                 {!comfyScenes.length ? (
                   <div className="clipSB_empty">Нет сцен. Нажми «Разобрать» в COMFY BRAIN.</div>
                 ) : comfyScenes.map((scene, index) => {
@@ -4790,7 +4790,7 @@ const hydrate = useCallback(() => {
                 })}
               </div>
 
-              <div className="clipSB_scenarioEdit clipSB_comfyEditor">
+              <div className="clipSB_scenarioEdit clipSB_comfyEditor clipSB_comfyWorkspace">
                 {!comfySelectedScene ? (
                   <div className="clipSB_empty">Выбери сцену слева.</div>
                 ) : (
