@@ -854,6 +854,11 @@ function normalizeClipImageRefsPayload(refs = {}) {
   if (refs?.refDirectives && typeof refs.refDirectives === "object") {
     normalized.refDirectives = refs.refDirectives;
   }
+  const primaryRole = String(refs?.primaryRole || "").trim();
+  if (primaryRole) normalized.primaryRole = primaryRole;
+  if (Array.isArray(refs?.secondaryRoles)) {
+    normalized.secondaryRoles = refs.secondaryRoles.map((role) => String(role || "").trim()).filter(Boolean);
+  }
 
   return normalized;
 }
@@ -875,6 +880,8 @@ function buildComfySceneRefsPayload({
   plannerMeta = null,
   refsUsed = [],
   refDirectives = null,
+  primaryRole = "",
+  secondaryRoles = [],
 } = {}) {
   const pickUrls = (roles = []) => roles
     .flatMap((role) => (Array.isArray(refsByRole?.[role]) ? refsByRole[role] : []))
@@ -919,6 +926,8 @@ function buildComfySceneRefsPayload({
     plannerMeta: plannerMeta && typeof plannerMeta === 'object' ? plannerMeta : undefined,
     refsUsed: Array.isArray(refsUsed) ? refsUsed : (refsUsed && typeof refsUsed === 'object' ? refsUsed : undefined),
     refDirectives: refDirectives && typeof refDirectives === 'object' ? refDirectives : undefined,
+    primaryRole: String(primaryRole || "").trim(),
+    secondaryRoles: Array.isArray(secondaryRoles) ? secondaryRoles : undefined,
   });
 }
 
@@ -2477,6 +2486,8 @@ const comfyShowVideoSection = Boolean(
         plannerMeta: comfyNode?.data?.plannerMeta || null,
         refsUsed: Array.isArray(comfySelectedScene?.refsUsed) ? comfySelectedScene.refsUsed : [],
         refDirectives: comfySelectedScene?.refDirectives && typeof comfySelectedScene.refDirectives === 'object' ? comfySelectedScene.refDirectives : null,
+        primaryRole: comfySelectedScene?.primaryRole || "",
+        secondaryRoles: Array.isArray(comfySelectedScene?.secondaryRoles) ? comfySelectedScene.secondaryRoles : [],
       };
       const refsForImageRequest = buildComfySceneRefsPayload(refsPayloadForImage);
 

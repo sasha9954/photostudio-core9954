@@ -60,6 +60,7 @@ class ClipImageRefsIn(BaseModel):
     refsUsed: list[str] | dict | None = None
     refDirectives: dict | None = None
     primaryRole: str | None = None
+    secondaryRoles: list[str] | None = None
     plannerMeta: dict | None = None
     propAnchorLabel: str | None = None
     sessionCharacterAnchor: str | None = None
@@ -4536,8 +4537,15 @@ def clip_image(payload: ClipImageIn):
     print("[COMFY IMAGE DEBUG] refsByRole counts=" + json.dumps(comfy_counts, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] refsByRole raw=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] connected active roles=" + json.dumps(connected_active_roles, ensure_ascii=False))
+    scene_secondary_roles = [
+        str(role or "").strip()
+        for role in (getattr(refs_obj, "secondaryRoles", None) or [])
+        if str(role or "").strip()
+    ]
     print("[COMFY IMAGE DEBUG] scene refsUsed=" + json.dumps(scene_refs_used, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene refDirectives=" + json.dumps(scene_ref_directives, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] scene primaryRole=" + json.dumps(scene_primary_role, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] scene secondaryRoles=" + json.dumps(scene_secondary_roles, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene active roles=" + json.dumps(scene_active_roles, ensure_ascii=False))
     for role in comfy_roles:
         has_urls = bool(comfy_refs_by_role.get(role))

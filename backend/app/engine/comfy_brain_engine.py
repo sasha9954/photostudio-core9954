@@ -797,11 +797,19 @@ def _build_scene_refs_debug(scenes: list[dict[str, Any]], refs_by_role: dict[str
         available_roles = {role for role, count in available_summary.items() if count > 0}
         primary_role = str(scene.get("primaryRole") or "").strip()
         active_roles = _resolve_scene_active_roles(refs_used, ref_directives, available_roles, primary_role)
+        secondary_roles_raw = scene.get("secondaryRoles")
+        secondary_roles = [
+            str(role or "").strip()
+            for role in (secondary_roles_raw if isinstance(secondary_roles_raw, list) else [])
+            if str(role or "").strip()
+        ]
         out.append({
             "sceneId": str(scene.get("sceneId") or ""),
             "availableRefsByRoleSummary": available_summary,
             "refsUsed": refs_used,
             "refDirectives": ref_directives,
+            "primaryRole": primary_role,
+            "secondaryRoles": secondary_roles,
             "activeRoles": active_roles,
         })
     return out
