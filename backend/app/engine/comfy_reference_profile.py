@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,6 +14,7 @@ from app.engine.gemini_rest import post_generate_content
 
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
 HUMAN_ROLES = {"character_1", "character_2", "character_3", "group"}
+MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024
 
 
 def _resolve_reference_url(url: str) -> str:
@@ -57,7 +59,15 @@ def _load_image_inline_part(url: str) -> tuple[dict[str, Any] | None, str | None
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = resp.read()
             headers = {str(k).lower(): str(v) for k, v in resp.headers.items()}
-    except (urllib.error.URLError, TimeoutError, ValueError):
+    except urllib.error.HTTPError:
+        return None, "image_http_error"
+    except (socket.timeout, TimeoutError):
+        return None, "image_timeout"
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, socket.timeout):
+            return None, "image_timeout"
+        return None, "image_download_failed"
+    except ValueError:
         return None, "image_download_failed"
     except Exception:
         return None, "image_download_failed"
@@ -67,7 +77,10 @@ def _load_image_inline_part(url: str) -> tuple[dict[str, Any] | None, str | None
 
     mime_type = _extract_mime_type(resolved, headers, data)
     if not mime_type:
-        return None, "image_download_failed"
+        return None, "image_invalid_mime"
+
+    if len(data) > MAX_VISION_IMAGE_BYTES:
+        return None, "image_too_large"
 
     return {
         "inlineData": {
@@ -96,6 +109,12 @@ def _vision_profile_prompt(role: str, entity_type: str) -> str:
         ),
     }
     visual_profile_requirements = schemas.get(entity_type, "visualProfile must include stable identifying cues for this role")
+    entity_constraints = {
+        "human": "Preserve identity-level cues, not a generic fashion summary. Do not generalize hair color/style. Do not generalize outfit signature.",
+        "animal": "Do not generalize species/breed-like appearance. Do not generalize coat pattern or morphology.",
+        "object": "Do not generalize object category, silhouette, material, or distinctive geometry.",
+    }
+    strict_entity_constraints = entity_constraints.get(entity_type, "")
     return (
         "You are a strict visual profiler. Respond with JSON only (no markdown, no prose). "
         "Return exactly one object with keys: entityType, visualProfile, invariants, allowedVariations, forbiddenChanges, confidence. "
@@ -104,8 +123,30 @@ def _vision_profile_prompt(role: str, entity_type: str) -> str:
         "confidence must be one of: low, medium, high. "
         f"Role: {role}. Expected entityType: {entity_type}. "
         f"{visual_profile_requirements}. "
+        f"{strict_entity_constraints} "
         "Do not include any other top-level keys."
     )
+
+
+def _is_weak_visual_profile(visual_probe: dict[str, Any]) -> bool:
+    visual_profile = visual_probe.get("visualProfile") if isinstance(visual_probe.get("visualProfile"), dict) else {}
+    non_empty_profile_values = 0
+    for value in visual_profile.values():
+        if isinstance(value, str) and value.strip():
+            non_empty_profile_values += 1
+        elif isinstance(value, list) and any(str(v).strip() for v in value):
+            non_empty_profile_values += 1
+        elif isinstance(value, dict) and value:
+            non_empty_profile_values += 1
+        elif value not in (None, "", [], {}):
+            non_empty_profile_values += 1
+
+    invariants = visual_probe.get("invariants") if isinstance(visual_probe.get("invariants"), list) else []
+    forbidden_changes = visual_probe.get("forbiddenChanges") if isinstance(visual_probe.get("forbiddenChanges"), list) else []
+    confidence = str(visual_probe.get("confidence") or "").strip().lower()
+    weak_confidence = confidence in {"", "low"}
+
+    return non_empty_profile_values <= 1 and not invariants and not forbidden_changes and weak_confidence
 
 
 def _extract_json_text_from_vision_response(resp: dict[str, Any]) -> str:
@@ -295,7 +336,7 @@ def _try_build_visual_profile_with_gemini(role: str, items: list[dict[str, str]]
     if not isinstance(parsed, dict):
         return None, model, "vision_invalid_payload"
 
-    parsed_entity_type = str(parsed.get("entityType") or "").strip().lower()
+    parsed_entity_type = str(parsed.get("entityType") or "").strip().lower() or None
     if parsed_entity_type and parsed_entity_type not in {"human", "animal", "object", "location", "style"}:
         return None, model, "vision_invalid_payload"
 
@@ -305,7 +346,11 @@ def _try_build_visual_profile_with_gemini(role: str, items: list[dict[str, str]]
         "allowedVariations": parsed.get("allowedVariations") if isinstance(parsed.get("allowedVariations"), list) else [],
         "forbiddenChanges": parsed.get("forbiddenChanges") if isinstance(parsed.get("forbiddenChanges"), list) else [],
         "confidence": parsed.get("confidence") if str(parsed.get("confidence") or "") in {"low", "medium", "high"} else None,
+        "expectedEntityType": entity_type,
+        "detectedEntityType": parsed_entity_type,
     }
+    if _is_weak_visual_profile(out):
+        return None, model, "weak_vision_profile"
     return out, model, None
 
 
@@ -333,6 +378,8 @@ def build_reference_profiles(refs_by_role: dict[str, Any] | None) -> dict[str, A
         profiles[role] = {
             "role": role,
             "entityType": entity_type,
+            "expectedEntityType": entity_type,
+            "detectedEntityType": visual_probe.get("detectedEntityType") if isinstance(visual_probe, dict) else None,
             "entityId": role,
             "identityLock": role in HUMAN_ROLES or role in {"animal", "props"},
             "environmentLock": role == "location",
@@ -357,6 +404,8 @@ def summarize_profiles(profiles: dict[str, Any]) -> dict[str, Any]:
             continue
         out[role] = {
             "entityType": profile.get("entityType"),
+            "expectedEntityType": profile.get("expectedEntityType"),
+            "detectedEntityType": profile.get("detectedEntityType"),
             "identityLock": bool(profile.get("identityLock")),
             "invariants": profile.get("invariants") or [],
             "allowedVariations": profile.get("allowedVariations") or [],
