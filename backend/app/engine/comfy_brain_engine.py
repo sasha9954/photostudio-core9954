@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 from app.core.config import settings
+from app.engine.comfy_reference_profile import build_reference_profiles, summarize_profiles
 from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
@@ -295,8 +296,21 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "If INPUT.audioDurationSec is provided and > 0, scene timeline MUST stay inside [0, audioDurationSec].\n"
         "TEXT is optional support that clarifies intent.\n"
         "REFS are optional anchors for character/location/style/props continuity.\n"
+        "REFERENCE CAST CONTRACT (STRICT):\n"
+        "- All reference inputs are globally visible to you.\n"
+        "- Treat references as cast members and world anchors.\n"
+        "- For every scene explicitly decide which roles appear and which roles do not appear.\n"
+        "- If a role has reference images, do not reinterpret that entity freely.\n"
+        "- Human references must preserve identity, hair, face, outfit and body signature.\n"
+        "- Animal references must preserve species, breed-like appearance, coat color/pattern and body type.\n"
+        "- Object references must preserve object category, silhouette, material, dominant colors and distinctive parts.\n"
+        "- A scene may use one actor, multiple actors, only props, only environment, or any justified subset.\n"
+        "- Never include unselected actors in a scene.\n"
+        "- Never replace a selected actor with a generic invented version.\n"
+        "- If a role is chosen as hero, that role must dominate shot semantics.\n"
         "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
-        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed,refDirectives.\n"
+        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed,refDirectives,"
+        "heroEntityId,supportEntityIds,mustAppear,mustNotAppear,environmentLock,styleLock,identityLock,roleSelectionReason.\n"
         "LANGUAGE CONTRACT (MANDATORY): imagePromptRu MUST be Russian; imagePromptEn MUST be English; videoPromptRu MUST be Russian; videoPromptEn MUST be English. Non-compliance is an error.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
@@ -430,6 +444,28 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         duration_n = max(0.0, end_n - start_n)
 
     refs_used, ref_directives, primary_role, secondary_roles = _normalize_scene_ref_roles(src, available_refs_by_role)
+    available_roles = {
+        role for role in COMFY_REF_ROLES if isinstance((available_refs_by_role or {}).get(role), list) and len((available_refs_by_role or {}).get(role) or []) > 0
+    }
+    hero_entity_id = str(src.get("heroEntityId") or primary_role or "").strip() or primary_role
+    support_entity_ids = [
+        str(item or "").strip()
+        for item in (src.get("supportEntityIds") if isinstance(src.get("supportEntityIds"), list) else secondary_roles)
+        if str(item or "").strip() in COMFY_REF_ROLES and str(item or "").strip() != hero_entity_id
+    ]
+    support_entity_ids = list(dict.fromkeys(support_entity_ids))
+    must_appear = [
+        str(item or "").strip()
+        for item in (src.get("mustAppear") if isinstance(src.get("mustAppear"), list) else [hero_entity_id] + support_entity_ids)
+        if str(item or "").strip() in COMFY_REF_ROLES
+    ]
+    must_appear = list(dict.fromkeys([r for r in must_appear if r in available_roles]))
+    must_not_appear = [
+        str(item or "").strip()
+        for item in (src.get("mustNotAppear") if isinstance(src.get("mustNotAppear"), list) else [])
+        if str(item or "").strip() in COMFY_REF_ROLES
+    ]
+    must_not_appear = list(dict.fromkeys(must_not_appear))
 
     image_prompt_ru = str(src.get("imagePromptRu") or src.get("imagePrompt") or "").strip()
     image_prompt_en = str(src.get("imagePromptEn") or "").strip()
@@ -494,6 +530,14 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         },
         "refsUsed": refs_used,
         "refDirectives": ref_directives,
+        "heroEntityId": hero_entity_id,
+        "supportEntityIds": support_entity_ids,
+        "mustAppear": must_appear,
+        "mustNotAppear": must_not_appear,
+        "environmentLock": bool(src.get("environmentLock", "location" in must_appear or ref_directives.get("location") == "environment_required")),
+        "styleLock": bool(src.get("styleLock", "style" in refs_used or ref_directives.get("style") in {"required", "optional"})),
+        "identityLock": bool(src.get("identityLock", any(role in refs_used for role in ["character_1", "character_2", "character_3", "group", "animal", "props"]))),
+        "roleSelectionReason": str(src.get("roleSelectionReason") or "").strip(),
         # Runtime render-state fields are intentionally initialized outside planner contract.
         "imageUrl": "",
         "videoUrl": "",
@@ -557,6 +601,8 @@ def _needs_segmentation_refinement(segmentation_debug: dict[str, Any], audio_dur
 
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
+    reference_profiles = build_reference_profiles(normalized.get("refsByRole") or {})
+    normalized["referenceProfiles"] = reference_profiles
     refs_presence = {k: len(v) for k, v in normalized["refsByRole"].items()}
     debug_signature = "COMFY_DEBUG_STEP_V1"
     module_file = __file__
@@ -760,6 +806,8 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "stillCoarseReasons": still_coarse_reasons if still_coarse_after_refinement else [],
             "promptContractWarnings": prompt_contract_warnings,
             "availableRefsByRoleSummary": {role: len((normalized.get("refsByRole") or {}).get(role) or []) for role in COMFY_REF_ROLES},
+            "referenceProfilesSummary": summarize_profiles(reference_profiles),
+            "rolesGloballyAvailable": [role for role in COMFY_REF_ROLES if len((normalized.get("refsByRole") or {}).get(role) or []) > 0],
             "sceneRoleSelection": scene_refs_debug,
             "activeRolesByScene": {item.get("sceneId"): item.get("activeRoles") for item in scene_refs_debug},
         },
@@ -811,6 +859,14 @@ def _build_scene_refs_debug(scenes: list[dict[str, Any]], refs_by_role: dict[str
             "primaryRole": primary_role,
             "secondaryRoles": secondary_roles,
             "activeRoles": active_roles,
+            "heroEntityId": scene.get("heroEntityId"),
+            "supportEntityIds": scene.get("supportEntityIds") if isinstance(scene.get("supportEntityIds"), list) else [],
+            "mustAppear": scene.get("mustAppear") if isinstance(scene.get("mustAppear"), list) else [],
+            "mustNotAppear": scene.get("mustNotAppear") if isinstance(scene.get("mustNotAppear"), list) else [],
+            "identityLock": bool(scene.get("identityLock")),
+            "environmentLock": bool(scene.get("environmentLock")),
+            "styleLock": bool(scene.get("styleLock")),
+            "selectionReason": str(scene.get("roleSelectionReason") or "").strip() or "derived_from_refs_used_and_directives",
         })
     return out
 

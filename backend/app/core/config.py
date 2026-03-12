@@ -1,11 +1,13 @@
 from pathlib import Path
 import logging
+import os
 
 from pydantic_settings import BaseSettings
 
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 logger = logging.getLogger(__name__)
+
 
 class Settings(BaseSettings):
     PS_ENV: str = "dev"
@@ -45,9 +47,23 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
+
 settings = Settings()
 
-# temporary debug
-print("[CONFIG] env_file =", ENV_FILE)
-print("[CONFIG] KIE_API_KEY loaded =", bool(settings.KIE_API_KEY))
-logger.info("[CONFIG] GEMINI_TEXT_MODEL = %s", settings.GEMINI_TEXT_MODEL)
+
+def _gemini_key_source() -> str:
+    if os.getenv("GEMINI_API_KEY"):
+        return "environment"
+    if ENV_FILE.exists():
+        return ".env"
+    return "missing"
+
+
+logger.info(
+    "[CONFIG] GEMINI key status=%s source=%s model_text=%s model_vision=%s model_image=%s",
+    "found" if bool((settings.GEMINI_API_KEY or "").strip()) else "missing",
+    _gemini_key_source(),
+    settings.GEMINI_TEXT_MODEL,
+    settings.GEMINI_VISION_MODEL,
+    settings.GEMINI_IMAGE_MODEL,
+)
