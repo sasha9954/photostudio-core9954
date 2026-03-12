@@ -51,6 +51,7 @@ export function normalizeComfyScenePrompts(scene = {}) {
     videoPromptEn,
     imagePrompt: imagePromptEn,
     videoPrompt: videoPromptEn,
+    videoPanelOpen: Boolean(scene?.videoPanelOpen || String(scene?.videoUrl || "").trim()),
     imagePromptSyncStatus,
     videoPromptSyncStatus,
   };
@@ -193,6 +194,7 @@ export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {
       refsUsed: {},
       imageUrl: "",
       videoUrl: "",
+      videoPanelOpen: false,
       plannerMeta,
     };
   });

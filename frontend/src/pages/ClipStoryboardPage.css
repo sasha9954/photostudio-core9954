@@ -1674,6 +1674,16 @@ body.ps_clip_fullscreen .mainCol {
   color: rgba(255,255,255,.58);
 }
 
+.clipSB_comfySplitGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.clipSB_comfySplitCol {
+  min-width: 0;
+}
+
 @media (max-width: 960px) {
   .clipSB_comfyBody {
     grid-template-columns: 1fr;
@@ -1687,7 +1697,8 @@ body.ps_clip_fullscreen .mainCol {
   .clipSB_comfyGrid,
   .clipSB_comfyStatusGrid,
   .clipSB_comfyDebug,
-  .clipSB_comfyInfoGrid {
+  .clipSB_comfyInfoGrid,
+  .clipSB_comfySplitGrid {
     grid-template-columns: 1fr;
   }
 }
