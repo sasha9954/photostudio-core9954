@@ -1,7 +1,7 @@
 from typing import Any
 
-from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field, ValidationError
 
 from app.engine.comfy_brain_engine import run_comfy_plan
 
@@ -32,24 +32,27 @@ class ClipComfyPlanIn(BaseModel):
 
 
 @router.post("/clip/comfy/plan")
-async def clip_comfy_plan(request: Request, payload: ClipComfyPlanIn) -> dict[str, Any]:
+async def clip_comfy_plan(request: Request) -> dict[str, Any]:
     content_type = request.headers.get("content-type", "")
     raw_body_bytes = await request.body()
     raw_body_text = raw_body_bytes.decode("utf-8", errors="replace")
 
-    parsed_json: Any = None
-    json_parse_error: str | None = None
-    try:
-        parsed_json = json.loads(raw_body_text) if raw_body_text else None
-    except Exception as exc:  # diagnostic logging only
-        json_parse_error = str(exc)
-
     logger.info("[clip_comfy_plan] content-type=%s", content_type)
     logger.info("[clip_comfy_plan] raw-body=%s", raw_body_text)
-    if json_parse_error:
-        logger.info("[clip_comfy_plan] parsed-json-error=%s", json_parse_error)
-    else:
+
+    parsed_json: Any = None
+    try:
+        parsed_json = json.loads(raw_body_text)
         logger.info("[clip_comfy_plan] parsed-json=%s", parsed_json)
+    except Exception as exc:
+        logger.exception("[clip_comfy_plan] json-parse-error=%s", exc)
+        raise HTTPException(status_code=422, detail=f"Invalid JSON body: {exc}") from exc
+
+    try:
+        payload = ClipComfyPlanIn.model_validate(parsed_json or {})
+    except ValidationError as exc:
+        logger.exception("[clip_comfy_plan] pydantic-validation-error=%s", exc)
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
     req = payload.model_dump(mode="json")
     req["refsByRole"] = {
