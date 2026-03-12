@@ -1610,6 +1610,7 @@ export default function ClipStoryboardPage() {
       audioStoryMode: payload?.audioStoryMode || "lyrics_music",
       hasText: !!String(payload?.text || "").trim(),
       hasAudio: !!String(payload?.audioUrl || "").trim(),
+      audioDurationSec: Number(payload?.audioDurationSec || 0) > 0 ? Number(payload.audioDurationSec) : null,
       refsCounts,
     };
   }, []);
@@ -1627,6 +1628,9 @@ export default function ClipStoryboardPage() {
       stylePreset: planMeta.stylePreset || null,
       audioStoryMode: planMeta.audioStoryMode || null,
       storyControlMode: planMeta.storyControlMode || null,
+      audioDurationSec: Number(planMeta?.audioDurationSec || 0) > 0 ? Number(planMeta.audioDurationSec) : null,
+      timelineDurationSec: Number(planMeta?.timelineDurationSec || 0) > 0 ? Number(planMeta.timelineDurationSec) : null,
+      sceneDurationTotalSec: Number(planMeta?.sceneDurationTotalSec || 0) > 0 ? Number(planMeta.sceneDurationTotalSec) : null,
       scenesCount: scenes.length,
       warnings: Array.isArray(response?.warnings) ? response.warnings.length : 0,
       errors: Array.isArray(response?.errors) ? response.errors.length : 0,
@@ -1691,7 +1695,7 @@ useEffect(() => {
         id: "audio",
         type: "audioNode",
         position: { x: 120, y: 120 },
-        data: { audioUrl: "", audioName: "", uploading: false },
+        data: { audioUrl: "", audioName: "", uploading: false, audioDurationSec: null },
       },
       {
         id: "text",
@@ -3848,6 +3852,9 @@ const hydrate = useCallback(() => {
 
           if (n.type === "audioNode") {
             delete data.audioType;
+            data.uploading = false;
+            const normalizedAudioDuration = Number(data.audioDurationSec || 0);
+            data.audioDurationSec = normalizedAudioDuration > 0 ? normalizedAudioDuration : null;
           }
 
           if (n.type === "refNode") {
@@ -3972,7 +3979,7 @@ const hydrate = useCallback(() => {
 
     let node;
     if (type === "audio") {
-      node = { id, type: "audioNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { audioUrl: "", audioName: "", uploading: false } };
+      node = { id, type: "audioNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { audioUrl: "", audioName: "", uploading: false, audioDurationSec: null } };
     } else if (type === "text") {
       node = { id, type: "textNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { textValue: "" } };
     } else if (type === "brain") {
