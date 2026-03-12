@@ -4451,6 +4451,31 @@ def clip_image(payload: ClipImageIn):
     comfy_refs_by_role = _clean_refs_by_role_for_image(getattr(refs_obj, "refsByRole", None))
     connected_inputs = getattr(refs_obj, "connectedInputs", None)
     connected_inputs = connected_inputs if isinstance(connected_inputs, dict) else {}
+    comfy_roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+    comfy_counts = {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles}
+    connected_refs_by_role = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
+    connected_active_roles = sorted([
+        role for role in comfy_roles
+        if comfy_counts.get(role, 0) > 0 or bool(connected_refs_by_role.get(role))
+    ])
+    print("[COMFY IMAGE DEBUG] refsByRole counts=" + json.dumps(comfy_counts, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] refsByRole raw=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] connected active roles=" + json.dumps(connected_active_roles, ensure_ascii=False))
+    for role in comfy_roles:
+        has_urls = bool(comfy_refs_by_role.get(role))
+        print(f"[COMFY IMAGE DEBUG] role {role} hasUrls={has_urls}")
+
+    comfy_inline_parts_by_role: dict[str, list[dict]] = {role: [] for role in comfy_roles}
+    for role in comfy_roles:
+        for ref_url in comfy_refs_by_role.get(role) or []:
+            inline_part = _load_reference_image_inline(ref_url)
+            if inline_part:
+                comfy_inline_parts_by_role[role].append(inline_part)
+        inline_count = len(comfy_inline_parts_by_role[role])
+        print(f"[COMFY IMAGE DEBUG] inline parts {role}={inline_count}")
+        if (comfy_refs_by_role.get(role) or []) and inline_count == 0:
+            print(f"[COMFY IMAGE DEBUG] WARNING role received but no inline image created: {role}")
+
     text_input = str(getattr(refs_obj, "text", "") or "").strip()
     audio_input_url = str(getattr(refs_obj, "audioUrl", "") or "").strip()
     mode_input = str(getattr(refs_obj, "mode", "") or "").strip()
@@ -4863,6 +4888,19 @@ def clip_image(payload: ClipImageIn):
             }],
             "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         }
+        text_parts_total = sum(1 for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str))
+        image_parts_total = sum(1 for part in parts if isinstance(part, dict) and isinstance(part.get("inlineData"), dict))
+        model_parts_summary = {
+            "textParts": text_parts_total,
+            "imageParts": image_parts_total,
+            "characterParts": len(character_images) + len(comfy_inline_parts_by_role.get("character_1") or []) + len(comfy_inline_parts_by_role.get("character_2") or []) + len(comfy_inline_parts_by_role.get("character_3") or []),
+            "animalParts": len(comfy_inline_parts_by_role.get("animal") or []),
+            "locationParts": len(location_images) + len(comfy_inline_parts_by_role.get("location") or []),
+            "styleParts": len(style_images) + len(comfy_inline_parts_by_role.get("style") or []),
+            "propsParts": len(props_images) + len(comfy_inline_parts_by_role.get("props") or []),
+            "previousSceneParts": 1 if previous_scene_image_inline else 0,
+        }
+        print("[COMFY IMAGE DEBUG] model parts summary=" + json.dumps(model_parts_summary, ensure_ascii=False))
         resp = post_generate_content(api_key, model, body, timeout=120)
         decoded = _decode_gemini_image(resp if isinstance(resp, dict) else {})
         if decoded:
