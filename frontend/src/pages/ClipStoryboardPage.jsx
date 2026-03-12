@@ -904,10 +904,15 @@ function buildComfySceneRefsPayload({
   styleLock = null,
   identityLock = null,
 } = {}) {
+  const normalizeRoleUrls = (items) => (Array.isArray(items)
+    ? items
+      .map((item) => (typeof item === "string" ? item : item?.url))
+      .map((url) => String(url || "").trim())
+      .filter(Boolean)
+    : []);
+
   const pickUrls = (roles = []) => roles
-    .flatMap((role) => (Array.isArray(refsByRole?.[role]) ? refsByRole[role] : []))
-    .map((item) => String(item?.url || "").trim())
-    .filter(Boolean);
+    .flatMap((role) => normalizeRoleUrls(refsByRole?.[role]));
 
   const normalizedRefsByRole = Object.fromEntries(
     ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
@@ -2533,8 +2538,18 @@ const comfyShowVideoSection = Boolean(
       console.log("[COMFY DEBUG FRONT] /clip/image comfyRefsByRole counts", summarizeRefsByRole(comfyRefsByRole));
       console.log("[COMFY DEBUG FRONT] /clip/image refs payload for buildComfySceneRefsPayload", refsPayloadForImage);
       console.log("[COMFY DEBUG FRONT] /clip/image refs payload refsByRole counts", summarizeRefsByRole(refsPayloadForImage?.refsByRole));
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsByRoleForImage.character_1 count", Array.isArray(refsByRoleForImage?.character_1) ? refsByRoleForImage.character_1.length : 0);
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsByRoleForImage.character_1 urls", Array.isArray(refsByRoleForImage?.character_1) ? refsByRoleForImage.character_1 : []);
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsPayloadForImage.refsByRole.character_1 count", Array.isArray(refsPayloadForImage?.refsByRole?.character_1) ? refsPayloadForImage.refsByRole.character_1.length : 0);
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsPayloadForImage.refsByRole.character_1 urls", Array.isArray(refsPayloadForImage?.refsByRole?.character_1) ? refsPayloadForImage.refsByRole.character_1 : []);
       console.log("[COMFY DEBUG FRONT] /clip/image final refs before request", refsForImageRequest);
       console.log("[COMFY DEBUG FRONT] /clip/image final refsByRole counts before request", summarizeRefsByRole(refsForImageRequest?.refsByRole));
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsForImageRequest.refsByRole.character_1 count", Array.isArray(refsForImageRequest?.refsByRole?.character_1) ? refsForImageRequest.refsByRole.character_1.length : 0);
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsForImageRequest.refsByRole.character_1 urls", Array.isArray(refsForImageRequest?.refsByRole?.character_1) ? refsForImageRequest.refsByRole.character_1 : []);
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsForImageRequest.character count", Array.isArray(refsForImageRequest?.character) ? refsForImageRequest.character.length : 0);
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsForImageRequest.character urls", Array.isArray(refsForImageRequest?.character) ? refsForImageRequest.character : []);
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsForImageRequest.heroEntityId", refsForImageRequest?.heroEntityId || null);
+      console.log("[COMFY DEBUG FRONT] /clip/image stage refsForImageRequest.refsUsed", refsForImageRequest?.refsUsed || []);
       console.log("[COMFY DEBUG FRONT] /clip/image final role contract", {
         heroEntityId: refsForImageRequest?.heroEntityId || null,
         refsUsed: refsForImageRequest?.refsUsed || [],
@@ -2566,6 +2581,7 @@ ${contextPrompt}`.trim(),
           refs: refsForImageRequest,
         },
       });
+      console.log("[COMFY DEBUG FRONT] /clip/image final request body refs", refsForImageRequest);
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || 'image_generation_failed');
       updateComfyScene(comfySafeIndex, { imageUrl: String(out.imageUrl || '') });
     } catch (e) {

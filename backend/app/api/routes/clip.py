@@ -4609,7 +4609,21 @@ def clip_image(payload: ClipImageIn):
     previous_scene_image_url = str(getattr(refs_obj, "previousSceneImageUrl", "") or "").strip()
     previous_scene_image_inline = _load_reference_image_inline(previous_scene_image_url) if previous_scene_image_url else None
 
-    comfy_refs_by_role = _clean_refs_by_role_for_image(getattr(refs_obj, "refsByRole", None))
+    raw_refs_by_role_incoming = getattr(refs_obj, "refsByRole", None)
+    print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole=" + json.dumps(raw_refs_by_role_incoming, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] incoming refs.raw.character=" + json.dumps(getattr(refs_obj, "character", None), ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] incoming refs.raw.heroEntityId=" + json.dumps(getattr(refs_obj, "heroEntityId", None), ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] incoming refs.raw.refsUsed=" + json.dumps(getattr(refs_obj, "refsUsed", None), ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] incoming refs.raw.primaryRole=" + json.dumps(getattr(refs_obj, "primaryRole", None), ensure_ascii=False))
+    incoming_character_1 = []
+    if isinstance(raw_refs_by_role_incoming, dict):
+        incoming_character_1 = raw_refs_by_role_incoming.get("character_1") or []
+    print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole.character_1=" + json.dumps(incoming_character_1, ensure_ascii=False))
+
+    comfy_refs_by_role = _clean_refs_by_role_for_image(raw_refs_by_role_incoming)
+    print("[COMFY IMAGE DEBUG] cleaned refsByRole=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] cleaned refsByRole counts=" + json.dumps({role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_1=" + json.dumps(comfy_refs_by_role.get("character_1") or [], ensure_ascii=False))
     reference_profiles = build_reference_profiles({
         role: [{"url": url, "name": ""} for url in (comfy_refs_by_role.get(role) or [])]
         for role in COMFY_REF_ROLES
