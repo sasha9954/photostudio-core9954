@@ -15,7 +15,25 @@ import "./ClipStoryboardPage.css";
 import { API_BASE, fetchJson } from "../services/api";
 import { useAuth } from "../app/AuthContext";
 import { useNavigate } from "react-router-dom";
-
+import {
+  ComfyBrainNode,
+  ComfyStoryboardNode,
+  ComfyVideoPreviewNode,
+  RefCharacter2Node,
+  RefCharacter3Node,
+  RefAnimalNode,
+  RefGroupNode,
+} from "./clip_nodes/comfy";
+import {
+  normalizeRenderProfile,
+  deriveSceneRoles,
+  canGenerateComfyImage,
+  inferPropAnchorLabel,
+  buildComfyGlobalContinuity,
+  buildMockComfyScenes,
+  deriveComfyBrainState,
+  extractComfyDebugFields,
+} from "./clip_nodes/comfy/comfyBrainDomain";
 
 
 // -------------------------
@@ -343,559 +361,6 @@ function getSceneUiDescription(scene) {
   return "";
 }
 
-const RENDER_PROFILE_OPTIONS = ["comfy image", "comfy text"];
-
-const REFERENCE_HANDLE_TO_ROLE = {
-  ref_character_1: "character_1",
-  ref_character_2: "character_2",
-  ref_character_3: "character_3",
-  ref_animal: "animal",
-  animal_1: "animal",
-  ref_group: "group",
-  group_faces: "group",
-  ref_location: "location",
-  ref_style: "style",
-  ref_props: "props",
-};
-
-const ROLE_PRIORITY = ["character_1", "character_2", "character_3", "animal", "group", "location", "props", "style"];
-const VISUAL_ANCHOR_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
-
-function normalizeRenderProfile(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  const candidate = RENDER_PROFILE_OPTIONS.find((item) => item === normalized);
-  return candidate || "comfy image";
-}
-
-function normalizeRoleList(input = []) {
-  const unique = new Set();
-  (Array.isArray(input) ? input : []).forEach((raw) => {
-    const role = REFERENCE_HANDLE_TO_ROLE[raw] || String(raw || "").trim().toLowerCase();
-    if (ROLE_PRIORITY.includes(role)) unique.add(role);
-  });
-  return ROLE_PRIORITY.filter((role) => unique.has(role));
-}
-
-function deriveSceneRoles({ refsByRole = {} } = {}) {
-  const cast = normalizeRoleList(Object.keys(refsByRole).filter((role) => Array.isArray(refsByRole[role]) && refsByRole[role].length > 0));
-  const castSubjects = cast.filter((role) => ["character_1", "character_2", "character_3", "animal", "group"].includes(role));
-  const primarySubject = castSubjects[0] || cast[0] || "character_1";
-  const secondarySubjects = castSubjects.filter((role) => role !== primarySubject);
-  return {
-    primarySubject,
-    secondarySubjects,
-    cast,
-  };
-}
-
-function hasComfyTextPrompt(plannerInput = {}) {
-  return !!String(plannerInput?.meaningfulText || "").trim();
-}
-
-function canGenerateComfyImage(plannerInput = {}) {
-  const refsByRole = plannerInput?.refsByRole || {};
-  return VISUAL_ANCHOR_ROLES.some((role) => Array.isArray(refsByRole[role]) && refsByRole[role].length > 0);
-}
-
-function inferPropAnchorLabel(refsByRole = {}) {
-  const firstProp = (Array.isArray(refsByRole.props) ? refsByRole.props : [])[0];
-  const name = String(firstProp?.name || "").trim();
-  return name || "hero prop";
-}
-
-const STORY_OVERRIDE_MARKERS = [
-  "не по песне", "другой сюжет", "только ритм", "только настроение", "не иллюстрируй буквально", "не по тексту песни",
-  "separate story", "different story", "audio only for pacing", "not literal lyrics", "use audio only as rhythm", "story from text",
-];
-
-const STORY_ENHANCEMENT_MARKERS = [
-  "усили", "усилить", "подчеркни", "добавь драмы", "сделай мрачнее", "сделай сильнее", "усиль финал",
-  "improve emotion", "enhance drama", "intensify", "emphasize", "add tension", "make more romantic", "make darker", "make more cinematic",
-];
-
-function normalizeStoryHeuristicText(value = "") {
-  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function hasStoryMarker(input = "", markers = []) {
-  if (!input) return false;
-  return markers.some((marker) => input.includes(marker));
-}
-
-function detectStoryControlMode({ meaningfulText = "", meaningfulAudio = "", refsByRole = {} } = {}) {
-  const text = normalizeStoryHeuristicText(meaningfulText);
-  const hasText = !!text;
-  const hasAudio = !!String(meaningfulAudio || "").trim();
-  const hasRefs = Object.values(refsByRole || {}).some((items) => Array.isArray(items) && items.length > 0);
-  if (!hasText && !hasAudio && !hasRefs) return "insufficient_input";
-  if (!hasText && !hasAudio && hasRefs) return "refs_mode_generated";
-  if (hasText && !hasAudio) return "text_override";
-  if (!hasText && hasAudio) return "audio_primary";
-  if (hasText && hasAudio) {
-    if (hasStoryMarker(text, STORY_OVERRIDE_MARKERS)) return "text_override";
-    if (hasStoryMarker(text, STORY_ENHANCEMENT_MARKERS)) return "audio_enhanced_by_text";
-    return "hybrid_balanced";
-  }
-  return "insufficient_input";
-}
-
-function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [], edgesNow = [] } = {}) {
-  const incoming = (edgesNow || []).filter((e) => e.target === nodeId);
-  const pickConnectedNode = (handleId) => {
-    const edge = [...incoming].reverse().find((e) => String(e.targetHandle || "") === handleId);
-    return edge ? (nodesNow.find((x) => x.id === edge.source) || null) : null;
-  };
-
-  const comfyRefConfigByHandle = {
-    ref_character_1: { nodeType: "refNode", kind: "ref_character" },
-    ref_location: { nodeType: "refNode", kind: "ref_location" },
-    ref_style: { nodeType: "refNode", kind: "ref_style" },
-    ref_props: { nodeType: "refNode", kind: "ref_items" },
-    ref_character_2: { nodeType: "refCharacter2" },
-    ref_character_3: { nodeType: "refCharacter3" },
-    ref_animal: { nodeType: "refAnimal" },
-    ref_group: { nodeType: "refGroup" },
-  };
-
-  const extractRefsFromSourceNode = (sourceNode, cfg = {}) => {
-    if (!sourceNode || sourceNode?.type !== cfg.nodeType) return [];
-    if (cfg.kind && sourceNode?.data?.kind !== cfg.kind) return [];
-    const refs = cfg.nodeType === "refNode"
-      ? normalizeRefData(sourceNode?.data || {}, cfg.kind || "").refs
-      : (Array.isArray(sourceNode?.data?.refs)
-        ? sourceNode.data.refs
-          .map((item) => ({ url: String(item?.url || "").trim(), name: String(item?.name || "").trim() }))
-          .filter((item) => !!item.url)
-        : []);
-    if (refs.length) return refs;
-    const fallbackUrl = String(sourceNode?.data?.url || "").trim();
-    return fallbackUrl ? [{ url: fallbackUrl, name: String(sourceNode?.data?.name || "").trim() }] : [];
-  };
-
-  const refsByRole = {
-    character_1: extractRefsFromSourceNode(pickConnectedNode("ref_character_1"), comfyRefConfigByHandle.ref_character_1),
-    character_2: extractRefsFromSourceNode(pickConnectedNode("ref_character_2"), comfyRefConfigByHandle.ref_character_2),
-    character_3: extractRefsFromSourceNode(pickConnectedNode("ref_character_3"), comfyRefConfigByHandle.ref_character_3),
-    animal: extractRefsFromSourceNode(pickConnectedNode("ref_animal"), comfyRefConfigByHandle.ref_animal),
-    group: extractRefsFromSourceNode(pickConnectedNode("ref_group"), comfyRefConfigByHandle.ref_group),
-    location: extractRefsFromSourceNode(pickConnectedNode("ref_location"), comfyRefConfigByHandle.ref_location),
-    style: extractRefsFromSourceNode(pickConnectedNode("ref_style"), comfyRefConfigByHandle.ref_style),
-    props: extractRefsFromSourceNode(pickConnectedNode("ref_props"), comfyRefConfigByHandle.ref_props),
-  };
-
-  const textNode = pickConnectedNode("text");
-  const audioNode = pickConnectedNode("audio");
-  const meaningfulText = textNode?.type === "textNode" ? String(textNode?.data?.textValue || "").trim() : "";
-  const meaningfulAudio = audioNode?.type === "audioNode"
-    ? String(audioNode?.data?.audioUrl || audioNode?.data?.audioName || "").trim()
-    : "";
-
-  const modeValue = String(nodeData?.mode || "clip");
-  const outputValue = normalizeRenderProfile(nodeData?.output || "comfy image");
-  const stylePreset = String(nodeData?.styleKey || "realism");
-  const freezeStyle = !!nodeData?.freezeStyle;
-  const modeSemantics = getModeSemantics(modeValue);
-  const styleSemantics = getStyleSemantics(stylePreset);
-
-  const narrativeSource = meaningfulText && meaningfulAudio
-    ? "text + audio"
-    : meaningfulText
-      ? "text"
-      : meaningfulAudio
-        ? "audio"
-        : Object.values(refsByRole).some((items) => items.length)
-          ? "refs"
-          : "none";
-  const timelineSource = meaningfulAudio ? "audio rhythm" : "logical timing";
-  const storyControlMode = detectStoryControlMode({ meaningfulText, meaningfulAudio, refsByRole });
-  const narrativeRoles = deriveStoryNarrativeRoles(storyControlMode);
-  const storyMissionSummary = buildStoryMissionSummary({ meaningfulText, storyControlMode, mode: modeValue });
-
-  return {
-    refsByRole,
-    meaningfulText,
-    meaningfulAudio,
-    modeValue,
-    outputValue,
-    stylePreset,
-    freezeStyle,
-    modeSemantics,
-    styleSemantics,
-    narrativeSource,
-    timelineSource,
-    storyControlMode,
-    narrativeRoles,
-    storyMissionSummary,
-  };
-}
-
-function deriveStoryNarrativeRoles(storyControlMode = "insufficient_input") {
-  const map = {
-    text_override: {
-      textNarrativeRole: "text defines primary story mission and scene objectives",
-      audioNarrativeRole: "audio shapes pacing and emotional contour",
-    },
-    audio_primary: {
-      textNarrativeRole: "text is optional support",
-      audioNarrativeRole: "audio provides primary story skeleton and beat logic",
-    },
-    audio_enhanced_by_text: {
-      textNarrativeRole: "text intensifies drama/theme and sharpens directorial accents",
-      audioNarrativeRole: "audio remains the backbone narrative flow",
-    },
-    hybrid_balanced: {
-      textNarrativeRole: "text co-authors narrative direction",
-      audioNarrativeRole: "audio co-authors rhythm and emotional progression",
-    },
-    refs_mode_generated: {
-      textNarrativeRole: "text is absent",
-      audioNarrativeRole: "audio is absent",
-    },
-    insufficient_input: {
-      textNarrativeRole: "text is insufficient",
-      audioNarrativeRole: "audio is insufficient",
-    },
-  };
-  return map[storyControlMode] || map.insufficient_input;
-}
-
-function buildStoryMissionSummary({ meaningfulText = "", storyControlMode = "insufficient_input", mode = "clip" } = {}) {
-  const conciseText = String(meaningfulText || "").trim().replace(/\s+/g, " ").slice(0, 180);
-  if (storyControlMode === "text_override") {
-    return conciseText || `${mode} mission: text-led narrative with audio cadence support`;
-  }
-  if (storyControlMode === "audio_enhanced_by_text") {
-    return conciseText ? `enhance audio story with: ${conciseText}` : `${mode} mission: enhance audio-driven story accents`;
-  }
-  if (storyControlMode === "hybrid_balanced") {
-    return conciseText ? `blend audio arc with text direction: ${conciseText}` : `${mode} mission: balanced text+audio authorship`;
-  }
-  if (storyControlMode === "audio_primary") return `${mode} mission: follow audio narrative pulse`;
-  if (storyControlMode === "refs_mode_generated") return `${mode} mission: derive narrative from refs + mode semantics`;
-  return `${mode} mission: insufficient narrative inputs`;
-}
-
-function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } = {}) {
-  const cast = Array.isArray(plannerMeta?.sceneRoleModel?.cast) ? plannerMeta.sceneRoleModel.cast : [];
-  const promptBasis = [
-    plannerInput.meaningfulText,
-    plannerMeta?.globalContinuity?.identityContinuity,
-    plannerMeta?.globalContinuity?.worldContinuity,
-    plannerMeta?.globalContinuity?.styleContinuity,
-  ].filter(Boolean).join("\n");
-  return {
-    primaryRole: plannerMeta?.sceneRoleModel?.primarySubject || "character_1",
-    secondaryRoles: plannerMeta?.sceneRoleModel?.secondarySubjects || [],
-    cast,
-    outputMode: plannerInput.output,
-    narrativeSource: plannerInput.narrativeSource,
-    stylePreset: plannerInput.stylePreset,
-    warnings: Array.isArray(plannerInput.warnings) ? plannerInput.warnings : [],
-    promptLength: promptBasis.length,
-    promptLines: promptBasis ? promptBasis.split("\n").length : 0,
-    promptBlocksUsed: promptBasis ? 4 : 0,
-    promptBasis,
-    modeIntent: plannerInput.modeIntent || plannerMeta.modeIntent || "",
-    modePromptBias: plannerInput.modePromptBias || plannerMeta.modePromptBias || "",
-    modeSceneStrategy: plannerInput.modeSceneStrategy || plannerMeta.modeSceneStrategy || "",
-    modeContinuityBias: plannerInput.modeContinuityBias || plannerMeta.modeContinuityBias || "",
-    planningMindset: plannerInput.planningMindset || plannerMeta.planningMindset || "",
-    styleSummary: plannerInput.styleSummary || plannerMeta.styleSummary || "",
-    styleContinuity: plannerInput.styleContinuity || plannerMeta.styleContinuity || "",
-    storyControlMode: plannerInput.storyControlMode || plannerMeta.storyControlMode || "insufficient_input",
-    storyMissionSummary: plannerInput.storyMissionSummary || plannerMeta.storyMissionSummary || "",
-    textNarrativeRole: plannerInput.textNarrativeRole || plannerMeta.textNarrativeRole || "",
-    audioNarrativeRole: plannerInput.audioNarrativeRole || plannerMeta.audioNarrativeRole || "",
-    usedPrimaryImage: plannerInput?.primaryImageAnchor?.url || "",
-    pipelineFlow: [
-      "brain uses all meaningful refs for scene planning",
-      "brain emits per-scene imagePrompt + videoPrompt + continuity",
-      "scene image is generated first",
-      "scene video uses generated image + scene video prompt + scene rules",
-    ],
-  };
-}
-
-function getModeSemantics(mode = "clip") {
-  const key = String(mode || "clip").toLowerCase();
-  const map = {
-    clip: {
-      modeIntent: "music_clip_rhythm",
-      modePromptBias: "dynamic rhythmic montage vocabulary",
-      modeSceneStrategy: "beat-driven cuts with energy shifts",
-      modeContinuityBias: "energy continuity over strict causal continuity",
-      planningMindset: "music_video_edit_mindset",
-      sceneTypes: ["hero_intro", "transition", "chorus_peak", "finale"],
-      sceneTitles: ["Beat Ignition", "Rhythm Lift", "Chorus Peak", "Final Hit"],
-      narrativeSteps: ["setup", "acceleration", "peak", "release"],
-      hooks: ["instant beat hook", "momentum switch", "chorus impact", "last rhythmic imprint"],
-      cameras: ["snappy establishing move", "kinetic tracking frame", "impact close-up", "wide outro sweep"],
-      ambience: ["tempo-led atmosphere", "high-energy transitions", "peak contrast pulse", "afterglow cadence"],
-      timingReasons: ["intro bars", "rising rhythmic phrase", "chorus accent", "outro cadence"],
-      beatAnchors: ["bar_intro", "bar_rise", "bar_peak", "bar_outro"],
-    },
-    kino: {
-      modeIntent: "cinematic_drama",
-      modePromptBias: "cinematic dramatic coherent scene vocabulary",
-      modeSceneStrategy: "cause-effect dramatic progression",
-      modeContinuityBias: "story continuity and emotional logic",
-      planningMindset: "director_scene_blocking_mindset",
-      sceneTypes: ["world_establish", "conflict_beat", "emotion_beat", "payoff"],
-      sceneTitles: ["World Establish", "Conflict Turn", "Emotional Beat", "Dramatic Payoff"],
-      narrativeSteps: ["setup", "conflict", "emotional_shift", "resolution"],
-      hooks: ["cinematic world reveal", "dramatic tension rise", "character emotion focus", "earned resolution"],
-      cameras: ["composed establishing frame", "motivated push-in", "held close dramatic frame", "controlled payoff composition"],
-      ambience: ["grounded cinematic tone", "tension in atmosphere", "intimate dramatic air", "resolved cinematic calm"],
-      timingReasons: ["logical opening context", "conflict escalation timing", "emotional processing beat", "narrative closure timing"],
-      beatAnchors: ["logic_setup", "logic_conflict", "logic_emotion", "logic_payoff"],
-    },
-    reklama: {
-      modeIntent: "advertising_persuasion",
-      modePromptBias: "hook promise proof payoff commercial vocabulary",
-      modeSceneStrategy: "hero object + promise + proof + payoff beats",
-      modeContinuityBias: "message clarity and product focus",
-      planningMindset: "commercial_persuasion_mindset",
-      sceneTypes: ["hero_intro", "product_focus", "payoff", "finale"],
-      sceneTitles: ["Hook Intro", "Promise Proof", "Benefit Payoff", "Brand Finale"],
-      narrativeSteps: ["hook", "promise", "proof", "payoff"],
-      hooks: ["instant commercial hook", "clear value promise", "proof-oriented beat", "brand memory lock"],
-      cameras: ["hero product reveal", "feature-focused camera pass", "benefit demonstration framing", "clean branded end frame"],
-      ambience: ["attention capture", "premium persuasion tone", "confidence and proof mood", "aspirational closure"],
-      timingReasons: ["hook in first impression window", "message comprehension beat", "proof retention beat", "brand recall beat"],
-      beatAnchors: ["ad_hook", "ad_promise", "ad_proof", "ad_payoff"],
-    },
-    scenario: {
-      modeIntent: "storyboard_authoring",
-      modePromptBias: "structured storyboard objective-driven vocabulary",
-      modeSceneStrategy: "explicit narrative beats and scene objectives",
-      modeContinuityBias: "structural continuity and script logic",
-      planningMindset: "storyboard_writer_mindset",
-      sceneTypes: ["world_establish", "objective_beat", "transition", "finale"],
-      sceneTitles: ["Scene Objective Setup", "Narrative Objective", "Transition Beat", "Storyboard Finale"],
-      narrativeSteps: ["setup", "objective", "transition", "resolution"],
-      hooks: ["clear scene objective", "narrative step clarity", "transition intention", "final objective closure"],
-      cameras: ["blocking-first establishing frame", "objective-focused medium frame", "bridging transition frame", "closure composition"],
-      ambience: ["structured storyboard tone", "narrative clarity mood", "transitional bridge mood", "resolved storyboard tone"],
-      timingReasons: ["script setup step", "objective progression step", "transition linking step", "final narrative step"],
-      beatAnchors: ["script_step_1", "script_step_2", "script_step_3", "script_step_4"],
-    },
-  };
-  return map[key] || map.clip;
-}
-
-function getStyleSemantics(stylePreset = "realism") {
-  const key = String(stylePreset || "realism").toLowerCase();
-  const map = {
-    realism: {
-      styleSummary: "grounded natural believable visual language",
-      styleContinuity: "physical coherence, natural light continuity, believable materials",
-      stylePromptBias: "natural grounded details",
-      ambienceBias: "natural atmosphere with restrained contrast",
-      cameraBias: "observational camera feeling",
-    },
-    film: {
-      styleSummary: "cinematic graded authored visual language",
-      styleContinuity: "cinematic grade continuity, motivated contrast, authored lens mood",
-      stylePromptBias: "cinematic dramatic authored frame",
-      ambienceBias: "dramatic cinematic ambience",
-      cameraBias: "directorial camera grammar",
-    },
-    neon: {
-      styleSummary: "stylized neon glow high-contrast visual language",
-      styleContinuity: "glow accents continuity, color contrast rhythm, stylized lighting",
-      stylePromptBias: "neon glow color accents",
-      ambienceBias: "electrified atmosphere with luminous accents",
-      cameraBias: "stylized energetic camera framing",
-    },
-    glossy: {
-      styleSummary: "polished premium commercial visual language",
-      styleContinuity: "clean premium finish continuity, controlled highlights, polished surfaces",
-      stylePromptBias: "premium polished finish",
-      ambienceBias: "aspirational premium atmosphere",
-      cameraBias: "precision commercial camera direction",
-    },
-    soft: {
-      styleSummary: "gentle airy low-contrast visual language",
-      styleContinuity: "soft light continuity, delicate transitions, airy color harmony",
-      stylePromptBias: "soft gentle airy details",
-      ambienceBias: "calm tender ambience",
-      cameraBias: "smooth delicate camera motion",
-    },
-  };
-  return map[key] || map.realism;
-}
-
-
-function buildComfyGlobalContinuity({ plannerInput = {}, refsByRole = {}, sceneRoleModel = {} } = {}) {
-  const anchors = plannerInput.anchors || {};
-  const continuityMemory = {
-    identityContinuity: anchors.sessionCharacterAnchor || `cast identity lock: ${(sceneRoleModel.cast || []).join(", ") || "minimal cast"}`,
-    worldContinuity: anchors.sessionLocationAnchor || (Array.isArray(refsByRole.location) && refsByRole.location.length ? "stable location anchor from refs" : "world continuity from textual context"),
-    styleContinuity: anchors.sessionStyleAnchor || `${plannerInput.stylePreset || "realism"} style continuity`,
-    propContinuity: anchors.propAnchorLabel || ((Array.isArray(refsByRole.props) && refsByRole.props.length) ? "hero prop continuity" : "no locked prop anchor"),
-    moodContinuity: plannerInput.storyControlMode === "audio_primary"
-      ? "mood continuity from audio rhythm"
-      : plannerInput.storyControlMode === "text_override"
-        ? "mood continuity from text mission"
-        : plannerInput.storyControlMode === "audio_enhanced_by_text" || plannerInput.storyControlMode === "hybrid_balanced"
-          ? "mood continuity from text-audio blend"
-          : plannerInput.storyControlMode === "refs_mode_generated"
-            ? "mood continuity from refs + mode semantics"
-            : "mood continuity unresolved",
-    timelineContinuity: plannerInput.timelineSource === "audio rhythm" ? "timeline anchored to audio cadence" : "timeline from logical progression",
-  };
-  return {
-    ...continuityMemory,
-    worldScaleContext: anchors.worldScaleContext || "human_world",
-    entityScaleAnchors: anchors.entityScaleAnchors || {},
-  };
-}
-
-function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {} } = {}) {
-  const baseCast = Array.isArray(plannerMeta?.sceneRoleModel?.cast) && plannerMeta.sceneRoleModel.cast.length
-    ? plannerMeta.sceneRoleModel.cast
-    : ["character_1"];
-  const primary = plannerMeta?.sceneRoleModel?.primarySubject || baseCast[0] || "character_1";
-  const secondaries = Array.isArray(plannerMeta?.sceneRoleModel?.secondarySubjects)
-    ? plannerMeta.sceneRoleModel.secondarySubjects
-    : baseCast.filter((role) => role !== primary);
-  const output = plannerInput.output || "comfy image";
-  const baseContinuity = plannerMeta?.globalContinuity || {};
-  const modeSemantics = getModeSemantics(plannerInput.mode);
-  const styleSemantics = getStyleSemantics(plannerInput.stylePreset);
-  const storyControlMode = plannerInput.storyControlMode || "insufficient_input";
-  const storyMissionSummary = plannerInput.storyMissionSummary || "";
-  const textNarrativeRole = plannerInput.textNarrativeRole || "";
-  const audioNarrativeRole = plannerInput.audioNarrativeRole || "";
-
-  const sceneBlueprints = [0, 1, 2, 3].map((idx) => ({
-    key: `c${idx + 1}`,
-    title: modeSemantics.sceneTitles[idx],
-    narrativeStep: modeSemantics.narrativeSteps[idx],
-    hook: modeSemantics.hooks[idx],
-    camera: `${modeSemantics.cameras[idx]} • ${styleSemantics.cameraBias}`,
-    ambience: `${modeSemantics.ambience[idx]} • ${styleSemantics.ambienceBias}`,
-    sceneType: modeSemantics.sceneTypes[idx],
-    timingReason: modeSemantics.timingReasons[idx],
-    beatAnchor: modeSemantics.beatAnchors[idx],
-  }));
-
-  return sceneBlueprints.map((item, idx) => {
-    const scenePrimary = idx === 0 ? primary : (secondaries[idx - 1] || primary);
-    const sceneSecondary = baseCast.filter((role) => role !== scenePrimary).slice(0, 3);
-    const hasSpeech = plannerInput.mode === "clip" && plannerInput.narrativeSource !== "none" && idx === 1;
-    const promptLead = output === "comfy text"
-      ? `rich textual storyboard for ${scenePrimary}`
-      : `cinematic frame with ${scenePrimary} anchor`;
-    const continuityMemory = {
-      summary: `${baseContinuity.identityContinuity || "identity continuity"}; ${baseContinuity.worldContinuity || "world continuity"}; ${baseContinuity.styleContinuity || "style continuity"}`,
-      worldScaleContext: baseContinuity.worldScaleContext || "human_world",
-      entityScaleAnchors: baseContinuity.entityScaleAnchors || {},
-      propState: baseContinuity.propContinuity || "",
-      moodState: baseContinuity.moodContinuity || "",
-      timelineState: baseContinuity.timelineContinuity || "",
-    };
-    const storyDirectorNote = storyControlMode === "text_override"
-      ? `story mission from text: ${storyMissionSummary || "text-driven narrative"}`
-      : storyControlMode === "audio_enhanced_by_text"
-        ? `audio story backbone enhanced by text direction: ${storyMissionSummary || "accent and drama enhancement"}`
-        : storyControlMode === "hybrid_balanced"
-          ? `hybrid mission from text + audio: ${storyMissionSummary || "balanced co-authorship"}`
-          : storyControlMode === "audio_primary"
-            ? "audio-first story pulse with text support"
-            : storyControlMode === "refs_mode_generated"
-              ? "refs-driven generated story mission"
-              : "insufficient mission inputs";
-
-    return {
-      sceneId: item.key,
-      title: item.title,
-      description: `${item.narrativeStep} • ${modeSemantics.modeIntent} • ${plannerInput.narrativeSource} • ${plannerInput.timelineSource} • ${storyDirectorNote}`,
-      primaryRole: scenePrimary,
-      secondaryRoles: sceneSecondary,
-      continuity: continuityMemory.summary,
-      imagePrompt: `${promptLead}. story control: ${storyControlMode}. story mission: ${storyMissionSummary || "n/a"}. text role: ${textNarrativeRole || "n/a"}. audio role: ${audioNarrativeRole || "n/a"}. mode intent: ${modeSemantics.modeIntent}. scene strategy: ${modeSemantics.modeSceneStrategy}. visual style: ${plannerInput.stylePreset} (${styleSemantics.stylePromptBias}). style continuity: ${styleSemantics.styleContinuity}. continuity lock enabled.`,
-      videoPrompt: `${item.camera}; ${item.ambience}; planning mindset: ${modeSemantics.planningMindset}; story control: ${storyControlMode}; mission: ${storyMissionSummary || "n/a"}; keep ${baseContinuity.timelineContinuity || "timeline continuity"}.`,
-      sceneType: item.sceneType,
-      sceneNarrativeStep: item.narrativeStep,
-      sceneGoal: storyDirectorNote,
-      storyMission: storyMissionSummary,
-      continuityInstruction: continuityMemory.summary,
-      cameraInstruction: item.camera,
-      ambienceInstruction: item.ambience,
-      viewerEngagementHook: `${item.hook} • ${storyControlMode}`,
-      hasCharacterSpeech: hasSpeech,
-      characterSpeechText: hasSpeech ? String(plannerInput.meaningfulText || "").slice(0, 140) : "",
-      continuityMemory,
-      previousContinuityMemory: idx > 0 ? { summary: `carry from ${sceneBlueprints[idx - 1].title}` } : null,
-      referenceDescriptions: plannerMeta.referenceSummary?.byRole || {},
-      referenceSummary: plannerMeta.referenceSummary?.text || "",
-      sceneParticipantsSummary: [scenePrimary, ...sceneSecondary].join(", "),
-      hasSceneImage: false,
-      sceneImageStatus: "pending_generation",
-      hasSceneVideo: false,
-      sceneVideoStatus: "pending_scene_image",
-      sceneOutputRule: "scene image is generated first; scene video uses generated image + video prompt + scene rules",
-      lyricFragment: plannerInput.narrativeSource.includes("audio") ? `${modeSemantics.modeIntent} audio-guided beat • ${audioNarrativeRole || "audio role"}` : "",
-      timingReason: plannerInput.timelineSource === "audio rhythm" ? `${item.timingReason} • audio cadence • ${storyControlMode}` : `${item.timingReason} • logical cadence • ${storyControlMode}`,
-      beatAnchor: plannerInput.timelineSource === "audio rhythm" ? item.beatAnchor : `logic_${item.beatAnchor}`,
-      plannerMeta,
-    };
-  });
-}
-
-function buildMockComfyScenes(meta = {}) {
-  const plannerInput = meta?.plannerInput && typeof meta.plannerInput === "object" ? meta.plannerInput : {};
-  const plannerMeta = {
-    mode: String(plannerInput?.mode || meta?.mode || "clip"),
-    output: normalizeRenderProfile(plannerInput?.output || meta?.output || "comfy image"),
-    stylePreset: String(plannerInput?.stylePreset || meta?.stylePreset || "realism"),
-    narrativeSource: String(plannerInput?.narrativeSource || meta?.narrativeSource || "none"),
-    timelineSource: String(plannerInput?.timelineSource || meta?.timelineSource || "logic"),
-    warnings: Array.isArray(plannerInput?.warnings) ? plannerInput.warnings : (Array.isArray(meta?.warnings) ? meta.warnings : []),
-    summary: meta?.summary && typeof meta.summary === "object" ? meta.summary : {},
-    sceneRoleModel: meta?.sceneRoleModel && typeof meta.sceneRoleModel === "object" ? meta.sceneRoleModel : deriveSceneRoles({ refsByRole: plannerInput?.refsByRole || {} }),
-    referenceSummary: meta?.referenceSummary && typeof meta.referenceSummary === "object" ? meta.referenceSummary : {},
-    modeIntent: String(plannerInput?.modeIntent || meta?.modeIntent || ""),
-    modePromptBias: String(plannerInput?.modePromptBias || meta?.modePromptBias || ""),
-    modeSceneStrategy: String(plannerInput?.modeSceneStrategy || meta?.modeSceneStrategy || ""),
-    modeContinuityBias: String(plannerInput?.modeContinuityBias || meta?.modeContinuityBias || ""),
-    planningMindset: String(plannerInput?.planningMindset || meta?.planningMindset || ""),
-    styleSummary: String(plannerInput?.styleSummary || meta?.styleSummary || ""),
-    styleContinuity: String(plannerInput?.styleContinuity || meta?.styleContinuity || ""),
-    storyControlMode: String(plannerInput?.storyControlMode || meta?.storyControlMode || "insufficient_input"),
-    storyMissionSummary: String(plannerInput?.storyMissionSummary || meta?.storyMissionSummary || ""),
-    textNarrativeRole: String(plannerInput?.textNarrativeRole || meta?.textNarrativeRole || ""),
-    audioNarrativeRole: String(plannerInput?.audioNarrativeRole || meta?.audioNarrativeRole || ""),
-  };
-  plannerMeta.globalContinuity = buildComfyGlobalContinuity({ plannerInput, refsByRole: plannerInput?.refsByRole || {}, sceneRoleModel: plannerMeta.sceneRoleModel });
-  return buildComfyScenesFromPlanner({ plannerInput, plannerMeta });
-}
-
-function getScenarioSceneStableKey(scene, idx) {
-  if (!scene || typeof scene !== "object") return `scene-${idx}`;
-  const explicitId = String(scene.id || scene.sceneId || "").trim();
-  if (explicitId) return explicitId;
-
-  const start = Number(scene.t0 ?? scene.start);
-  const end = Number(scene.t1 ?? scene.end);
-  if (Number.isFinite(start) && Number.isFinite(end)) {
-    return `time-${start}-${end}`;
-  }
-
-  return `scene-${idx}`;
-}
-
-
-function isLipSyncScene(scene) {
-  if (!scene || typeof scene !== "object") return false;
-  return !!(
-    scene.lipSync === true
-    || scene.isLipSync === true
-    || String(scene.renderMode || "").trim().toLowerCase() === "avatar_lipsync"
-  );
-}
-
 function stableRefsSignature(refs = []) {
   return refs
     .map((item) => String(item?.url || "").trim())
@@ -1011,6 +476,8 @@ function resolveAssetUrl(url) {
 
 const SCENE_IMAGE_FORMATS = ["9:16", "1:1", "16:9"];
 const DEFAULT_SCENE_IMAGE_FORMAT = "9:16";
+const USE_COMFY_MOCK = false;
+
 const PARSE_PROGRESS_PHRASES = [
   "Анализирую входы",
   "Собираю смысл сцены",
@@ -1879,212 +1346,6 @@ function RefNode({ id, data }) {
   );
 }
 
-
-function ComfyBrainNode({ id, data }) {
-  const mode = data?.mode || 'clip';
-  const output = data?.output || 'comfy image';
-  const styleKey = data?.styleKey || 'realism';
-  const modeMeta = getModeDisplayMeta(mode);
-  const styleMeta = getStyleDisplayMeta(styleKey);
-  const freezeStyle = !!data?.freezeStyle;
-  const parseStatus = data?.parseStatus || 'idle';
-  const summary = data?.brainSummary || {};
-  const warnings = Array.isArray(data?.brainWarnings) ? data.brainWarnings : [];
-  const critical = Array.isArray(data?.brainCritical) ? data.brainCritical : [];
-
-  return (
-    <>
-      {['audio','text','ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group','ref_location','ref_style','ref_props'].map((h, i) => (
-        <Handle key={h} type="target" position={Position.Left} id={h} className="clipSB_handle" style={handleStyle(h === 'ref_props' ? 'ref_items' : h, { top: 36 + i * 18 })} />
-      ))}
-      <Handle type="source" position={Position.Right} id="comfy_plan" className="clipSB_handle" style={handleStyle('comfy_plan')} />
-      <NodeShell title="COMFY BRAIN" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧠</span>} className="clipSB_nodeComfyBrain">
-        <div className="clipSB_badge">CANON v1.2 • PLANNER</div>
-        <div className="clipSB_grid2">
-          <div>
-            <div className="clipSB_brainLabel">MODE</div>
-            <select className="clipSB_select" value={mode} onChange={(e) => data?.onMode?.(id, e.target.value)}>
-              <option value="clip">Клип</option><option value="kino">Кино</option><option value="reklama">Реклама</option><option value="scenario">Сценарий</option>
-            </select>
-            <div className="clipSB_selectHint">{modeMeta.descriptionRu}</div>
-          </div>
-          <div>
-            <div className="clipSB_brainLabel">OUTPUT</div>
-            <select className="clipSB_select" value={output} onChange={(e) => data?.onOutput?.(id, e.target.value)}>
-              <option value="comfy image">comfy image</option>
-              <option value="comfy text">comfy text</option>
-            </select>
-          </div>
-        </div>
-        <div style={{ marginTop: 8 }}>
-          <div className="clipSB_brainLabel">STYLE</div>
-          <select className="clipSB_select" value={styleKey} onChange={(e) => data?.onStyle?.(id, e.target.value)}>
-            <option value="realism">Реализм</option><option value="film">Кино-стиль</option><option value="neon">Неон</option><option value="glossy">Глянец</option><option value="soft">Мягкий</option>
-          </select>
-          <div className="clipSB_selectHint">{styleMeta.descriptionRu}</div>
-        </div>
-        <div className="clipSB_brainSummaryBlock">
-          <div className="clipSB_brainSummaryRow"><span>story source</span><strong>{summary.storySource || 'none'}</strong></div>
-          <div className="clipSB_brainSummaryRow"><span>output</span><strong>{output}</strong></div>
-          <div className="clipSB_brainSummaryRow"><span>mode</span><strong>{modeMeta.labelRu}</strong></div>
-          <div className="clipSB_brainSummaryRow"><span>cast</span><strong>{summary.cast || 'none connected'}</strong></div>
-          <div className="clipSB_brainSummaryRow"><span>world</span><strong>{summary.world || 'location no • props no'}</strong></div>
-          <div className="clipSB_brainSummaryRow"><span>style</span><strong>{styleMeta.labelRu}</strong></div>
-        </div>
-        <div className="clipSB_toggleRow"><label><input type="checkbox" checked={freezeStyle} onChange={(e) => data?.onFreezeStyle?.(id, e.target.checked)} /> freeze style</label></div>
-        <div className="clipSB_brainWarnings">
-          {critical.map((item) => <div key={`critical-${item}`} className="clipSB_brainPill clipSB_brainPillCritical">{item}</div>)}
-          {warnings.map((item) => <div key={`warn-${item}`} className="clipSB_brainPill">{item}</div>)}
-          {!critical.length && !warnings.length ? <div className="clipSB_brainPill clipSB_brainPillOk">Planner ready</div> : null}
-        </div>
-        <button className="clipSB_btn" style={{ marginTop: 8 }} onClick={() => data?.onParse?.(id)}>Разобрать</button>
-        <div className="clipSB_small">status: {parseStatus}{data?.parsedAt ? ` • ${data.parsedAt}` : ''}</div>
-        <div className="clipSB_small">source: {summary.storySource || 'none'} • cast: {Number(data?.connectedCastCount || 0)} • world: {summary.worldCompact || 'none'} • style: {styleMeta.labelRu}</div>
-      </NodeShell>
-    </>
-  );
-}
-
-function ComfyStoryboardNode({ id, data }) {
-  const scenes = Array.isArray(data?.mockScenes) ? data.mockScenes : [];
-  const modeMeta = getModeDisplayMeta(data?.mode || 'clip');
-  const styleMeta = getStyleDisplayMeta(data?.stylePreset || 'realism');
-  const summaryScene = scenes[0] || null;
-  return (
-    <>
-      <Handle type="target" position={Position.Left} id="comfy_plan" className="clipSB_handle" style={handleStyle('comfy_plan')} />
-      <Handle type="source" position={Position.Right} id="comfy_scene_video_out" className="clipSB_handle" style={handleStyle('comfy_video', { top: 56 })} />
-      <NodeShell title="COMFY STORYBOARD" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧩</span>} className="clipSB_nodeComfyStoryboard"> 
-        <div className="clipSB_badge">EDITOR READY</div>
-        <div className="clipSB_small">scene count: {scenes.length || Number(data?.sceneCount || 0)}</div>
-        <div className="clipSB_small">mode: {modeMeta.labelRu} • style: {styleMeta.labelRu}</div>
-        <div className="clipSB_small">status: {data?.parseStatus || 'idle'} • output: {data?.output || 'comfy image'}</div>
-        <div className="clipSB_small">narrative: {summaryScene?.sceneNarrativeStep || data?.narrativeSource || 'none'} • timeline: {data?.timelineSource || 'logic'}</div>
-        <button className="clipSB_btn" style={{ marginTop: 10 }} onClick={() => data?.onOpenComfy?.(id)}>Сценарий</button>
-      </NodeShell>
-    </>
-  );
-}
-
-function ComfyVideoPreviewNode({ id, data }) {
-  return (
-    <>
-      <Handle type="target" position={Position.Left} id="comfy_scene_video_out" className="clipSB_handle" style={handleStyle('comfy_video')} />
-      <NodeShell title="COMFY VIDEO PREVIEW" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎬</span>} className="clipSB_nodeComfyVideo">
-        <div className="clipSB_badge">MP4 PREVIEW</div>
-        <div className="clipSB_previewCard">{data?.previewUrl ? <video src={data.previewUrl} controls className="clipSB_videoPlayer" /> : <div className="clipSB_small">No preview yet</div>}</div>
-        <div className="clipSB_small">{data?.previewStatus || 'idle'} • {data?.workflowPreset || 'comfy-default'} • {data?.format || '9:16'} • {data?.duration || 0}s</div>
-        <div className="clipSB_inlineBtns"><button className="clipSB_btn clipSB_btnSecondary">Preview</button><button className="clipSB_btn clipSB_btnSecondary">Open</button><button className="clipSB_btn clipSB_btnSecondary">Download</button></div>
-      </NodeShell>
-    </>
-  );
-}
-
-function RefCharacter2Node({ id, data }) {
-  return <RefLiteNode id={id} data={data} title="CHARACTER 2" className="clipSB_nodeRef2" handleId="ref_character_2" />;
-}
-function RefCharacter3Node({ id, data }) {
-  return <RefLiteNode id={id} data={data} title="CHARACTER 3" className="clipSB_nodeRef3" handleId="ref_character_3" />;
-}
-function RefAnimalNode({ id, data }) {
-  return <RefLiteNode id={id} data={data} title="ANIMAL" className="clipSB_nodeRefAnimal" handleId="ref_animal" />;
-}
-function RefGroupNode({ id, data }) {
-  return <RefLiteNode id={id} data={data} title="GROUP / COLLECTIVE" className="clipSB_nodeRefGroup" handleId="ref_group" />;
-}
-
-function RefLiteNode({ id, data, title, className, handleId }) {
-  const inputRef = useRef(null);
-  const maxFiles = 5;
-  const refs = Array.isArray(data?.refs)
-    ? data.refs
-      .map((item) => ({
-        url: String(item?.url || "").trim(),
-        name: String(item?.name || "").trim(),
-        type: String(item?.type || "").trim(),
-      }))
-      .filter((item) => !!item.url)
-      .slice(0, maxFiles)
-    : [];
-  const canAddMore = refs.length < maxFiles;
-
-  const openPicker = () => {
-    if (!canAddMore) return;
-    inputRef.current?.click();
-  };
-
-  const onInputChange = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-    await data?.onPickImage?.(id, files);
-    e.target.value = "";
-  };
-
-  return (
-    <>
-      <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
-      <NodeShell title={title} onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧷</span>} className={className}>
-        <div className="clipSB_refLitePreview">
-          {!refs.length ? (
-            <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && openPicker()}>
-              <span className="clipSB_refLiteEmptyPlus">+</span>
-              <span>нет изображений</span>
-              <span>добавь фото</span>
-            </div>
-          ) : (
-            <div className="clipSB_refGrid clipSB_refLiteGrid">
-              {refs.map((item, idx) => (
-                <div className="clipSB_refThumb" key={`${item.url}-${idx}`}>
-                  <button
-                    className="clipSB_refLiteOpen"
-                    onClick={() => data?.onOpenLightbox?.(item.url)}
-                    title="Открыть фото"
-                  >
-                    <img src={resolveAssetUrl(item.url)} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" />
-                  </button>
-                  <button
-                    className="clipSB_refThumbRemove"
-                    title="Удалить фото"
-                    onClick={() => data?.onRemoveImage?.(id, idx)}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-              {canAddMore ? (
-                <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">
-                  +
-                </button>
-              ) : null}
-            </div>
-          )}
-        </div>
-        <div className="clipSB_fileRow" style={{ marginTop: 8 }}>
-          <div className="clipSB_fileName" title={refs.map((x) => x.name || x.url).join(", ")}>
-            {refs.length ? `${refs.length}/${maxFiles} изображ.` : "нет изображений"}
-          </div>
-        </div>
-        <div className="clipSB_refLiteActions">
-          <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading}>
-            {data?.uploading ? 'Загрузка…' : refs.length ? 'Добавить фото' : 'Загрузить фото'}
-          </button>
-          {!canAddMore ? <div className="clipSB_small" style={{ marginTop: 0 }}>Лимит 5/5</div> : null}
-        </div>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/jpg,image/webp"
-          multiple
-          style={{ display: "none" }}
-          onChange={onInputChange}
-        />
-        <div className="clipSB_hint" style={{ marginTop: 8 }}>
-          Загрузи до 5 фото, порядок учитывается · подключай к COMFY BRAIN
-        </div>
-      </NodeShell>
-    </>
-  );
-}
 
 function StoryboardPlanNode({ id, data }) {
   const scenes = data?.scenes || [];
@@ -3707,7 +2968,7 @@ onClipSec: (nodeId, value) => {
             if (derived.storyControlMode === 'text_override' && derived.meaningfulAudio) warnings.push('TEXT задаёт сюжет; AUDIO используется для ритма/эмоционального контура');
             if (derived.storyControlMode === 'audio_enhanced_by_text') warnings.push('AUDIO даёт story backbone; TEXT усиливает драму и акценты');
             if (derived.storyControlMode === 'hybrid_balanced') warnings.push('Сюжет формируется совместно из AUDIO и TEXT');
-            if (derived.outputValue === 'comfy text' && !hasComfyTextPrompt({ meaningfulText: derived.meaningfulText })) warnings.push('Для comfy text желательно добавить richer text prompt');
+            if (derived.outputValue === 'comfy text' && !String(derived.meaningfulText || '').trim()) warnings.push('Для comfy text желательно добавить richer text prompt');
             if (derived.modeValue === 'reklama' && !derived.meaningfulText) warnings.push('Для reklama желательно добавить рекламный тезис в TEXT');
 
             const roleCoverage = {
@@ -3786,6 +3047,7 @@ onClipSec: (nodeId, value) => {
             nodeData: base.data,
             nodesNow: nodesRef.current || [],
             edgesNow: edgesRef.current || [],
+            normalizeRefDataFn: normalizeRefData,
           });
           const presentation = buildComfyBrainPresentation(derived);
 
@@ -3809,7 +3071,7 @@ onClipSec: (nodeId, value) => {
               onOutput: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, output: normalizeRenderProfile(value) } } : x))),
               onStyle: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, styleKey: value } } : x))),
               onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
-              onParse: (nodeId) => {
+              onParse: async (nodeId) => {
                 const now = new Date().toLocaleTimeString();
                 const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
                 const freshDerived = deriveComfyBrainState({
@@ -3817,35 +3079,50 @@ onClipSec: (nodeId, value) => {
                   nodeData: activeNode?.data || base.data,
                   nodesNow: nodesRef.current || [],
                   edgesNow: edgesRef.current || [],
+                  normalizeRefDataFn: normalizeRefData,
                 });
                 const freshPresentation = buildComfyBrainPresentation(freshDerived);
 
-                const plannerMeta = {
-                  plannerInput: freshPresentation.plannerInput,
+                const payload = {
                   mode: freshDerived.modeValue,
                   output: freshDerived.outputValue,
                   stylePreset: freshDerived.stylePreset,
-                  narrativeSource: freshDerived.narrativeSource,
-                  timelineSource: freshDerived.timelineSource,
+                  freezeStyle: freshDerived.freezeStyle,
+                  text: freshDerived.meaningfulText || "",
+                  audioUrl: freshDerived.meaningfulAudio || "",
+                  refsByRole: freshDerived.refsByRole,
                   storyControlMode: freshDerived.storyControlMode,
                   storyMissionSummary: freshDerived.storyMissionSummary,
-                  textNarrativeRole: freshDerived.narrativeRoles.textNarrativeRole,
-                  audioNarrativeRole: freshDerived.narrativeRoles.audioNarrativeRole,
-                  warnings: [...freshPresentation.critical, ...freshPresentation.warnings],
-                  summary: freshPresentation.brainSummary,
-                  sceneRoleModel: freshPresentation.sceneRoleModel,
-                  referenceSummary: freshPresentation.referenceSummary,
-                  modeIntent: freshDerived.modeSemantics.modeIntent,
-                  modePromptBias: freshDerived.modeSemantics.modePromptBias,
-                  modeSceneStrategy: freshDerived.modeSemantics.modeSceneStrategy,
-                  modeContinuityBias: freshDerived.modeSemantics.modeContinuityBias,
-                  planningMindset: freshDerived.modeSemantics.planningMindset,
-                  styleSummary: freshDerived.styleSemantics.styleSummary,
-                  styleContinuity: freshDerived.styleSemantics.styleContinuity,
+                  timelineSource: freshDerived.timelineSource,
+                  narrativeSource: freshDerived.narrativeSource,
                 };
-                const mockScenes = buildMockComfyScenes(plannerMeta);
-                const globalContinuity = mockScenes[0]?.plannerMeta?.globalContinuity || buildComfyGlobalContinuity({ plannerInput: freshPresentation.plannerInput, refsByRole: freshDerived.refsByRole, sceneRoleModel: freshPresentation.sceneRoleModel });
-                const debugFields = extractComfyDebugFields({ plannerInput: freshPresentation.plannerInput, plannerMeta: { ...plannerMeta, globalContinuity } });
+                console.log("[COMFY PARSE] payload", payload);
+
+                let response;
+                try {
+                  if (USE_COMFY_MOCK) {
+                    const plannerMeta = { plannerInput: payload, mode: payload.mode, output: payload.output, stylePreset: payload.stylePreset, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
+                    const scenes = buildMockComfyScenes(plannerMeta);
+                    response = { ok: true, planMeta: plannerMeta, globalContinuity: scenes[0]?.plannerMeta?.globalContinuity || "", scenes, warnings: plannerMeta.warnings, errors: [], debug: {} };
+                  } else {
+                    response = await fetchJson(`/api/clip/comfy/plan`, { method: "POST", body: JSON.stringify(payload) });
+                  }
+                  console.log("[COMFY PARSE] response", response);
+                } catch (err) {
+                  console.error("[COMFY PARSE] error", err);
+                  setNodes((prev) => prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, parseStatus: "error", brainCritical: [String(err?.message || err)], brainWarnings: [] } } : x));
+                  return;
+                }
+
+                if (!response?.ok) {
+                  setNodes((prev) => prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, parseStatus: "error", brainCritical: Array.isArray(response?.errors) ? response.errors : ["COMFY parse failed"], brainWarnings: Array.isArray(response?.warnings) ? response.warnings : [] } } : x));
+                  return;
+                }
+
+                const scenes = Array.isArray(response?.scenes) ? response.scenes : [];
+                const plannerMeta = response?.planMeta || {};
+                const globalContinuity = response?.globalContinuity || "";
+                const debugFields = response?.debug || extractComfyDebugFields({ plannerInput: payload, plannerMeta: { ...plannerMeta, globalContinuity } });
 
                 setNodes((prev) => prev.map((x) => {
                   if (x.id === nodeId) {
@@ -3855,14 +3132,17 @@ onClipSec: (nodeId, value) => {
                         ...x.data,
                         parseStatus: 'готово',
                         parsedAt: now,
-                        mockScenes,
+                        mockScenes: scenes,
                         lastPlannerMeta: { ...plannerMeta, globalContinuity, debugFields },
                         comfyDebug: debugFields,
+                        brainWarnings: Array.isArray(response?.warnings) ? response.warnings : freshPresentation.warnings,
+                        brainCritical: Array.isArray(response?.errors) ? response.errors : [],
                       },
                     };
                   }
                   return x;
                 }));
+
                 const comfyStoryTargets = (edgesRef.current || []).filter((e) => e.source === nodeId && e.sourceHandle === 'comfy_plan').map((e) => e.target);
                 if (comfyStoryTargets.length) {
                   setNodes((prev) => prev.map((x) => (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard')
@@ -3870,8 +3150,8 @@ onClipSec: (nodeId, value) => {
                         ...x,
                         data: {
                           ...x.data,
-                          mockScenes,
-                          sceneCount: mockScenes.length,
+                          mockScenes: scenes,
+                          sceneCount: scenes.length,
                           mode: freshDerived.modeValue,
                           output: freshDerived.outputValue,
                           stylePreset: freshDerived.stylePreset,
@@ -3881,7 +3161,7 @@ onClipSec: (nodeId, value) => {
                           storyMissionSummary: freshDerived.storyMissionSummary,
                           textNarrativeRole: freshDerived.narrativeRoles.textNarrativeRole,
                           audioNarrativeRole: freshDerived.narrativeRoles.audioNarrativeRole,
-                          warnings: plannerMeta.warnings,
+                          warnings: Array.isArray(response?.warnings) ? response.warnings : [],
                           summary: freshPresentation.brainSummary,
                           refsByRoleSummary: freshPresentation.referenceSummary,
                           plannerMeta: { ...plannerMeta, globalContinuity },
