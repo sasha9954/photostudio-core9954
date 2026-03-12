@@ -177,6 +177,58 @@ const SCENARIO_OPTIONS = [
   { value: "reklama", label: "реклама" },
 ];
 
+const MODE_DISPLAY_META = {
+  clip: {
+    labelRu: "Клип",
+    descriptionRu: "Ритм, монтаж и музыкальная энергия с динамичными сценами.",
+  },
+  kino: {
+    labelRu: "Кино",
+    descriptionRu: "Драматургия, логика сцен и причинно-следственная подача.",
+  },
+  reklama: {
+    labelRu: "Реклама",
+    descriptionRu: "Хук, ценность и акцент на продукте или ключевой идее.",
+  },
+  scenario: {
+    labelRu: "Сценарий",
+    descriptionRu: "Структурная раскадровка с понятными сценами и narrative steps.",
+  },
+};
+
+const STYLE_DISPLAY_META = {
+  realism: {
+    labelRu: "Реализм",
+    descriptionRu: "Натуральный свет, правдоподобная физика и живое изображение.",
+  },
+  film: {
+    labelRu: "Кино-стиль",
+    descriptionRu: "Киношная цветокоррекция, драматичный свет и авторская подача.",
+  },
+  neon: {
+    labelRu: "Неон",
+    descriptionRu: "Контрастный свет, цветные акценты и стилизованная атмосфера.",
+  },
+  glossy: {
+    labelRu: "Глянец",
+    descriptionRu: "Премиальная подача, чистая картинка и коммерческий блеск.",
+  },
+  soft: {
+    labelRu: "Мягкий",
+    descriptionRu: "Нежный свет, спокойная атмосфера и воздушная картинка.",
+  },
+};
+
+function getModeDisplayMeta(mode = "clip") {
+  const key = String(mode || "clip").toLowerCase();
+  return MODE_DISPLAY_META[key] || MODE_DISPLAY_META.clip;
+}
+
+function getStyleDisplayMeta(stylePreset = "realism") {
+  const key = String(stylePreset || "realism").toLowerCase();
+  return STYLE_DISPLAY_META[key] || STYLE_DISPLAY_META.realism;
+}
+
 // -------------------------
 // helpers
 // -------------------------
@@ -1742,6 +1794,8 @@ function ComfyBrainNode({ id, data }) {
   const mode = data?.mode || 'clip';
   const output = data?.output || 'comfy image';
   const styleKey = data?.styleKey || 'realism';
+  const modeMeta = getModeDisplayMeta(mode);
+  const styleMeta = getStyleDisplayMeta(styleKey);
   const freezeStyle = !!data?.freezeStyle;
   const parseStatus = data?.parseStatus || 'idle';
   const summary = data?.brainSummary || {};
@@ -1760,8 +1814,9 @@ function ComfyBrainNode({ id, data }) {
           <div>
             <div className="clipSB_brainLabel">MODE</div>
             <select className="clipSB_select" value={mode} onChange={(e) => data?.onMode?.(id, e.target.value)}>
-              <option value="clip">clip</option><option value="kino">kino</option><option value="reklama">reklama</option><option value="scenario">scenario</option>
+              <option value="clip">Клип</option><option value="kino">Кино</option><option value="reklama">Реклама</option><option value="scenario">Сценарий</option>
             </select>
+            <div className="clipSB_selectHint">{modeMeta.descriptionRu}</div>
           </div>
           <div>
             <div className="clipSB_brainLabel">OUTPUT</div>
@@ -1774,15 +1829,17 @@ function ComfyBrainNode({ id, data }) {
         <div style={{ marginTop: 8 }}>
           <div className="clipSB_brainLabel">STYLE</div>
           <select className="clipSB_select" value={styleKey} onChange={(e) => data?.onStyle?.(id, e.target.value)}>
-            <option value="realism">realism</option><option value="film">film</option><option value="neon">neon</option><option value="glossy">glossy</option><option value="soft">soft</option>
+            <option value="realism">Реализм</option><option value="film">Кино-стиль</option><option value="neon">Неон</option><option value="glossy">Глянец</option><option value="soft">Мягкий</option>
           </select>
+          <div className="clipSB_selectHint">{styleMeta.descriptionRu}</div>
         </div>
         <div className="clipSB_brainSummaryBlock">
           <div className="clipSB_brainSummaryRow"><span>story source</span><strong>{summary.storySource || 'none'}</strong></div>
           <div className="clipSB_brainSummaryRow"><span>output</span><strong>{output}</strong></div>
+          <div className="clipSB_brainSummaryRow"><span>mode</span><strong>{modeMeta.labelRu}</strong></div>
           <div className="clipSB_brainSummaryRow"><span>cast</span><strong>{summary.cast || 'none connected'}</strong></div>
           <div className="clipSB_brainSummaryRow"><span>world</span><strong>{summary.world || 'location no • props no'}</strong></div>
-          <div className="clipSB_brainSummaryRow"><span>style</span><strong>{summary.style || styleKey}</strong></div>
+          <div className="clipSB_brainSummaryRow"><span>style</span><strong>{styleMeta.labelRu}</strong></div>
         </div>
         <div className="clipSB_toggleRow"><label><input type="checkbox" checked={freezeStyle} onChange={(e) => data?.onFreezeStyle?.(id, e.target.checked)} /> freeze style</label></div>
         <div className="clipSB_brainWarnings">
@@ -1792,7 +1849,7 @@ function ComfyBrainNode({ id, data }) {
         </div>
         <button className="clipSB_btn" style={{ marginTop: 8 }} onClick={() => data?.onParse?.(id)}>Разобрать</button>
         <div className="clipSB_small">status: {parseStatus}{data?.parsedAt ? ` • ${data.parsedAt}` : ''}</div>
-        <div className="clipSB_small">source: {summary.storySource || 'none'} • cast: {Number(data?.connectedCastCount || 0)} • world: {summary.worldCompact || 'none'} • style: {summary.styleCompact || styleKey}</div>
+        <div className="clipSB_small">source: {summary.storySource || 'none'} • cast: {Number(data?.connectedCastCount || 0)} • world: {summary.worldCompact || 'none'} • style: {styleMeta.labelRu}</div>
       </NodeShell>
     </>
   );
@@ -1800,6 +1857,8 @@ function ComfyBrainNode({ id, data }) {
 
 function ComfyStoryboardNode({ id, data }) {
   const scenes = Array.isArray(data?.mockScenes) ? data.mockScenes : [];
+  const modeMeta = getModeDisplayMeta(data?.mode || 'clip');
+  const styleMeta = getStyleDisplayMeta(data?.stylePreset || 'realism');
   return (
     <>
       <Handle type="target" position={Position.Left} id="comfy_plan" className="clipSB_handle" style={handleStyle('comfy_plan')} />
@@ -1807,7 +1866,8 @@ function ComfyStoryboardNode({ id, data }) {
       <NodeShell title="COMFY STORYBOARD" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧩</span>} className="clipSB_nodeComfyStoryboard">
         <div className="clipSB_badge">PREVIEW</div>
         <div className="clipSB_small">scene count: {scenes.length || Number(data?.sceneCount || 0)}</div>
-        <div className="clipSB_small">mode: {data?.mode || 'clip'} • output: {data?.output || 'comfy image'}</div>
+        <div className="clipSB_small">mode: {modeMeta.labelRu} • output: {data?.output || 'comfy image'}</div>
+        <div className="clipSB_small">style: {styleMeta.labelRu}</div>
         <div className="clipSB_small">narrative: {data?.narrativeSource || 'none'} • timeline: {data?.timelineSource || 'logic'}</div>
         <div className="clipSB_inlineBtns">
           <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenComfy?.(id, 'SCENES')}>Сценарий</button>
