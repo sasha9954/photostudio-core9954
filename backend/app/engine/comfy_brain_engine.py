@@ -185,16 +185,19 @@ def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
     refs_presence = {k: len(v) for k, v in normalized["refsByRole"].items()}
+    debug_signature = "COMFY_DEBUG_STEP_V1"
+    module_file = __file__
     logger.info("[COMFY PLAN] request summary mode=%s output=%s style=%s", normalized["mode"], normalized["output"], normalized["stylePreset"])
     logger.info("[COMFY PLAN] text/audio/refs presence text=%s audio=%s refs=%s", bool(normalized["text"]), bool(normalized["audioUrl"]), refs_presence)
+    logger.warning("[%s] run_comfy_plan entered module_file=%s", debug_signature, module_file)
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
+    # TEMP DEBUG STEP: hard pin model to verify exact model request in logs.
     requested_model = "gemini-2.5-flash"
-    print("[COMFY PLAN] HARD MODEL =", requested_model)
-    logger.info("[COMFY PLAN] requested_model=%s", requested_model)
-    logger.info("[COMFY PLAN] effective_model_before_request=%s", requested_model)
+    logger.warning("[%s] hard_requested_model=%s", debug_signature, requested_model)
+    logger.warning("[%s] effective_model_before_request=%s", debug_signature, requested_model)
     if not api_key:
-        return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["GEMINI_API_KEY missing"], "debug": {"requestedModel": requested_model, "effectiveModel": None, "httpStatus": None, "rawPreview": "", "normalizedPayload": normalized}}
+        return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["GEMINI_API_KEY missing"], "debug": {"debugSignature": debug_signature, "moduleFile": module_file, "requestedModel": requested_model, "effectiveModel": None, "httpStatus": None, "rawPreview": "", "normalizedPayload": normalized}}
 
     body = {
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4},
@@ -239,6 +242,8 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         "errors": all_errors,
         "debug": {
             **(parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {}),
+            "debugSignature": debug_signature,
+            "moduleFile": module_file,
             "requestedModel": diagnostics.get("requestedModel") or requested_model,
             "effectiveModel": diagnostics.get("effectiveModel") or requested_model,
             "httpStatus": diagnostics.get("httpStatus"),
