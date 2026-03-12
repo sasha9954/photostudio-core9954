@@ -1057,20 +1057,35 @@ body.ps_clip_fullscreen .mainCol {
   position: fixed;
   inset: 0;
   z-index: 7000;
-  background: rgba(0,0,0,0.78);
-  backdrop-filter: blur(6px);
+  background: radial-gradient(circle at center, rgba(22, 30, 54, 0.32), rgba(0,0,0,0.88));
+  backdrop-filter: blur(12px) saturate(1.25);
   display: grid;
   place-items: center;
   padding: 24px;
   cursor: pointer;
+  opacity: 0;
+  transition: opacity 320ms cubic-bezier(.22,.61,.36,1), backdrop-filter 320ms cubic-bezier(.22,.61,.36,1);
+}
+
+.clipSB_lightbox.isActive {
+  opacity: 1;
 }
 
 .clipSB_lightboxImg{
   max-width: 96vw;
   max-height: 92vh;
-  border-radius: 14px;
-  box-shadow: 0 20px 80px rgba(0,0,0,0.6);
+  border-radius: 16px;
+  box-shadow: 0 26px 100px rgba(0,0,0,0.62), 0 0 0 1px rgba(140,178,255,0.20), 0 0 80px rgba(72, 134, 255, 0.20);
   object-fit: contain;
+  transform: scale(.9);
+  opacity: 0;
+  transition: transform 320ms cubic-bezier(.22,.61,.36,1), opacity 320ms cubic-bezier(.22,.61,.36,1), box-shadow 320ms cubic-bezier(.22,.61,.36,1);
+  will-change: transform, opacity;
+}
+
+.clipSB_lightboxImg.isActive {
+  transform: translate(0, 0) scale(1);
+  opacity: 1;
 }
 
 .clipSB_kv{
@@ -1667,6 +1682,7 @@ body.ps_clip_fullscreen .mainCol {
   max-height: 380px;
   object-fit: contain;
   display: block;
+  cursor: pointer;
 }
 
 .clipSB_comfyPreviewEmpty {

@@ -1872,6 +1872,9 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
   const [assemblyStageCurrent, setAssemblyStageCurrent] = useState(0);
   const [assemblyStageTotal, setAssemblyStageTotal] = useState(0);
   const [lightboxUrl, setLightboxUrl] = useState("");
+  const [lightboxAnchorRect, setLightboxAnchorRect] = useState(null);
+  const [lightboxActive, setLightboxActive] = useState(false);
+  const lightboxCloseTimerRef = useRef(null);
 
 const comfySelectedSceneId = String(comfySelectedScene?.sceneId || "").trim();
 const comfyActiveVideoJobSceneId = String(comfyActiveVideoJobRef.current?.sceneId || "").trim();
@@ -1885,18 +1888,73 @@ const comfyHasActiveVideoJobForScene = Boolean(
 const comfyShowVideoSection = Boolean(
   comfySelectedScene?.videoPanelOpen
   || String(comfySelectedScene?.videoUrl || "").trim()
-  || comfyVideoLoading
   || comfyHasActiveVideoJobForScene
 );
 
+  const openLightbox = useCallback((url, sourceRect = null) => {
+    if (lightboxCloseTimerRef.current) {
+      clearTimeout(lightboxCloseTimerRef.current);
+      lightboxCloseTimerRef.current = null;
+    }
+    setLightboxAnchorRect(sourceRect);
+    setLightboxActive(false);
+    setLightboxUrl(url);
+  }, []);
+
+  const closeLightbox = useCallback(() => {
+    if (!lightboxUrl) return;
+    setLightboxActive(false);
+    if (lightboxCloseTimerRef.current) {
+      clearTimeout(lightboxCloseTimerRef.current);
+    }
+    lightboxCloseTimerRef.current = setTimeout(() => {
+      setLightboxUrl("");
+      setLightboxAnchorRect(null);
+      lightboxCloseTimerRef.current = null;
+    }, 320);
+  }, [lightboxUrl]);
+
+  const handleComfyPreviewOpenLightbox = useCallback((url, event) => {
+    const rect = event?.currentTarget?.getBoundingClientRect?.() || null;
+    openLightbox(url, rect);
+  }, [openLightbox]);
+
+  const lightboxImageStyle = useMemo(() => {
+    if (!lightboxAnchorRect || lightboxActive || typeof window === "undefined") return undefined;
+    const viewportWidth = window.innerWidth || 1;
+    const viewportHeight = window.innerHeight || 1;
+    const centerX = lightboxAnchorRect.left + (lightboxAnchorRect.width / 2);
+    const centerY = lightboxAnchorRect.top + (lightboxAnchorRect.height / 2);
+    const translateX = centerX - (viewportWidth / 2);
+    const translateY = centerY - (viewportHeight / 2);
+    const scaleX = Math.min(1, Math.max(lightboxAnchorRect.width / (viewportWidth * 0.92), 0.08));
+    const scaleY = Math.min(1, Math.max(lightboxAnchorRect.height / (viewportHeight * 0.88), 0.08));
+    const scale = Math.min(scaleX, scaleY);
+    return {
+      transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
+      transformOrigin: "center center",
+    };
+  }, [lightboxActive, lightboxAnchorRect]);
+
   useEffect(() => {
     if (!lightboxUrl) return;
+    const rafId = window.requestAnimationFrame(() => setLightboxActive(true));
     const onKeyDown = (e) => {
-      if (e.key === "Escape") setLightboxUrl("");
+      if (e.key === "Escape") closeLightbox();
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [lightboxUrl]);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [closeLightbox, lightboxUrl]);
+
+  useEffect(() => () => {
+    if (lightboxCloseTimerRef.current) {
+      clearTimeout(lightboxCloseTimerRef.current);
+      lightboxCloseTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     setScenarioVideoError("");
@@ -3802,7 +3860,7 @@ onClipSec: (nodeId, value) => {
             data: {
               ...base.data,
               onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
-              onOpenLightbox: (url) => setLightboxUrl(resolveAssetUrl(url)),
+              onOpenLightbox: (url) => openLightbox(resolveAssetUrl(url)),
               onPickImage: async (nodeId, filesRaw) => {
                 const files = Array.isArray(filesRaw) ? filesRaw : (filesRaw ? [filesRaw] : []);
                 if (!files.length) return;
@@ -4407,7 +4465,7 @@ const hydrate = useCallback(() => {
       {scenarioEditor.open ? (
         <div className="clipSB_scenarioOverlay" onClick={() => {
           setScenarioEditor((s) => ({ ...s, open: false }));
-          setLightboxUrl("");
+          closeLightbox();
         }}>
           <div className="clipSB_scenarioPanel" onClick={(e) => e.stopPropagation()}>
             <div className="clipSB_scenarioHeader">
@@ -4418,7 +4476,7 @@ const hydrate = useCallback(() => {
                 </div>
                 <button className="clipSB_iconBtn" onClick={() => {
                   setScenarioEditor((s) => ({ ...s, open: false }));
-                  setLightboxUrl("");
+                  closeLightbox();
                 }} aria-label="Закрыть">
                   ✕
                 </button>
@@ -4450,7 +4508,7 @@ const hydrate = useCallback(() => {
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            setLightboxUrl(sceneThumb);
+                            openLightbox(sceneThumb, e.currentTarget.getBoundingClientRect());
                           }}
                         />
                       ) : (
@@ -4599,7 +4657,7 @@ const hydrate = useCallback(() => {
                                 src={scenarioSelectedEffectiveStartImageUrl}
                                 alt="start frame preview"
                                 className="clipSB_scenarioPreview"
-                                onClick={() => setLightboxUrl(scenarioSelectedEffectiveStartImageUrl)}
+                                onClick={(e) => openLightbox(scenarioSelectedEffectiveStartImageUrl, e.currentTarget.getBoundingClientRect())}
                               />
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Start preview отсутствует</div>
@@ -4632,7 +4690,7 @@ const hydrate = useCallback(() => {
                                 src={scenarioSelected.endImageUrl}
                                 alt="end frame preview"
                                 className="clipSB_scenarioPreview"
-                                onClick={() => setLightboxUrl(scenarioSelected.endImageUrl)}
+                                onClick={(e) => openLightbox(scenarioSelected.endImageUrl, e.currentTarget.getBoundingClientRect())}
                               />
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">End preview отсутствует</div>
@@ -4685,7 +4743,7 @@ const hydrate = useCallback(() => {
                                 src={scenarioSelected.imageUrl}
                                 alt="scene preview"
                                 className="clipSB_scenarioPreview"
-                                onClick={() => setLightboxUrl(scenarioSelected.imageUrl)}
+                                onClick={(e) => openLightbox(scenarioSelected.imageUrl, e.currentTarget.getBoundingClientRect())}
                               />
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Превью отсутствует</div>
@@ -4799,7 +4857,7 @@ const hydrate = useCallback(() => {
                                   src={scenarioSelectedEffectiveStartImageUrl}
                                   className="clipSB_videoFrameImg"
                                   alt="start frame"
-                                  onClick={() => setLightboxUrl(scenarioSelectedEffectiveStartImageUrl)}
+                                  onClick={(e) => openLightbox(scenarioSelectedEffectiveStartImageUrl, e.currentTarget.getBoundingClientRect())}
                                 />
                               ) : (
                                 <div className="clipSB_videoFramePlaceholder">START</div>
@@ -4815,7 +4873,7 @@ const hydrate = useCallback(() => {
                                   src={scenarioSelected.endImageUrl}
                                   className="clipSB_videoFrameImg"
                                   alt="end frame"
-                                  onClick={() => setLightboxUrl(scenarioSelected.endImageUrl)}
+                                  onClick={(e) => openLightbox(scenarioSelected.endImageUrl, e.currentTarget.getBoundingClientRect())}
                                 />
                               ) : (
                                 <div className="clipSB_videoFramePlaceholder">END</div>
@@ -5002,7 +5060,12 @@ const hydrate = useCallback(() => {
                           <div className="clipSB_hint">Preview изображения</div>
                           <div className="clipSB_comfyPreviewBox">
                             {comfySelectedScene.imageUrl ? (
-                              <img className="clipSB_comfyPreviewImg" src={resolveAssetUrl(comfySelectedScene.imageUrl)} alt={comfySelectedScene.title || 'scene'} />
+                              <img
+                                className="clipSB_comfyPreviewImg"
+                                src={resolveAssetUrl(comfySelectedScene.imageUrl)}
+                                alt={comfySelectedScene.title || 'scene'}
+                                onClick={(e) => handleComfyPreviewOpenLightbox(resolveAssetUrl(comfySelectedScene.imageUrl), e)}
+                              />
                             ) : (
                               <div className="clipSB_comfyPreviewEmpty">Изображение сцены пока не создано</div>
                             )}
@@ -5086,12 +5149,13 @@ const hydrate = useCallback(() => {
       ) : null}
 
       {lightboxUrl ? (
-        <div className="clipSB_lightbox" onClick={() => setLightboxUrl("")}>
+        <div className={`clipSB_lightbox${lightboxActive ? ' isActive' : ''}`} onClick={closeLightbox}>
           <img
-            className="clipSB_lightboxImg"
+            className={`clipSB_lightboxImg${lightboxActive ? ' isActive' : ''}`}
             src={lightboxUrl}
             alt="Full preview"
             onClick={(e) => e.stopPropagation()}
+            style={lightboxImageStyle}
           />
         </div>
       ) : null}
