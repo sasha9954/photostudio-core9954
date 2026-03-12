@@ -13,6 +13,8 @@ PROMPT_SYNC_STATUS_SYNCED = "synced"
 PROMPT_SYNC_STATUS_NEEDS_SYNC = "needs_sync"
 PROMPT_SYNC_STATUS_SYNCING = "syncing"
 PROMPT_SYNC_STATUS_SYNC_ERROR = "sync_error"
+COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+COMFY_REF_DIRECTIVES = {"hero", "supporting", "environment_required", "required", "optional", "omit"}
 
 
 def _to_float(value: Any) -> float | None:
@@ -28,7 +30,7 @@ def _round_sec(value: float | None) -> float | None:
 
 
 def _clean_refs_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, list[dict[str, str]]]:
-    roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+    roles = COMFY_REF_ROLES
     src = refs_by_role if isinstance(refs_by_role, dict) else {}
     out: dict[str, list[dict[str, str]]] = {}
     for role in roles:
@@ -44,6 +46,78 @@ def _clean_refs_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, list[d
                 clean.append({"url": url, "name": str(item.get("name") or "").strip()})
         out[role] = clean
     return out
+
+
+def _normalize_scene_ref_roles(src: dict[str, Any], available_refs_by_role: dict[str, list[dict[str, str]]] | None) -> tuple[list[str], dict[str, str], str, list[str]]:
+    available = available_refs_by_role if isinstance(available_refs_by_role, dict) else {}
+    available_roles = {role for role in COMFY_REF_ROLES if isinstance(available.get(role), list) and len(available.get(role) or []) > 0}
+
+    refs_used_raw = src.get("refsUsed")
+    refs_used: list[str] = []
+    if isinstance(refs_used_raw, list):
+        refs_used = [str(role).strip() for role in refs_used_raw if str(role).strip() in COMFY_REF_ROLES]
+    elif isinstance(refs_used_raw, dict):
+        refs_used = [str(role).strip() for role, include in refs_used_raw.items() if str(role).strip() in COMFY_REF_ROLES and bool(include)]
+    refs_used = list(dict.fromkeys([role for role in refs_used if role in available_roles]))
+
+    primary_role = str(src.get("primaryRole") or "").strip()
+    if primary_role not in COMFY_REF_ROLES or primary_role not in available_roles:
+        fallback_priority = ["character_1", "character_2", "character_3", "group", "animal", "location", "props", "style"]
+        primary_role = next((role for role in fallback_priority if role in available_roles), "character_1")
+
+    secondary_roles_raw = src.get("secondaryRoles")
+    secondary_roles = [
+        role for role in ([str(item).strip() for item in secondary_roles_raw] if isinstance(secondary_roles_raw, list) else [])
+        if role in COMFY_REF_ROLES and role in available_roles and role != primary_role
+    ]
+    secondary_roles = list(dict.fromkeys(secondary_roles))
+
+    directives_raw = src.get("refDirectives") if isinstance(src.get("refDirectives"), dict) else {}
+    directives: dict[str, str] = {role: "omit" for role in COMFY_REF_ROLES}
+    for role, value in directives_raw.items():
+        clean_role = str(role).strip()
+        clean_value = str(value).strip()
+        if clean_role in COMFY_REF_ROLES and clean_value in COMFY_REF_DIRECTIVES:
+            directives[clean_role] = clean_value
+
+    directives[primary_role] = "hero" if primary_role in {"character_1", "character_2", "character_3", "group", "animal"} else "required"
+    for role in secondary_roles:
+        if role == "location":
+            directives[role] = "environment_required"
+        elif role == "style":
+            directives[role] = "optional"
+        elif role == "props":
+            directives[role] = "required"
+        else:
+            directives[role] = "supporting"
+
+    for role in refs_used:
+        if directives.get(role) == "omit":
+            if role == "location":
+                directives[role] = "environment_required"
+            elif role == "style":
+                directives[role] = "optional"
+            elif role == "props":
+                directives[role] = "required"
+            else:
+                directives[role] = "supporting"
+
+    active_directive_values = {"hero", "supporting", "environment_required", "required"}
+    active_roles = [role for role in COMFY_REF_ROLES if role in available_roles and directives.get(role) in active_directive_values]
+    for role in refs_used:
+        if role in available_roles and role not in active_roles:
+            active_roles.append(role)
+
+    if not active_roles and primary_role in available_roles:
+        active_roles = [primary_role]
+        directives[primary_role] = "hero" if primary_role in {"character_1", "character_2", "character_3", "group", "animal"} else "required"
+
+    if primary_role not in active_roles and active_roles:
+        primary_role = active_roles[0]
+        directives[primary_role] = "hero" if primary_role in {"character_1", "character_2", "character_3", "group", "animal"} else "required"
+
+    secondary_roles = [role for role in active_roles if role != primary_role]
+    return active_roles, directives, primary_role, secondary_roles
 
 
 def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -194,7 +268,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "TEXT is optional support that clarifies intent.\n"
         "REFS are optional anchors for character/location/style/props continuity.\n"
         "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
-        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed.\n"
+        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed,refDirectives.\n"
         "LANGUAGE CONTRACT (MANDATORY): imagePromptRu MUST be Russian; imagePromptEn MUST be English; videoPromptRu MUST be Russian; videoPromptEn MUST be English. Non-compliance is an error.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
@@ -297,7 +371,7 @@ def _call_gemini_plan(api_key: str, model: str, body: dict[str, Any]) -> tuple[d
     return parsed, diagnostics
 
 
-def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
+def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: dict[str, list[dict[str, str]]] | None = None) -> dict[str, Any]:
     src = scene if isinstance(scene, dict) else {}
     start_sec = src.get("startSec")
     end_sec = src.get("endSec")
@@ -327,9 +401,7 @@ def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
     if duration_n is None and start_n is not None and end_n is not None:
         duration_n = max(0.0, end_n - start_n)
 
-    refs_used = src.get("refsUsed")
-    if not isinstance(refs_used, dict):
-        refs_used = {}
+    refs_used, ref_directives, primary_role, secondary_roles = _normalize_scene_ref_roles(src, available_refs_by_role)
 
     image_prompt_ru = str(src.get("imagePromptRu") or src.get("imagePrompt") or "").strip()
     image_prompt_en = str(src.get("imagePromptEn") or "").strip()
@@ -377,8 +449,8 @@ def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
         "sceneGoal": str(src.get("sceneGoal") or ""),
         "storyMission": str(src.get("storyMission") or ""),
         "sceneOutputRule": str(src.get("sceneOutputRule") or "scene image first"),
-        "primaryRole": str(src.get("primaryRole") or "character_1"),
-        "secondaryRoles": src.get("secondaryRoles") if isinstance(src.get("secondaryRoles"), list) else [],
+        "primaryRole": primary_role,
+        "secondaryRoles": secondary_roles,
         "continuity": str(src.get("continuity") or ""),
         "imagePrompt": image_prompt_en,
         "videoPrompt": video_prompt_en,
@@ -393,6 +465,7 @@ def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
             "video": video_missing_langs,
         },
         "refsUsed": refs_used,
+        "refDirectives": ref_directives,
         # Runtime render-state fields are intentionally initialized outside planner contract.
         "imageUrl": "",
         "videoUrl": "",
@@ -511,7 +584,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         parsed = {}
 
     raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
-    scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(raw_scenes)]
+    scenes = [_normalize_scene(scene, idx, normalized.get("refsByRole")) for idx, scene in enumerate(raw_scenes)]
     prompt_contract_warnings: list[str] = []
     for scene in scenes:
         scene_id = str(scene.get("sceneId") or "unknown_scene")
@@ -564,7 +637,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             if len(refinement_warnings) > 0:
                 warnings.append(f"segmentation_refinement_warnings:{'|'.join(refinement_warnings)}")
             refined_raw_scenes = refined_parsed.get("scenes") if isinstance(refined_parsed.get("scenes"), list) else []
-            refined_scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(refined_raw_scenes)]
+            refined_scenes = [_normalize_scene(scene, idx, normalized.get("refsByRole")) for idx, scene in enumerate(refined_raw_scenes)]
             valid_refined_scenes = [
                 scene for scene in refined_scenes
                 if (_to_float(scene.get("endSec")) or 0.0) > (_to_float(scene.get("startSec")) or 0.0)
@@ -620,6 +693,8 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         "sceneDurationTotalSec": timing_debug.get("sceneDurationTotalSec"),
     })
 
+    scene_refs_debug = _build_scene_refs_debug(scenes, normalized.get("refsByRole") or {})
+
     result = {
         "ok": len(all_errors) == 0,
         "planMeta": plan_meta,
@@ -656,6 +731,9 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "stillCoarseAfterRefinement": still_coarse_after_refinement,
             "stillCoarseReasons": still_coarse_reasons if still_coarse_after_refinement else [],
             "promptContractWarnings": prompt_contract_warnings,
+            "availableRefsByRoleSummary": {role: len((normalized.get("refsByRole") or {}).get(role) or []) for role in COMFY_REF_ROLES},
+            "sceneRoleSelection": scene_refs_debug,
+            "activeRolesByScene": {item.get("sceneId"): item.get("activeRoles") for item in scene_refs_debug},
         },
     }
     if timing_debug.get("normalizationApplied"):
@@ -680,6 +758,30 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     )
     return result
 
+
+
+def _build_scene_refs_debug(scenes: list[dict[str, Any]], refs_by_role: dict[str, list[dict[str, str]]]) -> list[dict[str, Any]]:
+    available_summary = {role: len(refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}
+    out: list[dict[str, Any]] = []
+    for scene in scenes:
+        ref_directives = scene.get("refDirectives") if isinstance(scene.get("refDirectives"), dict) else {}
+        refs_used = scene.get("refsUsed") if isinstance(scene.get("refsUsed"), list) else []
+        active_roles = [
+            role for role in COMFY_REF_ROLES
+            if role in available_summary
+            and available_summary.get(role, 0) > 0
+            and ref_directives.get(role) in {"hero", "supporting", "environment_required", "required"}
+        ]
+        if not active_roles:
+            active_roles = [role for role in refs_used if role in COMFY_REF_ROLES]
+        out.append({
+            "sceneId": str(scene.get("sceneId") or ""),
+            "availableRefsByRoleSummary": available_summary,
+            "refsUsed": refs_used,
+            "refDirectives": ref_directives,
+            "activeRoles": active_roles,
+        })
+    return out
 
 def build_comfy_prompt_sync_prompt(payload: dict[str, Any]) -> str:
     return (

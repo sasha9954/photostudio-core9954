@@ -54,6 +54,8 @@ class ClipImageRefsIn(BaseModel):
     sceneGoal: str | None = None
     sceneNarrativeStep: str | None = None
     continuity: str | None = None
+    refsUsed: list[str] | dict | None = None
+    refDirectives: dict | None = None
     plannerMeta: dict | None = None
     propAnchorLabel: str | None = None
     sessionCharacterAnchor: str | None = None
@@ -4215,6 +4217,34 @@ def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[s
     return out
 
 
+def _resolve_scene_active_roles_for_image(refs_used: list[str] | dict | None, ref_directives: dict | None, available_refs_by_role: dict[str, list[str]]) -> list[str]:
+    roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+    available_roles = {role for role in roles if len(available_refs_by_role.get(role) or []) > 0}
+
+    selected_from_used: list[str] = []
+    if isinstance(refs_used, list):
+        selected_from_used = [str(role).strip() for role in refs_used if str(role).strip() in roles]
+    elif isinstance(refs_used, dict):
+        selected_from_used = [str(role).strip() for role, include in refs_used.items() if str(role).strip() in roles and bool(include)]
+    selected_from_used = [role for role in selected_from_used if role in available_roles]
+
+    selected_from_directives: list[str] = []
+    if isinstance(ref_directives, dict):
+        for role, directive in ref_directives.items():
+            clean_role = str(role).strip()
+            clean_directive = str(directive).strip()
+            if clean_role not in roles or clean_role not in available_roles:
+                continue
+            if clean_directive in {"hero", "supporting", "environment_required", "required", "optional"}:
+                selected_from_directives.append(clean_role)
+
+    active_roles: list[str] = []
+    for role in selected_from_used + selected_from_directives:
+        if role not in active_roles:
+            active_roles.append(role)
+    return active_roles
+
+
 def _shorten_text(value: str, limit: int = 700) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
@@ -4452,6 +4482,16 @@ def clip_image(payload: ClipImageIn):
     connected_inputs = getattr(refs_obj, "connectedInputs", None)
     connected_inputs = connected_inputs if isinstance(connected_inputs, dict) else {}
     comfy_roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+
+    scene_refs_used = getattr(refs_obj, "refsUsed", None)
+    scene_ref_directives = getattr(refs_obj, "refDirectives", None)
+    scene_active_roles = _resolve_scene_active_roles_for_image(scene_refs_used, scene_ref_directives, comfy_refs_by_role)
+    if scene_active_roles:
+        comfy_refs_by_role = {
+            role: (comfy_refs_by_role.get(role) or []) if role in scene_active_roles else []
+            for role in comfy_roles
+        }
+
     comfy_counts = {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles}
     connected_refs_by_role = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
     connected_active_roles = sorted([
@@ -4461,6 +4501,9 @@ def clip_image(payload: ClipImageIn):
     print("[COMFY IMAGE DEBUG] refsByRole counts=" + json.dumps(comfy_counts, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] refsByRole raw=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] connected active roles=" + json.dumps(connected_active_roles, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] scene refsUsed=" + json.dumps(scene_refs_used, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] scene refDirectives=" + json.dumps(scene_ref_directives, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] scene active roles=" + json.dumps(scene_active_roles, ensure_ascii=False))
     for role in comfy_roles:
         has_urls = bool(comfy_refs_by_role.get(role))
         print(f"[COMFY IMAGE DEBUG] role {role} hasUrls={has_urls}")
@@ -4537,6 +4580,9 @@ def clip_image(payload: ClipImageIn):
         "hasSessionBaseline": bool(isinstance(session_baseline, dict) and session_baseline),
         "hasPreviousContinuityMemory": bool(previous_continuity_memory),
         "hasPreviousSceneImage": bool(previous_scene_image_inline),
+        "sceneRefsUsed": scene_refs_used if isinstance(scene_refs_used, (list, dict)) else [],
+        "sceneRefDirectives": scene_ref_directives if isinstance(scene_ref_directives, dict) else {},
+        "sceneActiveRoles": scene_active_roles,
     }
 
     style_anchor = (

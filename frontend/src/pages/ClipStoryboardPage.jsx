@@ -846,6 +846,15 @@ function normalizeClipImageRefsPayload(refs = {}) {
     normalized.plannerMeta = refs.plannerMeta;
   }
 
+  if (Array.isArray(refs?.refsUsed)) {
+    normalized.refsUsed = refs.refsUsed.map((role) => String(role || "").trim()).filter(Boolean);
+  } else if (refs?.refsUsed && typeof refs.refsUsed === "object") {
+    normalized.refsUsed = refs.refsUsed;
+  }
+  if (refs?.refDirectives && typeof refs.refDirectives === "object") {
+    normalized.refDirectives = refs.refDirectives;
+  }
+
   return normalized;
 }
 
@@ -864,6 +873,8 @@ function buildComfySceneRefsPayload({
   sceneNarrativeStep = "",
   continuity = "",
   plannerMeta = null,
+  refsUsed = [],
+  refDirectives = null,
 } = {}) {
   const pickUrls = (roles = []) => roles
     .flatMap((role) => (Array.isArray(refsByRole?.[role]) ? refsByRole[role] : []))
@@ -906,6 +917,8 @@ function buildComfySceneRefsPayload({
     sceneNarrativeStep: String(sceneNarrativeStep || "").trim(),
     continuity: String(continuity || "").trim(),
     plannerMeta: plannerMeta && typeof plannerMeta === 'object' ? plannerMeta : undefined,
+    refsUsed: Array.isArray(refsUsed) ? refsUsed : (refsUsed && typeof refsUsed === 'object' ? refsUsed : undefined),
+    refDirectives: refDirectives && typeof refDirectives === 'object' ? refDirectives : undefined,
   });
 }
 
@@ -2462,6 +2475,8 @@ const comfyShowVideoSection = Boolean(
         sceneNarrativeStep: plannerInput?.sceneNarrativeStep || comfySelectedScene?.sceneNarrativeStep || "",
         continuity: plannerInput?.continuity || comfySelectedScene?.continuity || "",
         plannerMeta: comfyNode?.data?.plannerMeta || null,
+        refsUsed: Array.isArray(comfySelectedScene?.refsUsed) ? comfySelectedScene.refsUsed : [],
+        refDirectives: comfySelectedScene?.refDirectives && typeof comfySelectedScene.refDirectives === 'object' ? comfySelectedScene.refDirectives : null,
       };
       const refsForImageRequest = buildComfySceneRefsPayload(refsPayloadForImage);
 
