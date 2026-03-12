@@ -9,6 +9,7 @@ export default function ComfyBrainNode({ id, data }) {
   const styleMeta = getStyleDisplayMeta(styleKey);
   const freezeStyle = !!data?.freezeStyle;
   const parseStatus = data?.parseStatus || "idle";
+  const audioStoryMode = data?.audioStoryMode || "lyrics_music";
 
   return (<>
     {["audio","text","ref_character_1","ref_character_2","ref_character_3","ref_animal","ref_group","ref_location","ref_style","ref_props"].map((h, i) => (
@@ -22,6 +23,9 @@ export default function ComfyBrainNode({ id, data }) {
       </div>
 
       <div style={{ marginTop: 8 }}><div className="clipSB_brainLabel">STYLE</div><select className="clipSB_select" value={styleKey} onChange={(e) => data?.onStyle?.(id, e.target.value)}><option value="realism">Реализм</option><option value="film">Кино-стиль</option><option value="neon">Неон</option><option value="glossy">Глянец</option><option value="soft">Мягкий</option></select><div className="clipSB_selectHint">{styleMeta.descriptionRu}</div></div>
+
+
+      <div style={{ marginTop: 8 }}><div className="clipSB_brainLabel">AUDIO STORY MODE</div><select className="clipSB_select" value={audioStoryMode} onChange={(e) => data?.onAudioStoryMode?.(id, e.target.value)}><option value="lyrics_music">lyrics + music</option><option value="music_only">music only</option><option value="music_plus_text">music + text</option></select><div className="clipSB_selectHint">lyrics+music: слова песни формируют сюжет; music_only: игнорировать lyrics и строить по ритму/энергии; music_plus_text: игнорировать lyrics, сюжет берётся из TEXT.</div></div>
 
       <div className="clipSB_toggleRow"><label><input type="checkbox" checked={freezeStyle} onChange={(e) => data?.onFreezeStyle?.(id, e.target.checked)} /> freeze style</label></div>
 
