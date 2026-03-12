@@ -58,9 +58,12 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
     return (
         "You are COMFY storyboard planner. Return strict JSON only.\n"
         "Fields: ok, planMeta, globalContinuity, scenes, warnings, errors, debug.\n"
-        "Each scene must include: sceneId,title,sceneNarrativeStep,sceneGoal,storyMission,sceneOutputRule,"
-        "primaryRole,secondaryRoles,continuity,imagePrompt,videoPrompt.\n"
-        "Use TEXT as story mission, AUDIO as rhythm/emotional contour, refs as anchors, OUTPUT strategy as comfy image/text.\n"
+        "AUDIO is primary source for rhythm, emotional contour, dramatic shifts and timing.\n"
+        "TEXT is optional support that clarifies intent.\n"
+        "REFS are optional anchors for character/location/style/props continuity.\n"
+        "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
+        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePrompt,videoPrompt,refsUsed,imageUrl,videoUrl.\n"
+        "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
         f"INPUT={json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -112,7 +115,7 @@ def _call_gemini_plan(api_key: str, model: str, body: dict[str, Any]) -> tuple[d
     }
     if isinstance(resp, dict) and resp.get("__http_error__"):
         logger.warning("[COMFY PLAN] gemini http error model=%s status=%s", model, resp.get("status"))
-        return {}, diagnostics
+        return {"errors": ["gemini_http_error"], "debug": {"httpStatus": http_status}}, diagnostics
 
     parsed = _extract_json(raw)
     if not isinstance(parsed, dict):
@@ -120,6 +123,61 @@ def _call_gemini_plan(api_key: str, model: str, body: dict[str, Any]) -> tuple[d
         return {"errors": ["gemini_invalid_json"]}, diagnostics
 
     return parsed, diagnostics
+
+
+def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
+    src = scene if isinstance(scene, dict) else {}
+    start_sec = src.get("startSec")
+    end_sec = src.get("endSec")
+    duration_sec = src.get("durationSec")
+
+    if start_sec is None and isinstance(src.get("timeRange"), dict):
+        start_sec = src["timeRange"].get("startSec")
+        end_sec = src["timeRange"].get("endSec")
+    if start_sec is None:
+        start_sec = src.get("start")
+    if end_sec is None:
+        end_sec = src.get("end")
+
+    try:
+        start_n = float(start_sec) if start_sec is not None else None
+    except Exception:
+        start_n = None
+    try:
+        end_n = float(end_sec) if end_sec is not None else None
+    except Exception:
+        end_n = None
+    try:
+        duration_n = float(duration_sec) if duration_sec is not None else None
+    except Exception:
+        duration_n = None
+
+    if duration_n is None and start_n is not None and end_n is not None:
+        duration_n = max(0.0, end_n - start_n)
+
+    refs_used = src.get("refsUsed")
+    if not isinstance(refs_used, dict):
+        refs_used = {}
+
+    return {
+        "sceneId": str(src.get("sceneId") or f"scene-{idx + 1}"),
+        "title": str(src.get("title") or f"Scene {idx + 1}"),
+        "startSec": start_n,
+        "endSec": end_n,
+        "durationSec": duration_n,
+        "sceneNarrativeStep": str(src.get("sceneNarrativeStep") or ""),
+        "sceneGoal": str(src.get("sceneGoal") or ""),
+        "storyMission": str(src.get("storyMission") or ""),
+        "sceneOutputRule": str(src.get("sceneOutputRule") or "scene image first"),
+        "primaryRole": str(src.get("primaryRole") or "character_1"),
+        "secondaryRoles": src.get("secondaryRoles") if isinstance(src.get("secondaryRoles"), list) else [],
+        "continuity": str(src.get("continuity") or ""),
+        "imagePrompt": str(src.get("imagePrompt") or ""),
+        "videoPrompt": str(src.get("videoPrompt") or ""),
+        "refsUsed": refs_used,
+        "imageUrl": str(src.get("imageUrl") or ""),
+        "videoUrl": str(src.get("videoUrl") or ""),
+    }
 
 
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
@@ -159,7 +217,8 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         errors.append("gemini_invalid_json")
         parsed = {}
 
-    scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
+    raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
+    scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(raw_scenes)]
     logger.info("[COMFY PLAN] normalized scenes count=%s", len(scenes))
 
     result = {

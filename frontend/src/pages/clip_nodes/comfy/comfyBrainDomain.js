@@ -118,9 +118,13 @@ export function buildComfyGlobalContinuity({ plannerInput = {}, refsByRole = {},
 
 export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {} } = {}) {
   const count = Number(plannerMeta?.summary?.sceneCount || 6);
+  const defaultDuration = 3;
   return Array.from({ length: Math.max(1, Math.min(12, count)) }).map((_, idx) => ({
     sceneId: `comfy-scene-${idx + 1}`,
     title: `Scene ${idx + 1}`,
+    startSec: idx * defaultDuration,
+    endSec: (idx + 1) * defaultDuration,
+    durationSec: defaultDuration,
     sceneNarrativeStep: `step_${idx + 1}`,
     sceneGoal: plannerInput.storyMissionSummary || "advance story",
     storyMission: plannerInput.storyMissionSummary || "",
@@ -130,6 +134,9 @@ export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {
     continuity: plannerMeta?.globalContinuity || "",
     imagePrompt: `Create frame ${idx + 1} in ${plannerInput.stylePreset || "realism"} style. ${plannerInput.storyMissionSummary || ""}`,
     videoPrompt: `Animate frame ${idx + 1} with coherent transition and rhythm cues.`,
+    refsUsed: {},
+    imageUrl: "",
+    videoUrl: "",
     plannerMeta,
   }));
 }

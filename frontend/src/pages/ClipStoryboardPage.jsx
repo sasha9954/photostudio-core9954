@@ -1708,11 +1708,29 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
     : scenarioPreviousScene?.startImageUrl
       ? "startImageUrl"
       : "none";
+
+const comfyNode = useMemo(() => {
+  if (comfyEditor.nodeId) return nodes.find((n) => n.id === comfyEditor.nodeId && n.type === 'comfyStoryboard') || null;
+  return nodes.find((n) => n.type === 'comfyStoryboard') || null;
+}, [nodes, comfyEditor.nodeId]);
+
+const comfyScenes = useMemo(() => {
+  const arr = comfyNode?.data?.mockScenes;
+  return Array.isArray(arr) ? arr : [];
+}, [comfyNode]);
+
+const comfySelectedIndex = Number.isFinite(comfyEditor.selected) ? comfyEditor.selected : 0;
+const comfySafeIndex = comfySelectedIndex < 0 ? 0 : Math.min(comfySelectedIndex, Math.max(0, comfyScenes.length - 1));
+const comfySelectedScene = comfyScenes[comfySafeIndex] || null;
   const [scenarioImageLoading, setScenarioImageLoading] = useState(false);
   const [scenarioImageError, setScenarioImageError] = useState("");
   const [scenarioVideoLoading, setScenarioVideoLoading] = useState(false);
   const [scenarioVideoError, setScenarioVideoError] = useState("");
   const [scenarioVideoOpen, setScenarioVideoOpen] = useState(false);
+  const [comfyImageLoading, setComfyImageLoading] = useState(false);
+  const [comfyImageError, setComfyImageError] = useState("");
+  const [comfyVideoLoading, setComfyVideoLoading] = useState(false);
+  const [comfyVideoError, setComfyVideoError] = useState("");
   const [assemblyBuildState, setAssemblyBuildState] = useState("idle");
   const [assemblyError, setAssemblyError] = useState("");
   const [assemblyInfo, setAssemblyInfo] = useState("");
@@ -1872,6 +1890,84 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
       safeDel(VIDEO_JOB_STORE_KEY);
     }
   }, [VIDEO_JOB_STORE_KEY, startScenarioVideoPolling]);
+
+  const updateComfyScene = useCallback((idx, patch) => {
+    if (!comfyNode?.id || idx < 0) return;
+    setNodes((prev) => prev.map((n) => {
+      if (n.id !== comfyNode.id) return n;
+      const scenes = Array.isArray(n?.data?.mockScenes) ? n.data.mockScenes : [];
+      if (!scenes[idx]) return n;
+      const nextScenes = scenes.map((scene, sceneIdx) => (sceneIdx === idx ? { ...scene, ...patch } : scene));
+      return { ...n, data: { ...n.data, mockScenes: nextScenes } };
+    }));
+  }, [comfyNode?.id, setNodes]);
+
+  const handleComfyGenerateImage = useCallback(async () => {
+    if (!comfySelectedScene) return;
+    setComfyImageLoading(true);
+    setComfyImageError("");
+    try {
+      const sceneId = String(comfySelectedScene.sceneId || `comfy-scene-${comfySafeIndex + 1}`);
+      const out = await fetchJson('/api/clip/image', {
+        method: 'POST',
+        body: {
+          sceneId,
+          prompt: String(comfySelectedScene.imagePrompt || '').trim(),
+          sceneDelta: String(comfySelectedScene.imagePrompt || '').trim(),
+          style: String(comfyNode?.data?.stylePreset || 'realism'),
+          width: 1024,
+          height: 1792,
+        },
+      });
+      if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || 'image_generation_failed');
+      updateComfyScene(comfySafeIndex, { imageUrl: String(out.imageUrl || '') });
+    } catch (e) {
+      console.error(e);
+      setComfyImageError(String(e?.message || e));
+    } finally {
+      setComfyImageLoading(false);
+    }
+  }, [comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, updateComfyScene]);
+
+  const handleComfyDeleteImage = useCallback(() => {
+    setComfyImageError('');
+    updateComfyScene(comfySafeIndex, { imageUrl: '', videoUrl: '' });
+  }, [comfySafeIndex, updateComfyScene]);
+
+  const handleComfyGenerateVideo = useCallback(async () => {
+    if (!comfySelectedScene?.imageUrl) return;
+    setComfyVideoLoading(true);
+    setComfyVideoError('');
+    try {
+      const sceneId = String(comfySelectedScene.sceneId || `comfy-scene-${comfySafeIndex + 1}`);
+      const out = await fetchJson('/api/clip/video', {
+        method: 'POST',
+        body: {
+          sceneId,
+          imageUrl: String(comfySelectedScene.imageUrl || ''),
+          videoPrompt: String(comfySelectedScene.videoPrompt || '').trim(),
+          requestedDurationSec: Number(comfySelectedScene.durationSec) || 3,
+          format: '9:16',
+        },
+      });
+      if (!out?.ok || !out?.videoUrl) throw new Error(out?.hint || out?.code || 'video_generation_failed');
+      updateComfyScene(comfySafeIndex, { videoUrl: String(out.videoUrl || '') });
+    } catch (e) {
+      console.error(e);
+      setComfyVideoError(String(e?.message || e));
+    } finally {
+      setComfyVideoLoading(false);
+    }
+  }, [comfySafeIndex, comfySelectedScene, updateComfyScene]);
+
+  const handleComfyDeleteVideo = useCallback(() => {
+    setComfyVideoError('');
+    updateComfyScene(comfySafeIndex, { videoUrl: '' });
+  }, [comfySafeIndex, updateComfyScene]);
+
+  const handleComfyImagePromptChange = useCallback((value) => {
+    updateComfyScene(comfySafeIndex, { imagePrompt: value });
+  }, [comfySafeIndex, updateComfyScene]);
 
   const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
     if (!scenarioSelected) return;
@@ -4337,146 +4433,125 @@ const hydrate = useCallback(() => {
 
       {comfyEditor.open ? (
         <div className="clipSB_scenarioOverlay" onClick={() => setComfyEditor((state) => ({ ...state, open: false }))}>
-          <div className="clipSB_scenarioPanel" onClick={(e) => e.stopPropagation()}>
-            {(() => {
-              const node = nodes.find((n) => n.id === comfyEditor.nodeId && n.type === 'comfyStoryboard');
-              const scenes = Array.isArray(node?.data?.mockScenes) ? node.data.mockScenes : [];
-              const selectedIdx = Number.isFinite(comfyEditor.selected) ? comfyEditor.selected : 0;
-              const safeIdx = selectedIdx < 0 ? 0 : Math.min(selectedIdx, Math.max(0, scenes.length - 1));
-              const selectedScene = scenes[safeIdx] || null;
-              const modeMeta = getModeDisplayMeta(node?.data?.mode || 'clip');
-              const styleMeta = getStyleDisplayMeta(node?.data?.stylePreset || 'realism');
-              const pipelineFlow = Array.isArray(node?.data?.pipelineFlow)
-                ? node.data.pipelineFlow.join(' → ')
-                : (Array.isArray(node?.data?.debugFields?.pipelineFlow) ? node.data.debugFields.pipelineFlow.join(' → ') : 'brain → scene image → scene video');
-              const sceneTypeLabel = selectedScene?.sceneType || 'scene';
-              const secondaryRoles = (selectedScene?.secondaryRoles || node?.data?.debugFields?.secondaryRoles || []).join(', ') || 'none';
+          <div className="clipSB_scenarioPanel clipSB_comfyPanel" onClick={(e) => e.stopPropagation()}>
+            <div className="clipSB_scenarioHeader">
+              <div>
+                <div className="clipSB_scenarioTitle">COMFY STORYBOARD</div>
+                <div className="clipSB_scenarioMeta">{(comfyNode?.data?.mode || 'clip')} • {(comfyNode?.data?.stylePreset || 'realism')} • сцен: {comfyScenes.length}</div>
+              </div>
+              <button className="clipSB_iconBtn" onClick={() => setComfyEditor((state) => ({ ...state, open: false }))}>×</button>
+            </div>
 
-              return (
-                <>
-                  <div className="clipSB_scenarioHeader">
-                    <div>
-                      <div className="clipSB_scenarioTitle">COMFY STORYBOARD</div>
-                      <div className="clipSB_scenarioMeta">{modeMeta.labelRu} • {styleMeta.labelRu} • сцен: {scenes.length}</div>
+            <div className="clipSB_scenarioBody">
+              <div className="clipSB_scenarioList clipSB_comfySceneList">
+                {!comfyScenes.length ? (
+                  <div className="clipSB_empty">Нет сцен. Нажми «Разобрать» в COMFY BRAIN.</div>
+                ) : comfyScenes.map((scene, index) => {
+                  const isActive = comfySafeIndex === index;
+                  const hasImage = !!String(scene?.imageUrl || '').trim();
+                  const hasVideo = !!String(scene?.videoUrl || '').trim();
+                  const start = Number(scene?.startSec);
+                  const end = Number(scene?.endSec);
+                  const dur = Number(scene?.durationSec);
+                  const timing = Number.isFinite(start) && Number.isFinite(end)
+                    ? `${start.toFixed(1)}–${end.toFixed(1)}s`
+                    : Number.isFinite(dur)
+                      ? `${dur.toFixed(1)}s`
+                      : '—';
+                  return (
+                    <button
+                      key={scene.sceneId || `comfy-${index}`}
+                      className={`clipSB_scenarioItem ${isActive ? 'isActive' : ''}`}
+                      onClick={() => setComfyEditor((state) => ({ ...state, selected: index }))}
+                    >
+                      <div className="clipSB_scenarioItemTop">
+                        <div className="clipSB_scenarioItemTime">{scene.sceneId || `scene ${index + 1}`}</div>
+                        <div className="clipSB_comfyReadyIcons">
+                          {hasImage ? <span className="clipSB_tag clipSB_tagOk">image-ready</span> : null}
+                          {hasVideo ? <span className="clipSB_tag clipSB_tagOk">video-ready</span> : null}
+                        </div>
+                      </div>
+                      <div className="clipSB_scenarioItemText">{scene.title || `Сцена ${index + 1}`}</div>
+                      <div className="clipSB_small">{timing}</div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="clipSB_scenarioEdit clipSB_comfyEditor">
+                {!comfySelectedScene ? (
+                  <div className="clipSB_empty">Выбери сцену слева.</div>
+                ) : (
+                  <>
+                    <div className="clipSB_comfyInfoGrid">
+                      <div className="clipSB_comfyKv"><span>title</span><strong>{comfySelectedScene.title || '—'}</strong></div>
+                      <div className="clipSB_comfyKv"><span>time</span><strong>{Number.isFinite(Number(comfySelectedScene.startSec)) && Number.isFinite(Number(comfySelectedScene.endSec)) ? `${Number(comfySelectedScene.startSec).toFixed(1)}–${Number(comfySelectedScene.endSec).toFixed(1)}s` : `${Number(comfySelectedScene.durationSec || 0).toFixed(1)}s`}</strong></div>
+                      <div className="clipSB_comfyKv"><span>purpose</span><strong>{comfySelectedScene.sceneGoal || comfySelectedScene.sceneNarrativeStep || '—'}</strong></div>
+                      <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>continuity</span><strong>{comfySelectedScene.continuity || comfyNode?.data?.plannerMeta?.globalContinuity || '—'}</strong></div>
                     </div>
-                    <button className="clipSB_iconBtn" onClick={() => setComfyEditor((state) => ({ ...state, open: false }))}>×</button>
-                  </div>
 
-                  <div className="clipSB_scenarioBody">
-                    <div className="clipSB_scenarioList">
-                      {!scenes.length ? (
-                        <div className="clipSB_empty">Нет mock сцен. Нажми «Разобрать» в COMFY BRAIN.</div>
-                      ) : scenes.map((scene, index) => {
-                        const isActive = safeIdx === index;
-                        return (
-                          <button
-                            key={scene.sceneId || `comfy-${index}`}
-                            className={`clipSB_scenarioItem ${isActive ? 'isActive' : ''}`}
-                            onClick={() => setComfyEditor((state) => ({ ...state, selected: index }))}
-                          >
-                            <div className="clipSB_scenarioItemTop">
-                              <div className="clipSB_scenarioItemTime">{scene.sceneId || `scene ${index + 1}`}</div>
-                              <span className="clipSB_tag">{scene.sceneType || 'scene'}</span>
-                            </div>
-                            <div className="clipSB_scenarioItemText">{scene.title || `Сцена ${index + 1}`}</div>
-                            <div className="clipSB_small">{scene.sceneNarrativeStep || scene.sceneGoal || scene.description || '—'}</div>
-                          </button>
-                        );
-                      })}
+                    <div className="clipSB_scenarioEditRow">
+                      <div className="clipSB_hint">Image prompt</div>
+                      <textarea
+                        className="clipSB_textarea clipSB_comfyTextarea"
+                        value={String(comfySelectedScene.imagePrompt || '')}
+                        onChange={(e) => handleComfyImagePromptChange(e.target.value)}
+                        placeholder="Опиши визуал сцены для генерации изображения"
+                      />
                     </div>
 
-                    <div className="clipSB_scenarioEdit">
-                      {!selectedScene ? (
-                        <div className="clipSB_empty">Выбери сцену слева.</div>
+                    <div className="clipSB_comfyPreviewBox">
+                      {comfySelectedScene.imageUrl ? (
+                        <img className="clipSB_comfyPreviewImg" src={resolveAssetUrl(comfySelectedScene.imageUrl)} alt={comfySelectedScene.title || 'scene'} />
                       ) : (
-                        <>
-                          <div className="clipSB_scenarioMeta" style={{ marginBottom: 8 }}>
-                            Scene {safeIdx + 1} • {sceneTypeLabel}
-                          </div>
-
-                          <div className="clipSB_scenarioEditRow">
-                            <div className="clipSB_hint">Описание сцены</div>
-                            <div className="clipSB_comfyGrid">
-                              <div className="clipSB_comfyKv"><span>title</span><strong>{selectedScene.title || '—'}</strong></div>
-                              <div className="clipSB_comfyKv"><span>sceneType</span><strong>{sceneTypeLabel}</strong></div>
-                              <div className="clipSB_comfyKv"><span>sceneNarrativeStep</span><strong>{selectedScene.sceneNarrativeStep || '—'}</strong></div>
-                              <div className="clipSB_comfyKv"><span>sceneGoal</span><strong>{selectedScene.sceneGoal || '—'}</strong></div>
-                              <div className="clipSB_comfyKv"><span>storyMission</span><strong>{selectedScene.storyMission || node?.data?.storyMissionSummary || '—'}</strong></div>
-                              <div className="clipSB_comfyKv"><span>sceneOutputRule</span><strong>{selectedScene.sceneOutputRule || 'scene image first'}</strong></div>
-                              <div className="clipSB_comfyKv"><span>primaryRole</span><strong>{selectedScene.primaryRole || node?.data?.debugFields?.primaryRole || 'character_1'}</strong></div>
-                              <div className="clipSB_comfyKv"><span>secondaryRoles</span><strong>{secondaryRoles}</strong></div>
-                              <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>continuity</span><strong>{selectedScene.continuity || node?.data?.plannerMeta?.globalContinuity || '—'}</strong></div>
-                            </div>
-                          </div>
-
-                          <div className="clipSB_scenarioEditRow">
-                            <div className="clipSB_hint">Промт для фото</div>
-                            <div className="clipSB_comfyPrompt">{selectedScene.imagePrompt || 'no image prompt'}</div>
-                          </div>
-
-                          <div className="clipSB_scenarioEditRow">
-                            <div className="clipSB_hint">Промт для видео</div>
-                            <div className="clipSB_comfyPrompt">{selectedScene.videoPrompt || 'no video prompt'}</div>
-                          </div>
-
-                          <div className="clipSB_scenarioEditRow">
-                            <div className="clipSB_hint">Continuity / pipeline</div>
-                            <div className="clipSB_videoMetaGrid">
-                              <div className="clipSB_videoKv"><span>storyControlMode</span><span>{node?.data?.storyControlMode || node?.data?.debugFields?.storyControlMode || 'insufficient_input'}</span></div>
-                              <div className="clipSB_videoKv"><span>pipelineFlow</span><span>{pipelineFlow}</span></div>
-                            </div>
-                          </div>
-
-                          <div className="clipSB_scenarioEditRow">
-                            <div className="clipSB_scenarioActions">
-                              <button className="clipSB_btn clipSB_btnSecondary" disabled title="Скоро: генерация фото прямо из COMFY editor">Сделать фото (soon)</button>
-                              <button className="clipSB_btn clipSB_btnSecondary" disabled title="Скоро: сборка сцены в видео">Добавить в видео (soon)</button>
-                              <button className="clipSB_btn clipSB_btnSecondary" disabled>Очистить фото</button>
-                              <button className="clipSB_btn clipSB_btnSecondary" disabled>Очистить видео</button>
-                            </div>
-                          </div>
-
-                          <div className="clipSB_comfyStatusGrid">
-                            <div className="clipSB_scenarioEditRow">
-                              <div className="clipSB_hint">Статус фото</div>
-                              <div className="clipSB_small">imageUrl: {selectedScene.imageUrl || '—'}</div>
-                              <div className="clipSB_small">endImageUrl: {selectedScene.endImageUrl || '—'}</div>
-                            </div>
-                            <div className="clipSB_scenarioEditRow">
-                              <div className="clipSB_hint">Статус видео</div>
-                              <div className="clipSB_small">videoUrl: {selectedScene.videoUrl || '—'}</div>
-                              <div className="clipSB_small">audioSliceUrl: {selectedScene.audioSliceUrl || '—'}</div>
-                            </div>
-                          </div>
-
-                          <details className="clipSB_scenarioEditRow" style={{ marginTop: 10 }}>
-                            <summary className="clipSB_hint" style={{ cursor: 'pointer' }}>DEBUG</summary>
-                            <div className="clipSB_comfyDebug" style={{ marginTop: 8 }}>
-                              <div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'} • {node?.data?.output || 'comfy image'}</div>
-                              <div className="clipSB_small">narrative source: {node?.data?.narrativeSource || 'none'}</div>
-                              <div className="clipSB_small">style preset: {node?.data?.stylePreset || 'realism'}</div>
-                              <div className="clipSB_small">mode intent: {node?.data?.debugFields?.modeIntent || 'none'}</div>
-                              <div className="clipSB_small">mode bias: {node?.data?.debugFields?.modePromptBias || 'none'}</div>
-                              <div className="clipSB_small">scene strategy: {node?.data?.debugFields?.modeSceneStrategy || 'none'}</div>
-                              <div className="clipSB_small">continuity bias: {node?.data?.debugFields?.modeContinuityBias || 'none'}</div>
-                              <div className="clipSB_small">planning mindset: {node?.data?.debugFields?.planningMindset || 'none'}</div>
-                              <div className="clipSB_small">style summary: {node?.data?.debugFields?.styleSummary || 'none'}</div>
-                              <div className="clipSB_small">style continuity: {node?.data?.debugFields?.styleContinuity || 'none'}</div>
-                              <div className="clipSB_small">story mission: {node?.data?.debugFields?.storyMissionSummary || 'none'}</div>
-                              <div className="clipSB_small">text narrative role: {node?.data?.debugFields?.textNarrativeRole || 'none'}</div>
-                              <div className="clipSB_small">audio narrative role: {node?.data?.debugFields?.audioNarrativeRole || 'none'}</div>
-                              <div className="clipSB_small">cast: {(node?.data?.debugFields?.cast || []).join(', ') || 'none'}</div>
-                              <div className="clipSB_small">prompt length: {node?.data?.debugFields?.promptLength || 0} • lines: {node?.data?.debugFields?.promptLines || 0}</div>
-                              <div className="clipSB_small">warnings: {(Array.isArray(node?.data?.warnings) ? node.data.warnings.join(' | ') : '') || 'none'}</div>
-                            </div>
-                          </details>
-                        </>
+                        <div className="clipSB_comfyPreviewEmpty">Изображение сцены пока не создано</div>
                       )}
                     </div>
-                  </div>
-                </>
-              );
-            })()}
+
+                    <div className="clipSB_comfyActions">
+                      <button className="clipSB_btn" onClick={handleComfyGenerateImage} disabled={comfyImageLoading}>{comfyImageLoading ? 'Создаю...' : 'Создать изображение'}</button>
+                      <button className="clipSB_btn clipSB_btnSecondary" onClick={handleComfyDeleteImage} disabled={comfyImageLoading}>Удалить изображение</button>
+                    </div>
+                    {comfyImageError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfyImageError}</div> : null}
+
+                    {comfySelectedScene.imageUrl ? (
+                      <div className="clipSB_videoBlock">
+                        <div className="clipSB_hint" style={{ marginBottom: 8 }}>Видео блок</div>
+                        <div className="clipSB_comfyVideoBase">
+                          <img className="clipSB_comfyPreviewImg" src={resolveAssetUrl(comfySelectedScene.imageUrl)} alt="video base" />
+                        </div>
+                        <div className="clipSB_scenarioEditRow" style={{ marginTop: 8 }}>
+                          <div className="clipSB_hint">Video prompt</div>
+                          <textarea
+                            className="clipSB_textarea clipSB_comfyTextarea"
+                            value={String(comfySelectedScene.videoPrompt || '')}
+                            onChange={(e) => updateComfyScene(comfySafeIndex, { videoPrompt: e.target.value })}
+                            placeholder="Опиши действие камеры и движение в кадре"
+                          />
+                        </div>
+                        <div className="clipSB_comfyActions">
+                          <button className="clipSB_btn" onClick={handleComfyGenerateVideo} disabled={comfyVideoLoading}>{comfyVideoLoading ? 'Делаю...' : 'Сделать видео'}</button>
+                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleComfyDeleteVideo} disabled={comfyVideoLoading}>Удалить видео</button>
+                        </div>
+                        {comfyVideoError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfyVideoError}</div> : null}
+                        {comfySelectedScene.videoUrl ? (
+                          <video className="clipSB_scenarioPreview" src={resolveAssetUrl(comfySelectedScene.videoUrl)} controls />
+                        ) : (
+                          <div className="clipSB_small">Видео еще не создано.</div>
+                        )}
+                      </div>
+                    ) : null}
+
+                    <details className="clipSB_scenarioEditRow" style={{ marginTop: 8 }}>
+                      <summary className="clipSB_hint" style={{ cursor: 'pointer' }}>DEBUG</summary>
+                      <div className="clipSB_small" style={{ marginTop: 8 }}>pipeline: {(Array.isArray(comfyNode?.data?.pipelineFlow) ? comfyNode.data.pipelineFlow.join(' → ') : 'brain → scene image → scene video')}</div>
+                      <div className="clipSB_small">narrative source: {comfyNode?.data?.narrativeSource || 'none'}</div>
+                      <div className="clipSB_small">warnings: {(Array.isArray(comfyNode?.data?.warnings) ? comfyNode.data.warnings.join(' | ') : '') || 'none'}</div>
+                    </details>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       ) : null}
