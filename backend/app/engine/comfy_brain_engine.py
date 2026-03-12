@@ -464,9 +464,13 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
     segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
     initial_segmentation_debug = dict(segmentation_debug)
-    refinement_applied = False
+    initial_scene_count = len(scenes)
+    refinement_attempted = False
+    refinement_succeeded = False
     refinement_reasons: list[str] = []
     refinement_pass_count = 0
+    refinement_errors: list[str] = []
+    refinement_warnings: list[str] = []
 
     needs_refinement, refinement_reasons = _needs_segmentation_refinement(
         segmentation_debug,
@@ -475,7 +479,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
     if needs_refinement and len(scenes) > 0 and len(errors) == 0:
-        refinement_applied = True
+        refinement_attempted = True
         refinement_pass_count = 1
         refinement_reason_str = ",".join(refinement_reasons)
         refinement_body = {
@@ -487,22 +491,40 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         if refined_http_status:
             warnings.append(f"segmentation_refinement_http_error:{refined_http_status}")
         else:
+            refinement_errors = [str(err) for err in (refined_parsed.get("errors") if isinstance(refined_parsed.get("errors"), list) else []) if str(err)]
+            refinement_warnings = [str(warn) for warn in (refined_parsed.get("warnings") if isinstance(refined_parsed.get("warnings"), list) else []) if str(warn)]
+            if len(refinement_errors) > 0:
+                warnings.append("segmentation_refinement_failed_with_errors")
+                warnings.append(f"segmentation_refinement_errors:{'|'.join(refinement_errors)}")
+            if len(refinement_warnings) > 0:
+                warnings.append(f"segmentation_refinement_warnings:{'|'.join(refinement_warnings)}")
             refined_raw_scenes = refined_parsed.get("scenes") if isinstance(refined_parsed.get("scenes"), list) else []
             refined_scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(refined_raw_scenes)]
-            if len(refined_scenes) > 0:
-                scenes, timing_debug = _normalize_scene_timeline(refined_scenes, normalized.get("audioDurationSec"))
+            valid_refined_scenes = [
+                scene for scene in refined_scenes
+                if (_to_float(scene.get("endSec")) or 0.0) > (_to_float(scene.get("startSec")) or 0.0)
+            ]
+            if len(refined_scenes) == 0:
+                warnings.append("segmentation_refinement_returned_no_scenes")
+            elif len(valid_refined_scenes) == 0:
+                warnings.append("segmentation_refinement_returned_invalid_scenes")
+            elif len(refinement_errors) == 0:
+                scenes, timing_debug = _normalize_scene_timeline(valid_refined_scenes, normalized.get("audioDurationSec"))
                 segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
                 parsed = refined_parsed
+                refinement_succeeded = True
                 diagnostics = {
                     **diagnostics,
                     "refinement": {
                         "httpStatus": refined_diagnostics.get("httpStatus"),
                         "rawPreview": refined_diagnostics.get("rawPreview") or "",
+                        "errors": refinement_errors,
+                        "warnings": refinement_warnings,
                     },
                 }
                 warnings.append("segmentation_refined_second_pass")
             else:
-                warnings.append("segmentation_refinement_returned_no_scenes")
+                warnings.append("segmentation_refinement_not_applied_due_to_errors")
 
     if segmentation_debug.get("suspiciousEqualChunking"):
         warnings.append("segmentation_suspicious_equal_chunks")
@@ -512,8 +534,10 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         normalized.get("audioDurationSec"),
         len(scenes),
     )
-    if refinement_applied and still_coarse:
-        warnings.append(f"segmentation_still_coarse_after_refinement:{','.join(still_coarse_reasons)}")
+    still_coarse_after_refinement = bool(refinement_attempted and still_coarse)
+    if still_coarse_after_refinement:
+        reasons_suffix = f":{','.join(still_coarse_reasons)}" if still_coarse_reasons else ""
+        warnings.append(f"segmentation_still_coarse_after_refinement{reasons_suffix}")
     logger.info("[COMFY PLAN] normalized scenes count=%s", len(scenes))
 
     parsed_errors = parsed.get("errors") if isinstance(parsed.get("errors"), list) else []
@@ -553,9 +577,19 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "segmentation": segmentation_debug,
             "initialSegmentationDebug": initial_segmentation_debug,
             "finalSegmentationDebug": segmentation_debug,
-            "refinementApplied": refinement_applied,
+            "initialSceneCount": initial_scene_count,
+            "finalSceneCount": len(scenes),
+            "initialAverageSceneDurationSec": initial_segmentation_debug.get("averageSceneDurationSec"),
+            "finalAverageSceneDurationSec": segmentation_debug.get("averageSceneDurationSec"),
+            "refinementApplied": refinement_attempted,
+            "refinementAttempted": refinement_attempted,
+            "refinementSucceeded": refinement_succeeded,
             "refinementReason": ",".join(refinement_reasons) if refinement_reasons else None,
             "refinementPassCount": refinement_pass_count,
+            "refinementErrors": refinement_errors,
+            "refinementWarnings": refinement_warnings,
+            "stillCoarseAfterRefinement": still_coarse_after_refinement,
+            "stillCoarseReasons": still_coarse_reasons if still_coarse_after_refinement else [],
         },
     }
     if timing_debug.get("normalizationApplied"):
