@@ -3443,7 +3443,6 @@ onClipSec: (nodeId, value) => {
                 comfyParseSeqRef.current = parseId;
                 comfyParseInFlightRef.current.add(nodeId);
                 const startedAt = new Date().toISOString();
-                const now = new Date().toLocaleTimeString();
                 const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
                 const freshDerived = deriveComfyBrainState({
                   nodeId,
@@ -3478,7 +3477,7 @@ onClipSec: (nodeId, value) => {
 
                 setNodes((prev) => prev.map((x) => {
                   if (x.id === nodeId) {
-                    return { ...x, data: { ...x.data, parseStatus: 'parsing', parsedAt: now } };
+                    return { ...x, data: { ...x.data, parseStatus: 'parsing' } };
                   }
                   if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') {
                     return { ...x, data: { ...x.data, parseStatus: 'updating' } };
@@ -3521,6 +3520,7 @@ onClipSec: (nodeId, value) => {
                 const plannerMeta = response?.planMeta || {};
                 const globalContinuity = response?.globalContinuity || "";
                 const debugFields = response?.debug || extractComfyDebugFields({ plannerInput: payload, plannerMeta: { ...plannerMeta, globalContinuity } });
+                const parsedAt = new Date().toLocaleTimeString();
 
                 setNodes((prev) => prev.map((x) => {
                   if (x.id === nodeId) {
@@ -3529,7 +3529,7 @@ onClipSec: (nodeId, value) => {
                       data: {
                         ...x.data,
                         parseStatus: 'ready',
-                        parsedAt: now,
+                        parsedAt,
                         mockScenes: scenes,
                         lastPlannerMeta: { ...plannerMeta, globalContinuity, debugFields },
                         comfyDebug: debugFields,
