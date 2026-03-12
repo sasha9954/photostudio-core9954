@@ -1891,6 +1891,10 @@ const comfyNode = useMemo(() => {
   return nodes.find((n) => n.type === 'comfyStoryboard') || null;
 }, [nodes, comfyEditor.nodeId]);
 
+useEffect(() => {
+  console.log("[COMFY DEBUG FRONT] comfyStoryboard plannerMeta plannerInput refsByRole", comfyNode?.data?.plannerMeta?.plannerInput?.refsByRole);
+}, [comfyNode]);
+
 const comfyScenes = useMemo(() => {
   const arr = comfyNode?.data?.mockScenes;
   return Array.isArray(arr) ? arr.map((scene) => normalizeComfyScenePrompts(scene)) : [];
@@ -3789,6 +3793,8 @@ onClipSec: (nodeId, value) => {
                   timelineSource: freshDerived.timelineSource,
                   narrativeSource: freshDerived.narrativeSource,
                 };
+                console.log("[COMFY DEBUG FRONT] derived refsByRole", freshDerived?.refsByRole);
+                console.log("[COMFY DEBUG FRONT] payload refsByRole before /clip/comfy/plan", payload?.refsByRole);
                 console.log(`[COMFY PARSE #${parseId}] payload`, {
                   nodeId,
                   startedAt,
@@ -3816,6 +3822,8 @@ onClipSec: (nodeId, value) => {
                   } else {
                     response = await fetchJson(`/api/clip/comfy/plan`, { method: "POST", body: payload });
                   }
+                  console.log("[COMFY DEBUG FRONT] /clip/comfy/plan response plannerInput refsByRole", response?.planMeta?.plannerInput?.refsByRole);
+                  console.log("[COMFY DEBUG FRONT] /clip/comfy/plan full planMeta", response?.planMeta);
                   console.log(`[COMFY PARSE #${parseId}] response`, summarizeComfyResponse(response));
                 } catch (err) {
                   console.error(`[COMFY PARSE #${parseId}] error`, err);
