@@ -4,12 +4,14 @@ import base64
 import json
 import mimetypes
 import socket
+from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
 
 from app.core.config import settings
+from app.core.static_paths import ASSETS_DIR
 from app.engine.gemini_rest import post_generate_content
 
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
@@ -50,32 +52,95 @@ def _extract_mime_type(url: str, headers: dict[str, str], data: bytes) -> str:
     return ""
 
 
+def _extract_local_static_asset_relative_path(url: str) -> str | None:
+    raw = (url or "").strip()
+    if not raw:
+        return None
+
+    parsed = urllib.parse.urlparse(raw)
+    path = raw
+    if parsed.scheme in {"http", "https"}:
+        host = (parsed.hostname or "").lower()
+        local_hosts = {"127.0.0.1", "localhost"}
+        public_base = (settings.PUBLIC_BASE_URL or "").strip()
+        if public_base:
+            try:
+                public_host = (urllib.parse.urlparse(public_base).hostname or "").lower()
+                if public_host:
+                    local_hosts.add(public_host)
+            except Exception:
+                pass
+        if host not in local_hosts:
+            return None
+        path = parsed.path or ""
+    elif raw.startswith("//"):
+        return None
+
+    normalized = path.lstrip("/")
+    prefix = "static/assets/"
+    if not normalized.startswith(prefix):
+        return None
+
+    rel_path = normalized[len(prefix) :]
+    return rel_path or None
+
+
+def _read_local_static_asset(url: str) -> tuple[bytes | None, str, str | None]:
+    rel_path = _extract_local_static_asset_relative_path(url)
+    if not rel_path:
+        return None, "", None
+
+    try:
+        decoded_rel_path = urllib.parse.unquote(rel_path)
+        assets_root = Path(ASSETS_DIR).resolve()
+        file_path = (assets_root / decoded_rel_path).resolve()
+        if assets_root not in file_path.parents:
+            return None, "", "local_asset_not_found"
+        if not file_path.exists() or not file_path.is_file():
+            return None, "", "local_asset_not_found"
+        return file_path.read_bytes(), file_path.as_uri(), None
+    except OSError:
+        return None, "", "local_asset_read_failed"
+    except Exception:
+        return None, "", "local_asset_read_failed"
+
+
 def _load_image_inline_part(url: str) -> tuple[dict[str, Any] | None, str | None]:
     resolved = _resolve_reference_url(url)
     if not resolved:
         return None, "image_download_failed"
-    req = urllib.request.Request(resolved, headers={"User-Agent": "photostudio-gemini-vision/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = resp.read()
-            headers = {str(k).lower(): str(v) for k, v in resp.headers.items()}
-    except urllib.error.HTTPError:
-        return None, "image_http_error"
-    except (socket.timeout, TimeoutError):
-        return None, "image_timeout"
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, socket.timeout):
+    data: bytes
+    data_source_for_mime = resolved
+    headers: dict[str, str] = {}
+    local_data, local_source, local_error = _read_local_static_asset(resolved)
+    if local_error:
+        return None, local_error
+    if local_data is not None:
+        data = local_data
+        data_source_for_mime = local_source
+    else:
+        req = urllib.request.Request(resolved, headers={"User-Agent": "photostudio-gemini-vision/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read()
+                headers = {str(k).lower(): str(v) for k, v in resp.headers.items()}
+        except urllib.error.HTTPError:
+            return None, "image_http_error"
+        except (socket.timeout, TimeoutError):
             return None, "image_timeout"
-        return None, "image_download_failed"
-    except ValueError:
-        return None, "image_download_failed"
-    except Exception:
-        return None, "image_download_failed"
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, socket.timeout):
+                return None, "image_timeout"
+            return None, "image_download_failed"
+        except ValueError:
+            return None, "image_download_failed"
+        except Exception:
+            return None, "image_download_failed"
 
     if not data:
         return None, "image_download_failed"
 
-    mime_type = _extract_mime_type(resolved, headers, data)
+    mime_type = _extract_mime_type(data_source_for_mime, headers, data)
     if not mime_type:
         return None, "image_invalid_mime"
 
