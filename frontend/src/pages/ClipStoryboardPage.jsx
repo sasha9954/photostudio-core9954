@@ -832,15 +832,57 @@ function normalizeClipImageRefsPayload(refs = {}) {
   const previousSceneImageUrl = String(refs?.previousSceneImageUrl || "").trim();
   if (previousSceneImageUrl) normalized.previousSceneImageUrl = previousSceneImageUrl;
 
+  if (refs?.refsByRole && typeof refs.refsByRole === "object") {
+    normalized.refsByRole = refs.refsByRole;
+  }
+  if (refs?.connectedInputs && typeof refs.connectedInputs === "object") {
+    normalized.connectedInputs = refs.connectedInputs;
+  }
+  for (const key of ["text", "audioUrl", "mode", "stylePreset", "sceneId", "sceneGoal", "sceneNarrativeStep", "continuity"]) {
+    const value = String(refs?.[key] || "").trim();
+    if (value) normalized[key] = value;
+  }
+  if (refs?.plannerMeta && typeof refs.plannerMeta === "object") {
+    normalized.plannerMeta = refs.plannerMeta;
+  }
+
   return normalized;
 }
 
 
-function buildComfySceneRefsPayload({ refsByRole = {}, previousSceneImageUrl = "", previousContinuityMemory = null, propAnchorLabel = "" } = {}) {
+function buildComfySceneRefsPayload({
+  refsByRole = {},
+  previousSceneImageUrl = "",
+  previousContinuityMemory = null,
+  propAnchorLabel = "",
+  text = "",
+  audioUrl = "",
+  mode = "",
+  stylePreset = "",
+  sceneId = "",
+  sceneGoal = "",
+  sceneNarrativeStep = "",
+  continuity = "",
+  plannerMeta = null,
+} = {}) {
   const pickUrls = (roles = []) => roles
     .flatMap((role) => (Array.isArray(refsByRole?.[role]) ? refsByRole[role] : []))
     .map((item) => String(item?.url || "").trim())
     .filter(Boolean);
+
+  const normalizedRefsByRole = Object.fromEntries(
+    ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+      .map((role) => [role, pickUrls([role])])
+  );
+
+  const nodeSignals = {
+    hasAudio: !!String(audioUrl || "").trim(),
+    hasText: !!String(text || "").trim(),
+    hasMode: !!String(mode || "").trim(),
+    hasStylePreset: !!String(stylePreset || "").trim(),
+    hasContinuity: !!String(continuity || "").trim(),
+    hasPlannerMeta: !!(plannerMeta && typeof plannerMeta === 'object' && Object.keys(plannerMeta).length),
+  };
 
   return normalizeClipImageRefsPayload({
     character: pickUrls(["character_1", "character_2", "character_3", "animal", "group"]),
@@ -850,6 +892,20 @@ function buildComfySceneRefsPayload({ refsByRole = {}, previousSceneImageUrl = "
     previousSceneImageUrl,
     previousContinuityMemory,
     propAnchorLabel: String(propAnchorLabel || "").trim() || undefined,
+    refsByRole: normalizedRefsByRole,
+    connectedInputs: {
+      refsByRole: Object.fromEntries(Object.entries(normalizedRefsByRole).map(([role, urls]) => [role, (urls || []).length > 0])),
+      ...nodeSignals,
+    },
+    text: String(text || "").trim(),
+    audioUrl: String(audioUrl || "").trim(),
+    mode: String(mode || "").trim(),
+    stylePreset: String(stylePreset || "").trim(),
+    sceneId: String(sceneId || "").trim(),
+    sceneGoal: String(sceneGoal || "").trim(),
+    sceneNarrativeStep: String(sceneNarrativeStep || "").trim(),
+    continuity: String(continuity || "").trim(),
+    plannerMeta: plannerMeta && typeof plannerMeta === 'object' ? plannerMeta : undefined,
   });
 }
 
@@ -2345,6 +2401,15 @@ ${contextPrompt}`.trim(),
             previousSceneImageUrl,
             previousContinuityMemory: comfySelectedScene?.continuity ? { continuity: comfySelectedScene.continuity } : null,
             propAnchorLabel: inferPropAnchorLabel(comfyRefsByRole),
+            text: comfyNode?.data?.text || "",
+            audioUrl: comfyNode?.data?.audioUrl || "",
+            mode: comfyNode?.data?.mode || "",
+            stylePreset: comfyNode?.data?.stylePreset || "",
+            sceneId,
+            sceneGoal: comfySelectedScene?.sceneGoal || "",
+            sceneNarrativeStep: comfySelectedScene?.sceneNarrativeStep || "",
+            continuity: comfySelectedScene?.continuity || "",
+            plannerMeta: comfyNode?.data?.plannerMeta || null,
           }),
         },
       });

@@ -16,6 +16,7 @@ import time
 import threading
 from urllib.parse import urlparse
 from uuid import uuid4
+from typing import Any
 
 from PIL import Image, ImageDraw
 
@@ -43,6 +44,17 @@ class ClipImageRefsIn(BaseModel):
     location: list[str] = Field(default_factory=list)
     style: list[str] = Field(default_factory=list)
     props: list[str] = Field(default_factory=list)
+    refsByRole: dict | None = None
+    connectedInputs: dict | None = None
+    text: str | None = None
+    audioUrl: str | None = None
+    mode: str | None = None
+    stylePreset: str | None = None
+    sceneId: str | None = None
+    sceneGoal: str | None = None
+    sceneNarrativeStep: str | None = None
+    continuity: str | None = None
+    plannerMeta: dict | None = None
     propAnchorLabel: str | None = None
     sessionCharacterAnchor: str | None = None
     sessionLocationAnchor: str | None = None
@@ -4184,6 +4196,214 @@ If any of the required descriptive fields are returned in English, the output is
     }
 
 
+def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[str]]:
+    roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+    src = refs_by_role if isinstance(refs_by_role, dict) else {}
+    out: dict[str, list[str]] = {}
+    for role in roles:
+        items = src.get(role)
+        urls: list[str] = []
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    url = str(item.get("url") or "").strip()
+                else:
+                    url = str(item or "").strip()
+                if url:
+                    urls.append(url)
+        out[role] = list(dict.fromkeys(urls))
+    return out
+
+
+def _shorten_text(value: str, limit: int = 700) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + " …"
+
+
+def _build_comfy_image_prompt_assembly(
+    *,
+    scene_delta: str,
+    scene_text: str,
+    style: str,
+    style_anchor: str,
+    lighting_anchor: str,
+    location_anchor: str,
+    environment_anchor: str,
+    weather_anchor: str,
+    surface_anchor: str,
+    world_scale_context: str,
+    entity_scale_anchor_text: str,
+    refs_by_role: dict[str, list[str]],
+    connected_inputs: dict[str, Any],
+    text_input: str,
+    audio_url: str,
+    mode_input: str,
+    style_preset_input: str,
+    scene_goal: str,
+    scene_narrative_step: str,
+    continuity_input: str,
+    planner_meta: dict[str, Any],
+    session_baseline: dict[str, Any] | None,
+    effective_character_anchor: str,
+    effective_location_anchor: str,
+    effective_style_anchor: str,
+    scene_id: str,
+) -> tuple[str, dict[str, Any]]:
+    cast_roles = ["character_1", "character_2", "character_3", "group", "animal"]
+    cast_entities = [role for role in cast_roles if refs_by_role.get(role)]
+    world_entities = [role for role in ["location"] if refs_by_role.get(role)]
+    style_entities = [role for role in ["style"] if refs_by_role.get(role)]
+    props_entities = [role for role in ["props"] if refs_by_role.get(role)]
+
+    role_blocks: list[str] = []
+    if cast_entities:
+        role_blocks.append(f"Cast/entity anchors (must be present and active): {', '.join(cast_entities)}.")
+    if world_entities:
+        role_blocks.append("World/location anchor is connected and must define environment identity.")
+    if style_entities:
+        role_blocks.append("Style anchor is connected and must define visual language, palette, weather and atmosphere.")
+    if props_entities:
+        role_blocks.append("Props/items anchor is connected and must preserve object identity.")
+
+    identity_lock_block = ""
+    if refs_by_role.get("character_1"):
+        identity_lock_block = "\n".join([
+            "IDENTITY LOCK (STRICT CHARACTER_1 ANCHOR):",
+            "- use character_1 reference as strict identity anchor",
+            "- preserve the same person identity",
+            "- keep face identity consistent with reference",
+            "- do not replace with a different person",
+            "- do not reinterpret as generic subject",
+            "- preserve gender presentation, approximate age, face structure, hair identity cues from reference",
+            "- cinematic variation is allowed, identity drift is not allowed",
+        ])
+
+    anti_collage_block = "\n".join([
+        "ANTI-COLLAGE / SINGLE-FRAME GUARDRAIL:",
+        "- single image only",
+        "- exactly one coherent photographic frame",
+        "- no collage",
+        "- no diptych",
+        "- no triptych",
+        "- no split screen",
+        "- no multi-panel composition",
+        "- no storyboard sheet",
+        "- no contact sheet",
+        "- no repeated copies of the subject",
+        "- no stacked frames",
+        "- no grid layout",
+        "- no multiple photos inside one image",
+    ])
+
+    continuity_value = continuity_input or str((planner_meta or {}).get("globalContinuity") or "").strip()
+    scene_goal_value = scene_goal or str((planner_meta or {}).get("storyMissionSummary") or "").strip()
+    planner_meta_preview = {
+        "storyControlMode": str((planner_meta or {}).get("storyControlMode") or "").strip(),
+        "timelineSource": str((planner_meta or {}).get("timelineSource") or "").strip(),
+        "narrativeSource": str((planner_meta or {}).get("narrativeSource") or "").strip(),
+    }
+
+    scene_meaning_block = "\n".join([
+        "SCENE MEANING:",
+        f"- scene delta: {scene_delta}",
+        f"- scene text/context: {scene_text or text_input or ''}",
+        f"- scene goal: {scene_goal_value}",
+        f"- scene narrative step: {scene_narrative_step}",
+    ])
+
+    continuity_block = "\n".join([
+        "CONTINUITY:",
+        f"- continuity constraints: {continuity_value}",
+        f"- session baseline: {json.dumps(session_baseline or {}, ensure_ascii=False)}",
+    ])
+
+    source_control_block = "\n".join([
+        "CONNECTED INPUTS (all connected sources must be consumed by role):",
+        f"- text input: {bool(text_input.strip())}",
+        f"- audio input: {bool(audio_url.strip())}",
+        f"- mode: {mode_input or ''}",
+        f"- style preset: {style_preset_input or style}",
+        f"- planner meta: {json.dumps(planner_meta_preview, ensure_ascii=False)}",
+        "- use audio as rhythm/emotion/timing influence when connected",
+        "- use text as semantic/narrative influence when connected",
+        "- use mode/style preset as cinematic interpretation layer when connected",
+        "- if any connected input is ignored this is a logic error",
+    ])
+
+    assembled_prompt = "\n\n".join([
+        scene_meaning_block,
+        continuity_block,
+        "CAST / ENTITY ANCHORS:\n" + ("\n".join(role_blocks) if role_blocks else "- none explicitly connected"),
+        "WORLD / LOCATION ANCHOR:\n" + f"- {effective_location_anchor or location_anchor}",
+        "STYLE ANCHOR:\n" + f"- {effective_style_anchor or style_anchor}",
+        "PROPS ANCHOR:\n" + ("- props/items connected and must be preserved" if props_entities else "- no explicit props refs"),
+        "CAMERA / COMPOSITION BLOCK:\n"
+        f"- style: {style}\n"
+        f"- lighting anchor: {lighting_anchor}\n"
+        f"- environment anchor: {environment_anchor}\n"
+        f"- weather anchor: {weather_anchor}\n"
+        f"- surface anchor: {surface_anchor}\n"
+        f"- world scale context: {world_scale_context}\n"
+        f"- entity scale anchors: {entity_scale_anchor_text}",
+        anti_collage_block,
+        identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
+        source_control_block,
+        "CHARACTER ANCHOR:\n" + f"- {effective_character_anchor or 'coherent single-character identity across all scenes'}",
+    ])
+
+    connected_summary = {
+        "refsByRole": {role: len(urls) for role, urls in refs_by_role.items()},
+        "connectedInputs": connected_inputs,
+        "activeRoles": sorted([role for role, urls in refs_by_role.items() if urls]),
+        "hasCharacter1Ref": bool(refs_by_role.get("character_1")),
+        "hasLocationRef": bool(refs_by_role.get("location")),
+        "hasStyleRef": bool(refs_by_role.get("style")),
+        "hasPropsRef": bool(refs_by_role.get("props")),
+        "hasAudio": bool(audio_url.strip()),
+        "hasText": bool(text_input.strip()),
+    }
+
+    consumed_inputs = set(["sceneDelta", "sceneText", "style", "continuity", "plannerMeta", "mode", "stylePreset", "audio", "text"])
+    for role, urls in refs_by_role.items():
+        if urls:
+            consumed_inputs.add(f"ref:{role}")
+
+    expected_connected = set()
+    refs_connected = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
+    if isinstance(refs_connected, dict):
+        for role, is_connected in refs_connected.items():
+            if is_connected:
+                expected_connected.add(f"ref:{role}")
+    if text_input.strip() or bool((connected_inputs or {}).get("hasText")):
+        expected_connected.add("text")
+    if audio_url.strip() or bool((connected_inputs or {}).get("hasAudio")):
+        expected_connected.add("audio")
+    if mode_input.strip() or bool((connected_inputs or {}).get("hasMode")):
+        expected_connected.add("mode")
+    if style_preset_input.strip() or bool((connected_inputs or {}).get("hasStylePreset")):
+        expected_connected.add("stylePreset")
+    if continuity_value:
+        expected_connected.add("continuity")
+    if planner_meta:
+        expected_connected.add("plannerMeta")
+
+    unused_connected_inputs = sorted(expected_connected - consumed_inputs)
+
+    debug = {
+        "sceneId": scene_id,
+        "connectedNodesSummary": connected_summary,
+        "refsByRole": refs_by_role,
+        "rolesActive": connected_summary["activeRoles"],
+        "identityLockBlockPreview": identity_lock_block,
+        "antiCollageBlockPreview": anti_collage_block,
+        "finalImagePromptPreview": _shorten_text(assembled_prompt, 1800),
+        "unusedConnectedInputs": unused_connected_inputs,
+    }
+    return assembled_prompt, debug
+
+
 @router.post("/clip/image")
 def clip_image(payload: ClipImageIn):
     scene_id = (payload.sceneId or "").strip()
@@ -4227,6 +4447,19 @@ def clip_image(payload: ClipImageIn):
     previous_continuity_memory = _sanitize_continuity_memory(getattr(refs_obj, "previousContinuityMemory", None))
     previous_scene_image_url = str(getattr(refs_obj, "previousSceneImageUrl", "") or "").strip()
     previous_scene_image_inline = _load_reference_image_inline(previous_scene_image_url) if previous_scene_image_url else None
+
+    comfy_refs_by_role = _clean_refs_by_role_for_image(getattr(refs_obj, "refsByRole", None))
+    connected_inputs = getattr(refs_obj, "connectedInputs", None)
+    connected_inputs = connected_inputs if isinstance(connected_inputs, dict) else {}
+    text_input = str(getattr(refs_obj, "text", "") or "").strip()
+    audio_input_url = str(getattr(refs_obj, "audioUrl", "") or "").strip()
+    mode_input = str(getattr(refs_obj, "mode", "") or "").strip()
+    style_preset_input = str(getattr(refs_obj, "stylePreset", "") or "").strip()
+    scene_goal_input = str(getattr(refs_obj, "sceneGoal", "") or "").strip()
+    scene_narrative_step_input = str(getattr(refs_obj, "sceneNarrativeStep", "") or "").strip()
+    continuity_input = str(getattr(refs_obj, "continuity", "") or "").strip()
+    planner_meta_input = getattr(refs_obj, "plannerMeta", None)
+    planner_meta_input = planner_meta_input if isinstance(planner_meta_input, dict) else {}
 
     character_images = []
     for ref_url in character_refs:
@@ -4491,6 +4724,38 @@ def clip_image(payload: ClipImageIn):
             "All visible objects must inherit environmental color contamination, haze, and weather response.\n"
             "Keep one world identity across clip shots: stable lighting logic, palette, atmosphere, weather, and material response."
         )
+
+        comfy_assembled_prompt, comfy_assembly_debug = _build_comfy_image_prompt_assembly(
+            scene_delta=scene_delta,
+            scene_text=scene_text,
+            style=style,
+            style_anchor=style_anchor,
+            lighting_anchor=lighting_anchor,
+            location_anchor=location_anchor,
+            environment_anchor=environment_anchor,
+            weather_anchor=weather_anchor,
+            surface_anchor=surface_anchor,
+            world_scale_context=world_scale_context,
+            entity_scale_anchor_text=entity_scale_anchor_text,
+            refs_by_role=comfy_refs_by_role,
+            connected_inputs=connected_inputs,
+            text_input=text_input,
+            audio_url=audio_input_url,
+            mode_input=mode_input,
+            style_preset_input=style_preset_input,
+            scene_goal=scene_goal_input,
+            scene_narrative_step=scene_narrative_step_input,
+            continuity_input=continuity_input,
+            planner_meta=planner_meta_input,
+            session_baseline=session_baseline if isinstance(session_baseline, dict) else None,
+            effective_character_anchor=effective_character_anchor,
+            effective_location_anchor=effective_location_anchor,
+            effective_style_anchor=effective_style_anchor,
+            scene_id=scene_id,
+        )
+        assembled_prompt = comfy_assembled_prompt
+        refs_debug["comfyAssemblyDebug"] = comfy_assembly_debug
+        print("[COMFY IMAGE ASSEMBLY]", json.dumps(comfy_assembly_debug, ensure_ascii=False))
 
         generation_mode = "continuity_chain" if previous_scene_image_inline else "baseline_only"
 
