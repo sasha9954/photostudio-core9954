@@ -1,0 +1,140 @@
+import json
+import logging
+from typing import Any
+
+from app.core.config import settings
+from app.engine.gemini_rest import post_generate_content
+
+logger = logging.getLogger(__name__)
+
+
+def _clean_refs_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, list[dict[str, str]]]:
+    roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+    src = refs_by_role if isinstance(refs_by_role, dict) else {}
+    out: dict[str, list[dict[str, str]]] = {}
+    for role in roles:
+        items = src.get(role)
+        clean = []
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    continue
+                clean.append({"url": url, "name": str(item.get("name") or "").strip()})
+        out[role] = clean
+    return out
+
+
+def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    mode = str(data.get("mode") or "clip").strip().lower()
+    if mode not in {"clip", "kino", "reklama", "scenario"}:
+        mode = "clip"
+    output = str(data.get("output") or "comfy image").strip().lower()
+    if output not in {"comfy image", "comfy text"}:
+        output = "comfy image"
+
+    return {
+        "mode": mode,
+        "output": output,
+        "stylePreset": str(data.get("stylePreset") or "realism").strip().lower(),
+        "freezeStyle": bool(data.get("freezeStyle")),
+        "text": str(data.get("text") or "").strip(),
+        "audioUrl": str(data.get("audioUrl") or "").strip(),
+        "refsByRole": _clean_refs_by_role(data.get("refsByRole")),
+        "storyControlMode": str(data.get("storyControlMode") or "").strip(),
+        "storyMissionSummary": str(data.get("storyMissionSummary") or "").strip(),
+        "timelineSource": str(data.get("timelineSource") or "").strip(),
+        "narrativeSource": str(data.get("narrativeSource") or "").strip(),
+    }
+
+
+def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
+    return (
+        "You are COMFY storyboard planner. Return strict JSON only.\n"
+        "Fields: ok, planMeta, globalContinuity, scenes, warnings, errors, debug.\n"
+        "Each scene must include: sceneId,title,sceneNarrativeStep,sceneGoal,storyMission,sceneOutputRule,"
+        "primaryRole,secondaryRoles,continuity,imagePrompt,videoPrompt.\n"
+        "Use TEXT as story mission, AUDIO as rhythm/emotional contour, refs as anchors, OUTPUT strategy as comfy image/text.\n"
+        f"INPUT={json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def _extract_text(resp: dict[str, Any]) -> str:
+    try:
+        parts = (((resp or {}).get("candidates") or [])[0].get("content") or {}).get("parts") or []
+        text_parts = [str(p.get("text") or "") for p in parts if isinstance(p, dict)]
+        return "\n".join([x for x in text_parts if x])
+    except Exception:
+        return ""
+
+
+def _extract_json(raw: str) -> dict[str, Any] | None:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if s.startswith("```"):
+        s = s.strip("`")
+        if s.startswith("json"):
+            s = s[4:]
+    try:
+        parsed = json.loads(s)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    start = s.find("{")
+    end = s.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(s[start:end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = normalize_comfy_payload(payload)
+    refs_presence = {k: len(v) for k, v in normalized["refsByRole"].items()}
+    logger.info("[COMFY PLAN] request summary mode=%s output=%s style=%s", normalized["mode"], normalized["output"], normalized["stylePreset"])
+    logger.info("[COMFY PLAN] text/audio/refs presence text=%s audio=%s refs=%s", bool(normalized["text"]), bool(normalized["audioUrl"]), refs_presence)
+
+    api_key = (settings.GEMINI_API_KEY or "").strip()
+    model = (settings.GEMINI_TEXT_MODEL or "gemini-2.5-flash").strip()
+    if not api_key:
+        return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["GEMINI_API_KEY missing"], "debug": {"normalizedPayload": normalized}}
+
+    body = {
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4},
+        "contents": [{"role": "user", "parts": [{"text": build_comfy_planner_prompt(normalized)}]}],
+    }
+    logger.info("[COMFY PLAN] gemini request start model=%s", model)
+    resp = post_generate_content(api_key, model, body, timeout=120)
+    raw = _extract_text(resp if isinstance(resp, dict) else {})
+    logger.info("[COMFY PLAN] gemini raw response %s", raw[:1500])
+
+    parsed = _extract_json(raw)
+    warnings = []
+    errors = []
+    if isinstance(resp, dict) and resp.get("__http_error__"):
+        errors.append(f"gemini_http_error:{resp.get('status')}")
+    if not isinstance(parsed, dict):
+        errors.append("gemini_invalid_json")
+        parsed = {}
+
+    scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
+    logger.info("[COMFY PLAN] normalized scenes count=%s", len(scenes))
+
+    result = {
+        "ok": len(errors) == 0,
+        "planMeta": parsed.get("planMeta") if isinstance(parsed.get("planMeta"), dict) else {"mode": normalized["mode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"]},
+        "globalContinuity": parsed.get("globalContinuity") if isinstance(parsed.get("globalContinuity"), (dict, str)) else {},
+        "scenes": scenes,
+        "warnings": (parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []) + warnings,
+        "errors": (parsed.get("errors") if isinstance(parsed.get("errors"), list) else []) + errors,
+        "debug": parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {"normalizedPayload": normalized, "geminiRaw": raw[:3000]},
+    }
+    logger.info("[COMFY PLAN] warnings/errors warnings=%s errors=%s", result["warnings"], result["errors"])
+    return result
