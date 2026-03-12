@@ -3474,6 +3474,18 @@ onClipSec: (nodeId, value) => {
                   ...summarizeComfyPayload(payload),
                 });
 
+                const comfyStoryTargets = (edgesRef.current || []).filter((e) => e.source === nodeId && e.sourceHandle === 'comfy_plan').map((e) => e.target);
+
+                setNodes((prev) => prev.map((x) => {
+                  if (x.id === nodeId) {
+                    return { ...x, data: { ...x.data, parseStatus: 'parsing', parsedAt: now } };
+                  }
+                  if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') {
+                    return { ...x, data: { ...x.data, parseStatus: 'updating' } };
+                  }
+                  return x;
+                }));
+
                 let response;
                 try {
                   if (USE_COMFY_MOCK) {
@@ -3486,14 +3498,22 @@ onClipSec: (nodeId, value) => {
                   console.log(`[COMFY PARSE #${parseId}] response`, summarizeComfyResponse(response));
                 } catch (err) {
                   console.error(`[COMFY PARSE #${parseId}] error`, err);
-                  setNodes((prev) => prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, parseStatus: "error", brainCritical: [String(err?.message || err)], brainWarnings: [] } } : x));
+                  setNodes((prev) => prev.map((x) => {
+                    if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: [String(err?.message || err)], brainWarnings: [] } };
+                    if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error' } };
+                    return x;
+                  }));
                   return;
                 } finally {
                   comfyParseInFlightRef.current.delete(nodeId);
                 }
 
                 if (!response?.ok) {
-                  setNodes((prev) => prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, parseStatus: "error", brainCritical: Array.isArray(response?.errors) ? response.errors : ["COMFY parse failed"], brainWarnings: Array.isArray(response?.warnings) ? response.warnings : [] } } : x));
+                  setNodes((prev) => prev.map((x) => {
+                    if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: Array.isArray(response?.errors) ? response.errors : ["COMFY parse failed"], brainWarnings: Array.isArray(response?.warnings) ? response.warnings : [] } };
+                    if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error' } };
+                    return x;
+                  }));
                   return;
                 }
 
@@ -3508,7 +3528,7 @@ onClipSec: (nodeId, value) => {
                       ...x,
                       data: {
                         ...x.data,
-                        parseStatus: 'готово',
+                        parseStatus: 'ready',
                         parsedAt: now,
                         mockScenes: scenes,
                         lastPlannerMeta: { ...plannerMeta, globalContinuity, debugFields },
@@ -3521,7 +3541,6 @@ onClipSec: (nodeId, value) => {
                   return x;
                 }));
 
-                const comfyStoryTargets = (edgesRef.current || []).filter((e) => e.source === nodeId && e.sourceHandle === 'comfy_plan').map((e) => e.target);
                 if (comfyStoryTargets.length) {
                   setNodes((prev) => prev.map((x) => (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard')
                     ? {
@@ -3797,6 +3816,11 @@ const hydrate = useCallback(() => {
 
           if (n.type === "comfyBrain") {
             data.audioStoryMode = normalizeAudioStoryMode(data.audioStoryMode || "lyrics_music");
+            data.parseStatus = ["idle", "parsing", "ready", "error"].includes(String(data.parseStatus || "")) ? data.parseStatus : "idle";
+          }
+
+          if (n.type === "comfyStoryboard") {
+            data.parseStatus = ["idle", "updating", "ready", "error"].includes(String(data.parseStatus || "")) ? data.parseStatus : "idle";
           }
 
           if (n.type === "audioNode") {
@@ -3945,7 +3969,7 @@ const hydrate = useCallback(() => {
     } else if (type === "comfyBrain") {
       node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', output: 'comfy image', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
     } else if (type === "comfyStoryboard") {
-      node = { id, type: "comfyStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mockScenes: [], sceneCount: 0, mode: 'clip' } };
+      node = { id, type: "comfyStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mockScenes: [], sceneCount: 0, mode: 'clip', parseStatus: 'idle' } };
     } else if (type === "comfyVideoPreview") {
       node = { id, type: "comfyVideoPreview", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { previewStatus: 'idle', previewUrl: '', workflowPreset: 'comfy-default', format: '9:16', duration: 0 } };
     } else if (type === "refCharacter2") {

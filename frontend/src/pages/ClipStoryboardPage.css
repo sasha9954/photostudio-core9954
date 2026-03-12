@@ -276,7 +276,12 @@
   background: rgba(255, 255, 255, 0.08);
 }
 
-
+.clipSB_btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.66;
+  background: rgba(77, 216, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(77, 216, 255, 0.24);
+}
 
 .clipSB_btnLink {
   display: inline-flex;
@@ -1294,6 +1299,41 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_nodeComfyBrain { --node-accent: rgba(77, 216, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(77,216,255,.24), 0 0 22px rgba(77,216,255,.18); }
 .clipSB_nodeComfyStoryboard { --node-accent: rgba(106, 168, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(106,168,255,.24), 0 0 22px rgba(106,168,255,.18); }
 .clipSB_nodeComfyVideo { --node-accent: rgba(125, 249, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(125,249,255,.24), 0 0 22px rgba(125,249,255,.18); }
+
+@keyframes clipSBComfyNodePulse {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(77,216,255,.32), 0 0 16px rgba(77,216,255,.22); }
+  50% { box-shadow: inset 0 0 0 1px rgba(77,216,255,.55), 0 0 28px rgba(77,216,255,.35); }
+}
+
+.clipSB_nodeComfyBrainStateParsing {
+  --node-accent: rgba(77, 216, 255, 0.95);
+  animation: clipSBComfyNodePulse 1.5s ease-in-out infinite;
+}
+
+.clipSB_nodeComfyBrainStateReady {
+  --node-accent: rgba(147, 221, 111, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(147,221,111,.28), 0 0 22px rgba(147,221,111,.2);
+}
+
+.clipSB_nodeComfyBrainStateError {
+  --node-accent: rgba(255, 120, 120, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(255,120,120,.28), 0 0 20px rgba(255,120,120,.22);
+}
+
+.clipSB_nodeComfyStoryboardStateUpdating {
+  --node-accent: rgba(106, 168, 255, 0.95);
+  animation: clipSBComfyNodePulse 1.5s ease-in-out infinite;
+}
+
+.clipSB_nodeComfyStoryboardStateReady {
+  --node-accent: rgba(147, 221, 111, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(147,221,111,.28), 0 0 22px rgba(147,221,111,.2);
+}
+
+.clipSB_nodeComfyStoryboardStateError {
+  --node-accent: rgba(255, 120, 120, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(255,120,120,.28), 0 0 20px rgba(255,120,120,.22);
+}
 .clipSB_nodeRef2 { --node-accent: rgba(0, 188, 212, 0.78); box-shadow: inset 0 0 0 1px rgba(0,188,212,.24), 0 0 18px rgba(0,188,212,.18); }
 .clipSB_nodeRef3 { --node-accent: rgba(38, 198, 218, 0.78); box-shadow: inset 0 0 0 1px rgba(38,198,218,.24), 0 0 18px rgba(38,198,218,.18); }
 .clipSB_nodeRefAnimal { --node-accent: rgba(255, 183, 77, 0.78); box-shadow: inset 0 0 0 1px rgba(255,183,77,.24), 0 0 18px rgba(255,183,77,.18); }
