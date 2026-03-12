@@ -26,6 +26,7 @@ import {
 } from "./clip_nodes/comfy";
 import {
   normalizeRenderProfile,
+  normalizeAudioStoryMode,
   deriveSceneRoles,
   canGenerateComfyImage,
   inferPropAnchorLabel,
@@ -1585,6 +1586,7 @@ export default function ClipStoryboardPage() {
       mode: payload?.mode || "",
       output: payload?.output || "",
       stylePreset: payload?.stylePreset || "",
+      audioStoryMode: payload?.audioStoryMode || "lyrics_music",
       hasText: !!String(payload?.text || "").trim(),
       hasAudio: !!String(payload?.audioUrl || "").trim(),
       refsCounts,
@@ -3322,6 +3324,9 @@ onClipSec: (nodeId, value) => {
             if (derived.storyControlMode === 'text_override' && derived.meaningfulAudio) warnings.push('TEXT задаёт сюжет; AUDIO используется для ритма/эмоционального контура');
             if (derived.storyControlMode === 'audio_enhanced_by_text') warnings.push('AUDIO даёт story backbone; TEXT усиливает драму и акценты');
             if (derived.storyControlMode === 'hybrid_balanced') warnings.push('Сюжет формируется совместно из AUDIO и TEXT');
+            if (derived.audioStoryMode === 'lyrics_music' && derived.meaningfulAudio) warnings.push('Audio story mode: lyrics+music (можно использовать смысл слов песни).');
+            if (derived.audioStoryMode === 'music_only' && derived.meaningfulAudio) warnings.push('Audio story mode: music_only (lyrics игнорируются, сюжет только из музыки/энергии).');
+            if (derived.audioStoryMode === 'music_plus_text' && derived.meaningfulAudio) warnings.push('Audio story mode: music_plus_text (lyrics игнорируются, сюжет берётся из TEXT).');
             if (derived.outputValue === 'comfy text' && !String(derived.meaningfulText || '').trim()) warnings.push('Для comfy text желательно добавить richer text prompt');
             if (derived.modeValue === 'reklama' && !derived.meaningfulText) warnings.push('Для reklama желательно добавить рекламный тезис в TEXT');
 
@@ -3348,6 +3353,7 @@ onClipSec: (nodeId, value) => {
               timelineSource: derived.timelineSource,
               storyControlMode: derived.storyControlMode,
               storyMissionSummary: derived.storyMissionSummary,
+              audioStoryMode: derived.audioStoryMode,
               textNarrativeRole: derived.narrativeRoles.textNarrativeRole,
               audioNarrativeRole: derived.narrativeRoles.audioNarrativeRole,
               modeIntent: derived.modeSemantics.modeIntent,
@@ -3377,6 +3383,7 @@ onClipSec: (nodeId, value) => {
               styleCompact: `${derived.stylePreset}${derived.refsByRole.style.length ? ' + ref' : ''}`,
               sourceArbitration: `${derived.narrativeSource} • ${derived.storyControlMode}`,
               storyMissionSummary: derived.storyMissionSummary,
+              audioStoryMode: derived.audioStoryMode,
               outputMode: derived.outputValue,
               modeBias: derived.modeSemantics.modePromptBias,
               planningStyle: derived.modeSemantics.planningMindset,
@@ -3423,6 +3430,7 @@ onClipSec: (nodeId, value) => {
               onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
               onMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x))),
               onOutput: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, output: normalizeRenderProfile(value) } } : x))),
+              onAudioStoryMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, audioStoryMode: normalizeAudioStoryMode(value) } } : x))),
               onStyle: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, styleKey: value } } : x))),
               onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
               onParse: async (nodeId) => {
@@ -3455,6 +3463,7 @@ onClipSec: (nodeId, value) => {
                   refsByRole: freshDerived.refsByRole,
                   storyControlMode: freshDerived.storyControlMode,
                   storyMissionSummary: freshDerived.storyMissionSummary,
+                  audioStoryMode: freshDerived.audioStoryMode,
                   timelineSource: freshDerived.timelineSource,
                   narrativeSource: freshDerived.narrativeSource,
                 };
@@ -3467,7 +3476,7 @@ onClipSec: (nodeId, value) => {
                 let response;
                 try {
                   if (USE_COMFY_MOCK) {
-                    const plannerMeta = { plannerInput: payload, mode: payload.mode, output: payload.output, stylePreset: payload.stylePreset, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
+                    const plannerMeta = { plannerInput: payload, mode: payload.mode, output: payload.output, stylePreset: payload.stylePreset, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, audioStoryMode: payload.audioStoryMode, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
                     const scenes = buildMockComfyScenes(plannerMeta);
                     response = { ok: true, planMeta: plannerMeta, globalContinuity: scenes[0]?.plannerMeta?.globalContinuity || "", scenes, warnings: plannerMeta.warnings, errors: [], debug: {} };
                   } else {
@@ -3527,6 +3536,7 @@ onClipSec: (nodeId, value) => {
                           timelineSource: freshDerived.timelineSource,
                           storyControlMode: freshDerived.storyControlMode,
                           storyMissionSummary: freshDerived.storyMissionSummary,
+                          audioStoryMode: freshDerived.audioStoryMode,
                           textNarrativeRole: freshDerived.narrativeRoles.textNarrativeRole,
                           audioNarrativeRole: freshDerived.narrativeRoles.audioNarrativeRole,
                           warnings: Array.isArray(response?.warnings) ? response.warnings : [],
@@ -3928,7 +3938,7 @@ const hydrate = useCallback(() => {
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else if (type === "comfyBrain") {
-      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', output: 'comfy image', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
+      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', output: 'comfy image', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
     } else if (type === "comfyStoryboard") {
       node = { id, type: "comfyStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mockScenes: [], sceneCount: 0, mode: 'clip' } };
     } else if (type === "comfyVideoPreview") {

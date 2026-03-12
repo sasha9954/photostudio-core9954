@@ -1,4 +1,5 @@
 const RENDER_PROFILE_OPTIONS = ["comfy image", "comfy text"];
+export const AUDIO_STORY_MODE_OPTIONS = ["lyrics_music", "music_only", "music_plus_text"];
 
 const REFERENCE_HANDLE_TO_ROLE = {
   ref_character_1: "character_1",
@@ -20,6 +21,11 @@ const STORY_ENHANCEMENT_MARKERS = ["усили", "усилить", "enhance", "i
 export function normalizeRenderProfile(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return RENDER_PROFILE_OPTIONS.includes(normalized) ? normalized : "comfy image";
+}
+
+export function normalizeAudioStoryMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return AUDIO_STORY_MODE_OPTIONS.includes(normalized) ? normalized : "lyrics_music";
 }
 
 export function normalizeRoleList(input = []) {
@@ -157,6 +163,7 @@ export function buildMockComfyScenes(meta = {}) {
     storyMissionSummary: String(plannerInput?.storyMissionSummary || meta?.storyMissionSummary || ""),
     textNarrativeRole: String(plannerInput?.textNarrativeRole || meta?.textNarrativeRole || ""),
     audioNarrativeRole: String(plannerInput?.audioNarrativeRole || meta?.audioNarrativeRole || ""),
+    audioStoryMode: normalizeAudioStoryMode(plannerInput?.audioStoryMode || meta?.audioStoryMode || "lyrics_music"),
   };
   plannerMeta.globalContinuity = buildComfyGlobalContinuity({ plannerInput, refsByRole: plannerInput?.refsByRole || {}, sceneRoleModel: plannerMeta.sceneRoleModel });
   return buildComfyScenesFromPlanner({ plannerInput, plannerMeta });
@@ -205,6 +212,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const textNode = pickConnectedNode("text");
   const modeValue = String(nodeData?.mode || "clip").toLowerCase();
   const outputValue = normalizeRenderProfile(nodeData?.output || "comfy image");
+  const audioStoryMode = normalizeAudioStoryMode(nodeData?.audioStoryMode || "lyrics_music");
   const stylePreset = String(nodeData?.styleKey || "realism").toLowerCase();
   const freezeStyle = !!nodeData?.freezeStyle;
   const meaningfulAudio = audioNode?.type === "audioNode" ? String(audioNode?.data?.audioUrl || "").trim() : "";
@@ -220,6 +228,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   return {
     modeValue,
     outputValue,
+    audioStoryMode,
     stylePreset,
     freezeStyle,
     meaningfulText,
@@ -243,6 +252,7 @@ export function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } 
     storyControlMode: plannerInput.storyControlMode,
     narrativeSource: plannerInput.narrativeSource,
     timelineSource: plannerInput.timelineSource,
+    audioStoryMode: plannerInput.audioStoryMode,
     warnings: plannerMeta.warnings || [],
     globalContinuity: plannerMeta.globalContinuity || "",
     primaryRole: plannerMeta?.sceneRoleModel?.primarySubject || "character_1",

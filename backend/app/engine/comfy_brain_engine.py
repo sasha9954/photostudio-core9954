@@ -39,9 +39,14 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     if output not in {"comfy image", "comfy text"}:
         output = "comfy image"
 
+    audio_story_mode = str(data.get("audioStoryMode") or "lyrics_music").strip().lower()
+    if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text"}:
+        audio_story_mode = "lyrics_music"
+
     return {
         "mode": mode,
         "output": output,
+        "audioStoryMode": audio_story_mode,
         "stylePreset": str(data.get("stylePreset") or "realism").strip().lower(),
         "freezeStyle": bool(data.get("freezeStyle")),
         "text": str(data.get("text") or "").strip(),
@@ -55,9 +60,23 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
+    audio_story_mode = str(payload.get("audioStoryMode") or "lyrics_music").strip().lower()
+    if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text"}:
+        audio_story_mode = "lyrics_music"
+
+    audio_story_rules = (
+        "AUDIO STORY MODE RULES (STRICT):\n"
+        "- lyrics_music: if track has vocals/lyrics, use lyrics meaning as narrative driver; align scenes to verses/chorus while also using music rhythm and energy.\n"
+        "- music_only: ignore lyrics meaning completely even when vocals exist; build scenes only from rhythm/tempo/energy/dynamics/mood; do not derive plot from sung words.\n"
+        "- music_plus_text: ignore lyrics meaning completely; use AUDIO only for rhythm/emotion/edit pace; derive story beats from TEXT node and keep REFS continuity. If TEXT is empty, build neutral non-lyrics storyboard from music energy.\n"
+        "- If mode is music_only or music_plus_text, never pretend lyrics control story."
+    )
+
     return (
         "You are COMFY storyboard planner. Return strict JSON only.\n"
         "Fields: ok, planMeta, globalContinuity, scenes, warnings, errors, debug.\n"
+        f"Selected audioStoryMode={audio_story_mode}.\n"
+        f"{audio_story_rules}\n"
         "AUDIO is primary source for rhythm, emotional contour, dramatic shifts and timing.\n"
         "TEXT is optional support that clarifies intent.\n"
         "REFS are optional anchors for character/location/style/props continuity.\n"
@@ -241,7 +260,12 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
 
     result = {
         "ok": len(all_errors) == 0,
-        "planMeta": parsed.get("planMeta") if isinstance(parsed.get("planMeta"), dict) else {"mode": normalized["mode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"]},
+        "planMeta": (
+            {
+                **({"mode": normalized["mode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"], "audioStoryMode": normalized["audioStoryMode"]}),
+                **(parsed.get("planMeta") if isinstance(parsed.get("planMeta"), dict) else {}),
+            }
+        ),
         "globalContinuity": parsed.get("globalContinuity") if isinstance(parsed.get("globalContinuity"), (dict, str)) else {},
         "scenes": scenes,
         "warnings": (parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []) + warnings,
