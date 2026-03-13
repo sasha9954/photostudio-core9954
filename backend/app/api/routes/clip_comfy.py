@@ -51,21 +51,25 @@ class ClipComfyConnectRefsIn(BaseModel):
 def _build_character_1_label(profile: dict[str, Any] | None) -> str:
     source = profile if isinstance(profile, dict) else {}
     visual_profile = source.get("visualProfile") if isinstance(source.get("visualProfile"), dict) else {}
-    gender = str(visual_profile.get("genderPresentation") or "").strip().lower()
-    age = str(visual_profile.get("ageRange") or "").strip()
+    raw_gender = (
+        visual_profile.get("genderPresentation")
+        or source.get("genderPresentation")
+        or visual_profile.get("gender")
+        or source.get("gender")
+        or ""
+    )
+    gender = str(raw_gender).strip().lower()
 
-    male_tokens = {"male", "man", "masculine", "муж", "мужчина", "парень"}
-    female_tokens = {"female", "woman", "feminine", "жен", "женщина", "девушка"}
+    female_tokens = {"female", "woman", "girl", "feminine", "жен", "женщина", "девушка"}
+    male_tokens = {"male", "man", "boy", "masculine", "муж", "мужчина", "парень"}
 
-    if any(token in gender for token in male_tokens):
-        base = "мужчина"
-    elif any(token in gender for token in female_tokens):
+    if any(token in gender for token in female_tokens):
         base = "женщина"
+    elif any(token in gender for token in male_tokens):
+        base = "мужчина"
     else:
         base = "персонаж"
 
-    if age:
-        return f"{base}, {age}"
     return base
 
 
@@ -124,12 +128,22 @@ async def clip_comfy_connect_refs(payload: ClipComfyConnectRefsIn) -> dict[str, 
 
     reference_profiles = build_reference_profiles({"character_1": character_1_items})
     character_1_profile = reference_profiles.get("character_1") if isinstance(reference_profiles.get("character_1"), dict) else {}
+    raw_gender_presentation = ""
+    if isinstance(character_1_profile.get("visualProfile"), dict):
+        raw_gender_presentation = str(character_1_profile.get("visualProfile", {}).get("genderPresentation") or "")
+    short_label = _build_character_1_label(character_1_profile)
+    logger.info(
+        "[clip_comfy_connect_refs] character_1 rawGenderPresentation=%s resolvedLabel=%s",
+        raw_gender_presentation,
+        short_label,
+    )
+
     return {
         "ok": True,
         "connectedRefsSummary": [
             {
                 "role": "character_1",
-                "label": _build_character_1_label(character_1_profile),
+                "label": short_label,
             }
         ],
         "referenceProfiles": {
