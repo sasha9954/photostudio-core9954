@@ -831,6 +831,7 @@ function normalizeRefNodeData(data = {}, kindHint = "") {
     ...normalized,
     refStatus,
     refShortLabel,
+    refDetailsOpen: !!normalized?.refDetailsOpen,
     refHiddenProfile: normalized?.refHiddenProfile && typeof normalized.refHiddenProfile === "object" ? normalized.refHiddenProfile : null,
     refAnalysisError: refStatus === "error" ? String(normalized?.refAnalysisError || "").trim() : "",
     refAnalyzedAt: String(normalized?.refAnalyzedAt || "").trim(),
@@ -3825,15 +3826,35 @@ onClipSec: (nodeId, value) => {
           };
         }
 
-        if (n.type === "refNode") {
+        if (["refNode", "refCharacter2", "refCharacter3", "refAnimal", "refGroup"].includes(n.type)) {
+          const normalizedRefData = n.type === "refNode"
+            ? normalizeRefNodeData(base.data || {}, base?.data?.kind || "")
+            : {
+              ...base.data,
+              refs: Array.isArray(base?.data?.refs)
+                ? base.data.refs
+                  .map((item) => ({
+                    url: String(item?.url || "").trim(),
+                    name: String(item?.name || "").trim(),
+                    type: String(item?.type || "").trim(),
+                  }))
+                  .filter((item) => !!item.url)
+                  .slice(0, 5)
+                : [],
+              refStatus: deriveRefNodeStatus({ ...(base?.data || {}), refs: Array.isArray(base?.data?.refs) ? base.data.refs : [] }),
+              refShortLabel: String(base?.data?.refShortLabel || "").trim(),
+              refDetailsOpen: !!base?.data?.refDetailsOpen,
+              refHiddenProfile: base?.data?.refHiddenProfile && typeof base.data.refHiddenProfile === "object" ? base.data.refHiddenProfile : null,
+              refAnalysisError: String(base?.data?.refAnalysisError || "").trim(),
+            };
           return {
             ...base,
             data: {
-              ...normalizeRefNodeData(base.data || {}, base?.data?.kind || ""),
+              ...normalizedRefData,
               onPickImage: async (nodeId, file) => {
                 const pickedFiles = Array.isArray(file) ? file : (file ? [file] : []);
                 if (!pickedFiles.length) return;
-                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: true } } : x)));
+                setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: true } } : x))));
                 try {
                   const targetNode = nodesRef.current.find((x) => x.id === nodeId);
                   const maxFiles = targetNode?.data?.kind === "ref_style" ? 1 : 5;
@@ -3853,14 +3874,14 @@ onClipSec: (nodeId, value) => {
                         const nextRefs = nextMax === 1
                           ? [{ url, name: out?.name || oneFile.name }]
                           : nextPrevRefs.concat({ url, name: out?.name || oneFile.name }).slice(0, nextMax);
-                        return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refHiddenProfile: null, refAnalysisError: "" } };
+                        return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refDetailsOpen: false, refHiddenProfile: null, refAnalysisError: "" } };
                       }));
                     } catch (err) {
                       console.error(err);
                     }
                   }
                 } finally {
-                  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: false } } : x)));
+                  setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: false } } : x))));
                 }
               },
               onConfirmAdd: async (nodeId) => {
@@ -3868,24 +3889,27 @@ onClipSec: (nodeId, value) => {
                 const refs = normalizeRefData(node?.data || {}, node?.data?.kind || "").refs;
                 const role = resolveRefRoleForNode(node);
                 if (!refs.length || !role) return;
-                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x)));
+                setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x))));
                 try {
                   const response = await fetchJson(`/api/clip/comfy/analyze-ref-node`, { method: "POST", body: { role, refs } });
-                  setNodes((prev) => prev.map((x) => (x.id === nodeId
-                    ? { ...x, data: { ...x.data, refStatus: "ready", refShortLabel: String(response?.shortLabel || "").trim(), refHiddenProfile: response?.profile && typeof response.profile === "object" ? response.profile : null, refAnalysisError: "", refAnalyzedAt: new Date().toISOString() } }
-                    : x)));
+                  setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId
+                    ? { ...x, data: { ...x.data, refStatus: "ready", refShortLabel: String(response?.shortLabel || "").trim(), refDetailsOpen: false, refHiddenProfile: response?.profile && typeof response.profile === "object" ? response.profile : null, refAnalysisError: "", refAnalyzedAt: new Date().toISOString() } }
+                    : x))));
                 } catch (err) {
                   console.error(err);
-                  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x)));
+                  setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x))));
                 }
               },
               onRemoveImage: (nodeId, idx) => {
-                setNodes((prev) => prev.map((x) => {
+                setNodes((prev) => bindHandlers(prev.map((x) => {
                   if (x.id !== nodeId) return x;
                   const prevRefs = normalizeRefData(x?.data || {}, x?.data?.kind || "").refs;
                   const nextRefs = prevRefs.filter((_, i) => i !== idx);
-                  return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refHiddenProfile: null, refAnalysisError: "" } };
-                }));
+                  return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refDetailsOpen: false, refHiddenProfile: null, refAnalysisError: "" } };
+                })));
+              },
+              onToggleDetails: (nodeId) => {
+                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refDetailsOpen: !x?.data?.refDetailsOpen } } : x)));
               },
             },
           };
@@ -4430,6 +4454,10 @@ return base;
     ]
   );
 
+  useEffect(() => {
+    setNodes((prev) => bindHandlers(prev));
+  }, [edges, bindHandlers, setNodes]);
+
 const hydrate = useCallback(() => {
     // IMPORTANT: we always have an accountKey (fallback to "guest"), so persistence works even before auth init.
     didHydrateRef.current = false;
@@ -4566,6 +4594,7 @@ const hydrate = useCallback(() => {
                 uploading: false,
                 refStatus: deriveRefNodeStatus({ ...data, refs }),
                 refShortLabel: String(data?.refShortLabel || "").trim(),
+                refDetailsOpen: !!data?.refDetailsOpen,
                 refHiddenProfile: data?.refHiddenProfile && typeof data.refHiddenProfile === "object" ? data.refHiddenProfile : null,
                 refAnalysisError: String(data?.refAnalysisError || "").trim(),
               },

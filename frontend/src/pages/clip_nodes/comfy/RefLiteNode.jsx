@@ -9,6 +9,60 @@ const REF_STATUS_LABELS = {
   error: "ошибка",
 };
 
+function formatRefProfileDetails(profile) {
+  if (!profile || typeof profile !== "object") return [];
+
+  const scalar = (value) => {
+    if (value === null || value === undefined) return "";
+    if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+    if (typeof value === "object") {
+      return Object.values(value).flatMap((item) => (Array.isArray(item) ? item : [item])).map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+    }
+    return String(value).trim();
+  };
+
+  const pick = (...keys) => keys.map((key) => scalar(profile?.[key])).find(Boolean) || "";
+  const type = String(profile?.type || profile?.kind || "").toLowerCase();
+
+  const pushLine = (label, value, acc) => {
+    const normalized = scalar(value);
+    if (normalized) acc.push(`- ${label}: ${normalized}`);
+  };
+
+  const lines = [];
+  pushLine("тип", pick("type", "kind", "entityType", "category"), lines);
+
+  if (type.includes("human") || type.includes("person") || type.includes("character") || type.includes("человек")) {
+    pushLine("пол/подача", pick("genderPresentation", "gender", "presentation", "sex"), lines);
+    pushLine("возраст", pick("age", "ageRange"), lines);
+    pushLine("волосы", pick("hair", "hairStyle"), lines);
+    pushLine("одежда", pick("clothing", "outfit", "wardrobe"), lines);
+    pushLine("особенности", pick("features", "distinctiveFeatures", "marks"), lines);
+  } else if (type.includes("animal") || type.includes("pet") || type.includes("живот")) {
+    pushLine("вид", pick("species", "animalType", "breed"), lines);
+    pushLine("окрас", pick("color", "coatColor", "furColor"), lines);
+    pushLine("особенности", pick("features", "distinctiveFeatures", "marks"), lines);
+  } else if (type.includes("location") || type.includes("place") || type.includes("локац")) {
+    pushLine("место", pick("place", "location", "scene", "setting"), lines);
+    pushLine("поверхность", pick("surface", "ground"), lines);
+    pushLine("окружение", pick("environment", "surroundings", "context"), lines);
+  } else if (type.includes("style") || type.includes("aesthetic") || type.includes("стил")) {
+    pushLine("направление", pick("direction", "styleDirection", "genre"), lines);
+    pushLine("свет", pick("lighting", "light"), lines);
+    pushLine("атмосфера", pick("mood", "atmosphere"), lines);
+  } else {
+    pushLine("категория", pick("category", "itemType", "objectType"), lines);
+    pushLine("цвет", pick("color", "palette"), lines);
+    pushLine("материал", pick("material", "materials"), lines);
+    pushLine("форма", pick("shape", "form"), lines);
+  }
+
+  if (lines.length) return lines;
+  return Object.entries(profile)
+    .filter(([, value]) => value !== null && value !== undefined && String(scalar(value)).trim())
+    .map(([key, value]) => `- ${key}: ${scalar(value)}`);
+}
+
 export default function RefLiteNode({ id, data, title, className, handleId }) {
   const inputRef = useRef(null);
   const maxFiles = 5;
@@ -18,6 +72,9 @@ export default function RefLiteNode({ id, data, title, className, handleId }) {
   const isDraft = refStatus === "draft";
   const isError = refStatus === "error";
   const shortLabel = String(data?.refShortLabel || "").trim();
+  const detailsOpen = !!data?.refDetailsOpen;
+  const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
+  const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
 
   const openPicker = () => { if (canAddMore) inputRef.current?.click(); };
   const onInputChange = async (e) => { const files = Array.from(e.target.files || []); if (files.length) await data?.onPickImage?.(id, files); e.target.value = ""; };
@@ -29,6 +86,16 @@ export default function RefLiteNode({ id, data, title, className, handleId }) {
       {isDraft ? <div className="clipSB_refWarningBadge">⚠ Нажмите «Добавить», чтобы подтвердить реф</div> : null}
       {isError ? <div className="clipSB_refErrorBadge">⚠ {String(data?.refAnalysisError || "Не удалось проанализировать реф")}</div> : null}
       {refStatus === "ready" && shortLabel ? <div className="clipSB_refReadyBadge">label: {shortLabel}</div> : null}
+      {canToggleDetails ? (
+        <button className="clipSB_refToggleDetails" onClick={() => data?.onToggleDetails?.(id)}>
+          {detailsOpen ? "Скрыть описание" : "Показать описание"}
+        </button>
+      ) : null}
+      {canToggleDetails && detailsOpen ? (
+        <div className="clipSB_refDetailsBox">
+          {detailsLines.map((line, idx) => <div key={`${id}-details-${idx}`} className="clipSB_refDetailsLine">{line}</div>)}
+        </div>
+      ) : null}
       <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => <div className="clipSB_refThumb" key={`${item.url}-${idx}`}><button className="clipSB_refLiteOpen" onClick={() => data?.onOpenLightbox?.(item.url)} title="Открыть фото"><img src={resolveAssetUrl(item.url)} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" /></button><button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button></div>)}{canAddMore ? <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">+</button> : null}</div>}</div>
       <div style={{ display: "flex", gap: 8 }}>
         <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading || refStatus === "loading"}>{data?.uploading ? "Загрузка…" : refs.length ? "Добавить фото" : "Загрузить фото"}</button>
