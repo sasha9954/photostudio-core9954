@@ -3951,6 +3951,51 @@ onClipSec: (nodeId, value) => {
               onAudioStoryMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, audioStoryMode: normalizeAudioStoryMode(value) } } : x))),
               onStyle: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, styleKey: value } } : x))),
               onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
+              onConnectRefs: async (nodeId) => {
+                setNodes((prev) => prev.map((x) => (x.id === nodeId
+                  ? { ...x, data: { ...x.data, refsConnectStatus: "loading" } }
+                  : x)));
+                try {
+                  const brainNode = nodesRef.current.find((x) => x.id === nodeId);
+                  if (!brainNode || brainNode.type !== "comfyBrain") return;
+                  const liveDerived = deriveComfyBrainState({
+                    nodeId,
+                    nodeData: brainNode.data || {},
+                    nodesNow: nodesRef.current || [],
+                    edgesNow: edgesRef.current || [],
+                    normalizeRefDataFn: normalizeRefData,
+                  });
+                  const refsPayload = {
+                    refsByRole: {
+                      character_1: Array.isArray(liveDerived?.refsByRole?.character_1) ? liveDerived.refsByRole.character_1 : [],
+                    },
+                  };
+                  const response = await fetchJson(`/api/clip/comfy/connect-refs`, { method: "POST", body: refsPayload });
+                  const connectedRefsSummary = Array.isArray(response?.connectedRefsSummary) ? response.connectedRefsSummary : [];
+                  const hiddenRefProfiles = response?.referenceProfiles && typeof response.referenceProfiles === "object" ? response.referenceProfiles : {};
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId
+                    ? {
+                        ...x,
+                        data: {
+                          ...x.data,
+                          refsConnectStatus: "ready",
+                          connectedRefsSummary,
+                          hiddenReferenceProfiles: hiddenRefProfiles,
+                          plannerMeta: {
+                            ...(x?.data?.plannerMeta || {}),
+                            connectedRefsSummary,
+                            referenceProfiles: hiddenRefProfiles,
+                          },
+                        },
+                      }
+                    : x)));
+                } catch (err) {
+                  console.error(err);
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId
+                    ? { ...x, data: { ...x.data, refsConnectStatus: "error", connectedRefsSummary: [] } }
+                    : x)));
+                }
+              },
               onParse: async (nodeId) => {
                 if (comfyParseInFlightRef.current.has(nodeId)) {
                   console.info("[COMFY PARSE] skip duplicate run node=%s", nodeId);

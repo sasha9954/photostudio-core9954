@@ -21,6 +21,9 @@ export default function ComfyBrainNode({ id, data }) {
         ? "ошибка"
         : "ожидание";
   const parseButtonLabel = isParsing ? "Разбираю..." : "Разобрать";
+  const refsConnectStatus = data?.refsConnectStatus || "idle";
+  const isConnectingRefs = refsConnectStatus === "loading";
+  const connectedRefsSummary = Array.isArray(data?.connectedRefsSummary) ? data.connectedRefsSummary : [];
   const parseHint = isParsing
     ? "Идёт анализ аудио и построение сцен. Повторный запуск временно заблокирован."
     : isReady
@@ -57,7 +60,19 @@ export default function ComfyBrainNode({ id, data }) {
       <div className="clipSB_small" style={{ marginTop: 8 }}>status: {statusLabel}{data?.parsedAt ? ` • ${data.parsedAt}` : ""}</div>
       <div className="clipSB_selectHint" style={{ marginTop: 6 }}>{parseHint}</div>
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <button className="clipSB_btn" onClick={() => data?.onConnectRefs?.(id)} disabled={isConnectingRefs || isParsing}>{isConnectingRefs ? "Подключаю..." : "Подключить рефы"}</button>
         <button className="clipSB_btn" onClick={() => data?.onParse?.(id)} disabled={isParsing}>{parseButtonLabel}</button>
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <div className="clipSB_brainLabel">Подключённые рефы</div>
+        {connectedRefsSummary.length ? (
+          connectedRefsSummary.map((item, idx) => (
+            <div key={`${item?.role || "role"}-${idx}`} className="clipSB_small">{String(item?.role || "ref")} — {String(item?.label || "персонаж")}</div>
+          ))
+        ) : (
+          <div className="clipSB_small">Рефы не подключены</div>
+        )}
       </div>
     </NodeShell>
   </>);
