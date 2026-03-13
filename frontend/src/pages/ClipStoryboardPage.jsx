@@ -4032,6 +4032,29 @@ onClipSec: (nodeId, value) => {
             normalizeRefDataFn: normalizeRefData,
           });
           const presentation = buildComfyBrainPresentation(derived);
+          const roleOrder = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"];
+          const refConnectionStates = derived?.refConnectionStates && typeof derived.refConnectionStates === "object" ? derived.refConnectionStates : {};
+          const connectedRefsSummary = roleOrder
+            .filter((role) => refConnectionStates?.[role]?.connected)
+            .map((role) => {
+              const meta = refConnectionStates?.[role] || {};
+              if (meta.status === "ready") return { role, label: String(meta.shortLabel || "персонаж") };
+              return { role, label: String(meta.warningLabel || "добавьте реф"), status: meta.status };
+            });
+          const connectedRefsWarnings = roleOrder
+            .filter((role) => refConnectionStates?.[role]?.connected && ["draft", "error", "loading"].includes(String(refConnectionStates?.[role]?.status || "")))
+            .map((role) => ({
+              role,
+              status: refConnectionStates?.[role]?.status || "draft",
+              message: refConnectionStates?.[role]?.status === "error"
+                ? (refConnectionStates?.[role]?.error || "ошибка анализа")
+                : (refConnectionStates?.[role]?.warningLabel || "добавьте реф"),
+            }));
+          const hiddenReferenceProfiles = Object.fromEntries(
+            roleOrder
+              .filter((role) => refConnectionStates?.[role]?.status === "ready" && refConnectionStates?.[role]?.hiddenProfile)
+              .map((role) => [role, refConnectionStates[role].hiddenProfile])
+          );
 
           return {
             ...base,
@@ -4048,70 +4071,16 @@ onClipSec: (nodeId, value) => {
               plannerInput: presentation.plannerInput,
               sceneRoleModel: presentation.sceneRoleModel,
               referenceSummary: presentation.referenceSummary,
+              refsConnectStatus: "ready",
+              connectedRefsSummary,
+              connectedRefsWarnings,
+              hiddenReferenceProfiles,
               onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
               onMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x))),
               onOutput: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, output: normalizeRenderProfile(value) } } : x))),
               onAudioStoryMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, audioStoryMode: normalizeAudioStoryMode(value) } } : x))),
               onStyle: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, styleKey: value } } : x))),
               onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
-              onConnectRefs: async (nodeId) => {
-                setNodes((prev) => prev.map((x) => (x.id === nodeId
-                  ? { ...x, data: { ...x.data, refsConnectStatus: "loading" } }
-                  : x)));
-                try {
-                  const brainNode = nodesRef.current.find((x) => x.id === nodeId);
-                  if (!brainNode || brainNode.type !== "comfyBrain") return;
-                  const liveDerived = deriveComfyBrainState({
-                    nodeId,
-                    nodeData: brainNode.data || {},
-                    nodesNow: nodesRef.current || [],
-                    edgesNow: edgesRef.current || [],
-                    normalizeRefDataFn: normalizeRefData,
-                  });
-                  const roleOrder = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"];
-                  const states = liveDerived?.refConnectionStates || {};
-                  const connectedRefsSummary = roleOrder
-                    .filter((role) => states?.[role]?.connected)
-                    .map((role) => {
-                      const meta = states?.[role] || {};
-                      if (meta.status === "ready") {
-                        return { role, label: String(meta.shortLabel || "персонаж") };
-                      }
-                      return { role, label: String(meta.warningLabel || "добавьте реф"), status: meta.status };
-                    });
-                  const hiddenRefProfiles = Object.fromEntries(
-                    roleOrder
-                      .filter((role) => states?.[role]?.status === "ready" && states?.[role]?.hiddenProfile)
-                      .map((role) => [role, states[role].hiddenProfile])
-                  );
-                  const warnings = roleOrder
-                    .filter((role) => states?.[role]?.connected && ["draft", "error", "loading"].includes(String(states?.[role]?.status || "")))
-                    .map((role) => ({ role, status: states?.[role]?.status || "draft", message: states?.[role]?.status === "error" ? (states?.[role]?.error || "ошибка анализа") : (states?.[role]?.warningLabel || "добавьте реф") }));
-                  setNodes((prev) => prev.map((x) => (x.id === nodeId
-                    ? {
-                        ...x,
-                        data: {
-                          ...x.data,
-                          refsConnectStatus: "ready",
-                          connectedRefsSummary,
-                          connectedRefsWarnings: warnings,
-                          hiddenReferenceProfiles: hiddenRefProfiles,
-                          plannerMeta: {
-                            ...(x?.data?.plannerMeta || {}),
-                            connectedRefsSummary,
-                            connectedRefsWarnings: warnings,
-                            referenceProfiles: hiddenRefProfiles,
-                          },
-                        },
-                      }
-                    : x)));
-                } catch (err) {
-                  console.error(err);
-                  setNodes((prev) => prev.map((x) => (x.id === nodeId
-                    ? { ...x, data: { ...x.data, refsConnectStatus: "error", connectedRefsSummary: [] } }
-                    : x)));
-                }
-              },
               onParse: async (nodeId) => {
                 if (comfyParseInFlightRef.current.has(nodeId)) {
                   console.info("[COMFY PARSE] skip duplicate run node=%s", nodeId);
