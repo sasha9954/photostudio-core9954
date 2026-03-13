@@ -1038,6 +1038,35 @@ function summarizeRefsByRole(refsByRole) {
   return { ...summary, activeRoles };
 }
 
+function pickReadyLiveRefsByRoleForScene({ liveDerived = null, scene = null } = {}) {
+  const roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
+  const activeCandidates = new Set([
+    ...(Array.isArray(scene?.refsUsed) ? scene.refsUsed : []),
+    ...(Array.isArray(scene?.mustAppear) ? scene.mustAppear : []),
+    ...(Array.isArray(scene?.secondaryRoles) ? scene.secondaryRoles : []),
+    ...(Array.isArray(scene?.supportEntityIds) ? scene.supportEntityIds : []),
+    String(scene?.heroEntityId || "").trim(),
+    String(scene?.primaryRole || "").trim(),
+  ].map((role) => String(role || "").trim()).filter(Boolean));
+
+  const refConnectionStates = liveDerived?.refConnectionStates && typeof liveDerived.refConnectionStates === "object"
+    ? liveDerived.refConnectionStates
+    : {};
+
+  return Object.fromEntries(roles.map((role) => {
+    const roleState = refConnectionStates?.[role] || {};
+    const connected = !!roleState?.connected;
+    const status = String(roleState?.status || "").trim().toLowerCase();
+    const roleRefs = Array.isArray(roleState?.refs) ? roleState.refs : [];
+    const urls = roleRefs
+      .map((item) => String(item?.url || "").trim())
+      .filter(Boolean);
+    const isSceneRole = activeCandidates.size === 0 || activeCandidates.has(role);
+    const canAttachVisual = connected && status === "ready" && isSceneRole;
+    return [role, canAttachVisual ? [...new Set(urls)] : []];
+  }));
+}
+
 function collectComfyRefDerivationSnapshot({ nodeId = "", nodesNow = [], edgesNow = [] } = {}) {
   const trackedHandles = [
     "ref_character_1",
@@ -2612,7 +2641,11 @@ const comfyShowVideoSection = Boolean(
         mode: liveDerived?.modeValue || comfyNode?.data?.plannerMeta?.plannerInput?.mode || "",
         stylePreset: liveDerived?.stylePreset || comfyNode?.data?.plannerMeta?.plannerInput?.stylePreset || "",
       };
-      const refsByRoleForImage = plannerInput?.refsByRole || comfyRefsByRole;
+      const readyLiveRefsByRole = pickReadyLiveRefsByRoleForScene({
+        liveDerived,
+        scene: comfySceneForImageContract,
+      });
+      const refsByRoleForImage = readyLiveRefsByRole;
       const refsPayloadForImage = {
         refsByRole: refsByRoleForImage,
         previousSceneImageUrl,
@@ -2644,6 +2677,8 @@ const comfyShowVideoSection = Boolean(
       console.log("[COMFY DEBUG FRONT] /clip/image plannerInput", plannerInput);
       console.log("[COMFY DEBUG FRONT] /clip/image plannerInput.refsByRole", plannerInput?.refsByRole);
       console.log("[COMFY DEBUG FRONT] /clip/image plannerInput.refsByRole counts", summarizeRefsByRole(plannerInput?.refsByRole));
+      console.log("[COMFY DEBUG FRONT] /clip/image readyLiveRefsByRole", readyLiveRefsByRole);
+      console.log("[COMFY DEBUG FRONT] /clip/image readyLiveRefsByRole counts", summarizeRefsByRole(readyLiveRefsByRole));
       console.log("[COMFY DEBUG FRONT] /clip/image comfyRefsByRole", comfyRefsByRole);
       console.log("[COMFY DEBUG FRONT] /clip/image comfyRefsByRole counts", summarizeRefsByRole(comfyRefsByRole));
       console.log("[COMFY DEBUG FRONT] /clip/image selected scene vs current scene", {
