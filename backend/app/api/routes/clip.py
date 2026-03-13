@@ -4717,7 +4717,7 @@ def clip_image(payload: ClipImageIn):
     connected_refs_by_role = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
     connected_active_roles = sorted([
         role for role in comfy_roles
-        if comfy_counts.get(role, 0) > 0 or bool(connected_refs_by_role.get(role))
+        if bool(connected_refs_by_role.get(role))
     ])
     print("[COMFY IMAGE DEBUG] refsByRole counts=" + json.dumps(comfy_counts, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] refsByRole raw=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
@@ -4975,15 +4975,16 @@ def clip_image(payload: ClipImageIn):
         for role in ordered_roles_for_attach:
             role_parts = comfy_inline_parts_by_role.get(role) or []
             role_urls = comfy_refs_by_role.get(role) or []
+            role_connected = bool(connected_refs_by_role.get(role))
             role_attach_order.append(role)
             if role_parts:
                 parts.append({"text": f"COMFY role reference images for {role}."})
                 parts.extend(role_parts)
                 attached_counts_by_role[role] = len(role_parts)
             elif role_urls:
-                skipped_roles.append({"role": role, "reason": "inline_load_failed", "urlCount": len(role_urls)})
+                skipped_roles.append({"role": role, "reason": "inline_load_failed", "urlCount": len(role_urls), "connected": role_connected})
             else:
-                skipped_roles.append({"role": role, "reason": "no_urls"})
+                skipped_roles.append({"role": role, "reason": "no_urls", "connected": role_connected})
 
         if character_images:
             parts.append({"text": "Legacy character reference images (compatibility path)."})
@@ -5232,6 +5233,7 @@ def clip_image(payload: ClipImageIn):
         refs_debug["heroAttached"] = hero_attached
         refs_debug["heroEntityId"] = hero_entity_id or None
         refs_debug["skippedRoles"] = skipped_roles
+        refs_debug["modelPartsSummary"] = model_parts_summary
         print("[COMFY IMAGE DEBUG] model parts summary=" + json.dumps(model_parts_summary, ensure_ascii=False))
         resp = post_generate_content(api_key, model, body, timeout=120)
         decoded = _decode_gemini_image(resp if isinstance(resp, dict) else {})
