@@ -774,6 +774,69 @@ function readFileAsDataUrl(file) {
   });
 }
 
+const REF_NODE_ROLE_BY_TYPE = {
+  refNode: {
+    ref_character: "character_1",
+    ref_location: "location",
+    ref_style: "style",
+    ref_items: "props",
+  },
+  refCharacter2: "character_2",
+  refCharacter3: "character_3",
+  refAnimal: "animal",
+  refGroup: "group",
+};
+
+const REF_ROLE_PENDING_LABELS = {
+  character_1: "добавьте персонажа",
+  character_2: "добавьте персонажа",
+  character_3: "добавьте персонажа",
+  animal: "добавьте животное",
+  group: "добавьте группу",
+  props: "добавьте предмет",
+  location: "добавьте локацию",
+  style: "добавьте стиль",
+};
+
+const REF_STATUS_LABELS = {
+  empty: "пусто",
+  draft: "черновик",
+  loading: "анализ...",
+  ready: "готово",
+  error: "ошибка",
+};
+
+function resolveRefRoleForNode(node = {}) {
+  if (!node || typeof node !== "object") return "";
+  if (node.type === "refNode") {
+    return REF_NODE_ROLE_BY_TYPE.refNode?.[String(node?.data?.kind || "")] || "";
+  }
+  return REF_NODE_ROLE_BY_TYPE?.[node.type] || "";
+}
+
+function deriveRefNodeStatus(data = {}) {
+  const refsCount = Array.isArray(data?.refs) ? data.refs.filter((item) => !!String(item?.url || "").trim()).length : 0;
+  const rawStatus = String(data?.refStatus || "").trim().toLowerCase();
+  if (!refsCount) return "empty";
+  if (["empty", "draft", "loading", "ready", "error"].includes(rawStatus)) return rawStatus;
+  return "draft";
+}
+
+function normalizeRefNodeData(data = {}, kindHint = "") {
+  const normalized = normalizeRefData(data, kindHint);
+  const refs = Array.isArray(normalized?.refs) ? normalized.refs : [];
+  const refStatus = deriveRefNodeStatus({ ...normalized, refs });
+  const refShortLabel = String(normalized?.refShortLabel || "").trim();
+  return {
+    ...normalized,
+    refStatus,
+    refShortLabel,
+    refHiddenProfile: normalized?.refHiddenProfile && typeof normalized.refHiddenProfile === "object" ? normalized.refHiddenProfile : null,
+    refAnalysisError: refStatus === "error" ? String(normalized?.refAnalysisError || "").trim() : "",
+    refAnalyzedAt: String(normalized?.refAnalyzedAt || "").trim(),
+  };
+}
+
 function normalizeRefData(data, kindHint = "") {
   const kind = String(data?.kind || kindHint || "");
   const maxFiles = kind === "ref_style" ? 1 : 5;
@@ -1065,7 +1128,7 @@ function stripFunctionsDeep(value) {
 function serializeNodesForStorage(nodes) {
   return nodes.map((n) => {
     const normalizedData = n.type === "refNode"
-      ? normalizeRefData(n.data || {}, n?.data?.kind || "")
+      ? normalizeRefNodeData(n.data || {}, n?.data?.kind || "")
       : (n.data || {});
     const data = stripFunctionsDeep(normalizedData) || {};
     if (n.type === "brainNode") {
@@ -1535,6 +1598,12 @@ function RefNode({ id, data }) {
     .map((item) => ({ url: String(item?.url || "").trim(), name: String(item?.name || "").trim() }))
     .filter((item) => !!item.url);
   const canAddMore = refs.length < maxFiles;
+  const refStatus = deriveRefNodeStatus(data);
+  const isDraft = refStatus === "draft";
+  const isError = refStatus === "error";
+  const isReady = refStatus === "ready";
+  const shortLabel = String(data?.refShortLabel || "").trim();
+  const analysisError = String(data?.refAnalysisError || "").trim();
 
   const openPicker = () => {
     if (!canAddMore) return;
@@ -1555,7 +1624,7 @@ function RefNode({ id, data }) {
         title={title}
         onClose={() => data?.onRemoveNode?.(id)}
         icon={<span aria-hidden>{icon}</span>}
-        className={`clipSB_nodeRef clipSB_nodeRef--${kind}`}
+        className={`clipSB_nodeRef clipSB_nodeRef--${kind} ${isDraft ? "clipSB_nodeRefDraft" : ""} ${isError ? "clipSB_nodeRefError" : ""}`.trim()}
       >
         <div className="clipSB_refGrid" style={{ marginBottom: 10 }}>
           {refs.map((item, idx) => (
@@ -1583,9 +1652,19 @@ function RefNode({ id, data }) {
           </div>
         </div>
 
-        <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading}>
-          {data?.uploading ? "Загрузка…" : "Загрузить фото"}
-        </button>
+        <div className="clipSB_small" style={{ marginBottom: 8 }}>статус: {REF_STATUS_LABELS[refStatus] || refStatus}</div>
+        {isDraft ? <div className="clipSB_refWarningBadge">⚠ Нажмите «Добавить», чтобы подтвердить реф</div> : null}
+        {isError ? <div className="clipSB_refErrorBadge">⚠ {analysisError || "Не удалось проанализировать реф"}</div> : null}
+        {isReady && shortLabel ? <div className="clipSB_refReadyBadge">label: {shortLabel}</div> : null}
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading || refStatus === "loading"}>
+            {data?.uploading ? "Загрузка…" : "Загрузить фото"}
+          </button>
+          <button className="clipSB_btn" onClick={() => data?.onConfirmAdd?.(id)} disabled={!refs.length || !!data?.uploading || refStatus === "loading"}>
+            {refStatus === "loading" ? "Анализ..." : "Добавить"}
+          </button>
+        </div>
         <input
           ref={inputRef}
           type="file"
@@ -1604,7 +1683,7 @@ function RefNode({ id, data }) {
         <div className="clipSB_hint" style={{ marginTop: 10 }}>
           {kind === "ref_style"
             ? "Глобальный стиль (1 фото)"
-            : "Загрузи до 5 фото, порядок учитывается"}
+            : "Загрузи до 5 фото, затем нажми «Добавить»"}
         </div>
 
         <div className="clipSB_hint" style={{ marginTop: 8 }}>
@@ -1614,7 +1693,6 @@ function RefNode({ id, data }) {
     </>
   );
 }
-
 
 function StoryboardPlanNode({ id, data }) {
   const scenes = data?.scenes || [];
@@ -3751,7 +3829,7 @@ onClipSec: (nodeId, value) => {
           return {
             ...base,
             data: {
-              ...base.data,
+              ...normalizeRefNodeData(base.data || {}, base?.data?.kind || ""),
               onPickImage: async (nodeId, file) => {
                 const pickedFiles = Array.isArray(file) ? file : (file ? [file] : []);
                 if (!pickedFiles.length) return;
@@ -3775,7 +3853,7 @@ onClipSec: (nodeId, value) => {
                         const nextRefs = nextMax === 1
                           ? [{ url, name: out?.name || oneFile.name }]
                           : nextPrevRefs.concat({ url, name: out?.name || oneFile.name }).slice(0, nextMax);
-                        return { ...x, data: { ...x.data, refs: nextRefs } };
+                        return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refHiddenProfile: null, refAnalysisError: "" } };
                       }));
                     } catch (err) {
                       console.error(err);
@@ -3785,11 +3863,28 @@ onClipSec: (nodeId, value) => {
                   setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: false } } : x)));
                 }
               },
+              onConfirmAdd: async (nodeId) => {
+                const node = (nodesRef.current || []).find((x) => x.id === nodeId);
+                const refs = normalizeRefData(node?.data || {}, node?.data?.kind || "").refs;
+                const role = resolveRefRoleForNode(node);
+                if (!refs.length || !role) return;
+                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x)));
+                try {
+                  const response = await fetchJson(`/api/clip/comfy/analyze-ref-node`, { method: "POST", body: { role, refs } });
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId
+                    ? { ...x, data: { ...x.data, refStatus: "ready", refShortLabel: String(response?.shortLabel || "").trim(), refHiddenProfile: response?.profile && typeof response.profile === "object" ? response.profile : null, refAnalysisError: "", refAnalyzedAt: new Date().toISOString() } }
+                    : x)));
+                } catch (err) {
+                  console.error(err);
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x)));
+                }
+              },
               onRemoveImage: (nodeId, idx) => {
                 setNodes((prev) => prev.map((x) => {
                   if (x.id !== nodeId) return x;
                   const prevRefs = normalizeRefData(x?.data || {}, x?.data?.kind || "").refs;
-                  return { ...x, data: { ...x.data, refs: prevRefs.filter((_, i) => i !== idx) } };
+                  const nextRefs = prevRefs.filter((_, i) => i !== idx);
+                  return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refHiddenProfile: null, refAnalysisError: "" } };
                 }));
               },
             },
@@ -3828,8 +3923,16 @@ onClipSec: (nodeId, value) => {
 
             const warnings = [];
             const critical = [];
+            const refConnectionStates = derived?.refConnectionStates && typeof derived.refConnectionStates === 'object' ? derived.refConnectionStates : {};
+            const pendingRefRoles = Object.entries(refConnectionStates)
+              .filter(([, meta]) => meta?.connected && String(meta?.status || '') === 'draft')
+              .map(([role, meta]) => `${role} — ${String(meta?.warningLabel || 'добавьте реф')}`);
+            const erroredRefRoles = Object.entries(refConnectionStates)
+              .filter(([, meta]) => meta?.connected && String(meta?.status || '') === 'error')
+              .map(([role, meta]) => `${role} — ${String(meta?.error || 'ошибка анализа')}`);
             if (derived.narrativeSource === 'none') critical.push('Недостаточно входных данных');
-            if (meaningfulRefRoles.length > 0) warnings.push('Все подключённые ref-ноды участвуют в построении сцен');
+            if (pendingRefRoles.length) warnings.push(`Есть незавершённые рефы: ${pendingRefRoles.join('; ')}`);
+            if (erroredRefRoles.length) warnings.push(`Есть ref-ноды с ошибкой: ${erroredRefRoles.join('; ')}`);
             if (!canGenerateComfyImage({ refsByRole: derived.refsByRole }) && (derived.meaningfulText || derived.meaningfulAudio)) {
               warnings.push('Визуальные сцены будут синтезированы из текста, аудио и режима');
             }
@@ -3965,20 +4068,25 @@ onClipSec: (nodeId, value) => {
                     edgesNow: edgesRef.current || [],
                     normalizeRefDataFn: normalizeRefData,
                   });
-                  const refsPayload = {
-                    refsByRole: {
-                      character_1: Array.isArray(liveDerived?.refsByRole?.character_1) ? liveDerived.refsByRole.character_1 : [],
-                      character_2: Array.isArray(liveDerived?.refsByRole?.character_2) ? liveDerived.refsByRole.character_2 : [],
-                      character_3: Array.isArray(liveDerived?.refsByRole?.character_3) ? liveDerived.refsByRole.character_3 : [],
-                      animal: Array.isArray(liveDerived?.refsByRole?.animal) ? liveDerived.refsByRole.animal : [],
-                      props: Array.isArray(liveDerived?.refsByRole?.props) ? liveDerived.refsByRole.props : [],
-                      location: Array.isArray(liveDerived?.refsByRole?.location) ? liveDerived.refsByRole.location : [],
-                      style: Array.isArray(liveDerived?.refsByRole?.style) ? liveDerived.refsByRole.style : [],
-                    },
-                  };
-                  const response = await fetchJson(`/api/clip/comfy/connect-refs`, { method: "POST", body: refsPayload });
-                  const connectedRefsSummary = Array.isArray(response?.connectedRefsSummary) ? response.connectedRefsSummary : [];
-                  const hiddenRefProfiles = response?.referenceProfiles && typeof response.referenceProfiles === "object" ? response.referenceProfiles : {};
+                  const roleOrder = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"];
+                  const states = liveDerived?.refConnectionStates || {};
+                  const connectedRefsSummary = roleOrder
+                    .filter((role) => states?.[role]?.connected)
+                    .map((role) => {
+                      const meta = states?.[role] || {};
+                      if (meta.status === "ready") {
+                        return { role, label: String(meta.shortLabel || "персонаж") };
+                      }
+                      return { role, label: String(meta.warningLabel || "добавьте реф"), status: meta.status };
+                    });
+                  const hiddenRefProfiles = Object.fromEntries(
+                    roleOrder
+                      .filter((role) => states?.[role]?.status === "ready" && states?.[role]?.hiddenProfile)
+                      .map((role) => [role, states[role].hiddenProfile])
+                  );
+                  const warnings = roleOrder
+                    .filter((role) => states?.[role]?.connected && ["draft", "error", "loading"].includes(String(states?.[role]?.status || "")))
+                    .map((role) => ({ role, status: states?.[role]?.status || "draft", message: states?.[role]?.status === "error" ? (states?.[role]?.error || "ошибка анализа") : (states?.[role]?.warningLabel || "добавьте реф") }));
                   setNodes((prev) => prev.map((x) => (x.id === nodeId
                     ? {
                         ...x,
@@ -3986,10 +4094,12 @@ onClipSec: (nodeId, value) => {
                           ...x.data,
                           refsConnectStatus: "ready",
                           connectedRefsSummary,
+                          connectedRefsWarnings: warnings,
                           hiddenReferenceProfiles: hiddenRefProfiles,
                           plannerMeta: {
                             ...(x?.data?.plannerMeta || {}),
                             connectedRefsSummary,
+                            connectedRefsWarnings: warnings,
                             referenceProfiles: hiddenRefProfiles,
                           },
                         },
@@ -4205,6 +4315,7 @@ onClipSec: (nodeId, value) => {
             ...base,
             data: {
               ...base.data,
+              refStatus: deriveRefNodeStatus(base.data || {}),
               onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
               onOpenLightbox: (url) => openLightbox(resolveAssetUrl(url)),
               onPickImage: async (nodeId, filesRaw) => {
@@ -4255,10 +4366,27 @@ onClipSec: (nodeId, value) => {
                         .filter((item) => !!item.url)
                         .slice(0, 5)
                       : [];
-                    return { ...x, data: { ...x.data, refs: oldRefs.concat(uploadedRefs).slice(0, 5) } };
+                    const refs = oldRefs.concat(uploadedRefs).slice(0, 5);
+                    return { ...x, data: { ...x.data, refs, refStatus: refs.length ? "draft" : "empty", refShortLabel: "", refHiddenProfile: null, refAnalysisError: "" } };
                   }));
                 } finally {
                   setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: false } } : x)));
+                }
+              },
+              onConfirmAdd: async (nodeId) => {
+                const node = (nodesRef.current || []).find((x) => x.id === nodeId);
+                const refs = Array.isArray(node?.data?.refs) ? node.data.refs.filter((item) => !!String(item?.url || "").trim()).slice(0, 5) : [];
+                const role = resolveRefRoleForNode(node);
+                if (!refs.length || !role) return;
+                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x)));
+                try {
+                  const response = await fetchJson(`/api/clip/comfy/analyze-ref-node`, { method: "POST", body: { role, refs } });
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId
+                    ? { ...x, data: { ...x.data, refStatus: "ready", refShortLabel: String(response?.shortLabel || "").trim(), refHiddenProfile: response?.profile && typeof response.profile === "object" ? response.profile : null, refAnalysisError: "", refAnalyzedAt: new Date().toISOString() } }
+                    : x)));
+                } catch (err) {
+                  console.error(err);
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x)));
                 }
               },
               onRemoveImage: (nodeId, idx) => setNodes((prev) => prev.map((x) => {
@@ -4266,7 +4394,7 @@ onClipSec: (nodeId, value) => {
                 const refs = Array.isArray(x?.data?.refs)
                   ? x.data.refs.filter((_, i) => i !== idx)
                   : [];
-                return { ...x, data: { ...x.data, refs } };
+                return { ...x, data: { ...x.data, refs, refStatus: refs.length ? "draft" : "empty", refShortLabel: "", refHiddenProfile: null, refAnalysisError: "" } };
               })),
             },
           };
@@ -4433,7 +4561,7 @@ const hydrate = useCallback(() => {
           }
 
           if (n.type === "refNode") {
-            const normalized = normalizeRefData(data, data?.kind || "");
+            const normalized = normalizeRefNodeData(data, data?.kind || "");
             normalized.uploading = false;
             delete normalized.url;
             delete normalized.name;
@@ -4442,6 +4570,30 @@ const hydrate = useCallback(() => {
               type: n.type,
               position: n.position,
               data: normalized,
+            };
+          }
+
+          if (["refCharacter2", "refCharacter3", "refAnimal", "refGroup"].includes(n.type)) {
+            const refs = Array.isArray(data?.refs)
+              ? data.refs.map((item) => ({
+                url: String(item?.url || "").trim(),
+                name: String(item?.name || "").trim(),
+                type: String(item?.type || "").trim(),
+              })).filter((item) => !!item.url).slice(0, 5)
+              : [];
+            return {
+              id: n.id,
+              type: n.type,
+              position: n.position,
+              data: {
+                ...data,
+                refs,
+                uploading: false,
+                refStatus: deriveRefNodeStatus({ ...data, refs }),
+                refShortLabel: String(data?.refShortLabel || "").trim(),
+                refHiddenProfile: data?.refHiddenProfile && typeof data.refHiddenProfile === "object" ? data.refHiddenProfile : null,
+                refAnalysisError: String(data?.refAnalysisError || "").trim(),
+              },
             };
           }
 
@@ -4560,13 +4712,13 @@ const hydrate = useCallback(() => {
     } else if (type === "brain") {
       node = { id, type: "brainNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: "clip", scenarioKey: "clip", shootKey: "cinema", styleKey: "realism", freezeStyle: false, clipSec: 30 } };
     } else if (type === "ref_character") {
-      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПЕРСОНАЖ", icon: "🧍", kind: "ref_character", refs: [], uploading: false } };
+      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПЕРСОНАЖ", icon: "🧍", kind: "ref_character", refs: [], uploading: false, refStatus: "empty" } };
     } else if (type === "ref_location") {
-      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ЛОКАЦИЯ", icon: "📍", kind: "ref_location", refs: [], uploading: false } };
+      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ЛОКАЦИЯ", icon: "📍", kind: "ref_location", refs: [], uploading: false, refStatus: "empty" } };
     } else if (type === "ref_style") {
-      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — СТИЛЬ", icon: "🎨", kind: "ref_style", refs: [], uploading: false } };
+      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — СТИЛЬ", icon: "🎨", kind: "ref_style", refs: [], uploading: false, refStatus: "empty" } };
     } else if (type === "ref_items") {
-      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПРЕДМЕТЫ", icon: "📦", kind: "ref_items", refs: [], uploading: false } };
+      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПРЕДМЕТЫ", icon: "📦", kind: "ref_items", refs: [], uploading: false, refStatus: "empty" } };
     } else if (type === "storyboard") {
       node = { id, type: "storyboardNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { scenes: [] } };
     } else if (type === "assembly") {
@@ -4578,13 +4730,13 @@ const hydrate = useCallback(() => {
     } else if (type === "comfyVideoPreview") {
       node = { id, type: "comfyVideoPreview", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { previewStatus: 'idle', previewUrl: '', workflowPreset: 'comfy-default', format: '9:16', duration: 0 } };
     } else if (type === "refCharacter2") {
-      node = { id, type: "refCharacter2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], uploading: false } };
+      node = { id, type: "refCharacter2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
     } else if (type === "refCharacter3") {
-      node = { id, type: "refCharacter3", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], uploading: false } };
+      node = { id, type: "refCharacter3", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
     } else if (type === "refAnimal") {
-      node = { id, type: "refAnimal", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'single animal', speciesHint: '', scaleLock: false, behavior: 'neutral', notes: '', refs: [], uploading: false } };
+      node = { id, type: "refAnimal", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'single animal', speciesHint: '', scaleLock: false, behavior: 'neutral', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
     } else if (type === "refGroup") {
-      node = { id, type: "refGroup", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'crowd', density: 'medium', formation: '', outfitConsistency: 'varied outfit', notes: '', refs: [], uploading: false } };
+      node = { id, type: "refGroup", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'crowd', density: 'medium', formation: '', outfitConsistency: 'varied outfit', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
     } else {
       return;
     }

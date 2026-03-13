@@ -49,6 +49,11 @@ class ClipComfyConnectRefsIn(BaseModel):
     refsByRole: dict[str, list[RefItemIn]] = Field(default_factory=dict)
 
 
+class ClipComfyAnalyzeRefIn(BaseModel):
+    role: str = ""
+    refs: list[RefItemIn] = Field(default_factory=list)
+
+
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "props", "location", "style"]
 
 
@@ -332,4 +337,30 @@ async def clip_comfy_connect_refs(payload: ClipComfyConnectRefsIn) -> dict[str, 
         "ok": True,
         "connectedRefsSummary": connected_refs_summary,
         "referenceProfiles": reference_profiles,
+    }
+
+
+@router.post("/clip/comfy/analyze-ref-node")
+async def clip_comfy_analyze_ref_node(payload: ClipComfyAnalyzeRefIn) -> dict[str, Any]:
+    role = str(payload.role or "").strip().lower()
+    if role not in CONNECT_REFS_MAIN_ROLES:
+        raise HTTPException(status_code=422, detail="invalid_ref_role")
+
+    refs = [
+        item.model_dump(mode="json") for item in (payload.refs or [])
+        if str(item.url or "").strip()
+    ]
+    if not refs:
+        raise HTTPException(status_code=422, detail="empty_ref_list")
+
+    profiles = build_reference_profiles({role: refs})
+    profile = profiles.get(role) if isinstance(profiles.get(role), dict) else None
+    if not profile:
+        raise HTTPException(status_code=500, detail="ref_profile_build_failed")
+
+    return {
+        "ok": True,
+        "role": role,
+        "shortLabel": _build_short_label_for_role(role, profile),
+        "profile": profile,
     }

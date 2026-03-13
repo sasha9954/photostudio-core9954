@@ -262,7 +262,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     ref_group: { nodeType: "refGroup" },
   };
 
-  const extractRefsFromSourceNode = (sourceNode, cfg = {}) => {
+  const normalizeNodeRefs = (sourceNode, cfg = {}) => {
     if (!sourceNode || sourceNode?.type !== cfg.nodeType) return [];
     if (cfg.kind && sourceNode?.data?.kind !== cfg.kind) return [];
     if (cfg.nodeType === "refNode" && typeof normalizeRefDataFn === "function") {
@@ -271,17 +271,56 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     const refs = Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [];
     return refs.map((item) => ({ url: String(item?.url || "").trim(), name: String(item?.name || "").trim() })).filter((item) => !!item.url);
   };
-
-  const refsByRole = {
-    character_1: extractRefsFromSourceNode(pickConnectedNode("ref_character_1"), comfyRefConfigByHandle.ref_character_1),
-    character_2: extractRefsFromSourceNode(pickConnectedNode("ref_character_2"), comfyRefConfigByHandle.ref_character_2),
-    character_3: extractRefsFromSourceNode(pickConnectedNode("ref_character_3"), comfyRefConfigByHandle.ref_character_3),
-    animal: extractRefsFromSourceNode(pickConnectedNode("ref_animal"), comfyRefConfigByHandle.ref_animal),
-    group: extractRefsFromSourceNode(pickConnectedNode("ref_group"), comfyRefConfigByHandle.ref_group),
-    location: extractRefsFromSourceNode(pickConnectedNode("ref_location"), comfyRefConfigByHandle.ref_location),
-    style: extractRefsFromSourceNode(pickConnectedNode("ref_style"), comfyRefConfigByHandle.ref_style),
-    props: extractRefsFromSourceNode(pickConnectedNode("ref_props"), comfyRefConfigByHandle.ref_props),
+  const resolveRefStatus = (sourceNode, refs = []) => {
+    const refsCount = Array.isArray(refs) ? refs.length : 0;
+    const raw = String(sourceNode?.data?.refStatus || "").trim().toLowerCase();
+    if (!refsCount) return "empty";
+    if (["empty", "draft", "loading", "ready", "error"].includes(raw)) return raw;
+    return "draft";
   };
+  const refNodesByRole = {
+    character_1: pickConnectedNode("ref_character_1"),
+    character_2: pickConnectedNode("ref_character_2"),
+    character_3: pickConnectedNode("ref_character_3"),
+    animal: pickConnectedNode("ref_animal"),
+    group: pickConnectedNode("ref_group"),
+    location: pickConnectedNode("ref_location"),
+    style: pickConnectedNode("ref_style"),
+    props: pickConnectedNode("ref_props"),
+  };
+  const roleDraftMessages = {
+    character_1: "добавьте персонажа",
+    character_2: "добавьте персонажа",
+    character_3: "добавьте персонажа",
+    animal: "добавьте животное",
+    group: "добавьте группу",
+    props: "добавьте предмет",
+    location: "добавьте локацию",
+    style: "добавьте стиль",
+  };
+  const refConnectionStates = Object.fromEntries(Object.entries(refNodesByRole).map(([role, sourceNode]) => {
+    const cfg = role === "character_1" ? comfyRefConfigByHandle.ref_character_1
+      : role === "character_2" ? comfyRefConfigByHandle.ref_character_2
+      : role === "character_3" ? comfyRefConfigByHandle.ref_character_3
+      : role === "animal" ? comfyRefConfigByHandle.ref_animal
+      : role === "group" ? comfyRefConfigByHandle.ref_group
+      : role === "location" ? comfyRefConfigByHandle.ref_location
+      : role === "style" ? comfyRefConfigByHandle.ref_style
+      : comfyRefConfigByHandle.ref_props;
+    const refs = normalizeNodeRefs(sourceNode, cfg);
+    const status = resolveRefStatus(sourceNode, refs);
+    const shortLabel = String(sourceNode?.data?.refShortLabel || "").trim();
+    return [role, {
+      connected: !!sourceNode,
+      status,
+      refs,
+      shortLabel,
+      warningLabel: roleDraftMessages[role] || "добавьте реф",
+      error: String(sourceNode?.data?.refAnalysisError || "").trim(),
+      hiddenProfile: sourceNode?.data?.refHiddenProfile && typeof sourceNode.data.refHiddenProfile === "object" ? sourceNode.data.refHiddenProfile : null,
+    }];
+  }));
+  const refsByRole = Object.fromEntries(Object.entries(refConnectionStates).map(([role, meta]) => [role, meta.status === "ready" ? meta.refs : []]));
 
   const audioNode = pickConnectedNode("audio");
   const textNode = pickConnectedNode("text");
@@ -319,6 +358,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     modeSemantics,
     styleSemantics,
     storyMissionSummary,
+    refConnectionStates,
   };
 }
 

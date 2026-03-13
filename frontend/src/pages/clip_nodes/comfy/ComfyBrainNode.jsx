@@ -24,6 +24,7 @@ export default function ComfyBrainNode({ id, data }) {
   const refsConnectStatus = data?.refsConnectStatus || "idle";
   const isConnectingRefs = refsConnectStatus === "loading";
   const connectedRefsSummary = Array.isArray(data?.connectedRefsSummary) ? data.connectedRefsSummary : [];
+  const connectedRefsWarnings = Array.isArray(data?.connectedRefsWarnings) ? data.connectedRefsWarnings : [];
   const parseHint = isParsing
     ? "Идёт анализ аудио и построение сцен. Повторный запуск временно заблокирован."
     : isReady
@@ -73,6 +74,14 @@ export default function ComfyBrainNode({ id, data }) {
         ) : (
           <div className="clipSB_small">Рефы не подключены</div>
         )}
+        {connectedRefsWarnings.length ? (
+          <div className="clipSB_refWarningsBlock">
+            <div className="clipSB_brainLabel">Есть незавершённые рефы</div>
+            {connectedRefsWarnings.map((item, idx) => (
+              <div key={`${item?.role || "warn"}-${idx}`} className="clipSB_small">{String(item?.role || "ref")} — {String(item?.message || "добавьте реф")}</div>
+            ))}
+          </div>
+        ) : null}
       </div>
     </NodeShell>
   </>);
