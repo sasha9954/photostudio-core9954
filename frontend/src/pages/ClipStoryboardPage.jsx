@@ -1038,8 +1038,10 @@ function summarizeRefsByRole(refsByRole) {
   return { ...summary, activeRoles };
 }
 
-function pickReadyLiveRefsByRoleForScene({ liveDerived = null, scene = null } = {}) {
+function pickReadyLiveRefsByRoleForScene({ liveDerived = null, scene = null, includeDebug = false } = {}) {
   const roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
+  const castRoles = new Set(["character_1", "character_2", "character_3", "animal", "group"]);
+  const worldAnchorRoles = new Set(["location", "style"]);
   const activeCandidates = new Set([
     ...(Array.isArray(scene?.refsUsed) ? scene.refsUsed : []),
     ...(Array.isArray(scene?.mustAppear) ? scene.mustAppear : []),
@@ -1049,11 +1051,25 @@ function pickReadyLiveRefsByRoleForScene({ liveDerived = null, scene = null } = 
     String(scene?.primaryRole || "").trim(),
   ].map((role) => String(role || "").trim()).filter(Boolean));
 
+  const rawRefsUsed = Array.isArray(scene?.refsUsed)
+    ? scene.refsUsed
+    : (scene?.refsUsed && typeof scene?.refsUsed === "object" ? Object.keys(scene.refsUsed) : []);
+  const refsUsedSet = new Set(rawRefsUsed.map((role) => String(role || "").trim()).filter(Boolean));
+  const refDirectives = scene?.refDirectives && typeof scene.refDirectives === "object" ? scene.refDirectives : {};
+  const hasPropAnchorSignal = Boolean(
+    scene?.propAnchorLabel
+    || refsUsedSet.has("props")
+    || (refDirectives?.props && typeof refDirectives.props === "object" && Object.keys(refDirectives.props).length)
+    || String(scene?.sceneGoal || "").toLowerCase().includes("prop")
+    || String(scene?.continuity || "").toLowerCase().includes("prop")
+  );
+
   const refConnectionStates = liveDerived?.refConnectionStates && typeof liveDerived.refConnectionStates === "object"
     ? liveDerived.refConnectionStates
     : {};
 
-  return Object.fromEntries(roles.map((role) => {
+  const decisionByRole = {};
+  const refsByRole = Object.fromEntries(roles.map((role) => {
     const roleState = refConnectionStates?.[role] || {};
     const connected = !!roleState?.connected;
     const status = String(roleState?.status || "").trim().toLowerCase();
@@ -1061,10 +1077,61 @@ function pickReadyLiveRefsByRoleForScene({ liveDerived = null, scene = null } = 
     const urls = roleRefs
       .map((item) => String(item?.url || "").trim())
       .filter(Boolean);
-    const isSceneRole = activeCandidates.size === 0 || activeCandidates.has(role);
-    const canAttachVisual = connected && status === "ready" && isSceneRole;
-    return [role, canAttachVisual ? [...new Set(urls)] : []];
+    const uniqueUrls = [...new Set(urls)];
+    const inSceneCast = activeCandidates.size === 0 || activeCandidates.has(role);
+    const hasUrls = uniqueUrls.length > 0;
+
+    let allowedByRolePolicy = false;
+    let reason = "filtered_out_not_in_scene_cast";
+    if (castRoles.has(role)) {
+      allowedByRolePolicy = inSceneCast;
+      reason = inSceneCast ? "ok" : "filtered_out_not_in_scene_cast";
+    } else if (worldAnchorRoles.has(role)) {
+      allowedByRolePolicy = true;
+      reason = "ok_world_anchor";
+    } else if (role === "props") {
+      const propsInScene = inSceneCast || refsUsedSet.has("props");
+      allowedByRolePolicy = propsInScene || hasPropAnchorSignal;
+      reason = allowedByRolePolicy ? "ok_props_anchor" : "filtered_out_not_in_scene_cast";
+    }
+
+    const canAttachVisual = connected && status === "ready" && hasUrls && allowedByRolePolicy;
+    if (!canAttachVisual && hasUrls && worldAnchorRoles.has(role) && (!connected || status !== "ready")) {
+      reason = "filtered_out_world_anchor_disabled";
+    }
+    if (!hasUrls) reason = "no_urls";
+
+    decisionByRole[role] = {
+      connected,
+      status,
+      urlCount: uniqueUrls.length,
+      inSceneCast,
+      allowedByRolePolicy,
+      canAttachVisual,
+      reason,
+    };
+    return [role, canAttachVisual ? uniqueUrls : []];
   }));
+
+  if (includeDebug) {
+    return {
+      refsByRole,
+      debug: {
+        sceneId: String(scene?.sceneId || "").trim() || null,
+        activeCandidates: [...activeCandidates],
+        sceneCastRoles: [...activeCandidates].filter((role) => castRoles.has(role)),
+        worldAnchorRoles: ["location", "style"],
+        propsAnchorSignals: {
+          refsUsed: refsUsedSet.has("props"),
+          hasPropAnchorSignal,
+          directives: !!(refDirectives?.props && typeof refDirectives.props === "object" && Object.keys(refDirectives.props).length),
+        },
+        decisionByRole,
+      },
+    };
+  }
+
+  return refsByRole;
 }
 
 function collectComfyRefDerivationSnapshot({ nodeId = "", nodesNow = [], edgesNow = [] } = {}) {
@@ -2618,7 +2685,7 @@ const comfyShowVideoSection = Boolean(
         mode: comfyNode?.data?.mode || "clip",
         stylePreset: comfyNode?.data?.stylePreset || "realism",
       });
-      const imagePrompt = await ensureComfyPromptSynced({ idx: comfySafeIndex, promptType: 'image' });
+      const syncedImagePrompt = await ensureComfyPromptSynced({ idx: comfySafeIndex, promptType: 'image' });
       const previousSceneImageUrl = String(
         comfyPreviousScene?.endImageUrl
         || comfyPreviousScene?.imageUrl
@@ -2641,10 +2708,42 @@ const comfyShowVideoSection = Boolean(
         mode: liveDerived?.modeValue || comfyNode?.data?.plannerMeta?.plannerInput?.mode || "",
         stylePreset: liveDerived?.stylePreset || comfyNode?.data?.plannerMeta?.plannerInput?.stylePreset || "",
       };
-      const readyLiveRefsByRole = pickReadyLiveRefsByRoleForScene({
+      const readyLiveRefsSelection = pickReadyLiveRefsByRoleForScene({
         liveDerived,
         scene: comfySceneForImageContract,
+        includeDebug: true,
       });
+      const readyLiveRefsByRole = readyLiveRefsSelection?.refsByRole || {};
+      const readyLiveRefsDebug = readyLiveRefsSelection?.debug || {};
+      const plannerSceneSnapshot = comfyNode?.data?.plannerMeta?.mockScenes?.[comfySafeIndex] || null;
+      const fallbackPromptFromContract = [
+        String(comfySceneForImageContract?.sceneGoal || "").trim(),
+        String(comfySceneForImageContract?.sceneNarrativeStep || "").trim(),
+        String(comfySceneForImageContract?.continuity || "").trim(),
+        comfySceneForImageContract?.refDirectives ? `Ref directives: ${JSON.stringify(comfySceneForImageContract.refDirectives)}` : "",
+      ].filter(Boolean).join("\n");
+      const fallbackPromptFromLive = [
+        String(liveDerived?.meaningfulText || "").trim(),
+        String(liveDerived?.modeValue || "").trim() ? `Mode: ${String(liveDerived?.modeValue || "").trim()}` : "",
+        String(liveDerived?.stylePreset || "").trim() ? `Style preset: ${String(liveDerived?.stylePreset || "").trim()}` : "",
+        String(liveDerived?.meaningfulAudio || "").trim() ? `Audio cue: ${String(liveDerived?.meaningfulAudio || "").trim()}` : "",
+      ].filter(Boolean).join("\n");
+      const fallbackPromptFromPlannerSnapshot = String(
+        plannerSceneSnapshot?.imagePromptEn
+        || plannerSceneSnapshot?.imagePrompt
+        || plannerSceneSnapshot?.framePrompt
+        || plannerSceneSnapshot?.prompt
+        || ""
+      ).trim();
+      const promptCandidates = [
+        { source: "synced_scene_image_prompt", value: String(syncedImagePrompt || "").trim() },
+        { source: "scene_contract", value: fallbackPromptFromContract },
+        { source: "live_brain_state", value: fallbackPromptFromLive },
+        { source: "planner_snapshot_fallback", value: fallbackPromptFromPlannerSnapshot },
+      ];
+      const selectedPromptCandidate = promptCandidates.find((item) => String(item?.value || "").trim()) || { source: "none", value: "" };
+      const imagePrompt = String(selectedPromptCandidate?.value || "").trim();
+      const promptSource = String(selectedPromptCandidate?.source || "none");
       const refsByRoleForImage = readyLiveRefsByRole;
       const refsPayloadForImage = {
         refsByRole: refsByRoleForImage,
@@ -2671,6 +2770,7 @@ const comfyShowVideoSection = Boolean(
         environmentLock: typeof comfySceneForImageContract?.environmentLock === 'boolean' ? comfySceneForImageContract.environmentLock : null,
         styleLock: typeof comfySceneForImageContract?.styleLock === 'boolean' ? comfySceneForImageContract.styleLock : null,
         identityLock: typeof comfySceneForImageContract?.identityLock === 'boolean' ? comfySceneForImageContract.identityLock : null,
+        promptSource,
       };
       const refsForImageRequest = buildComfySceneRefsPayload(refsPayloadForImage);
 
@@ -2679,6 +2779,7 @@ const comfyShowVideoSection = Boolean(
       console.log("[COMFY DEBUG FRONT] /clip/image plannerInput.refsByRole counts", summarizeRefsByRole(plannerInput?.refsByRole));
       console.log("[COMFY DEBUG FRONT] /clip/image readyLiveRefsByRole", readyLiveRefsByRole);
       console.log("[COMFY DEBUG FRONT] /clip/image readyLiveRefsByRole counts", summarizeRefsByRole(readyLiveRefsByRole));
+      console.log("[COMFY DEBUG FRONT] /clip/image readyLiveRefs selection debug", readyLiveRefsDebug);
       console.log("[COMFY DEBUG FRONT] /clip/image comfyRefsByRole", comfyRefsByRole);
       console.log("[COMFY DEBUG FRONT] /clip/image comfyRefsByRole counts", summarizeRefsByRole(comfyRefsByRole));
       console.log("[COMFY DEBUG FRONT] /clip/image selected scene vs current scene", {
@@ -2721,6 +2822,13 @@ const comfyShowVideoSection = Boolean(
       console.log("[COMFY DEBUG FRONT] /clip/image final refsByRole urls", Object.fromEntries(
         Object.entries(refsForImageRequest?.refsByRole || {}).map(([role, urls]) => [role, Array.isArray(urls) ? urls : []])
       ));
+      console.log("[COMFY DEBUG FRONT] /clip/image prompt selection", {
+        sceneId,
+        promptSource,
+        imagePromptPreview: imagePrompt.slice(0, 240),
+        selectedSceneId: String(comfySelectedScene?.sceneId || ""),
+        currentSceneId: String(comfyCurrentSceneById?.sceneId || ""),
+      });
 
       const out = await fetchJson('/api/clip/image', {
         method: 'POST',
@@ -2735,6 +2843,11 @@ ${contextPrompt}`.trim(),
           width: 1024,
           height: 1792,
           refs: refsForImageRequest,
+          promptDebug: {
+            sceneId,
+            promptSource,
+            imagePromptPreview: imagePrompt.slice(0, 400),
+          },
         },
       });
       console.log("[COMFY DEBUG FRONT] /clip/image final request body refs", refsForImageRequest);
