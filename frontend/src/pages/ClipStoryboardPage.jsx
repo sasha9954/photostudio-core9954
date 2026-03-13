@@ -1038,6 +1038,63 @@ function summarizeRefsByRole(refsByRole) {
   return { ...summary, activeRoles };
 }
 
+function looksLikeTechnicalAssetRef(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return false;
+  return (
+    raw.startsWith("http://")
+    || raw.startsWith("https://")
+    || raw.startsWith("blob:")
+    || raw.startsWith("file:")
+    || raw.startsWith("data:")
+    || raw.startsWith("/static/")
+    || raw.startsWith("/api/")
+    || raw.startsWith("/assets/")
+  );
+}
+
+function selectComfyImagePrompt({
+  syncedImagePrompt = "",
+  sceneContract = null,
+  liveDerived = null,
+  plannerSceneSnapshot = null,
+} = {}) {
+  const fallbackPromptFromContract = [
+    String(sceneContract?.sceneGoal || "").trim(),
+    String(sceneContract?.sceneNarrativeStep || "").trim(),
+    String(sceneContract?.continuity || "").trim(),
+    sceneContract?.refDirectives ? `Ref directives: ${JSON.stringify(sceneContract.refDirectives)}` : "",
+  ].filter(Boolean).join("\n");
+  const semanticAudioCue = String(liveDerived?.meaningfulAudio || "").trim();
+  const safeAudioCue = semanticAudioCue && !looksLikeTechnicalAssetRef(semanticAudioCue) ? semanticAudioCue : "";
+  const fallbackPromptFromLive = [
+    String(liveDerived?.meaningfulText || "").trim(),
+    String(liveDerived?.modeValue || "").trim() ? `Mode: ${String(liveDerived?.modeValue || "").trim()}` : "",
+    String(liveDerived?.stylePreset || "").trim() ? `Style preset: ${String(liveDerived?.stylePreset || "").trim()}` : "",
+    safeAudioCue ? `Audio cue: ${safeAudioCue}` : "",
+  ].filter(Boolean).join("\n");
+  const fallbackPromptFromPlannerSnapshot = String(
+    plannerSceneSnapshot?.imagePromptEn
+    || plannerSceneSnapshot?.imagePrompt
+    || plannerSceneSnapshot?.framePrompt
+    || plannerSceneSnapshot?.prompt
+    || ""
+  ).trim();
+  const promptCandidates = [
+    { source: "synced_scene_image_prompt", value: String(syncedImagePrompt || "").trim() },
+    { source: "scene_contract", value: fallbackPromptFromContract },
+    { source: "live_brain_state", value: fallbackPromptFromLive },
+    { source: "planner_snapshot_fallback", value: fallbackPromptFromPlannerSnapshot },
+  ];
+  const selectedPromptCandidate = promptCandidates.find((item) => String(item?.value || "").trim()) || { source: "none", value: "" };
+  return {
+    imagePrompt: String(selectedPromptCandidate?.value || "").trim(),
+    promptSource: String(selectedPromptCandidate?.source || "none"),
+    promptCandidates,
+    audioCueDroppedAsTechnicalRef: Boolean(semanticAudioCue && !safeAudioCue),
+  };
+}
+
 function pickReadyLiveRefsByRoleForScene({ liveDerived = null, scene = null, includeDebug = false } = {}) {
   const roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
   const castRoles = new Set(["character_1", "character_2", "character_3", "animal", "group"]);
@@ -1082,16 +1139,20 @@ function pickReadyLiveRefsByRoleForScene({ liveDerived = null, scene = null, inc
     const hasUrls = uniqueUrls.length > 0;
 
     let allowedByRolePolicy = false;
+    let attachedByPolicy = "none";
     let reason = "filtered_out_not_in_scene_cast";
     if (castRoles.has(role)) {
       allowedByRolePolicy = inSceneCast;
+      attachedByPolicy = "cast";
       reason = inSceneCast ? "ok" : "filtered_out_not_in_scene_cast";
     } else if (worldAnchorRoles.has(role)) {
       allowedByRolePolicy = true;
+      attachedByPolicy = "world_anchor";
       reason = "ok_world_anchor";
     } else if (role === "props") {
       const propsInScene = inSceneCast || refsUsedSet.has("props");
       allowedByRolePolicy = propsInScene || hasPropAnchorSignal;
+      attachedByPolicy = allowedByRolePolicy ? "prop_anchor" : "none";
       reason = allowedByRolePolicy ? "ok_props_anchor" : "filtered_out_not_in_scene_cast";
     }
 
@@ -1107,6 +1168,7 @@ function pickReadyLiveRefsByRoleForScene({ liveDerived = null, scene = null, inc
       urlCount: uniqueUrls.length,
       inSceneCast,
       allowedByRolePolicy,
+      attachedByPolicy,
       canAttachVisual,
       reason,
     };
@@ -1121,6 +1183,15 @@ function pickReadyLiveRefsByRoleForScene({ liveDerived = null, scene = null, inc
         activeCandidates: [...activeCandidates],
         sceneCastRoles: [...activeCandidates].filter((role) => castRoles.has(role)),
         worldAnchorRoles: ["location", "style"],
+        allowedRolesForImage: Object.entries(decisionByRole)
+          .filter(([, state]) => !!state?.allowedByRolePolicy)
+          .map(([role]) => role),
+        attachedByPolicy: Object.fromEntries(
+          Object.entries(decisionByRole).map(([role, state]) => [role, state?.attachedByPolicy || "none"])
+        ),
+        filteredReasonsByRole: Object.fromEntries(
+          Object.entries(decisionByRole).map(([role, state]) => [role, state?.reason || "unknown"])
+        ),
         propsAnchorSignals: {
           refsUsed: refsUsedSet.has("props"),
           hasPropAnchorSignal,
@@ -2716,34 +2787,14 @@ const comfyShowVideoSection = Boolean(
       const readyLiveRefsByRole = readyLiveRefsSelection?.refsByRole || {};
       const readyLiveRefsDebug = readyLiveRefsSelection?.debug || {};
       const plannerSceneSnapshot = comfyNode?.data?.plannerMeta?.mockScenes?.[comfySafeIndex] || null;
-      const fallbackPromptFromContract = [
-        String(comfySceneForImageContract?.sceneGoal || "").trim(),
-        String(comfySceneForImageContract?.sceneNarrativeStep || "").trim(),
-        String(comfySceneForImageContract?.continuity || "").trim(),
-        comfySceneForImageContract?.refDirectives ? `Ref directives: ${JSON.stringify(comfySceneForImageContract.refDirectives)}` : "",
-      ].filter(Boolean).join("\n");
-      const fallbackPromptFromLive = [
-        String(liveDerived?.meaningfulText || "").trim(),
-        String(liveDerived?.modeValue || "").trim() ? `Mode: ${String(liveDerived?.modeValue || "").trim()}` : "",
-        String(liveDerived?.stylePreset || "").trim() ? `Style preset: ${String(liveDerived?.stylePreset || "").trim()}` : "",
-        String(liveDerived?.meaningfulAudio || "").trim() ? `Audio cue: ${String(liveDerived?.meaningfulAudio || "").trim()}` : "",
-      ].filter(Boolean).join("\n");
-      const fallbackPromptFromPlannerSnapshot = String(
-        plannerSceneSnapshot?.imagePromptEn
-        || plannerSceneSnapshot?.imagePrompt
-        || plannerSceneSnapshot?.framePrompt
-        || plannerSceneSnapshot?.prompt
-        || ""
-      ).trim();
-      const promptCandidates = [
-        { source: "synced_scene_image_prompt", value: String(syncedImagePrompt || "").trim() },
-        { source: "scene_contract", value: fallbackPromptFromContract },
-        { source: "live_brain_state", value: fallbackPromptFromLive },
-        { source: "planner_snapshot_fallback", value: fallbackPromptFromPlannerSnapshot },
-      ];
-      const selectedPromptCandidate = promptCandidates.find((item) => String(item?.value || "").trim()) || { source: "none", value: "" };
-      const imagePrompt = String(selectedPromptCandidate?.value || "").trim();
-      const promptSource = String(selectedPromptCandidate?.source || "none");
+      const promptSelection = selectComfyImagePrompt({
+        syncedImagePrompt,
+        sceneContract: comfySceneForImageContract,
+        liveDerived,
+        plannerSceneSnapshot,
+      });
+      const imagePrompt = promptSelection.imagePrompt;
+      const promptSource = promptSelection.promptSource;
       const refsByRoleForImage = readyLiveRefsByRole;
       const refsPayloadForImage = {
         refsByRole: refsByRoleForImage,
@@ -2828,6 +2879,8 @@ const comfyShowVideoSection = Boolean(
         imagePromptPreview: imagePrompt.slice(0, 240),
         selectedSceneId: String(comfySelectedScene?.sceneId || ""),
         currentSceneId: String(comfyCurrentSceneById?.sceneId || ""),
+        audioCueDroppedAsTechnicalRef: promptSelection.audioCueDroppedAsTechnicalRef,
+        promptCandidates: promptSelection.promptCandidates.map((item) => ({ source: item.source, preview: String(item.value || "").slice(0, 120) })),
       });
 
       const out = await fetchJson('/api/clip/image', {
@@ -2846,7 +2899,10 @@ ${contextPrompt}`.trim(),
           promptDebug: {
             sceneId,
             promptSource,
-            imagePromptPreview: imagePrompt.slice(0, 400),
+            promptPreview: imagePrompt.slice(0, 400),
+            sceneDeltaPreview: `${imagePrompt}\n\n${contextPrompt}`.trim().slice(0, 400),
+            sceneTextPreview: String(contextPrompt || "").slice(0, 400),
+            audioCueDroppedAsTechnicalRef: promptSelection.audioCueDroppedAsTechnicalRef,
           },
         },
       });

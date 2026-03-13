@@ -4709,6 +4709,7 @@ def clip_image(payload: ClipImageIn):
     scene_contract["heroEntityId"] = hero_entity_id
     scene_contract["supportEntityIds"] = support_entity_ids
     scene_contract["mustAppear"] = must_appear_roles
+    scene_contract["mustAppearCastRoles"] = must_appear_roles
     dropped_by_must_not_appear = sorted([role for role in (scene_contract.get("resolvedRoles") or []) if role in must_not_appear_roles])
     connected_refs_by_role = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
 
@@ -4727,10 +4728,13 @@ def clip_image(payload: ClipImageIn):
 
     scene_cast_roles = [role for role in scene_active_roles if role in COMFY_CAST_ROLES]
     world_anchor_roles: list[str] = []
-    if (comfy_refs_by_role.get("location") or []) and (contract_environment_lock or bool(connected_refs_by_role.get("location"))):
-        world_anchor_roles.append("location")
-    if (comfy_refs_by_role.get("style") or []) and (contract_style_lock or bool(connected_refs_by_role.get("style"))):
-        world_anchor_roles.append("style")
+    for role in ["location", "style"]:
+        role_urls = comfy_refs_by_role.get(role) or []
+        if not role_urls:
+            continue
+        if role in must_not_appear_roles:
+            continue
+        world_anchor_roles.append(role)
 
     allowed_props = bool(
         (comfy_refs_by_role.get("props") or []) and (
@@ -4753,12 +4757,14 @@ def clip_image(payload: ClipImageIn):
             if not allowed and role_urls:
                 reason = "filtered_out_not_in_scene_cast"
                 if role in COMFY_WORLD_ANCHOR_ROLES:
-                    reason = "filtered_out_world_anchor_disabled"
+                    reason = "filtered_out_world_anchor_must_not_appear" if role in must_not_appear_roles else "filtered_out_world_anchor_disabled"
                 filtered_out_by_scene_contract.append({
                     "role": role,
                     "reason": reason,
                     "urlCount": len(role_urls),
                     "connected": bool(connected_refs_by_role.get(role)),
+                    "environmentLock": contract_environment_lock if role == "location" else None,
+                    "styleLock": contract_style_lock if role == "style" else None,
                 })
             next_refs_by_role[role] = role_urls if allowed else []
         comfy_refs_by_role = next_refs_by_role
@@ -4868,6 +4874,7 @@ def clip_image(payload: ClipImageIn):
         "heroEntityId": scene_contract.get("heroEntityId"),
         "supportEntityIds": scene_contract.get("supportEntityIds") or [],
         "mustAppear": scene_contract.get("mustAppear") or [],
+        "mustAppearCastRoles": scene_contract.get("mustAppearCastRoles") or [],
         "mustNotAppear": scene_contract.get("mustNotAppear") or [],
         "identityLock": bool(scene_contract.get("identityLock")),
         "environmentLock": bool(scene_contract.get("environmentLock")),
@@ -4878,6 +4885,8 @@ def clip_image(payload: ClipImageIn):
         "resolvedRoles": scene_contract.get("resolvedRoles") or [],
         "sceneCastRoles": scene_cast_roles,
         "worldAnchorRoles": world_anchor_roles,
+        "attachedWorldAnchorRoles": [role for role in world_anchor_roles if len(comfy_refs_by_role.get(role) or []) > 0],
+        "allowedRolesForImage": sorted(list(allowed_roles_for_image)),
         "filteredOutBySceneContract": filtered_out_by_scene_contract,
         "incomingReadyRefsByRole": {role: len((raw_refs_by_role_incoming or {}).get(role) or []) for role in comfy_roles} if isinstance(raw_refs_by_role_incoming, dict) else {},
         "rawRefsByRole": {role: len((getattr(refs_obj, "refsByRole", {}) or {}).get(role) or []) for role in comfy_roles},
@@ -4888,7 +4897,9 @@ def clip_image(payload: ClipImageIn):
             "sceneGoal": scene_goal_input or None,
             "sceneNarrativeStep": scene_narrative_step_input or None,
             "continuity": continuity_input or None,
-            "imagePromptPreview": (prompt or scene_delta)[:400],
+            "promptPreview": (prompt or "")[:400],
+            "sceneDeltaPreview": (scene_delta or "")[:400],
+            "sceneTextPreview": (scene_text or "")[:400],
             "promptSource": prompt_source or (request_prompt_debug.get("promptSource") if isinstance(request_prompt_debug, dict) else None) or "unknown",
         },
     }
@@ -5293,6 +5304,15 @@ def clip_image(payload: ClipImageIn):
             "attachedCountsByRole": attached_counts_by_role,
             "skippedRoles": skipped_roles + filtered_out_by_scene_contract,
             "inlineLoadFailuresByRole": inline_load_failures_by_role,
+            "failedInlineRoleCount": len([role for role in comfy_roles if inline_load_failures_by_role.get(role, 0) > 0]),
+            "failedInlineUrlCountByRole": {role: inline_load_failures_by_role.get(role, 0) for role in comfy_roles},
+            "comfyRoleAwarePartsByRole": {role: len(comfy_inline_parts_by_role.get(role) or []) for role in comfy_roles},
+            "legacyPartsSummary": {
+                "character": len(character_images),
+                "location": len(location_images),
+                "style": len(style_images),
+                "props": len(props_images),
+            },
             "activeRoles": scene_active_roles,
         }
         refs_debug["attachOrder"] = role_attach_order
@@ -5300,6 +5320,15 @@ def clip_image(payload: ClipImageIn):
         refs_debug["heroAttached"] = hero_attached
         refs_debug["heroEntityId"] = hero_entity_id or None
         refs_debug["inlineLoadFailuresByRole"] = inline_load_failures_by_role
+        refs_debug["failedInlineRoleCount"] = len([role for role in comfy_roles if inline_load_failures_by_role.get(role, 0) > 0])
+        refs_debug["failedInlineUrlCountByRole"] = {role: inline_load_failures_by_role.get(role, 0) for role in comfy_roles}
+        refs_debug["comfyRoleAwarePartsByRole"] = {role: len(comfy_inline_parts_by_role.get(role) or []) for role in comfy_roles}
+        refs_debug["legacyPartsSummary"] = {
+            "character": len(character_images),
+            "location": len(location_images),
+            "style": len(style_images),
+            "props": len(props_images),
+        }
         refs_debug["skippedRoles"] = skipped_roles + filtered_out_by_scene_contract
         refs_debug["modelPartsSummary"] = model_parts_summary
         print("[COMFY IMAGE DEBUG] model parts summary=" + json.dumps(model_parts_summary, ensure_ascii=False))
