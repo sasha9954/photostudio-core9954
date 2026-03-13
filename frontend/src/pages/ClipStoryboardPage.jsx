@@ -4075,6 +4075,12 @@ onClipSec: (nodeId, value) => {
               connectedRefsSummary,
               connectedRefsWarnings,
               hiddenReferenceProfiles,
+              plannerMeta: {
+                ...(base.data?.plannerMeta || {}),
+                connectedRefsSummary,
+                connectedRefsWarnings,
+                referenceProfiles: hiddenReferenceProfiles,
+              },
               onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
               onMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x))),
               onOutput: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, output: normalizeRenderProfile(value) } } : x))),
