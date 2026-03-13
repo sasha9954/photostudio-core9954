@@ -48,7 +48,35 @@ class ClipComfyConnectRefsIn(BaseModel):
     refsByRole: dict[str, list[RefItemIn]] = Field(default_factory=dict)
 
 
-def _build_character_1_label(profile: dict[str, Any] | None) -> str:
+CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "props", "location", "style"]
+
+
+def _extract_profile_tokens(profile: dict[str, Any] | None) -> str:
+    source = profile if isinstance(profile, dict) else {}
+    visual_profile = source.get("visualProfile") if isinstance(source.get("visualProfile"), dict) else {}
+    fields: list[Any] = [
+        source.get("entityType"),
+        source.get("detectedEntityType"),
+        source.get("expectedEntityType"),
+        source.get("invariants"),
+        source.get("forbiddenChanges"),
+    ]
+    fields.extend(list(visual_profile.values()))
+
+    tokens: list[str] = []
+    for value in fields:
+        if isinstance(value, str):
+            tokens.append(value)
+        elif isinstance(value, list):
+            tokens.extend([str(v) for v in value if isinstance(v, (str, int, float))])
+        elif isinstance(value, dict):
+            tokens.extend([str(v) for v in value.values() if isinstance(v, (str, int, float))])
+        elif isinstance(value, (int, float)):
+            tokens.append(str(value))
+    return " ".join(tokens).strip().lower()
+
+
+def _build_human_label(profile: dict[str, Any] | None) -> str:
     source = profile if isinstance(profile, dict) else {}
     visual_profile = source.get("visualProfile") if isinstance(source.get("visualProfile"), dict) else {}
     raw_gender = (
@@ -71,6 +99,70 @@ def _build_character_1_label(profile: dict[str, Any] | None) -> str:
         base = "персонаж"
 
     return base
+
+
+def _build_animal_label(profile: dict[str, Any] | None) -> str:
+    tokens = _extract_profile_tokens(profile)
+    if any(token in tokens for token in ["кот", "cat", "feline"]):
+        return "кот"
+    if any(token in tokens for token in ["собак", "dog", "canine"]):
+        return "собака"
+    if any(token in tokens for token in ["волк", "wolf"]):
+        return "волк"
+    return "животное"
+
+
+def _build_props_label(profile: dict[str, Any] | None) -> str:
+    tokens = _extract_profile_tokens(profile)
+    if any(token in tokens for token in ["машин", "car", "automobile", "sedan", "suv"]):
+        return "машина"
+    if any(token in tokens for token in ["мото", "motorcycle", "bike"]):
+        return "мотоцикл"
+    if any(token in tokens for token in ["camera", "камера"]):
+        return "камера"
+    if any(token in tokens for token in ["телефон", "phone", "smartphone", "iphone", "android"]):
+        return "телефон"
+    if any(token in tokens for token in ["tech", "device", "gadget", "техник"]):
+        return "техника"
+    return "предмет"
+
+
+def _build_location_label(profile: dict[str, Any] | None) -> str:
+    tokens = _extract_profile_tokens(profile)
+    if any(token in tokens for token in ["город", "city", "urban", "downtown"]):
+        return "город"
+    if any(token in tokens for token in ["квартир", "apartment", "flat", "interior"]):
+        return "квартира"
+    if any(token in tokens for token in ["лес", "forest", "woodland", "jungle"]):
+        return "лес"
+    if any(token in tokens for token in ["марс", "mars"]):
+        return "Марс"
+    return "локация"
+
+
+def _build_style_label(profile: dict[str, Any] | None) -> str:
+    tokens = _extract_profile_tokens(profile)
+    if any(token in tokens for token in ["реал", "realism", "photoreal", "naturalistic"]):
+        return "реализм"
+    if any(token in tokens for token in ["кино", "cinema", "cinematic", "film"]):
+        return "кино"
+    if any(token in tokens for token in ["неон", "neon", "cyberpunk", "glow"]):
+        return "неон"
+    return "стиль"
+
+
+def _build_short_label_for_role(role: str, profile: dict[str, Any] | None) -> str:
+    if role in {"character_1", "character_2", "character_3"}:
+        return _build_human_label(profile)
+    if role == "animal":
+        return _build_animal_label(profile)
+    if role == "props":
+        return _build_props_label(profile)
+    if role == "location":
+        return _build_location_label(profile)
+    if role == "style":
+        return _build_style_label(profile)
+    return "реф"
 
 
 @router.post("/clip/comfy/plan")
@@ -116,37 +208,36 @@ async def clip_comfy_connect_refs(payload: ClipComfyConnectRefsIn) -> dict[str, 
         role: [item.model_dump(mode="json") for item in items]
         for role, items in (payload.refsByRole or {}).items()
     }
-    character_1_items = refs_by_role.get("character_1") if isinstance(refs_by_role.get("character_1"), list) else []
-    character_1_items = [item for item in character_1_items if isinstance(item, dict) and str(item.get("url") or "").strip()]
+    filtered_refs_by_role: dict[str, list[dict[str, Any]]] = {}
+    for role in CONNECT_REFS_MAIN_ROLES:
+        role_items = refs_by_role.get(role) if isinstance(refs_by_role.get(role), list) else []
+        clean_items = [item for item in role_items if isinstance(item, dict) and str(item.get("url") or "").strip()]
+        if clean_items:
+            filtered_refs_by_role[role] = clean_items
 
-    if not character_1_items:
+    if not filtered_refs_by_role:
         return {
             "ok": True,
             "connectedRefsSummary": [],
             "referenceProfiles": {},
         }
 
-    reference_profiles = build_reference_profiles({"character_1": character_1_items})
-    character_1_profile = reference_profiles.get("character_1") if isinstance(reference_profiles.get("character_1"), dict) else {}
-    raw_gender_presentation = ""
-    if isinstance(character_1_profile.get("visualProfile"), dict):
-        raw_gender_presentation = str(character_1_profile.get("visualProfile", {}).get("genderPresentation") or "")
-    short_label = _build_character_1_label(character_1_profile)
-    logger.info(
-        "[clip_comfy_connect_refs] character_1 rawGenderPresentation=%s resolvedLabel=%s",
-        raw_gender_presentation,
-        short_label,
-    )
+    reference_profiles = build_reference_profiles(filtered_refs_by_role)
+    connected_refs_summary: list[dict[str, str]] = []
+    for role in CONNECT_REFS_MAIN_ROLES:
+        role_profile = reference_profiles.get(role) if isinstance(reference_profiles.get(role), dict) else None
+        if not role_profile:
+            continue
+        connected_refs_summary.append(
+            {
+                "role": role,
+                "label": _build_short_label_for_role(role, role_profile),
+            }
+        )
+    logger.info("[clip_comfy_connect_refs] connected roles=%s", [item.get("role") for item in connected_refs_summary])
 
     return {
         "ok": True,
-        "connectedRefsSummary": [
-            {
-                "role": "character_1",
-                "label": short_label,
-            }
-        ],
-        "referenceProfiles": {
-            "character_1": character_1_profile,
-        },
+        "connectedRefsSummary": connected_refs_summary,
+        "referenceProfiles": reference_profiles,
     }

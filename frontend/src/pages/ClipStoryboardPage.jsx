@@ -3968,6 +3968,12 @@ onClipSec: (nodeId, value) => {
                   const refsPayload = {
                     refsByRole: {
                       character_1: Array.isArray(liveDerived?.refsByRole?.character_1) ? liveDerived.refsByRole.character_1 : [],
+                      character_2: Array.isArray(liveDerived?.refsByRole?.character_2) ? liveDerived.refsByRole.character_2 : [],
+                      character_3: Array.isArray(liveDerived?.refsByRole?.character_3) ? liveDerived.refsByRole.character_3 : [],
+                      animal: Array.isArray(liveDerived?.refsByRole?.animal) ? liveDerived.refsByRole.animal : [],
+                      props: Array.isArray(liveDerived?.refsByRole?.props) ? liveDerived.refsByRole.props : [],
+                      location: Array.isArray(liveDerived?.refsByRole?.location) ? liveDerived.refsByRole.location : [],
+                      style: Array.isArray(liveDerived?.refsByRole?.style) ? liveDerived.refsByRole.style : [],
                     },
                   };
                   const response = await fetchJson(`/api/clip/comfy/connect-refs`, { method: "POST", body: refsPayload });
