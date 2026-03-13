@@ -54,7 +54,7 @@ class ClipComfyAnalyzeRefIn(BaseModel):
     refs: list[RefItemIn] = Field(default_factory=list)
 
 
-CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "props", "location", "style"]
+CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
 
 
 def _extract_profile_tokens(profile: dict[str, Any] | None) -> str:
@@ -253,6 +253,8 @@ def _build_short_label_for_role(role: str, profile: dict[str, Any] | None) -> st
         return _build_human_label(profile)
     if role == "animal":
         return _build_animal_label(profile)
+    if role == "group":
+        return "группа"
     if role == "props":
         return _build_props_label(profile)
     if role == "location":

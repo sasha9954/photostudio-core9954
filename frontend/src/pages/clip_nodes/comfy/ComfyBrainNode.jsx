@@ -21,8 +21,6 @@ export default function ComfyBrainNode({ id, data }) {
         ? "ошибка"
         : "ожидание";
   const parseButtonLabel = isParsing ? "Разбираю..." : "Разобрать";
-  const refsConnectStatus = data?.refsConnectStatus || "idle";
-  const isConnectingRefs = refsConnectStatus === "loading";
   const connectedRefsSummary = Array.isArray(data?.connectedRefsSummary) ? data.connectedRefsSummary : [];
   const connectedRefsWarnings = Array.isArray(data?.connectedRefsWarnings) ? data.connectedRefsWarnings : [];
   const parseHint = isParsing
@@ -61,7 +59,6 @@ export default function ComfyBrainNode({ id, data }) {
       <div className="clipSB_small" style={{ marginTop: 8 }}>status: {statusLabel}{data?.parsedAt ? ` • ${data.parsedAt}` : ""}</div>
       <div className="clipSB_selectHint" style={{ marginTop: 6 }}>{parseHint}</div>
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <button className="clipSB_btn" onClick={() => data?.onConnectRefs?.(id)} disabled={isConnectingRefs || isParsing}>{isConnectingRefs ? "Подключаю..." : "Подключить рефы"}</button>
         <button className="clipSB_btn" onClick={() => data?.onParse?.(id)} disabled={isParsing}>{parseButtonLabel}</button>
       </div>
 
