@@ -142,26 +142,33 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
         if not isinstance(outputs, dict):
             continue
 
-        output_node_ids = [str(node_id) for node_id, node_output in outputs.items() if isinstance(node_output, dict)]
         print(f"[COMFY REMOTE] outputs keys for history '{history_key}'", list(outputs.keys()))
-        print(f"[COMFY REMOTE] node ids with outputs for history '{history_key}'", output_node_ids)
         if "75" in outputs:
             print("[COMFY REMOTE] outputs['75']", outputs.get("75"))
 
-        for _, node_output in outputs.items():
+        for node_id, node_output in outputs.items():
             if not isinstance(node_output, dict):
                 continue
 
-            for list_key in ("videos", "files", "gifs"):
+            for list_key in ("videos", "files", "gifs", "images"):
                 items = node_output.get(list_key)
                 if isinstance(items, list):
                     for item in items:
                         file_ref = _extract_file_ref(item)
                         if file_ref:
+                            print("[COMFY REMOTE] matched output", {
+                                "node_id": node_id,
+                                "list_key": list_key,
+                                "file_ref": file_ref,
+                            })
                             return file_ref, None
 
             file_ref = _extract_file_ref(node_output)
             if file_ref:
+                print("[COMFY REMOTE] matched direct output", {
+                    "node_id": node_id,
+                    "file_ref": file_ref,
+                })
                 return file_ref, None
 
     return None, "video_output_missing"
