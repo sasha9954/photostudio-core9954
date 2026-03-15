@@ -2241,6 +2241,7 @@ const scenarioSelectedCanInheritPreviousEnd = scenarioSelectedTransitionType ===
   && !!String(scenarioPreviousScene?.endImageUrl || "").trim();
 const scenarioSelectedEffectiveStartImageUrl = getEffectiveSceneStartImage(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedVideoSourceImageUrl = String(scenarioSelected?.videoSourceImageUrl || "").trim();
+const scenarioSelectedVideoPanelActivated = !!scenarioSelected?.videoPanelActivated;
 const scenarioSelectedStartImageSource = getSceneStartImageSource(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedImageFormat = normalizeSceneImageFormat(scenarioSelected?.imageFormat);
 const scenarioSelectedIndexLabel = Number.isFinite(scenarioEditor.selected) ? scenarioEditor.selected + 1 : 0;
@@ -2259,6 +2260,10 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
     : scenarioPreviousScene?.startImageUrl
       ? "startImageUrl"
       : "none";
+const scenarioHasImageForVideo = scenarioSelectedTransitionType === "continuous"
+  ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl)
+  : !!scenarioSelected?.imageUrl;
+const scenarioCanShowAddToVideoButton = scenarioHasImageForVideo && !scenarioSelectedVideoPanelActivated;
 
 const comfyNode = useMemo(() => {
   if (comfyEditor.nodeId) return nodes.find((n) => n.id === comfyEditor.nodeId && n.type === 'comfyStoryboard') || null;
@@ -2286,6 +2291,7 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
   const [scenarioImageLoading, setScenarioImageLoading] = useState(false);
   const [scenarioImageError, setScenarioImageError] = useState("");
   const [scenarioVideoLoading, setScenarioVideoLoading] = useState(false);
+  const [scenarioAudioSliceLoading, setScenarioAudioSliceLoading] = useState(false);
   const [scenarioVideoError, setScenarioVideoError] = useState("");
   const [scenarioVideoOpen, setScenarioVideoOpen] = useState(false);
   const [comfyImageLoading, setComfyImageLoading] = useState(false);
@@ -2393,6 +2399,7 @@ const comfyShowVideoSection = Boolean(
   useEffect(() => {
     setScenarioVideoError("");
     setScenarioVideoOpen(false);
+    setScenarioAudioSliceLoading(false);
     const selectedSceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
     const activeSceneId = String(scenarioActiveVideoJobRef.current?.sceneId || "");
     if (!activeSceneId || activeSceneId !== selectedSceneId) {
@@ -3166,12 +3173,36 @@ Aspect ratio: ${imageFormat}`,
 
       const generatedImageUrl = String(out.imageUrl || "");
       if (transitionType === "continuous" && normalizedSlot === "start") {
-        updateScenarioScene(scenarioEditor.selected, { startImageUrl: generatedImageUrl, imageFormat });
+        updateScenarioScene(scenarioEditor.selected, {
+          startImageUrl: generatedImageUrl,
+          imageFormat,
+          videoUrl: "",
+          videoSourceImageUrl: "",
+          videoPanelActivated: false,
+        });
       } else if (transitionType === "continuous" && normalizedSlot === "end") {
-        updateScenarioScene(scenarioEditor.selected, { endImageUrl: generatedImageUrl, imageFormat });
+        updateScenarioScene(scenarioEditor.selected, {
+          endImageUrl: generatedImageUrl,
+          imageFormat,
+          videoUrl: "",
+          videoSourceImageUrl: "",
+          videoPanelActivated: false,
+        });
       } else {
-        updateScenarioScene(scenarioEditor.selected, { imageUrl: generatedImageUrl, imageFormat });
+        updateScenarioScene(scenarioEditor.selected, {
+          imageUrl: generatedImageUrl,
+          imageFormat,
+          videoUrl: "",
+          videoSourceImageUrl: "",
+          videoPanelActivated: false,
+        });
       }
+      setScenarioVideoOpen(false);
+      setScenarioVideoLoading(false);
+      console.log("[StoryboardVideo] image_generated_reset_video_stage", {
+        sceneId,
+        slot: normalizedSlot,
+      });
     } catch (e) {
       console.error(e);
       setScenarioImageError(String(e?.message || e));
@@ -3208,7 +3239,8 @@ Aspect ratio: ${imageFormat}`,
     const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
     const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
 
-    setScenarioVideoLoading(true);
+    console.log("[StoryboardVideo] audio_loading_on reason=take_audio", { sceneId });
+    setScenarioAudioSliceLoading(true);
     setScenarioVideoError("");
     try {
       const out = await fetchJson("/api/clip/audio-slice", {
@@ -3232,7 +3264,7 @@ Aspect ratio: ${imageFormat}`,
       console.error(e);
       setScenarioVideoError(String(e?.message || e));
     } finally {
-      setScenarioVideoLoading(false);
+      setScenarioAudioSliceLoading(false);
     }
   }, [globalAudioUrlRaw, scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
 
@@ -3306,6 +3338,7 @@ Aspect ratio: ${imageFormat}`,
       ? (effectiveStartImageUrl || endImageUrl || frameImageUrl || "")
       : (frameImageUrl || "");
 
+    console.log("[StoryboardVideo] video_loading_on reason=generate_video", { sceneId });
     setScenarioVideoLoading(true);
     setScenarioVideoError("");
     console.log("[StoryboardVideo] generate", {
@@ -3424,7 +3457,7 @@ Aspect ratio: ${imageFormat}`,
     const effectiveVideoProvider = String(scenarioSelected?.sceneRenderProvider || "kie").trim().toLowerCase() === "comfy_remote" ? "comfy_remote" : "kie";
 
     const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
-    console.log("[StoryboardVideo] add_to_video", {
+    console.log("[StoryboardVideo] add_to_video activate_panel", {
       sceneId,
       transitionType,
       provider: effectiveVideoProvider,
@@ -3433,6 +3466,7 @@ Aspect ratio: ${imageFormat}`,
 
     updateScenarioScene(scenarioEditor.selected, {
       videoSourceImageUrl,
+      videoPanelActivated: true,
     });
 
     if (scenarioVideoScrollRafRef.current) {
@@ -4050,6 +4084,8 @@ onClipSec: (nodeId, value) => {
                         audioSliceActualDurationSec: normalizeDurationSec(s.audioSliceActualDurationSec),
                         audioSliceLoadError: s.audioSliceLoadError || "",
                         videoUrl: s.videoUrl || "",
+                        videoSourceImageUrl: s.videoSourceImageUrl || "",
+                        videoPanelActivated: !!s.videoPanelActivated,
                         why: s.why || "",
                         audioType: s.audioType || "mixed",
                         sceneType: s.sceneType || "visual_rhythm",
@@ -5547,7 +5583,7 @@ const hydrate = useCallback(() => {
                               {scenarioImageLoading ? "Генерация..." : "Сгенерировать end"}
                             </button>
                             <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleClearScenarioImage("end")}>Очистить end</button>
-                            {(scenarioSelectedEffectiveStartImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) ? (
+                            {scenarioCanShowAddToVideoButton ? (
                               <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioAddToVideo}>Добавить в Видео</button>
                             ) : null}
                           </div>
@@ -5600,7 +5636,7 @@ const hydrate = useCallback(() => {
                               {scenarioImageLoading ? "Генерация..." : "Сгенерировать изображение"}
                             </button>
                             <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleClearScenarioImage("single")}>Очистить изображение</button>
-                            {scenarioSelected.imageUrl ? (
+                            {scenarioCanShowAddToVideoButton ? (
                               <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioAddToVideo}>Добавить в Видео</button>
                             ) : null}
                           </div>
@@ -5691,8 +5727,8 @@ const hydrate = useCallback(() => {
                       ) : null}
                     </div>
 
-                    {scenarioVideoOpen ? (
-                      <div ref={scenarioVideoCardRef} className={`clipSB_scenarioEditRow clipSB_videoBlock${scenarioVideoFocusPulse ? " clipSB_videoBlockPulse" : ""}`}>
+                    {scenarioSelectedVideoPanelActivated ? (
+                      <div ref={scenarioVideoCardRef} className={`clipSB_scenarioEditRow clipSB_videoBlock${(scenarioVideoFocusPulse || scenarioVideoOpen) ? " clipSB_videoBlockPulse" : ""}`}>
                         <div className="clipSB_hint" style={{ marginBottom: 8 }}>Видео сцены</div>
                         {scenarioSelectedTransitionType === "continuous" ? (
                           <div className="clipSB_videoPipelineRow">
@@ -5794,15 +5830,15 @@ const hydrate = useCallback(() => {
                           <div className="clipSB_videoKv"><span>videoUrl</span><span>{scenarioSelected.videoUrl || "—"}</span></div>
                         </details>
                         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioVideoTakeAudio} disabled={scenarioVideoLoading || !globalAudioUrlRaw}>
-                            Взять аудио
+                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioVideoTakeAudio} disabled={scenarioAudioSliceLoading || !globalAudioUrlRaw}>
+                            {scenarioAudioSliceLoading ? "Делаю..." : "Взять аудио"}
                           </button>
                           <button
                             className="clipSB_btn clipSB_btnSecondary"
                             onClick={handleScenarioGenerateVideo}
                             disabled={scenarioVideoLoading || !(scenarioSelectedTransitionType === "continuous" ? (scenarioSelectedEffectiveStartImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) : scenarioSelected.imageUrl) || (scenarioSelectedIsLipSync && !scenarioSelected.audioSliceUrl)}
                           >
-                            Сгенерировать видео
+                            {scenarioVideoLoading ? "Делаю..." : "Сгенерировать видео"}
                           </button>
                           <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioClearVideo} disabled={scenarioVideoLoading}>
                             Очистить видео
