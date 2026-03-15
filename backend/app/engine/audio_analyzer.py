@@ -82,6 +82,32 @@ def _estimate_vocal_phrases(y: np.ndarray, sr: int) -> List[Dict[str, float]]:
     return _merge_segments(phrases, max_gap=0.3)
 
 
+def _derive_pause_points(vocal_phrases: List[Dict[str, float]], duration: float) -> List[float]:
+    if not vocal_phrases:
+        return []
+
+    pauses: List[float] = []
+    ordered = sorted(vocal_phrases, key=lambda x: float(x.get("start", 0.0)))
+    for idx in range(1, len(ordered)):
+        prev_end = float(ordered[idx - 1].get("end", 0.0))
+        cur_start = float(ordered[idx].get("start", 0.0))
+        gap = cur_start - prev_end
+        if gap >= 0.2:
+            pauses.append(_safe_float(prev_end + gap * 0.5))
+
+    # Also include phrase endings as safe cut points.
+    for phrase in ordered:
+        end = float(phrase.get("end", 0.0))
+        if 0.0 < end < duration:
+            pauses.append(_safe_float(end))
+
+    dedup: List[float] = []
+    for value in sorted(set(pauses)):
+        if not dedup or abs(value - dedup[-1]) >= 0.15:
+            dedup.append(value)
+    return dedup
+
+
 def _estimate_downbeats_and_bars(
     beats: List[float],
     beat_frames: np.ndarray,
@@ -285,6 +311,20 @@ def analyze_audio(path: str, debug: bool = False) -> dict:
     energy_peaks = [_safe_float(t) for t in sorted(selected_peaks)]
 
     vocal_phrases = _estimate_vocal_phrases(y=y, sr=sr)
+    pause_points = _derive_pause_points(vocal_phrases=vocal_phrases, duration=float(duration))
+    phrase_boundaries = sorted(
+        {
+            _safe_float(float(item.get("start", 0.0)))
+            for item in vocal_phrases
+            if 0.0 <= float(item.get("start", 0.0)) <= float(duration)
+        }.union(
+            {
+                _safe_float(float(item.get("end", 0.0)))
+                for item in vocal_phrases
+                if 0.0 <= float(item.get("end", 0.0)) <= float(duration)
+            }
+        )
+    )
     sections = _estimate_sections(y=y, sr=sr, duration=float(duration))
 
     if debug:
@@ -302,6 +342,8 @@ def analyze_audio(path: str, debug: bool = False) -> dict:
         "downbeats": downbeats,
         "bars": bars,
         "vocalPhrases": vocal_phrases,
+        "pausePoints": pause_points,
+        "phraseBoundaries": phrase_boundaries,
         "energyPeaks": energy_peaks,
         "sections": sections,
     }

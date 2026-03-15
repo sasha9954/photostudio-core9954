@@ -5987,8 +5987,21 @@ const hydrate = useCallback(() => {
                       <div className="clipSB_comfyInfoGrid">
                         <div className="clipSB_comfyKv"><span>Сцена</span><strong>{comfySelectedScene.title || '—'}</strong></div>
                         <div className="clipSB_comfyKv"><span>Время</span><strong>{Number.isFinite(Number(comfySelectedScene.startSec)) && Number.isFinite(Number(comfySelectedScene.endSec)) ? `${Number(comfySelectedScene.startSec).toFixed(1)}–${Number(comfySelectedScene.endSec).toFixed(1)}s` : `${Number(comfySelectedScene.durationSec || 0).toFixed(1)}s`}</strong></div>
+                        <div className="clipSB_comfyKv"><span>Тип сцены</span><strong>{comfySelectedScene.sceneType || '—'}</strong></div>
+                        <div className="clipSB_comfyKv"><span>Рендер-модель</span><strong>{comfySelectedScene.futureRenderModel || '—'}</strong></div>
+                        <div className="clipSB_comfyKv"><span>Anchor</span><strong>{comfySelectedScene.anchorType || '—'}</strong></div>
+                        <div className="clipSB_comfyKv"><span>Primary role</span><strong>{comfySelectedScene.primaryRole || '—'}</strong></div>
+                        <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Refs used</span><strong>{Array.isArray(comfySelectedScene.refsUsed) && comfySelectedScene.refsUsed.length ? comfySelectedScene.refsUsed.join(', ') : '—'}</strong></div>
                         <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Цель</span><strong>{comfySelectedScene.sceneGoal || comfySelectedScene.sceneNarrativeStep || '—'}</strong></div>
                       </div>
+                    </div>
+
+                    <div className="clipSB_comfySection">
+                      <div className="clipSB_comfyBlockTitle">WORLD BIBLE</div>
+                      <div className="clipSB_small">storyMode: {String(comfyNode?.data?.plannerMeta?.worldBible?.storyMode || comfyNode?.data?.plannerMeta?.audioStoryMode || '—')}</div>
+                      <div className="clipSB_small">visualStyle: {String(comfyNode?.data?.plannerMeta?.worldBible?.visualStyle || comfyNode?.data?.stylePreset || '—')}</div>
+                      <div className="clipSB_small">cameraLanguage: {String(comfyNode?.data?.plannerMeta?.worldBible?.cameraLanguage || '—')}</div>
+                      <div className="clipSB_small">emotionalArc: {String(comfyNode?.data?.plannerMeta?.worldBible?.emotionalArc || '—')}</div>
                     </div>
 
                     <div className="clipSB_comfySection">

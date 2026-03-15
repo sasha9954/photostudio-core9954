@@ -41,6 +41,7 @@ class ClipComfyPlanIn(BaseModel):
     refsByRole: dict[str, list[RefItemIn]] = Field(default_factory=dict)
     storyControlMode: str = ""
     storyMissionSummary: str = ""
+    audioStoryMode: str = "lyrics_music"
     timelineSource: str = ""
     narrativeSource: str = ""
 

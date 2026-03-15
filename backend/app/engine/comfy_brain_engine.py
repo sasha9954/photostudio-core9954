@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 from app.core.config import settings
+from app.engine.clip_scene_planner import plan_comfy_clip
 from app.engine.comfy_reference_profile import build_reference_profiles, summarize_profiles
 from app.engine.gemini_rest import post_generate_content
 
@@ -607,6 +608,9 @@ def _needs_segmentation_refinement(segmentation_debug: dict[str, Any], audio_dur
 
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
+    if normalized.get("mode") == "clip":
+        return plan_comfy_clip(normalized)
+
     reference_profiles = build_reference_profiles(normalized.get("refsByRole") or {})
     normalized["referenceProfiles"] = reference_profiles
     refs_presence = {k: len(v) for k, v in normalized["refsByRole"].items()}
