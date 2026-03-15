@@ -3197,6 +3197,11 @@ Aspect ratio: ${imageFormat}`,
           videoPanelActivated: false,
         });
       }
+      const activeSceneId = String(scenarioActiveVideoJobRef.current?.sceneId || "");
+      if (activeSceneId && activeSceneId === sceneId) {
+        clearActiveVideoJob();
+        console.log("[StoryboardVideo] cleared_active_job_on_image_regen", { sceneId, slot: normalizedSlot });
+      }
       setScenarioVideoOpen(false);
       setScenarioVideoLoading(false);
       console.log("[StoryboardVideo] image_generated_reset_video_stage", {
@@ -3209,7 +3214,7 @@ Aspect ratio: ${imageFormat}`,
     } finally {
       setScenarioImageLoading(false);
     }
-  }, [scenarioSelected, scenarioEditor.selected, scenarioScenes, scenarioBrainRefs, updateScenarioScene]);
+  }, [clearActiveVideoJob, scenarioSelected, scenarioEditor.selected, scenarioScenes, scenarioBrainRefs, updateScenarioScene]);
 
   const handleClearScenarioImage = useCallback((slot = "single") => {
     setScenarioImageError("");
@@ -3225,6 +3230,12 @@ Aspect ratio: ${imageFormat}`,
         videoSourceImageUrl: "",
         videoPanelActivated: false,
       });
+      const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
+      const activeSceneId = String(scenarioActiveVideoJobRef.current?.sceneId || "");
+      if (activeSceneId && activeSceneId === sceneId) {
+        clearActiveVideoJob();
+        console.log("[StoryboardVideo] cleared_active_job_on_image_clear", { sceneId, slot: normalizedSlot });
+      }
       setScenarioVideoOpen(false);
       setScenarioVideoLoading(false);
       return;
@@ -3236,19 +3247,31 @@ Aspect ratio: ${imageFormat}`,
         videoSourceImageUrl: "",
         videoPanelActivated: false,
       });
+      const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
+      const activeSceneId = String(scenarioActiveVideoJobRef.current?.sceneId || "");
+      if (activeSceneId && activeSceneId === sceneId) {
+        clearActiveVideoJob();
+        console.log("[StoryboardVideo] cleared_active_job_on_image_clear", { sceneId, slot: normalizedSlot });
+      }
       setScenarioVideoOpen(false);
       setScenarioVideoLoading(false);
       return;
     }
+    const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
     updateScenarioScene(scenarioEditor.selected, {
       imageUrl: "",
       videoUrl: "",
       videoSourceImageUrl: "",
       videoPanelActivated: false,
     });
+    const activeSceneId = String(scenarioActiveVideoJobRef.current?.sceneId || "");
+    if (activeSceneId && activeSceneId === sceneId) {
+      clearActiveVideoJob();
+      console.log("[StoryboardVideo] cleared_active_job_on_image_clear", { sceneId, slot: normalizedSlot });
+    }
     setScenarioVideoOpen(false);
     setScenarioVideoLoading(false);
-  }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
+  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
 
   const handleScenarioVideoTakeAudio = useCallback(async () => {
     if (!scenarioSelected) return;
@@ -3501,6 +3524,11 @@ Aspect ratio: ${imageFormat}`,
 
     setScenarioVideoOpen(true);
     setScenarioVideoError("");
+    if (sceneId === String(scenarioActiveVideoJobRef.current?.sceneId || "") && !String(scenarioSelected?.videoUrl || "").trim()) {
+      clearActiveVideoJob();
+      console.log("[StoryboardVideo] cleared_active_job_on_add_to_video", { sceneId });
+      setScenarioVideoLoading(false);
+    }
     const activeSceneId = String(scenarioActiveVideoJobRef.current?.sceneId || "");
     if (!activeSceneId || activeSceneId !== sceneId) {
       console.log("[StoryboardVideo] loading_off reason=no_active_job", { selectedSceneId: sceneId, activeSceneId });
@@ -3509,7 +3537,7 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoFocusPulse(true);
     window.setTimeout(() => setScenarioVideoFocusPulse(false), 1200);
     scrollToVideoBlock();
-  }, [scenarioEditor.selected, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
+  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
 
   const storyboardScenesForAssembly = useMemo(() => extractStoryboardScenesFromNodes(nodes), [nodes]);
 
