@@ -254,6 +254,8 @@ def analyze_audio(path: str, debug: bool = False) -> dict:
             "downbeats": [],
             "bars": [],
             "vocalPhrases": [],
+            "pausePoints": [],
+            "phraseBoundaries": [],
             "energyPeaks": [],
             "sections": [],
         }

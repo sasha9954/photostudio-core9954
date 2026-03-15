@@ -609,6 +609,7 @@ def _needs_segmentation_refinement(segmentation_debug: dict[str, Any], audio_dur
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
     if normalized.get("mode") == "clip":
+        logger.info("[COMFY PLAN][clip] audioStoryMode=%s text=%s audio=%s", normalized.get("audioStoryMode"), bool(normalized.get("text")), bool(normalized.get("audioUrl")))
         return plan_comfy_clip(normalized)
 
     reference_profiles = build_reference_profiles(normalized.get("refsByRole") or {})
