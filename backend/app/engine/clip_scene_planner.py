@@ -238,6 +238,74 @@ def _phase_label(scene_idx: int, total: int) -> str:
     return "release"
 
 
+def _compact_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _collect_text_inputs(payload: dict[str, Any]) -> tuple[str, str, str]:
+    text_fields = [
+        ("text", payload.get("text")),
+        ("lyricsText", payload.get("lyricsText")),
+        ("transcriptText", payload.get("transcriptText")),
+        ("spokenTextHint", payload.get("spokenTextHint")),
+        ("lyrics", payload.get("lyrics")),
+        ("transcript", payload.get("transcript")),
+    ]
+    primary_text = ""
+    source = ""
+    for key, value in text_fields:
+        clean = _compact_text(value)
+        if clean:
+            primary_text = clean
+            source = key
+            break
+
+    exact_lyrics = _compact_text(payload.get("lyricsText") or payload.get("lyrics"))
+    spoken_hint = _compact_text(payload.get("transcriptText") or payload.get("spokenTextHint") or payload.get("transcript"))
+    return primary_text, source, (exact_lyrics or spoken_hint)
+
+
+def _collect_semantic_hints(payload: dict[str, Any]) -> str:
+    hint_sources = [
+        payload.get("audioSemanticHints"),
+        payload.get("semanticHints"),
+        payload.get("audioSemanticSummary"),
+        payload.get("spokenTextHint"),
+    ]
+    values: list[str] = []
+    for src in hint_sources:
+        if isinstance(src, str):
+            clean = _compact_text(src)
+            if clean:
+                values.append(clean)
+        elif isinstance(src, list):
+            for item in src:
+                clean = _compact_text(item)
+                if clean:
+                    values.append(clean)
+        elif isinstance(src, dict):
+            for key in ["summary", "keywords", "intent", "theme", "notes"]:
+                value = src.get(key)
+                if isinstance(value, list):
+                    values.extend([_compact_text(v) for v in value if _compact_text(v)])
+                else:
+                    clean = _compact_text(value)
+                    if clean:
+                        values.append(clean)
+    return " | ".join(dict.fromkeys([v for v in values if v]))[:500]
+
+
+def _active_section_type(start: float, analysis: dict[str, Any]) -> str:
+    for section in analysis.get("sections") or []:
+        sec_start = _to_float((section or {}).get("start"))
+        sec_end = _to_float((section or {}).get("end"))
+        if sec_start is None or sec_end is None:
+            continue
+        if sec_start <= start < sec_end:
+            return str((section or {}).get("type") or "").strip().lower() or "section"
+    return "section"
+
+
 def _scene_type_for_story_window(
     *,
     start: float,
@@ -247,6 +315,8 @@ def _scene_type_for_story_window(
     analysis: dict[str, Any],
     text_beat: str,
     story_source: str,
+    section_type: str,
+    prev_scene_type: str | None,
 ) -> tuple[str, str]:
     phrase_overlap = any(((_to_float(p.get("start")) or 0.0) < end) and ((_to_float(p.get("end")) or 0.0) > start) for p in (analysis.get("vocalPhrases") or []))
     near_phrase_end = any(abs(((_to_float(p.get("end")) or -99.0) - end)) <= 0.45 for p in (analysis.get("vocalPhrases") or []))
@@ -258,18 +328,47 @@ def _scene_type_for_story_window(
     performance_feel = any(token in beat_lower for token in ["пой", "припев", "крич", "sing", "chorus", "voice", "вокал"])
     atmosphere_feel = any(token in beat_lower for token in ["ноч", "ветер", "улиц", "дожд", "тиш", "atmos", "landscape", "city"])
 
+    strong_text_beat = len(beat_lower) >= 24
+    section = section_type.lower()
+    closeup_prev = prev_scene_type in {"SING_CLOSEUP", "TALK_CLOSEUP"}
+    likely_chorus = any(token in section for token in ["chorus", "hook", "drop", "припев"])
+    likely_verse = any(token in section for token in ["verse", "куплет"])
+    likely_intro = any(token in section for token in ["intro", "интро", "start"])
+    likely_bridge = any(token in section for token in ["bridge", "бридж", "break"])
+    likely_outro = any(token in section for token in ["outro", "аутро", "ending"])
+    is_climax = phase == "peak" and phrase_overlap and (performance_feel or likely_chorus)
+
     if scene_idx == 0:
-        return ("ATMOSPHERIC_WIDE" if atmosphere_feel or not phrase_overlap else "STORY_ACTION"), phase
+        if likely_intro or atmosphere_feel or not phrase_overlap:
+            return "ATMOSPHERIC_WIDE", phase
+        return "STORY_ACTION", phase
     if scene_idx == total - 1:
         return "TRANSITION_SHOT", phase
-    if phrase_overlap and performance_feel and story_source != "audio_driven":
+    if pause_near or near_phrase_end:
+        if phase in {"release", "opening"} or likely_bridge or likely_outro:
+            return "TRANSITION_SHOT", phase
+    if phrase_overlap and performance_feel and story_source != "audio_driven" and (likely_chorus or is_climax):
         return "SING_CLOSEUP", phase
-    if phrase_overlap and (dialogue_feel or story_source == "text_driven"):
+    if phrase_overlap and (dialogue_feel or (story_source in {"text_driven", "hybrid", "lyrics_hint"} and strong_text_beat and likely_verse)):
+        if closeup_prev and not is_climax:
+            return "STORY_ACTION", phase
         return "TALK_CLOSEUP", phase
+    if closeup_prev and not is_climax:
+        if phrase_overlap:
+            return "EMOTIONAL_REACTION", phase
+        if phase in {"release", "opening"}:
+            return "ATMOSPHERIC_WIDE", phase
+        return "DETAIL_INSERT", phase
+    if likely_chorus and phrase_overlap and phase in {"buildup", "peak"}:
+        return "EMOTIONAL_REACTION", phase
+    if likely_intro and phase == "opening":
+        return "ATMOSPHERIC_WIDE", phase
+    if likely_bridge and phase in {"buildup", "peak"}:
+        return "DETAIL_INSERT", phase
+    if likely_outro and phase == "release":
+        return "TRANSITION_SHOT", phase
     if phrase_overlap and phase in {"buildup", "peak"}:
         return "EMOTIONAL_REACTION", phase
-    if pause_near or near_phrase_end:
-        return "TRANSITION_SHOT", phase
     if section_change and phase in {"opening", "release"}:
         return "ATMOSPHERIC_WIDE", phase
     if not phrase_overlap and phase == "peak":
@@ -344,16 +443,26 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
 
     boundaries = _extract_boundaries(duration, analysis)
     scenes: list[dict[str, Any]] = []
-    text = str(payload.get("text") or "").strip()
+    text, text_source, semantic_or_spoken_hint = _collect_text_inputs(payload)
     story_mode = str(payload.get("audioStoryMode") or "lyrics_music").strip() or "lyrics_music"
+    semantic_hint = _collect_semantic_hints(payload)
 
     text_beats = _split_text_beats(text, max(1, len(boundaries) - 1))
+    exact_lyrics_available = bool(_compact_text(payload.get("lyricsText") or payload.get("lyrics")))
     vocal_count = len(analysis.get("vocalPhrases") or [])
     story_source = "audio_driven"
     if text and vocal_count:
         story_source = "hybrid"
     elif text:
-        story_source = "text_driven"
+        story_source = "lyrics_hint" if text_source in {"lyricsText", "lyrics"} else "text_driven"
+    elif semantic_hint:
+        story_source = "semantic_fallback"
+        text_beats = _split_text_beats(semantic_hint, max(1, len(boundaries) - 1))
+    elif semantic_or_spoken_hint:
+        story_source = "lyrics_hint"
+        text_beats = _split_text_beats(semantic_or_spoken_hint, max(1, len(boundaries) - 1))
+
+    prev_scene_type: str | None = None
 
     world_bible = {
         "storyMode": story_mode,
@@ -383,6 +492,7 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         primary, secondary, refs_used, selection_reason = _active_roles_for_scene(idx, len(boundaries) - 1, refs_by_role)
         location = _pick_location(refs_by_role, idx)
         beat_text = text_beats[idx % len(text_beats)] if text_beats else ""
+        section_type = _active_section_type(start, analysis)
         scene_type, phase = _scene_type_for_story_window(
             start=start,
             end=end,
@@ -391,28 +501,22 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             analysis=analysis,
             text_beat=beat_text,
             story_source=story_source,
+            section_type=section_type,
+            prev_scene_type=prev_scene_type,
         )
 
         if beat_text:
             purpose = f"раскрыть сюжетный бит: {beat_text[:140]}"
             scene_goal = f"визуально и эмоционально донести: {beat_text[:180]}"
             narrative_step = f"{phase}_beat_{idx + 1}"
-            lyric_text = beat_text if scene_type == "SING_CLOSEUP" else ""
-            spoken_text = beat_text if scene_type in {"TALK_CLOSEUP", "STORY_ACTION", "EMOTIONAL_REACTION"} else ""
+            lyric_text = beat_text if scene_type == "SING_CLOSEUP" and exact_lyrics_available else ""
+            spoken_text = beat_text if scene_type in {"TALK_CLOSEUP", "STORY_ACTION", "EMOTIONAL_REACTION"} and not exact_lyrics_available else ""
         else:
-            section_type = next(
-                (
-                    str((s or {}).get("type") or "")
-                    for s in (analysis.get("sections") or [])
-                    if ((_to_float((s or {}).get("start")) or -1.0) <= start < ((_to_float((s or {}).get("end")) or 10**9)))
-                ),
-                "section",
-            )
             purpose = f"развить {section_type} фазу трека через {scene_type.lower()}"
             scene_goal = f"поддержать {phase} дугу истории по аудио-структуре"
             narrative_step = f"audio_{phase}_{idx + 1}"
             lyric_text = ""
-            spoken_text = f"Аудио-ориентированный переход {phase} без текстовой опоры" if scene_type == "TALK_CLOSEUP" else ""
+            spoken_text = f"Смысловой переход: {semantic_hint[:120]}" if (scene_type == "TALK_CLOSEUP" and semantic_hint) else ""
 
         title = f"Сцена {idx + 1}: {scene_type.lower()}"
         continuity = f"Сохранять единый мир, цветовую логику и идентичность героев. Локация: {location}."
@@ -430,7 +534,7 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             world_bible=world_bible,
         )
 
-        future_model = "sing_lipsync" if scene_type == "SING_CLOSEUP" else ("talk_or_lipsync" if scene_type == "TALK_CLOSEUP" else "story_video")
+        future_model = "sing_lipsync" if scene_type in {"SING_CLOSEUP", "TALK_CLOSEUP"} else "story_video"
         phrase_end_near = any(abs(((_to_float(p.get("end")) or -99.0) - end)) <= 0.45 for p in (analysis.get("vocalPhrases") or []))
         pause_inside = any(start <= ((_to_float(pp) or -99.0)) <= end for pp in (analysis.get("pausePoints") or []))
         section_start_near = any(abs(((_to_float(s.get("start")) or -99.0) - start)) <= 0.45 for s in (analysis.get("sections") or []))
@@ -472,6 +576,7 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "identityLock": True,
         }
         scenes.append(scene)
+        prev_scene_type = scene_type
 
     if not scenes:
         scenes = [{
@@ -509,6 +614,15 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "identityLock": True,
         }]
 
+    scene_type_histogram: dict[str, int] = {}
+    closeup_scene_count = 0
+    for item in scenes:
+        st = str(item.get("sceneType") or "")
+        if st:
+            scene_type_histogram[st] = scene_type_histogram.get(st, 0) + 1
+        if st in {"SING_CLOSEUP", "TALK_CLOSEUP"}:
+            closeup_scene_count += 1
+
     return {
         "ok": True,
         "worldBible": world_bible,
@@ -525,6 +639,11 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "storyMissionSummary": payload.get("storyMissionSummary") or "",
             "timelineSource": payload.get("timelineSource") or "audio_structure",
             "narrativeSource": payload.get("narrativeSource") or story_source,
+            "storySource": story_source,
+            "exactLyricsAvailable": exact_lyrics_available,
+            "textualBeatCount": len(text_beats),
+            "closeupSceneCount": closeup_scene_count,
+            "sceneTypeHistogram": scene_type_histogram,
             "audioDurationSec": _round(duration),
             "sceneDurationTotalSec": _round(sum(float(s.get("durationSec") or 0.0) for s in scenes)),
             "worldBible": world_bible,
@@ -541,6 +660,10 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 "pausePointCount": len(analysis.get("pausePoints") or []),
                 "phraseBoundaryCount": len(analysis.get("phraseBoundaries") or []),
                 "storySource": story_source,
+                "exactLyricsAvailable": exact_lyrics_available,
+                "textualBeatCount": len(text_beats),
+                "closeupSceneCount": closeup_scene_count,
+                "sceneTypeHistogram": scene_type_histogram,
             },
             "boundaries": boundaries,
         },

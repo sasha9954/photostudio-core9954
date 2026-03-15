@@ -170,6 +170,11 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "stylePreset": str(data.get("stylePreset") or "realism").strip().lower(),
         "freezeStyle": bool(data.get("freezeStyle")),
         "text": str(data.get("text") or "").strip(),
+        "lyricsText": str(data.get("lyricsText") or "").strip(),
+        "transcriptText": str(data.get("transcriptText") or "").strip(),
+        "spokenTextHint": str(data.get("spokenTextHint") or "").strip(),
+        "audioSemanticHints": data.get("audioSemanticHints") if isinstance(data.get("audioSemanticHints"), (list, dict, str)) else "",
+        "audioSemanticSummary": str(data.get("audioSemanticSummary") or "").strip(),
         "audioUrl": str(data.get("audioUrl") or "").strip(),
         "audioDurationSec": _to_float(data.get("audioDurationSec")),
         "refsByRole": _clean_refs_by_role(data.get("refsByRole")),
@@ -609,7 +614,15 @@ def _needs_segmentation_refinement(segmentation_debug: dict[str, Any], audio_dur
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
     if normalized.get("mode") == "clip":
-        logger.info("[COMFY PLAN][clip] audioStoryMode=%s text=%s audio=%s", normalized.get("audioStoryMode"), bool(normalized.get("text")), bool(normalized.get("audioUrl")))
+        logger.info(
+            "[COMFY PLAN][clip] audioStoryMode=%s text=%s lyricsText=%s transcriptText=%s spokenHint=%s audio=%s",
+            normalized.get("audioStoryMode"),
+            bool(normalized.get("text")),
+            bool(normalized.get("lyricsText")),
+            bool(normalized.get("transcriptText")),
+            bool(normalized.get("spokenTextHint")),
+            bool(normalized.get("audioUrl")),
+        )
         return plan_comfy_clip(normalized)
 
     reference_profiles = build_reference_profiles(normalized.get("refsByRole") or {})

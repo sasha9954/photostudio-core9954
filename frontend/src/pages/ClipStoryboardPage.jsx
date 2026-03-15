@@ -251,6 +251,15 @@ function getStyleDisplayMeta(stylePreset = "realism") {
   return STYLE_DISPLAY_META[key] || STYLE_DISPLAY_META.realism;
 }
 
+function formatSceneTypeHistogram(histogram) {
+  if (!histogram || typeof histogram !== "object") return "—";
+  const entries = Object.entries(histogram)
+    .filter(([k, v]) => String(k || "").trim() && Number(v) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]));
+  if (!entries.length) return "—";
+  return entries.map(([k, v]) => `${k}:${v}`).join(" · ");
+}
+
 // -------------------------
 // helpers
 // -------------------------
@@ -4608,6 +4617,11 @@ onClipSec: (nodeId, value) => {
                   stylePreset: freshDerived.stylePreset,
                   freezeStyle: freshDerived.freezeStyle,
                   text: freshDerived.meaningfulText || "",
+                  lyricsText: String(freshDerived.lyricsText || "").trim(),
+                  transcriptText: String(freshDerived.transcriptText || "").trim(),
+                  spokenTextHint: String(freshDerived.spokenTextHint || "").trim(),
+                  audioSemanticHints: freshDerived.audioSemanticHints || "",
+                  audioSemanticSummary: String(freshDerived.audioSemanticSummary || "").trim(),
                   audioUrl: freshDerived.meaningfulAudio || "",
                   audioDurationSec: freshDerived.meaningfulAudioDurationSec,
                   refsByRole: freshDerived.refsByRole,
@@ -6006,6 +6020,10 @@ const hydrate = useCallback(() => {
                       <div className="clipSB_small">colorWorld: {String(comfyNode?.data?.plannerMeta?.worldBible?.colorWorld || '—')}</div>
                       <div className="clipSB_small">cameraLanguage: {String(comfyNode?.data?.plannerMeta?.worldBible?.cameraLanguage || '—')}</div>
                       <div className="clipSB_small">emotionalArc: {String(comfyNode?.data?.plannerMeta?.worldBible?.emotionalArc || '—')}</div>
+                      <div className="clipSB_small">storySource: {String(comfyNode?.data?.plannerMeta?.storySource || comfyNode?.data?.comfyDebug?.analysis?.storySource || '—')}</div>
+                      <div className="clipSB_small">exactLyricsAvailable: {String(Boolean(comfyNode?.data?.plannerMeta?.exactLyricsAvailable ?? comfyNode?.data?.comfyDebug?.analysis?.exactLyricsAvailable))}</div>
+                      <div className="clipSB_small">closeupSceneCount: {String(comfyNode?.data?.plannerMeta?.closeupSceneCount ?? comfyNode?.data?.comfyDebug?.analysis?.closeupSceneCount ?? '—')}</div>
+                      <div className="clipSB_small">sceneTypeHistogram: {formatSceneTypeHistogram(comfyNode?.data?.plannerMeta?.sceneTypeHistogram || comfyNode?.data?.comfyDebug?.analysis?.sceneTypeHistogram)}</div>
                     </div>
 
                     <div className="clipSB_comfySection">
