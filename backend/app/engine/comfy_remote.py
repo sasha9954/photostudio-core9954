@@ -113,34 +113,56 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
     if not isinstance(history_payload, dict):
         return None, "history_not_dict"
 
-    for _, entry in history_payload.items():
+    print("[COMFY REMOTE] history top-level keys", list(history_payload.keys()))
+
+    def _extract_file_ref(candidate) -> str | None:
+        if isinstance(candidate, str):
+            value = candidate.strip()
+            return value or None
+        if not isinstance(candidate, dict):
+            return None
+
+        filename = str(candidate.get("filename") or "").strip()
+        subfolder = str(candidate.get("subfolder") or "").strip()
+        if filename and subfolder:
+            return f"{subfolder}/{filename}"
+        if filename:
+            return filename
+
+        for key in ("name", "path", "video", "url", "video_url"):
+            value = candidate.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    for history_key, entry in history_payload.items():
         if not isinstance(entry, dict):
             continue
         outputs = entry.get("outputs")
         if not isinstance(outputs, dict):
             continue
 
+        output_node_ids = [str(node_id) for node_id, node_output in outputs.items() if isinstance(node_output, dict)]
+        print(f"[COMFY REMOTE] outputs keys for history '{history_key}'", list(outputs.keys()))
+        print(f"[COMFY REMOTE] node ids with outputs for history '{history_key}'", output_node_ids)
+        if "75" in outputs:
+            print("[COMFY REMOTE] outputs['75']", outputs.get("75"))
+
         for _, node_output in outputs.items():
             if not isinstance(node_output, dict):
                 continue
 
-            videos = node_output.get("videos")
-            if isinstance(videos, list) and videos:
-                first = videos[0]
-                if isinstance(first, dict):
-                    filename = str(first.get("filename") or "").strip()
-                    subfolder = str(first.get("subfolder") or "").strip()
-                    if filename and subfolder:
-                        return f"{subfolder}/{filename}", None
-                    if filename:
-                        return filename, None
-                if isinstance(first, str) and first.strip():
-                    return first.strip(), None
+            for list_key in ("videos", "files", "gifs"):
+                items = node_output.get(list_key)
+                if isinstance(items, list):
+                    for item in items:
+                        file_ref = _extract_file_ref(item)
+                        if file_ref:
+                            return file_ref, None
 
-            for key in ("filename", "video", "url", "video_url"):
-                candidate = node_output.get(key)
-                if isinstance(candidate, str) and candidate.strip():
-                    return candidate.strip(), None
+            file_ref = _extract_file_ref(node_output)
+            if file_ref:
+                return file_ref, None
 
     return None, "video_output_missing"
 
