@@ -293,6 +293,7 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
         role: [item.model_dump(mode="json") for item in items]
         for role, items in (payload.refsByRole or {}).items()
     }
+    logger.info("[clip_comfy_plan] normalized-audioStoryMode=%s", req.get("audioStoryMode"))
     return run_comfy_plan(req)
 
 

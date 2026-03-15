@@ -6000,6 +6000,10 @@ const hydrate = useCallback(() => {
                       <div className="clipSB_comfyBlockTitle">WORLD BIBLE</div>
                       <div className="clipSB_small">storyMode: {String(comfyNode?.data?.plannerMeta?.worldBible?.storyMode || comfyNode?.data?.plannerMeta?.audioStoryMode || '—')}</div>
                       <div className="clipSB_small">visualStyle: {String(comfyNode?.data?.plannerMeta?.worldBible?.visualStyle || comfyNode?.data?.stylePreset || '—')}</div>
+                      <div className="clipSB_small">lensFamily: {String(comfyNode?.data?.plannerMeta?.worldBible?.lensFamily || '—')}</div>
+                      <div className="clipSB_small">lightingLogic: {String(comfyNode?.data?.plannerMeta?.worldBible?.lightingLogic || '—')}</div>
+                      <div className="clipSB_small">productionFeel: {String(comfyNode?.data?.plannerMeta?.worldBible?.productionFeel || '—')}</div>
+                      <div className="clipSB_small">colorWorld: {String(comfyNode?.data?.plannerMeta?.worldBible?.colorWorld || '—')}</div>
                       <div className="clipSB_small">cameraLanguage: {String(comfyNode?.data?.plannerMeta?.worldBible?.cameraLanguage || '—')}</div>
                       <div className="clipSB_small">emotionalArc: {String(comfyNode?.data?.plannerMeta?.worldBible?.emotionalArc || '—')}</div>
                     </div>
