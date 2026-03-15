@@ -197,46 +197,36 @@ def _find_first_node_id(workflow: dict, *, input_key: str, class_type_contains: 
     return None
 
 
+FIXED_IMAGE_VIDEO_NODES = {
+    "image": ("269", "image"),
+    "prompt": ("267:266", "value"),
+    "width": ("267:257", "value"),
+    "height": ("267:258", "value"),
+    "length": ("267:225", "value"),
+}
+FIXED_SEED_NODES = (("267:216", "noise_seed"), ("267:237", "noise_seed"))
+
+
 def _patch_workflow_inputs(workflow: dict, *, image_name: str, prompt: str, width: int, height: int, length: int, seed: int | None) -> tuple[dict | None, str | None]:
     wf = copy.deepcopy(workflow)
 
-    image_node_id = _find_first_node_id(wf, input_key="image", class_type_contains=("LoadImage",))
-    prompt_node_id = _find_first_node_id(
-        wf,
-        input_key="text",
-        class_type_contains=("CLIPTextEncode", "Text"),
-        forbid_name_contains=("negative",),
-    )
-    size_node_id = _find_first_node_id(wf, input_key="width")
-    length_node_id = _find_first_node_id(wf, input_key="length")
-
-    if not image_node_id:
-        return None, "missing_node:image"
-    if not prompt_node_id:
-        return None, "missing_node:prompt"
-    if not size_node_id:
-        return None, "missing_node:width_height"
-    if not length_node_id:
-        return None, "missing_node:length"
-
-    for node_id, key, value in [
-        (image_node_id, "image", image_name),
-        (prompt_node_id, "text", prompt),
-        (size_node_id, "width", int(width)),
-        (size_node_id, "height", int(height)),
-        (length_node_id, "length", int(length)),
-    ]:
+    patch_values = [
+        (*FIXED_IMAGE_VIDEO_NODES["image"], image_name),
+        (*FIXED_IMAGE_VIDEO_NODES["prompt"], prompt),
+        (*FIXED_IMAGE_VIDEO_NODES["width"], int(width)),
+        (*FIXED_IMAGE_VIDEO_NODES["height"], int(height)),
+        (*FIXED_IMAGE_VIDEO_NODES["length"], int(length)),
+    ]
+    for node_id, key, value in patch_values:
         ok, err = _set_node_input(wf, node_id, key, value)
         if not ok:
             return None, err
 
     if seed is not None:
-        seed_node_id = _find_first_node_id(wf, input_key="seed")
-        if not seed_node_id:
-            return None, "missing_node:seed"
-        ok, err = _set_node_input(wf, seed_node_id, "seed", int(seed))
-        if not ok:
-            return None, err
+        for node_id, key in FIXED_SEED_NODES:
+            ok, err = _set_node_input(wf, node_id, key, int(seed))
+            if not ok:
+                return None, err
 
     return wf, None
 
@@ -301,6 +291,14 @@ def run_comfy_image_to_video(
         "taskId": prompt_id,
         "debug": {
             "workflow": str(settings.COMFY_IMAGE_VIDEO_WORKFLOW or ""),
+            "usedNodeIds": {
+                "image": FIXED_IMAGE_VIDEO_NODES["image"][0],
+                "promptSource": FIXED_IMAGE_VIDEO_NODES["prompt"][0],
+                "width": FIXED_IMAGE_VIDEO_NODES["width"][0],
+                "height": FIXED_IMAGE_VIDEO_NODES["height"][0],
+                "length": FIXED_IMAGE_VIDEO_NODES["length"][0],
+                "noiseSeed": [node_id for node_id, _ in FIXED_SEED_NODES],
+            },
             "uploadedImage": uploaded_name,
             "fileRef": file_ref,
         },
