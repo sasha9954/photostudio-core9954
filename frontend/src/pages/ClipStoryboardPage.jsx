@@ -2240,6 +2240,7 @@ const scenarioSelectedCanInheritPreviousEnd = scenarioSelectedTransitionType ===
   && !!scenarioPreviousScene
   && !!String(scenarioPreviousScene?.endImageUrl || "").trim();
 const scenarioSelectedEffectiveStartImageUrl = getEffectiveSceneStartImage(scenarioSelected, scenarioPreviousScene);
+const scenarioSelectedVideoSourceImageUrl = String(scenarioSelected?.videoSourceImageUrl || "").trim();
 const scenarioSelectedStartImageSource = getSceneStartImageSource(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedImageFormat = normalizeSceneImageFormat(scenarioSelected?.imageFormat);
 const scenarioSelectedIndexLabel = Number.isFinite(scenarioEditor.selected) ? scenarioEditor.selected + 1 : 0;
@@ -2460,12 +2461,25 @@ const comfyShowVideoSection = Boolean(
 
   const startScenarioVideoPolling = useCallback((jobMeta) => {
     if (!jobMeta?.jobId) return;
-    scenarioActiveVideoJobRef.current = { ...jobMeta };
+    const now = Date.now();
+    const staleTimeoutMs = 20 * 60 * 1000;
+    scenarioActiveVideoJobRef.current = {
+      ...jobMeta,
+      startedAt: Number(jobMeta?.startedAt) || now,
+      updatedAt: Number(jobMeta?.updatedAt) || now,
+    };
     persistActiveVideoJob(scenarioActiveVideoJobRef.current);
     setScenarioVideoLoading(true);
     stopScenarioVideoPolling();
 
     const tick = async () => {
+      const currentMeta = scenarioActiveVideoJobRef.current || {};
+      const lastUpdatedAt = Number(currentMeta?.updatedAt) || Number(currentMeta?.startedAt) || 0;
+      if (lastUpdatedAt > 0 && (Date.now() - lastUpdatedAt) > staleTimeoutMs) {
+        clearActiveVideoJob();
+        setScenarioVideoError("video_job_stale_timeout");
+        return;
+      }
       try {
         const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(jobMeta.jobId)}`, { method: "GET" });
         if (!out?.ok) throw new Error(out?.hint || out?.code || "video_status_failed");
@@ -2476,6 +2490,7 @@ const comfyShowVideoSection = Boolean(
           providerJobId: String(out?.providerJobId || scenarioActiveVideoJobRef.current?.providerJobId || ""),
           sceneId: String(out?.sceneId || scenarioActiveVideoJobRef.current?.sceneId || ""),
           status,
+          updatedAt: Date.now(),
         };
         scenarioActiveVideoJobRef.current = nextMeta;
         persistActiveVideoJob(nextMeta);
@@ -2520,6 +2535,13 @@ const comfyShowVideoSection = Boolean(
     try {
       const parsed = JSON.parse(raw);
       if (!parsed?.jobId) return;
+      const staleTimeoutMs = 20 * 60 * 1000;
+      const lastUpdatedAt = Number(parsed?.updatedAt) || Number(parsed?.startedAt) || 0;
+      if (lastUpdatedAt > 0 && (Date.now() - lastUpdatedAt) > staleTimeoutMs) {
+        safeDel(VIDEO_JOB_STORE_KEY);
+        setScenarioVideoError("video_job_stale_timeout");
+        return;
+      }
       startScenarioVideoPolling(parsed);
     } catch {
       safeDel(VIDEO_JOB_STORE_KEY);
@@ -3235,9 +3257,18 @@ Aspect ratio: ${imageFormat}`,
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: scenarioSelected, previousScene: scenarioPreviousScene })
       : "";
+    const sourceImageUrl = transitionType === "continuous"
+      ? (effectiveStartImageUrl || endImageUrl || frameImageUrl || "")
+      : (frameImageUrl || "");
 
     setScenarioVideoLoading(true);
     setScenarioVideoError("");
+    console.log("[StoryboardVideo] generate", {
+      sceneId,
+      transitionType,
+      provider: effectiveVideoProvider,
+      sourceImageUrl,
+    });
     try {
       const endpoint = "/api/clip/video/start";
       const transitionActionPrompt = [
@@ -3248,7 +3279,7 @@ Aspect ratio: ${imageFormat}`,
         method: "POST",
         body: {
           sceneId,
-          imageUrl: frameImageUrl || effectiveStartImageUrl || endImageUrl,
+          imageUrl: sourceImageUrl,
           startImageUrl: effectiveStartImageUrl,
           endImageUrl,
           audioSliceUrl: scenarioSelected.audioSliceUrl || "",
@@ -3280,7 +3311,7 @@ Aspect ratio: ${imageFormat}`,
         method: "POST",
         body: {
           sceneId,
-          imageUrl: frameImageUrl || effectiveStartImageUrl || endImageUrl,
+          imageUrl: sourceImageUrl,
           startImageUrl: effectiveStartImageUrl,
           endImageUrl,
           audioSliceUrl: scenarioSelected.audioSliceUrl || "",
@@ -3342,6 +3373,22 @@ Aspect ratio: ${imageFormat}`,
       ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl)
       : !!scenarioSelected?.imageUrl;
     if (!hasImage) return;
+    const videoSourceImageUrl = transitionType === "continuous"
+      ? String(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl || "")
+      : String(scenarioSelected?.imageUrl || "");
+    const effectiveVideoProvider = String(scenarioSelected?.sceneRenderProvider || "kie").trim().toLowerCase() === "comfy_remote" ? "comfy_remote" : "kie";
+
+    const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
+    console.log("[StoryboardVideo] add_to_video", {
+      sceneId,
+      transitionType,
+      provider: effectiveVideoProvider,
+      sourceImageUrl: videoSourceImageUrl,
+    });
+
+    updateScenarioScene(scenarioEditor.selected, {
+      videoSourceImageUrl,
+    });
 
     if (scenarioVideoScrollRafRef.current) {
       cancelAnimationFrame(scenarioVideoScrollRafRef.current);
@@ -3357,7 +3404,7 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoFocusPulse(true);
     window.setTimeout(() => setScenarioVideoFocusPulse(false), 1200);
     scrollToVideoBlock();
-  }, [scenarioSelected, scenarioSelectedEffectiveStartImageUrl]);
+  }, [scenarioEditor.selected, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
 
   const storyboardScenesForAssembly = useMemo(() => extractStoryboardScenesFromNodes(nodes), [nodes]);
 
@@ -5643,10 +5690,10 @@ const hydrate = useCallback(() => {
                                     src={scenarioSelected.videoUrl}
                                     poster={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
                                   />
-                                ) : getSceneVideoPoster(scenarioSelected, scenarioPreviousScene) ? (
+                                ) : scenarioSelectedVideoSourceImageUrl ? (
                                   <img
                                     className="clipSB_videoPoster"
-                                    src={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
+                                    src={scenarioSelectedVideoSourceImageUrl}
                                     alt="video preview"
                                   />
                                 ) : (
@@ -5673,9 +5720,11 @@ const hydrate = useCallback(() => {
                                 src={scenarioSelected.videoUrl}
                                 poster={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
                               />
-                            ) : getSceneVideoPoster(scenarioSelected, scenarioPreviousScene) ? (
-                              <img className="clipSB_videoPoster" src={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)} alt="poster" />
-                            ) : null}
+                            ) : scenarioSelectedVideoSourceImageUrl ? (
+                              <img className="clipSB_videoPoster" src={scenarioSelectedVideoSourceImageUrl} alt="poster" />
+                            ) : (
+                              <div className="clipSB_videoFramePlaceholder">PREVIEW</div>
+                            )}
 
                             {scenarioVideoLoading ? (
                               <div className="clipSB_videoOverlay">
@@ -5689,6 +5738,7 @@ const hydrate = useCallback(() => {
                           <div className="clipSB_videoKv"><span>imageUrl</span><span>{scenarioSelected.imageUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>startImageUrl</span><span>{scenarioSelectedEffectiveStartImageUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>endImageUrl</span><span>{scenarioSelected.endImageUrl || "—"}</span></div>
+                          <div className="clipSB_videoKv"><span>videoSourceImageUrl</span><span>{scenarioSelected.videoSourceImageUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>transitionActionPrompt</span><span>{scenarioSelected.transitionActionPrompt || scenarioSelected.videoPrompt || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>audioSliceUrl</span><span>{scenarioSelected.audioSliceUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>videoUrl</span><span>{scenarioSelected.videoUrl || "—"}</span></div>
