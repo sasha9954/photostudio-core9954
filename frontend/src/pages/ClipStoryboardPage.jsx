@@ -2393,7 +2393,13 @@ const comfyShowVideoSection = Boolean(
   useEffect(() => {
     setScenarioVideoError("");
     setScenarioVideoOpen(false);
-  }, [scenarioEditor.selected]);
+    const selectedSceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
+    const activeSceneId = String(scenarioActiveVideoJobRef.current?.sceneId || "");
+    if (!activeSceneId || activeSceneId !== selectedSceneId) {
+      console.log("[StoryboardVideo] loading_off reason=no_active_job", { selectedSceneId, activeSceneId });
+      setScenarioVideoLoading(false);
+    }
+  }, [scenarioEditor.selected, scenarioSelected?.id]);
 
   useEffect(() => {
     if (!scenarioEditor.open) return;
@@ -2459,6 +2465,16 @@ const comfyShowVideoSection = Boolean(
     setScenarioVideoLoading(false);
   }, [VIDEO_JOB_STORE_KEY, stopScenarioVideoPolling]);
 
+  const isScenarioVideoJobNotFound = useCallback((payload) => {
+    const status = String(payload?.status || "").toLowerCase();
+    const code = String(payload?.code || "").toLowerCase();
+    const hint = String(payload?.hint || "").toLowerCase();
+    return status === "not_found"
+      || code === "video_job_not_found"
+      || code.includes("job_id_not_found_or_expired")
+      || hint.includes("job_id_not_found_or_expired");
+  }, []);
+
   const startScenarioVideoPolling = useCallback((jobMeta) => {
     if (!jobMeta?.jobId) return;
     const now = Date.now();
@@ -2482,8 +2498,22 @@ const comfyShowVideoSection = Boolean(
       }
       try {
         const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(jobMeta.jobId)}`, { method: "GET" });
+        if (!out?.ok && isScenarioVideoJobNotFound(out)) {
+          console.log("[StoryboardVideo] polling_stop reason=job_not_found", { jobId: jobMeta.jobId });
+          clearActiveVideoJob();
+          setScenarioVideoLoading(false);
+          setScenarioVideoError("");
+          return;
+        }
         if (!out?.ok) throw new Error(out?.hint || out?.code || "video_status_failed");
         const status = String(out?.status || "").toLowerCase();
+        if (isScenarioVideoJobNotFound(out)) {
+          console.log("[StoryboardVideo] polling_stop reason=job_not_found", { jobId: jobMeta.jobId, status, code: out?.code, hint: out?.hint });
+          clearActiveVideoJob();
+          setScenarioVideoLoading(false);
+          setScenarioVideoError("");
+          return;
+        }
         const nextMeta = {
           ...(scenarioActiveVideoJobRef.current || {}),
           jobId: jobMeta.jobId,
@@ -2519,13 +2549,21 @@ const comfyShowVideoSection = Boolean(
 
         scenarioVideoPollTimerRef.current = setTimeout(tick, 1800);
       } catch (e) {
+        const errMsg = String(e?.message || "").toLowerCase();
+        if (errMsg.includes("job_id_not_found_or_expired")) {
+          console.log("[StoryboardVideo] polling_stop reason=job_not_found", { jobId: jobMeta.jobId, error: String(e?.message || e) });
+          clearActiveVideoJob();
+          setScenarioVideoLoading(false);
+          setScenarioVideoError("");
+          return;
+        }
         console.error(e);
         scenarioVideoPollTimerRef.current = setTimeout(tick, 2400);
       }
     };
 
     scenarioVideoPollTimerRef.current = setTimeout(tick, 250);
-  }, [clearActiveVideoJob, persistActiveVideoJob, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
+  }, [clearActiveVideoJob, isScenarioVideoJobNotFound, persistActiveVideoJob, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
 
   useEffect(() => () => stopScenarioVideoPolling(), [stopScenarioVideoPolling]);
 
@@ -2542,11 +2580,18 @@ const comfyShowVideoSection = Boolean(
         setScenarioVideoError("video_job_stale_timeout");
         return;
       }
+      if (isScenarioVideoJobNotFound(parsed)) {
+        safeDel(VIDEO_JOB_STORE_KEY);
+        setScenarioVideoLoading(false);
+        setScenarioVideoError("");
+        console.log("[StoryboardVideo] restored_job_not_found_cleared", { jobId: parsed?.jobId || "" });
+        return;
+      }
       startScenarioVideoPolling(parsed);
     } catch {
       safeDel(VIDEO_JOB_STORE_KEY);
     }
-  }, [VIDEO_JOB_STORE_KEY, startScenarioVideoPolling]);
+  }, [VIDEO_JOB_STORE_KEY, isScenarioVideoJobNotFound, startScenarioVideoPolling]);
 
   const updateComfyScene = useCallback((idx, patch) => {
     if (!comfyNode?.id || idx < 0) return;
@@ -3401,6 +3446,11 @@ Aspect ratio: ${imageFormat}`,
 
     setScenarioVideoOpen(true);
     setScenarioVideoError("");
+    const activeSceneId = String(scenarioActiveVideoJobRef.current?.sceneId || "");
+    if (!activeSceneId || activeSceneId !== sceneId) {
+      console.log("[StoryboardVideo] loading_off reason=no_active_job", { selectedSceneId: sceneId, activeSceneId });
+      setScenarioVideoLoading(false);
+    }
     setScenarioVideoFocusPulse(true);
     window.setTimeout(() => setScenarioVideoFocusPulse(false), 1200);
     scrollToVideoBlock();
