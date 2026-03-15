@@ -180,23 +180,7 @@ def _set_node_input(workflow: dict, node_id: str, input_key: str, value) -> tupl
     return True, None
 
 
-def _find_first_node_id(workflow: dict, *, input_key: str, class_type_contains: tuple[str, ...] | None = None, forbid_name_contains: tuple[str, ...] | None = None) -> str | None:
-    for node_id, node in workflow.items():
-        if not isinstance(node, dict):
-            continue
-        inputs = node.get("inputs")
-        if not isinstance(inputs, dict) or input_key not in inputs:
-            continue
-        class_type = str(node.get("class_type") or "")
-        haystack = f"{class_type} {json.dumps(node.get('_meta') or {}, ensure_ascii=False)}".lower()
-        if class_type_contains and not any(token.lower() in class_type.lower() for token in class_type_contains):
-            continue
-        if forbid_name_contains and any(token.lower() in haystack for token in forbid_name_contains):
-            continue
-        return str(node_id)
-    return None
-
-
+# These node ids are intentionally pinned to image-video-silent-directprompt.json.
 FIXED_IMAGE_VIDEO_NODES = {
     "image": ("269", "image"),
     "prompt": ("267:266", "value"),
@@ -204,6 +188,8 @@ FIXED_IMAGE_VIDEO_NODES = {
     "height": ("267:258", "value"),
     "length": ("267:225", "value"),
 }
+
+# These seed node ids are intentionally pinned to image-video-silent-directprompt.json.
 FIXED_SEED_NODES = (("267:216", "noise_seed"), ("267:237", "noise_seed"))
 
 
