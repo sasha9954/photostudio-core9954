@@ -251,15 +251,15 @@ def run_comfy_image_to_video(
         return None, f"workflow_patch_failed:{patch_err or 'unknown_patch_error'}"
 
     print(
-        "[comfy_remote] patched workflow values",
+        "[COMFY REMOTE] patched workflow values",
         {
             "uploaded_name": uploaded_name,
             "effective_prompt": effective_prompt,
-            "image": patched_workflow["269"]["inputs"]["image"],
-            "prompt": patched_workflow["267:266"]["inputs"]["value"],
-            "width": patched_workflow["267:257"]["inputs"]["value"],
-            "height": patched_workflow["267:258"]["inputs"]["value"],
-            "length": patched_workflow["267:225"]["inputs"]["value"],
+            "image": patched_workflow.get("269", {}).get("inputs", {}).get("image"),
+            "prompt": patched_workflow.get("267:266", {}).get("inputs", {}).get("value"),
+            "width": patched_workflow.get("267:257", {}).get("inputs", {}).get("value"),
+            "height": patched_workflow.get("267:258", {}).get("inputs", {}).get("value"),
+            "length": patched_workflow.get("267:225", {}).get("inputs", {}).get("value"),
         },
     )
 
