@@ -2332,17 +2332,11 @@ const comfyShowVideoSection = Boolean(
 );
 
 useEffect(() => {
-  const activeSceneId = String(comfyActiveVideoJobRef.current?.sceneId || "").trim();
-  const hasActiveSceneJob = Boolean(
-    comfySelectedSceneId
-    && activeSceneId
-    && comfySelectedSceneId === activeSceneId
-  );
-  if (!hasActiveSceneJob) {
+  if (!comfyHasActiveVideoJobForScene) {
     setComfyVideoLoading(false);
   }
   setComfyVideoError("");
-}, [comfySelectedSceneId]);
+}, [comfyHasActiveVideoJobForScene, comfySelectedSceneId]);
 
   const openLightbox = useCallback((url, sourceRect = null) => {
     if (lightboxCloseTimerRef.current) {
@@ -3029,9 +3023,16 @@ ${contextPrompt}`.trim(),
   }, [comfyNode?.data, comfyNode?.id, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfyPreviousScene?.endImageUrl, comfyPreviousScene?.imageUrl, comfyPreviousScene?.startImageUrl, comfyRefsByRole, comfySafeIndex, comfyScenes, comfySelectedScene, ensureComfyPromptSynced, normalizeRefData, updateComfyScene]);
 
   const handleComfyDeleteImage = useCallback(() => {
+    const activeSceneId = String(comfyActiveVideoJobRef.current?.sceneId || '').trim();
+    const selectedSceneId = String(comfySelectedScene?.sceneId || '').trim();
+    if (activeSceneId && selectedSceneId && activeSceneId === selectedSceneId) {
+      clearActiveComfyVideoJob();
+    }
+    setComfyVideoLoading(false);
+    setComfyVideoError('');
     setComfyImageError('');
     updateComfyScene(comfySafeIndex, { imageUrl: '', videoUrl: '', videoPanelOpen: false });
-  }, [comfySafeIndex, updateComfyScene]);
+  }, [clearActiveComfyVideoJob, comfySafeIndex, comfySelectedScene?.sceneId, updateComfyScene]);
 
   const handleComfyOpenVideoPanel = useCallback(() => {
     if (!comfySelectedScene) return;
@@ -6092,10 +6093,8 @@ const hydrate = useCallback(() => {
                                   src={resolveAssetUrl(comfySelectedScene.imageUrl)}
                                   alt={comfySelectedScene.title || 'video source preview'}
                                 />
-                              ) : !comfySelectedScene.imageUrl ? (
-                                <div className="clipSB_comfyPreviewEmpty">Сначала создайте изображение для этой сцены</div>
                               ) : (
-                                <div className="clipSB_comfyPreviewEmpty">Видео ещё не создано</div>
+                                <div className="clipSB_comfyPreviewEmpty">Сначала создайте изображение для этой сцены</div>
                               )}
 
                               {(comfyVideoLoading || comfyHasActiveVideoJobForScene) && comfySelectedScene.imageUrl && !comfySelectedScene.videoUrl ? (
