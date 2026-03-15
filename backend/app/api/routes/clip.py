@@ -2434,6 +2434,90 @@ def _apply_lipsync_performance_rules(*, scenes: list[dict], duration: float, voc
     return updated
 
 
+def _extract_semantic_whitelist(*, text: str, session_world_anchors: dict[str, str], location_refs: list[str], props_refs: list[str]) -> dict[str, Any]:
+    token_re = re.compile(r"[a-zA-Zа-яА-ЯёЁ0-9_\-]+")
+    concept_cues: dict[str, tuple[str, ...]] = {
+        "sky": ("sky", "небо", "horizon", "гориз", "cloud", "облак"),
+        "night": ("night", "ноч", "moon", "луна", "star", "звезд"),
+        "wind": ("wind", "ветер", "breeze"),
+        "open_space": ("open", "простор", "field", "поле", "distance", "даль"),
+        "emotion": ("love", "люб", "heart", "сердц", "emotion", "чувств"),
+        "light": ("light", "свет", "sun", "солн", "dawn", "закат"),
+        "city": ("city", "город", "street", "улиц", "stage", "сцен"),
+        "nature": ("mountain", "гор", "forest", "лес", "sea", "море", "water", "вода"),
+    }
+    text_l = (text or "").lower()
+    concepts: list[str] = []
+    for concept, cues in concept_cues.items():
+        if any(c in text_l for c in cues):
+            concepts.append(concept)
+
+    anchor_tokens: set[str] = set()
+    for anchor_value in session_world_anchors.values():
+        for token in token_re.findall(str(anchor_value or "").lower()):
+            if len(token) >= 4:
+                anchor_tokens.add(token)
+    for ref_url in [*(location_refs or []), *(props_refs or [])]:
+        tail = str(ref_url or "").split("/")[-1].split("?")[0].replace("-", " ").replace("_", " ")
+        for token in token_re.findall(tail.lower()):
+            if len(token) >= 4:
+                anchor_tokens.add(token)
+
+    return {
+        "concepts": concepts,
+        "anchorTokens": sorted(anchor_tokens),
+    }
+
+
+def _scene_semantic_guardrail(
+    *,
+    scene: dict,
+    semantic_whitelist: dict[str, Any],
+    source_text: str,
+    session_world_anchors: dict[str, str],
+    prop_anchor_label: str,
+) -> tuple[dict, bool]:
+    banned_terms = [
+        "microchip", "microchips", "chipset", "motherboard", "circuit", "pcb", "silicon",
+        "server rack", "datacenter", "data center", "cyberpunk computer", "quantum processor",
+    ]
+    token_space = " ".join([
+        str(scene.get("visualDescription") or ""),
+        str(scene.get("visualPrompt") or ""),
+        str(scene.get("reason") or ""),
+        str(scene.get("environment") or ""),
+        str(scene.get("sceneNarrative") or ""),
+    ]).lower()
+
+    grounding_text = " ".join([
+        (source_text or "").lower(),
+        " ".join(str(v or "").lower() for v in (session_world_anchors or {}).values()),
+        str(prop_anchor_label or "").lower(),
+        " ".join((semantic_whitelist or {}).get("anchorTokens") or []),
+    ])
+
+    found_ungrounded = [term for term in banned_terms if term in token_space and term not in grounding_text]
+    if not found_ungrounded:
+        return scene, False
+
+    fallback_environment = str(session_world_anchors.get("location") or session_world_anchors.get("style") or "same main location with continuity")
+    fallback_narrative = f"The performer remains in the same story world ({fallback_environment}) to preserve lyrical continuity."
+    patched = dict(scene)
+    patched["visualDescription"] = fallback_narrative
+    patched["reason"] = "Semantic fallback: keep the same location/world continuity when ungrounded objects are detected."
+    patched["visualPrompt"] = f"cinematic shot in {fallback_environment}, consistent world continuity, no unrelated objects"
+    patched["environment"] = fallback_environment
+    if not str(patched.get("sceneNarrative") or "").strip():
+        patched["sceneNarrative"] = fallback_narrative
+    if not str(patched.get("sceneGoal") or "").strip():
+        patched["sceneGoal"] = "Maintain the same story world while advancing the lyric emotion"
+    if not str(patched.get("characterAction") or "").strip():
+        patched["characterAction"] = "Performer continues emotional action in place"
+    if not str(patched.get("cameraMotion") or "").strip():
+        patched["cameraMotion"] = "Alternative angle in the same location"
+    return patched, True
+
+
 @router.post("/clip/plan")
 def clip_plan(payload: BrainIn):
     """Gemini-first clip planner: Gemini analyzes audio/text/refs and returns strict JSON storyboard."""
@@ -2499,6 +2583,13 @@ def clip_plan(payload: BrainIn):
         location_refs=location_refs,
         style_refs=style_refs,
         style_key=style_key,
+    )
+
+    semantic_whitelist = _extract_semantic_whitelist(
+        text=text,
+        session_world_anchors=session_world_anchors,
+        location_refs=location_refs,
+        props_refs=props_refs,
     )
 
     planner_input_signature = _planner_input_signature(
@@ -2758,6 +2849,24 @@ Scenes should represent:
 - narrative progression
 
 The storyboard must feel like a visual interpretation of the song.
+
+SEMANTIC WHITELIST RESTRICTION (CLIP MODE):
+Build a semantic whitelist from lyrics/audio semantics and text cues (for example: sky, night, wind, open space, emotion, distance, light, horizon).
+Every scene environment/object choice must be grounded in at least one of:
+- lyrics/text meaning
+- character/location/style/props references
+- current session world anchors
+Reject ungrounded elements.
+
+SEMANTIC CONSISTENCY CHECK (PER SCENE):
+Before finalizing each scene, verify scene objects and environment stay within the extracted semantic domain.
+Invalid example: sky/night/love lyrics + microchips/server racks/cyberpunk computers with no grounding source.
+Valid example: sky, clouds, night city lights, open field, mountain horizon, stage under open sky.
+
+HALLUCINATION PREVENTION / FALLBACK RULE:
+If environment cannot be inferred confidently from lyrics/references, do not invent unrelated worlds.
+Fallback to the main location with variations in lighting, framing, camera distance, and character action.
+Keep same world, same props, and same narrative continuity unless lyrics explicitly imply transformation/metaphor.
 
 ADVERTISEMENT MODE RULE:
 
@@ -3736,6 +3845,11 @@ Response schema (all keys required):
     "transitionType": "continuous | single | hard_cut",
     "sceneType": string,
     "shotPurpose": string,
+    "sceneGoal": string,
+    "sceneNarrative": string,
+    "characterAction": string,
+    "cameraMotion": string,
+    "environment": string,
     "visualDescription": string,
     "startFramePrompt": string,
     "endFramePrompt": string,
@@ -3863,6 +3977,7 @@ If any of the required descriptive fields are returned in English, the output is
             "props": props_refs,
         },
         "propAnchor": prop_anchor,
+        "semanticWhitelist": semantic_whitelist,
     }
 
     parts = [{"text": system_rules}]
@@ -3950,6 +4065,14 @@ If any of the required descriptive fields are returned in English, the output is
             end_frame_prompt = str(scene.get("endFramePrompt") or "").strip()
             if not (visual_prompt or visual_desc or frame_prompt or start_frame_prompt or end_frame_prompt):
                 return False, f"scene_{idx}_visual_empty"
+            if not str(scene.get("sceneGoal") or scene.get("shotPurpose") or "").strip():
+                return False, f"scene_{idx}_sceneGoal_missing"
+            if not str(scene.get("sceneNarrative") or scene.get("visualDescription") or "").strip():
+                return False, f"scene_{idx}_sceneNarrative_missing"
+            if not str(scene.get("characterAction") or scene.get("motion") or "").strip():
+                return False, f"scene_{idx}_characterAction_missing"
+            if not str(scene.get("cameraMotion") or scene.get("camera") or "").strip():
+                return False, f"scene_{idx}_cameraMotion_missing"
         return True, None
 
     retry_used = False
@@ -4070,6 +4193,11 @@ If any of the required descriptive fields are returned in English, the output is
             transition_type = _infer_transition_type(s)
 
         scene_type = str(s.get("sceneType") or "visual_rhythm").strip() or "visual_rhythm"
+        scene_goal = str(s.get("sceneGoal") or s.get("shotPurpose") or "").strip()
+        scene_narrative = str(s.get("sceneNarrative") or s.get("visualDescription") or "").strip()
+        character_action = str(s.get("characterAction") or s.get("motion") or "").strip()
+        camera_motion = str(s.get("cameraMotion") or s.get("camera") or "").strip()
+        scene_environment = str(s.get("environment") or "").strip()
         start_frame_prompt = ""
         end_frame_prompt = ""
         frame_prompt = ""
@@ -4119,6 +4247,30 @@ If any of the required descriptive fields are returned in English, the output is
                 session_world_anchors=session_world_anchors,
                 prop_anchor_label=prop_anchor_label,
             )
+        guarded_scene, semantic_fallback_used = _scene_semantic_guardrail(
+            scene={
+                **s,
+                "visualDescription": visual_desc,
+                "visualPrompt": visual_prompt,
+                "reason": reason_text,
+                "sceneNarrative": scene_narrative,
+                "environment": scene_environment,
+            },
+            semantic_whitelist=semantic_whitelist,
+            source_text=text,
+            session_world_anchors=session_world_anchors,
+            prop_anchor_label=prop_anchor_label or "",
+        )
+        if semantic_fallback_used:
+            visual_desc = str(guarded_scene.get("visualDescription") or visual_desc).strip()
+            visual_prompt = str(guarded_scene.get("visualPrompt") or visual_prompt).strip()
+            reason_text = str(guarded_scene.get("reason") or reason_text).strip()
+            scene_narrative = str(guarded_scene.get("sceneNarrative") or scene_narrative).strip()
+            scene_goal = str(guarded_scene.get("sceneGoal") or scene_goal).strip()
+            character_action = str(guarded_scene.get("characterAction") or character_action).strip()
+            camera_motion = str(guarded_scene.get("cameraMotion") or camera_motion).strip()
+            scene_environment = str(guarded_scene.get("environment") or scene_environment).strip()
+
         scene_delta = _build_scene_delta(s, previous_scene)
         scene_text_ru = visual_desc or reason_text or lyric_fragment
         scene_obj = {
@@ -4138,6 +4290,11 @@ If any of the required descriptive fields are returned in English, the output is
             "videoPrompt": video_prompt,
             "why": reason_text,
             "sceneType": scene_type,
+            "sceneGoal": scene_goal or "Advance the lyrical narrative in the same world",
+            "sceneNarrative": scene_narrative or scene_text_ru,
+            "characterAction": character_action or "Character performs the current emotional beat",
+            "cameraMotion": camera_motion or "Cinematic movement aligned with rhythm",
+            "environment": scene_environment or str(session_world_anchors.get("location") or "same main location"),
             "isLipSync": bool(lip_sync_text),
             "lipSyncText": lip_sync_text,
             "lyricFragment": lyric_fragment,
@@ -4203,6 +4360,7 @@ If any of the required descriptive fields are returned in English, the output is
                 "warnings": validation_warnings,
             },
             "summary": {
+                "semanticWhitelist": semantic_whitelist,
                 "totalSceneCount": len(normalized_scenes),
                 "totalLipSyncCandidatesSelected": len(lip_sync_scenes),
             },
