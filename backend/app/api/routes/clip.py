@@ -25,6 +25,7 @@ from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url
 from app.engine.video_engine import _download_image_from_source
 from app.engine.gemini_rest import post_generate_content
 from app.engine.comfy_reference_profile import build_reference_profiles, summarize_profiles
+from app.engine.comfy_remote import run_comfy_image_to_video
 
 router = APIRouter()
 
@@ -108,6 +109,7 @@ class ClipVideoIn(BaseModel):
     sceneType: str | None = None
     shotType: str | None = None
     audioSliceUrl: str | None = None
+    provider: str | None = None
 
 
 class AssembleSceneIn(BaseModel):
@@ -477,6 +479,16 @@ def _normalize_clip_video_transition_type(value: str | None) -> str:
     }
     return aliases.get(raw, "single")
 
+
+
+
+def _resolve_clip_video_dimensions(output_format: str | None) -> tuple[int, int]:
+    normalized = str(output_format or "9:16").strip() or "9:16"
+    if normalized == "16:9":
+        return 1280, 720
+    if normalized == "1:1":
+        return 1024, 1024
+    return 720, 1280
 
 def _is_clip_video_transition_mode(transition_type: str, start_image_url: str, end_image_url: str) -> bool:
     if transition_type in {"continuous", "transition"}:
@@ -5825,6 +5837,100 @@ def clip_video(payload: ClipVideoIn):
         mode = "continuous"
     else:
         mode = "single"
+
+    provider = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
+    print(
+        "[CLIP VIDEO PROVIDER] "
+        f"sceneId={scene_id} provider={provider} mode={mode} transitionType={transition_type} format={output_format}"
+    )
+
+    if provider == "comfy_remote":
+        if bool(payload.lipSync) or mode != "single" or transition_type != "single":
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "code": "comfy_unsupported_mode",
+                    "hint": "comfy_remote_supports_only_single_image_to_video_without_lipsync",
+                },
+            )
+
+        source_image_url = image_url or start_image_url or end_image_url
+        if not source_image_url:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "code": "VIDEO_SOURCE_IMAGE_REQUIRED",
+                    "hint": "imageUrl_required_for_comfy_remote",
+                },
+            )
+
+        width, height = _resolve_clip_video_dimensions(output_format)
+        try:
+            requested_duration = float(payload.requestedDurationSec or 5)
+        except Exception:
+            requested_duration = 5.0
+        requested_duration = max(1.0, min(8.0, requested_duration))
+        length = max(24, min(192, int(round(requested_duration * 24))))
+
+        effective_prompt = str(payload.videoPrompt or payload.transitionActionPrompt or "").strip() or "cinematic motion, natural movement"
+
+        try:
+            image_bytes, image_ext = _download_image_from_source(source_image_url)
+        except Exception as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "comfy_upload_failed", "hint": f"image_download_failed:{str(exc)[:240]}"},
+            )
+
+        image_filename = f"{scene_id}_{int(time.time())}.{(image_ext or 'jpg').lower()}"
+        print(
+            "[COMFY REMOTE] "
+            f"workflow={settings.COMFY_IMAGE_VIDEO_WORKFLOW} width={width} height={height} length={length}"
+        )
+
+        comfy_out, comfy_err = run_comfy_image_to_video(
+            image_bytes=image_bytes,
+            image_filename=image_filename,
+            prompt=effective_prompt,
+            width=width,
+            height=height,
+            length=length,
+        )
+        if comfy_err or not comfy_out:
+            err_text = str(comfy_err or "comfy_remote_failed")
+            code = "comfy_unreachable"
+            status_code = 500
+            if "upload_failed" in err_text:
+                code = "comfy_upload_failed"
+            elif "prompt_submit_failed" in err_text:
+                code = "comfy_prompt_submit_failed"
+            elif "history_wait_failed:timeout" in err_text:
+                code = "comfy_timeout"
+                status_code = 504
+            elif "extract_failed" in err_text:
+                code = "comfy_output_missing"
+            elif "workflow_" in err_text or "missing_node" in err_text or "missing_input" in err_text:
+                code = "comfy_invalid_workflow"
+            return JSONResponse(status_code=status_code, content={"ok": False, "code": code, "hint": err_text[:300]})
+
+        video_url = str(comfy_out.get("videoUrl") or "").strip()
+        prompt_id = str(comfy_out.get("taskId") or "").strip()
+        print(f"[COMFY REMOTE] prompt_id={prompt_id}")
+        print(f"[COMFY REMOTE] video_url={video_url}")
+
+        return {
+            "ok": True,
+            "sceneId": scene_id,
+            "videoUrl": video_url,
+            "provider": "comfy_remote",
+            "model": "ltx-2.3",
+            "taskId": prompt_id,
+            "mode": "single",
+            "requestedDurationSec": round(float(length) / 24.0, 3),
+            "providerDurationSec": round(float(length) / 24.0, 3),
+        }
 
     guard_prompt = " ".join([
         str(payload.videoPrompt or "").strip(),

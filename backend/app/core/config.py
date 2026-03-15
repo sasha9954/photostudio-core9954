@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     KIE_POLL_INTERVAL_SEC: int = 5
     KIE_POLL_TIMEOUT_SEC: int = 300
 
+    # Remote ComfyUI image-to-video
+    COMFY_BASE_URL: str = "http://192.168.0.138:8000"
+    COMFY_POLL_INTERVAL_SEC: int = 2
+    COMFY_POLL_TIMEOUT_SEC: int = 600
+    COMFY_IMAGE_VIDEO_WORKFLOW: str = "app/workflows/image-video-silent-directprompt.json"
+    VIDEO_PROVIDER_DEFAULT: str = "kie"
+
     # PiAPI / OmniHuman lip-sync generation
     PIAPI_API_KEY: str = ""
     PIAPI_BASE_URL: str = "https://api.piapi.ai/api/v1"
