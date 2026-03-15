@@ -3219,14 +3219,35 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     if (transitionType === "continuous" && normalizedSlot === "start") {
-      updateScenarioScene(scenarioEditor.selected, { startImageUrl: "" });
+      updateScenarioScene(scenarioEditor.selected, {
+        startImageUrl: "",
+        videoUrl: "",
+        videoSourceImageUrl: "",
+        videoPanelActivated: false,
+      });
+      setScenarioVideoOpen(false);
+      setScenarioVideoLoading(false);
       return;
     }
     if (transitionType === "continuous" && normalizedSlot === "end") {
-      updateScenarioScene(scenarioEditor.selected, { endImageUrl: "" });
+      updateScenarioScene(scenarioEditor.selected, {
+        endImageUrl: "",
+        videoUrl: "",
+        videoSourceImageUrl: "",
+        videoPanelActivated: false,
+      });
+      setScenarioVideoOpen(false);
+      setScenarioVideoLoading(false);
       return;
     }
-    updateScenarioScene(scenarioEditor.selected, { imageUrl: "" });
+    updateScenarioScene(scenarioEditor.selected, {
+      imageUrl: "",
+      videoUrl: "",
+      videoSourceImageUrl: "",
+      videoPanelActivated: false,
+    });
+    setScenarioVideoOpen(false);
+    setScenarioVideoLoading(false);
   }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
 
   const handleScenarioVideoTakeAudio = useCallback(async () => {
