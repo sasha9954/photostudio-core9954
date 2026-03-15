@@ -2976,6 +2976,7 @@ ${contextPrompt}`.trim(),
           shotType: String(comfySelectedScene.sceneNarrativeStep || ''),
           sceneType: String(comfySelectedScene.sceneGoal || ''),
           format: '9:16',
+          provider: 'comfy_remote',
         },
       });
 
@@ -3000,6 +3001,7 @@ ${contextPrompt}`.trim(),
           shotType: String(comfySelectedScene.sceneNarrativeStep || ''),
           sceneType: String(comfySelectedScene.sceneGoal || ''),
           format: '9:16',
+          provider: 'comfy_remote',
         },
       });
       if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || 'video_generation_failed');
@@ -3217,6 +3219,7 @@ Aspect ratio: ${imageFormat}`,
     if (!hasImageForVideo) return;
     const effectiveLipSync = isLipSyncScene(scenarioSelected);
     const effectiveRenderMode = scenarioSelected?.renderMode || (effectiveLipSync ? "avatar_lipsync" : "standard_video");
+    const effectiveVideoProvider = String(scenarioSelected?.sceneRenderProvider || "kie").trim().toLowerCase() === "comfy_remote" ? "comfy_remote" : "kie";
 
     if (effectiveLipSync && !scenarioSelected?.audioSliceUrl) {
       setScenarioVideoError("Для lipSync сначала возьмите аудио");
@@ -3258,6 +3261,7 @@ Aspect ratio: ${imageFormat}`,
           shotType: scenarioSelected.shotType || "",
           sceneType: scenarioSelected.sceneType || "",
           format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
+          provider: effectiveVideoProvider,
         },
       });
 
@@ -3289,6 +3293,7 @@ Aspect ratio: ${imageFormat}`,
           shotType: scenarioSelected.shotType || "",
           sceneType: scenarioSelected.sceneType || "",
           format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
+          provider: effectiveVideoProvider,
         },
       });
       if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || "video_generation_failed");
