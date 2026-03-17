@@ -962,16 +962,59 @@ def _decode_gemini_image(resp: dict) -> tuple[bytes, str] | None:
         for cand in (resp.get("candidates") or []):
             content = (cand or {}).get("content") or {}
             for part in (content.get("parts") or []):
-                inline = part.get("inlineData") or {}
+                if not isinstance(part, dict):
+                    continue
+                inline = part.get("inlineData") or part.get("inline_data") or {}
                 b64 = inline.get("data")
-                mime = (inline.get("mimeType") or "image/png").lower()
+                mime = (inline.get("mimeType") or inline.get("mime_type") or "image/png").lower()
                 if isinstance(b64, str) and b64:
                     raw = base64.b64decode(b64)
                     ext = "jpg" if "jpeg" in mime or "jpg" in mime else "png"
                     return raw, ext
+                # Some wrappers place raw base64 directly under part.data.
+                direct_b64 = part.get("data")
+                if isinstance(direct_b64, str) and direct_b64:
+                    raw = base64.b64decode(direct_b64)
+                    return raw, "png"
     except Exception:
         return None
     return None
+
+
+def _summarize_gemini_image_response(resp: dict) -> dict:
+    candidates = resp.get("candidates") or []
+    image_part_count = 0
+    text_part_count = 0
+    file_part_count = 0
+    finish_reasons = []
+    for cand in candidates:
+        if not isinstance(cand, dict):
+            continue
+        finish_reason = str(cand.get("finishReason") or cand.get("finish_reason") or "").strip()
+        if finish_reason:
+            finish_reasons.append(finish_reason)
+        content = cand.get("content") or {}
+        for part in (content.get("parts") or []):
+            if not isinstance(part, dict):
+                continue
+            inline = part.get("inlineData") or part.get("inline_data") or {}
+            if isinstance(inline, dict) and inline.get("data"):
+                image_part_count += 1
+            if isinstance(part.get("text"), str) and part.get("text").strip():
+                text_part_count += 1
+            file_data = part.get("fileData") or part.get("file_data") or {}
+            if isinstance(file_data, dict) and (file_data.get("fileUri") or file_data.get("file_uri")):
+                file_part_count += 1
+
+    return {
+        "httpError": bool(resp.get("__http_error__")),
+        "status": resp.get("status"),
+        "candidateCount": len(candidates),
+        "imagePartCount": image_part_count,
+        "textPartCount": text_part_count,
+        "filePartCount": file_part_count,
+        "finishReasons": finish_reasons,
+    }
 
 
 def _normalize_ref_list(items, max_items: int = 8) -> list[str]:
@@ -5575,8 +5618,18 @@ def clip_image(payload: ClipImageIn):
         refs_debug["skippedRoles"] = skipped_roles + filtered_out_by_scene_contract
         refs_debug["modelPartsSummary"] = model_parts_summary
         print("[COMFY IMAGE DEBUG] model parts summary=" + json.dumps(model_parts_summary, ensure_ascii=False))
+        print("[CLIP IMAGE GEMINI] request model=" + str(model))
+        print("[CLIP IMAGE GEMINI] request config=" + json.dumps(body.get("generationConfig") or {}, ensure_ascii=False))
         resp = post_generate_content(api_key, model, body, timeout=120)
-        decoded = _decode_gemini_image(resp if isinstance(resp, dict) else {})
+        resp_dict = resp if isinstance(resp, dict) else {}
+        response_summary = _summarize_gemini_image_response(resp_dict)
+        print("[CLIP IMAGE GEMINI] response summary=" + json.dumps(response_summary, ensure_ascii=False))
+        if response_summary.get("httpError"):
+            print("[CLIP IMAGE GEMINI] response error text=" + str((resp_dict.get("text") or "")[:500]))
+
+        decoded = _decode_gemini_image(resp_dict)
+        image_found = bool(decoded)
+        print("[CLIP IMAGE GEMINI] decoded image found=" + json.dumps({"found": image_found}, ensure_ascii=False))
         if decoded:
             raw, ext = decoded
             image_url = _save_bytes_as_asset(raw, ext)
@@ -5590,6 +5643,8 @@ def clip_image(payload: ClipImageIn):
                 "generationMode": generation_mode,
             }
 
+        fallback_reason = "gemini_http_error" if response_summary.get("httpError") else "gemini_no_image_part"
+        print("[CLIP IMAGE GEMINI] fallback chosen=" + json.dumps({"reason": fallback_reason, "sceneId": scene_id}, ensure_ascii=False))
         image_url = _mock_scene_image(scene_id, width, height)
         return {
             "ok": True,
