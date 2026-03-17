@@ -5883,8 +5883,46 @@ const hydrate = useCallback((source = "unknown") => {
   }, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, accountKey]);
 
 
+  const lastPersistedPayloadRef = useRef("");
+  const persistDepsSnapshotRef = useRef(null);
+
   // persist
   useEffect(() => {
+    const depsSnapshot = {
+      nodesRef: nodes,
+      edgesRef: edges,
+      STORE_KEY,
+      accountKey,
+      assemblyResultRef: assemblyResult,
+      assemblyBuildState,
+      assemblyPayloadSignature,
+      scenarioScenesRef: scenarioScenes,
+      comfyScenesRef: comfyScenes,
+    };
+    const prevDepsSnapshot = persistDepsSnapshotRef.current;
+    if (prevDepsSnapshot) {
+      const changedDeps = [];
+      if (prevDepsSnapshot.nodesRef !== depsSnapshot.nodesRef) changedDeps.push("nodes");
+      if (prevDepsSnapshot.edgesRef !== depsSnapshot.edgesRef) changedDeps.push("edges");
+      if (prevDepsSnapshot.STORE_KEY !== depsSnapshot.STORE_KEY) changedDeps.push("STORE_KEY");
+      if (prevDepsSnapshot.accountKey !== depsSnapshot.accountKey) changedDeps.push("accountKey");
+      if (prevDepsSnapshot.assemblyResultRef !== depsSnapshot.assemblyResultRef) changedDeps.push("assemblyResult");
+      if (prevDepsSnapshot.assemblyBuildState !== depsSnapshot.assemblyBuildState) changedDeps.push("assemblyBuildState");
+      if (prevDepsSnapshot.assemblyPayloadSignature !== depsSnapshot.assemblyPayloadSignature) changedDeps.push("assemblyPayloadSignature");
+      if (prevDepsSnapshot.scenarioScenesRef !== depsSnapshot.scenarioScenesRef) changedDeps.push("scenarioScenes");
+      if (prevDepsSnapshot.comfyScenesRef !== depsSnapshot.comfyScenesRef) changedDeps.push("comfyScenes");
+      console.info("[CLIP TRACE] persist deps changed", {
+        changedDeps,
+        changedDepsCount: changedDeps.length,
+      });
+    } else {
+      console.info("[CLIP TRACE] persist deps changed", {
+        changedDeps: ["initial_run"],
+        changedDepsCount: 1,
+      });
+    }
+    persistDepsSnapshotRef.current = depsSnapshot;
+
     console.log("[CLIP TRACE] persist effect triggered", {
       nodesCount: Array.isArray(nodes) ? nodes.length : "unknown",
       edgesCount: Array.isArray(edges) ? edges.length : "unknown",
@@ -5907,14 +5945,12 @@ const hydrate = useCallback((source = "unknown") => {
     const storyboardSceneSignature = buildSceneSignature(scenarioScenes, "scene");
     const comfySceneSignature = buildSceneSignature(comfyScenes, "comfy_scene");
     const plannerInputSignature = String(plannerSignatureRef.current || "");
-    const persistedAt = new Date().toISOString();
-    const payload = {
+    const payloadComparable = {
       nodes: serialNodes,
       edges: serialEdges,
       plannerInputSignature,
       storyboardSceneSignature,
       comfySceneSignature,
-      persistedAt,
       accountKey,
       assemblyResult: assemblyResult?.finalVideoUrl
         ? {
@@ -5926,6 +5962,18 @@ const hydrate = useCallback((source = "unknown") => {
       assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
       assemblyPayloadSignature,
     };
+    const comparablePayloadString = JSON.stringify(payloadComparable);
+    const isSamePayload = comparablePayloadString === lastPersistedPayloadRef.current;
+    console.info("[CLIP TRACE] persist payload compare", {
+      isSamePayload,
+      payloadLength: comparablePayloadString.length,
+      previousPayloadLength: lastPersistedPayloadRef.current.length,
+    });
+    if (isSamePayload) {
+      console.info("[CLIP TRACE] persist skipped same payload");
+      return;
+    }
+
     console.info(`[CLIP TRACE] persist write nodes=${serialNodes.length} edges=${serialEdges.length}`);
     if (serialNodes.length === 0) {
       console.warn("[CLIP WARN] persist attempted with empty nodes");
@@ -5933,8 +5981,12 @@ const hydrate = useCallback((source = "unknown") => {
     if (serialEdges.length === 0) {
       console.warn("[CLIP WARN] persist attempted with empty edges");
     }
-    const ok = safeSet(STORE_KEY, JSON.stringify(payload));
+    const ok = safeSet(STORE_KEY, JSON.stringify({
+      ...payloadComparable,
+      persistedAt: new Date().toISOString(),
+    }));
     if (ok) {
+      lastPersistedPayloadRef.current = comparablePayloadString;
       console.info("[CLIP STORAGE] persist state", {
         accountKey,
         STORE_KEY,
