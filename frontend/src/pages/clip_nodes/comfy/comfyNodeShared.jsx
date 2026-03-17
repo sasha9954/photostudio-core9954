@@ -34,7 +34,7 @@ export function handleStyle(kind, extra = {}) {
 export function NodeShell({ title, icon, children, className = "", onClose }) {
   return (
     <div className={`clipSB_node ${className}`}>
-      <div className="clipSB_nodeHead"><div className="clipSB_nodeTitle">{icon}{title}</div>{onClose ? <button className="clipSB_close" onClick={onClose}>×</button> : null}</div>
+      <div className="clipSB_nodeHeader"><div className="clipSB_nodeTitle">{icon}{title}</div>{onClose ? <button className="clipSB_close" onClick={onClose}>×</button> : null}</div>
       <div className="clipSB_nodeBody">{children}</div>
     </div>
   );

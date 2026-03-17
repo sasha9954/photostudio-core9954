@@ -4984,35 +4984,36 @@ onClipSec: (nodeId, value) => {
                 const parseId = comfyParseSeqRef.current + 1;
                 comfyParseSeqRef.current = parseId;
                 comfyParseInFlightRef.current.add(nodeId);
-                clearClipStoryboardStorageForCurrentAccount("comfy_parse_start");
-                const startedAt = new Date().toISOString();
-                const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
-                const preDeriveSnapshot = collectComfyRefDerivationSnapshot({
-                  nodeId,
-                  nodesNow: nodesRef.current || [],
-                  edgesNow: edgesRef.current || [],
-                });
-                console.log("[COMFY DEBUG FRONT] pre-derive snapshot", preDeriveSnapshot);
-                const freshDerived = deriveComfyBrainState({
-                  nodeId,
-                  nodeData: activeNode?.data || base.data,
-                  nodesNow: nodesRef.current || [],
-                  edgesNow: edgesRef.current || [],
-                  normalizeRefDataFn: normalizeRefData,
-                });
-                const postDeriveSummary = summarizeRefsByRole(freshDerived?.refsByRole);
-                const droppedHandles = Object.entries(preDeriveSnapshot?.connectedSources || {})
-                  .filter(([handleId, sourceMeta]) => sourceMeta?.connected && (postDeriveSummary?.[String(handleId || "").replace("ref_", "")] || 0) === 0)
-                  .map(([handleId]) => handleId);
-                console.log("[COMFY DEBUG FRONT] post-derive refs summary", postDeriveSummary);
-                if (droppedHandles.length) {
-                  console.warn("[COMFY DEBUG FRONT] derive dropped connected refs", {
+                try {
+                  clearClipStoryboardStorageForCurrentAccount("comfy_parse_start");
+                  const startedAt = new Date().toISOString();
+                  const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
+                  const preDeriveSnapshot = collectComfyRefDerivationSnapshot({
                     nodeId,
-                    droppedHandles,
-                    connectedSources: preDeriveSnapshot?.connectedSources,
+                    nodesNow: nodesRef.current || [],
+                    edgesNow: edgesRef.current || [],
                   });
-                }
-                const freshPresentation = buildComfyBrainPresentation(freshDerived);
+                  console.log("[COMFY DEBUG FRONT] pre-derive snapshot", preDeriveSnapshot);
+                  const freshDerived = deriveComfyBrainState({
+                    nodeId,
+                    nodeData: activeNode?.data || base.data,
+                    nodesNow: nodesRef.current || [],
+                    edgesNow: edgesRef.current || [],
+                    normalizeRefDataFn: normalizeRefData,
+                  });
+                  const postDeriveSummary = summarizeRefsByRole(freshDerived?.refsByRole);
+                  const droppedHandles = Object.entries(preDeriveSnapshot?.connectedSources || {})
+                    .filter(([handleId, sourceMeta]) => sourceMeta?.connected && (postDeriveSummary?.[String(handleId || "").replace("ref_", "")] || 0) === 0)
+                    .map(([handleId]) => handleId);
+                  console.log("[COMFY DEBUG FRONT] post-derive refs summary", postDeriveSummary);
+                  if (droppedHandles.length) {
+                    console.warn("[COMFY DEBUG FRONT] derive dropped connected refs", {
+                      nodeId,
+                      droppedHandles,
+                      connectedSources: preDeriveSnapshot?.connectedSources,
+                    });
+                  }
+                  const freshPresentation = buildComfyBrainPresentation(freshDerived);
 
                 const payload = {
                   mode: freshDerived.modeValue,
@@ -5063,7 +5064,6 @@ onClipSec: (nodeId, value) => {
                   return x;
                 }));
 
-                try {
                   let response;
                   try {
                     if (USE_COMFY_MOCK) {
@@ -5576,6 +5576,16 @@ const hydrate = useCallback(() => {
 
       const hydratedNodes = cleanNodes.length ? cleanNodes : defaultNodes;
       const hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
+      console.log("[CLIP HYDRATE] nodes count", hydratedNodes.length);
+      console.log("[CLIP HYDRATE] node types", hydratedNodes.map((nodeItem) => nodeItem.type));
+      if (hydratedNodes.length === 0) {
+        console.warn("[CLIP HYDRATE] no nodes restored from storage");
+      }
+      hydratedNodes.forEach((nodeItem) => {
+        if (!nodeTypes[nodeItem?.type]) {
+          console.warn("[CLIP NODE TYPE MISSING]", nodeItem?.type);
+        }
+      });
       const hydratedScenes = extractStoryboardScenesFromNodes(hydratedNodes);
       const hydratedComfyScenes = extractComfyScenesFromNodes(hydratedNodes);
       const hydratedAudioUrl = extractGlobalAudioUrlFromNodes(hydratedNodes);
