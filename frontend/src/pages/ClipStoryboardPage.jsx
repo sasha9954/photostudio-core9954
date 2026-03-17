@@ -4265,12 +4265,34 @@ Aspect ratio: ${imageFormat}`,
 
     if (!invalidBrainIds.length) return;
 
-    let hasNodeChanges = false;
+    const invalidBrainIdSet = new Set(invalidBrainIds);
+    const staleTargetSet = new Set(
+      edgesNow
+        .filter((e) => invalidBrainIdSet.has(e.source))
+        .map((e) => e.target),
+    );
+
+    const hasNodeChanges = nodesNow.some((n) => {
+      if (invalidBrainIdSet.has(n.id)) {
+        return n?.data?.scenePlan !== null
+          || n?.data?.lastPlanMeta !== null
+          || n?.data?.plannerInputSignature !== null
+          || n?.data?.plannerState !== "stale";
+      }
+
+      if (!staleTargetSet.has(n.id)) return false;
+
+      if (n.type === "storyboardNode" || n.type === "resultsNode" || n.type === "assemblyNode") {
+        return n?.data?.isStale !== true;
+      }
+
+      return false;
+    });
 
     setNodes((prev) => {
       let changed = false;
       const next = prev.map((n) => {
-        if (!invalidBrainIds.includes(n.id)) return n;
+        if (!invalidBrainIdSet.has(n.id)) return n;
 
         const brainNeedsUpdate = n?.data?.scenePlan !== null
           || n?.data?.lastPlanMeta !== null
@@ -4292,9 +4314,8 @@ Aspect ratio: ${imageFormat}`,
         };
       });
 
-      const staleTargets = edgesNow.filter((e) => invalidBrainIds.includes(e.source)).map((e) => e.target);
       const withStaleTargets = next.map((n) => {
-        if (!staleTargets.includes(n.id)) return n;
+        if (!staleTargetSet.has(n.id)) return n;
         if (n.type === "storyboardNode" || n.type === "resultsNode") {
           if (n?.data?.isStale === true) return n;
           changed = true;
@@ -4309,7 +4330,6 @@ Aspect ratio: ${imageFormat}`,
       });
 
       if (!changed) return prev;
-      hasNodeChanges = true;
       return withStaleTargets;
     });
 
