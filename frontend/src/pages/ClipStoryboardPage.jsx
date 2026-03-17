@@ -5380,18 +5380,19 @@ return base;
     bindHandlersRef.current = bindHandlers;
   }, [bindHandlers]);
 
-  useEffect(() => {
-    setNodes((prev) => {
-      const edgesCount = Array.isArray(edges) ? edges.length : 0;
-      const nodesBefore = Array.isArray(prev) ? prev.length : 0;
-      console.info(`[CLIP TRACE] bindHandlers effect run edges=${edgesCount} nodesBefore=${nodesBefore}`);
-      const next = bindHandlers(prev);
-      if (areNodesMeaningfullyEqual(prev, next)) {
-        return prev;
-      }
-      return next;
-    });
-  }, [edges, bindHandlers, setNodes]);
+  // TEMP DIAGNOSTIC: disabled bindHandlers reconciliation effect to verify reload node disappearance loop.
+  // useEffect(() => {
+  //   setNodes((prev) => {
+  //     const edgesCount = Array.isArray(edges) ? edges.length : 0;
+  //     const nodesBefore = Array.isArray(prev) ? prev.length : 0;
+  //     console.info(`[CLIP TRACE] bindHandlers effect run edges=${edgesCount} nodesBefore=${nodesBefore}`);
+  //     const next = bindHandlers(prev);
+  //     if (areNodesMeaningfullyEqual(prev, next)) {
+  //       return prev;
+  //     }
+  //     return next;
+  //   });
+  // }, [edges, bindHandlers, setNodes]);
 
 const hydrate = useCallback((source = "unknown") => {
     if (hydrateInFlightRef.current) {
