@@ -68,6 +68,7 @@ const PORT_COLORS = {
 
 const CLIP_TRACE_PERSIST = false;
 const CLIP_TRACE_VIDEO_POLLING = false;
+const CLIP_TRACE_COMFY_REFS = false;
 
 function portColor(key) {
   return PORT_COLORS[key] || "#8c8c8c";
@@ -928,7 +929,15 @@ function resolveRefRoleForNode(node = {}) {
 function deriveRefNodeStatus(data = {}) {
   const refsCount = Array.isArray(data?.refs) ? data.refs.filter((item) => !!String(item?.url || "").trim()).length : 0;
   const rawStatus = String(data?.refStatus || "").trim().toLowerCase();
+  const refShortLabel = String(data?.refShortLabel || "").trim();
+  const refAnalyzedAt = String(data?.refAnalyzedAt || "").trim();
+  const refAnalysisError = String(data?.refAnalysisError || "").trim();
+  const hasHiddenProfile = !!(data?.refHiddenProfile && typeof data.refHiddenProfile === "object");
+  const hasAnalysisSignals = !!refShortLabel || hasHiddenProfile || !!refAnalyzedAt;
   if (!refsCount) return "empty";
+  if (rawStatus === "loading") return "loading";
+  if (refAnalysisError || rawStatus === "error") return "error";
+  if (hasAnalysisSignals) return "ready";
   if (["empty", "draft", "loading", "ready", "error"].includes(rawStatus)) return rawStatus;
   return "draft";
 }
@@ -3458,35 +3467,61 @@ const comfyShowVideoSection = Boolean(
       const nextPersisted = {};
       entries.forEach(([sceneId, meta]) => {
         if (!meta?.jobId) return;
-        const normalizedSceneId = String(sceneId || "");
+        const normalizedSceneId = String(sceneId || "").trim();
+        if (!normalizedSceneId) return;
         const idx = findComfySceneIndexById(normalizedSceneId);
         const sceneNow = idx >= 0 ? comfyScenesRef.current[idx] : null;
         const sceneVideoUrl = String(sceneNow?.videoUrl || "").trim();
         const sceneVideoJobId = String(sceneNow?.videoJobId || "").trim();
         const persistedJobId = String(meta?.jobId || "").trim();
-        if (sceneVideoUrl || (sceneVideoJobId && sceneVideoJobId !== persistedJobId)) {
-          console.info("[CLIP TRACE] stale persisted job ignored", {
-            scope: "comfy",
-            sceneId: normalizedSceneId,
-            jobId: persistedJobId,
-          });
+        if (sceneVideoUrl) {
+          if (CLIP_TRACE_VIDEO_POLLING || CLIP_TRACE_COMFY_REFS) {
+            console.info("[CLIP TRACE] stale persisted job ignored", {
+              scope: "comfy",
+              sceneId: normalizedSceneId,
+              jobId: persistedJobId,
+              reason: "scene_has_video_url",
+            });
+          }
           return;
         }
-        nextPersisted[normalizedSceneId] = meta;
-        if (CLIP_TRACE_VIDEO_POLLING) {
+        if (sceneVideoJobId && sceneVideoJobId !== persistedJobId) {
+          if (CLIP_TRACE_VIDEO_POLLING || CLIP_TRACE_COMFY_REFS) {
+            console.info("[CLIP TRACE] stale persisted job ignored", {
+              scope: "comfy",
+              sceneId: normalizedSceneId,
+              jobId: persistedJobId,
+              sceneVideoJobId,
+              reason: "scene_has_different_video_job",
+            });
+          }
+          return;
+        }
+        const normalizedMeta = { ...meta, sceneId: normalizedSceneId, status: String(meta?.status || "running").toLowerCase() || "running" };
+        nextPersisted[normalizedSceneId] = normalizedMeta;
+        if (idx >= 0) {
+          updateComfyScene(idx, {
+            videoJobId: persistedJobId,
+            videoStatus: normalizedMeta.status,
+            videoError: "",
+          });
+        }
+        if (CLIP_TRACE_VIDEO_POLLING || CLIP_TRACE_COMFY_REFS) {
           console.info("[CLIP TRACE] active job restored", {
             scope: "comfy",
             sceneId: normalizedSceneId,
             jobId: persistedJobId,
+            sceneFound: idx >= 0,
+            status: normalizedMeta.status,
           });
         }
-        startComfyVideoPolling({ ...meta, sceneId: normalizedSceneId });
+        startComfyVideoPolling(normalizedMeta);
       });
       persistActiveComfyVideoJob(nextPersisted);
     } catch {
       safeDel(COMFY_VIDEO_JOB_STORE_KEY);
     }
-  }, [COMFY_VIDEO_JOB_STORE_KEY, accountKey, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling]);
+  }, [COMFY_VIDEO_JOB_STORE_KEY, accountKey, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfyScene]);
 
   const handleComfyGenerateImage = useCallback(async () => {
     if (!comfySelectedScene) return;
@@ -5439,6 +5474,20 @@ onClipSec: (nodeId, value) => {
               .filter((role) => refConnectionStates?.[role]?.status === "ready" && refConnectionStates?.[role]?.hiddenProfile)
               .map((role) => [role, refConnectionStates[role].hiddenProfile])
           );
+
+          if (CLIP_TRACE_COMFY_REFS) {
+            console.info("[CLIP TRACE COMFY REFS] derived connected refs", {
+              nodeId: n.id,
+              connectedRefsSummary,
+              connectedRefsWarnings,
+              statuses: Object.fromEntries(roleOrder.map((role) => [role, {
+                connected: !!refConnectionStates?.[role]?.connected,
+                status: String(refConnectionStates?.[role]?.status || ""),
+                refsCount: Array.isArray(refConnectionStates?.[role]?.refs) ? refConnectionStates[role].refs.length : 0,
+                shortLabel: String(refConnectionStates?.[role]?.shortLabel || ""),
+              }])),
+            });
+          }
 
           return {
             ...base,

@@ -274,7 +274,15 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const resolveRefStatus = (sourceNode, refs = []) => {
     const refsCount = Array.isArray(refs) ? refs.length : 0;
     const raw = String(sourceNode?.data?.refStatus || "").trim().toLowerCase();
+    const shortLabel = String(sourceNode?.data?.refShortLabel || "").trim();
+    const refAnalyzedAt = String(sourceNode?.data?.refAnalyzedAt || "").trim();
+    const refAnalysisError = String(sourceNode?.data?.refAnalysisError || "").trim();
+    const hasHiddenProfile = !!(sourceNode?.data?.refHiddenProfile && typeof sourceNode.data.refHiddenProfile === "object");
+    const hasAnalysisSignals = !!shortLabel || hasHiddenProfile || !!refAnalyzedAt;
     if (!refsCount) return "empty";
+    if (raw === "loading") return "loading";
+    if (refAnalysisError || raw === "error") return "error";
+    if (hasAnalysisSignals) return "ready";
     if (["empty", "draft", "loading", "ready", "error"].includes(raw)) return raw;
     return "draft";
   };
