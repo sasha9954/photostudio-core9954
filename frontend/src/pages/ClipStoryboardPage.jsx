@@ -3120,6 +3120,11 @@ const comfyShowVideoSection = Boolean(
     if (timerId) {
       clearTimeout(timerId);
       comfyVideoPollTimersRef.current.delete(key);
+      console.info("[CLIP TRACE] polling stopped", {
+        scope: "comfy",
+        sceneId: key,
+        reason: "timer_cleared",
+      });
     }
   }, []);
 
@@ -3147,10 +3152,24 @@ const comfyShowVideoSection = Boolean(
         jobId: String(meta?.jobId || activeMeta?.jobId || ""),
         status: terminalStatus,
       });
+      return;
+    }
+    if (activeMeta?.jobId) {
+      console.warn("[CLIP TRACE] active comfy job cleared unexpectedly", {
+        sceneId: key,
+        jobId: String(meta?.jobId || activeMeta?.jobId || ""),
+      });
     }
   }, [persistActiveComfyVideoJob, stopComfyVideoPolling]);
 
   const resetComfyVideoJobsState = useCallback(() => {
+    comfyVideoJobsBySceneRef.current.forEach((meta, sceneId) => {
+      if (!meta?.jobId) return;
+      console.warn("[CLIP TRACE] active comfy job cleared unexpectedly", {
+        sceneId: String(sceneId || ""),
+        jobId: String(meta?.jobId || ""),
+      });
+    });
     comfyVideoJobsBySceneRef.current.clear();
     stopComfyVideoPolling();
     safeDel(COMFY_VIDEO_JOB_STORE_KEY);
@@ -3172,6 +3191,11 @@ const comfyShowVideoSection = Boolean(
     const sceneId = String(jobMeta.sceneId || "").trim();
     if (!sceneId) return;
     const startMeta = { ...jobMeta, sceneId, status: String(jobMeta?.status || "queued").toLowerCase() };
+    console.info("[CLIP TRACE] entered startComfyVideoPolling", {
+      sceneId,
+      jobId: String(startMeta?.jobId || ""),
+      status: String(startMeta?.status || ""),
+    });
     const prevMeta = comfyVideoJobsBySceneRef.current.get(sceneId);
     if (prevMeta?.jobId && String(prevMeta.jobId) !== String(startMeta.jobId)) {
       console.info("[CLIP TRACE] active job replaced", {
@@ -3188,6 +3212,7 @@ const comfyShowVideoSection = Boolean(
       updateComfyScene(initialIdx, { videoJobId: startMeta.jobId, videoStatus: startMeta.status, videoError: "" });
     }
     stopComfyVideoPolling(sceneId);
+    console.info("[CLIP TRACE] polling reset before start", { sceneId });
 
     console.info("[CLIP VIDEO POLLING START]", {
       sceneId,
@@ -3203,7 +3228,15 @@ const comfyShowVideoSection = Boolean(
         jobId: String(startMeta.jobId || ""),
         delayMs,
       });
-      comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, delayMs));
+      const timerId = setTimeout(tick, delayMs);
+      comfyVideoPollTimersRef.current.set(sceneId, timerId);
+      console.info("[CLIP TRACE] polling timer scheduled", {
+        scope: "comfy",
+        sceneId,
+        jobId: String(startMeta.jobId || ""),
+        delayMs,
+        reason,
+      });
     };
 
     const tick = async () => {
@@ -3337,6 +3370,10 @@ const comfyShowVideoSection = Boolean(
     };
 
     scheduleComfyPoll(250, "initial_after_start");
+    console.info("[CLIP TRACE] initial comfy poll scheduled", {
+      sceneId,
+      jobId: String(startMeta.jobId || ""),
+    });
   }, [clearActiveComfyVideoJob, comfyScenes, isComfyVideoJobNotFound, persistActiveComfyVideoJob, stopComfyVideoPolling, updateComfyScene]);
 
   useEffect(() => () => stopComfyVideoPolling(), [stopComfyVideoPolling]);
@@ -3657,11 +3694,23 @@ ${contextPrompt}`.trim(),
         });
       }
 
-      if (out?.ok && out?.jobId) {
+      if (out?.jobId) {
+        if (!out?.ok) {
+          console.warn("[CLIP WARN] start response has jobId but ok=false, forcing polling start", {
+            sceneId,
+            jobId: String(out?.jobId || ""),
+            raw: out,
+          });
+        }
         console.info("[CLIP TRACE] state update", {
           source: "handleComfyGenerateVideo:updateComfyScene:queued",
           sceneId,
           jobId: String(out.jobId || ""),
+        });
+        console.info("[CLIP TRACE] about to start comfy polling", {
+          sceneId,
+          jobId: String(out.jobId || ""),
+          out,
         });
         startComfyVideoPolling({
           jobId: String(out.jobId),
