@@ -443,6 +443,32 @@ function resetVideoStateBySceneId(nextScenes, { panelField = "" } = {}) {
   });
 }
 
+function buildSceneSignature(scenes, prefix = "scene") {
+  return normalizeSceneCollectionWithSceneId(scenes, prefix)
+    .map((scene, idx) => {
+      const sceneId = String(scene?.sceneId || "").trim() || `${prefix}_${idx + 1}`;
+      const t0 = Number(scene?.t0 ?? scene?.start ?? 0);
+      const t1 = Number(scene?.t1 ?? scene?.end ?? 0);
+      const imagePrompt = String(scene?.imagePrompt || scene?.framePrompt || scene?.prompt || scene?.sceneText || "").trim();
+      return [sceneId, Number.isFinite(t0) ? t0 : "", Number.isFinite(t1) ? t1 : "", imagePrompt].join("|");
+    })
+    .join("~~");
+}
+
+function collectSceneVideoStateStats(scenes, prefix = "scene") {
+  return normalizeSceneCollectionWithSceneId(scenes, prefix).reduce((acc, scene) => {
+    if (String(scene?.videoUrl || "").trim()) acc.videoUrlCount += 1;
+    if (String(scene?.videoStatus || "").trim()) acc.videoStatusCount += 1;
+    if (String(scene?.videoJobId || "").trim()) acc.videoJobIdCount += 1;
+    return acc;
+  }, {
+    totalScenes: Array.isArray(scenes) ? scenes.length : 0,
+    videoUrlCount: 0,
+    videoStatusCount: 0,
+    videoJobIdCount: 0,
+  });
+}
+
 function isLipSyncScene(scene) {
   if (!scene || typeof scene !== "object") return false;
   return !!(
@@ -2082,6 +2108,11 @@ export default function ClipStoryboardPage() {
   const VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:videoJob:v1:${accountKey}`, [accountKey]);
   const COMFY_VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:comfyVideoJob:v1:${accountKey}`, [accountKey]);
 
+  const storageVersionRef = useRef(0);
+  const plannerSignatureRef = useRef("");
+  const storyboardSignatureRef = useRef("");
+  const comfyStoryboardSignatureRef = useRef("");
+
   const didHydrateRef = useRef(false);
   const isHydratingRef = useRef(true);
   const parseTokenRef = useRef(0);
@@ -2347,6 +2378,41 @@ const comfyScenes = useMemo(() => {
     videoError: String(scene?.videoError || ''),
   }));
 }, [comfyNode]);
+
+useEffect(() => {
+  const latestBrainNode = nodes.find((node) => node.type === "brainNode") || null;
+  plannerSignatureRef.current = String(latestBrainNode?.data?.plannerInputSignature || "");
+  storyboardSignatureRef.current = buildSceneSignature(scenarioScenes, "scene");
+  comfyStoryboardSignatureRef.current = buildSceneSignature(comfyScenes, "comfy_scene");
+}, [comfyScenes, nodes, scenarioScenes]);
+
+const shouldInvalidateClipStoryboardStorage = useCallback((payload) => {
+  const savedPlannerSignature = String(payload?.plannerInputSignature || "");
+  const savedScenarioSignature = String(payload?.storyboardSceneSignature || "");
+  const savedComfySignature = String(payload?.comfySceneSignature || "");
+  const runtimePlannerSignature = String(plannerSignatureRef.current || "");
+  const runtimeScenarioSignature = String(storyboardSignatureRef.current || "");
+  const runtimeComfySignature = String(comfyStoryboardSignatureRef.current || "");
+
+  if (runtimePlannerSignature && savedPlannerSignature && runtimePlannerSignature !== savedPlannerSignature) return true;
+  if (runtimeScenarioSignature && savedScenarioSignature && runtimeScenarioSignature !== savedScenarioSignature) return true;
+  if (runtimeComfySignature && savedComfySignature && runtimeComfySignature !== savedComfySignature) return true;
+  return false;
+}, []);
+
+const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") => {
+  console.info("[CLIP STORAGE] clear account storage", {
+    reason,
+    accountKey,
+    STORE_KEY,
+    VIDEO_JOB_STORE_KEY,
+    COMFY_VIDEO_JOB_STORE_KEY,
+  });
+  safeDel(STORE_KEY);
+  safeDel(VIDEO_JOB_STORE_KEY);
+  safeDel(COMFY_VIDEO_JOB_STORE_KEY);
+  storageVersionRef.current += 1;
+}, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, accountKey]);
 
 const comfySelectedIndex = Number.isFinite(comfyEditor.selected) ? comfyEditor.selected : 0;
 const comfySafeIndex = comfySelectedIndex < 0 ? 0 : Math.min(comfySelectedIndex, Math.max(0, comfyScenes.length - 1));
@@ -2724,6 +2790,12 @@ const comfyShowVideoSection = Boolean(
         ? [[String(parsed?.sceneId || ""), parsed]]
         : (parsed && typeof parsed === "object" ? Object.entries(parsed) : []);
       const staleTimeoutMs = 20 * 60 * 1000;
+      console.info("[CLIP STORAGE] restore scenario video jobs", {
+        accountKey,
+        VIDEO_JOB_STORE_KEY,
+        restoredSceneIds: entries.map(([sceneId]) => String(sceneId || "")).filter(Boolean),
+        restoredJobs: entries.length,
+      });
       entries.forEach(([sceneId, meta]) => {
         if (!meta?.jobId) return;
         const lastUpdatedAt = Number(meta?.updatedAt) || Number(meta?.startedAt) || 0;
@@ -2737,7 +2809,7 @@ const comfyShowVideoSection = Boolean(
     } catch {
       safeDel(VIDEO_JOB_STORE_KEY);
     }
-  }, [VIDEO_JOB_STORE_KEY, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
+  }, [VIDEO_JOB_STORE_KEY, accountKey, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
 
   const updateComfyScene = useCallback((idx, patch) => {
     if (!comfyNode?.id || idx < 0) return;
@@ -3036,6 +3108,12 @@ const comfyShowVideoSection = Boolean(
       const entries = parsed?.jobId
         ? [[String(parsed?.sceneId || ""), parsed]]
         : (parsed && typeof parsed === "object" ? Object.entries(parsed) : []);
+      console.info("[CLIP STORAGE] restore comfy video jobs", {
+        accountKey,
+        COMFY_VIDEO_JOB_STORE_KEY,
+        restoredSceneIds: entries.map(([sceneId]) => String(sceneId || "")).filter(Boolean),
+        restoredJobs: entries.length,
+      });
       entries.forEach(([sceneId, meta]) => {
         if (!meta?.jobId) return;
         startComfyVideoPolling({ ...meta, sceneId: String(sceneId || "") });
@@ -3043,7 +3121,7 @@ const comfyShowVideoSection = Boolean(
     } catch {
       safeDel(COMFY_VIDEO_JOB_STORE_KEY);
     }
-  }, [COMFY_VIDEO_JOB_STORE_KEY, startComfyVideoPolling]);
+  }, [COMFY_VIDEO_JOB_STORE_KEY, accountKey, startComfyVideoPolling]);
 
   const handleComfyGenerateImage = useCallback(async () => {
     if (!comfySelectedScene) return;
@@ -4267,10 +4345,35 @@ onClipSec: (nodeId, value) => {
                 }, 95000);
                 parseTimeoutRef.current = timeoutId;
 
-                setNodes((prev) => prev.map((x) => (x.id === nodeId ? {
-                  ...x,
-                  data: { ...x.data, isParsing: true, activeParseToken: parseToken, lastParseError: null },
-                } : x)));
+                console.info("[CLIP STORAGE] scenario parse start", { nodeId, parseToken, accountKey, STORE_KEY });
+                clearClipStoryboardStorageForCurrentAccount("scenario_parse_start");
+                stopScenarioVideoPolling();
+                scenarioVideoJobsBySceneRef.current.clear();
+
+                setNodes((prev) => prev.map((x) => {
+                  if (x.id === nodeId) {
+                    return {
+                      ...x,
+                      data: {
+                        ...x.data,
+                        isParsing: true,
+                        activeParseToken: parseToken,
+                        lastParseError: null,
+                        parsedAt: new Date().toISOString(),
+                      },
+                    };
+                  }
+                  if (x.type === "storyboardNode") {
+                    return {
+                      ...x,
+                      data: {
+                        ...x.data,
+                        scenes: resetVideoStateBySceneId(normalizeSceneCollectionWithSceneId(x?.data?.scenes, "scene"), { panelField: "videoPanelActivated" }),
+                      },
+                    };
+                  }
+                  return x;
+                }));
 
                 try {
                   const planInput = collectBrainPlannerInput({ brainNodeId: nodeId, nodesList: nodesRef.current, edgesList: edgesRef.current });
@@ -4800,6 +4903,7 @@ onClipSec: (nodeId, value) => {
                 const parseId = comfyParseSeqRef.current + 1;
                 comfyParseSeqRef.current = parseId;
                 comfyParseInFlightRef.current.add(nodeId);
+                clearClipStoryboardStorageForCurrentAccount("comfy_parse_start");
                 const startedAt = new Date().toISOString();
                 const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
                 const preDeriveSnapshot = collectComfyRefDerivationSnapshot({
@@ -5139,6 +5243,10 @@ return base;
       assemblyStageTotal,
       handleAssemblyBuild,
       handleAssemblyStop,
+      clearClipStoryboardStorageForCurrentAccount,
+      stopScenarioVideoPolling,
+      accountKey,
+      STORE_KEY,
     ]
   );
 
@@ -5150,6 +5258,14 @@ const hydrate = useCallback(() => {
     // IMPORTANT: we always have an accountKey (fallback to "guest"), so persistence works even before auth init.
     didHydrateRef.current = false;
     isHydratingRef.current = true;
+
+    console.info("[CLIP STORAGE] hydrate start", {
+      accountKey,
+      STORE_KEY,
+      VIDEO_JOB_STORE_KEY,
+      COMFY_VIDEO_JOB_STORE_KEY,
+      storageVersion: storageVersionRef.current,
+    });
 
     // Try current key first; if empty, try a few compatible legacy keys (to survive format changes)
     let raw = safeGet(STORE_KEY);
@@ -5215,8 +5331,24 @@ const hydrate = useCallback(() => {
         ? parsed.assemblyBuildState
         : "idle";
       const savedAssemblyPayloadSignature = String(parsed?.assemblyPayloadSignature || "");
+      const savedPlannerSignature = String(parsed?.plannerInputSignature || "");
+      const savedStoryboardSignature = String(parsed?.storyboardSceneSignature || "");
+      const savedComfySignature = String(parsed?.comfySceneSignature || "");
 
       if (!savedNodes || !savedEdges) throw new Error("bad_format");
+      if (shouldInvalidateClipStoryboardStorage(parsed)) {
+        console.warn("[CLIP STORAGE] hydrated payload invalidated", {
+          accountKey,
+          STORE_KEY,
+          savedPlannerSignature,
+          runtimePlannerSignature: plannerSignatureRef.current,
+          savedStoryboardSignature,
+          runtimeStoryboardSignature: storyboardSignatureRef.current,
+          savedComfySignature,
+          runtimeComfySignature: comfyStoryboardSignatureRef.current,
+        });
+        throw new Error("stale_payload");
+      }
 
       // sanitize
       const cleanNodes = savedNodes
@@ -5329,6 +5461,7 @@ const hydrate = useCallback(() => {
       const hydratedNodes = cleanNodes.length ? cleanNodes : defaultNodes;
       const hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
       const hydratedScenes = extractStoryboardScenesFromNodes(hydratedNodes);
+      const hydratedComfyScenes = extractComfyScenesFromNodes(hydratedNodes);
       const hydratedAudioUrl = extractGlobalAudioUrlFromNodes(hydratedNodes);
       const hydratedFormat = hydratedScenes.find((scene) => String(scene?.imageFormat || "").trim())?.imageFormat || "9:16";
       const hydratedPayload = buildAssemblyPayload({
@@ -5337,6 +5470,14 @@ const hydrate = useCallback(() => {
         format: hydratedFormat,
       });
       const hydratedSignature = buildAssemblyPayloadSignature(hydratedPayload);
+      const scenarioStats = collectSceneVideoStateStats(hydratedScenes, "scene");
+      const comfyStats = collectSceneVideoStateStats(hydratedComfyScenes, "comfy_scene");
+      console.info("[CLIP STORAGE] hydrate payload accepted", {
+        accountKey,
+        STORE_KEY,
+        scenarioStats,
+        comfyStats,
+      });
 
       setNodes(bindHandlers(hydratedNodes));
       setEdges(hydratedEdges);
@@ -5369,7 +5510,15 @@ const hydrate = useCallback(() => {
       setAssemblyStageTotal(0);
       setIsAssembling(false);
       lastAssemblyPayloadSignatureRef.current = hydratedSignature;
-    } catch {
+    } catch (err) {
+      console.warn("[CLIP STORAGE] hydrate failed, fallback to defaults", {
+        accountKey,
+        STORE_KEY,
+        error: String(err?.message || err || "hydrate_failed"),
+      });
+      if (String(err?.message || "") === "stale_payload") {
+        clearClipStoryboardStorageForCurrentAccount("hydrate_stale_payload");
+      }
       setNodes(bindHandlers(defaultNodes));
       setEdges(defaultEdges);
       setAssemblyResult(null);
@@ -5392,7 +5541,19 @@ const hydrate = useCallback(() => {
         isHydratingRef.current = false;
       }, 0);
     }
-  }, [STORE_KEY, setNodes, setEdges, defaultNodes, defaultEdges, accountKey, user]);
+  }, [
+    STORE_KEY,
+    VIDEO_JOB_STORE_KEY,
+    COMFY_VIDEO_JOB_STORE_KEY,
+    setNodes,
+    setEdges,
+    defaultNodes,
+    defaultEdges,
+    accountKey,
+    user,
+    shouldInvalidateClipStoryboardStorage,
+    clearClipStoryboardStorageForCurrentAccount,
+  ]);
 
   const addNodeFromDrawer = useCallback((type) => {
     const id = `${type}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -5472,7 +5633,14 @@ const hydrate = useCallback(() => {
     return () => window.removeEventListener("ps:sessionChanged", onSessionChanged);
   }, [hydrate]);
 
-
+  useEffect(() => {
+    console.info("[CLIP STORAGE] active account scope", {
+      accountKey,
+      STORE_KEY,
+      VIDEO_JOB_STORE_KEY,
+      COMFY_VIDEO_JOB_STORE_KEY,
+    });
+  }, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, accountKey]);
 
 
   // persist
@@ -5484,9 +5652,18 @@ const hydrate = useCallback(() => {
     const serialNodes = serializeNodesForStorage(nodes);
     const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
 
-    const ok = safeSet(STORE_KEY, JSON.stringify({
+    const storyboardSceneSignature = buildSceneSignature(scenarioScenes, "scene");
+    const comfySceneSignature = buildSceneSignature(comfyScenes, "comfy_scene");
+    const plannerInputSignature = String(plannerSignatureRef.current || "");
+    const persistedAt = new Date().toISOString();
+    const payload = {
       nodes: serialNodes,
       edges: serialEdges,
+      plannerInputSignature,
+      storyboardSceneSignature,
+      comfySceneSignature,
+      persistedAt,
+      accountKey,
       assemblyResult: assemblyResult?.finalVideoUrl
         ? {
           finalVideoUrl: String(assemblyResult.finalVideoUrl || ""),
@@ -5496,9 +5673,29 @@ const hydrate = useCallback(() => {
         : null,
       assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
       assemblyPayloadSignature,
-    }));
-    if (ok) setLastSavedAt(Date.now());
-  }, [nodes, edges, STORE_KEY, accountKey, assemblyResult, assemblyBuildState, assemblyPayloadSignature]);
+    };
+    const ok = safeSet(STORE_KEY, JSON.stringify(payload));
+    if (ok) {
+      console.info("[CLIP STORAGE] persist state", {
+        accountKey,
+        STORE_KEY,
+        plannerInputSignature,
+        storyboardSceneStats: collectSceneVideoStateStats(scenarioScenes, "scene"),
+        comfySceneStats: collectSceneVideoStateStats(comfyScenes, "comfy_scene"),
+      });
+      setLastSavedAt(Date.now());
+    }
+  }, [
+    nodes,
+    edges,
+    STORE_KEY,
+    accountKey,
+    assemblyResult,
+    assemblyBuildState,
+    assemblyPayloadSignature,
+    scenarioScenes,
+    comfyScenes,
+  ]);
 
   // extra safety: flush to storage on page unload (helps when navigating away quickly)
   useEffect(() => {
@@ -5511,6 +5708,11 @@ const hydrate = useCallback(() => {
       const ok = safeSet(STORE_KEY, JSON.stringify({
       nodes: serialNodes,
       edges: serialEdges,
+      plannerInputSignature: String(plannerSignatureRef.current || ""),
+      storyboardSceneSignature: buildSceneSignature(scenarioScenes, "scene"),
+      comfySceneSignature: buildSceneSignature(comfyScenes, "comfy_scene"),
+      persistedAt: new Date().toISOString(),
+      accountKey,
       assemblyResult: assemblyResult?.finalVideoUrl
         ? {
           finalVideoUrl: String(assemblyResult.finalVideoUrl || ""),
@@ -5526,7 +5728,17 @@ const hydrate = useCallback(() => {
 
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [nodes, edges, STORE_KEY, accountKey, assemblyResult, assemblyBuildState, assemblyPayloadSignature]);
+  }, [
+    nodes,
+    edges,
+    STORE_KEY,
+    accountKey,
+    assemblyResult,
+    assemblyBuildState,
+    assemblyPayloadSignature,
+    scenarioScenes,
+    comfyScenes,
+  ]);
 
 
   const nodeTypes = useMemo(
