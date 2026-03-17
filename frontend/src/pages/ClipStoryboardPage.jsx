@@ -381,7 +381,7 @@ function getSceneUiDescription(scene) {
 
 function getScenarioSceneStableKey(scene, idx) {
   if (!scene || typeof scene !== "object") return `scene-${idx}`;
-  const explicitId = String(scene.sceneId || scene.id || "").trim();
+  const explicitId = String(scene.sceneId || "").trim();
   if (explicitId) return explicitId;
 
   const start = Number(scene.t0 ?? scene.start);
@@ -391,6 +391,42 @@ function getScenarioSceneStableKey(scene, idx) {
   }
 
   return `scene-${idx}`;
+}
+
+function buildCanonicalSceneId(scene, idx, prefix = "scene") {
+  const explicit = String(scene?.sceneId || "").trim();
+  if (explicit) return explicit;
+  const legacy = String(scene?.id || "").trim();
+  if (legacy) return legacy;
+  return `${prefix}_${String(idx + 1).padStart(3, "0")}`;
+}
+
+function normalizeSceneCollectionWithSceneId(scenes, prefix = "scene") {
+  return (Array.isArray(scenes) ? scenes : []).map((scene, idx) => ({
+    ...(scene && typeof scene === "object" ? scene : {}),
+    sceneId: buildCanonicalSceneId(scene, idx, prefix),
+  }));
+}
+
+function mergeVideoStateBySceneId(nextScenes, existingScenes, { panelField = "" } = {}) {
+  const existingMap = new Map(
+    normalizeSceneCollectionWithSceneId(existingScenes).map((scene) => [String(scene?.sceneId || ""), scene])
+  );
+  return normalizeSceneCollectionWithSceneId(nextScenes).map((scene) => {
+    const sceneId = String(scene?.sceneId || "");
+    const prev = existingMap.get(sceneId);
+    if (!prev) return scene;
+    const merged = { ...scene };
+    for (const field of ["videoUrl", "videoStatus", "videoJobId", "videoError"]) {
+      if (!String(merged?.[field] || "").trim() && String(prev?.[field] || "").trim()) {
+        merged[field] = prev[field];
+      }
+    }
+    if (panelField && merged?.[panelField] == null && prev?.[panelField] != null) {
+      merged[panelField] = prev[panelField];
+    }
+    return merged;
+  });
 }
 
 function isLipSyncScene(scene) {
@@ -683,7 +719,7 @@ function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16" }) {
       const videoUrl = String(scene?.videoUrl || "").trim();
       if (!videoUrl) return null;
       return {
-        sceneId: String(scene?.sceneId || `scene_${String(idx + 1).padStart(3, "0")}`),
+        sceneId: buildCanonicalSceneId(scene, idx, "scene"),
         videoUrl,
         requestedDurationSec: getSceneRequestedDurationSec(scene),
         transitionType: resolveSceneTransitionType(scene),
@@ -2237,7 +2273,7 @@ const scenarioBrainRefs = useMemo(() => {
 
 const scenarioScenes = useMemo(() => {
   const arr = scenarioNode?.data?.scenes;
-  return Array.isArray(arr) ? arr : [];
+  return normalizeSceneCollectionWithSceneId(arr, "scene");
 }, [scenarioNode]);
 
 const recommendedNextSceneIndex = useMemo(() => {
@@ -2289,13 +2325,13 @@ useEffect(() => {
 }, [comfyNode]);
 
 const comfyScenes = useMemo(() => {
-  const arr = comfyNode?.data?.mockScenes;
-  return Array.isArray(arr) ? arr.map((scene) => normalizeComfyScenePrompts({
+  const arr = normalizeSceneCollectionWithSceneId(comfyNode?.data?.mockScenes, "comfy_scene");
+  return arr.map((scene) => normalizeComfyScenePrompts({
     ...scene,
     videoJobId: String(scene?.videoJobId || ''),
     videoStatus: String(scene?.videoStatus || ''),
     videoError: String(scene?.videoError || ''),
-  })) : [];
+  }));
 }, [comfyNode]);
 
 const comfySelectedIndex = Number.isFinite(comfyEditor.selected) ? comfyEditor.selected : 0;
@@ -2853,6 +2889,17 @@ const comfyShowVideoSection = Boolean(
     stopComfyVideoPolling(key);
   }, [persistActiveComfyVideoJob, stopComfyVideoPolling]);
 
+
+  const isComfyVideoJobNotFound = useCallback((payload) => {
+    const status = String(payload?.status || "").toLowerCase();
+    const code = String(payload?.code || "").toLowerCase();
+    const hint = String(payload?.hint || "").toLowerCase();
+    return status === "not_found"
+      || code === "video_job_not_found"
+      || code.includes("job_id_not_found_or_expired")
+      || hint.includes("job_id_not_found_or_expired");
+  }, []);
+
   const startComfyVideoPolling = useCallback((jobMeta) => {
     if (!jobMeta?.jobId || !jobMeta?.sceneId) return;
     const sceneId = String(jobMeta.sceneId || "").trim();
@@ -2892,7 +2939,19 @@ const comfyShowVideoSection = Boolean(
           });
         }
 
-        if (!out?.ok && status === "not_found") {
+        const prevNotFoundCount = Number(activeMeta?.notFoundCount) || 0;
+        const notFoundRetryLimit = 3;
+        if (!out?.ok && isComfyVideoJobNotFound(out)) {
+          const nextNotFoundCount = prevNotFoundCount + 1;
+          const toleratedMeta = { ...nextMeta, notFoundCount: nextNotFoundCount, status: "running", updatedAt: Date.now() };
+          comfyVideoJobsBySceneRef.current.set(sceneId, toleratedMeta);
+          persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
+          if (nextNotFoundCount < notFoundRetryLimit) {
+            if (idx >= 0) updateComfyScene(idx, { videoStatus: "running", videoError: "", videoJobId: String(toleratedMeta?.jobId || "") });
+            comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2200));
+            return;
+          }
+          if (idx >= 0) updateComfyScene(idx, { videoStatus: "not_found", videoError: String(out?.hint || out?.code || "video_job_not_found"), videoJobId: String(toleratedMeta?.jobId || "") });
           clearActiveComfyVideoJob(sceneId);
           return;
         }
@@ -2920,6 +2979,23 @@ const comfyShowVideoSection = Boolean(
         comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 1800));
       } catch (e) {
         const idx = comfyScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
+        const errMsg = String(e?.message || e || "").toLowerCase();
+        if (errMsg.includes("job_id_not_found_or_expired")) {
+          const activeMetaNow = comfyVideoJobsBySceneRef.current.get(sceneId) || {};
+          const nextNotFoundCount = (Number(activeMetaNow?.notFoundCount) || 0) + 1;
+          const notFoundRetryLimit = 3;
+          const toleratedMeta = { ...activeMetaNow, notFoundCount: nextNotFoundCount, status: "running", updatedAt: Date.now() };
+          comfyVideoJobsBySceneRef.current.set(sceneId, toleratedMeta);
+          persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
+          if (nextNotFoundCount < notFoundRetryLimit) {
+            if (idx >= 0) updateComfyScene(idx, { videoStatus: "running", videoError: "", videoJobId: String(toleratedMeta?.jobId || "") });
+            comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2400));
+            return;
+          }
+          if (idx >= 0) updateComfyScene(idx, { videoStatus: "not_found", videoError: String(e?.message || e), videoJobId: String(toleratedMeta?.jobId || "") });
+          clearActiveComfyVideoJob(sceneId);
+          return;
+        }
         if (idx >= 0) {
           updateComfyScene(idx, { videoStatus: "running", videoError: "" });
         }
@@ -2928,7 +3004,7 @@ const comfyShowVideoSection = Boolean(
     };
 
     comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 250));
-  }, [clearActiveComfyVideoJob, comfyScenes, persistActiveComfyVideoJob, stopComfyVideoPolling, updateComfyScene]);
+  }, [clearActiveComfyVideoJob, comfyScenes, isComfyVideoJobNotFound, persistActiveComfyVideoJob, stopComfyVideoPolling, updateComfyScene]);
 
   useEffect(() => () => stopComfyVideoPolling(), [stopComfyVideoPolling]);
 
@@ -2954,7 +3030,8 @@ const comfyShowVideoSection = Boolean(
     setComfyImageLoading(true);
     setComfyImageError('');
     try {
-      const sceneId = String(comfySelectedScene.sceneId || `comfy-scene-${comfySafeIndex + 1}`);
+      const sceneId = String(comfySelectedScene?.sceneId || "").trim();
+      if (!sceneId) throw new Error("scene_id_required");
       const comfyCurrentSceneById = comfyScenes.find((scene) => String(scene?.sceneId || '').trim() === sceneId) || null;
       const comfySceneForImageContract = comfyCurrentSceneById || comfySelectedScene;
       const contextPrompt = buildComfySceneContextPrompt({
@@ -3165,7 +3242,8 @@ ${contextPrompt}`.trim(),
     if (!comfySelectedScene?.imageUrl) return;
     updateComfyScene(comfySafeIndex, { videoPanelOpen: true, videoStatus: 'queued', videoError: '' });
     try {
-      const sceneId = String(comfySelectedScene.sceneId || `comfy-scene-${comfySafeIndex + 1}`);
+      const sceneId = String(comfySelectedScene?.sceneId || "").trim();
+      if (!sceneId) throw new Error("scene_id_required");
       const contextPrompt = buildComfySceneContextPrompt({
         scene: comfySelectedScene,
         mode: comfyNode?.data?.mode || "clip",
@@ -3263,7 +3341,8 @@ ${contextPrompt}`.trim(),
     if (transitionType === "continuous" && normalizedSlot === "start" && !!scenarioSelected?.inheritPreviousEndAsStart) {
       return;
     }
-    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
     const sceneText = String(scenarioSelected.sceneText || scenarioSelected.visualDescription || "").trim();
     const previousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
     const previousSceneImageUrl = String(
@@ -3379,7 +3458,8 @@ Aspect ratio: ${imageFormat}`,
         videoSourceImageUrl: "",
         videoPanelActivated: false,
       });
-      const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
+      const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
       clearActiveVideoJob(sceneId);
       setScenarioVideoOpen(false);
       return;
@@ -3394,12 +3474,14 @@ Aspect ratio: ${imageFormat}`,
         videoSourceImageUrl: "",
         videoPanelActivated: false,
       });
-      const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
+      const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
       clearActiveVideoJob(sceneId);
       setScenarioVideoOpen(false);
       return;
     }
-    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
     updateScenarioScene(scenarioEditor.selected, {
       imageUrl: "",
       videoUrl: "",
@@ -3419,7 +3501,8 @@ Aspect ratio: ${imageFormat}`,
       setScenarioVideoError("Не найден общий audioUrl в Audio node");
       return;
     }
-    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
     const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
     const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
 
@@ -3509,7 +3592,8 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
 
-    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
     const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
     const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
     const dur = Math.max(0, t1 - t0);
@@ -3611,7 +3695,8 @@ Aspect ratio: ${imageFormat}`,
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
-    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
     clearActiveVideoJob(sceneId);
     updateScenarioScene(scenarioEditor.selected, { videoUrl: "", videoStatus: "", videoError: "", videoJobId: "" });
   }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected?.sceneId, updateScenarioScene]);
@@ -3645,7 +3730,8 @@ Aspect ratio: ${imageFormat}`,
       : String(scenarioSelected?.imageUrl || "");
     const effectiveVideoProvider = String(scenarioSelected?.sceneRenderProvider || "kie").trim().toLowerCase() === "comfy_remote" ? "comfy_remote" : "kie";
 
-    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
     console.log("[StoryboardVideo] add_to_video activate_panel", {
       sceneId,
       transitionType,
@@ -4228,14 +4314,17 @@ onClipSec: (nodeId, value) => {
                   const validation = out?.plannerDebug?.validation || {};
                   const diverseScenesRaw = enforceSceneDiversityLocal(scenesRaw);
 
+                  const existingScenesById = normalizeSceneCollectionWithSceneId(((nodesRef.current || []).find((x) => x.id === nodeId)?.data?.scenes || []), "scene");
                   const scenes = diverseScenesRaw
                     .map((s, idx) => {
                       const t0 = Number(s.start ?? s.t0 ?? 0);
                       const t1 = Number(s.end ?? s.t1 ?? 0);
                       const prompt = String(s.imagePrompt || s.framePrompt || s.prompt || s.sceneText || `Scene ${idx + 1}`);
                       const transitionType = resolveSceneTransitionType(s);
+                      const sceneId = buildCanonicalSceneId(s, idx, "scene");
                       return {
                         id: s.id || `s${String(idx + 1).padStart(2, "0")}`,
+                        sceneId,
                         sceneRole: normalizeSceneRole(s.sceneRole, idx),
                         start: t0,
                         end: t1,
@@ -4300,6 +4389,8 @@ onClipSec: (nodeId, value) => {
                     })
                     .filter((s) => Number.isFinite(s.t0) && Number.isFinite(s.t1) && s.t1 > s.t0);
 
+                  const mergedScenes = mergeVideoStateBySceneId(scenes, existingScenesById, { panelField: "videoPanelActivated" });
+
                   setNodes((prev) => {
                     const updated = prev.map((x) =>
                       x.id === nodeId
@@ -4307,7 +4398,7 @@ onClipSec: (nodeId, value) => {
                             ...x,
                             data: {
                               ...x.data,
-                              scenes,
+                              scenes: mergedScenes,
                               isParsing: false,
                               activeParseToken: parseToken,
                               lastParseError: null,
@@ -4329,7 +4420,7 @@ onClipSec: (nodeId, value) => {
                                 modelUsed: out.modelUsed || null,
                                 hint: out.hint || null,
                                 audioDuration,
-                                scenes,
+                                scenes: mergedScenes,
                                 sceneCount: Number(validation.sceneCount ?? scenes.length),
                                 warnings: Array.isArray(validation.warnings) ? validation.warnings : [],
                                 rejectedReason: validation.rejectedReason || null,
@@ -4802,7 +4893,15 @@ onClipSec: (nodeId, value) => {
                   return;
                 }
 
-                const scenes = Array.isArray(response?.scenes) ? response.scenes : [];
+                const existingComfyScenesByTarget = new Map(comfyStoryTargets.map((targetId) => {
+                  const targetNode = (nodesRef.current || []).find((x) => x.id === targetId);
+                  return [targetId, Array.isArray(targetNode?.data?.mockScenes) ? targetNode.data.mockScenes : []];
+                }));
+                const existingBrainComfyScenes = Array.isArray((nodesRef.current || []).find((x) => x.id === nodeId)?.data?.mockScenes)
+                  ? (nodesRef.current || []).find((x) => x.id === nodeId)?.data?.mockScenes
+                  : [];
+                const scenes = normalizeSceneCollectionWithSceneId(Array.isArray(response?.scenes) ? response.scenes : [], "comfy_scene");
+                const mergedBrainScenes = mergeVideoStateBySceneId(scenes, existingBrainComfyScenes, { panelField: "videoPanelOpen" });
                 const plannerMeta = response?.planMeta || {};
                 const globalContinuity = response?.globalContinuity || "";
                 const debugFields = response?.debug || extractComfyDebugFields({ plannerInput: payload, plannerMeta: { ...plannerMeta, globalContinuity } });
@@ -4816,7 +4915,7 @@ onClipSec: (nodeId, value) => {
                         ...x.data,
                         parseStatus: 'ready',
                         parsedAt,
-                        mockScenes: scenes.map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
+                        mockScenes: mergedBrainScenes.map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
                         lastPlannerMeta: { ...plannerMeta, globalContinuity, debugFields },
                         comfyDebug: debugFields,
                         brainWarnings: Array.isArray(response?.warnings) ? response.warnings : freshPresentation.warnings,
@@ -4833,7 +4932,7 @@ onClipSec: (nodeId, value) => {
                         ...x,
                         data: {
                           ...x.data,
-                          mockScenes: scenes.map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
+                          mockScenes: mergeVideoStateBySceneId(scenes, existingComfyScenesByTarget.get(x.id) || [], { panelField: "videoPanelOpen" }).map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
                           sceneCount: scenes.length,
                           mode: freshDerived.modeValue,
                           output: freshDerived.outputValue,
@@ -5129,6 +5228,11 @@ const hydrate = useCallback(() => {
 
           if (n.type === "comfyStoryboard") {
             data.parseStatus = ["idle", "updating", "ready", "error"].includes(String(data.parseStatus || "")) ? data.parseStatus : "idle";
+            data.mockScenes = normalizeSceneCollectionWithSceneId(data.mockScenes, "comfy_scene");
+          }
+
+          if (n.type === "storyboardNode") {
+            data.scenes = normalizeSceneCollectionWithSceneId(data.scenes, "scene");
           }
 
           if (n.type === "audioNode") {
@@ -6089,7 +6193,10 @@ const hydrate = useCallback(() => {
                         <div className="clipSB_comfySceneId">{scene.sceneId || `scene ${index + 1}`}</div>
                         <div className="clipSB_comfyReadyIcons">
                           {hasImage ? <span className="clipSB_tag clipSB_tagOk">image-ready</span> : null}
-                          {hasVideo ? <span className="clipSB_tag clipSB_tagOk">video-ready</span> : null}
+                          {String(scene?.videoStatus || '').trim() === 'queued' ? <span className="clipSB_tag">video-queued</span> : null}
+                          {String(scene?.videoStatus || '').trim() === 'running' ? <span className="clipSB_tag">video-running</span> : null}
+                          {hasVideo || String(scene?.videoStatus || '').trim() === 'done' ? <span className="clipSB_tag clipSB_tagOk">video-ready</span> : null}
+                          {(String(scene?.videoStatus || '').trim() === 'error' || String(scene?.videoStatus || '').trim() === 'not_found') ? <span className="clipSB_tag clipSB_tagWarn">video-error</span> : null}
                         </div>
                       </div>
                       <div className="clipSB_comfySceneTitle">{scene.title || `Сцена ${index + 1}`}</div>
