@@ -2494,11 +2494,39 @@ const comfySelectedSceneId = String(comfySelectedScene?.sceneId || "").trim();
 const scenarioVideoLoading = isVideoJobInProgress(scenarioSelected?.videoStatus);
 const comfyVideoLoading = isVideoJobInProgress(comfySelectedScene?.videoStatus);
 const comfyHasActiveVideoJobForScene = comfyVideoLoading;
+const scenarioHasVideoUrl = Boolean(String(scenarioSelected?.videoUrl || "").trim());
+const comfyHasVideoUrl = Boolean(String(comfySelectedScene?.videoUrl || "").trim());
+const scenarioShowingGeneratingOverlay = scenarioVideoLoading && !scenarioHasVideoUrl;
+const comfyShowingGeneratingOverlay = comfyHasActiveVideoJobForScene && Boolean(comfySelectedScene?.imageUrl) && !comfyHasVideoUrl;
 const comfyShowVideoSection = Boolean(
   comfySelectedScene?.videoPanelOpen
-  || String(comfySelectedScene?.videoUrl || "").trim()
+  || comfyHasVideoUrl
   || comfyHasActiveVideoJobForScene
 );
+
+  useEffect(() => {
+    if (!scenarioSelected) return;
+    console.info("[CLIP TRACE] preview render state", {
+      scope: "scenario",
+      sceneId: String(scenarioSelected?.sceneId || ""),
+      hasVideoUrl: scenarioHasVideoUrl,
+      videoStatus: String(scenarioSelected?.videoStatus || ""),
+      videoJobId: String(scenarioSelected?.videoJobId || ""),
+      showingGeneratingOverlay: scenarioShowingGeneratingOverlay,
+    });
+  }, [scenarioHasVideoUrl, scenarioSelected, scenarioShowingGeneratingOverlay]);
+
+  useEffect(() => {
+    if (!comfySelectedScene) return;
+    console.info("[CLIP TRACE] preview render state", {
+      scope: "comfy",
+      sceneId: String(comfySelectedScene?.sceneId || ""),
+      hasVideoUrl: comfyHasVideoUrl,
+      videoStatus: String(comfySelectedScene?.videoStatus || ""),
+      videoJobId: String(comfySelectedScene?.videoJobId || ""),
+      showingGeneratingOverlay: comfyShowingGeneratingOverlay,
+    });
+  }, [comfyHasVideoUrl, comfySelectedScene, comfyShowingGeneratingOverlay]);
 
   const openLightbox = useCallback((url, sourceRect = null) => {
     if (lightboxCloseTimerRef.current) {
@@ -2822,16 +2850,32 @@ const comfyShowVideoSection = Boolean(
         });
 
         if (status === "done") {
-          updateScenarioScene(idx, {
-            videoUrl: String(out?.videoUrl || ""),
-            mode: String(out?.mode || ""),
-            model: String(out?.model || ""),
-            requestedDurationSec: normalizeDurationSec(out?.requestedDurationSec),
-            providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
-            videoStatus: "done",
-            videoError: "",
-            videoJobId: settledMeta.jobId,
-          });
+          if (idx === -1) {
+            console.warn("[CLIP WARN] scene idx not found for done status", {
+              scope: "scenario",
+              sceneId,
+              jobId: String(settledMeta?.jobId || ""),
+            });
+          } else {
+            updateScenarioScene(idx, {
+              videoUrl: String(out?.videoUrl || ""),
+              mode: String(out?.mode || ""),
+              model: String(out?.model || ""),
+              requestedDurationSec: normalizeDurationSec(out?.requestedDurationSec),
+              providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
+              videoStatus: "done",
+              videoError: "",
+              videoJobId: settledMeta.jobId,
+            });
+            console.info("[CLIP TRACE] scene updated after done", {
+              scope: "scenario",
+              sceneId,
+              idx,
+              videoUrl: String(out?.videoUrl || ""),
+              videoStatus: "done",
+              videoJobId: String(settledMeta?.jobId || ""),
+            });
+          }
           clearActiveVideoJob(sceneId, { status: "done", jobId: settledMeta.jobId });
           return;
         }
@@ -3233,13 +3277,27 @@ const comfyShowVideoSection = Boolean(
         if (!out?.ok) throw new Error(out?.hint || out?.code || "video_status_failed");
 
         if (status === "done") {
-          if (idx >= 0) {
+          if (idx === -1) {
+            console.warn("[CLIP WARN] scene idx not found for done status", {
+              scope: "comfy",
+              sceneId,
+              jobId: String(nextMeta?.jobId || ""),
+            });
+          } else {
             updateComfyScene(idx, {
               videoUrl: String(out?.videoUrl || ""),
               videoPanelOpen: true,
               videoStatus: "done",
               videoError: "",
               videoJobId: nextMeta.jobId,
+            });
+            console.info("[CLIP TRACE] scene updated after done", {
+              scope: "comfy",
+              sceneId,
+              idx,
+              videoUrl: String(out?.videoUrl || ""),
+              videoStatus: "done",
+              videoJobId: String(nextMeta?.jobId || ""),
             });
           }
           clearActiveComfyVideoJob(sceneId, { status: "done", jobId: nextMeta.jobId });
@@ -6828,7 +6886,7 @@ const hydrate = useCallback((source = "unknown") => {
                                   <div className="clipSB_videoFramePlaceholder">RESULT</div>
                                 )}
 
-                                {scenarioVideoLoading ? (
+                                {scenarioShowingGeneratingOverlay ? (
                                   <div className="clipSB_videoOverlay">
                                     <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
                                   </div>
@@ -6854,7 +6912,7 @@ const hydrate = useCallback((source = "unknown") => {
                               <div className="clipSB_videoFramePlaceholder">PREVIEW</div>
                             )}
 
-                            {scenarioVideoLoading ? (
+                            {scenarioShowingGeneratingOverlay ? (
                               <div className="clipSB_videoOverlay">
                                 <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
                               </div>
@@ -6936,8 +6994,8 @@ const hydrate = useCallback((source = "unknown") => {
                         <div className="clipSB_comfySceneId">{scene.sceneId || `scene ${index + 1}`}</div>
                         <div className="clipSB_comfyReadyIcons">
                           {hasImage ? <span className="clipSB_tag clipSB_tagOk">image-ready</span> : null}
-                          {String(scene?.videoStatus || '').trim() === 'queued' ? <span className="clipSB_tag">video-queued</span> : null}
-                          {String(scene?.videoStatus || '').trim() === 'running' ? <span className="clipSB_tag">video-running</span> : null}
+                          {!hasVideo && String(scene?.videoStatus || '').trim() === 'queued' ? <span className="clipSB_tag">video-queued</span> : null}
+                          {!hasVideo && String(scene?.videoStatus || '').trim() === 'running' ? <span className="clipSB_tag">video-running</span> : null}
                           {hasVideo || String(scene?.videoStatus || '').trim() === 'done' ? <span className="clipSB_tag clipSB_tagOk">video-ready</span> : null}
                           {(String(scene?.videoStatus || '').trim() === 'error' || String(scene?.videoStatus || '').trim() === 'not_found') ? <span className="clipSB_tag clipSB_tagWarn">video-error</span> : null}
                         </div>
@@ -7094,7 +7152,7 @@ const hydrate = useCallback((source = "unknown") => {
                                 <div className="clipSB_comfyPreviewEmpty">Сначала создайте изображение для этой сцены</div>
                               )}
 
-                              {(comfyVideoLoading || comfyHasActiveVideoJobForScene) && comfySelectedScene.imageUrl && !comfySelectedScene.videoUrl ? (
+                              {comfyShowingGeneratingOverlay ? (
                                 <div className="clipSB_videoOverlay">
                                   <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
                                 </div>
