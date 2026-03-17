@@ -69,6 +69,7 @@ const PORT_COLORS = {
 const CLIP_TRACE_PERSIST = false;
 const CLIP_TRACE_VIDEO_POLLING = false;
 const CLIP_TRACE_COMFY_REFS = false;
+const CLIP_TRACE_GRAPH_HYDRATE = false;
 
 function portColor(key) {
   return PORT_COLORS[key] || "#8c8c8c";
@@ -958,6 +959,37 @@ function normalizeRefNodeData(data = {}, kindHint = "") {
   };
 }
 
+function isComfyRefLikeNodeType(nodeType = "") {
+  return ["refNode", "refCharacter2", "refCharacter3", "refAnimal", "refGroup"].includes(String(nodeType || ""));
+}
+
+function normalizeComfyRefNodeData(nodeType = "", data = {}, kindHint = "") {
+  if (nodeType === "refNode") {
+    return normalizeRefNodeData(data, kindHint);
+  }
+  const refs = Array.isArray(data?.refs)
+    ? data.refs
+      .map((item) => ({
+        url: String(item?.url || "").trim(),
+        name: String(item?.name || "").trim(),
+        type: String(item?.type || "").trim(),
+      }))
+      .filter((item) => !!item.url)
+      .slice(0, 5)
+    : [];
+  const normalized = {
+    ...data,
+    refs,
+    refStatus: deriveRefNodeStatus({ ...(data || {}), refs }),
+    refShortLabel: String(data?.refShortLabel || "").trim(),
+    refDetailsOpen: !!data?.refDetailsOpen,
+    refHiddenProfile: data?.refHiddenProfile && typeof data.refHiddenProfile === "object" ? data.refHiddenProfile : null,
+    refAnalysisError: String(data?.refAnalysisError || "").trim(),
+    refAnalyzedAt: String(data?.refAnalyzedAt || "").trim(),
+  };
+  return normalized;
+}
+
 function normalizeRefData(data, kindHint = "") {
   const kind = String(data?.kind || kindHint || "");
   const maxFiles = kind === "ref_style" ? 1 : 5;
@@ -1415,8 +1447,8 @@ function stripFunctionsDeep(value) {
 
 function serializeNodesForStorage(nodes) {
   return nodes.map((n) => {
-    const normalizedData = n.type === "refNode"
-      ? normalizeRefNodeData(n.data || {}, n?.data?.kind || "")
+    const normalizedData = isComfyRefLikeNodeType(n.type)
+      ? normalizeComfyRefNodeData(n.type, n.data || {}, n?.data?.kind || "")
       : (n.data || {});
     const data = stripFunctionsDeep(normalizedData) || {};
     if (n.type === "brainNode") {
@@ -3670,13 +3702,12 @@ const comfyShowVideoSection = Boolean(
         normalizeRefDataFn: normalizeRefData,
       });
       const plannerInput = {
-        ...(comfyNode?.data?.plannerMeta?.plannerInput || {}),
-        text: liveDerived?.meaningfulText || comfyNode?.data?.plannerMeta?.plannerInput?.text || "",
-        audioUrl: liveDerived?.meaningfulAudio || comfyNode?.data?.plannerMeta?.plannerInput?.audioUrl || "",
-        audioDurationSec: liveDerived?.meaningfulAudioDurationSec || comfyNode?.data?.plannerMeta?.plannerInput?.audioDurationSec || null,
-        refsByRole: liveDerived?.refsByRole || comfyNode?.data?.plannerMeta?.plannerInput?.refsByRole || {},
-        mode: liveDerived?.modeValue || comfyNode?.data?.plannerMeta?.plannerInput?.mode || "",
-        stylePreset: liveDerived?.stylePreset || comfyNode?.data?.plannerMeta?.plannerInput?.stylePreset || "",
+        text: liveDerived?.meaningfulText || "",
+        audioUrl: liveDerived?.meaningfulAudio || "",
+        audioDurationSec: liveDerived?.meaningfulAudioDurationSec || null,
+        refsByRole: liveDerived?.refsByRole || {},
+        mode: liveDerived?.modeValue || String(deriveNode?.data?.mode || "clip"),
+        stylePreset: liveDerived?.stylePreset || String(deriveNode?.data?.styleKey || "realism"),
       };
       const readyLiveRefsSelection = pickReadyLiveRefsByRoleForScene({
         liveDerived,
@@ -5315,27 +5346,8 @@ onClipSec: (nodeId, value) => {
           };
         }
 
-        if (["refNode", "refCharacter2", "refCharacter3", "refAnimal", "refGroup"].includes(n.type)) {
-          const normalizedRefData = n.type === "refNode"
-            ? normalizeRefNodeData(base.data || {}, base?.data?.kind || "")
-            : {
-              ...base.data,
-              refs: Array.isArray(base?.data?.refs)
-                ? base.data.refs
-                  .map((item) => ({
-                    url: String(item?.url || "").trim(),
-                    name: String(item?.name || "").trim(),
-                    type: String(item?.type || "").trim(),
-                  }))
-                  .filter((item) => !!item.url)
-                  .slice(0, 5)
-                : [],
-              refStatus: deriveRefNodeStatus({ ...(base?.data || {}), refs: Array.isArray(base?.data?.refs) ? base.data.refs : [] }),
-              refShortLabel: String(base?.data?.refShortLabel || "").trim(),
-              refDetailsOpen: !!base?.data?.refDetailsOpen,
-              refHiddenProfile: base?.data?.refHiddenProfile && typeof base.data.refHiddenProfile === "object" ? base.data.refHiddenProfile : null,
-              refAnalysisError: String(base?.data?.refAnalysisError || "").trim(),
-            };
+        if (isComfyRefLikeNodeType(n.type)) {
+          const normalizedRefData = normalizeComfyRefNodeData(n.type, base.data || {}, base?.data?.kind || "");
           return {
             ...base,
             data: {
@@ -5381,9 +5393,33 @@ onClipSec: (nodeId, value) => {
                 setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x))));
                 try {
                   const response = await fetchJson(`/api/clip/comfy/analyze-ref-node`, { method: "POST", body: { role, refs } });
-                  setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId
-                    ? { ...x, data: { ...x.data, refStatus: "ready", refShortLabel: String(response?.shortLabel || "").trim(), refDetailsOpen: false, refHiddenProfile: response?.profile && typeof response.profile === "object" ? response.profile : null, refAnalysisError: "", refAnalyzedAt: new Date().toISOString() } }
-                    : x))));
+                  const analyzedAt = new Date().toISOString();
+                  setNodes((prev) => bindHandlers(prev.map((x) => {
+                    if (x.id !== nodeId) return x;
+                    const mergedData = normalizeComfyRefNodeData(x.type, {
+                      ...x.data,
+                      refs,
+                      refStatus: "ready",
+                      refShortLabel: String(response?.shortLabel || "").trim(),
+                      refDetailsOpen: false,
+                      refHiddenProfile: response?.profile && typeof response.profile === "object" ? response.profile : null,
+                      refAnalysisError: "",
+                      refAnalyzedAt: analyzedAt,
+                    }, x?.data?.kind || "");
+                    if (CLIP_TRACE_COMFY_REFS) {
+                      console.info("[CLIP TRACE COMFY REFS] analyze-ref-node applied", {
+                        nodeId,
+                        role,
+                        refStatus: mergedData.refStatus,
+                        refsCount: Array.isArray(mergedData?.refs) ? mergedData.refs.length : 0,
+                        refShortLabel: mergedData.refShortLabel,
+                        hasHiddenProfile: !!mergedData.refHiddenProfile,
+                        refAnalyzedAt: mergedData.refAnalyzedAt,
+                        refAnalysisError: mergedData.refAnalysisError,
+                      });
+                    }
+                    return { ...x, data: mergedData };
+                  })));
                 } catch (err) {
                   console.error(err);
                   setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x))));
@@ -5918,9 +5954,32 @@ onClipSec: (nodeId, value) => {
                 setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x)));
                 try {
                   const response = await fetchJson(`/api/clip/comfy/analyze-ref-node`, { method: "POST", body: { role, refs } });
-                  setNodes((prev) => prev.map((x) => (x.id === nodeId
-                    ? { ...x, data: { ...x.data, refStatus: "ready", refShortLabel: String(response?.shortLabel || "").trim(), refHiddenProfile: response?.profile && typeof response.profile === "object" ? response.profile : null, refAnalysisError: "", refAnalyzedAt: new Date().toISOString() } }
-                    : x)));
+                  const analyzedAt = new Date().toISOString();
+                  setNodes((prev) => prev.map((x) => {
+                    if (x.id !== nodeId) return x;
+                    const mergedData = normalizeComfyRefNodeData(x.type, {
+                      ...x.data,
+                      refs,
+                      refStatus: "ready",
+                      refShortLabel: String(response?.shortLabel || "").trim(),
+                      refHiddenProfile: response?.profile && typeof response.profile === "object" ? response.profile : null,
+                      refAnalysisError: "",
+                      refAnalyzedAt: analyzedAt,
+                    }, x?.data?.kind || "");
+                    if (CLIP_TRACE_COMFY_REFS) {
+                      console.info("[CLIP TRACE COMFY REFS] analyze-ref-node applied", {
+                        nodeId,
+                        role,
+                        refStatus: mergedData.refStatus,
+                        refsCount: Array.isArray(mergedData?.refs) ? mergedData.refs.length : 0,
+                        refShortLabel: mergedData.refShortLabel,
+                        hasHiddenProfile: !!mergedData.refHiddenProfile,
+                        refAnalyzedAt: mergedData.refAnalyzedAt,
+                        refAnalysisError: mergedData.refAnalysisError,
+                      });
+                    }
+                    return { ...x, data: mergedData };
+                  }));
                 } catch (err) {
                   console.error(err);
                   setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x)));
@@ -6194,26 +6253,14 @@ const hydrate = useCallback((source = "unknown") => {
           }
 
           if (["refCharacter2", "refCharacter3", "refAnimal", "refGroup"].includes(n.type)) {
-            const refs = Array.isArray(data?.refs)
-              ? data.refs.map((item) => ({
-                url: String(item?.url || "").trim(),
-                name: String(item?.name || "").trim(),
-                type: String(item?.type || "").trim(),
-              })).filter((item) => !!item.url).slice(0, 5)
-              : [];
+            const normalized = normalizeComfyRefNodeData(n.type, data, data?.kind || "");
             return {
               id: n.id,
               type: n.type,
               position: n.position,
               data: {
-                ...data,
-                refs,
+                ...normalized,
                 uploading: false,
-                refStatus: deriveRefNodeStatus({ ...data, refs }),
-                refShortLabel: String(data?.refShortLabel || "").trim(),
-                refDetailsOpen: !!data?.refDetailsOpen,
-                refHiddenProfile: data?.refHiddenProfile && typeof data.refHiddenProfile === "object" ? data.refHiddenProfile : null,
-                refAnalysisError: String(data?.refAnalysisError || "").trim(),
               },
             };
           }
@@ -6252,6 +6299,34 @@ const hydrate = useCallback((source = "unknown") => {
 
       const hydratedNodes = cleanNodes.length ? cleanNodes : defaultNodes;
       const hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
+      if (CLIP_TRACE_GRAPH_HYDRATE || CLIP_TRACE_COMFY_REFS) {
+        const tracedHydratedNodes = hydratedNodes
+          .filter((nodeItem) => ["refNode", "refCharacter2", "refCharacter3"].includes(String(nodeItem?.type || "")))
+          .map((nodeItem) => ({
+            id: nodeItem.id,
+            type: nodeItem.type,
+            kind: String(nodeItem?.data?.kind || ""),
+            refStatus: String(nodeItem?.data?.refStatus || ""),
+            refsCount: Array.isArray(nodeItem?.data?.refs) ? nodeItem.data.refs.length : 0,
+            refShortLabel: String(nodeItem?.data?.refShortLabel || ""),
+            hasHiddenProfile: !!nodeItem?.data?.refHiddenProfile,
+            refAnalyzedAt: String(nodeItem?.data?.refAnalyzedAt || ""),
+            refAnalysisError: String(nodeItem?.data?.refAnalysisError || ""),
+          }));
+        const tracedHydratedEdges = hydratedEdges
+          .filter((edgeItem) => String(edgeItem?.targetHandle || "").startsWith("ref_"))
+          .map((edgeItem) => ({
+            id: edgeItem.id,
+            source: edgeItem.source,
+            target: edgeItem.target,
+            sourceHandle: edgeItem.sourceHandle || null,
+            targetHandle: edgeItem.targetHandle || null,
+          }));
+        console.info("[CLIP TRACE GRAPH HYDRATE] hydrated refs and edges", {
+          tracedHydratedNodes,
+          tracedHydratedEdges,
+        });
+      }
       console.log("[CLIP HYDRATE] nodes count", hydratedNodes.length);
       console.log("[CLIP HYDRATE] node types", hydratedNodes.map((nodeItem) => nodeItem.type));
       if (hydratedNodes.length === 0) {
@@ -6533,6 +6608,31 @@ const hydrate = useCallback((source = "unknown") => {
     // strip handlers from data
     const serialNodes = serializeNodesForStorage(nodes);
     const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
+    if (CLIP_TRACE_COMFY_REFS) {
+      const tracedNodes = serialNodes
+        .filter((nodeItem) => ["refNode", "refCharacter2", "refCharacter3"].includes(String(nodeItem?.type || "")))
+        .map((nodeItem) => ({
+          id: nodeItem.id,
+          type: nodeItem.type,
+          kind: String(nodeItem?.data?.kind || ""),
+          refStatus: String(nodeItem?.data?.refStatus || ""),
+          refsCount: Array.isArray(nodeItem?.data?.refs) ? nodeItem.data.refs.length : 0,
+          refShortLabel: String(nodeItem?.data?.refShortLabel || ""),
+          hasHiddenProfile: !!nodeItem?.data?.refHiddenProfile,
+          refAnalyzedAt: String(nodeItem?.data?.refAnalyzedAt || ""),
+          refAnalysisError: String(nodeItem?.data?.refAnalysisError || ""),
+        }));
+      const tracedEdges = serialEdges
+        .filter((edgeItem) => String(edgeItem?.targetHandle || "").startsWith("ref_"))
+        .map((edgeItem) => ({
+          id: edgeItem.id,
+          source: edgeItem.source,
+          target: edgeItem.target,
+          sourceHandle: edgeItem.sourceHandle || null,
+          targetHandle: edgeItem.targetHandle || null,
+        }));
+      console.info("[CLIP TRACE COMFY REFS] persist snapshot", { tracedNodes, tracedEdges });
+    }
 
     const storyboardSceneSignature = buildSceneSignature(scenarioScenes, "scene");
     const comfySceneSignature = buildSceneSignature(comfyScenes, "comfy_scene");
