@@ -3187,6 +3187,7 @@ const comfyShowVideoSection = Boolean(
       });
     });
     comfyVideoJobsBySceneRef.current.clear();
+    activePollingJobsRef.current.clear();
     stopComfyVideoPolling();
     safeDel(COMFY_VIDEO_JOB_STORE_KEY);
   }, [COMFY_VIDEO_JOB_STORE_KEY, stopComfyVideoPolling]);
@@ -3477,14 +3478,17 @@ const comfyShowVideoSection = Boolean(
   useEffect(() => {
     const restoreToken = `${accountKey}:${COMFY_VIDEO_JOB_STORE_KEY}`;
     if (restoredComfyVideoJobsRef.current.has(restoreToken)) return;
-    restoredComfyVideoJobsRef.current.add(restoreToken);
     const raw = safeGet(COMFY_VIDEO_JOB_STORE_KEY);
-    if (!raw) return;
+    if (!raw) {
+      restoredComfyVideoJobsRef.current.add(restoreToken);
+      return;
+    }
     try {
       const parsed = JSON.parse(raw);
       const entries = parsed?.jobId
         ? [[String(parsed?.sceneId || ""), parsed]]
         : (parsed && typeof parsed === "object" ? Object.entries(parsed) : []);
+      let hasPendingHydrationRestore = false;
       console.info("[CLIP STORAGE] restore comfy video jobs", {
         accountKey,
         COMFY_VIDEO_JOB_STORE_KEY,
@@ -3498,11 +3502,17 @@ const comfyShowVideoSection = Boolean(
         if (!normalizedSceneId) return;
         const idx = findComfySceneIndexById(normalizedSceneId);
         if (idx < 0) {
+          hasPendingHydrationRestore = true;
+          nextPersisted[normalizedSceneId] = {
+            ...meta,
+            sceneId: normalizedSceneId,
+            status: String(meta?.status || "running").toLowerCase() || "running",
+          };
           if (CLIP_TRACE_VIDEO_POLLING) {
-            console.info("[CLIP TRACE] restore job ignored", {
+            console.info("[CLIP TRACE] restore job deferred", {
               scope: "comfy",
               sceneId: normalizedSceneId,
-              reason: "invalid_scene_id",
+              reason: "scene_not_hydrated_yet",
             });
           }
           return;
@@ -3561,6 +3571,7 @@ const comfyShowVideoSection = Boolean(
               }
               updateComfyScene(idx, {
                 videoUrl: doneVideoUrl,
+                videoPanelOpen: true,
                 videoStatus: "done",
                 videoJobId: null,
                 videoError: "",
@@ -3597,10 +3608,14 @@ const comfyShowVideoSection = Boolean(
           });
       });
       persistActiveComfyVideoJob(nextPersisted);
+      if (!hasPendingHydrationRestore) {
+        restoredComfyVideoJobsRef.current.add(restoreToken);
+      }
     } catch {
       safeDel(COMFY_VIDEO_JOB_STORE_KEY);
+      restoredComfyVideoJobsRef.current.add(restoreToken);
     }
-  }, [COMFY_VIDEO_JOB_STORE_KEY, accountKey, clearActiveComfyVideoJob, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfyScene]);
+  }, [COMFY_VIDEO_JOB_STORE_KEY, accountKey, clearActiveComfyVideoJob, comfyScenes, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfyScene]);
 
   const handleComfyGenerateImage = useCallback(async () => {
     if (!comfySelectedScene) return;
