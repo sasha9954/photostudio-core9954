@@ -17,6 +17,7 @@ const VISUAL_ANCHOR_ROLES = ["character_1", "character_2", "character_3", "anima
 
 const STORY_OVERRIDE_MARKERS = ["не по песне", "другой сюжет", "separate story", "different story", "not literal lyrics"];
 const STORY_ENHANCEMENT_MARKERS = ["усили", "усилить", "enhance", "intensify", "emphasize", "make more cinematic"];
+const CLIP_TRACE_COMFY_REFS = false;
 
 export const PROMPT_SYNC_STATUS = {
   synced: "synced",
@@ -269,7 +270,12 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
       return normalizeRefDataFn(sourceNode?.data || {}, cfg.kind || "").refs;
     }
     const refs = Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [];
-    return refs.map((item) => ({ url: String(item?.url || "").trim(), name: String(item?.name || "").trim() })).filter((item) => !!item.url);
+    return refs
+      .map((item) => {
+        if (typeof item === "string") return { url: String(item || "").trim(), name: "" };
+        return { url: String(item?.url || "").trim(), name: String(item?.name || "").trim() };
+      })
+      .filter((item) => !!item.url);
   };
   const resolveRefStatus = (sourceNode, refs = []) => {
     const refsCount = Array.isArray(refs) ? refs.length : 0;
@@ -279,12 +285,17 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     const refAnalysisError = String(sourceNode?.data?.refAnalysisError || "").trim();
     const hasHiddenProfile = !!(sourceNode?.data?.refHiddenProfile && typeof sourceNode.data.refHiddenProfile === "object");
     const hasAnalysisSignals = !!shortLabel || hasHiddenProfile || !!refAnalyzedAt;
-    if (!refsCount) return "empty";
-    if (raw === "loading") return "loading";
-    if (refAnalysisError || raw === "error") return "error";
-    if (hasAnalysisSignals) return "ready";
-    if (["empty", "draft", "loading", "ready", "error"].includes(raw)) return raw;
-    return "draft";
+    if (refAnalysisError || raw === "error") {
+      return { status: "error", rawRefStatus: raw, refsCount, shortLabel, hasHiddenProfile, hasAnalyzedAt: !!refAnalyzedAt, warningLabel: "" };
+    }
+    if (!refsCount) {
+      return { status: "empty", rawRefStatus: raw, refsCount, shortLabel, hasHiddenProfile, hasAnalyzedAt: !!refAnalyzedAt, warningLabel: "" };
+    }
+    if (raw === "loading") {
+      return { status: "loading", rawRefStatus: raw, refsCount, shortLabel, hasHiddenProfile, hasAnalyzedAt: !!refAnalyzedAt, warningLabel: "" };
+    }
+    const status = (raw === "ready" || hasAnalysisSignals) ? "ready" : "draft";
+    return { status, rawRefStatus: raw, refsCount, shortLabel, hasHiddenProfile, hasAnalyzedAt: !!refAnalyzedAt, warningLabel: "" };
   };
   const refNodesByRole = {
     character_1: pickConnectedNode("ref_character_1"),
@@ -316,14 +327,20 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
       : role === "style" ? comfyRefConfigByHandle.ref_style
       : comfyRefConfigByHandle.ref_props;
     const refs = normalizeNodeRefs(sourceNode, cfg);
-    const status = resolveRefStatus(sourceNode, refs);
-    const shortLabel = String(sourceNode?.data?.refShortLabel || "").trim();
+    const resolved = resolveRefStatus(sourceNode, refs);
+    const status = String(resolved?.status || "draft");
+    const warningLabel = status === "ready" ? "" : (roleDraftMessages[role] || "добавьте реф");
+    const shortLabel = String(resolved?.shortLabel || sourceNode?.data?.refShortLabel || "").trim();
     return [role, {
       connected: !!sourceNode,
       status,
       refs,
       shortLabel,
-      warningLabel: roleDraftMessages[role] || "добавьте реф",
+      warningLabel,
+      rawRefStatus: String(resolved?.rawRefStatus || ""),
+      refsCount: Number(resolved?.refsCount || 0),
+      hasHiddenProfile: !!resolved?.hasHiddenProfile,
+      hasAnalyzedAt: !!resolved?.hasAnalyzedAt,
       error: String(sourceNode?.data?.refAnalysisError || "").trim(),
       hiddenProfile: sourceNode?.data?.refHiddenProfile && typeof sourceNode.data.refHiddenProfile === "object" ? sourceNode.data.refHiddenProfile : null,
     }];
@@ -348,6 +365,24 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const modeSemantics = getModeSemantics(modeValue);
   const styleSemantics = getStyleSemantics(stylePreset);
   const storyMissionSummary = buildStoryMissionSummary({ meaningfulText, storyControlMode, mode: modeValue });
+
+  if (CLIP_TRACE_COMFY_REFS) {
+    const tracedRoles = ["character_2", "character_3"];
+    const tracePayload = Object.fromEntries(tracedRoles.map((role) => {
+      const meta = refConnectionStates?.[role] || {};
+      return [role, {
+        connected: !!meta.connected,
+        rawRefStatus: String(meta.rawRefStatus || ""),
+        derivedStatus: String(meta.status || ""),
+        refsCount: Number(meta.refsCount || 0),
+        shortLabel: String(meta.shortLabel || ""),
+        hasHiddenProfile: !!meta.hasHiddenProfile,
+        hasAnalyzedAt: !!meta.hasAnalyzedAt,
+        warningLabel: String(meta.warningLabel || ""),
+      }];
+    }));
+    console.info("[CLIP TRACE COMFY REFS] deriveComfyBrainState role diagnostics", tracePayload);
+  }
 
   return {
     modeValue,

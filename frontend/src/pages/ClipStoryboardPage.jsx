@@ -5576,9 +5576,13 @@ onClipSec: (nodeId, value) => {
               connectedRefsWarnings,
               statuses: Object.fromEntries(roleOrder.map((role) => [role, {
                 connected: !!refConnectionStates?.[role]?.connected,
+                rawRefStatus: String(refConnectionStates?.[role]?.rawRefStatus || ""),
                 status: String(refConnectionStates?.[role]?.status || ""),
                 refsCount: Array.isArray(refConnectionStates?.[role]?.refs) ? refConnectionStates[role].refs.length : 0,
                 shortLabel: String(refConnectionStates?.[role]?.shortLabel || ""),
+                hasHiddenProfile: !!refConnectionStates?.[role]?.hasHiddenProfile,
+                hasAnalyzedAt: !!refConnectionStates?.[role]?.hasAnalyzedAt,
+                warningLabel: String(refConnectionStates?.[role]?.warningLabel || ""),
               }])),
             });
           }
