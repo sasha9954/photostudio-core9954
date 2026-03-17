@@ -19,6 +19,104 @@ const STORY_OVERRIDE_MARKERS = ["не по песне", "другой сюжет
 const STORY_ENHANCEMENT_MARKERS = ["усили", "усилить", "enhance", "intensify", "emphasize", "make more cinematic"];
 const CLIP_TRACE_COMFY_REFS = false;
 
+const MODE_RULES = {
+  clip: {
+    modeIntent: "music-driven montage",
+    modePromptBias: "rhythm and visual energy",
+    modeSceneStrategy: "beats and transitions",
+    modeContinuityBias: "motif continuity",
+    planningMindset: "music video director",
+    continuityStrictness: "soft",
+    abstractionAllowance: "high",
+    narrativeDiscipline: "medium",
+    planningRules: [
+      "Prioritize audiovisual impact over literal causality.",
+      "Allow associative montage and short scene beats.",
+      "Keep motif continuity even when causality is loose.",
+    ],
+  },
+  kino: {
+    modeIntent: "cinematic causality",
+    modePromptBias: "dramatic logic",
+    modeSceneStrategy: "narrative chain",
+    modeContinuityBias: "strong continuity",
+    planningMindset: "director",
+    continuityStrictness: "strong",
+    abstractionAllowance: "medium",
+    narrativeDiscipline: "high",
+    planningRules: [
+      "Build explicit cause-and-effect between scenes.",
+      "Avoid random clip sequencing; preserve narrative chain.",
+      "Hold continuity of character, world and actions.",
+    ],
+  },
+  reklama: {
+    modeIntent: "commercial persuasion",
+    modePromptBias: "product focus",
+    modeSceneStrategy: "hook-value-payoff",
+    modeContinuityBias: "brand consistency",
+    planningMindset: "creative strategist",
+    continuityStrictness: "strong",
+    abstractionAllowance: "low",
+    narrativeDiscipline: "high",
+    planningRules: [
+      "Each scene must carry a communication function.",
+      "Do not lose product/message for long stretches.",
+      "Follow hook → value → payoff progression.",
+    ],
+  },
+  scenario: {
+    modeIntent: "structured storyboard",
+    modePromptBias: "clarity",
+    modeSceneStrategy: "beat-by-beat",
+    modeContinuityBias: "script continuity",
+    planningMindset: "screenwriter",
+    continuityStrictness: "very_strong",
+    abstractionAllowance: "low",
+    narrativeDiscipline: "very_high",
+    planningRules: [
+      "Follow strongest text/story discipline.",
+      "Music is secondary to beat-by-beat script logic.",
+      "Minimize montage abstraction and keep structural clarity.",
+    ],
+  },
+};
+
+const AUDIO_STORY_POLICIES = {
+  lyrics_music: {
+    policyLabel: "lyrics_and_music_joint_driver",
+    lyricsUsage: "use",
+    storySource: "lyrics+music",
+    textRoleDefault: "optional enhancer",
+    planningRules: [
+      "Use lyrics meaning as narrative source when audio is present.",
+      "Use music for rhythm, transitions and emotional contour.",
+    ],
+  },
+  music_only: {
+    policyLabel: "music_drives_story_lyrics_ignored",
+    lyricsUsage: "ignore",
+    storySource: "music",
+    textRoleDefault: "guide when connected",
+    planningRules: [
+      "Ignore literal lyrics even if song contains words.",
+      "Build story from rhythm, energy, references and selected mode.",
+      "Without text node, do mood/energy progression instead of fake literal song plot.",
+    ],
+  },
+  music_plus_text: {
+    policyLabel: "text_semantics_with_music_timing",
+    lyricsUsage: "ignore",
+    storySource: "text+music",
+    textRoleDefault: "primary",
+    planningRules: [
+      "Ignore lyrics semantics.",
+      "Text node controls narrative direction.",
+      "Music controls timing, pacing, emotion and montage intensity.",
+    ],
+  },
+};
+
 export const PROMPT_SYNC_STATUS = {
   synced: "synced",
   needsSync: "needs_sync",
@@ -150,10 +248,8 @@ export function buildStoryMissionSummary({ meaningfulText = "", storyControlMode
 
 export function getModeSemantics(mode = "clip") {
   const key = String(mode || "clip").toLowerCase();
-  if (key === "kino") return { modeIntent: "cinematic causality", modePromptBias: "dramatic logic", modeSceneStrategy: "narrative chain", modeContinuityBias: "strong continuity", planningMindset: "director" };
-  if (key === "reklama") return { modeIntent: "commercial persuasion", modePromptBias: "product focus", modeSceneStrategy: "hook-value-payoff", modeContinuityBias: "brand consistency", planningMindset: "creative strategist" };
-  if (key === "scenario") return { modeIntent: "structured storyboard", modePromptBias: "clarity", modeSceneStrategy: "beat-by-beat", modeContinuityBias: "script continuity", planningMindset: "screenwriter" };
-  return { modeIntent: "music-driven montage", modePromptBias: "rhythm and visual energy", modeSceneStrategy: "beats and transitions", modeContinuityBias: "motif continuity", planningMindset: "music video director" };
+  const resolved = MODE_RULES[key] || MODE_RULES.clip;
+  return { ...resolved, modeRules: resolved };
 }
 
 export function getStyleSemantics(stylePreset = "realism") {
@@ -165,7 +261,41 @@ export function getStyleSemantics(stylePreset = "realism") {
     glossy: "clean premium commercial polish",
     soft: "gentle light and airy mood",
   };
-  return { styleSummary: map[key] || map.realism, styleContinuity: `Keep ${key} style continuity across all scenes.` };
+  return {
+    styleSummary: map[key] || map.realism,
+    styleContinuity: `Keep ${key} style continuity across all scenes.`,
+    styleRules: {
+      scope: "visual_filter_only",
+      planningRules: [
+        "Style affects visual treatment, light, color and finish.",
+        "Style must not override mode story structure.",
+        "Keep style continuity unless freeze style is disabled by user flow.",
+      ],
+    },
+  };
+}
+
+export function getAudioStoryPolicy(audioStoryMode = "lyrics_music", { hasText = false, hasAudio = false } = {}) {
+  const modeKey = normalizeAudioStoryMode(audioStoryMode);
+  const base = AUDIO_STORY_POLICIES[modeKey] || AUDIO_STORY_POLICIES.lyrics_music;
+  const warnings = [];
+  if (modeKey === "music_plus_text" && hasAudio && !hasText) {
+    warnings.push("music_plus_text selected without text: lyrics are ignored, fallback to music-only progression.");
+  }
+  if (modeKey === "music_only" && hasAudio && !hasText) {
+    warnings.push("music_only without text: planner should use mood/energy progression.");
+  }
+  return { ...base, warnings };
+}
+
+export function deriveTextInfluence({ mode = "clip", audioStoryMode = "lyrics_music", hasText = false, storyControlMode = "insufficient_input" } = {}) {
+  if (!hasText) return "none";
+  if (storyControlMode === "text_override") return "override";
+  if (mode === "scenario") return "override";
+  if (mode === "kino") return audioStoryMode === "music_only" ? "guide" : "override";
+  if (mode === "reklama") return audioStoryMode === "music_only" ? "guide" : "override";
+  if (mode === "clip") return audioStoryMode === "music_plus_text" ? "guide" : "enhancer";
+  return "guide";
 }
 
 export function buildComfyGlobalContinuity({ plannerInput = {}, refsByRole = {}, sceneRoleModel = {} } = {}) {
@@ -215,6 +345,14 @@ export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {
       styleLock: true,
       identityLock: true,
       roleSelectionReason: "mock_default_role_selection",
+      storyBeat: `beat_${idx + 1}`,
+      mustShow: [plannerMeta?.sceneRoleModel?.primarySubject || "character_1"],
+      mustKeep: ["identity continuity", "style continuity"],
+      cameraIntent: plannerInput?.modeSceneStrategy || "coherent progression",
+      transitionLogic: plannerInput?.modeContinuityBias || "coherent transition",
+      renderPriority: idx === 0 ? "hook" : "narrative_consistency",
+      speechRelation: plannerInput?.audioStoryMode === "music_plus_text" ? "text-led over music timing" : "music-led",
+      abstractionLevel: plannerMeta?.modeRules?.abstractionAllowance || "medium",
       imageUrl: "",
       videoUrl: "",
       videoPanelOpen: false,
@@ -240,6 +378,11 @@ export function buildMockComfyScenes(meta = {}) {
     textNarrativeRole: String(plannerInput?.textNarrativeRole || meta?.textNarrativeRole || ""),
     audioNarrativeRole: String(plannerInput?.audioNarrativeRole || meta?.audioNarrativeRole || ""),
     audioStoryMode: normalizeAudioStoryMode(plannerInput?.audioStoryMode || meta?.audioStoryMode || "lyrics_music"),
+    modeRules: plannerInput?.modeRules || meta?.modeRules || MODE_RULES[String(plannerInput?.mode || meta?.mode || "clip").toLowerCase()] || MODE_RULES.clip,
+    styleRules: plannerInput?.styleRules || meta?.styleRules || {},
+    audioStoryPolicy: plannerInput?.audioStoryPolicy || meta?.audioStoryPolicy || AUDIO_STORY_POLICIES.lyrics_music,
+    textInfluence: String(plannerInput?.textInfluence || meta?.textInfluence || "none"),
+    sceneContractSchemaVersion: "comfy_scene_contract_v1",
   };
   plannerMeta.globalContinuity = buildComfyGlobalContinuity({ plannerInput, refsByRole: plannerInput?.refsByRole || {}, sceneRoleModel: plannerMeta.sceneRoleModel });
   return buildComfyScenesFromPlanner({ plannerInput, plannerMeta });
@@ -364,6 +507,8 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const timelineSource = meaningfulAudio ? "audio rhythm" : "logic";
   const modeSemantics = getModeSemantics(modeValue);
   const styleSemantics = getStyleSemantics(stylePreset);
+  const audioStoryPolicy = getAudioStoryPolicy(audioStoryMode, { hasText: !!meaningfulText, hasAudio: !!meaningfulAudio });
+  const textInfluence = deriveTextInfluence({ mode: modeValue, audioStoryMode, hasText: !!meaningfulText, storyControlMode });
   const storyMissionSummary = buildStoryMissionSummary({ meaningfulText, storyControlMode, mode: modeValue });
 
   if (CLIP_TRACE_COMFY_REFS) {
@@ -400,6 +545,8 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     timelineSource,
     modeSemantics,
     styleSemantics,
+    audioStoryPolicy,
+    textInfluence,
     storyMissionSummary,
     refConnectionStates,
   };
@@ -414,6 +561,10 @@ export function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } 
     narrativeSource: plannerInput.narrativeSource,
     timelineSource: plannerInput.timelineSource,
     audioStoryMode: plannerInput.audioStoryMode,
+    textInfluence: plannerInput.textInfluence,
+    modeRules: plannerInput.modeRules,
+    styleRules: plannerInput.styleRules,
+    audioStoryPolicy: plannerInput.audioStoryPolicy,
     warnings: plannerMeta.warnings || [],
     globalContinuity: plannerMeta.globalContinuity || "",
     primaryRole: plannerMeta?.sceneRoleModel?.primarySubject || "character_1",

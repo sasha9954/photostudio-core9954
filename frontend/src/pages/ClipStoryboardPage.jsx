@@ -5525,10 +5525,11 @@ onClipSec: (nodeId, value) => {
             if (derived.storyControlMode === 'text_override' && derived.meaningfulAudio) warnings.push('TEXT задаёт сюжет; AUDIO используется для ритма/эмоционального контура');
             if (derived.storyControlMode === 'audio_enhanced_by_text') warnings.push('AUDIO даёт story backbone; TEXT усиливает драму и акценты');
             if (derived.storyControlMode === 'hybrid_balanced') warnings.push('Сюжет формируется совместно из AUDIO и TEXT');
-            if (derived.audioStoryMode === 'lyrics_music' && derived.meaningfulAudio) warnings.push('Audio story mode: lyrics+music (можно использовать смысл слов песни).');
-            if (derived.audioStoryMode === 'music_only' && derived.meaningfulAudio) warnings.push('Audio story mode: music_only (lyrics игнорируются, сюжет только из музыки/энергии).');
-            if (derived.audioStoryMode === 'music_plus_text' && derived.meaningfulAudio) warnings.push('Audio story mode: music_plus_text (lyrics игнорируются, сюжет берётся из TEXT).');
-            if (derived.audioStoryMode === 'music_plus_text' && derived.meaningfulAudio && !derived.meaningfulText) warnings.push('music_plus_text выбран, но TEXT пустой: lyrics будут проигнорированы, storyboard будет построен только по музыке/энергии');
+            if (derived.audioStoryMode === 'lyrics_music' && derived.meaningfulAudio) warnings.push('Audio story mode: lyrics+music (lyrics и музыка вместе управляют сюжетом).');
+            if (derived.audioStoryMode === 'music_only' && derived.meaningfulAudio) warnings.push('Audio story mode: music_only (lyrics игнорируются; сюжет строится по ритму/энергии/refs/mode).');
+            if (derived.audioStoryMode === 'music_plus_text' && derived.meaningfulAudio) warnings.push('Audio story mode: music_plus_text (lyrics игнорируются; TEXT задаёт narrative direction).');
+            if (Array.isArray(derived.audioStoryPolicy?.warnings)) derived.audioStoryPolicy.warnings.forEach((msg) => warnings.push(msg));
+            if (derived.modeValue === 'scenario' && !derived.meaningfulText) warnings.push('Scenario mode без TEXT: добавьте текст для beat-by-beat дисциплины.');
             if (derived.outputValue === 'comfy text' && !String(derived.meaningfulText || '').trim()) warnings.push('Для comfy text желательно добавить richer text prompt');
             if (derived.modeValue === 'reklama' && !derived.meaningfulText) warnings.push('Для reklama желательно добавить рекламный тезис в TEXT');
 
@@ -5557,6 +5558,8 @@ onClipSec: (nodeId, value) => {
               storyControlMode: derived.storyControlMode,
               storyMissionSummary: derived.storyMissionSummary,
               audioStoryMode: derived.audioStoryMode,
+              audioStoryPolicy: derived.audioStoryPolicy,
+              textInfluence: derived.textInfluence,
               textNarrativeRole: derived.narrativeRoles.textNarrativeRole,
               audioNarrativeRole: derived.narrativeRoles.audioNarrativeRole,
               modeIntent: derived.modeSemantics.modeIntent,
@@ -5564,8 +5567,10 @@ onClipSec: (nodeId, value) => {
               modeSceneStrategy: derived.modeSemantics.modeSceneStrategy,
               modeContinuityBias: derived.modeSemantics.modeContinuityBias,
               planningMindset: derived.modeSemantics.planningMindset,
+              modeRules: derived.modeSemantics.modeRules,
               styleSummary: derived.styleSemantics.styleSummary,
               styleContinuity: derived.styleSemantics.styleContinuity,
+              styleRules: derived.styleSemantics.styleRules,
               primaryImageAnchor: Object.values(derived.refsByRole).flat().find((item) => item?.url) || null,
               warnings: [...critical, ...warnings],
               coverage: {
@@ -5587,6 +5592,7 @@ onClipSec: (nodeId, value) => {
               sourceArbitration: `${derived.narrativeSource} • ${derived.storyControlMode}`,
               storyMissionSummary: derived.storyMissionSummary,
               audioStoryMode: derived.audioStoryMode,
+              textInfluence: derived.textInfluence,
               outputMode: derived.outputValue,
               modeBias: derived.modeSemantics.modePromptBias,
               planningStyle: derived.modeSemantics.planningMindset,
