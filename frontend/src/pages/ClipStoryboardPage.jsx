@@ -2245,6 +2245,8 @@ export default function ClipStoryboardPage() {
 
   const [lastSavedAt, setLastSavedAt] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [brainGuideOpen, setBrainGuideOpen] = useState(false);
+  const brainGuideRef = useRef(null);
 
   
 const [scenarioEditor, setScenarioEditor] = useState({
@@ -2273,6 +2275,20 @@ useEffect(() => {
   window.addEventListener("ps:clipOpenScenario", handler);
   return () => window.removeEventListener("ps:clipOpenScenario", handler);
 }, []);
+
+useEffect(() => {
+  if (!brainGuideOpen) return;
+  const onPointerDown = (event) => {
+    if (brainGuideRef.current?.contains(event.target)) return;
+    setBrainGuideOpen(false);
+  };
+  window.addEventListener("mousedown", onPointerDown);
+  window.addEventListener("touchstart", onPointerDown, { passive: true });
+  return () => {
+    window.removeEventListener("mousedown", onPointerDown);
+    window.removeEventListener("touchstart", onPointerDown);
+  };
+}, [brainGuideOpen]);
 
 useEffect(() => {
   const handler = (e) => {
@@ -6947,7 +6963,10 @@ const hydrate = useCallback((source = "unknown") => {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape") setDrawerOpen(false);
+      if (e.key === "Escape") {
+        setDrawerOpen(false);
+        setBrainGuideOpen(false);
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         setDrawerOpen((v) => !v);
@@ -6970,6 +6989,61 @@ const hydrate = useCallback((source = "unknown") => {
       <div className="clipSB_hud">
         <button className="clipSB_hudBtn" onClick={() => setDrawerOpen(true)}>Ноды</button>
         <button className="clipSB_hudBtn clipSB_hudBtnSecondary" onClick={() => navigate("/studio")}>К студиям</button>
+        <div className="clipSB_guideWrap" ref={brainGuideRef}>
+          <button
+            className={"clipSB_hudBtn clipSB_hudBtnGuide" + (brainGuideOpen ? " isActive" : "")}
+            onClick={() => setBrainGuideOpen((v) => !v)}
+            aria-haspopup="dialog"
+            aria-expanded={brainGuideOpen}
+          >
+            ℹ Guide
+          </button>
+          {brainGuideOpen ? (
+            <div className="clipSB_guidePopover" role="dialog" aria-label="COMFY BRAIN quick guide">
+              <div className="clipSB_guideTitle">COMFY BRAIN • quick guide</div>
+              <div className="clipSB_guideGrid">
+                <section className="clipSB_guideCard">
+                  <h4>MODE</h4>
+                  <ul>
+                    <li><b>Clip</b> — музыкальный монтаж и ассоциативность.</li>
+                    <li><b>Kino</b> — причинная кинодрама и логика сцен.</li>
+                    <li><b>Reklama</b> — коммуникация, продукт и message.</li>
+                    <li><b>Scenario</b> — строгий storyboard по смыслу.</li>
+                  </ul>
+                </section>
+                <section className="clipSB_guideCard">
+                  <h4>AUDIO STORY MODE</h4>
+                  <ul>
+                    <li><b>lyrics + music</b> — историю вместе ведут lyrics и музыка.</li>
+                    <li><b>music only</b> — lyrics игнорируются, работает ритм и энергия.</li>
+                    <li><b>music + text</b> — lyrics игнорируются, narrative direction даёт TEXT.</li>
+                  </ul>
+                </section>
+                <section className="clipSB_guideCard">
+                  <h4>TEXT</h4>
+                  <p>TEXT может <b>override</b>, <b>guide</b> или <b>enhance</b> story в зависимости от MODE.</p>
+                </section>
+                <section className="clipSB_guideCard">
+                  <h4>STYLE</h4>
+                  <p>STYLE усиливает визуал и не должен ломать драматургию MODE.</p>
+                </section>
+                <section className="clipSB_guideCard">
+                  <h4>REFS</h4>
+                  <p>REFS фиксируют персонажей, мир и continuity между сценами.</p>
+                </section>
+                <section className="clipSB_guideCard clipSB_guideCardCombo">
+                  <h4>Как комбинировать</h4>
+                  <ul>
+                    <li><code>scenario + music_plus_text + strong TEXT</code></li>
+                    <li><code>kino + lyrics_music + refs</code></li>
+                    <li><code>reklama + message in TEXT</code></li>
+                    <li><code>clip + music_only + strong visual refs</code></li>
+                  </ul>
+                </section>
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       
