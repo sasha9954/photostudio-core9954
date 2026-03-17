@@ -5337,9 +5337,6 @@ return base;
 
 const hydrate = useCallback(() => {
     // IMPORTANT: we always have an accountKey (fallback to "guest"), so persistence works even before auth init.
-    didHydrateRef.current = false;
-    isHydratingRef.current = true;
-
     console.info("[CLIP STORAGE] hydrate start", {
       accountKey,
       STORE_KEY,
@@ -5355,9 +5352,13 @@ const hydrate = useCallback(() => {
         hasParseController: !!parseControllerRef.current,
         comfyParseInFlightCount: comfyParseInFlightRef.current.size,
       });
-      isHydratingRef.current = false;
+      // Keep persist effects active when hydrate is intentionally skipped.
+      didHydrateRef.current = true;
       return;
     }
+
+    didHydrateRef.current = false;
+    isHydratingRef.current = true;
 
     // Try current key first; if empty, try a few compatible legacy keys (to survive format changes)
     let raw = safeGet(STORE_KEY);
