@@ -36,14 +36,15 @@
 
 /* HUD */
 .clipSB_hud {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  z-index: 2000;
+  position: fixed;
+  top: calc(86px + 16px);
+  left: max(18px, env(safe-area-inset-left));
+  z-index: 2400;
   display: inline-flex;
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
+  max-width: calc(100vw - 36px);
   border-radius: 999px;
   background: rgba(10, 12, 18, 0.52);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
