@@ -69,6 +69,7 @@ const PORT_COLORS = {
 const CLIP_TRACE_PERSIST = false;
 const CLIP_TRACE_VIDEO_POLLING = false;
 const CLIP_TRACE_COMFY_REFS = false;
+const CLIP_TRACE_BRAIN_REFRESH = false;
 const CLIP_TRACE_GRAPH_HYDRATE = false;
 
 function portColor(key) {
@@ -4930,11 +4931,23 @@ Aspect ratio: ${imageFormat}`,
   
   // wire handlers into node.data (keeps render simple)
   const bindHandlers = useCallback(
-    (ns) => {
+    (ns, options = {}) => {
+      const effectiveNodes = Array.isArray(options?.nodesNow) ? options.nodesNow : ns;
+      const effectiveEdges = Array.isArray(options?.edgesNow) ? options.edgesNow : (edgesRef.current || []);
+      const traceReason = String(options?.traceReason || "").trim() || "default";
       console.log("[CLIP TRACE] bindHandlers executed", {
         nodesCount: Array.isArray(ns) ? ns.length : "unknown",
+        edgesCount: Array.isArray(effectiveEdges) ? effectiveEdges.length : "unknown",
+        reason: traceReason,
         timestamp: Date.now()
       });
+      if (CLIP_TRACE_BRAIN_REFRESH) {
+        console.info("[CLIP TRACE BRAIN REFRESH] bindHandlers context", {
+          reason: traceReason,
+          nodesCount: Array.isArray(effectiveNodes) ? effectiveNodes.length : 0,
+          edgesCount: Array.isArray(effectiveEdges) ? effectiveEdges.length : 0,
+        });
+      }
 
       return ns.map((n) => {
         const base = { ...n, data: { ...n.data, onRemoveNode: (nodeId) => removeNode(nodeId) } };
@@ -5390,11 +5403,15 @@ onClipSec: (nodeId, value) => {
                 const refs = normalizeRefData(node?.data || {}, node?.data?.kind || "").refs;
                 const role = resolveRefRoleForNode(node);
                 if (!refs.length || !role) return;
-                setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x))));
+                setNodes((prev) => {
+                  const nextNodes = prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x));
+                  return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "analyze-ref-node:loading" });
+                });
                 try {
                   const response = await fetchJson(`/api/clip/comfy/analyze-ref-node`, { method: "POST", body: { role, refs } });
                   const analyzedAt = new Date().toISOString();
-                  setNodes((prev) => bindHandlers(prev.map((x) => {
+                  setNodes((prev) => {
+                    const nextNodes = prev.map((x) => {
                     if (x.id !== nodeId) return x;
                     const mergedData = normalizeComfyRefNodeData(x.type, {
                       ...x.data,
@@ -5418,11 +5435,27 @@ onClipSec: (nodeId, value) => {
                         refAnalysisError: mergedData.refAnalysisError,
                       });
                     }
+                    if (CLIP_TRACE_BRAIN_REFRESH) {
+                      console.info("[CLIP TRACE BRAIN REFRESH] analyze-ref-node apply", {
+                        nodeId,
+                        role,
+                        refStatus: mergedData.refStatus,
+                        refShortLabel: mergedData.refShortLabel,
+                        refAnalyzedAt: mergedData.refAnalyzedAt,
+                        refsCount: Array.isArray(mergedData?.refs) ? mergedData.refs.length : 0,
+                        hasHiddenProfile: !!mergedData.refHiddenProfile,
+                      });
+                    }
                     return { ...x, data: mergedData };
-                  })));
+                  });
+                    return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "analyze-ref-node:applied" });
+                  });
                 } catch (err) {
                   console.error(err);
-                  setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x))));
+                  setNodes((prev) => {
+                    const nextNodes = prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x));
+                    return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "analyze-ref-node:error" });
+                  });
                 }
               },
               onRemoveImage: (nodeId, idx) => {
@@ -5576,8 +5609,8 @@ onClipSec: (nodeId, value) => {
           const derived = deriveComfyBrainState({
             nodeId: n.id,
             nodeData: base.data,
-            nodesNow: nodesRef.current || [],
-            edgesNow: edgesRef.current || [],
+            nodesNow: effectiveNodes,
+            edgesNow: effectiveEdges,
             normalizeRefDataFn: normalizeRefData,
           });
           const presentation = buildComfyBrainPresentation(derived);
@@ -5620,6 +5653,18 @@ onClipSec: (nodeId, value) => {
                 hasAnalyzedAt: !!refConnectionStates?.[role]?.hasAnalyzedAt,
                 warningLabel: String(refConnectionStates?.[role]?.warningLabel || ""),
               }])),
+            });
+          }
+          if (CLIP_TRACE_BRAIN_REFRESH) {
+            console.info("[CLIP TRACE BRAIN REFRESH] comfyBrain derive", {
+              nodeId: n.id,
+              reason: traceReason,
+              connectedRefsSummary,
+              connectedRefsWarnings,
+              refConnectionStates: {
+                character_2: refConnectionStates?.character_2 || null,
+                character_3: refConnectionStates?.character_3 || null,
+              },
             });
           }
 
@@ -5951,11 +5996,15 @@ onClipSec: (nodeId, value) => {
                 const refs = Array.isArray(node?.data?.refs) ? node.data.refs.filter((item) => !!String(item?.url || "").trim()).slice(0, 5) : [];
                 const role = resolveRefRoleForNode(node);
                 if (!refs.length || !role) return;
-                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x)));
+                setNodes((prev) => {
+                  const nextNodes = prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "loading", refAnalysisError: "" } } : x));
+                  return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "analyze-ref-node:loading" });
+                });
                 try {
                   const response = await fetchJson(`/api/clip/comfy/analyze-ref-node`, { method: "POST", body: { role, refs } });
                   const analyzedAt = new Date().toISOString();
-                  setNodes((prev) => prev.map((x) => {
+                  setNodes((prev) => {
+                    const nextNodes = prev.map((x) => {
                     if (x.id !== nodeId) return x;
                     const mergedData = normalizeComfyRefNodeData(x.type, {
                       ...x.data,
@@ -5978,11 +6027,27 @@ onClipSec: (nodeId, value) => {
                         refAnalysisError: mergedData.refAnalysisError,
                       });
                     }
+                    if (CLIP_TRACE_BRAIN_REFRESH) {
+                      console.info("[CLIP TRACE BRAIN REFRESH] analyze-ref-node apply", {
+                        nodeId,
+                        role,
+                        refStatus: mergedData.refStatus,
+                        refShortLabel: mergedData.refShortLabel,
+                        refAnalyzedAt: mergedData.refAnalyzedAt,
+                        refsCount: Array.isArray(mergedData?.refs) ? mergedData.refs.length : 0,
+                        hasHiddenProfile: !!mergedData.refHiddenProfile,
+                      });
+                    }
                     return { ...x, data: mergedData };
-                  }));
+                  });
+                    return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "analyze-ref-node:applied" });
+                  });
                 } catch (err) {
                   console.error(err);
-                  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x)));
+                  setNodes((prev) => {
+                    const nextNodes = prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refStatus: "error", refAnalysisError: String(err?.message || err || "analyze_failed") } } : x));
+                    return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "analyze-ref-node:error" });
+                  });
                 }
               },
               onRemoveImage: (nodeId, idx) => setNodes((prev) => prev.map((x) => {
@@ -6149,8 +6214,15 @@ const hydrate = useCallback((source = "unknown") => {
     }
     if (!raw) {
       console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${defaultNodes.length} edgesAfter=${defaultEdges.length}`);
-      setNodes(bindHandlers(defaultNodes));
+      setNodes(bindHandlers(defaultNodes, { nodesNow: defaultNodes, edgesNow: defaultEdges, traceReason: "hydrate:defaults" }));
       setEdges(defaultEdges);
+      if (CLIP_TRACE_BRAIN_REFRESH) {
+        console.info("[CLIP TRACE BRAIN REFRESH] hydrate applied defaults graph", {
+          nodesCount: defaultNodes.length,
+          edgesCount: defaultEdges.length,
+          rederiveScheduled: true,
+        });
+      }
       setAssemblyResult(null);
       setAssemblyBuildState("idle");
       setIsAssemblyStale(false);
@@ -6357,8 +6429,15 @@ const hydrate = useCallback((source = "unknown") => {
       });
 
       console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${hydratedNodes.length} edgesAfter=${hydratedEdges.length}`);
-      setNodes(bindHandlers(hydratedNodes));
+      setNodes(bindHandlers(hydratedNodes, { nodesNow: hydratedNodes, edgesNow: hydratedEdges, traceReason: "hydrate:storage" }));
       setEdges(hydratedEdges);
+      if (CLIP_TRACE_BRAIN_REFRESH) {
+        console.info("[CLIP TRACE BRAIN REFRESH] hydrate applied storage graph", {
+          nodesCount: hydratedNodes.length,
+          edgesCount: hydratedEdges.length,
+          rederiveScheduled: true,
+        });
+      }
       console.log("[CLIP TRACE] hydrate completed", {
         nodesAfterHydrate: Array.isArray(hydratedNodes) ? hydratedNodes.length : "unknown",
         edgesAfterHydrate: Array.isArray(hydratedEdges) ? hydratedEdges.length : "unknown",
@@ -6403,8 +6482,15 @@ const hydrate = useCallback((source = "unknown") => {
         clearClipStoryboardStorageForCurrentAccount("hydrate_stale_payload");
       }
       console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${defaultNodes.length} edgesAfter=${defaultEdges.length}`);
-      setNodes(bindHandlers(defaultNodes));
+      setNodes(bindHandlers(defaultNodes, { nodesNow: defaultNodes, edgesNow: defaultEdges, traceReason: "hydrate:defaults" }));
       setEdges(defaultEdges);
+      if (CLIP_TRACE_BRAIN_REFRESH) {
+        console.info("[CLIP TRACE BRAIN REFRESH] hydrate fallback to defaults", {
+          nodesCount: defaultNodes.length,
+          edgesCount: defaultEdges.length,
+          rederiveScheduled: true,
+        });
+      }
       setAssemblyResult(null);
       setAssemblyBuildState("idle");
       setIsAssemblyStale(false);
@@ -6492,7 +6578,10 @@ const hydrate = useCallback((source = "unknown") => {
       return;
     }
 
-    setNodes((prev) => bindHandlers(prev.concat(node)));
+    setNodes((prev) => {
+      const nextNodes = prev.concat(node);
+      return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "node:add" });
+    });
     setDrawerOpen(false);
   }, [setNodes, bindHandlers]);
 
