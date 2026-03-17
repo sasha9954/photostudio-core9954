@@ -2308,6 +2308,12 @@ useEffect(() => {
   const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(defaultEdges);
 
+  console.log("[CLIP TRACE] PAGE RENDER", {
+    nodesCount: Array.isArray(nodes) ? nodes.length : "unknown",
+    edgesCount: Array.isArray(edges) ? edges.length : "unknown",
+    timestamp: Date.now()
+  });
+
   useEffect(() => {
     nodesCountRef.current = nodes.length;
   }, [nodes.length]);
@@ -4298,8 +4304,13 @@ Aspect ratio: ${imageFormat}`,
   
   // wire handlers into node.data (keeps render simple)
   const bindHandlers = useCallback(
-    (ns) =>
-      ns.map((n) => {
+    (ns) => {
+      console.log("[CLIP TRACE] bindHandlers executed", {
+        nodesCount: Array.isArray(nodes) ? nodes.length : "unknown",
+        timestamp: Date.now()
+      });
+
+      return ns.map((n) => {
         const base = { ...n, data: { ...n.data, onRemoveNode: (nodeId) => removeNode(nodeId) } };
         if (n.type === "audioNode") {
           return {
@@ -5345,7 +5356,8 @@ onClipSec: (nodeId, value) => {
           };
         }
 return base;
-      }),
+      });
+    },
     [
       setNodes,
       removeNode,
@@ -5654,6 +5666,11 @@ const hydrate = useCallback((source = "unknown") => {
       console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${hydratedNodes.length} edgesAfter=${hydratedEdges.length}`);
       setNodes(bindHandlers(hydratedNodes));
       setEdges(hydratedEdges);
+      console.log("[CLIP TRACE] hydrate completed", {
+        nodesAfterHydrate: Array.isArray(hydratedNodes) ? hydratedNodes.length : "unknown",
+        edgesAfterHydrate: Array.isArray(hydratedEdges) ? hydratedEdges.length : "unknown",
+        timestamp: Date.now()
+      });
 
       if (
         savedAssemblyResult?.finalVideoUrl
@@ -5825,6 +5842,12 @@ const hydrate = useCallback((source = "unknown") => {
 
   // persist
   useEffect(() => {
+    console.log("[CLIP TRACE] persist effect triggered", {
+      nodesCount: Array.isArray(nodes) ? nodes.length : "unknown",
+      edgesCount: Array.isArray(edges) ? edges.length : "unknown",
+      timestamp: Date.now()
+    });
+
     if (!didHydrateRef.current) {
       console.info("[CLIP TRACE] persist skipped reason=not_hydrated");
       return;
