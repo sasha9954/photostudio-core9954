@@ -3153,6 +3153,10 @@ const comfyShowVideoSection = Boolean(
     const key = String(sceneId || "").trim();
     if (!key) return;
     const activeMeta = comfyVideoJobsBySceneRef.current.get(key) || null;
+    const activeJobId = String(meta?.jobId || activeMeta?.jobId || "").trim();
+    if (activeJobId) {
+      activePollingJobsRef.current.delete(`${key}:${activeJobId}`);
+    }
     comfyVideoJobsBySceneRef.current.delete(key);
     persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
     stopComfyVideoPolling(key);
@@ -3202,6 +3206,7 @@ const comfyShowVideoSection = Boolean(
   useEffect(() => {
     comfyScenesRef.current = comfyScenes;
   }, [comfyScenes]);
+  const activePollingJobsRef = useRef(new Set());
 
   const restoredComfyVideoJobsRef = useRef(new Set());
 
@@ -3216,12 +3221,23 @@ const comfyShowVideoSection = Boolean(
     const sceneId = String(jobMeta.sceneId || "").trim();
     if (!sceneId) return;
     const startMeta = { ...jobMeta, sceneId, status: String(jobMeta?.status || "queued").toLowerCase() };
+    const pollingKey = `${sceneId}:${String(startMeta.jobId || "")}`;
     if (CLIP_TRACE_VIDEO_POLLING) {
-      console.info("[CLIP TRACE] entered startComfyVideoPolling", {
+      console.info("[CLIP TRACE] polling start", {
         sceneId,
         jobId: String(startMeta?.jobId || ""),
         status: String(startMeta?.status || ""),
       });
+    }
+    if (activePollingJobsRef.current.has(pollingKey)) {
+      if (CLIP_TRACE_VIDEO_POLLING) {
+        console.info("[CLIP TRACE] polling start skipped already active", {
+          scope: "comfy",
+          sceneId,
+          jobId: String(startMeta.jobId || ""),
+        });
+      }
+      return;
     }
     const prevMeta = comfyVideoJobsBySceneRef.current.get(sceneId);
     const existingTimerId = comfyVideoPollTimersRef.current.get(sceneId);
@@ -3236,6 +3252,7 @@ const comfyShowVideoSection = Boolean(
       return;
     }
     if (prevMeta?.jobId && String(prevMeta.jobId) !== String(startMeta.jobId)) {
+      activePollingJobsRef.current.delete(`${sceneId}:${String(prevMeta.jobId || "")}`);
       console.info("[CLIP TRACE] active job replaced", {
         scope: "comfy",
         sceneId,
@@ -3243,6 +3260,7 @@ const comfyShowVideoSection = Boolean(
         newJobId: String(startMeta.jobId || ""),
       });
     }
+    activePollingJobsRef.current.add(pollingKey);
     comfyVideoJobsBySceneRef.current.set(sceneId, startMeta);
     persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
     const initialIdx = findComfySceneIndexById(sceneId);
@@ -3386,25 +3404,34 @@ const comfyShowVideoSection = Boolean(
                 videoPanelOpen: true,
                 videoStatus: "done",
                 videoError: "",
-                videoJobId: nextMeta.jobId,
+                videoJobId: null,
               });
               if (CLIP_TRACE_VIDEO_POLLING) {
-                console.info("[CLIP TRACE] scene updated after done", {
+                console.info("[CLIP TRACE] video applied to scene", {
                   scope: "comfy",
                   sceneId,
                   idx,
                   videoUrl: doneVideoUrl,
                   videoStatus: "done",
-                  videoJobId: String(nextMeta?.jobId || ""),
+                  videoJobId: "",
                 });
               }
             }
+          }
+          activePollingJobsRef.current.delete(`${sceneId}:${String(nextMeta.jobId || "")}`);
+          if (CLIP_TRACE_VIDEO_POLLING) {
+            console.info("[CLIP TRACE] polling done", {
+              scope: "comfy",
+              sceneId,
+              jobId: String(nextMeta?.jobId || ""),
+            });
           }
           clearActiveComfyVideoJob(sceneId, { status: "done", jobId: nextMeta.jobId });
           return;
         }
 
         if (status === "error" || status === "stopped" || status === "not_found") {
+          activePollingJobsRef.current.delete(`${sceneId}:${String(nextMeta.jobId || "")}`);
           clearActiveComfyVideoJob(sceneId, { status, jobId: nextMeta.jobId });
           return;
         }
@@ -3470,6 +3497,16 @@ const comfyShowVideoSection = Boolean(
         const normalizedSceneId = String(sceneId || "").trim();
         if (!normalizedSceneId) return;
         const idx = findComfySceneIndexById(normalizedSceneId);
+        if (idx < 0) {
+          if (CLIP_TRACE_VIDEO_POLLING) {
+            console.info("[CLIP TRACE] restore job ignored", {
+              scope: "comfy",
+              sceneId: normalizedSceneId,
+              reason: "invalid_scene_id",
+            });
+          }
+          return;
+        }
         const sceneNow = idx >= 0 ? comfyScenesRef.current[idx] : null;
         const sceneVideoUrl = String(sceneNow?.videoUrl || "").trim();
         const sceneVideoJobId = String(sceneNow?.videoJobId || "").trim();
@@ -3498,30 +3535,72 @@ const comfyShowVideoSection = Boolean(
           return;
         }
         const normalizedMeta = { ...meta, sceneId: normalizedSceneId, status: String(meta?.status || "running").toLowerCase() || "running" };
+        comfyVideoJobsBySceneRef.current.set(normalizedSceneId, normalizedMeta);
         nextPersisted[normalizedSceneId] = normalizedMeta;
-        if (idx >= 0) {
-          updateComfyScene(idx, {
-            videoJobId: persistedJobId,
-            videoStatus: normalizedMeta.status,
-            videoError: "",
-          });
-        }
-        if (CLIP_TRACE_VIDEO_POLLING || CLIP_TRACE_COMFY_REFS) {
-          console.info("[CLIP TRACE] active job restored", {
+        updateComfyScene(idx, {
+          videoJobId: persistedJobId,
+          videoStatus: normalizedMeta.status,
+          videoError: "",
+        });
+        if (CLIP_TRACE_VIDEO_POLLING) {
+          console.info("[CLIP TRACE] restore job", {
             scope: "comfy",
             sceneId: normalizedSceneId,
             jobId: persistedJobId,
-            sceneFound: idx >= 0,
             status: normalizedMeta.status,
           });
         }
-        startComfyVideoPolling(normalizedMeta);
+        fetchJson(`/api/clip/video/status/${encodeURIComponent(persistedJobId)}`, { method: "GET" })
+          .then((out) => {
+            const status = String(out?.status || "").toLowerCase();
+            if (status === "done") {
+              const doneVideoUrl = String(out?.videoUrl || "").trim();
+              if (!doneVideoUrl) {
+                startComfyVideoPolling({ ...normalizedMeta, status: "running" });
+                return;
+              }
+              updateComfyScene(idx, {
+                videoUrl: doneVideoUrl,
+                videoStatus: "done",
+                videoJobId: null,
+                videoError: "",
+              });
+              if (CLIP_TRACE_VIDEO_POLLING) {
+                console.info("[CLIP TRACE] video applied to scene", {
+                  scope: "comfy",
+                  sceneId: normalizedSceneId,
+                  jobId: persistedJobId,
+                  source: "restore_status_done",
+                });
+              }
+              activePollingJobsRef.current.delete(`${normalizedSceneId}:${persistedJobId}`);
+              clearActiveComfyVideoJob(normalizedSceneId, { status: "done", jobId: persistedJobId });
+              return;
+            }
+            if (status === "running" || status === "queued" || status === "pending") {
+              startComfyVideoPolling({ ...normalizedMeta, status: status || "running" });
+              return;
+            }
+            if (status === "error" || status === "stopped" || status === "not_found") {
+              updateComfyScene(idx, {
+                videoStatus: status,
+                videoError: String(out?.error || out?.hint || "video_job_failed"),
+                videoJobId: persistedJobId,
+              });
+              clearActiveComfyVideoJob(normalizedSceneId, { status, jobId: persistedJobId });
+              return;
+            }
+            startComfyVideoPolling({ ...normalizedMeta, status: "running" });
+          })
+          .catch(() => {
+            startComfyVideoPolling({ ...normalizedMeta, status: normalizedMeta.status || "running" });
+          });
       });
       persistActiveComfyVideoJob(nextPersisted);
     } catch {
       safeDel(COMFY_VIDEO_JOB_STORE_KEY);
     }
-  }, [COMFY_VIDEO_JOB_STORE_KEY, accountKey, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfyScene]);
+  }, [COMFY_VIDEO_JOB_STORE_KEY, accountKey, clearActiveComfyVideoJob, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfyScene]);
 
   const handleComfyGenerateImage = useCallback(async () => {
     if (!comfySelectedScene) return;
