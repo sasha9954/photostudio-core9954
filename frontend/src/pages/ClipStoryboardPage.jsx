@@ -381,7 +381,7 @@ function getSceneUiDescription(scene) {
 
 function getScenarioSceneStableKey(scene, idx) {
   if (!scene || typeof scene !== "object") return `scene-${idx}`;
-  const explicitId = String(scene.id || scene.sceneId || "").trim();
+  const explicitId = String(scene.sceneId || scene.id || "").trim();
   if (explicitId) return explicitId;
 
   const start = Number(scene.t0 ?? scene.start);
@@ -683,7 +683,7 @@ function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16" }) {
       const videoUrl = String(scene?.videoUrl || "").trim();
       if (!videoUrl) return null;
       return {
-        sceneId: String(scene?.id || `scene_${String(idx + 1).padStart(3, "0")}`),
+        sceneId: String(scene?.sceneId || `scene_${String(idx + 1).padStart(3, "0")}`),
         videoUrl,
         requestedDurationSec: getSceneRequestedDurationSec(scene),
         transitionType: resolveSceneTransitionType(scene),
@@ -2412,7 +2412,7 @@ const comfyShowVideoSection = Boolean(
   useEffect(() => {
     setScenarioVideoOpen(false);
     setScenarioAudioSliceLoading(false);
-  }, [scenarioEditor.selected, scenarioSelected?.id]);
+  }, [scenarioEditor.selected, scenarioSelected?.sceneId]);
 
   useEffect(() => {
     if (!scenarioEditor.open) return;
@@ -2503,6 +2503,7 @@ const comfyShowVideoSection = Boolean(
     if (!sceneId) return;
     const now = Date.now();
     const staleTimeoutMs = 20 * 60 * 1000;
+    const notFoundRetryLimit = 3;
     const startMeta = {
       ...jobMeta,
       sceneId,
@@ -2512,7 +2513,7 @@ const comfyShowVideoSection = Boolean(
     };
     scenarioVideoJobsBySceneRef.current.set(sceneId, startMeta);
     persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
-    updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.id || "") === sceneId), {
+    updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId), {
       videoJobId: startMeta.jobId,
       videoStatus: startMeta.status,
       videoError: "",
@@ -2523,7 +2524,7 @@ const comfyShowVideoSection = Boolean(
       const currentMeta = scenarioVideoJobsBySceneRef.current.get(sceneId) || {};
       const lastUpdatedAt = Number(currentMeta?.updatedAt) || Number(currentMeta?.startedAt) || 0;
       if (lastUpdatedAt > 0 && (Date.now() - lastUpdatedAt) > staleTimeoutMs) {
-        updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.id || "") === sceneId), {
+        updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId), {
           videoStatus: "error",
           videoError: "video_job_stale_timeout",
         });
@@ -2545,21 +2546,62 @@ const comfyShowVideoSection = Boolean(
         scenarioVideoJobsBySceneRef.current.set(sceneId, nextMeta);
         persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
 
-        const idx = scenarioScenes.findIndex((x) => String(x?.id || "") === sceneId);
+        const idx = scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
+        const prevNotFoundCount = Number(activeMeta?.notFoundCount) || 0;
         if (!out?.ok && isScenarioVideoJobNotFound(out)) {
+          const nextNotFoundCount = prevNotFoundCount + 1;
+          const toleratedMeta = { ...nextMeta, notFoundCount: nextNotFoundCount, status: "running" };
+          scenarioVideoJobsBySceneRef.current.set(sceneId, toleratedMeta);
+          persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
+          if (nextNotFoundCount < notFoundRetryLimit) {
+            updateScenarioScene(idx, {
+              videoStatus: "running",
+              videoError: "",
+              videoJobId: toleratedMeta.jobId,
+            });
+            scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2200));
+            return;
+          }
           updateScenarioScene(idx, {
             videoStatus: "not_found",
             videoError: String(out?.hint || out?.code || "video_job_not_found"),
-            videoJobId: nextMeta.jobId,
+            videoJobId: toleratedMeta.jobId,
           });
           clearActiveVideoJob(sceneId);
           return;
         }
         if (!out?.ok) throw new Error(out?.hint || out?.code || "video_status_failed");
 
+        const settledMeta = { ...nextMeta, notFoundCount: 0 };
+        scenarioVideoJobsBySceneRef.current.set(sceneId, settledMeta);
+        persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
+
+        if (status === "not_found") {
+          const nextNotFoundCount = prevNotFoundCount + 1;
+          const toleratedMeta = { ...settledMeta, notFoundCount: nextNotFoundCount, status: "running" };
+          scenarioVideoJobsBySceneRef.current.set(sceneId, toleratedMeta);
+          persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
+          if (nextNotFoundCount < notFoundRetryLimit) {
+            updateScenarioScene(idx, {
+              videoStatus: "running",
+              videoJobId: toleratedMeta.jobId,
+              videoError: "",
+            });
+            scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2200));
+            return;
+          }
+          updateScenarioScene(idx, {
+            videoStatus: "not_found",
+            videoJobId: toleratedMeta.jobId,
+            videoError: String(out?.error || out?.hint || "video_job_not_found"),
+          });
+          clearActiveVideoJob(sceneId);
+          return;
+        }
+
         updateScenarioScene(idx, {
           videoStatus: status,
-          videoJobId: nextMeta.jobId,
+          videoJobId: settledMeta.jobId,
           videoError: status === "error" || status === "stopped" ? String(out?.error || out?.hint || "video_job_failed") : "",
         });
 
@@ -2572,13 +2614,13 @@ const comfyShowVideoSection = Boolean(
             providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
             videoStatus: "done",
             videoError: "",
-            videoJobId: nextMeta.jobId,
+            videoJobId: settledMeta.jobId,
           });
           clearActiveVideoJob(sceneId);
           return;
         }
 
-        if (status === "error" || status === "stopped" || status === "not_found") {
+        if (status === "error" || status === "stopped") {
           clearActiveVideoJob(sceneId);
           return;
         }
@@ -2586,11 +2628,26 @@ const comfyShowVideoSection = Boolean(
         scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 1800));
       } catch (e) {
         const errMsg = String(e?.message || "").toLowerCase();
-        const idx = scenarioScenes.findIndex((x) => String(x?.id || "") === sceneId);
+        const idx = scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
         if (errMsg.includes("job_id_not_found_or_expired")) {
+          const activeMeta = scenarioVideoJobsBySceneRef.current.get(sceneId) || {};
+          const nextNotFoundCount = (Number(activeMeta?.notFoundCount) || 0) + 1;
+          const toleratedMeta = { ...activeMeta, notFoundCount: nextNotFoundCount, status: "running", updatedAt: Date.now() };
+          scenarioVideoJobsBySceneRef.current.set(sceneId, toleratedMeta);
+          persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
+          if (nextNotFoundCount < notFoundRetryLimit) {
+            updateScenarioScene(idx, {
+              videoStatus: "running",
+              videoError: "",
+              videoJobId: String(toleratedMeta?.jobId || ""),
+            });
+            scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2400));
+            return;
+          }
           updateScenarioScene(idx, {
             videoStatus: "not_found",
             videoError: String(e?.message || e),
+            videoJobId: String(toleratedMeta?.jobId || ""),
           });
           clearActiveVideoJob(sceneId);
           return;
@@ -2621,7 +2678,7 @@ const comfyShowVideoSection = Boolean(
         if (!meta?.jobId) return;
         const lastUpdatedAt = Number(meta?.updatedAt) || Number(meta?.startedAt) || 0;
         if (lastUpdatedAt > 0 && (Date.now() - lastUpdatedAt) > staleTimeoutMs) {
-          const idx = scenarioScenes.findIndex((x) => String(x?.id || "") === String(sceneId || ""));
+          const idx = scenarioScenes.findIndex((x) => String(x?.sceneId || "") === String(sceneId || ""));
           updateScenarioScene(idx, { videoStatus: "error", videoError: "video_job_stale_timeout" });
           return;
         }
@@ -3206,7 +3263,7 @@ ${contextPrompt}`.trim(),
     if (transitionType === "continuous" && normalizedSlot === "start" && !!scenarioSelected?.inheritPreviousEndAsStart) {
       return;
     }
-    const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
     const sceneText = String(scenarioSelected.sceneText || scenarioSelected.visualDescription || "").trim();
     const previousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
     const previousSceneImageUrl = String(
@@ -3322,7 +3379,7 @@ Aspect ratio: ${imageFormat}`,
         videoSourceImageUrl: "",
         videoPanelActivated: false,
       });
-      const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
+      const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
       clearActiveVideoJob(sceneId);
       setScenarioVideoOpen(false);
       return;
@@ -3337,12 +3394,12 @@ Aspect ratio: ${imageFormat}`,
         videoSourceImageUrl: "",
         videoPanelActivated: false,
       });
-      const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
+      const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
       clearActiveVideoJob(sceneId);
       setScenarioVideoOpen(false);
       return;
     }
-    const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
     updateScenarioScene(scenarioEditor.selected, {
       imageUrl: "",
       videoUrl: "",
@@ -3362,7 +3419,7 @@ Aspect ratio: ${imageFormat}`,
       setScenarioVideoError("Не найден общий audioUrl в Audio node");
       return;
     }
-    const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
     const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
     const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
 
@@ -3452,7 +3509,7 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
 
-    const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
     const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
     const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
     const dur = Math.max(0, t1 - t0);
@@ -3554,10 +3611,10 @@ Aspect ratio: ${imageFormat}`,
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
-    const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
     clearActiveVideoJob(sceneId);
     updateScenarioScene(scenarioEditor.selected, { videoUrl: "", videoStatus: "", videoError: "", videoJobId: "" });
-  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected?.id, updateScenarioScene]);
+  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected?.sceneId, updateScenarioScene]);
 
   const handleScenarioAddToVideo = useCallback(() => {
     const scrollToVideoBlock = (attemptsLeft = 3) => {
@@ -3588,7 +3645,7 @@ Aspect ratio: ${imageFormat}`,
       : String(scenarioSelected?.imageUrl || "");
     const effectiveVideoProvider = String(scenarioSelected?.sceneRenderProvider || "kie").trim().toLowerCase() === "comfy_remote" ? "comfy_remote" : "kie";
 
-    const sceneId = String(scenarioSelected?.id || `s${scenarioEditor.selected + 1}`);
+    const sceneId = String(scenarioSelected?.sceneId || `s${scenarioEditor.selected + 1}`);
     console.log("[StoryboardVideo] add_to_video activate_panel", {
       sceneId,
       transitionType,
@@ -5838,7 +5895,7 @@ const hydrate = useCallback(() => {
                         <div className="clipSB_hint" style={{ marginBottom: 6 }}>Срез по сцене (audioSliceUrl)</div>
                         {scenarioSelectedAudioSliceUrl ? (
                           <audio
-                            key={`slice-${String(scenarioSelected.id || scenarioEditor.selected)}-${String(scenarioSelectedAudioSliceUrl || "")}`}
+                            key={`slice-${String(scenarioSelected.sceneId || scenarioEditor.selected)}-${String(scenarioSelectedAudioSliceUrl || "")}`}
                             className="clipSB_audioPlayer"
                             controls
                             preload="metadata"
@@ -5906,7 +5963,7 @@ const hydrate = useCallback(() => {
                               <div className="clipSB_videoPreviewWrap">
                                 {scenarioSelected.videoUrl ? (
                                   <video
-                                    key={String(scenarioSelected.id || scenarioEditor.selected) + ":" + String(scenarioSelected.videoUrl || "")}
+                                    key={String(scenarioSelected.sceneId || scenarioEditor.selected) + ":" + String(scenarioSelected.videoUrl || "")}
                                     className="clipSB_videoPlayer"
                                     controls
                                     playsInline
@@ -5936,7 +5993,7 @@ const hydrate = useCallback(() => {
                           <div className="clipSB_videoPreviewWrap">
                             {scenarioSelected.videoUrl ? (
                               <video
-                                key={String(scenarioSelected.id || scenarioEditor.selected) + ":" + String(scenarioSelected.videoUrl || "")}
+                                key={String(scenarioSelected.sceneId || scenarioEditor.selected) + ":" + String(scenarioSelected.videoUrl || "")}
                                 className="clipSB_videoPlayer"
                                 controls
                                 playsInline
