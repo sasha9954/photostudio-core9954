@@ -429,6 +429,20 @@ function mergeVideoStateBySceneId(nextScenes, existingScenes, { panelField = "" 
   });
 }
 
+function resetVideoStateBySceneId(nextScenes, { panelField = "" } = {}) {
+  return normalizeSceneCollectionWithSceneId(nextScenes).map((scene) => {
+    const resetScene = {
+      ...scene,
+      videoUrl: "",
+      videoStatus: "",
+      videoJobId: "",
+      videoError: "",
+    };
+    if (panelField) resetScene[panelField] = false;
+    return resetScene;
+  });
+}
+
 function isLipSyncScene(scene) {
   if (!scene || typeof scene !== "object") return false;
   return !!(
@@ -2889,6 +2903,12 @@ const comfyShowVideoSection = Boolean(
     stopComfyVideoPolling(key);
   }, [persistActiveComfyVideoJob, stopComfyVideoPolling]);
 
+  const resetComfyVideoJobsState = useCallback(() => {
+    comfyVideoJobsBySceneRef.current.clear();
+    stopComfyVideoPolling();
+    safeDel(COMFY_VIDEO_JOB_STORE_KEY);
+  }, [COMFY_VIDEO_JOB_STORE_KEY, stopComfyVideoPolling]);
+
 
   const isComfyVideoJobNotFound = useCallback((payload) => {
     const status = String(payload?.status || "").toLowerCase();
@@ -4893,15 +4913,9 @@ onClipSec: (nodeId, value) => {
                   return;
                 }
 
-                const existingComfyScenesByTarget = new Map(comfyStoryTargets.map((targetId) => {
-                  const targetNode = (nodesRef.current || []).find((x) => x.id === targetId);
-                  return [targetId, Array.isArray(targetNode?.data?.mockScenes) ? targetNode.data.mockScenes : []];
-                }));
-                const existingBrainComfyScenes = Array.isArray((nodesRef.current || []).find((x) => x.id === nodeId)?.data?.mockScenes)
-                  ? (nodesRef.current || []).find((x) => x.id === nodeId)?.data?.mockScenes
-                  : [];
+                resetComfyVideoJobsState();
                 const scenes = normalizeSceneCollectionWithSceneId(Array.isArray(response?.scenes) ? response.scenes : [], "comfy_scene");
-                const mergedBrainScenes = mergeVideoStateBySceneId(scenes, existingBrainComfyScenes, { panelField: "videoPanelOpen" });
+                const resetBrainScenes = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" });
                 const plannerMeta = response?.planMeta || {};
                 const globalContinuity = response?.globalContinuity || "";
                 const debugFields = response?.debug || extractComfyDebugFields({ plannerInput: payload, plannerMeta: { ...plannerMeta, globalContinuity } });
@@ -4915,7 +4929,7 @@ onClipSec: (nodeId, value) => {
                         ...x.data,
                         parseStatus: 'ready',
                         parsedAt,
-                        mockScenes: mergedBrainScenes.map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
+                        mockScenes: resetBrainScenes.map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
                         lastPlannerMeta: { ...plannerMeta, globalContinuity, debugFields },
                         comfyDebug: debugFields,
                         brainWarnings: Array.isArray(response?.warnings) ? response.warnings : freshPresentation.warnings,
@@ -4932,7 +4946,7 @@ onClipSec: (nodeId, value) => {
                         ...x,
                         data: {
                           ...x.data,
-                          mockScenes: mergeVideoStateBySceneId(scenes, existingComfyScenesByTarget.get(x.id) || [], { panelField: "videoPanelOpen" }).map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
+                          mockScenes: resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" }).map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
                           sceneCount: scenes.length,
                           mode: freshDerived.modeValue,
                           output: freshDerived.outputValue,
