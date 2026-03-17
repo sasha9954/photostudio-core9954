@@ -780,6 +780,11 @@ function extractStoryboardScenesFromNodes(nodes = []) {
   return Array.isArray(storyboardNode?.data?.scenes) ? storyboardNode.data.scenes : [];
 }
 
+function extractComfyScenesFromNodes(nodes = []) {
+  const comfyStoryboardNode = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "comfyStoryboard") || null;
+  return Array.isArray(comfyStoryboardNode?.data?.mockScenes) ? comfyStoryboardNode.data.mockScenes : [];
+}
+
 function extractGlobalAudioUrlFromNodes(nodes = []) {
   const audioNodeWithUrl = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "audioNode" && n?.data?.audioUrl);
   return audioNodeWithUrl?.data?.audioUrl ? String(audioNodeWithUrl.data.audioUrl) : "";
@@ -2400,6 +2405,20 @@ const shouldInvalidateClipStoryboardStorage = useCallback((payload) => {
   return false;
 }, []);
 
+const isClipHydrationBlocked = useCallback(() => {
+  const nodesNow = nodesRef.current || [];
+  const hasBrainParse = nodesNow.some((node) => node?.type === "brainNode" && !!node?.data?.isParsing);
+  const hasComfyParse = nodesNow.some((node) => {
+    if (node?.type !== "comfyBrain") return false;
+    const status = String(node?.data?.parseStatus || "");
+    return status === "loading" || status === "parsing";
+  });
+  const hasScenarioVideoGeneration = scenarioScenes.some((scene) => isVideoJobInProgress(scene?.videoStatus));
+  const hasComfyVideoGeneration = comfyScenes.some((scene) => isVideoJobInProgress(scene?.videoStatus));
+  const hasPendingParse = !!activeParseNodeRef.current || !!parseControllerRef.current || comfyParseInFlightRef.current.size > 0;
+  return hasPendingParse || hasBrainParse || hasComfyParse || hasScenarioVideoGeneration || hasComfyVideoGeneration;
+}, [comfyScenes, scenarioScenes]);
+
 const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") => {
   console.info("[CLIP STORAGE] clear account storage", {
     reason,
@@ -2636,8 +2655,25 @@ const comfyShowVideoSection = Boolean(
     });
     stopScenarioVideoPolling(sceneId);
 
+    const scheduleScenarioPoll = (delayMs, reason) => {
+      console.info("[VIDEO POLLING START]", {
+        scope: "scenario",
+        reason,
+        sceneId,
+        jobId: String(startMeta.jobId || ""),
+        delayMs,
+      });
+      scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, delayMs));
+    };
+
     const tick = async () => {
       const currentMeta = scenarioVideoJobsBySceneRef.current.get(sceneId) || {};
+      console.info("[VIDEO POLLING TICK]", {
+        scope: "scenario",
+        sceneId,
+        jobId: String(currentMeta?.jobId || ""),
+        status: String(currentMeta?.status || ""),
+      });
       const lastUpdatedAt = Number(currentMeta?.updatedAt) || Number(currentMeta?.startedAt) || 0;
       if (lastUpdatedAt > 0 && (Date.now() - lastUpdatedAt) > staleTimeoutMs) {
         updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId), {
@@ -2675,7 +2711,7 @@ const comfyShowVideoSection = Boolean(
               videoError: "",
               videoJobId: toleratedMeta.jobId,
             });
-            scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2200));
+            scheduleScenarioPoll(2200, "status_not_found_retry");
             return;
           }
           updateScenarioScene(idx, {
@@ -2703,7 +2739,7 @@ const comfyShowVideoSection = Boolean(
               videoJobId: toleratedMeta.jobId,
               videoError: "",
             });
-            scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2200));
+            scheduleScenarioPoll(2200, "status_not_found_retry");
             return;
           }
           updateScenarioScene(idx, {
@@ -2719,6 +2755,13 @@ const comfyShowVideoSection = Boolean(
           videoStatus: status,
           videoJobId: settledMeta.jobId,
           videoError: status === "error" || status === "stopped" ? String(out?.error || out?.hint || "video_job_failed") : "",
+        });
+        console.info("[VIDEO STATUS APPLIED]", {
+          scope: "scenario",
+          sceneId,
+          jobId: String(settledMeta?.jobId || ""),
+          status,
+          ok: !!out?.ok,
         });
 
         if (status === "done") {
@@ -2741,7 +2784,7 @@ const comfyShowVideoSection = Boolean(
           return;
         }
 
-        scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 1800));
+        scheduleScenarioPoll(1800, "status_running");
       } catch (e) {
         const errMsg = String(e?.message || "").toLowerCase();
         const idx = scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
@@ -2757,7 +2800,7 @@ const comfyShowVideoSection = Boolean(
               videoError: "",
               videoJobId: String(toleratedMeta?.jobId || ""),
             });
-            scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2400));
+            scheduleScenarioPoll(2400, "exception_not_found_retry");
             return;
           }
           updateScenarioScene(idx, {
@@ -2772,11 +2815,11 @@ const comfyShowVideoSection = Boolean(
           videoStatus: "running",
           videoError: "",
         });
-        scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2400));
+        scheduleScenarioPoll(2400, "exception_retry");
       }
     };
 
-    scenarioVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 250));
+    scheduleScenarioPoll(250, "initial_after_start");
   }, [clearActiveVideoJob, isScenarioVideoJobNotFound, persistActiveVideoJob, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
 
   useEffect(() => () => stopScenarioVideoPolling(), [stopScenarioVideoPolling]);
@@ -3005,10 +3048,27 @@ const comfyShowVideoSection = Boolean(
     }
     stopComfyVideoPolling(sceneId);
 
+    const scheduleComfyPoll = (delayMs, reason) => {
+      console.info("[VIDEO POLLING START]", {
+        scope: "comfy",
+        reason,
+        sceneId,
+        jobId: String(startMeta.jobId || ""),
+        delayMs,
+      });
+      comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, delayMs));
+    };
+
     const tick = async () => {
       try {
         const activeMeta = comfyVideoJobsBySceneRef.current.get(sceneId);
         if (!activeMeta?.jobId) return;
+        console.info("[VIDEO POLLING TICK]", {
+          scope: "comfy",
+          sceneId,
+          jobId: String(activeMeta?.jobId || ""),
+          status: String(activeMeta?.status || ""),
+        });
         const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(activeMeta.jobId)}`, { method: "GET" });
         const status = String(out?.status || "").toLowerCase() || "running";
         const nextMeta = {
@@ -3029,6 +3089,13 @@ const comfyShowVideoSection = Boolean(
               : "",
             videoJobId: nextMeta.jobId,
           });
+          console.info("[VIDEO STATUS APPLIED]", {
+            scope: "comfy",
+            sceneId,
+            jobId: String(nextMeta?.jobId || ""),
+            status,
+            ok: !!out?.ok,
+          });
         }
 
         const prevNotFoundCount = Number(activeMeta?.notFoundCount) || 0;
@@ -3040,7 +3107,7 @@ const comfyShowVideoSection = Boolean(
           persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
           if (nextNotFoundCount < notFoundRetryLimit) {
             if (idx >= 0) updateComfyScene(idx, { videoStatus: "running", videoError: "", videoJobId: String(toleratedMeta?.jobId || "") });
-            comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2200));
+            scheduleComfyPoll(2200, "status_not_found_retry");
             return;
           }
           if (idx >= 0) updateComfyScene(idx, { videoStatus: "not_found", videoError: String(out?.hint || out?.code || "video_job_not_found"), videoJobId: String(toleratedMeta?.jobId || "") });
@@ -3068,7 +3135,7 @@ const comfyShowVideoSection = Boolean(
           return;
         }
 
-        comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 1800));
+        scheduleComfyPoll(1800, "status_running");
       } catch (e) {
         const idx = comfyScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
         const errMsg = String(e?.message || e || "").toLowerCase();
@@ -3081,7 +3148,7 @@ const comfyShowVideoSection = Boolean(
           persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
           if (nextNotFoundCount < notFoundRetryLimit) {
             if (idx >= 0) updateComfyScene(idx, { videoStatus: "running", videoError: "", videoJobId: String(toleratedMeta?.jobId || "") });
-            comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2400));
+            scheduleComfyPoll(2400, "exception_not_found_retry");
             return;
           }
           if (idx >= 0) updateComfyScene(idx, { videoStatus: "not_found", videoError: String(e?.message || e), videoJobId: String(toleratedMeta?.jobId || "") });
@@ -3091,11 +3158,11 @@ const comfyShowVideoSection = Boolean(
         if (idx >= 0) {
           updateComfyScene(idx, { videoStatus: "running", videoError: "" });
         }
-        comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 2400));
+        scheduleComfyPoll(2400, "exception_retry");
       }
     };
 
-    comfyVideoPollTimersRef.current.set(sceneId, setTimeout(tick, 250));
+    scheduleComfyPoll(250, "initial_after_start");
   }, [clearActiveComfyVideoJob, comfyScenes, isComfyVideoJobNotFound, persistActiveComfyVideoJob, stopComfyVideoPolling, updateComfyScene]);
 
   useEffect(() => () => stopComfyVideoPolling(), [stopComfyVideoPolling]);
@@ -3369,6 +3436,13 @@ ${contextPrompt}`.trim(),
           format: '9:16',
           provider: 'comfy_remote',
         },
+      });
+      console.info("[VIDEO START RESPONSE]", {
+        scope: "comfy",
+        sceneId,
+        ok: !!out?.ok,
+        jobId: String(out?.jobId || ""),
+        providerJobId: String(out?.providerJobId || ""),
       });
 
       if (out?.ok && out?.jobId) {
@@ -3738,6 +3812,13 @@ Aspect ratio: ${imageFormat}`,
           format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
           provider: effectiveVideoProvider,
         },
+      });
+      console.info("[VIDEO START RESPONSE]", {
+        scope: "scenario",
+        sceneId,
+        ok: !!out?.ok,
+        jobId: String(out?.jobId || ""),
+        providerJobId: String(out?.providerJobId || ""),
       });
 
       if (out?.ok && out?.jobId) {
@@ -5267,6 +5348,17 @@ const hydrate = useCallback(() => {
       storageVersion: storageVersionRef.current,
     });
 
+    if (isClipHydrationBlocked()) {
+      console.info("[CLIP STORAGE] hydrate skipped due to active parse/generation", {
+        accountKey,
+        hasActiveParseNode: !!activeParseNodeRef.current,
+        hasParseController: !!parseControllerRef.current,
+        comfyParseInFlightCount: comfyParseInFlightRef.current.size,
+      });
+      isHydratingRef.current = false;
+      return;
+    }
+
     // Try current key first; if empty, try a few compatible legacy keys (to survive format changes)
     let raw = safeGet(STORE_KEY);
     if (!raw) {
@@ -5552,6 +5644,7 @@ const hydrate = useCallback(() => {
     accountKey,
     user,
     shouldInvalidateClipStoryboardStorage,
+    isClipHydrationBlocked,
     clearClipStoryboardStorageForCurrentAccount,
   ]);
 
@@ -5624,6 +5717,10 @@ const hydrate = useCallback(() => {
   // re-hydrate when session changes (logout/login without full reload)
   useEffect(() => {
     const onSessionChanged = () => {
+      if (isClipHydrationBlocked()) {
+        console.info("[CLIP STORAGE] skip sessionChanged hydrate due to active parse/generation", { accountKey });
+        return;
+      }
       // wait a tick so AuthContext can update ps:lastUserId/ps:lastEmail
       setTimeout(() => {
         hydrate();
@@ -5631,7 +5728,7 @@ const hydrate = useCallback(() => {
     };
     window.addEventListener("ps:sessionChanged", onSessionChanged);
     return () => window.removeEventListener("ps:sessionChanged", onSessionChanged);
-  }, [hydrate]);
+  }, [accountKey, hydrate, isClipHydrationBlocked]);
 
   useEffect(() => {
     console.info("[CLIP STORAGE] active account scope", {
