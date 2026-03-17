@@ -5791,6 +5791,13 @@ const hydrate = useCallback((source = "unknown") => {
     clearClipStoryboardStorageForCurrentAccount,
   ]);
 
+  const hydrateRef = useRef(hydrate);
+
+  useEffect(() => {
+    hydrateRef.current = hydrate;
+    console.info("[CLIP TRACE] hydrate ref updated");
+  }, [hydrate]);
+
   const addNodeFromDrawer = useCallback((type) => {
     const id = `${type}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const centerX = 360;
@@ -5842,8 +5849,8 @@ const hydrate = useCallback((source = "unknown") => {
 
   // hydrate on account change
   useEffect(() => {
-    hydrate("effect:account-change");
-  }, [hydrate]);
+    hydrateRef.current("effect:account-change");
+  }, [accountKey]);
 
   useEffect(() => () => {
     if (parseTimeoutRef.current) {
@@ -5866,12 +5873,12 @@ const hydrate = useCallback((source = "unknown") => {
       }
       // wait a tick so AuthContext can update ps:lastUserId/ps:lastEmail
       setTimeout(() => {
-        hydrate("event:sessionChanged");
+        hydrateRef.current("event:sessionChanged");
       }, 0);
     };
     window.addEventListener("ps:sessionChanged", onSessionChanged);
     return () => window.removeEventListener("ps:sessionChanged", onSessionChanged);
-  }, [accountKey, hydrate, isClipHydrationBlocked]);
+  }, [accountKey, isClipHydrationBlocked]);
 
   useEffect(() => {
     console.info("[CLIP STORAGE] active account scope", {
