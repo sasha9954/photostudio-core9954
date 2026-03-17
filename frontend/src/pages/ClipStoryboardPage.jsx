@@ -5063,119 +5063,120 @@ onClipSec: (nodeId, value) => {
                   return x;
                 }));
 
-                let response;
                 try {
-                  if (USE_COMFY_MOCK) {
-                    const plannerMeta = { plannerInput: payload, mode: payload.mode, output: payload.output, stylePreset: payload.stylePreset, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, audioStoryMode: payload.audioStoryMode, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
-                    const scenes = buildMockComfyScenes(plannerMeta);
-                    response = { ok: true, planMeta: plannerMeta, globalContinuity: scenes[0]?.plannerMeta?.globalContinuity || "", scenes, warnings: plannerMeta.warnings, errors: [], debug: {} };
-                  } else {
-                    response = await fetchJson(`/api/clip/comfy/plan`, { method: "POST", body: payload });
+                  let response;
+                  try {
+                    if (USE_COMFY_MOCK) {
+                      const plannerMeta = { plannerInput: payload, mode: payload.mode, output: payload.output, stylePreset: payload.stylePreset, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, audioStoryMode: payload.audioStoryMode, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
+                      const scenes = buildMockComfyScenes(plannerMeta);
+                      response = { ok: true, planMeta: plannerMeta, globalContinuity: scenes[0]?.plannerMeta?.globalContinuity || "", scenes, warnings: plannerMeta.warnings, errors: [], debug: {} };
+                    } else {
+                      response = await fetchJson(`/api/clip/comfy/plan`, { method: "POST", body: payload });
+                    }
+                    console.log("[COMFY DEBUG FRONT] /clip/comfy/plan response plannerInput refsByRole", response?.planMeta?.plannerInput?.refsByRole);
+                    console.log("[COMFY DEBUG FRONT] /clip/comfy/plan response plannerInput refs counts", summarizeRefsByRole(response?.planMeta?.plannerInput?.refsByRole));
+                    console.log("[COMFY DEBUG FRONT] /clip/comfy/plan full planMeta", response?.planMeta);
+                    console.log("[COMFY DEBUG FRONT] /clip/comfy/plan scenes count", Array.isArray(response?.scenes) ? response.scenes.length : 0);
+                    console.log(`[COMFY PARSE #${parseId}] response`, summarizeComfyResponse(response));
+                  } catch (err) {
+                    console.error(`[COMFY PARSE #${parseId}] error`, err);
+                    setNodes((prev) => prev.map((x) => {
+                      if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: [String(err?.message || err)], brainWarnings: [] } };
+                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error' } };
+                      return x;
+                    }));
+                    return;
                   }
-                  console.log("[COMFY DEBUG FRONT] /clip/comfy/plan response plannerInput refsByRole", response?.planMeta?.plannerInput?.refsByRole);
-                  console.log("[COMFY DEBUG FRONT] /clip/comfy/plan response plannerInput refs counts", summarizeRefsByRole(response?.planMeta?.plannerInput?.refsByRole));
-                  console.log("[COMFY DEBUG FRONT] /clip/comfy/plan full planMeta", response?.planMeta);
-                  console.log("[COMFY DEBUG FRONT] /clip/comfy/plan scenes count", Array.isArray(response?.scenes) ? response.scenes.length : 0);
-                  console.log(`[COMFY PARSE #${parseId}] response`, summarizeComfyResponse(response));
-                } catch (err) {
-                  console.error(`[COMFY PARSE #${parseId}] error`, err);
-                  setNodes((prev) => prev.map((x) => {
-                    if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: [String(err?.message || err)], brainWarnings: [] } };
-                    if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error' } };
-                    return x;
-                  }));
-                  comfyParseInFlightRef.current.delete(nodeId);
-                  return;
-                }
 
-                if (!response?.ok) {
-                  setNodes((prev) => prev.map((x) => {
-                    if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: Array.isArray(response?.errors) ? response.errors : ["COMFY parse failed"], brainWarnings: Array.isArray(response?.warnings) ? response.warnings : [] } };
-                    if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error' } };
-                    return x;
-                  }));
-                  comfyParseInFlightRef.current.delete(nodeId);
-                  return;
-                }
+                  if (!response?.ok) {
+                    setNodes((prev) => prev.map((x) => {
+                      if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: Array.isArray(response?.errors) ? response.errors : ["COMFY parse failed"], brainWarnings: Array.isArray(response?.warnings) ? response.warnings : [] } };
+                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error' } };
+                      return x;
+                    }));
+                    return;
+                  }
 
-                resetComfyVideoJobsState();
-                const scenes = normalizeSceneCollectionWithSceneId(Array.isArray(response?.scenes) ? response.scenes : [], "comfy_scene");
-                const resetBrainScenes = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" });
-                const comfyStoryboardTargets = comfyStoryTargets.length
-                  ? comfyStoryTargets
-                  : (nodesRef.current || []).filter((nodeItem) => nodeItem?.type === 'comfyStoryboard').map((nodeItem) => nodeItem.id);
-                const plannerMeta = response?.planMeta || {};
-                const globalContinuity = response?.globalContinuity || "";
-                const debugFields = response?.debug || extractComfyDebugFields({ plannerInput: payload, plannerMeta: { ...plannerMeta, globalContinuity } });
-                const parsedAt = new Date().toLocaleTimeString();
-                const storyboardScenesWithResetState = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" }).map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") }));
+                  resetComfyVideoJobsState();
+                  const scenes = normalizeSceneCollectionWithSceneId(Array.isArray(response?.scenes) ? response.scenes : [], "comfy_scene");
+                  const resetBrainScenes = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" });
+                  const comfyStoryboardTargets = comfyStoryTargets.length
+                    ? comfyStoryTargets
+                    : (nodesRef.current || []).filter((nodeItem) => nodeItem?.type === 'comfyStoryboard').map((nodeItem) => nodeItem.id);
+                  const plannerMeta = response?.planMeta || {};
+                  const globalContinuity = response?.globalContinuity || "";
+                  const debugFields = response?.debug || extractComfyDebugFields({ plannerInput: payload, plannerMeta: { ...plannerMeta, globalContinuity } });
+                  const parsedAt = new Date().toLocaleTimeString();
+                  const storyboardScenesWithResetState = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" }).map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") }));
 
-                console.log("[COMFY PLAN RESPONSE APPLIED]", {
-                  nodeId,
-                  scenesLength: scenes.length,
-                  comfyStoryTargets,
-                  comfyStoryboardTargets,
-                });
-
-                setNodes((prev) => {
-                  const nextNodes = prev.map((x) => {
-                    if (x.id === nodeId) {
-                      return {
-                        ...x,
-                        data: {
-                          ...x.data,
-                          parseStatus: 'ready',
-                          parsedAt,
-                          mockScenes: resetBrainScenes.map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
-                          lastPlannerMeta: { ...plannerMeta, globalContinuity, debugFields },
-                          comfyDebug: debugFields,
-                          brainWarnings: Array.isArray(response?.warnings) ? response.warnings : freshPresentation.warnings,
-                          brainCritical: Array.isArray(response?.errors) ? response.errors : [],
-                        },
-                      };
-                    }
-                    if (comfyStoryboardTargets.includes(x.id) && x.type === 'comfyStoryboard') {
-                      return {
-                        ...x,
-                        data: {
-                          ...x.data,
-                          mockScenes: storyboardScenesWithResetState,
-                          sceneCount: scenes.length,
-                          mode: freshDerived.modeValue,
-                          output: freshDerived.outputValue,
-                          stylePreset: freshDerived.stylePreset,
-                          narrativeSource: freshDerived.narrativeSource,
-                          timelineSource: freshDerived.timelineSource,
-                          storyControlMode: freshDerived.storyControlMode,
-                          storyMissionSummary: freshDerived.storyMissionSummary,
-                          audioStoryMode: freshDerived.audioStoryMode,
-                          textNarrativeRole: freshDerived.narrativeRoles.textNarrativeRole,
-                          audioNarrativeRole: freshDerived.narrativeRoles.audioNarrativeRole,
-                          warnings: Array.isArray(response?.warnings) ? response.warnings : [],
-                          summary: freshPresentation.brainSummary,
-                          refsByRoleSummary: freshPresentation.referenceSummary,
-                          plannerMeta: { ...plannerMeta, globalContinuity },
-                          debugFields,
-                          pipelineFlow: debugFields.pipelineFlow,
-                          parseStatus: 'ready',
-                        },
-                      };
-                    }
-                    return x;
-                  });
-
-                  const appliedStoryboardNode = nextNodes.find((nodeItem) => comfyStoryboardTargets.includes(nodeItem.id) && nodeItem.type === 'comfyStoryboard');
-                  const appliedScenesLength = Array.isArray(appliedStoryboardNode?.data?.mockScenes) ? appliedStoryboardNode.data.mockScenes.length : 0;
-                  console.log("[COMFY PLAN SETNODES DONE]", {
+                  console.log("[COMFY PLAN RESPONSE APPLIED]", {
                     nodeId,
                     scenesLength: scenes.length,
-                    appliedScenesLength,
                     comfyStoryTargets,
                     comfyStoryboardTargets,
                   });
-                  return nextNodes;
-                });
-                comfyParseInFlightRef.current.delete(nodeId);
+
+                  setNodes((prev) => {
+                    const nextNodes = prev.map((x) => {
+                      if (x.id === nodeId) {
+                        return {
+                          ...x,
+                          data: {
+                            ...x.data,
+                            parseStatus: 'ready',
+                            parsedAt,
+                            mockScenes: resetBrainScenes.map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
+                            lastPlannerMeta: { ...plannerMeta, globalContinuity, debugFields },
+                            comfyDebug: debugFields,
+                            brainWarnings: Array.isArray(response?.warnings) ? response.warnings : freshPresentation.warnings,
+                            brainCritical: Array.isArray(response?.errors) ? response.errors : [],
+                          },
+                        };
+                      }
+                      if (comfyStoryboardTargets.includes(x.id) && x.type === 'comfyStoryboard') {
+                        return {
+                          ...x,
+                          data: {
+                            ...x.data,
+                            mockScenes: storyboardScenesWithResetState,
+                            sceneCount: scenes.length,
+                            mode: freshDerived.modeValue,
+                            output: freshDerived.outputValue,
+                            stylePreset: freshDerived.stylePreset,
+                            narrativeSource: freshDerived.narrativeSource,
+                            timelineSource: freshDerived.timelineSource,
+                            storyControlMode: freshDerived.storyControlMode,
+                            storyMissionSummary: freshDerived.storyMissionSummary,
+                            audioStoryMode: freshDerived.audioStoryMode,
+                            textNarrativeRole: freshDerived.narrativeRoles.textNarrativeRole,
+                            audioNarrativeRole: freshDerived.narrativeRoles.audioNarrativeRole,
+                            warnings: Array.isArray(response?.warnings) ? response.warnings : [],
+                            summary: freshPresentation.brainSummary,
+                            refsByRoleSummary: freshPresentation.referenceSummary,
+                            plannerMeta: { ...plannerMeta, globalContinuity },
+                            debugFields,
+                            pipelineFlow: debugFields.pipelineFlow,
+                            parseStatus: 'ready',
+                          },
+                        };
+                      }
+                      return x;
+                    });
+
+                    const appliedStoryboardNode = nextNodes.find((nodeItem) => comfyStoryboardTargets.includes(nodeItem.id) && nodeItem.type === 'comfyStoryboard');
+                    const appliedScenesLength = Array.isArray(appliedStoryboardNode?.data?.mockScenes) ? appliedStoryboardNode.data.mockScenes.length : 0;
+                    console.log("[COMFY PLAN SETNODES DONE]", {
+                      nodeId,
+                      scenesLength: scenes.length,
+                      appliedScenesLength,
+                      comfyStoryTargets,
+                      comfyStoryboardTargets,
+                    });
+                    return nextNodes;
+                  });
+                } finally {
+                  comfyParseInFlightRef.current.delete(nodeId);
+                }
               },
             },
           };
