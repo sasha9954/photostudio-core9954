@@ -5484,6 +5484,16 @@ def _build_comfy_image_prompt_assembly(
     contract = scene_contract if isinstance(scene_contract, dict) else {}
     profiles = reference_profiles if isinstance(reference_profiles, dict) else {}
 
+    def _normalized_gender_presentation(raw: Any) -> str:
+        value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
+        if not value:
+            return ""
+        if any(token in value for token in ["female", "woman", "girl", "feminine"]):
+            return "female"
+        if any(token in value for token in ["male", "man", "boy", "masculine"]):
+            return "male"
+        return ""
+
     role_blocks: list[str] = []
     if cast_entities:
         role_blocks.append(f"Cast/entity anchors (must be present and active): {', '.join(cast_entities)}.")
@@ -5496,6 +5506,7 @@ def _build_comfy_image_prompt_assembly(
 
     profile_contract_lines: list[str] = []
     visual_profile_lines: list[str] = []
+    anatomy_contract_lines: list[str] = []
     forbidden_changes: list[str] = []
     active_roles = [str(r or "").strip() for r in (contract.get("activeRoles") or []) if str(r or "").strip() in COMFY_REF_ROLES]
     for role in active_roles:
@@ -5513,6 +5524,21 @@ def _build_comfy_image_prompt_assembly(
                     visual_bits.append(f"{k}={value}")
             if visual_bits:
                 visual_profile_lines.append(f"- {role}: " + "; ".join(visual_bits))
+            normalized_gender = _normalized_gender_presentation(visual_profile.get("genderPresentation"))
+            if normalized_gender == "female":
+                anatomy_contract_lines.extend([
+                    f"- {role}: preserve gender-consistent anatomy across all visible body parts",
+                    f"- {role}: all visible hands, fingers, wrists, forearms, shoulders, neck, clavicles, torso, waist, hips and legs must match the established female anatomy of the character",
+                    f"- {role}: no masculine hands, masculine forearms, masculine shoulders, masculine neck, masculine torso cues, or mixed-sex anatomy",
+                    f"- {role}: every visible body fragment must remain identity-consistent and sex-consistent even in partial-body crops or detail shots",
+                ])
+            elif normalized_gender == "male":
+                anatomy_contract_lines.extend([
+                    f"- {role}: preserve gender-consistent anatomy across all visible body parts",
+                    f"- {role}: all visible hands, fingers, wrists, forearms, shoulders, neck, clavicles, torso, waist, hips and legs must match the established male anatomy of the character",
+                    f"- {role}: no feminine hands, feminine shoulder line, feminine torso cues, or mixed-sex anatomy unless explicitly requested",
+                    f"- {role}: every visible body fragment must remain identity-consistent and sex-consistent even in partial-body crops or detail shots",
+                ])
         if forb:
             forbidden_changes.extend([f"{role}:{str(x)}" for x in forb])
 
@@ -5533,6 +5559,7 @@ def _build_comfy_image_prompt_assembly(
         "- location defines environment/world identity",
         "- style layer controls palette/lighting/cinematic treatment only",
         "- style cannot override actor identity, outfit identity, hair identity, animal coat/species identity, object silhouette/material/color, or world anchors",
+        "- sex-consistent anatomy must stay locked to the established character gender presentation across every visible body part",
         "- previous generated scene image is continuity reference, not identity override",
         "- camera/pose/composition may change; identity cannot change",
     ])
@@ -5582,6 +5609,12 @@ def _build_comfy_image_prompt_assembly(
         f"- active roles: {', '.join(active_roles) or 'none'}",
         "- preserve face/hair/body/outfit/accessories and forbidden identity changes from references",
     ] + (visual_profile_lines or ["- no detailed visualProfile extracted"]))
+
+    anatomy_lock_block = "\n".join([
+        "GENDER-CONSISTENT ANATOMY LOCK (STRICT PRIORITY 1A):",
+        "- preserve gender-consistent anatomy across all visible body parts",
+        "- no mixed-sex anatomy",
+    ] + (anatomy_contract_lines or ["- no explicit genderPresentation lock extracted from active human profiles"]))
 
     scene_meaning_lines = [
         "SCENE LAYER (PRIORITY 2):",
@@ -5634,6 +5667,7 @@ def _build_comfy_image_prompt_assembly(
         _comfy_text_rendering_block(allow_designed_text=allow_designed_text),
         priority_contract_block,
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
+        anatomy_lock_block,
         forbidden_changes_block,
         source_control_block,
         "CHARACTER ANCHOR:\n" + f"- {effective_character_anchor or 'coherent single-character identity across all scenes'}",
@@ -5684,6 +5718,7 @@ def _build_comfy_image_prompt_assembly(
         "rolesActive": connected_summary["activeRoles"],
         "identityLockBlockPreview": identity_lock_block,
         "priorityContractBlockPreview": priority_contract_block,
+        "anatomyLockBlockPreview": anatomy_lock_block,
         "forbiddenChangesBlockPreview": forbidden_changes_block,
         "antiCollageBlockPreview": anti_collage_block,
         "finalImagePromptPreview": _shorten_text(assembled_prompt, 1800),

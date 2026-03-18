@@ -362,6 +362,7 @@ def _role_invariants(role: str, items: list[dict[str, str]]) -> list[str]:
             "preserve same person identity",
             "preserve face structure, hair color/length/style, and outfit signature",
             "preserve age range and body type impression",
+            "preserve established gender presentation with full-body anatomy consistency across every visible body part",
         ])
     elif role == "animal":
         invariants.extend([
@@ -407,6 +408,8 @@ def _forbidden_changes(role: str) -> list[str]:
             "outfit replacement",
             "body type or age drift",
             "gender presentation drift",
+            "mixed-sex anatomy",
+            "visible body-part anatomy inconsistent with established gender presentation",
         ]
     if role == "animal":
         return [
