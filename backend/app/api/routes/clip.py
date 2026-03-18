@@ -1411,10 +1411,11 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
             {
                 "title": title,
                 "previewFormat": normalized_preview_format,
-                "titleBox": overlay_debug["titleBox"],
-                "fontSize": overlay_debug["fontSize"],
-                "lines": lines,
-                "titleRendered": overlay_debug["titleRendered"],
+                "overlay.titleBox": overlay_debug["titleBox"],
+                "overlay.plateRect": overlay_debug["plateRect"],
+                "overlay.fontSize": overlay_debug["fontSize"],
+                "overlay.lines": lines,
+                "overlay.titleRendered": overlay_debug["titleRendered"],
             },
             ensure_ascii=False,
         )
@@ -1481,6 +1482,14 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         gender_locks=role_gender_locks,
         species_locks=animal_species_locks,
     )
+    connected_ref_counts = {role: len(connected_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}
+    strict_identity_package_roles = [role for role in intro_active_cast_roles if connected_ref_counts.get(role, 0) > 0]
+    strict_identity_package_summary = _intro_role_package_summary(
+        strict_identity_package_roles,
+        gender_locks=role_gender_locks,
+        species_locks=animal_species_locks,
+    )
+    female_locked_roles = [role for role, gender_value in role_gender_locks.items() if gender_value == "female"]
 
     format_rule = {
         "9:16": "vertical opening frame, mobile-first composition, strong center-of-interest, generous vertical negative space",
@@ -1501,18 +1510,25 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "If a connected cast/world package is provided, build one strongest hook frame that clearly integrates the important participants, animals, props, and world anchors.",
         "Do not collapse a populated cast package into an empty landscape or a single generic lone character.",
         "When multiple hero participants are available, stage them together in one premium cinematic composition whenever the framing allows it.",
-        "Treat attached reference images as identity and design anchors for cast package, key props, location, and style.",
-        "INTRO CAST CONTRACT (STRICT):",
+        "Treat attached reference images as strict identity and design anchors for cast package, key props, location, and style.",
+        "Readable title text must not be generated inside Gemini; backend will overlay the final readable hook title after image generation.",
+        "INTRO CAST CONTRACT (HARD CAST LOCK):",
         f"- active cast roles: {_intro_role_package_summary(intro_active_cast_roles, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
         f"- must appear: {_intro_role_package_summary(intro_must_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
         f"- must not appear: {_intro_role_package_summary(intro_must_not_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
+        f"- strict identity package: {strict_identity_package_summary}",
         "- preserve each connected identity separately",
-        "- preserve identity of each connected participant from its reference anchors",
-        "- must include exactly these connected participants when composition allows",
+        "- preserve identity of each connected participant from its reference anchors exactly",
+        "- connected refs are mandatory identity anchors, not loose inspiration",
+        "- must include exactly these connected participants as the visible cast package",
         "- do not replace connected cast with generic random people",
+        "- do not replace connected participants with lookalikes or mixed crowd substitutes",
         "- do not collapse cast package into generic group of humans",
         "- do not introduce extra unconnected human participants",
+        "- no generic random crowd substitution",
         "- keep all connected participants readable and intentional in one hook frame",
+        "- if an animal role is connected, the animal must appear clearly in frame",
+        "- if two female characters are connected, render two distinct female characters",
         "INTRO HERO COMPOSITION RULE:",
         "- build one hook frame around the connected cast package",
         "- title defines the dramatic promise",
@@ -1534,6 +1550,10 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         prompt_lines.append(
             "Connected reference roles available: "
             + ", ".join(f"{_intro_role_label(role)} ({len(connected_refs_by_role.get(role) or [])})" for role in connected_roles)
+        )
+        prompt_lines.append(
+            "Connected reference counts by role: "
+            + ", ".join(f"{_intro_role_label(role)}={connected_ref_counts.get(role, 0)}" for role in connected_roles)
         )
     if connected_cast_roles:
         prompt_lines.append("Cast package roles: " + ", ".join(_intro_role_label(role) for role in connected_cast_roles))
@@ -1562,6 +1582,8 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
                     "- no masculine anatomy",
                     "- no generic cast substitution",
                 ])
+                if connected_ref_counts.get(role, 0) > 0:
+                    prompt_lines.append(f"- use connected {_intro_role_label(role)} references as exact female identity anchor")
             elif gender_value == "male":
                 prompt_lines.extend([
                     f"- {_intro_role_label(role)} must remain a distinct male character",
@@ -1570,6 +1592,8 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
                     "- no feminine anatomy drift",
                     "- no generic cast substitution",
                 ])
+                if connected_ref_counts.get(role, 0) > 0:
+                    prompt_lines.append(f"- use connected {_intro_role_label(role)} references as exact male identity anchor")
     if animal_species_locks:
         prompt_lines.append("CONNECTED ANIMAL SPECIES LOCKS (STRICT):")
         for role, species_value in animal_species_locks.items():
@@ -1589,9 +1613,19 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
                     "- no species drift",
                     "- do not omit the connected animal participant",
                 ])
-    if len([role for role, gender_value in role_gender_locks.items() if gender_value == "female"]) >= 2:
+            if connected_ref_counts.get(role, 0) > 0:
+                prompt_lines.append(f"- use connected {_intro_role_label(role)} references as exact {species_value} identity anchor")
+    if len(female_locked_roles) >= 2:
         prompt_lines.append(
-            "- if two female roles are connected, render two distinct female characters, not three random people"
+            "- if two female roles are connected, render two distinct female characters, not three random people or a mixed crowd"
+        )
+    if strict_identity_package_roles:
+        prompt_lines.append(
+            "STRICT CAST PACKAGE SUMMARY: "
+            + ", ".join(
+                f"{_intro_role_label(role)} uses {connected_ref_counts.get(role, 0)} connected reference image(s)"
+                for role in strict_identity_package_roles
+            )
         )
     if scene_count > 0:
         prompt_lines.append(f"Storyboard scene count: {scene_count}")
@@ -1607,6 +1641,7 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "sourceNodeTypes": source_node_types,
         "connectedRoles": connected_roles,
         "connectedRoleCounts": intro_connected_role_counts,
+        "connectedRefCounts": connected_ref_counts,
         "roleAwareCastSummary": role_aware_cast_summary or None,
         "heroParticipants": hero_participants,
         "supportingParticipants": supporting_participants,
@@ -1625,6 +1660,8 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "introAnimalSpeciesLocks": animal_species_locks,
         "introHeroParticipantsResolved": hero_participants_resolved,
         "introCastContractPreview": intro_cast_contract_preview,
+        "introStrictIdentityPackageRoles": strict_identity_package_roles,
+        "introStrictIdentityPackageSummary": strict_identity_package_summary,
         "promptPreview": prompt[:1600],
     }
     return prompt, debug
@@ -2003,10 +2040,11 @@ def clip_intro_generate(payload: IntroGenerateIn):
             "[INTRO FRAME CAST] "
             + json.dumps(
                 {
-                    "activeCastRoles": debug.get("introActiveCastRoles") or [],
-                    "mustAppear": debug.get("introMustAppear") or [],
-                    "genderLocks": debug.get("introRoleGenderLocks") or {},
-                    "speciesLocks": debug.get("introAnimalSpeciesLocks") or {},
+                    "introActiveCastRoles": debug.get("introActiveCastRoles") or [],
+                    "introMustAppear": debug.get("introMustAppear") or [],
+                    "introMustNotAppear": debug.get("introMustNotAppear") or [],
+                    "introRoleGenderLocks": debug.get("introRoleGenderLocks") or {},
+                    "introAnimalSpeciesLocks": debug.get("introAnimalSpeciesLocks") or {},
                     "connectedRefCounts": debug.get("introConnectedRoleCounts") or {},
                 },
                 ensure_ascii=False,
@@ -2022,7 +2060,9 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "width": width,
                     "height": height,
                     "sceneCount": debug.get("sceneCount"),
-                    "connectedRoleCounts": inline_part_counts,
+                    "connectedRefCounts": debug.get("connectedRefCounts") or {},
+                    "attachedReferenceParts": inline_part_counts,
+                    "attachedReferencePartTotal": len(inline_parts),
                     "model": model,
                 },
                 ensure_ascii=False,
