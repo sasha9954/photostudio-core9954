@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import logging
 import json
+import math
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -215,34 +216,82 @@ FIXED_IMAGE_VIDEO_NODES = {
     "width": ("267:257", "value"),
     "height": ("267:258", "value"),
     "length": ("267:225", "value"),
+    "fps": ("267:260", "value"),
 }
 
 # These seed node ids are intentionally pinned to image-video-silent-directprompt.json.
 FIXED_SEED_NODES = (("267:216", "noise_seed"), ("267:237", "noise_seed"))
 
 
-def _patch_workflow_inputs(workflow: dict, *, image_name: str, prompt: str, width: int, height: int, length: int, seed: int | None) -> tuple[dict | None, str | None]:
+def _resolve_workflow_fps(workflow: dict, default_fps: int = 24) -> int:
+    fps_node_id, fps_input_key = FIXED_IMAGE_VIDEO_NODES["fps"]
+    node = workflow.get(str(fps_node_id))
+    if isinstance(node, dict):
+        inputs = node.get("inputs")
+        if isinstance(inputs, dict):
+            try:
+                fps_value = int(inputs.get(fps_input_key) or default_fps)
+                if fps_value > 0:
+                    return fps_value
+            except Exception:
+                pass
+    return int(default_fps)
+
+
+def _patch_audio_frames(workflow: dict, frames: int) -> None:
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "frames_number" not in inputs:
+            continue
+        frame_value = inputs.get("frames_number")
+        if isinstance(frame_value, list):
+            continue
+        inputs["frames_number"] = int(frames)
+
+
+def _patch_workflow_inputs(
+    workflow: dict,
+    *,
+    image_name: str,
+    prompt: str,
+    width: int,
+    height: int,
+    requested_duration_sec: float,
+    seed: int | None,
+) -> tuple[dict | None, str | None, int | None, int | None]:
     wf = copy.deepcopy(workflow)
+
+    fps = _resolve_workflow_fps(wf)
+    frames = max(1, int(math.ceil(float(requested_duration_sec) * float(fps))))
+    print("[COMFY LENGTH APPLY]", {
+        "requestedDurationSec": float(requested_duration_sec),
+        "fps": int(fps),
+        "frames": int(frames),
+    })
 
     patch_values = [
         (*FIXED_IMAGE_VIDEO_NODES["image"], image_name),
         (*FIXED_IMAGE_VIDEO_NODES["prompt"], prompt),
         (*FIXED_IMAGE_VIDEO_NODES["width"], int(width)),
         (*FIXED_IMAGE_VIDEO_NODES["height"], int(height)),
-        (*FIXED_IMAGE_VIDEO_NODES["length"], int(length)),
+        (*FIXED_IMAGE_VIDEO_NODES["length"], int(frames)),
     ]
     for node_id, key, value in patch_values:
         ok, err = _set_node_input(wf, node_id, key, value)
         if not ok:
-            return None, err
+            return None, err, None, None
+
+    _patch_audio_frames(wf, frames)
 
     if seed is not None:
         for node_id, key in FIXED_SEED_NODES:
             ok, err = _set_node_input(wf, node_id, key, int(seed))
             if not ok:
-                return None, err
+                return None, err, None, None
 
-    return wf, None
+    return wf, None, frames, fps
 
 
 def run_comfy_image_to_video(
@@ -252,7 +301,7 @@ def run_comfy_image_to_video(
     prompt: str,
     width: int,
     height: int,
-    length: int,
+    requested_duration_sec: float,
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
     try:
@@ -266,13 +315,13 @@ def run_comfy_image_to_video(
 
     effective_prompt = str(prompt or "").strip()
 
-    patched_workflow, patch_err = _patch_workflow_inputs(
+    patched_workflow, patch_err, frame_count, fps = _patch_workflow_inputs(
         workflow,
         image_name=uploaded_name,
         prompt=effective_prompt,
         width=int(width),
         height=int(height),
-        length=int(length),
+        requested_duration_sec=float(requested_duration_sec),
         seed=seed,
     )
     if patch_err or not patched_workflow:
@@ -287,7 +336,9 @@ def run_comfy_image_to_video(
             "prompt": patched_workflow.get("267:266", {}).get("inputs", {}).get("value"),
             "width": patched_workflow.get("267:257", {}).get("inputs", {}).get("value"),
             "height": patched_workflow.get("267:258", {}).get("inputs", {}).get("value"),
+            "fps": fps,
             "length": patched_workflow.get("267:225", {}).get("inputs", {}).get("value"),
+            "audioFrames": patched_workflow.get("267:214", {}).get("inputs", {}).get("frames_number"),
         },
     )
 
@@ -316,7 +367,7 @@ def run_comfy_image_to_video(
         "mode": "single",
         "videoUrl": video_url,
         "model": "ltx-2.3",
-        "requestedDurationSec": round(float(length) / 24.0, 3),
+        "requestedDurationSec": round(float(requested_duration_sec), 3),
         "taskId": prompt_id,
         "debug": {
             "workflow": str(settings.COMFY_IMAGE_VIDEO_WORKFLOW or ""),
@@ -326,9 +377,12 @@ def run_comfy_image_to_video(
                 "width": FIXED_IMAGE_VIDEO_NODES["width"][0],
                 "height": FIXED_IMAGE_VIDEO_NODES["height"][0],
                 "length": FIXED_IMAGE_VIDEO_NODES["length"][0],
+                "fps": FIXED_IMAGE_VIDEO_NODES["fps"][0],
                 "noiseSeed": [node_id for node_id, _ in FIXED_SEED_NODES],
             },
             "uploadedImage": uploaded_name,
             "fileRef": file_ref,
+            "frames": frame_count,
+            "fps": fps,
         },
     }, None

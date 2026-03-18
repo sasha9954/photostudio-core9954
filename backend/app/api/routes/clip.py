@@ -6178,7 +6178,6 @@ def clip_video(payload: ClipVideoIn):
         except Exception:
             requested_duration = 5.0
         requested_duration = max(1.0, min(8.0, requested_duration))
-        length = max(24, min(192, int(round(requested_duration * 24))))
 
         effective_prompt = str(payload.videoPrompt or payload.transitionActionPrompt or "").strip() or "cinematic motion, natural movement"
 
@@ -6193,7 +6192,7 @@ def clip_video(payload: ClipVideoIn):
         image_filename = f"{scene_id}_{int(time.time())}.{(image_ext or 'jpg').lower()}"
         print(
             "[COMFY REMOTE] "
-            f"workflow={settings.COMFY_IMAGE_VIDEO_WORKFLOW} width={width} height={height} length={length}"
+            f"workflow={settings.COMFY_IMAGE_VIDEO_WORKFLOW} width={width} height={height} requestedDurationSec={requested_duration}"
         )
 
         comfy_out, comfy_err = run_comfy_image_to_video(
@@ -6202,7 +6201,7 @@ def clip_video(payload: ClipVideoIn):
             prompt=effective_prompt,
             width=width,
             height=height,
-            length=length,
+            requested_duration_sec=requested_duration,
         )
         if comfy_err or not comfy_out:
             err_text = str(comfy_err or "comfy_remote_failed")
@@ -6234,8 +6233,8 @@ def clip_video(payload: ClipVideoIn):
             "model": "ltx-2.3",
             "taskId": prompt_id,
             "mode": "single",
-            "requestedDurationSec": round(float(length) / 24.0, 3),
-            "providerDurationSec": round(float(length) / 24.0, 3),
+            "requestedDurationSec": round(float(requested_duration), 3),
+            "providerDurationSec": round(float(comfy_out.get("requestedDurationSec") or requested_duration), 3),
         }
 
     guard_prompt = " ".join([
