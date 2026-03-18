@@ -850,17 +850,69 @@ function getSceneRequestedDurationSec(scene) {
   return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
 }
 
-function buildIntroFramePayload(introFrame) {
+const INTRO_FRAME_PREVIEW_KINDS = {
+  UPLOADED: "uploaded_image",
+  GENERATED_LOCAL: "generated_local",
+};
+
+function normalizeIntroFramePreviewKind(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === INTRO_FRAME_PREVIEW_KINDS.UPLOADED) return INTRO_FRAME_PREVIEW_KINDS.UPLOADED;
+  if (normalized === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) return INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL;
+  return "";
+}
+
+function getEffectiveIntroFramePreviewKind(introFrame) {
+  const previewKind = normalizeIntroFramePreviewKind(introFrame?.previewKind);
+  if (previewKind) return previewKind;
+  return String(introFrame?.imageUrl || "").trim() ? INTRO_FRAME_PREVIEW_KINDS.UPLOADED : "";
+}
+
+function resolveIntroFramePreviewUrl(introFrame) {
+  if (!introFrame) return "";
+  const previewKind = getEffectiveIntroFramePreviewKind(introFrame);
   const imageUrl = String(introFrame?.imageUrl || "").trim();
-  if (!imageUrl) return null;
+  if (previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
+    return buildIntroFramePreviewDataUrl({
+      title: String(introFrame?.title || "").trim(),
+      stylePreset: introFrame?.stylePreset || "cinematic",
+      contextSummary: String(introFrame?.contextSummary || "").trim(),
+    });
+  }
+  return imageUrl;
+}
+
+function hasIntroFramePreview(introFrame) {
+  if (!introFrame) return false;
+  const previewKind = getEffectiveIntroFramePreviewKind(introFrame);
+  if (previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
+    return !!String(introFrame?.title || "").trim() || !!String(introFrame?.generatedAt || "").trim();
+  }
+  return !!String(introFrame?.imageUrl || "").trim();
+}
+
+function buildIntroFrameComparablePayload(introFrame) {
+  if (!introFrame || !hasIntroFramePreview(introFrame)) return null;
+  const previewKind = getEffectiveIntroFramePreviewKind(introFrame);
   return {
     nodeId: String(introFrame?.nodeId || ""),
     title: String(introFrame?.title || "").trim(),
     autoTitle: !!introFrame?.autoTitle,
     stylePreset: normalizeIntroStylePreset(introFrame?.stylePreset || "cinematic"),
     durationSec: normalizeIntroDurationSec(introFrame?.durationSec),
-    imageUrl,
+    previewKind,
     generatedAt: String(introFrame?.generatedAt || "").trim() || null,
+    imageUrl: previewKind === INTRO_FRAME_PREVIEW_KINDS.UPLOADED ? String(introFrame?.imageUrl || "").trim() : "",
+  };
+}
+
+function buildIntroFramePayload(introFrame) {
+  const comparable = buildIntroFrameComparablePayload(introFrame);
+  const imageUrl = resolveIntroFramePreviewUrl(introFrame);
+  if (!comparable || !imageUrl) return null;
+  return {
+    ...comparable,
+    imageUrl,
   };
 }
 
@@ -978,8 +1030,10 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       stylePreset: normalizeIntroStylePreset(introNode?.data?.stylePreset || "cinematic"),
       durationSec: normalizeIntroDurationSec(introNode?.data?.durationSec),
       imageUrl: String(introNode?.data?.imageUrl || "").trim(),
+      previewKind: getEffectiveIntroFramePreviewKind(introNode?.data),
       generatedAt: String(introNode?.data?.generatedAt || "").trim(),
       status: String(introNode?.data?.status || "idle"),
+      contextSummary: String(introNode?.data?.contextSummary || "").trim(),
       altTitles: Array.isArray(introNode?.data?.altTitles) ? introNode.data.altTitles : [],
     }
     : null;
@@ -1030,6 +1084,7 @@ function extractGlobalAudioUrlFromNodes(nodes = []) {
 }
 
 function buildAssemblyPayloadSignature(payload, options = {}) {
+  const introComparable = buildIntroFrameComparablePayload(payload?.intro);
   return JSON.stringify({
     scenesSource: String(options?.scenesSource || "none"),
     sourceNodeId: String(options?.sourceNodeId || ""),
@@ -1038,13 +1093,15 @@ function buildAssemblyPayloadSignature(payload, options = {}) {
     introSourceNodeType: String(options?.introSourceNodeType || ""),
     audioUrl: payload?.audioUrl || "",
     format: payload?.format || "9:16",
-    intro: payload?.intro
+    intro: introComparable
       ? {
-        nodeId: payload.intro.nodeId,
-        imageUrl: payload.intro.imageUrl,
-        durationSec: payload.intro.durationSec,
-        title: payload.intro.title,
-        stylePreset: payload.intro.stylePreset,
+        nodeId: introComparable.nodeId,
+        previewKind: introComparable.previewKind || "",
+        imageUrl: introComparable.imageUrl,
+        durationSec: introComparable.durationSec,
+        title: introComparable.title,
+        stylePreset: introComparable.stylePreset,
+        generatedAt: introComparable.generatedAt,
       }
       : null,
     scenes: Array.isArray(payload?.scenes)
@@ -1188,10 +1245,12 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
   const safeTitle = truncateIntroText(title || "INTRO FRAME", 64) || "INTRO FRAME";
   const safeContext = truncateIntroText(contextSummary || "Story preview", 120) || "Story preview";
   const meta = getIntroStyleMeta(stylePreset);
+  const width = 512;
+  const height = 288;
   if (typeof document !== "undefined") {
     const canvas = document.createElement("canvas");
-    canvas.width = 1024;
-    canvas.height = 1024;
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext("2d");
     if (ctx) {
       const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
@@ -1203,17 +1262,16 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
 
       ctx.fillStyle = `${meta.accent}55`;
       ctx.beginPath();
-      ctx.arc(210, 180, 210, 0, Math.PI * 2);
+      ctx.arc(96, 72, 92, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = `${meta.secondary}44`;
       ctx.beginPath();
-      ctx.arc(830, 240, 260, 0, Math.PI * 2);
+      ctx.arc(420, 76, 118, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = meta.accent;
-      ctx.font = "700 40px Arial";
-      ctx.letterSpacing = "4px";
-      ctx.fillText(meta.label.toUpperCase(), 72, 140);
+      ctx.font = "700 20px Arial";
+      ctx.fillText(meta.label.toUpperCase(), 28, 46);
 
       const drawWrapped = (text, x, y, maxWidth, lineHeight, maxLines, font, color) => {
         ctx.font = font;
@@ -1238,15 +1296,15 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
         }
       };
 
-      drawWrapped(safeTitle, 72, 340, 880, 102, 4, "900 96px Arial", "#ffffff");
+      drawWrapped(safeTitle, 28, 116, 456, 44, 3, "900 40px Arial", "#ffffff");
       ctx.fillStyle = meta.accent;
-      ctx.fillRect(72, 720, 880, 8);
-      drawWrapped(safeContext, 72, 790, 880, 40, 3, "400 31px Arial", "rgba(255,255,255,0.82)");
-      return canvas.toDataURL("image/png");
+      ctx.fillRect(28, 212, 456, 4);
+      drawWrapped(safeContext, 28, 244, 456, 18, 2, "400 14px Arial", "rgba(255,255,255,0.82)");
+      return canvas.toDataURL("image/jpeg", 0.72);
     }
   }
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 288">
       <defs>
         <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stop-color="#080d19"/>
@@ -1258,18 +1316,18 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
           <stop offset="100%" stop-color="${meta.secondary}"/>
         </linearGradient>
       </defs>
-      <rect width="1024" height="1024" fill="url(#bg)"/>
-      <circle cx="220" cy="180" r="210" fill="${meta.accent}" opacity="0.22"/>
-      <circle cx="820" cy="220" r="260" fill="${meta.secondary}" opacity="0.18"/>
-      <rect x="72" y="720" width="880" height="8" rx="4" fill="url(#accent)" opacity="0.92"/>
-      <text x="72" y="168" fill="${meta.accent}" font-size="40" font-family="Arial, Helvetica, sans-serif" font-weight="700" letter-spacing="8">${meta.label.toUpperCase()}</text>
-      <foreignObject x="72" y="250" width="880" height="330">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:98px;line-height:1.02;font-weight:900;color:white;text-transform:uppercase;letter-spacing:0.02em;">
+      <rect width="512" height="288" fill="url(#bg)"/>
+      <circle cx="96" cy="72" r="92" fill="${meta.accent}" opacity="0.22"/>
+      <circle cx="420" cy="76" r="118" fill="${meta.secondary}" opacity="0.18"/>
+      <rect x="28" y="212" width="456" height="4" rx="2" fill="url(#accent)" opacity="0.92"/>
+      <text x="28" y="48" fill="${meta.accent}" font-size="20" font-family="Arial, Helvetica, sans-serif" font-weight="700" letter-spacing="4">${meta.label.toUpperCase()}</text>
+      <foreignObject x="28" y="76" width="456" height="116">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:40px;line-height:1.06;font-weight:900;color:white;text-transform:uppercase;letter-spacing:0.02em;">
           ${safeTitle}
         </div>
       </foreignObject>
-      <foreignObject x="72" y="770" width="880" height="160">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:32px;line-height:1.25;color:rgba(255,255,255,0.82);">
+      <foreignObject x="28" y="228" width="456" height="36">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.3;color:rgba(255,255,255,0.82);">
           ${safeContext}
         </div>
       </foreignObject>
@@ -1912,6 +1970,21 @@ function serializeNodesForStorage(nodes) {
       delete data.isParsing;
       delete data.activeParseToken;
     }
+    if (n.type === "introFrame") {
+      data.previewKind = getEffectiveIntroFramePreviewKind(data);
+      if (data.previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
+        delete data.imageUrl;
+      }
+      delete data.contextSummary;
+      delete data.contextSceneCount;
+      delete data.sourceNodeIds;
+      delete data.sourceNodeTypes;
+      delete data.titleContextNodeId;
+      delete data.onField;
+      delete data.onGenerate;
+      delete data.onPickImage;
+      delete data.onClearImage;
+    }
     return {
       id: n.id,
       type: n.type,
@@ -2525,7 +2598,10 @@ function StoryboardPlanNode({ id, data }) {
 
 function IntroFrameNode({ id, data }) {
   const fileInputRef = useRef(null);
-  const previewUrl = resolveAssetUrl(data?.imageUrl);
+  const previewUrl = useMemo(
+    () => resolveAssetUrl(resolveIntroFramePreviewUrl(data)),
+    [data]
+  );
   const autoTitle = !!data?.autoTitle;
   const styleMeta = getIntroStyleMeta(data?.stylePreset || "cinematic");
   const durationSec = normalizeIntroDurationSec(data?.durationSec);
@@ -5147,7 +5223,7 @@ Aspect ratio: ${imageFormat}`,
   const assemblyIntroLabel = useMemo(() => getAssemblyIntroLabel(assemblySource.introSourceNodeType), [assemblySource.introSourceNodeType]);
   const assemblyScenesForPayload = assemblySource.scenes;
   const assemblyIntroFrame = assemblySource.introFrame;
-  const assemblyHasIntro = !!String(assemblyIntroFrame?.imageUrl || "").trim();
+  const assemblyHasIntro = hasIntroFramePreview(assemblyIntroFrame);
   const assemblyReadySceneCount = useMemo(
     () => assemblyScenesForPayload.filter((scene) => String(scene?.videoUrl || "").trim()).length,
     [assemblyScenesForPayload]
@@ -6671,14 +6747,23 @@ onClipSec: (nodeId, value) => {
                 try {
                   const dataUrl = await readFileAsDataUrl(file);
                   setNodes((prev) => prev.map((x) => (x.id === nodeId
-                    ? { ...x, data: { ...x.data, imageUrl: dataUrl, status: "ready", generatedAt: new Date().toISOString() } }
+                    ? {
+                      ...x,
+                      data: {
+                        ...x.data,
+                        imageUrl: dataUrl,
+                        previewKind: INTRO_FRAME_PREVIEW_KINDS.UPLOADED,
+                        status: "ready",
+                        generatedAt: new Date().toISOString(),
+                      },
+                    }
                     : x)));
                 } catch (err) {
                   console.error(err);
                 }
               },
               onClearImage: (nodeId) => setNodes((prev) => prev.map((x) => (x.id === nodeId
-                ? { ...x, data: { ...x.data, imageUrl: "", status: "idle", generatedAt: "" } }
+                ? { ...x, data: { ...x.data, imageUrl: "", previewKind: "", status: "idle", generatedAt: "" } }
                 : x))),
               onGenerate: (nodeId) => {
                 const currentNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
@@ -6690,18 +6775,14 @@ onClipSec: (nodeId, value) => {
                 const nextTitle = currentNode?.data?.autoTitle
                   ? buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes })
                   : String(currentNode?.data?.title || "").trim() || freshContext.autoTitle;
-                const imageUrl = buildIntroFramePreviewDataUrl({
-                  title: nextTitle,
-                  stylePreset: currentNode?.data?.stylePreset || "cinematic",
-                  contextSummary: freshContext.summary,
-                });
                 setNodes((prev) => prev.map((x) => (x.id === nodeId
                   ? {
                     ...x,
                     data: {
                       ...x.data,
                       title: nextTitle,
-                      imageUrl,
+                      imageUrl: "",
+                      previewKind: INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL,
                       status: "ready",
                       generatedAt: new Date().toISOString(),
                       altTitles: [nextTitle].filter(Boolean),
@@ -7106,6 +7187,10 @@ const hydrate = useCallback((source = "unknown") => {
             data.stylePreset = normalizeIntroStylePreset(data.stylePreset || "cinematic");
             data.durationSec = normalizeIntroDurationSec(data.durationSec);
             data.imageUrl = String(data.imageUrl || "");
+            data.previewKind = getEffectiveIntroFramePreviewKind(data);
+            if (data.previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
+              data.imageUrl = "";
+            }
             data.status = ["idle", "generating", "ready", "error"].includes(String(data.status || "")) ? String(data.status) : "idle";
             data.generatedAt = String(data.generatedAt || "");
             data.altTitles = Array.isArray(data.altTitles) ? data.altTitles.slice(0, 5).map((item) => String(item || "").trim()).filter(Boolean) : [];
@@ -7389,7 +7474,7 @@ const hydrate = useCallback((source = "unknown") => {
         id,
         type: "introFrame",
         position: { x: centerX + jitterX, y: centerY + jitterY },
-        data: { title: "", autoTitle: true, stylePreset: "cinematic", durationSec: 2.5, imageUrl: "", status: "idle", generatedAt: "", altTitles: [] },
+        data: { title: "", autoTitle: true, stylePreset: "cinematic", durationSec: 2.5, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [] },
       };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
