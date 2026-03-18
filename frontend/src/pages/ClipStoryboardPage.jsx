@@ -1457,6 +1457,97 @@ function inferIntroSpeciesLockFromProfile(profile) {
   return String(speciesValue || "").trim().toLowerCase();
 }
 
+const INTRO_REF_HANDLE_BY_ROLE = {
+  character_1: "ref_character_1",
+  character_2: "ref_character_2",
+  character_3: "ref_character_3",
+  animal: "ref_animal",
+  group: "ref_group",
+  location: "ref_location",
+  style: "ref_style",
+  props: "ref_props",
+};
+
+function getLatestIncomingNodeForHandle({ targetNodeId = "", targetHandle = "", nodesById = new Map(), edges = [] } = {}) {
+  if (!targetNodeId || !targetHandle) return null;
+  const edge = [...(Array.isArray(edges) ? edges : [])]
+    .reverse()
+    .find((item) => item?.target === targetNodeId && String(item?.targetHandle || "") === String(targetHandle || ""));
+  return edge ? (nodesById.get(edge?.source) || null) : null;
+}
+
+function extractIntroRefUrlsFromNode(node = null, role = "") {
+  if (!node || typeof node !== "object" || !role) return [];
+  if (node?.type === "refNode") {
+    const kind = String(node?.data?.kind || "");
+    const expectedKindByRole = {
+      character_1: "ref_character",
+      location: "ref_location",
+      style: "ref_style",
+      props: "ref_items",
+    };
+    if (expectedKindByRole?.[role] && kind !== expectedKindByRole[role]) return [];
+    return normalizeRefData(node?.data || {}, kind).refs
+      .map((item) => String(item?.url || "").trim())
+      .filter(Boolean);
+  }
+  return (Array.isArray(node?.data?.refs) ? node.data.refs : [])
+    .map((item) => (typeof item === "string" ? item : item?.url))
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+}
+
+function collectIntroConnectedRefPackage({ comfyNode = null, comfyBrainNode = null, nodesById = new Map(), edges = [] } = {}) {
+  const resolveAnchorNode = () => {
+    if (comfyBrainNode?.id) return comfyBrainNode;
+    if (comfyNode?.id) {
+      const linkedBrainNode = getLatestIncomingNodeForHandle({
+        targetNodeId: comfyNode.id,
+        targetHandle: "comfy_plan",
+        nodesById,
+        edges,
+      });
+      if (linkedBrainNode?.type === "comfyBrain") return linkedBrainNode;
+      return comfyNode;
+    }
+    return null;
+  };
+
+  const anchorNode = resolveAnchorNode();
+  const connectedRefsByRole = Object.fromEntries(
+    INTRO_COMFY_REF_ROLES.map((role) => {
+      const sourceNode = getLatestIncomingNodeForHandle({
+        targetNodeId: String(anchorNode?.id || ""),
+        targetHandle: INTRO_REF_HANDLE_BY_ROLE?.[role] || "",
+        nodesById,
+        edges,
+      });
+      return [role, [...new Set(extractIntroRefUrlsFromNode(sourceNode, role))]];
+    })
+  );
+  const roleProfiles = Object.fromEntries(
+    INTRO_COMFY_REF_ROLES
+      .map((role) => {
+        const sourceNode = getLatestIncomingNodeForHandle({
+          targetNodeId: String(anchorNode?.id || ""),
+          targetHandle: INTRO_REF_HANDLE_BY_ROLE?.[role] || "",
+          nodesById,
+          edges,
+        });
+        const profile = sourceNode?.data?.refHiddenProfile;
+        return [role, profile && typeof profile === "object" ? profile : null];
+      })
+      .filter(([, profile]) => !!profile)
+  );
+
+  return {
+    anchorNodeId: String(anchorNode?.id || ""),
+    anchorNodeType: String(anchorNode?.type || ""),
+    connectedRefsByRole: normalizeIntroConnectedRefsByRole(connectedRefsByRole),
+    roleProfiles,
+  };
+}
+
 function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) {
   const nodesById = new Map((Array.isArray(nodes) ? nodes : []).map((node) => [node?.id, node]));
   const incoming = (Array.isArray(edges) ? edges : []).filter((edge) => edge?.target === nodeId);
@@ -1490,7 +1581,24 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   if (textValue) summaryParts.push(`text: ${truncateIntroText(textValue, 42)}`);
   if (sourceLabels.length) summaryParts.push(`inputs: ${sourceLabels.join(", ")}`);
   const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || comfyBrainNode?.data?.plannerMeta?.plannerInput || {};
-  const connectedRefsByRole = normalizeIntroConnectedRefsByRole(plannerInput?.refsByRole || {});
+  const plannerConnectedRefsByRole = normalizeIntroConnectedRefsByRole(plannerInput?.refsByRole || {});
+  const graphRefPackage = collectIntroConnectedRefPackage({
+    comfyNode,
+    comfyBrainNode,
+    nodesById,
+    edges,
+  });
+  const connectedRefsByRole = normalizeIntroConnectedRefsByRole(
+    Object.fromEntries(
+      INTRO_COMFY_REF_ROLES.map((role) => [
+        role,
+        [...new Set([
+          ...(plannerConnectedRefsByRole?.[role] || []),
+          ...(graphRefPackage?.connectedRefsByRole?.[role] || []),
+        ])],
+      ])
+    )
+  );
   const activeRefRoles = INTRO_COMFY_REF_ROLES.filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
   const introActiveCastRoles = INTRO_CAST_ROLES.filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
   const heroParticipants = ["character_1", "character_2", "character_3"].filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
@@ -1507,6 +1615,7 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     comfyNode?.data?.plannerMeta?.referenceProfiles,
     comfyBrainNode?.data?.hiddenReferenceProfiles,
     comfyBrainNode?.data?.plannerMeta?.referenceProfiles,
+    graphRefPackage?.roleProfiles,
     directRoleProfiles,
   );
   const connectedGenderLocksByRole = Object.fromEntries(
@@ -1535,6 +1644,8 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   return {
     sourceNodeIds: storySources.map((node) => String(node?.id || "")).filter(Boolean),
     sourceNodeTypes: storySources.map((node) => String(node?.type || "")).filter(Boolean),
+    refAnchorNodeId: String(graphRefPackage?.anchorNodeId || ""),
+    refAnchorNodeType: String(graphRefPackage?.anchorNodeType || ""),
     titleContextNodeId: String(titleSource?.id || ""),
     titleText: textValue,
     scenes,
@@ -7599,6 +7710,19 @@ onClipSec: (nodeId, value) => {
                   : x)));
 
                 try {
+                  console.log("[INTRO FRAME PAYLOAD] /api/clip/intro/generate", {
+                    title: payload.title,
+                    previewFormat: payload.previewFormat,
+                    stylePreset: payload.stylePreset,
+                    connectedRefsByRole: payload.connectedRefsByRole,
+                    connectedRefsByRoleCounts: Object.fromEntries(
+                      INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(payload?.connectedRefsByRole?.[role]) ? payload.connectedRefsByRole[role].length : 0])
+                    ),
+                    introMustAppear: payload.introMustAppear,
+                    introMustNotAppear: payload.introMustNotAppear,
+                    connectedGenderLocksByRole: payload.connectedGenderLocksByRole,
+                    connectedSpeciesLocksByRole: payload.connectedSpeciesLocksByRole,
+                  });
                   const out = await fetchJson("/api/clip/intro/generate", {
                     method: "POST",
                     body: payload,
