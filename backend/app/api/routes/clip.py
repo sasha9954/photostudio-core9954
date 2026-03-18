@@ -6135,10 +6135,11 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
         final_filename = f"clip_final_{uuid4().hex}.mp4"
         final_path = os.path.join(str(ASSETS_DIR), final_filename)
         audio_applied = False
+        audio_delay_sec = intro_duration if has_intro and intro_duration > 0 else 0.0
 
         audio_url = str(payload.audioUrl or "").strip()
         if audio_url:
-            print("[CLIP ASSEMBLE] stage=audio_mux")
+            print(f"[CLIP ASSEMBLE] stage=audio_mux delaySec={audio_delay_sec:.3f}")
             _update_clip_assemble_job(
                 job_id,
                 status="running",
@@ -6152,9 +6153,13 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 if audio_probe_err == "ffprobe_missing_install_and_add_to_PATH":
                     raise RuntimeError("FFPROBE_MISSING")
                 if not audio_probe_err and audio_probe is not None:
-                    audio_ok, audio_ffmpeg_err = _run_ffmpeg([
+                    audio_mux_cmd = [
                         "ffmpeg", "-y",
                         "-i", assembled_no_audio,
+                    ]
+                    if audio_delay_sec > 0:
+                        audio_mux_cmd.extend(["-itsoffset", f"{audio_delay_sec:.3f}"])
+                    audio_mux_cmd.extend([
                         "-i", audio_path,
                         "-map", "0:v:0",
                         "-map", "1:a:0",
@@ -6163,6 +6168,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                         "-shortest",
                         final_path,
                     ])
+                    audio_ok, audio_ffmpeg_err = _run_ffmpeg(audio_mux_cmd)
                     if audio_ok:
                         audio_applied = True
                     else:
