@@ -7024,7 +7024,8 @@ def _normalize_clip_video_response_payload(response_obj) -> tuple[dict, int]:
 
 
 def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
-    print(f"[CLIP VIDEO JOB WORKER] start jobId={job_id}")
+    source_image_url = str(payload.imageUrl or payload.startImageUrl or payload.endImageUrl or "").strip()
+    print(f"[CLIP VIDEO JOB WORKER] start jobId={job_id} source_image_url={source_image_url}")
     with CLIP_VIDEO_JOBS_LOCK:
         job = CLIP_VIDEO_JOBS.get(job_id)
         if not job:
@@ -7057,6 +7058,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "completedAt": time.time() if status == "done" else None,
             })
         if status == "done":
+            print(f"[CLIP VIDEO JOB WORKER] terminal_transition jobId={job_id} status=done final_video_url={video_url}")
             print(f"[CLIP VIDEO JOB WORKER] status_done jobId={job_id}")
     except Exception as exc:
         print(f"[CLIP VIDEO JOB WORKER] failed jobId={job_id} error={str(exc)[:300]}")
@@ -7065,6 +7067,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
             if not job:
                 return
             job.update({"status": "error", "error": str(exc), "updatedAt": time.time(), "completedAt": None})
+        print(f"[CLIP VIDEO JOB WORKER] terminal_transition jobId={job_id} status=error")
 
 
 @router.post("/clip/video/start")
