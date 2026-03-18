@@ -733,6 +733,8 @@ const INTRO_STYLE_PRESET_META = {
 };
 
 const INTRO_STYLE_PRESETS = Object.keys(INTRO_STYLE_PRESET_META);
+const INTRO_COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
+const INTRO_CAST_ROLES = ["character_1", "character_2", "character_3", "animal", "group"];
 
 const PARSE_PROGRESS_PHRASES = [
   "Анализирую входы",
@@ -1360,6 +1362,61 @@ function buildIntroFrameAutoTitle({ textValue = "", scenes = [] } = {}) {
   return fallback ? fallback.toUpperCase() : "CINEMATIC INTRO";
 }
 
+function normalizeIntroConnectedRefsByRole(refsByRole = {}) {
+  return Object.fromEntries(
+    INTRO_COMFY_REF_ROLES.map((role) => {
+      const items = Array.isArray(refsByRole?.[role]) ? refsByRole[role] : [];
+      const urls = items
+        .map((item) => (typeof item === "string" ? item : item?.url))
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+      return [role, [...new Set(urls)]];
+    })
+  );
+}
+
+function formatIntroRoleLabel(role) {
+  return String(role || "")
+    .replace(/^character_/, "character ")
+    .replace(/_/g, " ")
+    .trim();
+}
+
+function buildIntroRoleAwareCastSummary(refsByRole = {}) {
+  const castRoles = INTRO_CAST_ROLES.filter((role) => (refsByRole?.[role] || []).length > 0);
+  if (!castRoles.length) return "";
+  const heroRoles = ["character_1", "character_2", "character_3"].filter((role) => (refsByRole?.[role] || []).length > 0);
+  const supportRoles = castRoles.filter((role) => !heroRoles.includes(role));
+  const summary = [];
+  if (heroRoles.length) summary.push(`heroes: ${heroRoles.map(formatIntroRoleLabel).join(", ")}`);
+  if (supportRoles.length) summary.push(`support: ${supportRoles.map(formatIntroRoleLabel).join(", ")}`);
+  return summary.join(" • ");
+}
+
+function buildIntroImportantProps(refsByRole = {}) {
+  const propsCount = Array.isArray(refsByRole?.props) ? refsByRole.props.length : 0;
+  if (!propsCount) return [];
+  const propLabel = inferPropAnchorLabel(refsByRole);
+  return [propLabel || `${propsCount} connected prop reference${propsCount > 1 ? "s" : ""}`];
+}
+
+function buildIntroWorldContext({ refsByRole = {}, sceneCount = 0, storyContext = "" } = {}) {
+  const parts = [];
+  if ((refsByRole?.location || []).length > 0) parts.push("location anchor connected");
+  if ((refsByRole?.group || []).length > 0) parts.push("group dynamics available");
+  if ((refsByRole?.animal || []).length > 0) parts.push("animal presence matters");
+  if ((refsByRole?.props || []).length > 0) parts.push("props should help sell the world");
+  if (sceneCount > 0) parts.push(`opening story distilled from ${sceneCount} storyboard scenes`);
+  if (!parts.length && storyContext) parts.push(truncateIntroText(storyContext, 120));
+  return parts.join(" • ");
+}
+
+function buildIntroStyleContext({ stylePreset = "", refsByRole = {} } = {}) {
+  const normalizedStylePreset = normalizeIntroStylePreset(stylePreset || "cinematic");
+  const hasStyleRefs = (refsByRole?.style || []).length > 0;
+  return `${normalizedStylePreset}${hasStyleRefs ? " + explicit style reference anchors" : " baseline"}`;
+}
+
 function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) {
   const nodesById = new Map((Array.isArray(nodes) ? nodes : []).map((node) => [node?.id, node]));
   const incoming = (Array.isArray(edges) ? edges : []).filter((edge) => edge?.target === nodeId);
@@ -1370,6 +1427,7 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     .filter(Boolean);
   const titleSource = titleEdge ? (nodesById.get(titleEdge.source) || null) : null;
   const comfyNode = storySources.find((node) => node?.type === "comfyStoryboard") || null;
+  const comfyBrainNode = storySources.find((node) => node?.type === "comfyBrain") || null;
   const storyboardNode = storySources.find((node) => node?.type === "storyboardNode") || null;
   const textNode = titleSource?.type === "textNode"
     ? titleSource
@@ -1391,6 +1449,23 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   if (sceneCount) summaryParts.push(`${sceneCount} сцен`);
   if (textValue) summaryParts.push(`text: ${truncateIntroText(textValue, 42)}`);
   if (sourceLabels.length) summaryParts.push(`inputs: ${sourceLabels.join(", ")}`);
+  const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || comfyBrainNode?.data?.plannerMeta?.plannerInput || {};
+  const connectedRefsByRole = normalizeIntroConnectedRefsByRole(plannerInput?.refsByRole || {});
+  const activeRefRoles = INTRO_COMFY_REF_ROLES.filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
+  const heroParticipants = ["character_1", "character_2", "character_3"].filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
+  const supportingParticipants = ["animal", "group"].filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
+  const roleAwareCastSummary = buildIntroRoleAwareCastSummary(connectedRefsByRole);
+  const worldContext = buildIntroWorldContext({
+    refsByRole: connectedRefsByRole,
+    sceneCount,
+    storyContext: summaryParts.join(" • "),
+  });
+  const styleContext = buildIntroStyleContext({
+    stylePreset: plannerInput?.stylePreset || comfyNode?.data?.stylePreset || comfyBrainNode?.data?.stylePreset || "",
+    refsByRole: connectedRefsByRole,
+  });
+  const importantProps = buildIntroImportantProps(connectedRefsByRole);
+  if (roleAwareCastSummary) summaryParts.push(`cast: ${roleAwareCastSummary}`);
   return {
     sourceNodeIds: storySources.map((node) => String(node?.id || "")).filter(Boolean),
     sourceNodeTypes: storySources.map((node) => String(node?.type || "")).filter(Boolean),
@@ -1400,6 +1475,14 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     sceneCount,
     summary: summaryParts.join(" • ") || "не подключён",
     autoTitle: buildIntroFrameAutoTitle({ textValue, scenes }),
+    connectedRefsByRole,
+    roleAwareCastSummary,
+    heroParticipants,
+    supportingParticipants,
+    importantProps,
+    worldContext,
+    styleContext,
+    activeRefRoles,
   };
 }
 
@@ -2975,103 +3058,102 @@ function IntroFrameNode({ id, data }) {
             }}
           >
             {previewUrl ? (
-              <img
-                src={previewUrl}
-                alt={previewTitle}
-                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-              />
+              <>
+                <img
+                  src={previewUrl}
+                  alt={previewTitle}
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: isGenerating ? "linear-gradient(180deg, rgba(5,8,16,0.12) 0%, rgba(5,8,16,0.08) 100%)" : "transparent",
+                  }}
+                />
+              </>
             ) : (
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  background: `radial-gradient(circle at 18% 18%, ${styleMeta.accent}38 0%, transparent 34%), radial-gradient(circle at 84% 20%, ${styleMeta.secondary}32 0%, transparent 38%), linear-gradient(145deg, #080d19 0%, ${styleMeta.secondary} 55%, #020409 100%)`,
-                }}
-              />
+              <>
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: `radial-gradient(circle at 18% 18%, ${styleMeta.accent}38 0%, transparent 34%), radial-gradient(circle at 84% 20%, ${styleMeta.secondary}32 0%, transparent 38%), linear-gradient(145deg, #080d19 0%, ${styleMeta.secondary} 55%, #020409 100%)`,
+                  }}
+                />
+
+                <div
+                  style={{
+                    position: "relative",
+                    zIndex: 1,
+                    minHeight: "100%",
+                    width: "100%",
+                    padding: previewFormatMeta.surfacePadding,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    overflow: "hidden",
+                    background: "linear-gradient(180deg, rgba(5,8,16,0.10) 0%, rgba(5,8,16,0.04) 35%, rgba(5,8,16,0.54) 100%)",
+                  }}
+                >
+                  <div
+                    className="clipSB_small"
+                    style={{
+                      color: styleMeta.accent,
+                      letterSpacing: "0.14em",
+                      textTransform: "uppercase",
+                      fontWeight: 700,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    ava-studio
+                  </div>
+
+                  <div style={{ marginTop: "auto", display: "grid", gap: 8, minWidth: 0, overflow: "hidden" }}>
+                    <div
+                      style={{
+                        fontSize: titleFontSize,
+                        lineHeight: denseTitle ? 1.08 : 1.12,
+                        fontWeight: 900,
+                        letterSpacing: denseTitle ? "0.015em" : "0.035em",
+                        textTransform: "uppercase",
+                        color: "#ffffff",
+                        overflow: "hidden",
+                        display: "-webkit-box",
+                        WebkitBoxOrient: "vertical",
+                        WebkitLineClamp: titleClamp,
+                        wordBreak: "break-word",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {previewTitle}
+                    </div>
+                    <div style={{ width: "100%", height: 3, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
+                    <div
+                      className="clipSB_small"
+                      style={{
+                        color: "rgba(245,247,255,0.84)",
+                        overflow: "hidden",
+                        display: "-webkit-box",
+                        WebkitBoxOrient: "vertical",
+                        WebkitLineClamp: contextClamp,
+                        lineHeight: 1.4,
+                        minWidth: 0,
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {previewContext}
+                    </div>
+                    <div className="clipSB_small" style={{ color: "rgba(232,236,255,0.72)" }}>
+                      ava-studio product 2026
+                    </div>
+                  </div>
+                </div>
+              </>
             )}
-
-            <div
-              style={{
-                position: "relative",
-                zIndex: 1,
-                minHeight: "100%",
-                width: "100%",
-                padding: previewFormatMeta.surfacePadding,
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "space-between",
-                gap: 12,
-                overflow: "hidden",
-                background: previewUrl ? "linear-gradient(180deg, rgba(5,8,16,0.14) 0%, rgba(5,8,16,0.04) 28%, rgba(5,8,16,0.76) 100%)" : "linear-gradient(180deg, rgba(5,8,16,0.10) 0%, rgba(5,8,16,0.04) 35%, rgba(5,8,16,0.54) 100%)",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, minWidth: 0 }}>
-                <div
-                  className="clipSB_small"
-                  style={{
-                    color: styleMeta.accent,
-                    letterSpacing: "0.14em",
-                    textTransform: "uppercase",
-                    fontWeight: 700,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {styleMeta.label}
-                </div>
-                <div
-                  className="clipSB_small"
-                  style={{
-                    flexShrink: 0,
-                    border: `1px solid ${styleMeta.accent}66`,
-                    borderRadius: 999,
-                    padding: "3px 8px",
-                    color: "#f5f7ff",
-                    background: "rgba(7,11,19,0.42)",
-                  }}
-                >
-                  {previewFormatMeta.label}
-                </div>
-              </div>
-
-              <div style={{ marginTop: "auto", display: "grid", gap: 8, minWidth: 0, overflow: "hidden" }}>
-                <div
-                  style={{
-                    fontSize: titleFontSize,
-                    lineHeight: denseTitle ? 1.08 : 1.12,
-                    fontWeight: 900,
-                    letterSpacing: denseTitle ? "0.015em" : "0.035em",
-                    textTransform: "uppercase",
-                    color: "#ffffff",
-                    overflow: "hidden",
-                    display: "-webkit-box",
-                    WebkitBoxOrient: "vertical",
-                    WebkitLineClamp: titleClamp,
-                    wordBreak: "break-word",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {previewTitle}
-                </div>
-                <div style={{ width: "100%", height: 3, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
-                <div
-                  className="clipSB_small"
-                  style={{
-                    color: "rgba(245,247,255,0.84)",
-                    overflow: "hidden",
-                    display: "-webkit-box",
-                    WebkitBoxOrient: "vertical",
-                    WebkitLineClamp: contextClamp,
-                    lineHeight: 1.4,
-                    minWidth: 0,
-                    wordBreak: "break-word",
-                  }}
-                >
-                  {previewContext}
-                </div>
-              </div>
-            </div>
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -7214,6 +7296,13 @@ onClipSec: (nodeId, value) => {
                   titleContext: String(freshContext.titleText || "").trim(),
                   sceneCount: Number(freshContext.sceneCount || 0),
                   sourceNodeTypes: Array.isArray(freshContext.sourceNodeTypes) ? freshContext.sourceNodeTypes : [],
+                  connectedRefsByRole: freshContext.connectedRefsByRole || {},
+                  roleAwareCastSummary: String(freshContext.roleAwareCastSummary || "").trim(),
+                  heroParticipants: Array.isArray(freshContext.heroParticipants) ? freshContext.heroParticipants : [],
+                  supportingParticipants: Array.isArray(freshContext.supportingParticipants) ? freshContext.supportingParticipants : [],
+                  importantProps: Array.isArray(freshContext.importantProps) ? freshContext.importantProps : [],
+                  worldContext: String(freshContext.worldContext || "").trim(),
+                  styleContext: String(freshContext.styleContext || "").trim(),
                 };
 
                 setNodes((prev) => prev.map((x) => (x.id === nodeId
