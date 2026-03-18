@@ -826,6 +826,21 @@ function normalizeComfyScenesForAssembly(scenes = []) {
   });
 }
 
+function getAssemblySourceLabel(scenesSource = "none") {
+  if (scenesSource === "comfyStoryboard") return "COMFY STORYBOARD";
+  if (scenesSource === "storyboard") return "STORYBOARD";
+  return "НЕ ПОДКЛЮЧЕНО";
+}
+
+function removeAssemblyIncomingSourceEdges(edges = [], assemblyNodeId = "", targetHandle = "assembly_in") {
+  const normalizedAssemblyNodeId = String(assemblyNodeId || "").trim();
+  const normalizedTargetHandle = String(targetHandle || "").trim() || "assembly_in";
+  return (Array.isArray(edges) ? edges : []).filter((edge) => {
+    if (String(edge?.target || "") !== normalizedAssemblyNodeId) return true;
+    return String(edge?.targetHandle || "") !== normalizedTargetHandle;
+  });
+}
+
 function extractComfyScenesFromNodes(nodes = []) {
   const comfyStoryboardNode = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "comfyStoryboard") || null;
   return normalizeComfyScenesForAssembly(comfyStoryboardNode?.data?.mockScenes);
@@ -839,13 +854,15 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
     : (nodesList.find((node) => node?.type === "assemblyNode") || null);
   const effectiveAssemblyNodeId = String(assemblyNode?.id || assemblyNodeId || "").trim();
   const nodesById = new Map(nodesList.map((node) => [node?.id, node]));
-  const incomingEdge = effectiveAssemblyNodeId
-    ? edgesList.find((edge) => {
+  const incomingSourceEdges = effectiveAssemblyNodeId
+    ? edgesList.filter((edge) => {
       if (edge?.target !== effectiveAssemblyNodeId) return false;
+      if (String(edge?.targetHandle || "") !== "assembly_in") return false;
       const sourceType = String(nodesById.get(edge?.source)?.type || "");
       return sourceType === "storyboardNode" || sourceType === "comfyStoryboard";
-    }) || null
-    : null;
+    })
+    : [];
+  const incomingEdge = incomingSourceEdges.length ? incomingSourceEdges[incomingSourceEdges.length - 1] : null;
   const sourceNode = incomingEdge ? (nodesById.get(incomingEdge.source) || null) : null;
 
   if (sourceNode?.type === "storyboardNode") {
@@ -2215,6 +2232,7 @@ function AssemblyNode({ id, data }) {
       >
         <div className="clipSB_assemblyStats">
           <div className="clipSB_assemblyRow"><span>Сцен готово</span><strong>{data?.readyScenes || 0}/{data?.totalScenes || 0}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Источник</span><strong>{data?.sourceLabel || "НЕ ПОДКЛЮЧЕНО"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Аудио</span><strong>{data?.hasAudio ? "подключено" : "не подключено"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Формат</span><strong>{data?.format || "9:16"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Длительность</span><strong>~{Math.round(Number(data?.durationSec || 0))} сек</strong></div>
@@ -4659,6 +4677,7 @@ Aspect ratio: ${imageFormat}`,
 
   const assemblySource = useMemo(() => resolveAssemblySource({ nodes, edges }), [nodes, edges]);
   const assemblyScenesSource = assemblySource.scenesSource;
+  const assemblySourceLabel = useMemo(() => getAssemblySourceLabel(assemblyScenesSource), [assemblyScenesSource]);
   const assemblyScenesForPayload = assemblySource.scenes;
   const assemblyReadySceneCount = useMemo(
     () => assemblyScenesForPayload.filter((scene) => String(scene?.videoUrl || "").trim()).length,
@@ -4694,11 +4713,17 @@ Aspect ratio: ${imageFormat}`,
       scenesSource: assemblyScenesSource,
       scenesCount: assemblyScenesForPayload.length,
       readyScenesCount: assemblyReadySceneCount,
+      sceneIds: assemblyScenesForPayload.map((scene) => String(scene?.sceneId || "")).filter(Boolean),
+      requestedDurations: assemblyScenesForPayload.map((scene) => getSceneRequestedDurationSec(scene)),
+      hasAudio: !!assemblyPayload.audioUrl,
+      format: assemblyPayload.format,
       signatureSource: `${assemblyScenesSource}:${assemblySource.sourceNodeId || "none"}`,
     });
   }, [
+    assemblyPayload.audioUrl,
+    assemblyPayload.format,
     assemblyReadySceneCount,
-    assemblyScenesForPayload.length,
+    assemblyScenesForPayload,
     assemblyScenesSource,
     assemblySource,
   ]);
@@ -4956,6 +4981,7 @@ Aspect ratio: ${imageFormat}`,
           format: assemblyPayload.format,
           durationSec: assemblyDurationEstimateSec,
           scenesSource: assemblyScenesSource,
+          sourceLabel: assemblySourceLabel,
           canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
           isAssembling,
           status: assemblyStatus,
@@ -4979,6 +5005,7 @@ Aspect ratio: ${imageFormat}`,
     assemblyDurationEstimateSec,
     assemblyReadySceneCount,
     assemblyScenesForPayload.length,
+    assemblySourceLabel,
     assemblyScenesSource,
     isAssembling,
     assemblyStatus,
@@ -6254,6 +6281,7 @@ onClipSec: (nodeId, value) => {
               format: assemblyPayload.format,
               durationSec: assemblyDurationEstimateSec,
               scenesSource: assemblyScenesSource,
+              sourceLabel: assemblySourceLabel,
               canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
               isAssembling,
               status: assemblyStatus,
@@ -6281,6 +6309,7 @@ return base;
       assemblyDurationEstimateSec,
       assemblyReadySceneCount,
       assemblyScenesForPayload.length,
+      assemblySourceLabel,
       assemblyScenesSource,
       assemblyPayload,
       isAssembling,
@@ -6604,13 +6633,22 @@ const hydrate = useCallback((source = "unknown") => {
         format: hydratedFormat,
       });
       const hydratedSignature = buildAssemblyPayloadSignature(hydratedPayload, hydratedAssemblySource);
-      const scenarioStats = collectSceneVideoStateStats(hydratedScenes, "scene");
+      const assemblySourceSceneStats = collectSceneVideoStateStats(
+        hydratedScenes,
+        hydratedAssemblySource.scenesSource === "comfyStoryboard" ? "comfy_scene" : "scene"
+      );
+      const storyboardStats = collectSceneVideoStateStats(extractStoryboardScenesFromNodes(hydratedNodes), "scene");
       const comfyStats = collectSceneVideoStateStats(hydratedComfyScenes, "comfy_scene");
       console.info("[CLIP STORAGE] hydrate payload accepted", {
         accountKey,
         STORE_KEY,
-        scenarioStats,
+        scenesSource: hydratedAssemblySource.scenesSource,
+        assemblySourceNodeId: hydratedAssemblySource.sourceNodeId,
+        assemblySourceNodeType: hydratedAssemblySource.sourceNodeType,
+        assemblySourceSceneStats,
+        storyboardStats,
         comfyStats,
+        hydratedSignatureSource: `${hydratedAssemblySource.scenesSource}:${hydratedAssemblySource.sourceNodeId || "none"}`,
       });
 
       console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${hydratedNodes.length} edgesAfter=${hydratedEdges.length}`);
@@ -7102,7 +7140,7 @@ const hydrate = useCallback((source = "unknown") => {
 
         if (src.type === 'comfyStoryboard' && (params.sourceHandle || '') === 'comfy_scene_video_out') {
           if (dst.type === 'assemblyNode' && (params.targetHandle || '') === 'assembly_in') {
-            const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === 'assembly_in'));
+            const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_in");
             const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
             return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
           }
@@ -7114,6 +7152,13 @@ const hydrate = useCallback((source = "unknown") => {
 
         if (src.type === 'comfyStoryboard' || src.type === 'comfyBrain' || src.type === 'comfyVideoPreview' || dst.type === 'comfyStoryboard' || dst.type === 'comfyBrain' || dst.type === 'comfyVideoPreview') {
           return eds;
+        }
+
+        if (src.type === "storyboardNode" && (params.sourceHandle || "") === "plan_out") {
+          if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_in") return eds;
+          const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_in");
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
+          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
 
         const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
