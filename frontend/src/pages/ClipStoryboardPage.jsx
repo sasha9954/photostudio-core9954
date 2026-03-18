@@ -1308,6 +1308,21 @@ const COMFY_IMAGE_NO_TEXT_RULE = [
   "Only include signage or readable text when the scene explicitly requires a real in-world sign.",
 ].join(" ");
 
+const COMFY_IMAGE_DESIGNED_TEXT_MARKERS = [
+  "{title}",
+  "title text",
+  "stylized title",
+  "movie title",
+  "poster title",
+  "thumbnail title",
+  "logo text",
+  "wordmark",
+  "typography",
+  "font",
+  "lettering",
+  "caption text",
+];
+
 function looksLikeSceneMetaLabel(value) {
   const raw = String(value || "").trim();
   if (!raw) return false;
@@ -1344,6 +1359,9 @@ function appendComfyImageNoTextRule(value) {
   const trimmed = String(value || "").trim();
   if (!trimmed) return COMFY_IMAGE_NO_TEXT_RULE;
   const normalized = trimmed.toLowerCase();
+  if (COMFY_IMAGE_DESIGNED_TEXT_MARKERS.some((marker) => normalized.includes(marker))) {
+    return trimmed;
+  }
   if (
     normalized.includes("no captions")
     || normalized.includes("no text")
