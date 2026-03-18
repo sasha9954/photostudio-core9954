@@ -1514,6 +1514,7 @@ function collectIntroConnectedRefPackage({ comfyNode = null, comfyBrainNode = nu
   };
 
   const anchorNode = resolveAnchorNode();
+  const connectedSourceNodeIdsByRole = {};
   const connectedRefsByRole = Object.fromEntries(
     INTRO_COMFY_REF_ROLES.map((role) => {
       const sourceNode = getLatestIncomingNodeForHandle({
@@ -1522,6 +1523,7 @@ function collectIntroConnectedRefPackage({ comfyNode = null, comfyBrainNode = nu
         nodesById,
         edges,
       });
+      connectedSourceNodeIdsByRole[role] = String(sourceNode?.id || "");
       return [role, [...new Set(extractIntroRefUrlsFromNode(sourceNode, role))]];
     })
   );
@@ -1544,6 +1546,7 @@ function collectIntroConnectedRefPackage({ comfyNode = null, comfyBrainNode = nu
     anchorNodeId: String(anchorNode?.id || ""),
     anchorNodeType: String(anchorNode?.type || ""),
     connectedRefsByRole: normalizeIntroConnectedRefsByRole(connectedRefsByRole),
+    connectedSourceNodeIdsByRole,
     roleProfiles,
   };
 }
@@ -1588,15 +1591,22 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     nodesById,
     edges,
   });
+  const graphConnectedRefsByRole = normalizeIntroConnectedRefsByRole(graphRefPackage?.connectedRefsByRole || {});
+  const graphConnectedSourceNodeIdsByRole = graphRefPackage?.connectedSourceNodeIdsByRole || {};
+  const graphConnectedRoles = INTRO_COMFY_REF_ROLES.filter((role) => !!String(graphConnectedSourceNodeIdsByRole?.[role] || "").trim());
+  const hasGraphConnectedRefs = graphConnectedRoles.some((role) => (graphConnectedRefsByRole?.[role] || []).length > 0);
   const connectedRefsByRole = normalizeIntroConnectedRefsByRole(
     Object.fromEntries(
-      INTRO_COMFY_REF_ROLES.map((role) => [
-        role,
-        [...new Set([
-          ...(plannerConnectedRefsByRole?.[role] || []),
-          ...(graphRefPackage?.connectedRefsByRole?.[role] || []),
-        ])],
-      ])
+      INTRO_COMFY_REF_ROLES.map((role) => {
+        const graphSourceNodeId = String(graphConnectedSourceNodeIdsByRole?.[role] || "").trim();
+        if (graphSourceNodeId) {
+          return [role, graphConnectedRefsByRole?.[role] || []];
+        }
+        if (!hasGraphConnectedRefs) {
+          return [role, plannerConnectedRefsByRole?.[role] || []];
+        }
+        return [role, []];
+      })
     )
   );
   const activeRefRoles = INTRO_COMFY_REF_ROLES.filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
@@ -1653,6 +1663,9 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     summary: summaryParts.join(" • ") || "не подключён",
     autoTitle: buildIntroFrameAutoTitle({ textValue, scenes }),
     connectedRefsByRole,
+    graphConnectedRefsByRole,
+    plannerConnectedRefsByRole,
+    graphConnectedSourceNodeIdsByRole,
     roleAwareCastSummary,
     heroParticipants,
     supportingParticipants,
@@ -7715,9 +7728,16 @@ onClipSec: (nodeId, value) => {
                     previewFormat: payload.previewFormat,
                     stylePreset: payload.stylePreset,
                     connectedRefsByRole: payload.connectedRefsByRole,
+                    rawConnectedRefsByRoleCounts: Object.fromEntries(
+                      INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(freshContext?.graphConnectedRefsByRole?.[role]) ? freshContext.graphConnectedRefsByRole[role].length : 0])
+                    ),
+                    plannerRefsByRoleCounts: Object.fromEntries(
+                      INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(freshContext?.plannerConnectedRefsByRole?.[role]) ? freshContext.plannerConnectedRefsByRole[role].length : 0])
+                    ),
                     connectedRefsByRoleCounts: Object.fromEntries(
                       INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(payload?.connectedRefsByRole?.[role]) ? payload.connectedRefsByRole[role].length : 0])
                     ),
+                    graphConnectedSourceNodeIdsByRole: freshContext?.graphConnectedSourceNodeIdsByRole || {},
                     introMustAppear: payload.introMustAppear,
                     introMustNotAppear: payload.introMustNotAppear,
                     connectedGenderLocksByRole: payload.connectedGenderLocksByRole,
