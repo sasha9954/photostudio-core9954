@@ -5946,6 +5946,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
         progressPercent=5,
         current=0,
         total=total_steps,
+        totalSteps=total_steps,
         sceneCount=scene_count,
         introIncluded=has_intro,
         introDurationSec=intro_duration if has_intro else 0,
@@ -5966,6 +5967,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 label=intro_label,
                 current=1,
                 total=total_steps,
+                totalSteps=total_steps,
                 progressPercent=max(10, min(70, intro_progress)),
             )
             intro_path, intro_err = _resolve_media_input(intro_image_url, temp_files)
@@ -6041,6 +6043,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 label=stage_label,
                 current=current_step,
                 total=total_steps,
+                totalSteps=total_steps,
                 progressPercent=max(10, min(70, progress)),
             )
 
@@ -6101,6 +6104,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             progressPercent=80,
             current=total_steps,
             total=total_steps,
+            totalSteps=total_steps,
         )
 
         concat_list_fd, concat_list_path = tempfile.mkstemp(prefix="clip_concat_", suffix=".txt")
@@ -6203,6 +6207,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             audioApplied=audio_applied,
             current=total_steps,
             total=total_steps,
+            totalSteps=total_steps,
             sceneCount=scene_count,
             introIncluded=has_intro,
             introDurationSec=intro_duration if has_intro else 0,
@@ -6266,6 +6271,7 @@ def clip_assemble(payload: AssembleClipIn):
             "label": "queued",
             "current": 0,
             "total": total_steps,
+            "totalSteps": total_steps,
             "progressPercent": 0,
             "finalVideoUrl": None,
             "audioApplied": False,
