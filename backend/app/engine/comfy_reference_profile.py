@@ -17,6 +17,13 @@ from app.engine.gemini_rest import post_generate_content
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
 HUMAN_ROLES = {"character_1", "character_2", "character_3", "group"}
 MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024
+ANIMAL_SPECIES_TERMS = {
+    "dog": ["dog", "dogs", "canine", "puppy", "hound", "собака", "пес", "пёс", "щенок"],
+    "cat": ["cat", "cats", "feline", "kitten", "kitty", "кошка", "кот", "котенок", "котёнок"],
+    "wolf": ["wolf", "wolves", "canis lupus", "волк", "волчица"],
+    "horse": ["horse", "horses", "equine", "stallion", "mare", "лошадь", "конь"],
+    "bird": ["bird", "avian", "parrot", "eagle", "owl", "птица", "попугай", "орел", "орёл", "сова"],
+}
 
 
 def _resolve_reference_url(url: str) -> str:
@@ -161,7 +168,7 @@ def _vision_profile_prompt(role: str, entity_type: str) -> str:
             "visualProfile must include keys: genderPresentation, ageRange, hair, face, bodyType, outfit, accessories, dominantColors"
         ),
         "animal": (
-            "visualProfile must include keys: species, breedLikeAppearance, coat, bodyType, sizeClass, morphology"
+            "visualProfile must include keys: species, speciesLock, speciesConfidence, breedLikeAppearance, coat, furPattern, bodyType, bodyBuild, sizeClass, morphology, muzzleShape, earShape, tailShape"
         ),
         "object": (
             "visualProfile must include keys: objectCategory, silhouette, material, dominantColors, distinctiveDetails, scaleClass"
@@ -176,7 +183,12 @@ def _vision_profile_prompt(role: str, entity_type: str) -> str:
     visual_profile_requirements = schemas.get(entity_type, "visualProfile must include stable identifying cues for this role")
     entity_constraints = {
         "human": "Preserve identity-level cues, not a generic fashion summary. Do not generalize hair color/style. Do not generalize outfit signature.",
-        "animal": "Do not generalize species/breed-like appearance. Do not generalize coat pattern or morphology.",
+        "animal": (
+            "Do not generalize species/breed-like appearance. "
+            "Species comes first and must stay locked. "
+            "Never loosely classify a dog as a cat or a cat as a dog. "
+            "Preserve coat pattern, muzzle shape, ear shape, tail shape, body build, and other morphology cues."
+        ),
         "object": "Do not generalize object category, silhouette, material, or distinctive geometry.",
     }
     strict_entity_constraints = entity_constraints.get(entity_type, "")
@@ -189,6 +201,8 @@ def _vision_profile_prompt(role: str, entity_type: str) -> str:
         f"Role: {role}. Expected entityType: {entity_type}. "
         f"{visual_profile_requirements}. "
         f"{strict_entity_constraints} "
+        "For animal references, identify species first, then breed-like cues. "
+        "If uncertain, keep speciesLock on the strongest supported species instead of guessing a different species. "
         "Do not include any other top-level keys."
     )
 
@@ -264,6 +278,75 @@ def _extract_tokens(items: list[dict[str, str]]) -> list[str]:
             if clean:
                 tokens.append(clean)
     return tokens
+
+
+def _count_term_hits(text: str, variants: list[str]) -> int:
+    haystack = f" {str(text or '').strip().lower()} "
+    hits = 0
+    for variant in variants:
+        needle = str(variant or "").strip().lower()
+        if needle and needle in haystack:
+            hits += 1
+    return hits
+
+
+def _detect_animal_species_from_text(*parts: Any) -> tuple[str, str]:
+    joined = " ".join(str(part or "") for part in parts if part not in (None, "")).strip().lower()
+    if not joined:
+        return "", "low"
+
+    scores = {
+        species: _count_term_hits(joined, variants)
+        for species, variants in ANIMAL_SPECIES_TERMS.items()
+    }
+    best_species, best_score = max(scores.items(), key=lambda item: item[1], default=("", 0))
+    if not best_species or best_score <= 0:
+        return "", "low"
+
+    sorted_scores = sorted(scores.values(), reverse=True)
+    runner_up = sorted_scores[1] if len(sorted_scores) > 1 else 0
+    confidence = "high" if best_score >= max(2, runner_up + 1) else "medium"
+    return best_species, confidence
+
+
+def _apply_animal_species_lock(profile: dict[str, Any], items: list[dict[str, str]]) -> dict[str, Any]:
+    if not isinstance(profile, dict):
+        return profile
+
+    visual_profile = profile.get("visualProfile") if isinstance(profile.get("visualProfile"), dict) else {}
+    token_text = " ".join(_extract_tokens(items))
+    candidate_species, candidate_confidence = _detect_animal_species_from_text(
+        visual_profile.get("species"),
+        visual_profile.get("speciesLock"),
+        visual_profile.get("breedLikeAppearance"),
+        visual_profile.get("morphology"),
+        visual_profile.get("muzzleShape"),
+        visual_profile.get("earShape"),
+        visual_profile.get("tailShape"),
+        profile.get("invariants"),
+        profile.get("forbiddenChanges"),
+        token_text,
+    )
+    if not candidate_species:
+        return profile
+
+    profile["visualProfile"] = {
+        **visual_profile,
+        "species": candidate_species,
+        "speciesLock": candidate_species,
+        "speciesConfidence": candidate_confidence,
+    }
+
+    invariants = profile.get("invariants") if isinstance(profile.get("invariants"), list) else []
+    forbidden_changes = profile.get("forbiddenChanges") if isinstance(profile.get("forbiddenChanges"), list) else []
+    species_invariant = f"species_lock={candidate_species}"
+    if species_invariant not in invariants:
+        invariants = [species_invariant, *invariants]
+    if "species drift" not in forbidden_changes:
+        forbidden_changes = ["species drift", *forbidden_changes]
+    profile["invariants"] = invariants
+    profile["forbiddenChanges"] = forbidden_changes
+    return profile
 
 
 def _role_invariants(role: str, items: list[dict[str, str]]) -> list[str]:
@@ -459,6 +542,8 @@ def build_reference_profiles(refs_by_role: dict[str, Any] | None) -> dict[str, A
             "profilingModel": vision_model,
             "profilingError": vision_error,
         }
+        if role == "animal":
+            profiles[role] = _apply_animal_species_lock(profiles[role], clean_items)
     return profiles
 
 

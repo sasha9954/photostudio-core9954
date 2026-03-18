@@ -61,6 +61,13 @@ class ClipComfyAnalyzeRefIn(BaseModel):
 
 
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
+ANIMAL_LABEL_BY_SPECIES = {
+    "dog": "собака",
+    "cat": "кот",
+    "wolf": "волк",
+    "horse": "лошадь",
+    "bird": "птица",
+}
 
 
 def _extract_profile_tokens(profile: dict[str, Any] | None) -> str:
@@ -181,13 +188,25 @@ def _build_human_label(profile: dict[str, Any] | None) -> str:
 
 
 def _build_animal_label(profile: dict[str, Any] | None) -> str:
+    source = profile if isinstance(profile, dict) else {}
+    visual_profile = source.get("visualProfile") if isinstance(source.get("visualProfile"), dict) else {}
+    locked_species = str(
+        visual_profile.get("speciesLock")
+        or visual_profile.get("species")
+        or source.get("speciesLock")
+        or source.get("species")
+        or ""
+    ).strip().lower()
+    if locked_species in ANIMAL_LABEL_BY_SPECIES:
+        return ANIMAL_LABEL_BY_SPECIES[locked_species]
+
     tokens = _extract_profile_tokens(profile)
+    if _has_any_token(tokens, ["собак", "dog", "canine", "puppy", "hound"]):
+        return "собака"
     if _has_any_token(tokens, ["волк", "wolf"]):
         return "волк"
-    if _has_any_token(tokens, ["кот", "кошка", "cat", "feline"]):
+    if _has_any_token(tokens, ["кот", "кошка", "cat", "feline", "kitten"]):
         return "кот"
-    if _has_any_token(tokens, ["собак", "dog", "canine"]):
-        return "собака"
     if _has_any_token(tokens, ["лошад", "horse", "equine"]):
         return "лошадь"
     if _has_any_token(tokens, ["птиц", "bird", "avian"]):

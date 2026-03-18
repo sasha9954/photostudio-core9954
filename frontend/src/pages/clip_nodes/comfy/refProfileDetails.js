@@ -55,8 +55,13 @@ export function formatRefProfileDetails(profile) {
     pushLine("особенности", pick("features", "distinctiveFeatures", "marks"), lines);
   } else if (type.includes("animal") || type.includes("pet") || type.includes("живот")) {
     pushLine("вид", pick("species", "animalType", "breed"), lines);
-    pushLine("окрас", pick("color", "coatColor", "furColor"), lines);
-    pushLine("особенности", pick("features", "distinctiveFeatures", "marks"), lines);
+    pushLine("порода / тип", pick("speciesLock", "breedLikeAppearance", "breed"), lines);
+    pushLine("окрас", pick("coat", "furPattern", "color", "coatColor", "furColor"), lines);
+    pushLine("морда", pick("muzzleShape", "muzzle"), lines);
+    pushLine("уши", pick("earShape", "ears"), lines);
+    pushLine("хвост", pick("tailShape", "tail"), lines);
+    pushLine("телосложение", pick("bodyBuild", "bodyType", "sizeClass"), lines);
+    pushLine("особенности", pick("features", "distinctiveFeatures", "marks", "morphology"), lines);
   } else if (type.includes("location") || type.includes("place") || type.includes("локац") || type.includes("environment")) {
     pushLine("место", pick("place", "location", "scene", "setting", "environmentType"), lines);
     pushLine("поверхность", pick("surface", "ground"), lines);

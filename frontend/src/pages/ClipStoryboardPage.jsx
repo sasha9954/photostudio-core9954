@@ -45,28 +45,47 @@ import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
 // -------------------------
 const PORT_COLORS = {
   audio: "#ff5f7d",
-  text: "#8bb8ff",
-  ref_character: "#34d5d7",
-  ref_character_1: "#34d5d7",
-  ref_character_2: "#00bcd4",
-  ref_character_3: "#26c6da",
-  ref_animal: "#ffb74d",
-  ref_group: "#f06292",
-  ref_location: "#b37bff",
-  ref_style: "#ffc25b",
-  ref_items: "#93dd6f",
-  ref_props: "#93dd6f",
-  plan: "#4dd8ff",
-  comfy_plan: "#4dd8ff",
-  comfy_storyboard: "#6aa8ff",
-  comfy_video: "#7df9ff",
+  text: "#6fa8ff",
+  ref_character: "#16d4de",
+  ref_character_1: "#16d4de",
+  ref_character_2: "#00bdd6",
+  ref_character_3: "#1fc8ff",
+  ref_animal: "#ffb347",
+  ref_group: "#ff5f97",
+  ref_location: "#a56fff",
+  ref_style: "#ffcb52",
+  ref_items: "#8ddf48",
+  ref_props: "#8ddf48",
+  plan: "#38d4ff",
+  comfy_plan: "#38d4ff",
+  comfy_storyboard: "#5c95ff",
+  comfy_video: "#5ef2ff",
   intro_context: "#ff9d5c",
-  intro_frame: "#ffcf5c",
+  intro_frame: "#ffd25a",
   intro_to_assembly: "#ffb35c",
-  brain_to_storyboard: "#4dd8ff",
-  storyboard_to_assembly: "#6aa8ff",
-  assembly: "#6aa8ff",
-  brain: "#c480ff",
+  brain_to_storyboard: "#38d4ff",
+  storyboard_to_assembly: "#5c95ff",
+  assembly: "#5c95ff",
+  brain: "#bb72ff",
+};
+
+const HANDLE_BASE_STYLE = {
+  width: 12,
+  height: 12,
+  borderRadius: 999,
+  border: "2px solid rgba(255,255,255,0.82)",
+  opacity: 1,
+};
+
+const COMFY_BRAIN_REF_HANDLE_CONFIG = {
+  ref_character_1: { sourceType: "refNode", sourceHandle: "ref_character" },
+  ref_character_2: { sourceType: "refCharacter2", sourceHandle: "ref_character_2" },
+  ref_character_3: { sourceType: "refCharacter3", sourceHandle: "ref_character_3" },
+  ref_animal: { sourceType: "refAnimal", sourceHandle: "ref_animal" },
+  ref_group: { sourceType: "refGroup", sourceHandle: "ref_group" },
+  ref_location: { sourceType: "refNode", sourceHandle: "ref_location" },
+  ref_style: { sourceType: "refNode", sourceHandle: "ref_style" },
+  ref_props: { sourceType: "refNode", sourceHandle: "ref_items" },
 };
 
 const CLIP_TRACE_PERSIST = false;
@@ -83,11 +102,9 @@ function portColor(key) {
 function handleStyle(kind, extra = {}) {
   const color = portColor(kind);
   return {
+    ...HANDLE_BASE_STYLE,
     background: color,
-    width: 12,
-    height: 12,
-    border: "2px solid rgba(255,255,255,0.42)",
-    boxShadow: `0 0 0 1px rgba(0,0,0,0.55), 0 0 10px ${color}99`,
+    boxShadow: `0 0 0 1px rgba(0,0,0,0.72), 0 0 0 2px ${color}26`,
     ...extra,
   };
 }
@@ -97,38 +114,27 @@ function isBrainInput(handleId) {
 }
 
 function isComfyBrainInput(handleId) {
-  return [
-    "audio",
-    "text",
-    "ref_character_1",
-    "ref_character_2",
-    "ref_character_3",
-    "ref_animal",
-    "ref_group",
-    "ref_location",
-    "ref_style",
-    "ref_props",
-  ].includes(handleId);
+  return ["audio", "text", ...Object.keys(COMFY_BRAIN_REF_HANDLE_CONFIG)].includes(handleId);
 }
 
 const EDGE_STYLE_BY_KIND = {
-  audio: { color: PORT_COLORS.audio, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  text: { color: PORT_COLORS.text, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_character: { color: PORT_COLORS.ref_character, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_character_1: { color: PORT_COLORS.ref_character_1, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_location: { color: PORT_COLORS.ref_location, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_style: { color: PORT_COLORS.ref_style, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_items: { color: PORT_COLORS.ref_items, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_props: { color: PORT_COLORS.ref_props, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_character_2: { color: PORT_COLORS.ref_character_2, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_character_3: { color: PORT_COLORS.ref_character_3, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_animal: { color: PORT_COLORS.ref_animal, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  ref_group: { color: PORT_COLORS.ref_group, strokeWidth: 2.1, opacity: 0.95, animatedDash: true },
-  comfy_plan: { color: PORT_COLORS.comfy_plan, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
-  comfy_storyboard: { color: PORT_COLORS.comfy_storyboard, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
-  comfy_video: { color: PORT_COLORS.comfy_video, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
-  intro_context: { color: PORT_COLORS.intro_context, strokeWidth: 2.3, opacity: 0.98, animatedDash: true },
-  intro_frame: { color: PORT_COLORS.intro_frame, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
+  audio: { color: PORT_COLORS.audio, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  text: { color: PORT_COLORS.text, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_character: { color: PORT_COLORS.ref_character, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_character_1: { color: PORT_COLORS.ref_character_1, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_location: { color: PORT_COLORS.ref_location, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_style: { color: PORT_COLORS.ref_style, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_items: { color: PORT_COLORS.ref_items, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_props: { color: PORT_COLORS.ref_props, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_character_2: { color: PORT_COLORS.ref_character_2, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_character_3: { color: PORT_COLORS.ref_character_3, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_animal: { color: PORT_COLORS.ref_animal, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  ref_group: { color: PORT_COLORS.ref_group, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  comfy_plan: { color: PORT_COLORS.comfy_plan, strokeWidth: 2.7, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  comfy_storyboard: { color: PORT_COLORS.comfy_storyboard, strokeWidth: 2.7, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  comfy_video: { color: PORT_COLORS.comfy_video, strokeWidth: 2.7, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  intro_context: { color: PORT_COLORS.intro_context, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  intro_frame: { color: PORT_COLORS.intro_frame, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   intro_to_assembly: { color: PORT_COLORS.intro_to_assembly, strokeWidth: 2.6, opacity: 1, animatedDash: true },
   plan: {
     color: PORT_COLORS.plan,
@@ -155,12 +161,13 @@ const EDGE_STYLE_BY_KIND = {
     animatedDash: true,
   },
   assembly: { color: PORT_COLORS.assembly, strokeWidth: 2.2, opacity: 0.95, animatedDash: true },
-  default: { color: "#8c8c8c", strokeWidth: 2, opacity: 0.9, animatedDash: true },
+  default: { color: "#8c8c8c", strokeWidth: 2.2, opacity: 0.96, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
 };
 
 function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "", targetType = "", existingKind = "" }) {
   if (targetType === "brainNode" && isBrainInput(targetHandle)) return targetHandle;
   if (targetType === "comfyBrain" && isComfyBrainInput(targetHandle)) return targetHandle;
+  if (sourceType === "comfyBrain" && isComfyBrainInput(sourceHandle)) return sourceHandle;
 
   if (targetType === "introFrame") {
     if (targetHandle === "story_context") return "intro_context";
@@ -8236,20 +8243,15 @@ const hydrate = useCallback((source = "unknown") => {
 
         if (dst.type === 'comfyBrain') {
           const h = params.targetHandle || '';
+          const sourceHandle = params.sourceHandle || '';
+          const refCfg = COMFY_BRAIN_REF_HANDLE_CONFIG[h];
           const ok =
-            (h === 'audio' && src.type === 'audioNode' && (params.sourceHandle || '') === 'audio') ||
-            (h === 'text' && src.type === 'textNode' && (params.sourceHandle || '') === 'text') ||
-            (h === 'ref_character_1' && src.type === 'refNode' && (params.sourceHandle || '') === 'ref_character') ||
-            (h === 'ref_character_2' && src.type === 'refCharacter2' && (params.sourceHandle || '') === 'ref_character_2') ||
-            (h === 'ref_character_3' && src.type === 'refCharacter3' && (params.sourceHandle || '') === 'ref_character_3') ||
-            (h === 'ref_animal' && src.type === 'refAnimal' && (params.sourceHandle || '') === 'ref_animal') ||
-            (h === 'ref_group' && src.type === 'refGroup' && (params.sourceHandle || '') === 'ref_group') ||
-            (h === 'ref_location' && src.type === 'refNode' && (params.sourceHandle || '') === 'ref_location') ||
-            (h === 'ref_style' && src.type === 'refNode' && (params.sourceHandle || '') === 'ref_style') ||
-            (h === 'ref_props' && src.type === 'refNode' && (params.sourceHandle || '') === 'ref_items');
+            (h === 'audio' && src.type === 'audioNode' && sourceHandle === 'audio') ||
+            (h === 'text' && src.type === 'textNode' && sourceHandle === 'text') ||
+            (!!refCfg && src.type === refCfg.sourceType && sourceHandle === refCfg.sourceHandle);
           if (!ok) return eds;
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === h));
-          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: h, sourceType: src.type, targetType: dst.type });
+          const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
           return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
 
