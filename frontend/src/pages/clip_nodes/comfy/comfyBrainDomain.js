@@ -142,6 +142,12 @@ export function normalizeComfyScenePrompts(scene = {}) {
   const emotion = String(scene?.emotion || "").trim();
   const cameraIntent = String(scene?.cameraIntent || "").trim();
   const continuityNotes = String(scene?.continuityNotes || scene?.continuity || "").trim();
+  const durationSecRaw = Number(scene?.durationSec);
+  const durationSec = Number.isFinite(durationSecRaw) ? durationSecRaw : 4;
+  const generationDurationSecRaw = Number(scene?.generationDurationSec);
+  const generationDurationSec = Number.isFinite(generationDurationSecRaw)
+    ? Math.max(1, Math.ceil(generationDurationSecRaw))
+    : Math.max(1, Math.ceil(durationSec || 4));
   const plannedGenerator = String(scene?.plannedGenerator || "video").trim() || "video";
   const futureGeneratorHint = String(scene?.futureGeneratorHint || "video").trim() || "video";
   const imagePromptSyncStatus = [PROMPT_SYNC_STATUS.synced, PROMPT_SYNC_STATUS.needsSync, PROMPT_SYNC_STATUS.syncing, PROMPT_SYNC_STATUS.syncError].includes(scene?.imagePromptSyncStatus)
@@ -171,6 +177,8 @@ export function normalizeComfyScenePrompts(scene = {}) {
     emotion,
     cameraIntent,
     continuityNotes,
+    durationSec,
+    generationDurationSec,
     plannedGenerator,
     futureGeneratorHint,
     imagePrompt: imagePromptEn,
@@ -479,6 +487,7 @@ export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {
       continuityNotes,
     });
     const durationSec = durations[idx];
+    const generationDurationSec = Math.ceil(durationSec);
     const startSec = cursorSec;
     const endSec = startSec + durationSec;
     cursorSec = endSec;
@@ -495,6 +504,7 @@ export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {
       startSec,
       endSec,
       durationSec,
+      generationDurationSec,
       sceneNarrativeStep: `step_${idx + 1}`,
       sceneGoal: blueprint.sceneGoal,
       storyMission: plannerInput.storyMissionSummary || "",
@@ -564,7 +574,7 @@ export function buildMockComfyScenes(meta = {}) {
     styleRules: plannerInput?.styleRules || meta?.styleRules || {},
     audioStoryPolicy: plannerInput?.audioStoryPolicy || meta?.audioStoryPolicy || AUDIO_STORY_POLICIES.lyrics_music,
     textInfluence: String(plannerInput?.textInfluence || meta?.textInfluence || "none"),
-    sceneContractSchemaVersion: "comfy_scene_contract_v2",
+    sceneContractSchemaVersion: "comfy_scene_contract_v3",
   };
   plannerMeta.globalContinuity = buildComfyGlobalContinuity({ plannerInput, refsByRole: plannerInput?.refsByRole || {}, sceneRoleModel: plannerMeta.sceneRoleModel });
   return buildComfyScenesFromPlanner({ plannerInput, plannerMeta });
