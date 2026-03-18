@@ -632,7 +632,100 @@ function resolveAssetUrl(url) {
 const SCENE_IMAGE_FORMATS = ["9:16", "1:1", "16:9"];
 const DEFAULT_SCENE_IMAGE_FORMAT = "9:16";
 const USE_COMFY_MOCK = false;
-const INTRO_STYLE_PRESETS = ["cinematic", "youtube", "dark_neon", "thriller", "fashion", "glitch"];
+const INTRO_STYLE_PRESET_META = {
+  cinematic: {
+    value: "cinematic",
+    label: "Cinematic",
+    shortDescription: "Премиальный film-poster кадр с серьёзным драматичным светом.",
+    uiHint: "Poster-grade",
+    accent: "#f6d365",
+    secondary: "#5ee7df",
+    background: "radial-gradient(circle at 24% 18%, rgba(246,211,101,0.76), rgba(94,231,223,0.24) 34%, rgba(10,16,28,1) 80%)",
+    promptRules: [
+      "ощущение opening shot / movie poster, clean composition и premium serious mood",
+      "драматичный направленный свет, выразительный контраст, аккуратная иерархия кадра",
+      "thumbnail energy сдержанная и дорогая, без дешёвого clickbait",
+    ],
+    forbidden: ["cheap clickbait look", "fake UI / arrows / circles", "collage или мусорная перегрузка"],
+  },
+  youtube: {
+    value: "youtube",
+    label: "YouTube",
+    shortDescription: "Читаемый thumbnail-first кадр с сильным focal point и ясной иерархией.",
+    uiHint: "Readable thumbnail",
+    accent: "#ffcf5c",
+    secondary: "#ff6b3d",
+    background: "radial-gradient(circle at 24% 20%, rgba(255,207,92,0.88), rgba(255,107,61,0.38) 35%, rgba(9,15,32,1) 78%)",
+    promptRules: [
+      "ясный главный объект, сильная subject hierarchy и читаемость в маленьком размере",
+      "больше thumbnail energy и punch, но всё ещё clean / premium",
+      "акцент на одном визуальном обещании кадра, без перегруза",
+    ],
+    forbidden: ["red arrows / fake UI / badges", "reaction-meme trash", "too many competing focal points"],
+  },
+  dark_neon: {
+    value: "dark_neon",
+    label: "Dark Neon",
+    shortDescription: "Тёмная cinematic сцена с контролируемыми cyan/magenta/violet акцентами.",
+    uiHint: "Cyber glow",
+    accent: "#6ef2ff",
+    secondary: "#b86dff",
+    background: "radial-gradient(circle at 25% 18%, rgba(110,242,255,0.5), rgba(184,109,255,0.28) 36%, rgba(4,8,20,1) 80%)",
+    promptRules: [
+      "dark scene + controlled neon accents, cinematic cyber glow",
+      "контрастный mood, аккуратный rim light и читаемый focal point",
+      "палитра неоновая, но сдержанная и дорогая, не кислотный мусор",
+    ],
+    forbidden: ["acid rainbow overload", "unreadable overglow", "chaotic cheap cyberpunk clutter"],
+  },
+  thriller: {
+    value: "thriller",
+    label: "Thriller",
+    shortDescription: "Напряжённый low-key кадр с тревогой, опасностью и мрачным драматизмом.",
+    uiHint: "Suspense mood",
+    accent: "#ff6b6b",
+    secondary: "#ffd166",
+    background: "radial-gradient(circle at 22% 18%, rgba(255,107,107,0.55), rgba(255,209,102,0.18) 34%, rgba(8,8,12,1) 80%)",
+    promptRules: [
+      "suspense-first composition, low-key lighting и тревожная атмосфера",
+      "кадр про напряжение и ожидание, а не про gore или horror-camp",
+      "тени глубже, свет выборочный, настроение кинематографично-мрачное",
+    ],
+    forbidden: ["cheap horror camp", "blood / gore overload", "slasher poster clichés"],
+  },
+  fashion: {
+    value: "fashion",
+    label: "Fashion",
+    shortDescription: "Premium editorial cover с polished posing и luxury finish.",
+    uiHint: "Editorial polish",
+    accent: "#ffd7f0",
+    secondary: "#8ae5ff",
+    background: "radial-gradient(circle at 24% 20%, rgba(255,215,240,0.78), rgba(138,229,255,0.28) 36%, rgba(14,15,28,1) 80%)",
+    promptRules: [
+      "ощущение luxury editorial cover / campaign still",
+      "чистая stylish композиция, уверенная posing, polished premium surface",
+      "look дорогой и curated, без mass-market banner energy",
+    ],
+    forbidden: ["cheap ecommerce banner feel", "sales-ad clutter", "mass-market promo styling"],
+  },
+  glitch: {
+    value: "glitch",
+    label: "Glitch",
+    shortDescription: "Контролируемая digital distortion aesthetic без потери главного focal point.",
+    uiHint: "Controlled distortion",
+    accent: "#8eff8c",
+    secondary: "#ff6ef2",
+    background: "radial-gradient(circle at 24% 20%, rgba(142,255,140,0.58), rgba(255,110,242,0.28) 32%, rgba(4,10,18,1) 78%)",
+    promptRules: [
+      "stylized disruption и digital texture как осознанный приём, не шум",
+      "главный subject остаётся читаемым, композиция не разваливается",
+      "модерновый synthetic mood, но без unreadable mess",
+    ],
+    forbidden: ["full-frame unreadable corruption", "broken-image sludge", "destroyed focal hierarchy"],
+  },
+};
+
+const INTRO_STYLE_PRESETS = Object.keys(INTRO_STYLE_PRESET_META);
 
 const PARSE_PROGRESS_PHRASES = [
   "Анализирую входы",
@@ -681,52 +774,7 @@ function normalizeIntroDurationSec(value) {
 
 function getIntroStyleMeta(stylePreset = "cinematic") {
   const normalized = normalizeIntroStylePreset(stylePreset);
-  if (normalized === "youtube") {
-    return {
-      label: "YouTube",
-      accent: "#ffcf5c",
-      secondary: "#ff6b3d",
-      background: "radial-gradient(circle at 24% 20%, rgba(255,207,92,0.88), rgba(255,107,61,0.38) 35%, rgba(9,15,32,1) 78%)",
-    };
-  }
-  if (normalized === "dark_neon") {
-    return {
-      label: "Dark Neon",
-      accent: "#6ef2ff",
-      secondary: "#b86dff",
-      background: "radial-gradient(circle at 25% 18%, rgba(110,242,255,0.5), rgba(184,109,255,0.28) 36%, rgba(4,8,20,1) 80%)",
-    };
-  }
-  if (normalized === "thriller") {
-    return {
-      label: "Thriller",
-      accent: "#ff6b6b",
-      secondary: "#ffd166",
-      background: "radial-gradient(circle at 22% 18%, rgba(255,107,107,0.55), rgba(255,209,102,0.18) 34%, rgba(8,8,12,1) 80%)",
-    };
-  }
-  if (normalized === "fashion") {
-    return {
-      label: "Fashion",
-      accent: "#ffd7f0",
-      secondary: "#8ae5ff",
-      background: "radial-gradient(circle at 24% 20%, rgba(255,215,240,0.78), rgba(138,229,255,0.28) 36%, rgba(14,15,28,1) 80%)",
-    };
-  }
-  if (normalized === "glitch") {
-    return {
-      label: "Glitch",
-      accent: "#8eff8c",
-      secondary: "#ff6ef2",
-      background: "radial-gradient(circle at 24% 20%, rgba(142,255,140,0.58), rgba(255,110,242,0.28) 32%, rgba(4,10,18,1) 78%)",
-    };
-  }
-  return {
-    label: "Cinematic",
-    accent: "#f6d365",
-    secondary: "#5ee7df",
-    background: "radial-gradient(circle at 24% 18%, rgba(246,211,101,0.76), rgba(94,231,223,0.24) 34%, rgba(10,16,28,1) 80%)",
-  };
+  return INTRO_STYLE_PRESET_META[normalized] || INTRO_STYLE_PRESET_META.cinematic;
 }
 
 function resolveSceneTransitionType(scene) {
@@ -852,6 +900,7 @@ function getSceneRequestedDurationSec(scene) {
 
 const INTRO_FRAME_PREVIEW_KINDS = {
   UPLOADED: "uploaded_image",
+  BACKEND_GENERATED: "backend_generated",
   GENERATED_LOCAL: "generated_local",
 };
 
@@ -870,6 +919,7 @@ const INTRO_FRAME_PREVIEW_FORMAT_OPTIONS = [
 function normalizeIntroFramePreviewKind(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === INTRO_FRAME_PREVIEW_KINDS.UPLOADED) return INTRO_FRAME_PREVIEW_KINDS.UPLOADED;
+  if (normalized === INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED) return INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED;
   if (normalized === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) return INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL;
   return "";
 }
@@ -1002,7 +1052,10 @@ function buildIntroFrameComparablePayload(introFrame) {
     previewFormat: normalizeIntroFramePreviewFormat(introFrame?.previewFormat),
     previewKind,
     generatedAt: String(introFrame?.generatedAt || "").trim() || null,
-    imageUrl: previewKind === INTRO_FRAME_PREVIEW_KINDS.UPLOADED ? String(introFrame?.imageUrl || "").trim() : "",
+    imageUrl: (
+      previewKind === INTRO_FRAME_PREVIEW_KINDS.UPLOADED
+      || previewKind === INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED
+    ) ? String(introFrame?.imageUrl || "").trim() : "",
   };
 }
 
@@ -1341,6 +1394,26 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     summary: summaryParts.join(" • ") || "не подключён",
     autoTitle: buildIntroFrameAutoTitle({ textValue, scenes }),
   };
+}
+
+function buildIntroFrameStoryContextText(context = {}) {
+  const scenes = Array.isArray(context?.scenes) ? context.scenes : [];
+  const storyBeats = scenes
+    .slice(0, 6)
+    .map((scene, idx) => {
+      const beat = truncateIntroText(getSceneUiDescription(scene) || scene?.title || scene?.prompt || "", 120);
+      if (!beat) return "";
+      const t0 = Number(scene?.t0 ?? scene?.start);
+      const t1 = Number(scene?.t1 ?? scene?.end);
+      const timing = Number.isFinite(t0) && Number.isFinite(t1) ? ` (${t0}s→${t1}s)` : "";
+      return `${idx + 1}. ${beat}${timing}`;
+    })
+    .filter(Boolean);
+
+  return [
+    String(context?.summary || "").trim(),
+    storyBeats.length ? `Opening beats: ${storyBeats.join(" | ")}` : "",
+  ].filter(Boolean).join(" • ");
 }
 
 function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", contextSummary = "", previewFormat = INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE } = {}) {
@@ -2729,6 +2802,7 @@ function IntroFrameNode({ id, data }) {
   const previewFormatMeta = getIntroFramePreviewFormatMeta(previewFormat);
   const durationSec = normalizeIntroDurationSec(data?.durationSec);
   const status = String(data?.status || "idle");
+  const errorMessage = String(data?.error || "").trim();
   const previewTitle = String(data?.title || "INTRO FRAME").trim() || "INTRO FRAME";
   const previewContext = String(data?.contextSummary || "Story preview").trim() || "Story preview";
   const denseTitle = previewTitle.length > 44;
@@ -2744,6 +2818,9 @@ function IntroFrameNode({ id, data }) {
     : status === "generating" || status === "preview_generating"
       ? "собираем preview..."
       : "черновик";
+  const selectedStylePreset = normalizeIntroStylePreset(data?.stylePreset || "cinematic");
+  const selectedStyleMeta = getIntroStyleMeta(selectedStylePreset);
+  const isGenerating = status === "generating" || status === "preview_generating";
 
   return (
     <>
@@ -2784,47 +2861,98 @@ function IntroFrameNode({ id, data }) {
             <span className="clipSB_small">Auto title по сюжетному контексту</span>
           </label>
 
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 110px 92px", gap: 8 }}>
+          <div style={{ display: "grid", gap: 10, marginTop: 4 }}>
             <label>
               <div className="clipSB_hint" style={{ marginBottom: 6 }}>Style preset</div>
               <select
                 className="clipSB_select"
-                value={normalizeIntroStylePreset(data?.stylePreset || "cinematic")}
+                value={selectedStylePreset}
                 onChange={(e) => data?.onField?.(id, "stylePreset", e.target.value)}
+                style={{ minHeight: 42 }}
               >
-                {INTRO_STYLE_PRESETS.map((item) => <option key={item} value={item}>{item}</option>)}
+                {INTRO_STYLE_PRESETS.map((item) => {
+                  const meta = getIntroStyleMeta(item);
+                  return <option key={item} value={item}>{meta.label} — {meta.uiHint}</option>;
+                })}
               </select>
             </label>
-            <label>
-              <div className="clipSB_hint" style={{ marginBottom: 6 }}>Preview</div>
-              <select
-                className="clipSB_select"
-                value={previewFormat}
-                onChange={(e) => data?.onField?.(id, "previewFormat", e.target.value)}
-              >
-                {INTRO_FRAME_PREVIEW_FORMAT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-              </select>
-            </label>
-            <label>
-              <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
-              <input
-                className="clipSB_input"
-                type="number"
-                min="0.5"
-                max="8"
-                step="0.1"
-                value={durationSec}
-                onChange={(e) => data?.onField?.(id, "durationSec", e.target.value)}
-              />
-            </label>
+
+            <div
+              style={{
+                borderRadius: 12,
+                padding: "10px 12px",
+                border: `1px solid ${selectedStyleMeta.accent}3d`,
+                background: "rgba(10,14,24,0.74)",
+                boxShadow: `inset 0 0 0 1px ${selectedStyleMeta.accent}12`,
+                display: "grid",
+                gap: 7,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#f5f7ff" }}>{selectedStyleMeta.label}</div>
+                <div
+                  className="clipSB_small"
+                  style={{
+                    flexShrink: 0,
+                    borderRadius: 999,
+                    padding: "3px 8px",
+                    color: selectedStyleMeta.accent,
+                    border: `1px solid ${selectedStyleMeta.accent}55`,
+                    background: "rgba(255,255,255,0.03)",
+                  }}
+                >
+                  {selectedStyleMeta.uiHint}
+                </div>
+              </div>
+              <div className="clipSB_small" style={{ color: "rgba(245,247,255,0.78)", lineHeight: 1.45 }}>
+                {selectedStyleMeta.shortDescription}
+              </div>
+              <div className="clipSB_small" style={{ color: "rgba(207,216,255,0.74)", lineHeight: 1.4 }}>
+                Rules: {selectedStyleMeta.promptRules.join(" • ")}
+              </div>
+              <div className="clipSB_small" style={{ color: "rgba(255,188,188,0.72)", lineHeight: 1.35 }}>
+                Avoid: {selectedStyleMeta.forbidden.join(" • ")}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 92px", gap: 10, alignItems: "end" }}>
+              <label>
+                <div className="clipSB_hint" style={{ marginBottom: 6 }}>Preview</div>
+                <select
+                  className="clipSB_select"
+                  value={previewFormat}
+                  onChange={(e) => data?.onField?.(id, "previewFormat", e.target.value)}
+                  style={{ minHeight: 42 }}
+                >
+                  {INTRO_FRAME_PREVIEW_FORMAT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                </select>
+              </label>
+              <label>
+                <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
+                <input
+                  className="clipSB_input"
+                  type="number"
+                  min="0.5"
+                  max="8"
+                  step="0.1"
+                  value={durationSec}
+                  onChange={(e) => data?.onField?.(id, "durationSec", e.target.value)}
+                />
+              </label>
+            </div>
           </div>
 
           <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
             Story context: {String(data?.contextSummary || "не подключён")}
           </div>
           <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
-            Generate делает локальный intro preview для Assembly, без AI render engine.
+            Generate вызывает backend Gemini generation и сохраняет preview как asset URL.
           </div>
+          {errorMessage ? (
+            <div className="clipSB_small" style={{ color: "#ff9b9b" }}>
+              Ошибка генерации: {errorMessage}
+            </div>
+          ) : null}
 
           <div
             style={{
@@ -2940,8 +3068,8 @@ function IntroFrameNode({ id, data }) {
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)}>
-              {previewUrl ? "Regenerate" : "Generate"}
+            <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
+              {isGenerating ? "Generating..." : (previewUrl ? "Regenerate" : "Generate")}
             </button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
               Загрузить image
@@ -7047,6 +7175,7 @@ onClipSec: (nodeId, value) => {
                         previewKind: INTRO_FRAME_PREVIEW_KINDS.UPLOADED,
                         status: "ready",
                         generatedAt: new Date().toISOString(),
+                        error: "",
                       },
                     }
                     : x)));
@@ -7055,9 +7184,9 @@ onClipSec: (nodeId, value) => {
                 }
               },
               onClearImage: (nodeId) => setNodes((prev) => prev.map((x) => (x.id === nodeId
-                ? { ...x, data: { ...x.data, imageUrl: "", previewKind: "", status: "idle", generatedAt: "" } }
+                ? { ...x, data: { ...x.data, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", error: "" } }
                 : x))),
-              onGenerate: (nodeId) => {
+              onGenerate: async (nodeId) => {
                 const currentNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
                 const freshContext = collectIntroFrameContext({
                   nodeId,
@@ -7067,20 +7196,71 @@ onClipSec: (nodeId, value) => {
                 const nextTitle = currentNode?.data?.autoTitle
                   ? buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes })
                   : String(currentNode?.data?.title || "").trim() || freshContext.autoTitle;
+                const storyContext = buildIntroFrameStoryContextText(freshContext);
+                const payload = {
+                  title: nextTitle,
+                  autoTitle: !!currentNode?.data?.autoTitle,
+                  stylePreset: normalizeIntroStylePreset(currentNode?.data?.stylePreset || "cinematic"),
+                  previewFormat: normalizeIntroFramePreviewFormat(currentNode?.data?.previewFormat),
+                  durationSec: normalizeIntroDurationSec(currentNode?.data?.durationSec),
+                  storyContext,
+                  titleContext: String(freshContext.titleText || "").trim(),
+                  sceneCount: Number(freshContext.sceneCount || 0),
+                  sourceNodeTypes: Array.isArray(freshContext.sourceNodeTypes) ? freshContext.sourceNodeTypes : [],
+                };
+
                 setNodes((prev) => prev.map((x) => (x.id === nodeId
                   ? {
                     ...x,
                     data: {
                       ...x.data,
                       title: nextTitle,
-                      imageUrl: "",
-                      previewKind: INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL,
-                      status: "ready",
-                      generatedAt: new Date().toISOString(),
-                      altTitles: [nextTitle].filter(Boolean),
+                      contextSummary: freshContext.summary,
+                      contextSceneCount: freshContext.sceneCount,
+                      sourceNodeIds: freshContext.sourceNodeIds,
+                      sourceNodeTypes: freshContext.sourceNodeTypes,
+                      status: "generating",
+                      error: "",
                     },
                   }
                   : x)));
+
+                try {
+                  const out = await fetchJson("/api/clip/intro/generate", {
+                    method: "POST",
+                    body: payload,
+                  });
+                  if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "intro_generation_failed");
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId
+                    ? {
+                      ...x,
+                      data: {
+                        ...x.data,
+                        title: String(out?.title || nextTitle || ""),
+                        imageUrl: String(out.imageUrl || ""),
+                        previewKind: INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED,
+                        status: "ready",
+                        generatedAt: String(out.generatedAt || new Date().toISOString()),
+                        altTitles: [String(out?.title || nextTitle || "")].filter(Boolean),
+                        error: "",
+                      },
+                    }
+                    : x)));
+                } catch (err) {
+                  console.error(err);
+                  const message = String(err?.message || err || "intro_generation_failed");
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId
+                    ? {
+                      ...x,
+                      data: {
+                        ...x.data,
+                        status: x.data?.imageUrl ? "ready" : "idle",
+                        error: message,
+                      },
+                    }
+                    : x)));
+                  notify({ type: "error", message: `INTRO FRAME: ${message}` });
+                }
               },
             },
           };
@@ -7433,6 +7613,7 @@ const hydrate = useCallback((source = "unknown") => {
             data.durationSec = normalizeIntroDurationSec(data.durationSec);
             data.previewFormat = normalizeIntroFramePreviewFormat(data.previewFormat);
             data.imageUrl = String(data.imageUrl || "");
+            data.error = String(data.error || "");
             data.previewKind = getEffectiveIntroFramePreviewKind(data);
             if (data.previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
               data.imageUrl = "";
@@ -7720,7 +7901,7 @@ const hydrate = useCallback((source = "unknown") => {
         id,
         type: "introFrame",
         position: { x: centerX + jitterX, y: centerY + jitterY },
-        data: { title: "", autoTitle: true, stylePreset: "cinematic", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [] },
+        data: { title: "", autoTitle: true, stylePreset: "cinematic", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
       };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };

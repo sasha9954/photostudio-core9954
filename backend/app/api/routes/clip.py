@@ -130,6 +130,18 @@ class AssembleIntroIn(BaseModel):
     imageUrl: str | None = None
 
 
+class IntroGenerateIn(BaseModel):
+    title: str | None = None
+    autoTitle: bool | None = True
+    stylePreset: str | None = "cinematic"
+    previewFormat: str | None = "16:9"
+    durationSec: int | float | None = 2.5
+    storyContext: str | None = None
+    titleContext: str | None = None
+    sceneCount: int | None = 0
+    sourceNodeTypes: list[str] = Field(default_factory=list)
+
+
 class AssembleClipIn(BaseModel):
     audioUrl: str | None = None
     format: str | None = "9:16"
@@ -739,6 +751,201 @@ def _save_bytes_as_asset(raw: bytes, ext: str = "png") -> str:
     return _asset_url(filename)
 
 
+INTRO_FRAME_STYLE_PRESETS: dict[str, dict[str, Any]] = {
+    "cinematic": {
+        "label": "Cinematic",
+        "shortDescription": "Premium film-poster frame with serious composition and dramatic light.",
+        "uiHint": "Poster-grade",
+        "promptRules": [
+            "build the frame like a premium movie poster or a decisive opening-film still",
+            "use clean subject hierarchy, intentional negative space, and elegant camera blocking",
+            "prefer dramatic motivated lighting, rich contrast, and restrained premium color grading",
+            "keep the mood serious, elevated, and cinematic rather than loud or gimmicky",
+            "the image should feel expensive, polished, and story-driven",
+        ],
+        "negativeRules": [
+            "no cheap clickbait thumbnail styling",
+            "no fake UI, arrows, badges, emoji, or red-circled annotations",
+            "no cluttered collage layout or tabloid energy",
+        ],
+    },
+    "youtube": {
+        "label": "YouTube",
+        "shortDescription": "Readable high-energy thumbnail composition with a clear focal point.",
+        "uiHint": "Readable thumbnail",
+        "promptRules": [
+            "optimize for immediate thumbnail readability and one dominant focal point",
+            "use clear subject hierarchy, strong silhouette separation, and bold but clean composition",
+            "increase thumbnail energy and clarity without losing realism or polish",
+            "keep the frame legible at small sizes with obvious visual priority",
+            "allow stronger expression and punchier contrast while staying premium",
+        ],
+        "negativeRules": [
+            "no cheap clickbait trash",
+            "no fake UI, subscriber counters, circles, red arrows, reaction-face meme language, or spammy overlays",
+            "no overcrowded layout with too many competing focal points",
+        ],
+    },
+    "dark_neon": {
+        "label": "Dark Neon",
+        "shortDescription": "Dark cinematic scene with controlled cyan-magenta-violet neon energy.",
+        "uiHint": "Cyber glow",
+        "promptRules": [
+            "build a dark moody scene with restrained neon accents in cyan, magenta, teal, or violet",
+            "maintain strong contrast with cinematic glow and selective rim lighting",
+            "preserve a clean focal point inside the darkness and avoid flattening the scene",
+            "make the atmosphere feel premium, futuristic, and immersive",
+            "keep the palette controlled and intentional rather than chaotic",
+        ],
+        "negativeRules": [
+            "no acid-color overload or rainbow noise",
+            "no unreadable overglow that destroys subject clarity",
+            "no cheap cyberpunk cliché clutter",
+        ],
+    },
+    "thriller": {
+        "label": "Thriller",
+        "shortDescription": "Low-key suspense frame with danger, tension, and moody dramatic shadows.",
+        "uiHint": "Suspense mood",
+        "promptRules": [
+            "emphasize tension, unease, and suspense in a grounded thriller tone",
+            "use low-key lighting, selective highlights, and darker shadow zones",
+            "compose for anticipation, threat, or ominous discovery rather than action spectacle",
+            "keep the atmosphere anxious, dramatic, and cinematic",
+            "prioritize controlled realism with emotional pressure in the frame",
+        ],
+        "negativeRules": [
+            "no horror-camp exaggeration",
+            "no gore, blood spray, monsters, or slasher imagery unless explicitly requested",
+            "no cheesy jump-scare poster clichés",
+        ],
+    },
+    "fashion": {
+        "label": "Fashion",
+        "shortDescription": "Premium editorial cover look with polished posing and refined luxury finish.",
+        "uiHint": "Editorial polish",
+        "promptRules": [
+            "treat the image like a luxury editorial cover or premium campaign frame",
+            "use elegant subject posing, sophisticated framing, and polished styling",
+            "favor refined light shaping, premium texture detail, and clean visual rhythm",
+            "make the overall impression expensive, composed, and aspirational",
+            "keep the frame sleek and curated with confident visual restraint",
+        ],
+        "negativeRules": [
+            "no mass-market promo banner feeling",
+            "no cheap ecommerce layout or sales-ad energy",
+            "no clutter that breaks the editorial premium look",
+        ],
+    },
+    "glitch": {
+        "label": "Glitch",
+        "shortDescription": "Controlled digital disruption with modern synthetic tension and clean focal priority.",
+        "uiHint": "Controlled distortion",
+        "promptRules": [
+            "use stylized digital distortion as a controlled design language rather than random damage",
+            "preserve the main focal point and silhouette readability under the glitch treatment",
+            "mix synthetic tension, signal breakup, and modern digital texture in a curated way",
+            "keep the image intentional, sharp, and contemporary",
+            "apply glitch accents selectively so the scene remains premium and readable",
+        ],
+        "negativeRules": [
+            "no unreadable visual mess",
+            "no full-frame corruption that destroys composition",
+            "no low-quality broken-image artifacts or compression sludge",
+        ],
+    },
+}
+
+
+def _normalize_intro_style_preset(style_preset: str | None) -> str:
+    normalized = str(style_preset or "cinematic").strip().lower()
+    return normalized if normalized in INTRO_FRAME_STYLE_PRESETS else "cinematic"
+
+
+def _get_intro_style_meta(style_preset: str | None) -> dict[str, Any]:
+    return INTRO_FRAME_STYLE_PRESETS[_normalize_intro_style_preset(style_preset)]
+
+
+def _normalize_intro_preview_format(preview_format: str | None) -> str:
+    value = str(preview_format or "16:9").strip()
+    return value if value in {"9:16", "1:1", "16:9"} else "16:9"
+
+
+def _resolve_intro_preview_dimensions(preview_format: str | None) -> tuple[int, int]:
+    normalized = _normalize_intro_preview_format(preview_format)
+    if normalized == "9:16":
+        return 1024, 1820
+    if normalized == "1:1":
+        return 1024, 1024
+    return 1344, 768
+
+
+def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, Any]]:
+    style_preset = _normalize_intro_style_preset(payload.stylePreset)
+    preview_format = _normalize_intro_preview_format(payload.previewFormat)
+    style_meta = _get_intro_style_meta(style_preset)
+    title = str(payload.title or "").strip() or "INTRO FRAME"
+    title_context = str(payload.titleContext or "").strip()
+    story_context = str(payload.storyContext or "").strip()
+    source_node_types = [str(item or "").strip() for item in (payload.sourceNodeTypes or []) if str(item or "").strip()]
+    try:
+        duration_sec = max(0.5, min(8.0, float(payload.durationSec or 2.5)))
+    except Exception:
+        duration_sec = 2.5
+    try:
+        scene_count = max(0, min(24, int(payload.sceneCount or 0)))
+    except Exception:
+        scene_count = 0
+
+    format_rule = {
+        "9:16": "vertical opening frame, mobile-first composition, strong center-of-interest, generous vertical negative space",
+        "1:1": "square hero thumbnail composition, balanced central hierarchy, strong read at feed size",
+        "16:9": "widescreen opening frame, cinematic panoramic balance, horizontal staging with premium depth",
+    }[preview_format]
+
+    prompt_lines = [
+        "Create one premium opening-frame still image for a clip intro preview.",
+        "The image must feel like the very first visual beat of the story and also read as a polished thumbnail/cover image.",
+        f"Target aspect ratio: {preview_format}. Composition rule: {format_rule}.",
+        f"Style preset: {style_meta['label']}. Visual intent: {style_meta['shortDescription']}",
+        f"Title concept for semantic guidance only: {title}.",
+        "Do NOT render readable title text into the image unless explicitly requested elsewhere; treat the title as mood/story guidance only.",
+        "Focus on one clean, striking, premium visual moment rather than a multi-panel layout.",
+        "Use cinematic realism, coherent lighting, believable materials, and strong subject separation.",
+        "The frame must feel like a real generated image asset, not a UI mockup or placeholder.",
+        "INTRO FRAME STYLE RULES:",
+        *[f"- {rule}" for rule in style_meta["promptRules"]],
+        "INTRO FRAME FORBIDDEN ELEMENTS:",
+        *[f"- {rule}" for rule in style_meta["negativeRules"]],
+        _comfy_text_rendering_block(allow_designed_text=False),
+    ]
+    if title_context:
+        prompt_lines.append(f"Title context: {title_context}")
+    if story_context:
+        prompt_lines.append(f"Story context: {story_context}")
+    if source_node_types:
+        prompt_lines.append(f"Connected source node types: {', '.join(source_node_types)}")
+    if scene_count > 0:
+        prompt_lines.append(f"Storyboard scene count: {scene_count}")
+    prompt_lines.append(f"Intended intro duration reference: {duration_sec:.1f} seconds.")
+
+    prompt = "\n".join(line for line in prompt_lines if str(line or "").strip())
+    debug = {
+        "title": title,
+        "stylePreset": style_preset,
+        "previewFormat": preview_format,
+        "sceneCount": scene_count,
+        "durationSec": round(duration_sec, 1),
+        "sourceNodeTypes": source_node_types,
+        "styleLabel": style_meta["label"],
+        "styleDescription": style_meta["shortDescription"],
+        "styleRules": style_meta["promptRules"],
+        "forbidden": style_meta["negativeRules"],
+        "promptPreview": prompt[:1200],
+    }
+    return prompt, debug
+
+
 def _resolve_audio_asset_path(audio_url: str) -> str | None:
     if not audio_url:
         return None
@@ -1076,6 +1283,101 @@ def _summarize_gemini_image_response(resp: dict) -> dict:
         "filePartCount": file_part_count,
         "finishReasons": finish_reasons,
     }
+
+
+@router.post("/clip/intro/generate")
+def clip_intro_generate(payload: IntroGenerateIn):
+    style_preset = _normalize_intro_style_preset(payload.stylePreset)
+    preview_format = _normalize_intro_preview_format(payload.previewFormat)
+    title = str(payload.title or "").strip() or "INTRO FRAME"
+    width, height = _resolve_intro_preview_dimensions(preview_format)
+    api_key = (settings.GEMINI_API_KEY or "").strip()
+    if not api_key:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "code": "GEMINI_API_KEY_MISSING",
+                "hint": "gemini_api_key_missing_for_intro_generation",
+            },
+        )
+
+    prompt, debug = _build_intro_frame_prompt(payload)
+    model = settings.GEMINI_IMAGE_MODEL or "gemini-2.5-flash-image-preview"
+    body = {
+        "contents": [{
+            "role": "user",
+            "parts": [{"text": prompt}],
+        }],
+        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+    }
+
+    try:
+        print(
+            "[INTRO FRAME GEMINI] request",
+            json.dumps(
+                {
+                    "title": title,
+                    "stylePreset": style_preset,
+                    "previewFormat": preview_format,
+                    "width": width,
+                    "height": height,
+                    "sceneCount": debug.get("sceneCount"),
+                    "model": model,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        resp = post_generate_content(api_key, model, body, timeout=120)
+        resp_dict = resp if isinstance(resp, dict) else {}
+        response_summary = _summarize_gemini_image_response(resp_dict)
+        print("[INTRO FRAME GEMINI] response summary=" + json.dumps(response_summary, ensure_ascii=False))
+        decoded = _decode_gemini_image(resp_dict)
+        if not decoded:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "ok": False,
+                    "code": "INTRO_IMAGE_GENERATION_FAILED",
+                    "hint": "gemini_returned_no_image_for_intro_frame",
+                    "stylePreset": style_preset,
+                    "previewFormat": preview_format,
+                    "debug": {
+                        **debug,
+                        "responseSummary": response_summary,
+                    },
+                },
+            )
+
+        raw, ext = decoded
+        image_url = _save_bytes_as_asset(raw, ext)
+        generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return {
+            "ok": True,
+            "imageUrl": image_url,
+            "title": title,
+            "stylePreset": style_preset,
+            "previewFormat": preview_format,
+            "generatedAt": generated_at,
+            "engine": "gemini",
+            "modelUsed": model,
+            "debug": {
+                **debug,
+                "responseSummary": response_summary,
+            },
+        }
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "code": "INTRO_IMAGE_GENERATION_FAILED",
+                "hint": str(exc)[:300],
+                "stylePreset": style_preset,
+                "previewFormat": preview_format,
+                "debug": debug,
+            },
+        )
 
 
 def _normalize_ref_list(items, max_items: int = 8) -> list[str]:
