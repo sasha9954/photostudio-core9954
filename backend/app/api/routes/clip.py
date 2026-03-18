@@ -1185,15 +1185,34 @@ def _hex_to_rgba(hex_value: str, alpha: int = 255) -> tuple[int, int, int, int]:
 
 
 def _get_intro_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    font_candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    normalized_size = max(24, int(size))
+    filename_candidates = [
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+        "Arial Bold.ttf" if bold else "Arial.ttf",
+        "arialbd.ttf" if bold else "arial.ttf",
     ]
-    for path in font_candidates:
+    path_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/local/share/fonts/DejaVuSans-Bold.ttf" if bold else "/usr/local/share/fonts/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/Arial Bold.ttf" if bold else "C:/Windows/Fonts/Arial.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
+    ]
+    for font_name in filename_candidates:
         try:
-            return ImageFont.truetype(path, max(12, int(size)))
+            return ImageFont.truetype(font_name, normalized_size)
         except Exception:
             continue
+    for path in path_candidates:
+        if not path:
+            continue
+        try:
+            return ImageFont.truetype(path, normalized_size)
+        except Exception:
+            continue
+    print("[INTRO FRAME FONT WARNING] truetype font not found, fallback used")
     return ImageFont.load_default()
 
 
@@ -1223,9 +1242,9 @@ def _wrap_intro_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Image
 
 def _fit_intro_title(draw: ImageDraw.ImageDraw, title: str, box_width: int, box_height: int, preview_format: str) -> tuple[ImageFont.ImageFont, list[str], int]:
     max_lines = 2
-    width_factor = 0.178 if preview_format == "16:9" else 0.168 if preview_format == "1:1" else 0.158
-    max_font = max(58, min(212, int(box_width * width_factor)))
-    min_font = 28
+    width_factor = 0.205 if preview_format == "16:9" else 0.195 if preview_format == "1:1" else 0.185
+    max_font = max(76, min(248, int(box_width * width_factor)))
+    min_font = 44
     for font_size in range(max_font, min_font - 1, -4):
         font = _get_intro_font(font_size, bold=True)
         lines = _wrap_intro_text(draw, title, font, box_width, max_lines)
@@ -1239,9 +1258,9 @@ def _fit_intro_title(draw: ImageDraw.ImageDraw, title: str, box_width: int, box_
         height = bbox[3] - bbox[1]
         if width <= box_width and height <= box_height:
             return font, lines, spacing
-    fallback_font = _get_intro_font(min_font, bold=True)
+    fallback_font = _get_intro_font(max(min_font, 48), bold=True)
     fallback_lines = _wrap_intro_text(draw, title, fallback_font, box_width, max_lines) or [str(title or "INTRO FRAME").strip()[:60]]
-    return fallback_font, fallback_lines, max(8, int(min_font * 0.16))
+    return fallback_font, fallback_lines, max(10, int(max(min_font, 48) * 0.16))
 
 
 def _draw_text_tracking(draw: ImageDraw.ImageDraw, position: tuple[float, float], text: str, font: ImageFont.ImageFont, fill: tuple[int, int, int, int], tracking: int = 0) -> None:
@@ -1544,90 +1563,38 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
 
     prompt_lines = [
         "Create one premium opening-frame still image for a clip intro preview.",
-        "The image must feel like the very first visual beat of the story and also read as a polished thumbnail/cover image.",
         f"Target aspect ratio: {preview_format}. Composition rule: {format_rule}.",
         f"Style preset: {style_meta['label']}. Visual intent: {style_meta['shortDescription']}",
-        f"Title concept for semantic guidance only: {title}.",
-        "Do NOT render readable title text into the image unless explicitly requested elsewhere; treat the title as mood/story guidance only.",
-        "Focus on one clean, striking, premium visual moment rather than a multi-panel layout.",
-        "Use cinematic realism, coherent lighting, believable materials, and strong subject separation.",
-        "The frame must feel like a real generated image asset, not a UI mockup or placeholder.",
-        "If a connected cast/world package is provided, build one strongest hook frame that clearly integrates the important participants, animals, props, and world anchors.",
-        "Do not collapse a populated cast package into an empty landscape or a single generic lone character.",
-        "When multiple hero participants are available, stage them together in one premium cinematic composition whenever the framing allows it.",
-        "Treat attached reference images as strict identity and design anchors for cast package, key props, location, and style.",
-        "Readable title text must not be generated inside Gemini; backend will overlay the final readable hook title after image generation.",
-        "REFERENCE PRIORITY RULE (CRITICAL):",
-        "- attached reference images define the exact visual identity of each participant",
-        "- treat reference images as primary source of truth, not as inspiration",
-        "- facial structure, hair, clothing, body type must match reference images",
-        "- do not approximate identity",
-        "- do not generate new faces",
-        "- do not mix identities between references",
-        "STRICT ROLE MAPPING:",
-        "- each role uses ONLY its attached reference images",
-        "- do not swap references between roles",
-        "- do not merge multiple roles into one person",
-        "- if 2 roles exist -> must render 2 distinct individuals",
-        "- character_1 = first female reference",
-        "- character_2 = second female reference",
-        "- animal = dog reference",
-        "- do not collapse into group",
-        "- do not replace with generic characters",
-        "- do not reduce number of participants",
-        "PARTICIPANT COUNT LOCK:",
-        "- render exactly the connected participants",
-        "- if 2 characters + 1 animal are connected, render exactly 2 characters and 1 dog",
-        "- no extra humans",
-        "- no background crowd",
-        "- no hidden extra faces",
-        "ANIMAL PRESENCE RULE:",
-        "- if animal role is connected -> animal must be clearly visible in frame",
-        "- animal must not be cropped out",
-        "- animal must not be replaced",
-        "- animal must not be omitted",
-        "TEXT RENDERING RULE:",
-        "- do NOT generate readable text inside the image",
-        "- do NOT attempt to render titles or captions",
-        "- all readable text will be added by backend overlay",
-        "INTRO CAST CONTRACT (HARD CAST LOCK):",
-        f"- active cast roles: {_intro_role_package_summary(intro_active_cast_roles, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
+        f"Title concept for story guidance only: {title}.",
+        "Keep the image as one clean hook frame, not a collage, poster mockup, or UI layout.",
+        "Attached reference images are the exact cast package and exact world anchors.",
+        "Use the attached references as strict identity anchors, not loose inspiration.",
+        "Do not render readable text inside the image; backend will add the final readable title overlay.",
+        "STRICT INTRO CONTRACT:",
+        f"- active cast package: {_intro_role_package_summary(intro_active_cast_roles, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
         f"- must appear: {_intro_role_package_summary(intro_must_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
         f"- must not appear: {_intro_role_package_summary(intro_must_not_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
         f"- strict identity package: {strict_identity_package_summary}",
-        "- preserve each connected identity separately",
-        "- preserve identity of each connected participant from its reference anchors exactly",
-        "- connected refs are mandatory identity anchors, not loose inspiration",
-        "- must include exactly these connected participants as the visible cast package",
-        "- exact connected cast package means no omissions, no replacements, no extras",
-        "- do not replace connected cast with generic random people",
-        "- do not replace connected participants with lookalikes or mixed crowd substitutes",
-        "- do not collapse cast package into generic group of humans",
-        "- do not introduce extra unconnected human participants",
-        "- no extra humans beyond connected cast package",
+        "- render exactly the connected cast package",
+        "- no extra humans",
         "- no background crowd",
-        "- no hidden extra faces",
-        "- no generic random crowd substitution",
-        "- keep all connected participants readable and intentional in one hook frame",
-        "- if an animal role is connected, the animal must appear clearly in frame",
-        "- if animal role is attached as inline reference, animal must remain visible in final frame",
-        "- if two female characters are connected, render two distinct female characters",
-        "- do not merge connected women into one generic heroine or anonymous ensemble",
-        "INTRO HERO COMPOSITION RULE:",
-        "- build one hook frame around the connected cast package",
-        "- title defines the dramatic promise",
-        "- composition should sell the opening conflict / mystery",
-        "- keep the cast readable and intentional",
-        "INTRO FRAME STYLE RULES:",
-        *[f"- {rule}" for rule in style_meta["promptRules"]],
-        "INTRO FRAME FORBIDDEN ELEMENTS:",
-        *[f"- {rule}" for rule in style_meta["negativeRules"]],
-        _comfy_text_rendering_block(allow_designed_text=False),
+        "- no random replacement characters",
+        "- do not merge multiple roles into one person",
+        "- do not omit any required connected role",
     ]
     if role_identity_lock_lines:
         prompt_lines.extend([
             "ROLE IDENTITY LOCK:",
             *role_identity_lock_lines,
+        ])
+    if len(strict_identity_package_roles) >= 2:
+        prompt_lines.append("- if 2 connected character roles exist, render exactly 2 distinct people")
+    if connected_ref_counts.get("animal", 0) > 0:
+        prompt_lines.extend([
+            "ANIMAL LOCK:",
+            "- animal must appear clearly in frame",
+            "- animal must match its attached reference exactly",
+            "- do not omit or replace the animal",
         ])
     if title_context:
         prompt_lines.append(f"Title context: {title_context}")
@@ -1637,12 +1604,8 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         prompt_lines.append(f"Connected source node types: {', '.join(source_node_types)}")
     if connected_roles:
         prompt_lines.append(
-            "Connected reference roles available: "
+            "Connected reference roles: "
             + ", ".join(f"{_intro_role_label(role)} ({len(connected_refs_by_role.get(role) or [])})" for role in connected_roles)
-        )
-        prompt_lines.append(
-            "Connected reference counts by role: "
-            + ", ".join(f"{_intro_role_label(role)}={connected_ref_counts.get(role, 0)}" for role in connected_roles)
         )
     if connected_cast_roles:
         prompt_lines.append("Cast package roles: " + ", ".join(_intro_role_label(role) for role in connected_cast_roles))
@@ -1661,46 +1624,35 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     if style_context:
         prompt_lines.append(f"Style context: {style_context}")
     if role_gender_locks:
-        prompt_lines.append("CONNECTED GENDER LOCKS (STRICT):")
+        prompt_lines.append("CONNECTED GENDER LOCKS:")
         for role, gender_value in role_gender_locks.items():
             if gender_value == "female":
                 prompt_lines.extend([
                     f"- {_intro_role_label(role)} must remain a distinct female character",
-                    "- preserve female identity, female body and face cues",
                     "- no male replacement",
-                    "- no masculine anatomy",
-                    "- no generic cast substitution",
                 ])
                 if connected_ref_counts.get(role, 0) > 0:
                     prompt_lines.append(f"- use connected {_intro_role_label(role)} references as exact female identity anchor")
             elif gender_value == "male":
                 prompt_lines.extend([
                     f"- {_intro_role_label(role)} must remain a distinct male character",
-                    "- preserve male identity, male body and face cues",
                     "- no female replacement",
-                    "- no feminine anatomy drift",
-                    "- no generic cast substitution",
                 ])
                 if connected_ref_counts.get(role, 0) > 0:
                     prompt_lines.append(f"- use connected {_intro_role_label(role)} references as exact male identity anchor")
     if animal_species_locks:
-        prompt_lines.append("CONNECTED ANIMAL SPECIES LOCKS (STRICT):")
+        prompt_lines.append("CONNECTED SPECIES LOCKS:")
         for role, species_value in animal_species_locks.items():
             prompt_lines.append(f"- {_intro_role_label(role)} must appear as {species_value}")
             if role == "animal" and species_value == "dog":
                 prompt_lines.extend([
-                    "- connected animal must appear as dog",
+                    "- render a dog, not any other species",
                     "- no cat",
                     "- no wolf",
-                    "- no species drift",
-                    "- no replacement by generic human extra",
-                    "- do not omit the dog",
                 ])
             else:
                 prompt_lines.extend([
                     f"- preserve {_intro_role_label(role)} species lock exactly",
-                    "- no species drift",
-                    "- do not omit the connected animal participant",
                 ])
             if connected_ref_counts.get(role, 0) > 0:
                 prompt_lines.append(f"- use connected {_intro_role_label(role)} references as exact {species_value} identity anchor")
@@ -1709,10 +1661,7 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
             "FEMALE IDENTITY LOCK:",
             "- render two distinct female characters",
             "- both must match their reference images",
-            "- do not generate generic women",
-            "- do not merge faces",
             "- do not change gender",
-            "- if two female roles are connected, render two distinct female characters, not three random people or a mixed crowd",
         ])
     elif len(female_roles_with_refs) == 1:
         prompt_lines.extend([
@@ -1729,7 +1678,13 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
                 for role in strict_identity_package_roles
             )
         )
-        prompt_lines.append("STRICT INTRO CAST CONTRACT: preserve each connected identity separately and never substitute the package with a generic crowd scene.")
+    prompt_lines.extend([
+        "INTRO FRAME STYLE RULES:",
+        *[f"- {rule}" for rule in style_meta["promptRules"]],
+        "INTRO FRAME FORBIDDEN ELEMENTS:",
+        *[f"- {rule}" for rule in style_meta["negativeRules"]],
+        _comfy_text_rendering_block(allow_designed_text=False),
+    ])
     if scene_count > 0:
         prompt_lines.append(f"Storyboard scene count: {scene_count}")
     prompt_lines.append(f"Intended intro duration reference: {duration_sec:.1f} seconds.")
@@ -2116,7 +2071,21 @@ def clip_intro_generate(payload: IntroGenerateIn):
     title = str(payload.title or "").strip() or "INTRO FRAME"
     width, height = _resolve_intro_preview_dimensions(preview_format)
     connected_refs_by_role = _normalize_intro_connected_refs_by_role(getattr(payload, "connectedRefsByRole", None))
+    raw_connected_ref_counts = {role: len(connected_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}
+    total_connected_refs = sum(raw_connected_ref_counts.values())
+    print("[INTRO FRAME REFS RECEIVED] " + json.dumps({
+        "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
+        "refsReceivedByRole": raw_connected_ref_counts,
+        "totalConnectedRefs": total_connected_refs,
+    }, ensure_ascii=False))
+    if total_connected_refs <= 0:
+        print("[INTRO FRAME WARNING] no connected refs received")
     inline_parts, inline_part_counts, inline_part_debug = _build_intro_reference_inline_parts(connected_refs_by_role)
+    print("[INTRO FRAME INLINE IMAGES] " + json.dumps({
+        "refsReceivedByRole": raw_connected_ref_counts,
+        "inlineImagesAttachedByRole": inline_part_counts,
+        "attachedInlineImageTotal": len(inline_parts),
+    }, ensure_ascii=False))
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
         return JSONResponse(
@@ -2148,7 +2117,9 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "introMustNotAppear": debug.get("introMustNotAppear") or [],
                     "introRoleGenderLocks": debug.get("introRoleGenderLocks") or {},
                     "introAnimalSpeciesLocks": debug.get("introAnimalSpeciesLocks") or {},
-                    "connectedRefCounts": debug.get("introConnectedRoleCounts") or {},
+                    "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
+                    "connectedRefCounts": debug.get("connectedRefCounts") or {},
+                    "refsReceivedByRole": raw_connected_ref_counts,
                     "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
                     "rolesWithImageParts": inline_part_debug.get("rolesWithImageParts") or [],
                     "roleAttachedImageCounts": inline_part_debug.get("roleAttachedImageCounts") or {},
@@ -2165,6 +2136,8 @@ def clip_intro_generate(payload: IntroGenerateIn):
             "[INTRO FRAME REFS DEBUG] "
             + json.dumps(
                 {
+                    "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
+                    "refsReceivedByRole": raw_connected_ref_counts,
                     "roleAttachedImageCounts": inline_part_debug.get("roleAttachedImageCounts") or {},
                     "totalInlineImages": inline_part_debug.get("totalInlineImages") or len(inline_parts),
                     "rolesWithImageParts": inline_part_debug.get("rolesWithImageParts") or [],
@@ -2183,7 +2156,9 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "width": width,
                     "height": height,
                     "sceneCount": debug.get("sceneCount"),
+                    "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
                     "connectedRefCounts": debug.get("connectedRefCounts") or {},
+                    "refsReceivedByRole": raw_connected_ref_counts,
                     "attachedReferenceParts": inline_part_counts,
                     "attachedReferencePartTotal": len(inline_parts),
                     "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
@@ -2215,6 +2190,8 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "previewFormat": preview_format,
                     "debug": {
                         **debug,
+                        "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
+                        "refsReceivedByRole": raw_connected_ref_counts,
                         "responseSummary": response_summary,
                         "attachedReferenceParts": inline_part_counts,
                         "attachedReferencePartTotal": len(inline_parts),
@@ -2241,6 +2218,8 @@ def clip_intro_generate(payload: IntroGenerateIn):
             "modelUsed": model,
             "debug": {
                 **debug,
+                "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
+                "refsReceivedByRole": raw_connected_ref_counts,
                 "responseSummary": response_summary,
                 "attachedReferenceParts": inline_part_counts,
                 "attachedReferencePartTotal": len(inline_parts),
@@ -2263,6 +2242,8 @@ def clip_intro_generate(payload: IntroGenerateIn):
                 "previewFormat": preview_format,
                 "debug": {
                     **debug,
+                    "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
+                    "refsReceivedByRole": raw_connected_ref_counts,
                     "attachedReferenceParts": inline_part_counts,
                     "attachedReferencePartTotal": len(inline_parts),
                     "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
