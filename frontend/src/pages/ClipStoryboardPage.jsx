@@ -2530,6 +2530,11 @@ function IntroFrameNode({ id, data }) {
   const styleMeta = getIntroStyleMeta(data?.stylePreset || "cinematic");
   const durationSec = normalizeIntroDurationSec(data?.durationSec);
   const status = String(data?.status || "idle");
+  const statusLabel = status === "ready"
+    ? "preview готов"
+    : status === "generating" || status === "preview_generating"
+      ? "собираем preview..."
+      : "черновик";
 
   return (
     <>
@@ -2546,7 +2551,7 @@ function IntroFrameNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
           <div className="clipSB_assemblyRow"><span>Длительность</span><strong>{durationSec.toFixed(1)} сек</strong></div>
-          <div className="clipSB_assemblyRow"><span>Статус</span><strong>{status === "ready" ? "готово" : status === "generating" ? "генерация..." : "черновик"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Статус</span><strong>{statusLabel}</strong></div>
         </div>
 
         <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
@@ -2597,6 +2602,9 @@ function IntroFrameNode({ id, data }) {
 
           <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
             Story context: {String(data?.contextSummary || "не подключён")}
+          </div>
+          <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
+            Generate делает локальный intro preview для Assembly, без AI render engine.
           </div>
 
           <div
@@ -2659,6 +2667,7 @@ function AssemblyNode({ id, data }) {
   const result = data?.result || null;
   const finalVideoUrl = resolveAssetUrl(data?.result?.finalVideoUrl);
   const resultSceneCount = Number(result?.sceneCount || 0);
+  const resultTotalSegments = Number(result?.totalSegments || 0);
   const audioApplied = !!result?.audioApplied;
   const isStale = !!data?.isStale;
 
@@ -2687,6 +2696,11 @@ function AssemblyNode({ id, data }) {
         {data?.debugSummary ? (
           <div className="clipSB_selectHint" style={{ marginTop: 6 }}>
             trace: {data.debugSummary}
+          </div>
+        ) : null}
+        {result ? (
+          <div className="clipSB_selectHint" style={{ marginTop: 6 }}>
+            result: scenes={resultSceneCount}; intro={result?.introIncluded ? "yes" : "no"}; totalSegments={resultTotalSegments || resultSceneCount}; totalSteps={Number(data?.assemblyStageTotal || 0) || Number(result?.totalSteps || 0) || 0}; introDuration={Number(result?.introDurationSec || 0) || 0}
           </div>
         ) : null}
 
@@ -5302,6 +5316,9 @@ Aspect ratio: ${imageFormat}`,
             audioApplied: !!out?.audioApplied,
             sceneCount: Number(out?.sceneCount || assemblyPayload.scenes.length || 0),
             introIncluded: !!out?.introIncluded,
+            totalSegments: Number(out?.totalSegments || 0),
+            totalSteps: Number(out?.total || 0),
+            introDurationSec: Number(out?.introDurationSec || 0),
           });
           setAssemblyBuildState("done");
           setAssemblyInfo("");
@@ -7260,6 +7277,9 @@ const hydrate = useCallback((source = "unknown") => {
           sceneCount: Number(savedAssemblyResult.sceneCount || 0),
           audioApplied: !!savedAssemblyResult.audioApplied,
           introIncluded: !!savedAssemblyResult.introIncluded,
+          totalSegments: Number(savedAssemblyResult.totalSegments || 0),
+          totalSteps: Number(savedAssemblyResult.totalSteps || 0),
+          introDurationSec: Number(savedAssemblyResult.introDurationSec || 0),
         });
         setAssemblyBuildState("done");
         setIsAssemblyStale(false);
@@ -7552,6 +7572,9 @@ const hydrate = useCallback((source = "unknown") => {
           sceneCount: Number(assemblyResult.sceneCount || 0),
           audioApplied: !!assemblyResult.audioApplied,
           introIncluded: !!assemblyResult.introIncluded,
+          totalSegments: Number(assemblyResult.totalSegments || 0),
+          totalSteps: Number(assemblyResult.totalSteps || 0),
+          introDurationSec: Number(assemblyResult.introDurationSec || 0),
         }
         : null,
       assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
@@ -7631,6 +7654,9 @@ const hydrate = useCallback((source = "unknown") => {
           sceneCount: Number(assemblyResult.sceneCount || 0),
           audioApplied: !!assemblyResult.audioApplied,
           introIncluded: !!assemblyResult.introIncluded,
+          totalSegments: Number(assemblyResult.totalSegments || 0),
+          totalSteps: Number(assemblyResult.totalSteps || 0),
+          introDurationSec: Number(assemblyResult.introDurationSec || 0),
         }
         : null,
       assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",

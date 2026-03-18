@@ -892,12 +892,26 @@ def _resolve_media_input(url: str, temp_files: list[str]) -> tuple[str | None, s
             header, encoded = source.split(",", 1)
         except ValueError:
             return None, "invalid_data_url"
-        mime_match = re.match(r"^data:([^;,]+)?(;base64)?$", header)
-        if not mime_match:
+        if not header.lower().startswith("data:"):
             return None, "invalid_data_url_header"
-        mime_type = (mime_match.group(1) or "application/octet-stream").strip().lower()
-        is_base64 = ";base64" in header
-        extension = mimetypes.guess_extension(mime_type) or ".bin"
+        metadata = header[5:]
+        metadata_parts = [part.strip() for part in metadata.split(";")]
+        mime_type = "application/octet-stream"
+        is_base64 = False
+        if metadata_parts:
+            first_part = metadata_parts[0]
+            if first_part:
+                mime_type = first_part.strip().lower()
+            for part in metadata_parts[1:]:
+                if part.lower() == "base64":
+                    is_base64 = True
+        if "/" not in mime_type:
+            mime_type = "application/octet-stream"
+        extension = mimetypes.guess_extension(mime_type)
+        if not extension and mime_type == "image/svg+xml":
+            extension = ".svg"
+        if not extension:
+            extension = ".bin"
         fd, temp_path = tempfile.mkstemp(prefix="clip_assemble_data_", suffix=extension)
         os.close(fd)
         try:
@@ -5885,6 +5899,10 @@ def _update_clip_assemble_job(job_id: str, **updates):
         job.update(updates)
 
 
+def _has_valid_intro_image(intro: AssembleIntroIn | None) -> bool:
+    return bool(str(getattr(intro, "imageUrl", "") or "").strip())
+
+
 def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
     scenes = payload.scenes or []
     intro = payload.intro
@@ -5894,17 +5912,25 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
     prepared_scenes: list[tuple[str, float]] = []
     final_path: str | None = None
 
-    has_intro = bool(str(getattr(intro, "imageUrl", "") or "").strip())
-    total_scenes = len(scenes) + (1 if has_intro else 0)
+    scene_count = len(scenes)
+    has_intro = _has_valid_intro_image(intro)
+    intro_steps = 1 if has_intro else 0
+    total_steps = scene_count + intro_steps
+    intro_duration_raw = getattr(intro, "durationSec", 2.5) if intro else 2.5
+    try:
+        intro_duration = max(0.1, float(intro_duration_raw or 2.5))
+    except Exception:
+        intro_duration = 2.5
     print(
         "[CLIP ASSEMBLE] source resolution",
         json.dumps(
             {
                 "jobId": job_id,
-                "sceneCount": len(scenes),
+                "sceneCount": scene_count,
                 "introPresent": has_intro,
                 "introNodeId": str(getattr(intro, "nodeId", "") or ""),
-                "introDurationSec": float(getattr(intro, "durationSec", 0) or 0),
+                "introDurationSec": intro_duration if has_intro else 0,
+                "total": total_steps,
                 "audioPresent": bool(str(payload.audioUrl or "").strip()),
                 "format": str(payload.format or "9:16"),
             },
@@ -5919,17 +5945,29 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
         label="preparing scenes",
         progressPercent=5,
         current=0,
-        total=total_scenes,
+        total=total_steps,
+        sceneCount=scene_count,
+        introIncluded=has_intro,
+        introDurationSec=intro_duration if has_intro else 0,
+        totalSegments=total_steps,
     )
 
     try:
         if has_intro:
             intro_image_url = str(getattr(intro, "imageUrl", "") or "").strip()
-            intro_duration_raw = getattr(intro, "durationSec", 2.5)
-            try:
-                intro_duration = max(0.1, float(intro_duration_raw or 2.5))
-            except Exception:
-                intro_duration = 2.5
+            intro_label = f"intro 1/{total_steps}" if total_steps > 0 else "preparing intro"
+            intro_progress = 10
+            if total_steps > 0:
+                intro_progress = 10 + int((1 / total_steps) * 60)
+            _update_clip_assemble_job(
+                job_id,
+                status="running",
+                stage="preparing",
+                label=intro_label,
+                current=1,
+                total=total_steps,
+                progressPercent=max(10, min(70, intro_progress)),
+            )
             intro_path, intro_err = _resolve_media_input(intro_image_url, temp_files)
             if intro_err or not intro_path:
                 raise RuntimeError(f"INTRO_MEDIA_RESOLVE_FAILED:{intro_err or 'unknown'}")
@@ -5990,18 +6028,19 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 _update_clip_assemble_job(job_id, stage="stopped", label="stopped")
                 return
 
-            stage_label = f"scene {idx + 1}/{total_scenes}"
+            current_step = intro_steps + idx + 1
+            stage_label = f"scene {idx + 1}/{scene_count}"
             print(f"[CLIP ASSEMBLE] stage=preparing label={stage_label}")
             progress = 10
-            if total_scenes > 0:
-                progress = 10 + int(((idx + 1) / total_scenes) * 60)
+            if total_steps > 0:
+                progress = 10 + int((current_step / total_steps) * 60)
             _update_clip_assemble_job(
                 job_id,
                 status="running",
                 stage="preparing",
                 label=stage_label,
-                current=idx + 1,
-                total=total_scenes,
+                current=current_step,
+                total=total_steps,
                 progressPercent=max(10, min(70, progress)),
             )
 
@@ -6060,8 +6099,8 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             stage="concat",
             label="concat scenes",
             progressPercent=80,
-            current=len(prepared_scenes),
-            total=total_scenes,
+            current=total_steps,
+            total=total_steps,
         )
 
         concat_list_fd, concat_list_path = tempfile.mkstemp(prefix="clip_concat_", suffix=".txt")
@@ -6162,8 +6201,12 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             progressPercent=100,
             finalVideoUrl=final_video_url,
             audioApplied=audio_applied,
-            sceneCount=len(prepared_scenes),
+            current=total_steps,
+            total=total_steps,
+            sceneCount=scene_count,
             introIncluded=has_intro,
+            introDurationSec=intro_duration if has_intro else 0,
+            totalSegments=len(prepared_scenes),
             error=None,
         )
     except Exception as exc:
@@ -6206,6 +6249,15 @@ def clip_assemble(payload: AssembleClipIn):
         )
 
     job_id = uuid4().hex
+    scene_count = len(scenes)
+    has_intro = _has_valid_intro_image(payload.intro)
+    intro_steps = 1 if has_intro else 0
+    total_steps = scene_count + intro_steps
+    intro_duration_raw = getattr(payload.intro, "durationSec", 2.5) if payload.intro else 2.5
+    try:
+        intro_duration = max(0.1, float(intro_duration_raw or 2.5)) if has_intro else 0
+    except Exception:
+        intro_duration = 2.5 if has_intro else 0
     with CLIP_ASSEMBLE_JOBS_LOCK:
         CLIP_ASSEMBLE_JOBS[job_id] = {
             "jobId": job_id,
@@ -6213,12 +6265,14 @@ def clip_assemble(payload: AssembleClipIn):
             "stage": "queued",
             "label": "queued",
             "current": 0,
-            "total": len(scenes),
+            "total": total_steps,
             "progressPercent": 0,
             "finalVideoUrl": None,
             "audioApplied": False,
-            "sceneCount": 0,
-            "introIncluded": False,
+            "sceneCount": scene_count,
+            "introIncluded": has_intro,
+            "introDurationSec": intro_duration,
+            "totalSegments": total_steps,
             "error": None,
             "updatedAt": time.time(),
         }
