@@ -2953,6 +2953,26 @@ function StoryboardPlanNode({ id, data }) {
 
 function IntroFrameNode({ id, data }) {
   const fileInputRef = useRef(null);
+  const [isCompactLayout, setIsCompactLayout] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth < 1180;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const media = window.matchMedia("(max-width: 1179px)");
+    const syncLayout = (event) => setIsCompactLayout(event.matches);
+
+    setIsCompactLayout(media.matches);
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", syncLayout);
+      return () => media.removeEventListener("change", syncLayout);
+    }
+
+    media.addListener(syncLayout);
+    return () => media.removeListener(syncLayout);
+  }, []);
+
   const previewKind = normalizeIntroFramePreviewKind(data?.previewKind);
   const previewUrl = useMemo(
     () => resolveAssetUrl(resolveIntroFramePreviewUrl(data)),
@@ -3003,255 +3023,267 @@ function IntroFrameNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Статус</span><strong>{statusLabel}</strong></div>
         </div>
 
-        <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-          <label>
-            <div className="clipSB_hint" style={{ marginBottom: 6 }}>Title</div>
-            <input
-              className="clipSB_input"
-              value={String(data?.title || "")}
-              onChange={(e) => data?.onField?.(id, "title", e.target.value)}
-              disabled={autoTitle}
-              placeholder={autoTitle ? "Авто по сюжету / сценам" : "Введите заголовок"}
-            />
-          </label>
-
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={autoTitle}
-              onChange={(e) => data?.onField?.(id, "autoTitle", e.target.checked)}
-            />
-            <span className="clipSB_small">Auto title по сюжетному контексту</span>
-          </label>
-
-          <div style={{ display: "grid", gap: 10, marginTop: 4 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isCompactLayout ? "minmax(0, 1fr)" : "minmax(0, 1fr) minmax(220px, 240px)",
+            gap: 12,
+            alignItems: "start",
+            marginTop: 10,
+          }}
+        >
+          <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
             <label>
-              <div className="clipSB_hint" style={{ marginBottom: 6 }}>Style preset</div>
-              <select
-                className="clipSB_select"
-                value={selectedStylePreset}
-                onChange={(e) => data?.onField?.(id, "stylePreset", e.target.value)}
-                style={{ minHeight: 42 }}
-              >
-                {INTRO_STYLE_PRESETS.map((item) => {
-                  const meta = getIntroStyleMeta(item);
-                  return <option key={item} value={item}>{meta.label} — {meta.uiHint}</option>;
-                })}
-              </select>
+              <div className="clipSB_hint" style={{ marginBottom: 6 }}>Title</div>
+              <input
+                className="clipSB_input"
+                value={String(data?.title || "")}
+                onChange={(e) => data?.onField?.(id, "title", e.target.value)}
+                disabled={autoTitle}
+                placeholder={autoTitle ? "Авто по сюжету / сценам" : "Введите заголовок"}
+              />
             </label>
 
-            <div
-              style={{
-                borderRadius: 12,
-                padding: "10px 12px",
-                border: `1px solid ${selectedStyleMeta.accent}3d`,
-                background: "rgba(10,14,24,0.74)",
-                boxShadow: `inset 0 0 0 1px ${selectedStyleMeta.accent}12`,
-                display: "grid",
-                gap: 7,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#f5f7ff" }}>{selectedStyleMeta.label}</div>
-                <div
-                  className="clipSB_small"
-                  style={{
-                    flexShrink: 0,
-                    borderRadius: 999,
-                    padding: "3px 8px",
-                    color: selectedStyleMeta.accent,
-                    border: `1px solid ${selectedStyleMeta.accent}55`,
-                    background: "rgba(255,255,255,0.03)",
-                  }}
-                >
-                  {selectedStyleMeta.uiHint}
-                </div>
-              </div>
-              <div className="clipSB_small" style={{ color: "rgba(245,247,255,0.78)", lineHeight: 1.45 }}>
-                {selectedStyleMeta.shortDescription}
-              </div>
-              <div className="clipSB_small" style={{ color: "rgba(207,216,255,0.74)", lineHeight: 1.4 }}>
-                Rules: {selectedStyleMeta.promptRules.join(" • ")}
-              </div>
-              <div className="clipSB_small" style={{ color: "rgba(255,188,188,0.72)", lineHeight: 1.35 }}>
-                Avoid: {selectedStyleMeta.forbidden.join(" • ")}
-              </div>
-            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={autoTitle}
+                onChange={(e) => data?.onField?.(id, "autoTitle", e.target.checked)}
+              />
+              <span className="clipSB_small">Auto title по сюжетному контексту</span>
+            </label>
 
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 92px", gap: 10, alignItems: "end" }}>
+            <div style={{ display: "grid", gap: 10, marginTop: 4 }}>
               <label>
-                <div className="clipSB_hint" style={{ marginBottom: 6 }}>Preview</div>
+                <div className="clipSB_hint" style={{ marginBottom: 6 }}>Style preset</div>
                 <select
                   className="clipSB_select"
-                  value={previewFormat}
-                  onChange={(e) => data?.onField?.(id, "previewFormat", e.target.value)}
+                  value={selectedStylePreset}
+                  onChange={(e) => data?.onField?.(id, "stylePreset", e.target.value)}
                   style={{ minHeight: 42 }}
                 >
-                  {INTRO_FRAME_PREVIEW_FORMAT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  {INTRO_STYLE_PRESETS.map((item) => {
+                    const meta = getIntroStyleMeta(item);
+                    return <option key={item} value={item}>{meta.label} — {meta.uiHint}</option>;
+                  })}
                 </select>
               </label>
-              <label>
-                <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
-                <input
-                  className="clipSB_input"
-                  type="number"
-                  min="0.5"
-                  max="8"
-                  step="0.1"
-                  value={durationSec}
-                  onChange={(e) => data?.onField?.(id, "durationSec", e.target.value)}
-                />
-              </label>
-            </div>
-          </div>
 
-          <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
-            Story context: {String(data?.contextSummary || "не подключён")}
-          </div>
-          <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
-            Generate вызывает backend Gemini generation и сохраняет preview как asset URL.
-          </div>
-          {hasBackendGeneratedAsset ? (
-            <div className="clipSB_small" style={{ color: "#b8c4ff" }}>
-              Backend-branded asset показан как есть, без локального fake text overlay.
-            </div>
-          ) : null}
-          {errorMessage ? (
-            <div className="clipSB_small" style={{ color: "#ff9b9b" }}>
-              Ошибка генерации: {errorMessage}
-            </div>
-          ) : null}
+              <div
+                style={{
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  border: `1px solid ${selectedStyleMeta.accent}3d`,
+                  background: "rgba(10,14,24,0.74)",
+                  boxShadow: `inset 0 0 0 1px ${selectedStyleMeta.accent}12`,
+                  display: "grid",
+                  gap: 7,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#f5f7ff" }}>{selectedStyleMeta.label}</div>
+                  <div
+                    className="clipSB_small"
+                    style={{
+                      flexShrink: 0,
+                      borderRadius: 999,
+                      padding: "3px 8px",
+                      color: selectedStyleMeta.accent,
+                      border: `1px solid ${selectedStyleMeta.accent}55`,
+                      background: "rgba(255,255,255,0.03)",
+                    }}
+                  >
+                    {selectedStyleMeta.uiHint}
+                  </div>
+                </div>
+                <div className="clipSB_small" style={{ color: "rgba(245,247,255,0.78)", lineHeight: 1.45 }}>
+                  {selectedStyleMeta.shortDescription}
+                </div>
+                <div className="clipSB_small" style={{ color: "rgba(207,216,255,0.74)", lineHeight: 1.4 }}>
+                  Rules: {selectedStyleMeta.promptRules.join(" • ")}
+                </div>
+                <div className="clipSB_small" style={{ color: "rgba(255,188,188,0.72)", lineHeight: 1.35 }}>
+                  Avoid: {selectedStyleMeta.forbidden.join(" • ")}
+                </div>
+              </div>
 
-          <div
-            style={{
-              borderRadius: 14,
-              overflow: "hidden",
-              border: `1px solid ${styleMeta.accent}55`,
-              background: styleMeta.background,
-              minHeight: previewFormatMeta.cardMinHeight,
-              aspectRatio: previewFormatMeta.aspectRatio,
-              position: "relative",
-              width: "100%",
-              display: "flex",
-            }}
-          >
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 92px", gap: 10, alignItems: "end" }}>
+                <label>
+                  <div className="clipSB_hint" style={{ marginBottom: 6 }}>Preview</div>
+                  <select
+                    className="clipSB_select"
+                    value={previewFormat}
+                    onChange={(e) => data?.onField?.(id, "previewFormat", e.target.value)}
+                    style={{ minHeight: 42 }}
+                  >
+                    {INTRO_FRAME_PREVIEW_FORMAT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
+                  <input
+                    className="clipSB_input"
+                    type="number"
+                    min="0.5"
+                    max="8"
+                    step="0.1"
+                    value={durationSec}
+                    onChange={(e) => data?.onField?.(id, "durationSec", e.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
+              Story context: {String(data?.contextSummary || "не подключён")}
+            </div>
+            <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
+              Generate вызывает backend Gemini generation и сохраняет preview как asset URL.
+            </div>
             {hasBackendGeneratedAsset ? (
-              <img
-                src={previewUrl}
-                alt={previewTitle}
-                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-              />
-            ) : previewUrl ? (
-              <>
+              <div className="clipSB_small" style={{ color: "#b8c4ff" }}>
+                Backend-branded asset показан как есть, без локального fake text overlay.
+              </div>
+            ) : null}
+            {errorMessage ? (
+              <div className="clipSB_small" style={{ color: "#ff9b9b" }}>
+                Ошибка генерации: {errorMessage}
+              </div>
+            ) : null}
+          </div>
+
+          <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
+            <div
+              style={{
+                borderRadius: 14,
+                overflow: "hidden",
+                border: `1px solid ${styleMeta.accent}55`,
+                background: styleMeta.background,
+                minHeight: previewFormatMeta.cardMinHeight,
+                aspectRatio: previewFormatMeta.aspectRatio,
+                position: "relative",
+                width: "100%",
+                display: "flex",
+              }}
+            >
+              {hasBackendGeneratedAsset ? (
                 <img
                   src={previewUrl}
                   alt={previewTitle}
                   style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                 />
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    background: isGenerating ? "linear-gradient(180deg, rgba(5,8,16,0.12) 0%, rgba(5,8,16,0.08) 100%)" : "transparent",
-                  }}
-                />
-              </>
-            ) : (
-              <>
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    background: `radial-gradient(circle at 18% 18%, ${styleMeta.accent}38 0%, transparent 34%), radial-gradient(circle at 84% 20%, ${styleMeta.secondary}32 0%, transparent 38%), linear-gradient(145deg, #080d19 0%, ${styleMeta.secondary} 55%, #020409 100%)`,
-                  }}
-                />
-
-                <div
-                  style={{
-                    position: "relative",
-                    zIndex: 1,
-                    minHeight: "100%",
-                    width: "100%",
-                    padding: previewFormatMeta.surfacePadding,
-                    display: "flex",
-                    flexDirection: "column",
-                    justifyContent: "space-between",
-                    gap: 12,
-                    overflow: "hidden",
-                    background: "linear-gradient(180deg, rgba(5,8,16,0.10) 0%, rgba(5,8,16,0.04) 35%, rgba(5,8,16,0.54) 100%)",
-                  }}
-                >
+              ) : previewUrl ? (
+                <>
+                  <img
+                    src={previewUrl}
+                    alt={previewTitle}
+                    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                  />
                   <div
-                    className="clipSB_small"
                     style={{
-                      color: styleMeta.accent,
-                      letterSpacing: "0.14em",
-                      textTransform: "uppercase",
-                      fontWeight: 700,
-                      whiteSpace: "nowrap",
+                      position: "absolute",
+                      inset: 0,
+                      background: isGenerating ? "linear-gradient(180deg, rgba(5,8,16,0.12) 0%, rgba(5,8,16,0.08) 100%)" : "transparent",
+                    }}
+                  />
+                </>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      background: `radial-gradient(circle at 18% 18%, ${styleMeta.accent}38 0%, transparent 34%), radial-gradient(circle at 84% 20%, ${styleMeta.secondary}32 0%, transparent 38%), linear-gradient(145deg, #080d19 0%, ${styleMeta.secondary} 55%, #020409 100%)`,
+                    }}
+                  />
+
+                  <div
+                    style={{
+                      position: "relative",
+                      zIndex: 1,
+                      minHeight: "100%",
+                      width: "100%",
+                      padding: previewFormatMeta.surfacePadding,
+                      display: "flex",
+                      flexDirection: "column",
+                      justifyContent: "space-between",
+                      gap: 12,
                       overflow: "hidden",
-                      textOverflow: "ellipsis",
+                      background: "linear-gradient(180deg, rgba(5,8,16,0.10) 0%, rgba(5,8,16,0.04) 35%, rgba(5,8,16,0.54) 100%)",
                     }}
                   >
-                    ava-studio
-                  </div>
-
-                  <div style={{ marginTop: "auto", display: "grid", gap: 8, minWidth: 0, overflow: "hidden" }}>
-                    <div
-                      style={{
-                        fontSize: titleFontSize,
-                        lineHeight: denseTitle ? 1.08 : 1.12,
-                        fontWeight: 900,
-                        letterSpacing: denseTitle ? "0.015em" : "0.035em",
-                        textTransform: "uppercase",
-                        color: "#ffffff",
-                        overflow: "hidden",
-                        display: "-webkit-box",
-                        WebkitBoxOrient: "vertical",
-                        WebkitLineClamp: titleClamp,
-                        wordBreak: "break-word",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {previewTitle}
-                    </div>
-                    <div style={{ width: "100%", height: 3, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
                     <div
                       className="clipSB_small"
                       style={{
-                        color: "rgba(245,247,255,0.84)",
+                        color: styleMeta.accent,
+                        letterSpacing: "0.14em",
+                        textTransform: "uppercase",
+                        fontWeight: 700,
+                        whiteSpace: "nowrap",
                         overflow: "hidden",
-                        display: "-webkit-box",
-                        WebkitBoxOrient: "vertical",
-                        WebkitLineClamp: contextClamp,
-                        lineHeight: 1.4,
-                        minWidth: 0,
-                        wordBreak: "break-word",
+                        textOverflow: "ellipsis",
                       }}
                     >
-                      {previewContext}
+                      ava-studio
                     </div>
-                    <div className="clipSB_small" style={{ color: "rgba(232,236,255,0.72)" }}>
-                      ava-studio product 2026
+
+                    <div style={{ marginTop: "auto", display: "grid", gap: 8, minWidth: 0, overflow: "hidden" }}>
+                      <div
+                        style={{
+                          fontSize: titleFontSize,
+                          lineHeight: denseTitle ? 1.08 : 1.12,
+                          fontWeight: 900,
+                          letterSpacing: denseTitle ? "0.015em" : "0.035em",
+                          textTransform: "uppercase",
+                          color: "#ffffff",
+                          overflow: "hidden",
+                          display: "-webkit-box",
+                          WebkitBoxOrient: "vertical",
+                          WebkitLineClamp: titleClamp,
+                          wordBreak: "break-word",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {previewTitle}
+                      </div>
+                      <div style={{ width: "100%", height: 3, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
+                      <div
+                        className="clipSB_small"
+                        style={{
+                          color: "rgba(245,247,255,0.84)",
+                          overflow: "hidden",
+                          display: "-webkit-box",
+                          WebkitBoxOrient: "vertical",
+                          WebkitLineClamp: contextClamp,
+                          lineHeight: 1.4,
+                          minWidth: 0,
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {previewContext}
+                      </div>
+                      <div className="clipSB_small" style={{ color: "rgba(232,236,255,0.72)" }}>
+                        ava-studio product 2026
+                      </div>
                     </div>
                   </div>
-                </div>
-              </>
-            )}
-          </div>
+                </>
+              )}
+            </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
-              {isGenerating ? "Generating..." : (previewUrl ? "Regenerate" : "Generate")}
-            </button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
-              Загрузить image
-            </button>
-            {previewUrl ? (
-              <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onClearImage?.(id)}>
-                Очистить
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
+                {isGenerating ? "Generating..." : (previewUrl ? "Regenerate" : "Generate")}
               </button>
-            ) : null}
+              <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
+                Загрузить image
+              </button>
+              {previewUrl ? (
+                <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onClearImage?.(id)}>
+                  Очистить
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <input
