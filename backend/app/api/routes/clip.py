@@ -4640,6 +4640,66 @@ def _shorten_text(value: str, limit: int = 700) -> str:
     return text[:limit] + " …"
 
 
+def _looks_like_scene_meta_label(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    normalized = raw.lower()
+    return bool(
+        re.fullmatch(r"scene\s*\d+", raw, flags=re.IGNORECASE)
+        or re.fullmatch(r"сцена\s*\d+", raw, flags=re.IGNORECASE)
+        or re.fullmatch(r"step[_\s-]*\d+", raw, flags=re.IGNORECASE)
+        or normalized == "story_action"
+        or normalized.startswith("scene title:")
+        or normalized.startswith("narrative step:")
+        or normalized.startswith("scene goal:")
+        or normalized.startswith("mode:")
+        or normalized.startswith("style preset:")
+        or normalized.startswith("timing:")
+        or normalized.startswith("primary role:")
+        or normalized.startswith("secondary roles:")
+        or normalized.startswith("refs used:")
+        or normalized.startswith("source image:")
+    )
+
+
+def _sanitize_visual_prompt_text(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    lines: list[str] = []
+    for line in re.split(r"\n+", raw):
+        cleaned = str(line or "").strip()
+        if not cleaned or _looks_like_scene_meta_label(cleaned):
+            continue
+        lines.append(cleaned)
+    return "\n".join(lines).strip()
+
+
+def _normalize_scene_goal_for_image(scene_goal: str, planner_meta: dict[str, Any] | None = None) -> str:
+    cleaned = _sanitize_visual_prompt_text(scene_goal)
+    if cleaned:
+        return cleaned
+    return _sanitize_visual_prompt_text(str((planner_meta or {}).get("storyMissionSummary") or ""))
+
+
+def _normalize_scene_narrative_step_for_image(scene_narrative_step: str) -> str:
+    cleaned = _sanitize_visual_prompt_text(scene_narrative_step)
+    if not cleaned or _looks_like_scene_meta_label(cleaned):
+        return ""
+    return cleaned
+
+
+def _comfy_no_text_overlay_block() -> str:
+    return "\n".join([
+        "TEXT OVERLAY SAFETY (DEFAULT RULE):",
+        "- no text overlays in the generated image",
+        "- no captions, subtitles, labels, UI text, lower-thirds, watermarks, side annotations, typography, or debug strings",
+        "- do not draw scene numbers, scene titles, scene ids, step labels, story_action, or any service/meta text",
+        "- only allow readable text when the scene explicitly requires a real in-world sign or object with text",
+    ])
+
+
 def _build_comfy_image_prompt_assembly(
     *,
     scene_delta: str,
@@ -4754,8 +4814,9 @@ def _build_comfy_image_prompt_assembly(
         "- no multiple photos inside one image",
     ])
 
-    continuity_value = continuity_input or str((planner_meta or {}).get("globalContinuity") or "").strip()
-    scene_goal_value = scene_goal or str((planner_meta or {}).get("storyMissionSummary") or "").strip()
+    continuity_value = _sanitize_visual_prompt_text(continuity_input or str((planner_meta or {}).get("globalContinuity") or "").strip())
+    scene_goal_value = _normalize_scene_goal_for_image(scene_goal, planner_meta)
+    scene_narrative_step_value = _normalize_scene_narrative_step_for_image(scene_narrative_step)
     planner_meta_preview = {
         "storyControlMode": str((planner_meta or {}).get("storyControlMode") or "").strip(),
         "timelineSource": str((planner_meta or {}).get("timelineSource") or "").strip(),
@@ -4769,14 +4830,17 @@ def _build_comfy_image_prompt_assembly(
         "- preserve face/hair/body/outfit/accessories and forbidden identity changes from references",
     ] + (visual_profile_lines or ["- no detailed visualProfile extracted"]))
 
-    scene_meaning_block = "\n".join([
+    scene_meaning_lines = [
         "SCENE LAYER (PRIORITY 2):",
         "SCENE MEANING:",
-        f"- scene delta: {scene_delta}",
-        f"- scene text/context: {scene_text or text_input or ''}",
-        f"- scene goal: {scene_goal_value}",
-        f"- scene narrative step: {scene_narrative_step}",
-    ])
+        f"- scene delta: {_sanitize_visual_prompt_text(scene_delta)}",
+        f"- scene text/context: {_sanitize_visual_prompt_text(scene_text or text_input or '')}",
+    ]
+    if scene_goal_value:
+        scene_meaning_lines.append(f"- scene goal: {scene_goal_value}")
+    if scene_narrative_step_value:
+        scene_meaning_lines.append(f"- scene progression cue: {scene_narrative_step_value}")
+    scene_meaning_block = "\n".join(scene_meaning_lines)
 
     continuity_block = "\n".join([
         "CONTINUITY:",
@@ -4814,6 +4878,7 @@ def _build_comfy_image_prompt_assembly(
         f"- world scale context: {world_scale_context}\n"
         f"- entity scale anchors: {entity_scale_anchor_text}",
         anti_collage_block,
+        _comfy_no_text_overlay_block(),
         priority_contract_block,
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
         forbidden_changes_block,
@@ -4888,7 +4953,7 @@ def clip_image(payload: ClipImageIn):
 
     width = max(256, min(2048, int(payload.width or 1024)))
     height = max(256, min(2048, int(payload.height or 1024)))
-    scene_text = (payload.sceneText or "").strip()
+    scene_text = _sanitize_visual_prompt_text((payload.sceneText or "").strip())
     refs_obj = payload.refs
     character_refs = _normalize_ref_list(getattr(refs_obj, "character", None))
     location_refs = _normalize_ref_list(getattr(refs_obj, "location", None))
@@ -5092,9 +5157,9 @@ def clip_image(payload: ClipImageIn):
     audio_input_url = str(getattr(refs_obj, "audioUrl", "") or "").strip()
     mode_input = str(getattr(refs_obj, "mode", "") or "").strip()
     style_preset_input = str(getattr(refs_obj, "stylePreset", "") or "").strip()
-    scene_goal_input = str(getattr(refs_obj, "sceneGoal", "") or "").strip()
-    scene_narrative_step_input = str(getattr(refs_obj, "sceneNarrativeStep", "") or "").strip()
-    continuity_input = str(getattr(refs_obj, "continuity", "") or "").strip()
+    scene_goal_input = _normalize_scene_goal_for_image(str(getattr(refs_obj, "sceneGoal", "") or "").strip())
+    scene_narrative_step_input = _normalize_scene_narrative_step_for_image(str(getattr(refs_obj, "sceneNarrativeStep", "") or "").strip())
+    continuity_input = _sanitize_visual_prompt_text(str(getattr(refs_obj, "continuity", "") or "").strip())
     prompt_source = str(getattr(refs_obj, "promptSource", "") or "").strip() or str((getattr(payload, "promptDebug", None) or {}).get("promptSource") or "").strip()
     request_prompt_debug = getattr(payload, "promptDebug", None)
     request_prompt_debug = request_prompt_debug if isinstance(request_prompt_debug, dict) else {}
@@ -5313,7 +5378,8 @@ def clip_image(payload: ClipImageIn):
             "PROP CATEGORY AND SCALE LOCK: Prop references define object class (portable_tool, handheld_object, device, furniture, large_machine, vehicle, environment_object). Keep category-faithful shape, function, and human-relative scale across all shots. Portable and handheld props must keep realistic body-relative size and must not randomly grow or shrink between scenes. "
             "CLIP WORLD LOCK: Every shot in one clip must belong to one shared world identity. Preserve the same lighting logic, atmosphere, weather state, palette, material response, and dust/fog/snow/rain state across shots. Shot variation is allowed, but world identity must remain unchanged. "
             "PROP PHYSICAL CONSISTENCY: Keep consistent size relative to hands, size relative to torso/legs, grip logic, weight impression, handle/cable behavior, and ground contact behavior. The prop must not look weightless, oversized, undersized, or physically inconsistent between scenes. If the prop is handheld, its scale must remain realistically liftable by the character. "
-            "Scene text may be Russian and visual prompt may be English. Use both when available: visual prompt defines composition/action, and scene text defines narrative context and emotion."
+            "Scene text may be Russian and visual prompt may be English. Use both when available: visual prompt defines composition/action, and scene text defines narrative context and emotion. "
+            "DEFAULT NO-TEXT RULE: generated scene images must not contain captions, labels, subtitles, UI overlays, watermarks, scene numbers, scene titles, debug/meta text, side annotations, or typography unless the scene explicitly requires real in-world signage."
         )
 
         parts = [{"text": system_prompt}]
@@ -5367,6 +5433,9 @@ def clip_image(payload: ClipImageIn):
             parts.append({"text": "The prop identity is defined by the reference images and must not be replaced."})
             if prop_anchor_label:
                 parts.append({"text": f"Session prop anchor label: {prop_anchor_label}. Keep exactly this prop identity."})
+
+        scene_delta = _sanitize_visual_prompt_text(scene_delta)
+        scene_text = _sanitize_visual_prompt_text(scene_text)
 
         if prop_anchor_label:
             scene_delta = _enforce_prop_anchor_text(scene_delta, prop_anchor_label, lang="en")

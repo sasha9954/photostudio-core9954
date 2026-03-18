@@ -1205,6 +1205,60 @@ function looksLikeTechnicalAssetRef(value) {
   );
 }
 
+const COMFY_IMAGE_NO_TEXT_RULE = [
+  "Generate a clean scene image with zero added text.",
+  "No captions, no labels, no subtitles, no watermarks, no typography, no UI overlays.",
+  "Do not render scene numbers, titles, debug text, story_action, or side annotations.",
+  "Only include signage or readable text when the scene explicitly requires a real in-world sign.",
+].join(" ");
+
+function looksLikeSceneMetaLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  const normalized = raw.toLowerCase();
+  return (
+    /^scene\s*\d+$/i.test(raw)
+    || /^сцена\s*\d+$/i.test(raw)
+    || /^step[_\s-]*\d+$/i.test(raw)
+    || normalized === "story_action"
+    || normalized.startsWith("scene title:")
+    || normalized.startsWith("narrative step:")
+    || normalized.startsWith("scene goal:")
+    || normalized.startsWith("mode:")
+    || normalized.startsWith("style preset:")
+    || normalized.startsWith("timing:")
+    || normalized.startsWith("primary role:")
+    || normalized.startsWith("secondary roles:")
+    || normalized.startsWith("refs used:")
+    || normalized.startsWith("source image:")
+  );
+}
+
+function sanitizeComfyVisualPromptText(value) {
+  if (!String(value || "").trim()) return "";
+  return String(value || "")
+    .split(/\n+/)
+    .map((line) => String(line || "").trim())
+    .filter((line) => line && !looksLikeSceneMetaLabel(line))
+    .join("\n")
+    .trim();
+}
+
+function appendComfyImageNoTextRule(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return COMFY_IMAGE_NO_TEXT_RULE;
+  const normalized = trimmed.toLowerCase();
+  if (
+    normalized.includes("no captions")
+    || normalized.includes("no text")
+    || normalized.includes("no typography")
+    || normalized.includes("no ui overlays")
+  ) {
+    return trimmed;
+  }
+  return `${trimmed}\n\n${COMFY_IMAGE_NO_TEXT_RULE}`.trim();
+}
+
 function selectComfyImagePrompt({
   syncedImagePrompt = "",
   sceneContract = null,
@@ -1212,35 +1266,32 @@ function selectComfyImagePrompt({
   plannerSceneSnapshot = null,
 } = {}) {
   const fallbackPromptFromContract = [
-    String(sceneContract?.sceneGoal || "").trim(),
-    String(sceneContract?.sceneNarrativeStep || "").trim(),
-    String(sceneContract?.continuity || "").trim(),
-    sceneContract?.refDirectives ? `Ref directives: ${JSON.stringify(sceneContract.refDirectives)}` : "",
+    sanitizeComfyVisualPromptText(sceneContract?.sceneGoal),
+    sanitizeComfyVisualPromptText(sceneContract?.continuity),
+    sceneContract?.refDirectives ? `Reference directives: ${JSON.stringify(sceneContract.refDirectives)}` : "",
   ].filter(Boolean).join("\n");
   const semanticAudioCue = String(liveDerived?.meaningfulAudio || "").trim();
   const safeAudioCue = semanticAudioCue && !looksLikeTechnicalAssetRef(semanticAudioCue) ? semanticAudioCue : "";
   const fallbackPromptFromLive = [
-    String(liveDerived?.meaningfulText || "").trim(),
-    String(liveDerived?.modeValue || "").trim() ? `Mode: ${String(liveDerived?.modeValue || "").trim()}` : "",
-    String(liveDerived?.stylePreset || "").trim() ? `Style preset: ${String(liveDerived?.stylePreset || "").trim()}` : "",
+    sanitizeComfyVisualPromptText(liveDerived?.meaningfulText),
     safeAudioCue ? `Audio cue: ${safeAudioCue}` : "",
   ].filter(Boolean).join("\n");
-  const fallbackPromptFromPlannerSnapshot = String(
+  const fallbackPromptFromPlannerSnapshot = sanitizeComfyVisualPromptText(
     plannerSceneSnapshot?.imagePromptEn
     || plannerSceneSnapshot?.imagePrompt
     || plannerSceneSnapshot?.framePrompt
     || plannerSceneSnapshot?.prompt
     || ""
-  ).trim();
+  );
   const promptCandidates = [
-    { source: "synced_scene_image_prompt", value: String(syncedImagePrompt || "").trim() },
+    { source: "synced_scene_image_prompt", value: sanitizeComfyVisualPromptText(syncedImagePrompt) },
     { source: "scene_contract", value: fallbackPromptFromContract },
     { source: "live_brain_state", value: fallbackPromptFromLive },
     { source: "planner_snapshot_fallback", value: fallbackPromptFromPlannerSnapshot },
   ];
   const selectedPromptCandidate = promptCandidates.find((item) => String(item?.value || "").trim()) || { source: "none", value: "" };
   return {
-    imagePrompt: String(selectedPromptCandidate?.value || "").trim(),
+    imagePrompt: appendComfyImageNoTextRule(selectedPromptCandidate?.value || ""),
     promptSource: String(selectedPromptCandidate?.source || "none"),
     promptCandidates,
     audioCueDroppedAsTechnicalRef: Boolean(semanticAudioCue && !safeAudioCue),
@@ -1413,17 +1464,14 @@ function buildComfySceneContextPrompt({ scene = {}, mode = "clip", stylePreset =
       ? `${Number(scene.durationSec).toFixed(1)}s`
       : "";
   const parts = [
-    `Mode: ${mode}`,
-    `Style preset: ${stylePreset}`,
-    scene?.title ? `Scene title: ${scene.title}` : "",
-    scene?.sceneGoal ? `Scene goal: ${scene.sceneGoal}` : "",
-    scene?.sceneNarrativeStep ? `Narrative step: ${scene.sceneNarrativeStep}` : "",
-    scene?.continuity ? `Continuity: ${scene.continuity}` : "",
-    timing ? `Timing: ${timing}` : "",
-    scene?.primaryRole ? `Primary role: ${scene.primaryRole}` : "",
-    Array.isArray(scene?.secondaryRoles) && scene.secondaryRoles.length ? `Secondary roles: ${scene.secondaryRoles.join(", ")}` : "",
-    scene?.refsUsed && typeof scene.refsUsed === "object" && Object.keys(scene.refsUsed).length ? `Refs used: ${JSON.stringify(scene.refsUsed)}` : "",
-    isVideo && scene?.imageUrl ? `Source image: ${scene.imageUrl}` : "",
+    `Cinematic ${String(mode || "clip").trim()} scene in ${String(stylePreset || "realism").trim()} style.`,
+    sanitizeComfyVisualPromptText(scene?.sceneGoal),
+    sanitizeComfyVisualPromptText(scene?.continuity),
+    timing ? `Keep the action readable within ${timing}.` : "",
+    scene?.primaryRole ? `Primary subject focus: ${scene.primaryRole}.` : "",
+    Array.isArray(scene?.secondaryRoles) && scene.secondaryRoles.length ? `Supporting subjects available: ${scene.secondaryRoles.join(", ")}.` : "",
+    isVideo && scene?.imageUrl ? `Animate from the provided source image while preserving the same clean composition and world continuity.` : "",
+    !isVideo ? COMFY_IMAGE_NO_TEXT_RULE : "",
   ].filter(Boolean);
   return parts.join("\n");
 }
