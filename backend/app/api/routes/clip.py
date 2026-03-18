@@ -9,6 +9,7 @@ import math
 import base64
 import json
 import re
+import unicodedata
 import os
 import io
 import mimetypes
@@ -956,9 +957,92 @@ def _normalize_intro_lock_map(raw: Any, *, allowed_roles: set[str] | None = None
     return out
 
 
+_INTRO_SPECIES_CYRILLIC_MAP = str.maketrans({
+    "а": "a",
+    "б": "b",
+    "в": "v",
+    "г": "g",
+    "д": "d",
+    "е": "e",
+    "ё": "e",
+    "ж": "zh",
+    "з": "z",
+    "и": "i",
+    "й": "y",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "о": "o",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "у": "u",
+    "ф": "f",
+    "х": "kh",
+    "ц": "ts",
+    "ч": "ch",
+    "ш": "sh",
+    "щ": "shch",
+    "ъ": "",
+    "ы": "y",
+    "ь": "",
+    "э": "e",
+    "ю": "yu",
+    "я": "ya",
+})
+
+_INTRO_SPECIES_ALIAS_MAP = {
+    "dog": "dog",
+    "dogs": "dog",
+    "canine": "dog",
+    "puppy": "dog",
+    "hound": "dog",
+    "sobaka": "dog",
+    "pes": "dog",
+    "pyos": "dog",
+    "shchenok": "dog",
+    "cat": "cat",
+    "cats": "cat",
+    "feline": "cat",
+    "kitten": "cat",
+    "kitty": "cat",
+    "koshka": "cat",
+    "kot": "cat",
+    "kotenok": "cat",
+    "wolf": "wolf",
+    "wolves": "wolf",
+    "canis lupus": "wolf",
+    "volk": "wolf",
+    "volchitsa": "wolf",
+    "horse": "horse",
+    "horses": "horse",
+    "equine": "horse",
+    "stallion": "horse",
+    "mare": "horse",
+    "loshad": "horse",
+    "kon": "horse",
+    "bird": "bird",
+    "avian": "bird",
+    "parrot": "bird",
+    "eagle": "bird",
+    "owl": "bird",
+    "ptitsa": "bird",
+    "popugay": "bird",
+    "orel": "bird",
+    "sova": "bird",
+}
+
+
 def _normalize_intro_species_lock(raw: Any) -> str:
     value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
-    return re.sub(r"[^a-z0-9\- ]+", "", value).strip()
+    if not value:
+        return ""
+    transliterated = unicodedata.normalize("NFKD", value).translate(_INTRO_SPECIES_CYRILLIC_MAP)
+    ascii_value = transliterated.encode("ascii", "ignore").decode("ascii")
+    normalized = re.sub(r"[^a-z0-9\- ]+", "", ascii_value).strip()
+    return _INTRO_SPECIES_ALIAS_MAP.get(normalized, normalized)
 
 
 def _normalize_intro_role_list(items: Any, *, allowed_roles: set[str] | None = None, max_items: int = 8) -> list[str]:

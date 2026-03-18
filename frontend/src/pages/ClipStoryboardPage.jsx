@@ -3135,7 +3135,13 @@ function IntroFrameNode({ id, data }) {
               display: "flex",
             }}
           >
-            {previewUrl ? (
+            {hasBackendGeneratedAsset ? (
+              <img
+                src={previewUrl}
+                alt={previewTitle}
+                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+              />
+            ) : previewUrl ? (
               <>
                 <img
                   src={previewUrl}
