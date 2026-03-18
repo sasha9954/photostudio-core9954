@@ -5317,7 +5317,7 @@ Aspect ratio: ${imageFormat}`,
             sceneCount: Number(out?.sceneCount || assemblyPayload.scenes.length || 0),
             introIncluded: !!out?.introIncluded,
             totalSegments: Number(out?.totalSegments || 0),
-            totalSteps: Number(out?.totalSteps || 0),
+            totalSteps: Number(out?.totalSteps || out?.total || 0),
             introDurationSec: Number(out?.introDurationSec || 0),
           });
           setAssemblyBuildState("done");
