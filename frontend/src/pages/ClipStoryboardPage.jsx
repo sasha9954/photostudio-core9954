@@ -2955,12 +2955,12 @@ function IntroFrameNode({ id, data }) {
   const fileInputRef = useRef(null);
   const [isCompactLayout, setIsCompactLayout] = useState(() => {
     if (typeof window === "undefined") return false;
-    return window.innerWidth < 1180;
+    return window.innerWidth < 1280;
   });
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    const media = window.matchMedia("(max-width: 1179px)");
+    const media = window.matchMedia("(max-width: 1279px)");
     const syncLayout = (event) => setIsCompactLayout(event.matches);
 
     setIsCompactLayout(media.matches);
@@ -2988,13 +2988,14 @@ function IntroFrameNode({ id, data }) {
   const errorMessage = String(data?.error || "").trim();
   const previewTitle = String(data?.title || "INTRO FRAME").trim() || "INTRO FRAME";
   const previewContext = String(data?.contextSummary || "Story preview").trim() || "Story preview";
+  const previewContextShort = truncateIntroText(previewContext, 148);
   const denseTitle = previewTitle.length > 44;
   const titleClamp = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT ? 4 : 3;
   const titleFontSize = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT
-    ? (denseTitle ? 22 : 26)
+    ? (denseTitle ? 32 : 38)
     : previewFormat === INTRO_FRAME_PREVIEW_FORMATS.SQUARE
-      ? (denseTitle ? 20 : 24)
-      : (denseTitle ? 18 : 22);
+      ? (denseTitle ? 28 : 34)
+      : (denseTitle ? 24 : 30);
   const contextClamp = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT ? 2 : 1;
   const statusLabel = status === "ready"
     ? "preview готов"
@@ -3004,6 +3005,23 @@ function IntroFrameNode({ id, data }) {
   const selectedStylePreset = normalizeIntroStylePreset(data?.stylePreset || "cinematic");
   const selectedStyleMeta = getIntroStyleMeta(selectedStylePreset);
   const isGenerating = status === "generating" || status === "preview_generating";
+  const debug = data?.debug && typeof data.debug === "object" ? data.debug : {};
+  const activeCastRoles = Array.isArray(debug?.introActiveCastRoles) ? debug.introActiveCastRoles : [];
+  const mustAppearRoles = Array.isArray(debug?.introMustAppear) ? debug.introMustAppear : [];
+  const mustNotAppearRoles = Array.isArray(debug?.introMustNotAppear) ? debug.introMustNotAppear : [];
+  const attachedReferenceParts = debug?.attachedReferenceParts && typeof debug.attachedReferenceParts === "object"
+    ? debug.attachedReferenceParts
+    : {};
+  const attachedInlineRoles = Array.isArray(debug?.attachedInlineReferenceRoles) ? debug.attachedInlineReferenceRoles : [];
+  const overlayDebug = debug?.overlay && typeof debug.overlay === "object" ? debug.overlay : {};
+  const detailRows = [
+    activeCastRoles.length ? ["Active cast", activeCastRoles.join(", ")] : null,
+    mustAppearRoles.length ? ["Must appear", mustAppearRoles.join(", ")] : null,
+    mustNotAppearRoles.length ? ["Must not appear", mustNotAppearRoles.join(", ")] : null,
+    attachedInlineRoles.length ? ["Inline refs", attachedInlineRoles.join(", ")] : null,
+    Object.keys(attachedReferenceParts).length ? ["Attached parts", Object.entries(attachedReferenceParts).map(([role, count]) => `${role}:${count}`).join(" • ")] : null,
+    overlayDebug?.titleRendered ? ["Overlay", `font ${overlayDebug?.fontSize || 0}px • ${Array.isArray(overlayDebug?.lines) ? overlayDebug.lines.length : 0} lines`] : null,
+  ].filter(Boolean);
 
   return (
     <>
@@ -3016,44 +3034,44 @@ function IntroFrameNode({ id, data }) {
         icon={<span aria-hidden>🖼️</span>}
         className="clipSB_nodeAssembly"
       >
-        <div className="clipSB_assemblyStats">
-          <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
-          <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
-          <div className="clipSB_assemblyRow"><span>Длительность</span><strong>{durationSec.toFixed(1)} сек</strong></div>
-          <div className="clipSB_assemblyRow"><span>Статус</span><strong>{statusLabel}</strong></div>
-        </div>
+        <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 860, maxWidth: "100%" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: isCompactLayout ? "minmax(0, 1fr)" : "minmax(280px, 330px) minmax(0, 1fr)",
+              gap: 14,
+              alignItems: "start",
+              marginTop: 10,
+            }}
+          >
+            <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
+              <div className="clipSB_assemblyStats" style={{ marginBottom: 0 }}>
+                <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
+                <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
+                <div className="clipSB_assemblyRow"><span>Длительность</span><strong>{durationSec.toFixed(1)} сек</strong></div>
+                <div className="clipSB_assemblyRow"><span>Статус</span><strong>{statusLabel}</strong></div>
+              </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: isCompactLayout ? "minmax(0, 1fr)" : "minmax(0, 1fr) minmax(220px, 240px)",
-            gap: 12,
-            alignItems: "start",
-            marginTop: 10,
-          }}
-        >
-          <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
-            <label>
-              <div className="clipSB_hint" style={{ marginBottom: 6 }}>Title</div>
-              <input
-                className="clipSB_input"
-                value={String(data?.title || "")}
-                onChange={(e) => data?.onField?.(id, "title", e.target.value)}
-                disabled={autoTitle}
-                placeholder={autoTitle ? "Авто по сюжету / сценам" : "Введите заголовок"}
-              />
-            </label>
+              <label>
+                <div className="clipSB_hint" style={{ marginBottom: 6 }}>Title</div>
+                <input
+                  className="clipSB_input"
+                  value={String(data?.title || "")}
+                  onChange={(e) => data?.onField?.(id, "title", e.target.value)}
+                  disabled={autoTitle}
+                  placeholder={autoTitle ? "Авто по сюжету / сценам" : "Введите заголовок"}
+                />
+              </label>
 
-            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input
-                type="checkbox"
-                checked={autoTitle}
-                onChange={(e) => data?.onField?.(id, "autoTitle", e.target.checked)}
-              />
-              <span className="clipSB_small">Auto title по сюжетному контексту</span>
-            </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={autoTitle}
+                  onChange={(e) => data?.onField?.(id, "autoTitle", e.target.checked)}
+                />
+                <span className="clipSB_small">Auto title по сюжетному контексту</span>
+              </label>
 
-            <div style={{ display: "grid", gap: 10, marginTop: 4 }}>
               <label>
                 <div className="clipSB_hint" style={{ marginBottom: 6 }}>Style preset</div>
                 <select
@@ -3068,44 +3086,6 @@ function IntroFrameNode({ id, data }) {
                   })}
                 </select>
               </label>
-
-              <div
-                style={{
-                  borderRadius: 12,
-                  padding: "10px 12px",
-                  border: `1px solid ${selectedStyleMeta.accent}3d`,
-                  background: "rgba(10,14,24,0.74)",
-                  boxShadow: `inset 0 0 0 1px ${selectedStyleMeta.accent}12`,
-                  display: "grid",
-                  gap: 7,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#f5f7ff" }}>{selectedStyleMeta.label}</div>
-                  <div
-                    className="clipSB_small"
-                    style={{
-                      flexShrink: 0,
-                      borderRadius: 999,
-                      padding: "3px 8px",
-                      color: selectedStyleMeta.accent,
-                      border: `1px solid ${selectedStyleMeta.accent}55`,
-                      background: "rgba(255,255,255,0.03)",
-                    }}
-                  >
-                    {selectedStyleMeta.uiHint}
-                  </div>
-                </div>
-                <div className="clipSB_small" style={{ color: "rgba(245,247,255,0.78)", lineHeight: 1.45 }}>
-                  {selectedStyleMeta.shortDescription}
-                </div>
-                <div className="clipSB_small" style={{ color: "rgba(207,216,255,0.74)", lineHeight: 1.4 }}>
-                  Rules: {selectedStyleMeta.promptRules.join(" • ")}
-                </div>
-                <div className="clipSB_small" style={{ color: "rgba(255,188,188,0.72)", lineHeight: 1.35 }}>
-                  Avoid: {selectedStyleMeta.forbidden.join(" • ")}
-                </div>
-              </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 92px", gap: 10, alignItems: "end" }}>
                 <label>
@@ -3132,171 +3112,241 @@ function IntroFrameNode({ id, data }) {
                   />
                 </label>
               </div>
+
+              <div
+                className="clipSB_small"
+                style={{
+                  color: "#cfd8ff",
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(159,176,255,0.16)",
+                  background: "rgba(9,13,24,0.72)",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+                title={previewContext}
+              >
+                Story context: {previewContextShort || "не подключён"}
+              </div>
+
+              {errorMessage ? (
+                <div className="clipSB_small" style={{ color: "#ff9b9b", padding: "10px 12px", borderRadius: 12, background: "rgba(87,22,28,0.34)", border: "1px solid rgba(255,118,118,0.26)" }}>
+                  Ошибка генерации: {errorMessage}
+                </div>
+              ) : null}
+
+              <details style={{ borderRadius: 12, border: `1px solid ${selectedStyleMeta.accent}30`, background: "rgba(10,14,24,0.74)" }}>
+                <summary style={{ cursor: "pointer", listStyle: "none", padding: "10px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12, fontWeight: 700, color: "#f5f7ff" }}>
+                  <span>Details / Prompt info</span>
+                  <span className="clipSB_small" style={{ color: selectedStyleMeta.accent }}>{selectedStyleMeta.uiHint}</span>
+                </summary>
+                <div style={{ display: "grid", gap: 10, padding: "0 12px 12px" }}>
+                  <div className="clipSB_small" style={{ color: "rgba(245,247,255,0.78)", lineHeight: 1.45 }}>
+                    {selectedStyleMeta.shortDescription}
+                  </div>
+                  <div className="clipSB_small" style={{ color: "rgba(207,216,255,0.74)", lineHeight: 1.4 }}>
+                    Rules: {selectedStyleMeta.promptRules.join(" • ")}
+                  </div>
+                  <div className="clipSB_small" style={{ color: "rgba(255,188,188,0.72)", lineHeight: 1.35 }}>
+                    Avoid: {selectedStyleMeta.forbidden.join(" • ")}
+                  </div>
+                  <div className="clipSB_small" style={{ color: "#9fb0ff", lineHeight: 1.4 }}>
+                    Generate вызывает backend Gemini generation и сохраняет preview как asset URL.
+                  </div>
+                  {hasBackendGeneratedAsset ? (
+                    <div className="clipSB_small" style={{ color: "#b8c4ff", lineHeight: 1.4 }}>
+                      Backend-branded asset показан как есть, без локального fake text overlay.
+                    </div>
+                  ) : null}
+                  {detailRows.length ? (
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {detailRows.map(([label, value]) => (
+                        <div key={label} className="clipSB_small" style={{ color: "#dce4ff", lineHeight: 1.4 }}>
+                          <strong style={{ color: "#ffffff" }}>{label}:</strong> {value}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </details>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
+                  {isGenerating ? "Generating..." : (previewUrl ? "Regenerate" : "Generate")}
+                </button>
+                <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
+                  Загрузить image
+                </button>
+                {previewUrl ? (
+                  <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onClearImage?.(id)}>
+                    Очистить
+                  </button>
+                ) : null}
+              </div>
             </div>
 
-            <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
-              Story context: {String(data?.contextSummary || "не подключён")}
-            </div>
-            <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
-              Generate вызывает backend Gemini generation и сохраняет preview как asset URL.
-            </div>
-            {hasBackendGeneratedAsset ? (
-              <div className="clipSB_small" style={{ color: "#b8c4ff" }}>
-                Backend-branded asset показан как есть, без локального fake text overlay.
-              </div>
-            ) : null}
-            {errorMessage ? (
-              <div className="clipSB_small" style={{ color: "#ff9b9b" }}>
-                Ошибка генерации: {errorMessage}
-              </div>
-            ) : null}
-          </div>
-
-          <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
-            <div
-              style={{
-                borderRadius: 14,
-                overflow: "hidden",
-                border: `1px solid ${styleMeta.accent}55`,
-                background: styleMeta.background,
-                minHeight: previewFormatMeta.cardMinHeight,
-                aspectRatio: previewFormatMeta.aspectRatio,
-                position: "relative",
-                width: "100%",
-                display: "flex",
-              }}
-            >
-              {hasBackendGeneratedAsset ? (
-                <img
-                  src={previewUrl}
-                  alt={previewTitle}
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                />
-              ) : previewUrl ? (
-                <>
+            <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
+              <div
+                style={{
+                  borderRadius: 16,
+                  overflow: "hidden",
+                  border: `1px solid ${styleMeta.accent}55`,
+                  background: styleMeta.background,
+                  minHeight: Math.max(previewFormatMeta.cardMinHeight, isCompactLayout ? 320 : 360),
+                  aspectRatio: previewFormatMeta.aspectRatio,
+                  position: "relative",
+                  width: "100%",
+                  display: "flex",
+                  boxShadow: "0 24px 44px rgba(0,0,0,0.28)",
+                }}
+              >
+                {hasBackendGeneratedAsset ? (
                   <img
                     src={previewUrl}
                     alt={previewTitle}
                     style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                   />
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      background: isGenerating ? "linear-gradient(180deg, rgba(5,8,16,0.12) 0%, rgba(5,8,16,0.08) 100%)" : "transparent",
-                    }}
-                  />
-                </>
-              ) : (
-                <>
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      background: `radial-gradient(circle at 18% 18%, ${styleMeta.accent}38 0%, transparent 34%), radial-gradient(circle at 84% 20%, ${styleMeta.secondary}32 0%, transparent 38%), linear-gradient(145deg, #080d19 0%, ${styleMeta.secondary} 55%, #020409 100%)`,
-                    }}
-                  />
-
-                  <div
-                    style={{
-                      position: "relative",
-                      zIndex: 1,
-                      minHeight: "100%",
-                      width: "100%",
-                      padding: previewFormatMeta.surfacePadding,
-                      display: "flex",
-                      flexDirection: "column",
-                      justifyContent: "space-between",
-                      gap: 12,
-                      overflow: "hidden",
-                      background: "linear-gradient(180deg, rgba(5,8,16,0.10) 0%, rgba(5,8,16,0.04) 35%, rgba(5,8,16,0.54) 100%)",
-                    }}
-                  >
+                ) : previewUrl ? (
+                  <>
+                    <img
+                      src={previewUrl}
+                      alt={previewTitle}
+                      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    />
                     <div
-                      className="clipSB_small"
                       style={{
-                        color: styleMeta.accent,
-                        letterSpacing: "0.14em",
-                        textTransform: "uppercase",
-                        fontWeight: 700,
-                        whiteSpace: "nowrap",
+                        position: "absolute",
+                        inset: 0,
+                        background: isGenerating ? "linear-gradient(180deg, rgba(5,8,16,0.12) 0%, rgba(5,8,16,0.08) 100%)" : "transparent",
+                      }}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        background: `radial-gradient(circle at 18% 18%, ${styleMeta.accent}38 0%, transparent 34%), radial-gradient(circle at 84% 20%, ${styleMeta.secondary}32 0%, transparent 38%), linear-gradient(145deg, #080d19 0%, ${styleMeta.secondary} 55%, #020409 100%)`,
+                      }}
+                    />
+
+                    <div
+                      style={{
+                        position: "relative",
+                        zIndex: 1,
+                        minHeight: "100%",
+                        width: "100%",
+                        padding: Math.max(previewFormatMeta.surfacePadding, 18),
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "space-between",
+                        gap: 14,
                         overflow: "hidden",
-                        textOverflow: "ellipsis",
+                        background: "linear-gradient(180deg, rgba(5,8,16,0.08) 0%, rgba(5,8,16,0.03) 28%, rgba(5,8,16,0.66) 100%)",
                       }}
                     >
-                      ava-studio
-                    </div>
-
-                    <div style={{ marginTop: "auto", display: "grid", gap: 8, minWidth: 0, overflow: "hidden" }}>
-                      <div
-                        style={{
-                          fontSize: titleFontSize,
-                          lineHeight: denseTitle ? 1.08 : 1.12,
-                          fontWeight: 900,
-                          letterSpacing: denseTitle ? "0.015em" : "0.035em",
-                          textTransform: "uppercase",
-                          color: "#ffffff",
-                          overflow: "hidden",
-                          display: "-webkit-box",
-                          WebkitBoxOrient: "vertical",
-                          WebkitLineClamp: titleClamp,
-                          wordBreak: "break-word",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {previewTitle}
-                      </div>
-                      <div style={{ width: "100%", height: 3, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
                       <div
                         className="clipSB_small"
                         style={{
-                          color: "rgba(245,247,255,0.84)",
+                          color: styleMeta.accent,
+                          letterSpacing: "0.16em",
+                          textTransform: "uppercase",
+                          fontWeight: 800,
+                          whiteSpace: "nowrap",
                           overflow: "hidden",
-                          display: "-webkit-box",
-                          WebkitBoxOrient: "vertical",
-                          WebkitLineClamp: contextClamp,
-                          lineHeight: 1.4,
-                          minWidth: 0,
-                          wordBreak: "break-word",
+                          textOverflow: "ellipsis",
                         }}
                       >
-                        {previewContext}
+                        ava-studio
                       </div>
-                      <div className="clipSB_small" style={{ color: "rgba(232,236,255,0.72)" }}>
-                        ava-studio product 2026
+
+                      <div style={{ marginTop: "auto", display: "grid", gap: 10, minWidth: 0, overflow: "hidden" }}>
+                        <div
+                          style={{
+                            alignSelf: "start",
+                            maxWidth: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "78%" : "100%",
+                            padding: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "16px 18px 14px" : "18px 18px 16px",
+                            borderRadius: 18,
+                            background: "linear-gradient(180deg, rgba(4,6,12,0.74) 0%, rgba(4,6,12,0.92) 100%)",
+                            border: `1px solid ${styleMeta.accent}55`,
+                            boxShadow: `0 10px 30px ${styleMeta.accent}30, inset 0 1px 0 rgba(255,255,255,0.08)`,
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: titleFontSize,
+                              lineHeight: denseTitle ? 1.02 : 1.06,
+                              fontWeight: 900,
+                              letterSpacing: denseTitle ? "0.012em" : "0.03em",
+                              textTransform: "uppercase",
+                              color: "#ffffff",
+                              textShadow: "0 2px 0 rgba(0,0,0,0.32), 0 0 18px rgba(255,255,255,0.12)",
+                              overflow: "hidden",
+                              display: "-webkit-box",
+                              WebkitBoxOrient: "vertical",
+                              WebkitLineClamp: titleClamp,
+                              wordBreak: "break-word",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {previewTitle}
+                          </div>
+                        </div>
+                        <div style={{ width: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "72%" : "100%", height: 4, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
+                        <div
+                          className="clipSB_small"
+                          style={{
+                            color: "rgba(245,247,255,0.84)",
+                            overflow: "hidden",
+                            display: "-webkit-box",
+                            WebkitBoxOrient: "vertical",
+                            WebkitLineClamp: contextClamp,
+                            lineHeight: 1.4,
+                            minWidth: 0,
+                            wordBreak: "break-word",
+                            maxWidth: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "76%" : "100%",
+                          }}
+                        >
+                          {previewContext}
+                        </div>
+                        <div className="clipSB_small" style={{ color: "rgba(232,236,255,0.76)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                          ava-studio product 2026
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </>
-              )}
-            </div>
+                  </>
+                )}
+              </div>
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
-                {isGenerating ? "Generating..." : (previewUrl ? "Regenerate" : "Generate")}
-              </button>
-              <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
-                Загрузить image
-              </button>
-              {previewUrl ? (
-                <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onClearImage?.(id)}>
-                  Очистить
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
+                  {isGenerating ? "Generating..." : (previewUrl ? "Regenerate" : "Generate")}
                 </button>
-              ) : null}
+                <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
+                  Upload
+                </button>
+                {previewUrl ? (
+                  <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onClearImage?.(id)}>
+                    Clear
+                  </button>
+                ) : null}
+              </div>
             </div>
-          </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) data?.onPickImage?.(id, file);
-              e.target.value = "";
-            }}
-          />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) data?.onPickImage?.(id, file);
+                e.target.value = "";
+              }}
+            />
+          </div>
         </div>
       </NodeShell>
     </>
@@ -7487,6 +7537,7 @@ onClipSec: (nodeId, value) => {
                         status: "ready",
                         generatedAt: new Date().toISOString(),
                         error: "",
+                        debug: {},
                       },
                     }
                     : x)));
@@ -7495,7 +7546,7 @@ onClipSec: (nodeId, value) => {
                 }
               },
               onClearImage: (nodeId) => setNodes((prev) => prev.map((x) => (x.id === nodeId
-                ? { ...x, data: { ...x.data, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", error: "" } }
+                ? { ...x, data: { ...x.data, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", error: "", debug: {} } }
                 : x))),
               onGenerate: async (nodeId) => {
                 const currentNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
@@ -7565,6 +7616,7 @@ onClipSec: (nodeId, value) => {
                         generatedAt: String(out.generatedAt || new Date().toISOString()),
                         altTitles: [String(out?.title || nextTitle || "")].filter(Boolean),
                         error: "",
+                        debug: out?.debug && typeof out.debug === "object" ? out.debug : {},
                       },
                     }
                     : x)));

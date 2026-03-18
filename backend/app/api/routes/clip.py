@@ -1135,9 +1135,10 @@ def _intro_role_label(role: str) -> str:
     }.get(str(role or "").strip(), str(role or "").strip().replace("_", " "))
 
 
-def _build_intro_reference_inline_parts(connected_refs_by_role: dict[str, list[str]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def _build_intro_reference_inline_parts(connected_refs_by_role: dict[str, list[str]]) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, Any]]:
     inline_parts: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
+    attached_roles: list[str] = []
     per_role_limit = {
         "character_1": 2,
         "character_2": 2,
@@ -1158,10 +1159,18 @@ def _build_intro_reference_inline_parts(connected_refs_by_role: dict[str, list[s
             if len(inline_parts) + len(parts) >= max_total:
                 break
         counts[role] = len(parts)
+        if parts:
+            attached_roles.append(role)
         inline_parts.extend(parts)
         if len(inline_parts) >= max_total:
             break
-    return inline_parts[:max_total], counts
+    attached_debug = {
+        "attachedInlineReferenceRoles": attached_roles,
+        "dogRoleAttached": counts.get("animal", 0) > 0,
+        "character1RefAttached": counts.get("character_1", 0) > 0,
+        "character2RefAttached": counts.get("character_2", 0) > 0,
+    }
+    return inline_parts[:max_total], counts, attached_debug
 
 
 def _hex_to_rgba(hex_value: str, alpha: int = 255) -> tuple[int, int, int, int]:
@@ -1324,7 +1333,7 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
     draw.rounded_rectangle(
         plate_rect,
         radius=max(20, int(min(width, height) * 0.028)),
-        fill=(5, 8, 18, 182 if normalized_preview_format == "16:9" else 194),
+        fill=(4, 6, 14, 214 if normalized_preview_format == "16:9" else 226),
         outline=(accent[0], accent[1], accent[2], 96),
         width=max(2, int(min(width, height) * 0.0032)),
     )
@@ -1339,7 +1348,7 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
             min(plate_rect[3], plate_rect[1] + max(22, int((plate_rect[3] - plate_rect[1]) * 0.42))),
         ),
         radius=max(18, int(min(width, height) * 0.024)),
-        fill=(accent[0], accent[1], accent[2], 46),
+        fill=(accent[0], accent[1], accent[2], 64),
     )
     plate_highlight = plate_highlight.filter(ImageFilter.GaussianBlur(radius=max(8, int(min(width, height) * 0.012))))
     overlay = Image.alpha_composite(overlay, plate_highlight)
@@ -1386,8 +1395,8 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
         align="left",
     )
 
-    brand_font = _get_intro_font(max(18, int(width * 0.021)), bold=True)
-    footer_font = _get_intro_font(max(14, int(width * 0.014)), bold=False)
+    brand_font = _get_intro_font(max(20, int(width * 0.022)), bold=True)
+    footer_font = _get_intro_font(max(15, int(width * 0.015)), bold=False)
     brand_x = margin_x
     brand_y = max(18, int(height * 0.05))
     _draw_text_tracking(draw, (brand_x, brand_y), "ava-studio", brand_font, (255, 255, 255, 218), tracking=max(0, int(width * 0.0018)))
@@ -1521,14 +1530,18 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "- preserve identity of each connected participant from its reference anchors exactly",
         "- connected refs are mandatory identity anchors, not loose inspiration",
         "- must include exactly these connected participants as the visible cast package",
+        "- exact connected cast package means no omissions, no replacements, no extras",
         "- do not replace connected cast with generic random people",
         "- do not replace connected participants with lookalikes or mixed crowd substitutes",
         "- do not collapse cast package into generic group of humans",
         "- do not introduce extra unconnected human participants",
+        "- no extra humans beyond connected cast package",
         "- no generic random crowd substitution",
         "- keep all connected participants readable and intentional in one hook frame",
         "- if an animal role is connected, the animal must appear clearly in frame",
+        "- if animal role is attached as inline reference, animal must remain visible in final frame",
         "- if two female characters are connected, render two distinct female characters",
+        "- do not merge connected women into one generic heroine or anonymous ensemble",
         "INTRO HERO COMPOSITION RULE:",
         "- build one hook frame around the connected cast package",
         "- title defines the dramatic promise",
@@ -1627,6 +1640,7 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
                 for role in strict_identity_package_roles
             )
         )
+        prompt_lines.append("STRICT INTRO CAST CONTRACT: preserve each connected identity separately and never substitute the package with a generic crowd scene.")
     if scene_count > 0:
         prompt_lines.append(f"Storyboard scene count: {scene_count}")
     prompt_lines.append(f"Intended intro duration reference: {duration_sec:.1f} seconds.")
@@ -2013,7 +2027,7 @@ def clip_intro_generate(payload: IntroGenerateIn):
     title = str(payload.title or "").strip() or "INTRO FRAME"
     width, height = _resolve_intro_preview_dimensions(preview_format)
     connected_refs_by_role = _normalize_intro_connected_refs_by_role(getattr(payload, "connectedRefsByRole", None))
-    inline_parts, inline_part_counts = _build_intro_reference_inline_parts(connected_refs_by_role)
+    inline_parts, inline_part_counts, inline_part_debug = _build_intro_reference_inline_parts(connected_refs_by_role)
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
         return JSONResponse(
@@ -2046,6 +2060,10 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "introRoleGenderLocks": debug.get("introRoleGenderLocks") or {},
                     "introAnimalSpeciesLocks": debug.get("introAnimalSpeciesLocks") or {},
                     "connectedRefCounts": debug.get("introConnectedRoleCounts") or {},
+                    "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
+                    "dogRoleAttached": bool(inline_part_debug.get("dogRoleAttached")),
+                    "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
+                    "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
                 },
                 ensure_ascii=False,
             )
@@ -2063,6 +2081,10 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "connectedRefCounts": debug.get("connectedRefCounts") or {},
                     "attachedReferenceParts": inline_part_counts,
                     "attachedReferencePartTotal": len(inline_parts),
+                    "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
+                    "dogRoleAttached": bool(inline_part_debug.get("dogRoleAttached")),
+                    "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
+                    "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
                     "model": model,
                 },
                 ensure_ascii=False,
@@ -2085,6 +2107,12 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "debug": {
                         **debug,
                         "responseSummary": response_summary,
+                        "attachedReferenceParts": inline_part_counts,
+                        "attachedReferencePartTotal": len(inline_parts),
+                        "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
+                        "dogRoleAttached": bool(inline_part_debug.get("dogRoleAttached")),
+                        "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
+                        "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
                     },
                 },
             )
@@ -2107,6 +2135,10 @@ def clip_intro_generate(payload: IntroGenerateIn):
                 "responseSummary": response_summary,
                 "attachedReferenceParts": inline_part_counts,
                 "attachedReferencePartTotal": len(inline_parts),
+                "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
+                "dogRoleAttached": bool(inline_part_debug.get("dogRoleAttached")),
+                "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
+                "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
                 "backendBrandedAsset": True,
                 "overlay": overlay_debug,
             },
@@ -2120,7 +2152,15 @@ def clip_intro_generate(payload: IntroGenerateIn):
                 "hint": str(exc)[:300],
                 "stylePreset": style_preset,
                 "previewFormat": preview_format,
-                "debug": debug,
+                "debug": {
+                    **debug,
+                    "attachedReferenceParts": inline_part_counts,
+                    "attachedReferencePartTotal": len(inline_parts),
+                    "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
+                    "dogRoleAttached": bool(inline_part_debug.get("dogRoleAttached")),
+                    "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
+                    "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
+                },
             },
         )
 
