@@ -1241,26 +1241,37 @@ def _wrap_intro_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Image
 
 
 def _fit_intro_title(draw: ImageDraw.ImageDraw, title: str, box_width: int, box_height: int, preview_format: str) -> tuple[ImageFont.ImageFont, list[str], int]:
-    max_lines = 2
-    width_factor = 0.205 if preview_format == "16:9" else 0.195 if preview_format == "1:1" else 0.185
-    max_font = max(76, min(248, int(box_width * width_factor)))
-    min_font = 48 if preview_format == "9:16" else 44
-    for font_size in range(max_font, min_font - 1, -4):
+    normalized_title = str(title or "").strip() or "INTRO FRAME"
+    normalized_title_word_count = len([word for word in re.split(r"\s+", normalized_title) if word])
+    max_lines = 3 if preview_format == "9:16" else 2
+    width_factor = 0.205 if preview_format == "16:9" else 0.195 if preview_format == "1:1" else 0.18
+    max_font = max(72, min(248, int(box_width * width_factor)))
+    min_font = 34 if preview_format == "9:16" else 44
+    font_step = 3 if preview_format == "9:16" else 4
+    spacing_factor = 0.14 if preview_format == "9:16" else 0.16
+    stroke_width = 2
+    for font_size in range(max_font, min_font - 1, -font_step):
         font = _get_intro_font(font_size, bold=True)
-        lines = _wrap_intro_text(draw, title, font, box_width, max_lines)
+        lines = _wrap_intro_text(draw, normalized_title, font, box_width, max_lines)
         if not lines:
             continue
-        spacing = max(10, int(font_size * 0.16))
-        bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font, spacing=spacing, stroke_width=2)
+        rendered_word_count = len([word for line in lines for word in re.split(r"\s+", str(line).replace("…", " ").strip()) if word])
+        truncated = rendered_word_count < normalized_title_word_count
+        spacing = max(8 if preview_format == "9:16" else 10, int(font_size * spacing_factor))
+        bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font, spacing=spacing, stroke_width=stroke_width)
         if not bbox:
             continue
         width = bbox[2] - bbox[0]
         height = bbox[3] - bbox[1]
-        if width <= box_width and height <= box_height:
+        if width <= box_width and height <= box_height and not truncated:
             return font, lines, spacing
-    fallback_font = _get_intro_font(max(min_font, 48), bold=True)
-    fallback_lines = _wrap_intro_text(draw, title, fallback_font, box_width, max_lines) or [str(title or "INTRO FRAME").strip()[:60]]
-    return fallback_font, fallback_lines, max(10, int(max(min_font, 48) * 0.16))
+        if width <= box_width and height <= box_height and font_size == min_font:
+            return font, lines, spacing
+    fallback_size = max(min_font, 34 if preview_format == "9:16" else 48)
+    fallback_font = _get_intro_font(fallback_size, bold=True)
+    fallback_lines = _wrap_intro_text(draw, normalized_title, fallback_font, box_width, max_lines) or [normalized_title[:80]]
+    fallback_spacing = max(8 if preview_format == "9:16" else 10, int(fallback_size * spacing_factor))
+    return fallback_font, fallback_lines[:max_lines], fallback_spacing
 
 
 def _draw_text_tracking(draw: ImageDraw.ImageDraw, position: tuple[float, float], text: str, font: ImageFont.ImageFont, fill: tuple[int, int, int, int], tracking: int = 0) -> None:
@@ -1322,7 +1333,7 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
     draw = ImageDraw.Draw(overlay)
     margin_x = int(width * (0.065 if normalized_preview_format == "16:9" else 0.078))
     title_box = {
-        "9:16": (int(width * 0.13), int(height * 0.64), int(width * 0.87), int(height * 0.90)),
+        "9:16": (int(width * 0.12), int(height * 0.67), int(width * 0.88), int(height * 0.91)),
         "1:1": (int(width * 0.12), int(height * 0.66), int(width * 0.88), int(height * 0.90)),
         "16:9": (int(width * 0.24), int(height * 0.67), int(width * 0.76), int(height * 0.91)),
     }[normalized_preview_format]
@@ -1337,8 +1348,8 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
     title_x = title_box[0]
     title_y = max(title_box[1], min(title_box[3] - title_h, title_box[1] + max(0, (title_box_h - title_h) // 2)))
 
-    plate_pad_x = max(28, int(width * 0.032))
-    plate_pad_y = max(24, int(height * 0.024))
+    plate_pad_x = max(24 if normalized_preview_format == "9:16" else 28, int(width * (0.025 if normalized_preview_format == "9:16" else 0.032)))
+    plate_pad_y = max(18 if normalized_preview_format == "9:16" else 24, int(height * (0.018 if normalized_preview_format == "9:16" else 0.024)))
     plate_rect = (
         max(18, title_x - plate_pad_x),
         max(18, title_y - plate_pad_y),
@@ -1595,7 +1606,42 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "- do not merge roles",
         "- do not replace one role with another role",
         "- do not omit any required connected role",
+        "EXACT CAST PACKAGE LOCK:",
+        "- attached reference images are the exact participants of the intro frame",
+        "- render exactly the connected participants and no others",
+        "- all connected participants must be visible in the final frame",
+        "- do not omit any participant",
+        "- do not add extra humans",
+        "- do not replace participants with lookalikes",
+        "- do not merge two women into one heroine",
+        "- do not turn the cast package into a generic crowd scene",
+        "ROLE SEPARATION LOCK:",
     ]
+    exact_role_separation_lines = []
+    for role in intro_active_cast_roles:
+        if connected_ref_counts.get(role, 0) > 0:
+            exact_role_separation_lines.append(f"- {role} must remain the exact {_intro_role_label(role)} from {role} refs")
+    if exact_role_separation_lines:
+        prompt_lines.extend(exact_role_separation_lines)
+    else:
+        prompt_lines.append("- keep connected role identities separated and exact")
+    prompt_lines.append("- do not swap identities between roles")
+    connected_women_count = sum(
+        1
+        for role in intro_active_cast_roles
+        if role_gender_locks.get(role) == "female" and connected_ref_counts.get(role, 0) > 0
+    )
+    if connected_women_count > 0:
+        prompt_lines.append(f"- render exactly {connected_women_count} women when these female roles are connected")
+    if connected_ref_counts.get("animal", 0) > 0 and animal_species_locks.get("animal") == "dog":
+        prompt_lines.append(f"- render exactly {connected_women_count} women and 1 dog when these roles are connected" if connected_women_count > 0 else "- render exactly 1 dog when animal is connected")
+    prompt_lines.extend([
+        "WORLD SOURCE RULE:",
+        "- world, environment, and location must come from story context and opening beats",
+        "- use refs for who is in frame",
+        "- use story context for where the frame happens",
+        "- do not invent bedroom / home interior / random room if story context suggests industrial / abandoned / gym / tension space",
+    ])
     if role_identity_lock_lines:
         prompt_lines.extend([
             "ROLE IDENTITY LOCK:",
@@ -1610,16 +1656,18 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         prompt_lines.append("- if 2 connected character roles exist, render exactly 2 distinct people")
     if connected_ref_counts.get("animal", 0) > 0:
         prompt_lines.extend([
-            "ANIMAL LOCK:",
-            "- animal must appear clearly in frame",
-            "- if animal role is connected, animal must be visible in frame",
-            "- animal must match its attached reference exactly",
-            "- do not omit or replace the animal",
+            "VISIBLE DOG LOCK:" if animal_species_locks.get("animal") == "dog" else "ANIMAL LOCK:",
+            "- one dog must be clearly visible in the final frame" if animal_species_locks.get("animal") == "dog" else "- animal must appear clearly in frame",
+            "- the dog must be in foreground or midground" if animal_species_locks.get("animal") == "dog" else "- if animal role is connected, animal must be visible in frame",
+            "- the dog must not be cropped out" if animal_species_locks.get("animal") == "dog" else "- animal must remain fully readable in frame",
+            "- the dog must match the attached animal reference" if animal_species_locks.get("animal") == "dog" else "- animal must match its attached reference exactly",
+            "- do not omit the dog even in tight framing" if animal_species_locks.get("animal") == "dog" else "- do not omit or replace the animal",
         ])
     if title_context:
         prompt_lines.append(f"Title context: {title_context}")
     if story_context:
         prompt_lines.append(f"Story context: {story_context}")
+        prompt_lines.append(f"Opening beats / location source of truth: {story_context}")
     if source_node_types:
         prompt_lines.append(f"Connected source node types: {', '.join(source_node_types)}")
     if connected_roles:
@@ -1712,6 +1760,7 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
 
     prompt = "\n".join(line for line in prompt_lines if str(line or "").strip())
     debug = {
+        "rawConnectedRefsByRoleCounts": {role: len(connected_refs_by_role.get(role) or []) for role in connected_refs_by_role},
         "title": title,
         "stylePreset": style_preset,
         "previewFormat": preview_format,
@@ -2167,6 +2216,20 @@ def clip_intro_generate(payload: IntroGenerateIn):
             )
         )
         print(
+            "[INTRO FRAME PROMPT DEBUG] "
+            + json.dumps(
+                {
+                    "rawConnectedRefsByRoleCounts": debug.get("rawConnectedRefsByRoleCounts") or raw_connected_ref_counts,
+                    "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
+                    "totalInlineImages": inline_part_debug.get("totalInlineImages") or len(inline_parts),
+                    "introMustAppear": debug.get("introMustAppear") or [],
+                    "introActiveCastRoles": debug.get("introActiveCastRoles") or [],
+                    "promptPreview": debug.get("promptPreview") or "",
+                },
+                ensure_ascii=False,
+            )
+        )
+        print(
             "[INTRO FRAME REFS DEBUG] "
             + json.dumps(
                 {
@@ -2288,6 +2351,9 @@ def clip_intro_generate(payload: IntroGenerateIn):
                 "refsPipelineWarning": refs_pipeline_warning or None,
                 "backendBrandedAsset": True,
                 "overlay": overlay_debug,
+                "overlay.lines": overlay_debug.get("lines") or [],
+                "overlay.fontSize": overlay_debug.get("fontSize"),
+                "overlay.truetypeLoaded": bool(overlay_debug.get("truetypeLoaded")),
             },
         }
     except Exception as exc:
