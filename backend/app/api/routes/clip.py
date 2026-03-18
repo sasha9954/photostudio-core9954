@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 from typing import Any
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 from app.core.config import settings
 from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url
@@ -140,6 +140,13 @@ class IntroGenerateIn(BaseModel):
     titleContext: str | None = None
     sceneCount: int | None = 0
     sourceNodeTypes: list[str] = Field(default_factory=list)
+    connectedRefsByRole: dict | None = None
+    roleAwareCastSummary: str | None = None
+    heroParticipants: list[str] = Field(default_factory=list)
+    supportingParticipants: list[str] = Field(default_factory=list)
+    importantProps: list[str] = Field(default_factory=list)
+    worldContext: str | None = None
+    styleContext: str | None = None
 
 
 class AssembleClipIn(BaseModel):
@@ -756,6 +763,8 @@ INTRO_FRAME_STYLE_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Cinematic",
         "shortDescription": "Premium film-poster frame with serious composition and dramatic light.",
         "uiHint": "Poster-grade",
+        "accent": "#f6d365",
+        "secondary": "#5ee7df",
         "promptRules": [
             "build the frame like a premium movie poster or a decisive opening-film still",
             "use clean subject hierarchy, intentional negative space, and elegant camera blocking",
@@ -773,6 +782,8 @@ INTRO_FRAME_STYLE_PRESETS: dict[str, dict[str, Any]] = {
         "label": "YouTube",
         "shortDescription": "Readable high-energy thumbnail composition with a clear focal point.",
         "uiHint": "Readable thumbnail",
+        "accent": "#ffcf5c",
+        "secondary": "#ff6b3d",
         "promptRules": [
             "optimize for immediate thumbnail readability and one dominant focal point",
             "use clear subject hierarchy, strong silhouette separation, and bold but clean composition",
@@ -790,6 +801,8 @@ INTRO_FRAME_STYLE_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Dark Neon",
         "shortDescription": "Dark cinematic scene with controlled cyan-magenta-violet neon energy.",
         "uiHint": "Cyber glow",
+        "accent": "#6ef2ff",
+        "secondary": "#b86dff",
         "promptRules": [
             "build a dark moody scene with restrained neon accents in cyan, magenta, teal, or violet",
             "maintain strong contrast with cinematic glow and selective rim lighting",
@@ -807,6 +820,8 @@ INTRO_FRAME_STYLE_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Thriller",
         "shortDescription": "Low-key suspense frame with danger, tension, and moody dramatic shadows.",
         "uiHint": "Suspense mood",
+        "accent": "#ff6b6b",
+        "secondary": "#ffd166",
         "promptRules": [
             "emphasize tension, unease, and suspense in a grounded thriller tone",
             "use low-key lighting, selective highlights, and darker shadow zones",
@@ -824,6 +839,8 @@ INTRO_FRAME_STYLE_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Fashion",
         "shortDescription": "Premium editorial cover look with polished posing and refined luxury finish.",
         "uiHint": "Editorial polish",
+        "accent": "#ffd7f0",
+        "secondary": "#8ae5ff",
         "promptRules": [
             "treat the image like a luxury editorial cover or premium campaign frame",
             "use elegant subject posing, sophisticated framing, and polished styling",
@@ -841,6 +858,8 @@ INTRO_FRAME_STYLE_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Glitch",
         "shortDescription": "Controlled digital disruption with modern synthetic tension and clean focal priority.",
         "uiHint": "Controlled distortion",
+        "accent": "#8eff8c",
+        "secondary": "#ff6ef2",
         "promptRules": [
             "use stylized digital distortion as a controlled design language rather than random damage",
             "preserve the main focal point and silhouette readability under the glitch treatment",
@@ -880,6 +899,284 @@ def _resolve_intro_preview_dimensions(preview_format: str | None) -> tuple[int, 
     return 1344, 768
 
 
+def _normalize_intro_connected_refs_by_role(raw_refs_by_role: Any) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    source = raw_refs_by_role if isinstance(raw_refs_by_role, dict) else {}
+    for role in COMFY_REF_ROLES:
+        items = source.get(role) if isinstance(source, dict) else None
+        urls: list[str] = []
+        for item in (items or []):
+            value = item if isinstance(item, str) else (item.get("url") if isinstance(item, dict) else "")
+            value = str(value or "").strip()
+            if value and value not in urls:
+                urls.append(value)
+        normalized[role] = urls
+    return normalized
+
+
+def _normalize_intro_text_list(items: Any, max_items: int = 8) -> list[str]:
+    out: list[str] = []
+    if not isinstance(items, list):
+        return out
+    for item in items:
+        value = str(item or "").strip()
+        if value and value not in out:
+            out.append(value)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _intro_role_label(role: str) -> str:
+    return {
+        "character_1": "character 1",
+        "character_2": "character 2",
+        "character_3": "character 3",
+        "animal": "animal",
+        "group": "group",
+        "location": "location",
+        "style": "style",
+        "props": "props",
+    }.get(str(role or "").strip(), str(role or "").strip().replace("_", " "))
+
+
+def _build_intro_reference_inline_parts(connected_refs_by_role: dict[str, list[str]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    inline_parts: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    per_role_limit = {
+        "character_1": 2,
+        "character_2": 2,
+        "character_3": 2,
+        "animal": 2,
+        "group": 1,
+        "location": 1,
+        "style": 1,
+        "props": 2,
+    }
+    max_total = 10
+    for role in COMFY_REF_ROLES:
+        parts: list[dict[str, Any]] = []
+        for ref_url in (connected_refs_by_role.get(role) or [])[:per_role_limit.get(role, 1)]:
+            inline_part = _load_reference_image_inline(ref_url)
+            if inline_part:
+                parts.append(inline_part)
+            if len(inline_parts) + len(parts) >= max_total:
+                break
+        counts[role] = len(parts)
+        inline_parts.extend(parts)
+        if len(inline_parts) >= max_total:
+            break
+    return inline_parts[:max_total], counts
+
+
+def _hex_to_rgba(hex_value: str, alpha: int = 255) -> tuple[int, int, int, int]:
+    rgb = ImageColor.getrgb(str(hex_value or "#ffffff"))
+    return rgb[0], rgb[1], rgb[2], max(0, min(255, int(alpha)))
+
+
+def _get_intro_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    font_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for path in font_candidates:
+        try:
+            return ImageFont.truetype(path, max(12, int(size)))
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _wrap_intro_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int, max_lines: int) -> list[str]:
+    words = [word for word in re.split(r"\s+", str(text or "").strip()) if word]
+    if not words:
+        return []
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        test = f"{current} {word}".strip()
+        bbox = draw.textbbox((0, 0), test, font=font, stroke_width=2)
+        if bbox and (bbox[2] - bbox[0]) <= max_width:
+            current = test
+            continue
+        lines.append(current)
+        current = word
+        if len(lines) >= max_lines - 1:
+            break
+    if len(lines) < max_lines:
+        lines.append(current)
+    remaining_words = words[len(" ".join(lines).split()):]
+    if remaining_words:
+        lines[-1] = (lines[-1].rstrip(" .,!?:;-") + "…").strip()
+    return lines[:max_lines]
+
+
+def _fit_intro_title(draw: ImageDraw.ImageDraw, title: str, box_width: int, box_height: int, preview_format: str) -> tuple[ImageFont.ImageFont, list[str], int]:
+    max_lines = 4 if preview_format == "9:16" else 3
+    max_font = max(44, min(132, int(box_width * (0.118 if preview_format == "16:9" else 0.102))))
+    min_font = 28
+    for font_size in range(max_font, min_font - 1, -4):
+        font = _get_intro_font(font_size, bold=True)
+        lines = _wrap_intro_text(draw, title, font, box_width, max_lines)
+        if not lines:
+            continue
+        bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font, spacing=max(10, int(font_size * 0.16)), stroke_width=2)
+        if not bbox:
+            continue
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+        if width <= box_width and height <= box_height:
+            return font, lines, max(10, int(font_size * 0.16))
+    fallback_font = _get_intro_font(min_font, bold=True)
+    fallback_lines = _wrap_intro_text(draw, title, fallback_font, box_width, max_lines) or [str(title or "INTRO FRAME").strip()[:60]]
+    return fallback_font, fallback_lines, max(8, int(min_font * 0.16))
+
+
+def _draw_text_tracking(draw: ImageDraw.ImageDraw, position: tuple[float, float], text: str, font: ImageFont.ImageFont, fill: tuple[int, int, int, int], tracking: int = 0) -> None:
+    x, y = position
+    for char in str(text or ""):
+        draw.text((x, y), char, font=font, fill=fill)
+        bbox = draw.textbbox((x, y), char, font=font)
+        fallback_size = getattr(font, "size", 16)
+        advance = (bbox[2] - bbox[0]) if bbox else fallback_size * 0.5
+        x += advance + tracking
+
+
+def _draw_intro_vertical_fade(overlay: Image.Image, *, top_alpha: int, bottom_alpha: int) -> None:
+    width, height = overlay.size
+    draw = ImageDraw.Draw(overlay)
+    for y in range(height):
+        top_ratio = max(0.0, 1.0 - (y / max(1, height * 0.52)))
+        bottom_ratio = max(0.0, (y - (height * 0.45)) / max(1, height * 0.55))
+        alpha = int(max(top_ratio * top_alpha, bottom_ratio * bottom_alpha))
+        if alpha <= 0:
+            continue
+        draw.line((0, y, width, y), fill=(6, 9, 18, min(255, alpha)))
+
+
+def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, preview_format: str) -> bytes:
+    base = Image.open(io.BytesIO(raw)).convert("RGBA")
+    width, height = base.size
+    style_meta = _get_intro_style_meta(style_preset)
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    glow = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    glow_draw = ImageDraw.Draw(glow)
+
+    accent = _hex_to_rgba(style_meta.get("accent", "#f6d365"), 255)
+    secondary = _hex_to_rgba(style_meta.get("secondary", "#5ee7df"), 255)
+
+    _draw_intro_vertical_fade(overlay, top_alpha=118, bottom_alpha=190)
+    glow_draw.ellipse(
+        (
+            int(width * 0.04),
+            int(height * 0.03),
+            int(width * (0.32 if preview_format != "9:16" else 0.48)),
+            int(height * (0.26 if preview_format != "9:16" else 0.22)),
+        ),
+        fill=_hex_to_rgba(style_meta.get("accent", "#f6d365"), 52),
+    )
+    glow_draw.ellipse(
+        (
+            int(width * 0.68),
+            int(height * 0.04),
+            int(width * 0.98),
+            int(height * (0.24 if preview_format != "9:16" else 0.18)),
+        ),
+        fill=_hex_to_rgba(style_meta.get("secondary", "#5ee7df"), 42),
+    )
+    if style_preset == "glitch":
+        for idx in range(5):
+            y = int(height * (0.18 + idx * 0.13))
+            band_color = accent if idx % 2 == 0 else secondary
+            glow_draw.rounded_rectangle(
+                (int(width * 0.08), y, int(width * 0.92), y + max(6, height // 110)),
+                radius=max(3, height // 240),
+                fill=(band_color[0], band_color[1], band_color[2], 26),
+            )
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=max(10, int(min(width, height) * 0.018))))
+    overlay = Image.alpha_composite(overlay, glow)
+
+    draw = ImageDraw.Draw(overlay)
+    margin_x = int(width * (0.065 if preview_format == "16:9" else 0.08))
+    title_box = {
+        "9:16": (margin_x, int(height * 0.56), width - margin_x, int(height * 0.91)),
+        "1:1": (margin_x, int(height * 0.54), width - margin_x, int(height * 0.88)),
+        "16:9": (margin_x, int(height * 0.50), int(width * 0.76), int(height * 0.86)),
+    }[_normalize_intro_preview_format(preview_format)]
+    title_box_w = max(120, title_box[2] - title_box[0])
+    title_box_h = max(120, title_box[3] - title_box[1])
+    font, lines, spacing = _fit_intro_title(draw, title, title_box_w, title_box_h, preview_format)
+    title_text = "\n".join(lines)
+    title_bbox = draw.multiline_textbbox((0, 0), title_text, font=font, spacing=spacing, stroke_width=2, align="left")
+    title_w = title_bbox[2] - title_bbox[0]
+    title_h = title_bbox[3] - title_bbox[1]
+    title_x = title_box[0]
+    title_y = max(title_box[1], title_box[3] - title_h)
+
+    plate_pad_x = max(18, int(width * 0.018))
+    plate_pad_y = max(16, int(height * 0.015))
+    plate_rect = (
+        max(12, title_x - plate_pad_x),
+        max(12, title_y - plate_pad_y),
+        min(width - 12, title_x + title_w + plate_pad_x),
+        min(height - 12, title_y + title_h + plate_pad_y),
+    )
+    draw.rounded_rectangle(
+        plate_rect,
+        radius=max(18, int(min(width, height) * 0.024)),
+        fill=(8, 11, 21, 132 if preview_format == "16:9" else 148),
+        outline=(accent[0], accent[1], accent[2], 76),
+        width=max(1, int(min(width, height) * 0.0026)),
+    )
+    accent_bar_h = max(4, int(height * 0.006))
+    draw.rounded_rectangle(
+        (plate_rect[0], plate_rect[1], min(plate_rect[2], plate_rect[0] + int((plate_rect[2] - plate_rect[0]) * 0.42)), plate_rect[1] + accent_bar_h),
+        radius=max(3, accent_bar_h // 2),
+        fill=(accent[0], accent[1], accent[2], 215),
+    )
+
+    text_glow = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    text_glow_draw = ImageDraw.Draw(text_glow)
+    for dx, dy, alpha in [(0, 0, 104), (3, 3, 68), (-2, 0, 54)]:
+        text_glow_draw.multiline_text(
+            (title_x + dx, title_y + dy),
+            title_text,
+            font=font,
+            fill=(accent[0], accent[1], accent[2], alpha),
+            spacing=spacing,
+            stroke_width=3,
+            stroke_fill=(7, 10, 18, min(255, alpha + 28)),
+            align="left",
+        )
+    text_glow = text_glow.filter(ImageFilter.GaussianBlur(radius=max(4, int(min(width, height) * 0.0065))))
+    overlay = Image.alpha_composite(overlay, text_glow)
+    draw = ImageDraw.Draw(overlay)
+    draw.multiline_text(
+        (title_x, title_y),
+        title_text,
+        font=font,
+        fill=(255, 255, 255, 244),
+        spacing=spacing,
+        stroke_width=2,
+        stroke_fill=(5, 8, 16, 235),
+        align="left",
+    )
+
+    brand_font = _get_intro_font(max(18, int(width * 0.021)), bold=True)
+    footer_font = _get_intro_font(max(14, int(width * 0.014)), bold=False)
+    brand_x = margin_x
+    brand_y = max(18, int(height * 0.05))
+    _draw_text_tracking(draw, (brand_x, brand_y), "ava-studio", brand_font, (255, 255, 255, 218), tracking=max(0, int(width * 0.0018)))
+    footer_text = "ava-studio product 2026"
+    footer_y = height - int(height * 0.06) - getattr(footer_font, "size", 16)
+    _draw_text_tracking(draw, (margin_x, footer_y), footer_text, footer_font, (232, 236, 255, 170), tracking=max(0, int(width * 0.0011)))
+
+    composed = Image.alpha_composite(base, overlay).convert("RGB")
+    out = io.BytesIO()
+    composed.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
 def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, Any]]:
     style_preset = _normalize_intro_style_preset(payload.stylePreset)
     preview_format = _normalize_intro_preview_format(payload.previewFormat)
@@ -896,6 +1193,17 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         scene_count = max(0, min(24, int(payload.sceneCount or 0)))
     except Exception:
         scene_count = 0
+    connected_refs_by_role = _normalize_intro_connected_refs_by_role(getattr(payload, "connectedRefsByRole", None))
+    connected_roles = [role for role, urls in connected_refs_by_role.items() if urls]
+    connected_cast_roles = [role for role in connected_roles if role in COMFY_CAST_ROLES]
+    connected_world_roles = [role for role in connected_roles if role in COMFY_WORLD_ANCHOR_ROLES]
+    connected_prop_roles = [role for role in connected_roles if role == "props"]
+    role_aware_cast_summary = str(getattr(payload, "roleAwareCastSummary", "") or "").strip()
+    hero_participants = _normalize_intro_text_list(getattr(payload, "heroParticipants", None), max_items=5)
+    supporting_participants = _normalize_intro_text_list(getattr(payload, "supportingParticipants", None), max_items=6)
+    important_props = _normalize_intro_text_list(getattr(payload, "importantProps", None), max_items=5)
+    world_context = str(getattr(payload, "worldContext", "") or "").strip()
+    style_context = str(getattr(payload, "styleContext", "") or "").strip()
 
     format_rule = {
         "9:16": "vertical opening frame, mobile-first composition, strong center-of-interest, generous vertical negative space",
@@ -913,6 +1221,10 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "Focus on one clean, striking, premium visual moment rather than a multi-panel layout.",
         "Use cinematic realism, coherent lighting, believable materials, and strong subject separation.",
         "The frame must feel like a real generated image asset, not a UI mockup or placeholder.",
+        "If a connected cast/world package is provided, build one strongest hook frame that clearly integrates the important participants, animals, props, and world anchors.",
+        "Do not collapse a populated cast package into an empty landscape or a single generic lone character.",
+        "When multiple hero participants are available, stage them together in one premium cinematic composition whenever the framing allows it.",
+        "Treat attached reference images as identity and design anchors for cast package, key props, location, and style.",
         "INTRO FRAME STYLE RULES:",
         *[f"- {rule}" for rule in style_meta["promptRules"]],
         "INTRO FRAME FORBIDDEN ELEMENTS:",
@@ -925,6 +1237,29 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         prompt_lines.append(f"Story context: {story_context}")
     if source_node_types:
         prompt_lines.append(f"Connected source node types: {', '.join(source_node_types)}")
+    if connected_roles:
+        prompt_lines.append(
+            "Connected reference roles available: "
+            + ", ".join(f"{_intro_role_label(role)} ({len(connected_refs_by_role.get(role) or [])})" for role in connected_roles)
+        )
+    if connected_cast_roles:
+        prompt_lines.append("Cast package roles: " + ", ".join(_intro_role_label(role) for role in connected_cast_roles))
+    if connected_world_roles:
+        prompt_lines.append("World anchors: " + ", ".join(_intro_role_label(role) for role in connected_world_roles))
+    if connected_prop_roles:
+        prompt_lines.append("Key prop anchors are connected and should be visually integrated when relevant.")
+    if role_aware_cast_summary:
+        prompt_lines.append(f"Role-aware cast summary: {role_aware_cast_summary}")
+    if hero_participants:
+        prompt_lines.append(f"Hero participants: {', '.join(hero_participants)}")
+    if supporting_participants:
+        prompt_lines.append(f"Supporting participants: {', '.join(supporting_participants)}")
+    if important_props:
+        prompt_lines.append(f"Important props: {', '.join(important_props)}")
+    if world_context:
+        prompt_lines.append(f"World context: {world_context}")
+    if style_context:
+        prompt_lines.append(f"Style context: {style_context}")
     if scene_count > 0:
         prompt_lines.append(f"Storyboard scene count: {scene_count}")
     prompt_lines.append(f"Intended intro duration reference: {duration_sec:.1f} seconds.")
@@ -937,6 +1272,14 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "sceneCount": scene_count,
         "durationSec": round(duration_sec, 1),
         "sourceNodeTypes": source_node_types,
+        "connectedRoles": connected_roles,
+        "connectedRoleCounts": {role: len(connected_refs_by_role.get(role) or []) for role in connected_roles},
+        "roleAwareCastSummary": role_aware_cast_summary or None,
+        "heroParticipants": hero_participants,
+        "supportingParticipants": supporting_participants,
+        "importantProps": important_props,
+        "worldContext": world_context or None,
+        "styleContext": style_context or None,
         "styleLabel": style_meta["label"],
         "styleDescription": style_meta["shortDescription"],
         "styleRules": style_meta["promptRules"],
@@ -1291,6 +1634,8 @@ def clip_intro_generate(payload: IntroGenerateIn):
     preview_format = _normalize_intro_preview_format(payload.previewFormat)
     title = str(payload.title or "").strip() or "INTRO FRAME"
     width, height = _resolve_intro_preview_dimensions(preview_format)
+    connected_refs_by_role = _normalize_intro_connected_refs_by_role(getattr(payload, "connectedRefsByRole", None))
+    inline_parts, inline_part_counts = _build_intro_reference_inline_parts(connected_refs_by_role)
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
         return JSONResponse(
@@ -1307,7 +1652,7 @@ def clip_intro_generate(payload: IntroGenerateIn):
     body = {
         "contents": [{
             "role": "user",
-            "parts": [{"text": prompt}],
+            "parts": [*inline_parts, {"text": prompt}],
         }],
         "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
     }
@@ -1323,6 +1668,7 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "width": width,
                     "height": height,
                     "sceneCount": debug.get("sceneCount"),
+                    "connectedRoleCounts": inline_part_counts,
                     "model": model,
                 },
                 ensure_ascii=False,
@@ -1350,7 +1696,8 @@ def clip_intro_generate(payload: IntroGenerateIn):
             )
 
         raw, ext = decoded
-        image_url = _save_bytes_as_asset(raw, ext)
+        branded = _render_intro_frame_asset(raw, title=title, style_preset=style_preset, preview_format=preview_format)
+        image_url = _save_bytes_as_asset(branded, "png")
         generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         return {
             "ok": True,
@@ -1364,6 +1711,9 @@ def clip_intro_generate(payload: IntroGenerateIn):
             "debug": {
                 **debug,
                 "responseSummary": response_summary,
+                "attachedReferenceParts": inline_part_counts,
+                "attachedReferencePartTotal": len(inline_parts),
+                "backendBrandedAsset": True,
             },
         }
     except Exception as exc:
