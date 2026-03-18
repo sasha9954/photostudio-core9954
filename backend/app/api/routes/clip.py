@@ -1034,6 +1034,30 @@ _INTRO_SPECIES_ALIAS_MAP = {
     "sova": "bird",
 }
 
+_INTRO_SPECIES_KEYWORD_GROUPS = [
+    ("dog", ("dog", "dogs", "sobaka", "pes", "pyos", "puppy", "hound", "canine")),
+    ("cat", ("cat", "cats", "kot", "koshka", "kitten", "kitty", "feline")),
+    ("wolf", ("wolf", "wolves", "volk", "volchitsa", "canis lupus")),
+    ("horse", ("horse", "horses", "loshad", "kon", "equine", "stallion", "mare")),
+    ("bird", ("bird", "ptitsa", "popugay", "orel", "sova", "avian", "parrot", "eagle", "owl")),
+]
+
+
+def _intro_species_from_keywords(normalized: str) -> str:
+    normalized_value = re.sub(r"\s+", " ", str(normalized or "").strip().lower())
+    if not normalized_value:
+        return ""
+    padded = f" {normalized_value} "
+    for canonical, keywords in _INTRO_SPECIES_KEYWORD_GROUPS:
+        for keyword in keywords:
+            if " " in keyword:
+                if keyword in normalized_value:
+                    return canonical
+                continue
+            if f" {keyword} " in padded:
+                return canonical
+    return normalized_value
+
 
 def _normalize_intro_species_lock(raw: Any) -> str:
     value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
@@ -1041,8 +1065,10 @@ def _normalize_intro_species_lock(raw: Any) -> str:
         return ""
     transliterated = unicodedata.normalize("NFKD", value).translate(_INTRO_SPECIES_CYRILLIC_MAP)
     ascii_value = transliterated.encode("ascii", "ignore").decode("ascii")
-    normalized = re.sub(r"[^a-z0-9\- ]+", "", ascii_value).strip()
-    return _INTRO_SPECIES_ALIAS_MAP.get(normalized, normalized)
+    normalized = re.sub(r"[^a-z0-9\- ]+", " ", ascii_value)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized_alias = _INTRO_SPECIES_ALIAS_MAP.get(normalized, normalized)
+    return _intro_species_from_keywords(normalized_alias)
 
 
 def _normalize_intro_role_list(items: Any, *, allowed_roles: set[str] | None = None, max_items: int = 8) -> list[str]:
