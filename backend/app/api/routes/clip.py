@@ -1244,7 +1244,7 @@ def _fit_intro_title(draw: ImageDraw.ImageDraw, title: str, box_width: int, box_
     max_lines = 2
     width_factor = 0.205 if preview_format == "16:9" else 0.195 if preview_format == "1:1" else 0.185
     max_font = max(76, min(248, int(box_width * width_factor)))
-    min_font = 44
+    min_font = 48 if preview_format == "9:16" else 44
     for font_size in range(max_font, min_font - 1, -4):
         font = _get_intro_font(font_size, bold=True)
         lines = _wrap_intro_text(draw, title, font, box_width, max_lines)
@@ -1329,6 +1329,7 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
     title_box_w = max(120, title_box[2] - title_box[0])
     title_box_h = max(120, title_box[3] - title_box[1])
     font, lines, spacing = _fit_intro_title(draw, title, title_box_w, title_box_h, normalized_preview_format)
+    truetype_loaded = isinstance(font, ImageFont.FreeTypeFont)
     title_text = "\n".join(lines)
     title_bbox = draw.multiline_textbbox((0, 0), title_text, font=font, spacing=spacing, stroke_width=3, align="left")
     title_w = title_bbox[2] - title_bbox[0]
@@ -1449,6 +1450,8 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
         "titleBox": [int(v) for v in title_box],
         "plateRect": [int(v) for v in plate_rect],
         "fontSize": int(getattr(font, "size", 0) or 0),
+        "truetypeLoaded": truetype_loaded,
+        "fontName": str(getattr(font, "path", "") or getattr(font, "font", "") or ""),
         "lines": lines,
         "lineCount": len(lines),
         "titleRendered": bool(title_text.strip()),
@@ -1466,6 +1469,7 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
                 "overlay.titleBox": overlay_debug["titleBox"],
                 "overlay.plateRect": overlay_debug["plateRect"],
                 "overlay.fontSize": overlay_debug["fontSize"],
+                "overlay.truetypeLoaded": overlay_debug["truetypeLoaded"],
                 "overlay.lines": lines,
                 "overlay.titleRendered": overlay_debug["titleRendered"],
                 "overlay.titleSizeRatio": overlay_debug["titleSizeRatio"],
@@ -1554,6 +1558,11 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     role_identity_lock_lines: list[str] = [f"- {role} must match its reference image exactly" for role in strict_identity_package_roles]
     if connected_ref_counts.get("animal", 0) > 0 and "animal" not in strict_identity_package_roles:
         role_identity_lock_lines.append("- animal must match its reference image exactly")
+    strict_role_mapping_lines = [
+        f"- {_intro_role_label(role)} may only use attached {_intro_role_label(role)} reference images"
+        for role in COMFY_REF_ROLES
+        if connected_ref_counts.get(role, 0) > 0
+    ]
 
     format_rule = {
         "9:16": "vertical opening frame, mobile-first composition, strong center-of-interest, generous vertical negative space",
@@ -1575,11 +1584,16 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         f"- must appear: {_intro_role_package_summary(intro_must_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
         f"- must not appear: {_intro_role_package_summary(intro_must_not_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
         f"- strict identity package: {strict_identity_package_summary}",
+        "- render exactly the connected participants",
         "- render exactly the connected cast package",
         "- no extra humans",
         "- no background crowd",
+        "- no hidden extra faces",
         "- no random replacement characters",
+        "- do not replace connected cast with generic people",
         "- do not merge multiple roles into one person",
+        "- do not merge roles",
+        "- do not replace one role with another role",
         "- do not omit any required connected role",
     ]
     if role_identity_lock_lines:
@@ -1587,12 +1601,18 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
             "ROLE IDENTITY LOCK:",
             *role_identity_lock_lines,
         ])
+    if strict_role_mapping_lines:
+        prompt_lines.extend([
+            "ROLE → REF MAPPING LOCK:",
+            *strict_role_mapping_lines,
+        ])
     if len(strict_identity_package_roles) >= 2:
         prompt_lines.append("- if 2 connected character roles exist, render exactly 2 distinct people")
     if connected_ref_counts.get("animal", 0) > 0:
         prompt_lines.extend([
             "ANIMAL LOCK:",
             "- animal must appear clearly in frame",
+            "- if animal role is connected, animal must be visible in frame",
             "- animal must match its attached reference exactly",
             "- do not omit or replace the animal",
         ])
@@ -1660,6 +1680,7 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         prompt_lines.extend([
             "FEMALE IDENTITY LOCK:",
             "- render two distinct female characters",
+            "- if 2 female roles are connected, render exactly 2 distinct women matching their refs",
             "- both must match their reference images",
             "- do not change gender",
         ])
@@ -2073,18 +2094,30 @@ def clip_intro_generate(payload: IntroGenerateIn):
     connected_refs_by_role = _normalize_intro_connected_refs_by_role(getattr(payload, "connectedRefsByRole", None))
     raw_connected_ref_counts = {role: len(connected_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}
     total_connected_refs = sum(raw_connected_ref_counts.values())
+    refs_pipeline_warning = "intro went without refs: connectedRefsByRole is empty, pipeline should be checked" if total_connected_refs <= 0 else ""
     print("[INTRO FRAME REFS RECEIVED] " + json.dumps({
         "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
         "refsReceivedByRole": raw_connected_ref_counts,
         "totalConnectedRefs": total_connected_refs,
     }, ensure_ascii=False))
     if total_connected_refs <= 0:
-        print("[INTRO FRAME WARNING] no connected refs received")
+        print("[INTRO FRAME WARNING] " + json.dumps({
+            "message": refs_pipeline_warning,
+            "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
+            "refsReceivedByRole": raw_connected_ref_counts,
+            "totalConnectedRefs": total_connected_refs,
+        }, ensure_ascii=False))
     inline_parts, inline_part_counts, inline_part_debug = _build_intro_reference_inline_parts(connected_refs_by_role)
     print("[INTRO FRAME INLINE IMAGES] " + json.dumps({
+        "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
         "refsReceivedByRole": raw_connected_ref_counts,
         "inlineImagesAttachedByRole": inline_part_counts,
+        "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
         "attachedInlineImageTotal": len(inline_parts),
+        "totalInlineImages": inline_part_debug.get("totalInlineImages") or len(inline_parts),
+        "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
+        "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
+        "animalRefAttached": bool(inline_part_debug.get("animalRefAttached")),
     }, ensure_ascii=False))
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
@@ -2128,6 +2161,7 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "animalRefAttached": bool(inline_part_debug.get("animalRefAttached")),
                     "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
                     "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
+                    "introWentWithoutRefs": total_connected_refs <= 0,
                 },
                 ensure_ascii=False,
             )
@@ -2138,10 +2172,19 @@ def clip_intro_generate(payload: IntroGenerateIn):
                 {
                     "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
                     "refsReceivedByRole": raw_connected_ref_counts,
+                    "inlineImagesAttachedByRole": inline_part_counts,
+                    "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
                     "roleAttachedImageCounts": inline_part_debug.get("roleAttachedImageCounts") or {},
                     "totalInlineImages": inline_part_debug.get("totalInlineImages") or len(inline_parts),
+                    "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
+                    "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
                     "rolesWithImageParts": inline_part_debug.get("rolesWithImageParts") or [],
                     "animalRefAttached": bool(inline_part_debug.get("animalRefAttached")),
+                    "introActiveCastRoles": debug.get("introActiveCastRoles") or [],
+                    "introMustAppear": debug.get("introMustAppear") or [],
+                    "introMustNotAppear": debug.get("introMustNotAppear") or [],
+                    "introWentWithoutRefs": total_connected_refs <= 0,
+                    "refsPipelineWarning": refs_pipeline_warning or None,
                 },
                 ensure_ascii=False,
             )
@@ -2159,6 +2202,7 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
                     "connectedRefCounts": debug.get("connectedRefCounts") or {},
                     "refsReceivedByRole": raw_connected_ref_counts,
+                    "inlineImagesAttachedByRole": inline_part_counts,
                     "attachedReferenceParts": inline_part_counts,
                     "attachedReferencePartTotal": len(inline_parts),
                     "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
@@ -2169,6 +2213,11 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     "animalRefAttached": bool(inline_part_debug.get("animalRefAttached")),
                     "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
                     "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
+                    "introActiveCastRoles": debug.get("introActiveCastRoles") or [],
+                    "introMustAppear": debug.get("introMustAppear") or [],
+                    "introMustNotAppear": debug.get("introMustNotAppear") or [],
+                    "introWentWithoutRefs": total_connected_refs <= 0,
+                    "refsPipelineWarning": refs_pipeline_warning or None,
                     "model": model,
                 },
                 ensure_ascii=False,
@@ -2192,13 +2241,18 @@ def clip_intro_generate(payload: IntroGenerateIn):
                         **debug,
                         "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
                         "refsReceivedByRole": raw_connected_ref_counts,
+                        "inlineImagesAttachedByRole": inline_part_counts,
                         "responseSummary": response_summary,
                         "attachedReferenceParts": inline_part_counts,
                         "attachedReferencePartTotal": len(inline_parts),
                         "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
+                        "totalInlineImages": inline_part_debug.get("totalInlineImages") or len(inline_parts),
+                        "animalRefAttached": bool(inline_part_debug.get("animalRefAttached")),
                         "dogRoleAttached": bool(inline_part_debug.get("dogRoleAttached")),
                         "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
                         "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
+                        "introWentWithoutRefs": total_connected_refs <= 0,
+                        "refsPipelineWarning": refs_pipeline_warning or None,
                     },
                 },
             )
@@ -2220,13 +2274,18 @@ def clip_intro_generate(payload: IntroGenerateIn):
                 **debug,
                 "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
                 "refsReceivedByRole": raw_connected_ref_counts,
+                "inlineImagesAttachedByRole": inline_part_counts,
                 "responseSummary": response_summary,
                 "attachedReferenceParts": inline_part_counts,
                 "attachedReferencePartTotal": len(inline_parts),
                 "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
+                "totalInlineImages": inline_part_debug.get("totalInlineImages") or len(inline_parts),
+                "animalRefAttached": bool(inline_part_debug.get("animalRefAttached")),
                 "dogRoleAttached": bool(inline_part_debug.get("dogRoleAttached")),
                 "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
                 "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
+                "introWentWithoutRefs": total_connected_refs <= 0,
+                "refsPipelineWarning": refs_pipeline_warning or None,
                 "backendBrandedAsset": True,
                 "overlay": overlay_debug,
             },
@@ -2244,12 +2303,17 @@ def clip_intro_generate(payload: IntroGenerateIn):
                     **debug,
                     "rawConnectedRefsByRoleCounts": raw_connected_ref_counts,
                     "refsReceivedByRole": raw_connected_ref_counts,
+                    "inlineImagesAttachedByRole": inline_part_counts,
                     "attachedReferenceParts": inline_part_counts,
                     "attachedReferencePartTotal": len(inline_parts),
                     "attachedInlineReferenceRoles": inline_part_debug.get("attachedInlineReferenceRoles") or [],
+                    "totalInlineImages": inline_part_debug.get("totalInlineImages") or len(inline_parts),
+                    "animalRefAttached": bool(inline_part_debug.get("animalRefAttached")),
                     "dogRoleAttached": bool(inline_part_debug.get("dogRoleAttached")),
                     "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
                     "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
+                    "introWentWithoutRefs": total_connected_refs <= 0,
+                    "refsPipelineWarning": refs_pipeline_warning or None,
                 },
             },
         )
