@@ -136,6 +136,14 @@ export function normalizeComfyScenePrompts(scene = {}) {
   const imagePromptEn = String(scene?.imagePromptEn || scene?.imagePrompt || "").trim();
   const videoPromptRu = String(scene?.videoPromptRu || scene?.videoPrompt || "").trim();
   const videoPromptEn = String(scene?.videoPromptEn || scene?.videoPrompt || "").trim();
+  const sceneGoal = String(scene?.sceneGoal || "").trim();
+  const storyBeat = String(scene?.storyBeat || "").trim();
+  const visualAction = String(scene?.visualAction || "").trim();
+  const emotion = String(scene?.emotion || "").trim();
+  const cameraIntent = String(scene?.cameraIntent || "").trim();
+  const continuityNotes = String(scene?.continuityNotes || scene?.continuity || "").trim();
+  const plannedGenerator = String(scene?.plannedGenerator || "video").trim() || "video";
+  const futureGeneratorHint = String(scene?.futureGeneratorHint || "video").trim() || "video";
   const imagePromptSyncStatus = [PROMPT_SYNC_STATUS.synced, PROMPT_SYNC_STATUS.needsSync, PROMPT_SYNC_STATUS.syncing, PROMPT_SYNC_STATUS.syncError].includes(scene?.imagePromptSyncStatus)
     ? scene.imagePromptSyncStatus
     : computePromptSync({ ru: imagePromptRu, en: imagePromptEn });
@@ -157,6 +165,14 @@ export function normalizeComfyScenePrompts(scene = {}) {
     imagePromptEn,
     videoPromptRu,
     videoPromptEn,
+    sceneGoal,
+    storyBeat,
+    visualAction,
+    emotion,
+    cameraIntent,
+    continuityNotes,
+    plannedGenerator,
+    futureGeneratorHint,
     imagePrompt: imagePromptEn,
     videoPrompt: videoPromptEn,
     refsUsed,
@@ -306,26 +322,185 @@ export function buildComfyGlobalContinuity({ plannerInput = {}, refsByRole = {},
   return `Mode ${mode}. Style ${style}. Keep cast (${cast}) and world anchors (${world}) consistent scene-to-scene.`;
 }
 
+function getRoleLabelRu(role = "") {
+  const map = {
+    character_1: "главный герой",
+    character_2: "второй герой",
+    character_3: "третий герой",
+    animal: "животное",
+    group: "группа",
+    location: "локация",
+    props: "реквизит",
+    style: "стиль",
+  };
+  return map[String(role || "").trim().toLowerCase()] || "герой";
+}
+
+function clampSceneDuration(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 4;
+  return Math.max(3, Math.min(6, Math.round(num)));
+}
+
+function buildSceneDurations(count, { mode = "clip", audioDurationSec = null, hasAudio = false } = {}) {
+  const modePatterns = {
+    clip: [3, 4, 5, 3, 6, 4],
+    kino: [4, 5, 4, 6, 5, 4],
+    reklama: [3, 4, 4, 5, 4, 3],
+    scenario: [4, 4, 5, 5, 4, 6],
+  };
+  const pattern = modePatterns[String(mode || "clip").toLowerCase()] || modePatterns.clip;
+  const durations = Array.from({ length: count }).map((_, idx) => pattern[idx % pattern.length]);
+  if (!hasAudio || !Number.isFinite(Number(audioDurationSec)) || Number(audioDurationSec) <= 0) {
+    return durations.map(clampSceneDuration);
+  }
+  const targetAverage = Math.max(3, Math.min(6, Number(audioDurationSec) / Math.max(1, count)));
+  return durations.map((duration, idx) => {
+    const patterned = duration + (targetAverage - 4);
+    const rhythmOffset = ((idx % 3) - 1) * 0.35;
+    return clampSceneDuration(patterned + rhythmOffset);
+  });
+}
+
+function pickSceneBlueprint(mode = "clip", idx = 0, count = 1) {
+  const position = count <= 1 ? 0 : idx / Math.max(1, count - 1);
+  const modeKey = String(mode || "clip").toLowerCase();
+  const clipBlueprints = [
+    { sceneGoal: "Мгновенно задать ритм и внимание", storyBeat: "История открывается сильным визуальным импульсом", visualAction: "Герой резко входит в кадр и сразу запускает движение сцены", emotion: "Импульс, предвкушение", cameraIntent: "Быстрый заход камеры, энергичный параллакс", continuityFocus: "Сохранить ключевой образ героя и стиль света", motionLevel: "high", dialogueLike: false },
+    { sceneGoal: "Усилить драйв и смену импульса", storyBeat: "Герой проходит через первый эмоциональный подъём", visualAction: "Герой ускоряется, взаимодействует с пространством и меняет траекторию", emotion: "Азарт, напряжение", cameraIntent: "Ручная камера с коротким рывком и смещением", continuityFocus: "Сохранить ту же локацию-мотив и узнаваемую пластику движения", motionLevel: "high", dialogueLike: false },
+    { sceneGoal: "Показать эмоциональный акцент", storyBeat: "История делает акцент на внутреннем состоянии героя", visualAction: "Герой на секунду задерживается, реагирует взглядом и снова двигается", emotion: "Эмоциональный всплеск, уязвимость", cameraIntent: "Средний план с мягким подлетом камеры", continuityFocus: "Сохранить костюм, настроение света и мотив предыдущей сцены", motionLevel: "medium", dialogueLike: true },
+    { sceneGoal: "Подготовить следующий визуальный удар", storyBeat: "Сюжетный ритм собирается перед новым пиком", visualAction: "Пространство и герой входят в синхронное движение перед переходом", emotion: "Нарастание, ожидание", cameraIntent: "Камера тянет вперёд и готовит переход на следующий бит", continuityFocus: "Сохранить доминирующие цвета, героя и направление движения", motionLevel: "medium", dialogueLike: false },
+    { sceneGoal: "Дать кульминационный всплеск", storyBeat: "История достигает самого яркого действия", visualAction: "Герой совершает самый выразительный жест или рывок в сцене", emotion: "Эйфория, максимальное напряжение", cameraIntent: "Широкий динамичный проход с ощущением кульминации", continuityFocus: "Сохранить кульминационный образ героя и окружение без разрыва", motionLevel: "high", dialogueLike: false },
+    { sceneGoal: "Закрепить послевкусие и выход", storyBeat: "История завершает фразу и оставляет визуальный след", visualAction: "Герой замедляется, фиксирует итог момента и растворяется в финальном движении", emotion: "Освобождение, послевкусие", cameraIntent: "Плавный отъезд камеры с финальной фиксацией образа", continuityFocus: "Сохранить финальный образ, свет и тот же мир сцены", motionLevel: "low", dialogueLike: false },
+  ];
+  const kinoBlueprints = [
+    { sceneGoal: "Завязать причину события", storyBeat: "Герой сталкивается с фактом, который запускает действие", visualAction: "Герой замечает важную деталь и принимает решение двигаться дальше", emotion: "Собранность, тревога", cameraIntent: "Наблюдающая камера с акцентом на причинную деталь", continuityFocus: "Сохранить ту же ситуацию, героя и предметный контекст", motionLevel: "medium", dialogueLike: false },
+    { sceneGoal: "Показать развитие решения", storyBeat: "Решение героя приводит к следующему шагу", visualAction: "Герой действует целенаправленно и меняет состояние сцены", emotion: "Напряжение, контроль", cameraIntent: "Поступательное движение камеры вслед за действием", continuityFocus: "Сохранить направление действия и логику пространства", motionLevel: "medium", dialogueLike: false },
+    { sceneGoal: "Зафиксировать реакцию и ставку", storyBeat: "История раскрывает, что поставлено на карту", visualAction: "Герой останавливается, считывает последствия и готовится к следующему шагу", emotion: "Сомнение, давление", cameraIntent: "Сдержанный средний план с фокусом на лице", continuityFocus: "Сохранить ту же одежду, локацию и причинную связь", motionLevel: "low", dialogueLike: true },
+    { sceneGoal: "Довести конфликт до перелома", storyBeat: "Сюжет приходит к точке, где возврата уже нет", visualAction: "Герой совершает действие, после которого ситуация меняется необратимо", emotion: "Решимость, драматическое напряжение", cameraIntent: "Камера усиливает перелом через наезд и фиксацию жеста", continuityFocus: "Сохранить конфликтный объект и тот же драматический вектор", motionLevel: "high", dialogueLike: false },
+    { sceneGoal: "Закрепить следствие", storyBeat: "История показывает результат принятого решения", visualAction: "Герой проживает итог и переводит историю к следующей точке", emotion: "Тяжесть, разрядка", cameraIntent: "Плавное сопровождение с ощущением последствия", continuityFocus: "Сохранить следы действия и неизменность мира", motionLevel: "low", dialogueLike: true },
+  ];
+  const reklamaBlueprints = [
+    { sceneGoal: "Сразу захватить внимание", storyBeat: "Сцена мгновенно формулирует главный визуальный крючок", visualAction: "Герой или продукт появляются максимально выразительно и читаемо", emotion: "Интерес, импульс", cameraIntent: "Короткий яркий заход камеры на ключевой объект", continuityFocus: "Сохранить брендовые цвета, героя и предмет в центре внимания", motionLevel: "medium", dialogueLike: false },
+    { sceneGoal: "Показать ключевую пользу", storyBeat: "История объясняет, зачем объект нужен зрителю", visualAction: "Герой наглядно использует объект и демонстрирует полезный результат", emotion: "Уверенность, удовольствие", cameraIntent: "Чистый демонстрационный ракурс с акцентом на действие", continuityFocus: "Сохранить продукт, детали интерфейса или формы без изменений", motionLevel: "medium", dialogueLike: false },
+    { sceneGoal: "Укрепить доверие через эмоцию", storyBeat: "Сцена показывает человеческую реакцию на ценность", visualAction: "Герой реагирует на эффект продукта и делится эмоциональным откликом", emotion: "Облегчение, радость", cameraIntent: "Средний план с мягким приближением к эмоции", continuityFocus: "Сохранить образ героя, продукт и чистую визуальную подачу", motionLevel: "low", dialogueLike: true },
+    { sceneGoal: "Подвести к запоминанию оффера", storyBeat: "История собирает визуальные аргументы в понятный итог", visualAction: "Герой завершает действие, а продукт остаётся главным визуальным акцентом", emotion: "Удовлетворение, уверенность", cameraIntent: "Плавный финальный наезд с премиальной подачей", continuityFocus: "Сохранить брендовый свет, упаковку и чистый фон", motionLevel: "low", dialogueLike: false },
+  ];
+  const scenarioBlueprints = [
+    { sceneGoal: "Чётко ввести исходную ситуацию", storyBeat: "История устанавливает, кто где находится и что происходит", visualAction: "Герой входит в обозначенное пространство и начинает конкретное действие", emotion: "Собранность, ожидание", cameraIntent: "Ясный установочный план без визуального шума", continuityFocus: "Сохранить географию сцены, образ героя и реквизит", motionLevel: "low", dialogueLike: false },
+    { sceneGoal: "Перевести сцену к следующему биту", storyBeat: "Герой выполняет шаг, который логично ведёт к продолжению", visualAction: "Герой взаимодействует с объектом или персонажем и меняет ситуацию", emotion: "Фокус, внутреннее давление", cameraIntent: "Функциональное сопровождение действия без лишней экспрессии", continuityFocus: "Сохранить позицию объектов и последовательность действий", motionLevel: "medium", dialogueLike: false },
+    { sceneGoal: "Показать реакцию и уточнение смысла", storyBeat: "История фиксирует ответ героя на произошедшее", visualAction: "Герой останавливается, реагирует и формулирует следующий импульс действием", emotion: "Сдержанное напряжение, размышление", cameraIntent: "Средний план с читаемой мимикой и ясным фокусом", continuityFocus: "Сохранить ось сцены, костюм и предметные связи", motionLevel: "low", dialogueLike: true },
+    { sceneGoal: "Подготовить точный переход вперёд", storyBeat: "Сюжет завершает текущий шаг и переводит историю дальше", visualAction: "Герой завершает действие и визуально открывает следующий эпизод", emotion: "Решимость, движение вперёд", cameraIntent: "Плавное доведение кадра до точки следующего перехода", continuityFocus: "Сохранить логическую последовательность и состояние пространства", motionLevel: "medium", dialogueLike: false },
+  ];
+  const blueprintMap = { clip: clipBlueprints, kino: kinoBlueprints, reklama: reklamaBlueprints, scenario: scenarioBlueprints };
+  const blueprints = blueprintMap[modeKey] || clipBlueprints;
+  const scaledIndex = Math.min(blueprints.length - 1, Math.max(0, Math.round(position * (blueprints.length - 1))));
+  return blueprints[scaledIndex];
+}
+
+function inferSceneEmotionTag(emotion = "") {
+  const value = String(emotion || "").toLowerCase();
+  if (value.includes("эйфор") || value.includes("радост") || value.includes("удоволь")) return "uplift";
+  if (value.includes("трев") || value.includes("напряж") || value.includes("давление")) return "tension";
+  if (value.includes("уязв") || value.includes("сомнен") || value.includes("размыш")) return "intimate";
+  return "steady";
+}
+
+function pickFutureGeneratorHint({ mode = "clip", hasAudio = false, audioStoryMode = "lyrics_music", blueprint = {} } = {}) {
+  if (mode === "clip" && hasAudio && audioStoryMode !== "music_only" && (blueprint.motionLevel === "high" || blueprint.emotion?.includes("Эйфория") || blueprint.emotion?.includes("Азарт"))) {
+    return "singing_candidate";
+  }
+  if (blueprint.dialogueLike || inferSceneEmotionTag(blueprint.emotion) === "intimate") {
+    return "speech_candidate";
+  }
+  if (blueprint.motionLevel === "high" || String(blueprint.visualAction || "").includes("меняет") || String(blueprint.visualAction || "").includes("рывок")) {
+    return "transform_candidate";
+  }
+  return "video";
+}
+
+function buildContinuityNotes({ plannerInput = {}, plannerMeta = {}, primaryRole = "character_1", blueprint = {} } = {}) {
+  const refsByRole = plannerInput?.refsByRole || {};
+  const locationAnchor = Array.isArray(refsByRole.location) && refsByRole.location.length > 0 ? "та же локация" : "тот же тип пространства";
+  const propAnchor = Array.isArray(refsByRole.props) && refsByRole.props.length > 0 ? "те же ключевые предметы" : "без смены ключевых объектов";
+  const styleAnchor = plannerInput?.stylePreset ? `стиль ${plannerInput.stylePreset}` : "тот же визуальный стиль";
+  const castAnchor = primaryRole ? `тот же ${getRoleLabelRu(primaryRole)}` : "тот же герой";
+  return [castAnchor, locationAnchor, propAnchor, styleAnchor, blueprint.continuityFocus].filter(Boolean).join(", ");
+}
+
+function buildPromptPackage({ idx = 0, stylePreset = "realism", primaryRole = "character_1", plannerInput = {}, plannerMeta = {}, blueprint = {}, continuityNotes = "" } = {}) {
+  const storyMission = String(plannerInput?.storyMissionSummary || plannerMeta?.storyMissionSummary || "").trim();
+  const primaryRoleRu = getRoleLabelRu(primaryRole);
+  const worldHint = Array.isArray(plannerInput?.refsByRole?.location) && plannerInput.refsByRole.location.length > 0 ? "anchored to the established location" : "in a consistent cinematic environment";
+  const styleSummary = String(plannerMeta?.styleRules?.styleSummary || plannerInput?.styleSemantics?.styleSummary || "").trim();
+  const imagePromptEn = [
+    `Create the keyframe for scene ${idx + 1}.`,
+    `Main subject: ${primaryRole}.`,
+    `Show ${blueprint.visualAction ? blueprint.visualAction.toLowerCase() : "a decisive story moment"}.`,
+    `Environment: ${worldHint}.`,
+    `Mood: ${blueprint.emotion || "focused cinematic emotion"}.`,
+    `Style: ${stylePreset}${styleSummary ? `, ${styleSummary}` : ""}.`,
+    storyMission ? `Story context: ${storyMission}.` : "",
+  ].filter(Boolean).join(" ");
+  const videoPromptEn = [
+    `Animate scene ${idx + 1} as a coherent story beat.`,
+    `Action: ${blueprint.visualAction || "keep the hero moving through the scene"}.`,
+    `Camera: ${blueprint.cameraIntent || "maintain motivated cinematic movement"}.`,
+    `Emotional progression: start with ${blueprint.emotion || "focused emotion"} and push toward the next beat.`,
+    continuityNotes ? `Continuity: ${continuityNotes}.` : "",
+    `Keep the result ready for video generation.`,
+  ].filter(Boolean).join(" ");
+  const imagePromptRu = `Ключевой кадр ${idx + 1}: ${blueprint.visualAction || "решающий момент сцены"}. В кадре ${primaryRoleRu}, окружение без разрыва по стилю ${stylePreset}.`;
+  const videoPromptRu = `Внутри сцены ${idx + 1}: ${blueprint.visualAction || "герой продолжает действие"}, камера — ${String(blueprint.cameraIntent || "мотивированное движение").toLowerCase()}, эмоция — ${String(blueprint.emotion || "сфокусированное напряжение").toLowerCase()}.`;
+  return { imagePromptEn, videoPromptEn, imagePromptRu, videoPromptRu };
+}
+
 export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {} } = {}) {
   const count = Number(plannerMeta?.summary?.sceneCount || 6);
-  const defaultDuration = 3;
-  return Array.from({ length: Math.max(1, Math.min(12, count)) }).map((_, idx) => {
-    const imagePromptRu = `Кадр ${idx + 1} в стиле ${plannerInput.stylePreset || "realism"}. ${plannerInput.storyMissionSummary || ""}`.trim();
-    const imagePromptEn = `Create frame ${idx + 1} in ${plannerInput.stylePreset || "realism"} style. ${plannerInput.storyMissionSummary || ""}`.trim();
-    const videoPromptRu = `Анимируй кадр ${idx + 1} с согласованным движением камеры и ритмом.`;
-    const videoPromptEn = `Animate frame ${idx + 1} with coherent transition and rhythm cues.`;
+  const sceneCount = Math.max(1, Math.min(12, count));
+  const mode = String(plannerInput?.mode || plannerMeta?.mode || "clip").toLowerCase();
+  const modeRules = plannerInput?.modeRules || plannerMeta?.modeRules || MODE_RULES[mode] || MODE_RULES.clip;
+  const primaryRole = plannerMeta?.sceneRoleModel?.primarySubject || "character_1";
+  const secondaryRoles = plannerMeta?.sceneRoleModel?.secondarySubjects || [];
+  const audioDurationSec = Number(plannerInput?.audioDurationSec || plannerMeta?.audioDurationSec || 0);
+  const hasAudio = audioDurationSec > 0 || !!String(plannerInput?.meaningfulAudio || "").trim();
+  const durations = buildSceneDurations(sceneCount, { mode, audioDurationSec, hasAudio });
+  let cursorSec = 0;
+  return Array.from({ length: sceneCount }).map((_, idx) => {
+    const blueprint = pickSceneBlueprint(mode, idx, sceneCount);
+    const continuityNotes = buildContinuityNotes({ plannerInput, plannerMeta, primaryRole, blueprint });
+    const { imagePromptEn, videoPromptEn, imagePromptRu, videoPromptRu } = buildPromptPackage({
+      idx,
+      stylePreset: plannerInput.stylePreset || plannerMeta.stylePreset || "realism",
+      primaryRole,
+      plannerInput,
+      plannerMeta,
+      blueprint,
+      continuityNotes,
+    });
+    const durationSec = durations[idx];
+    const startSec = cursorSec;
+    const endSec = startSec + durationSec;
+    cursorSec = endSec;
+    const futureGeneratorHint = pickFutureGeneratorHint({
+      mode,
+      hasAudio,
+      audioStoryMode: plannerInput?.audioStoryMode || plannerMeta?.audioStoryMode || "lyrics_music",
+      blueprint,
+    });
+    const planningRulesSummary = Array.isArray(modeRules?.planningRules) ? modeRules.planningRules.slice(0, 2).join(" | ") : "";
     return {
       sceneId: `comfy-scene-${idx + 1}`,
       title: `Scene ${idx + 1}`,
-      startSec: idx * defaultDuration,
-      endSec: (idx + 1) * defaultDuration,
-      durationSec: defaultDuration,
+      startSec,
+      endSec,
+      durationSec,
       sceneNarrativeStep: `step_${idx + 1}`,
-      sceneGoal: plannerInput.storyMissionSummary || "advance story",
+      sceneGoal: blueprint.sceneGoal,
       storyMission: plannerInput.storyMissionSummary || "",
       sceneOutputRule: "scene image first",
-      primaryRole: plannerMeta?.sceneRoleModel?.primarySubject || "character_1",
-      secondaryRoles: plannerMeta?.sceneRoleModel?.secondarySubjects || [],
+      primaryRole,
+      secondaryRoles,
       continuity: plannerMeta?.globalContinuity || "",
       imagePrompt: imagePromptEn,
       videoPrompt: videoPromptEn,
@@ -337,22 +512,29 @@ export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {
       videoPromptSyncStatus: PROMPT_SYNC_STATUS.synced,
       refsUsed: [],
       refDirectives: {},
-      heroEntityId: plannerMeta?.sceneRoleModel?.primarySubject || "character_1",
-      supportEntityIds: plannerMeta?.sceneRoleModel?.secondarySubjects || [],
-      mustAppear: [plannerMeta?.sceneRoleModel?.primarySubject || "character_1"],
+      heroEntityId: primaryRole,
+      supportEntityIds: secondaryRoles,
+      mustAppear: [primaryRole],
       mustNotAppear: [],
       environmentLock: true,
       styleLock: true,
       identityLock: true,
       roleSelectionReason: "mock_default_role_selection",
-      storyBeat: `beat_${idx + 1}`,
-      mustShow: [plannerMeta?.sceneRoleModel?.primarySubject || "character_1"],
+      storyBeat: blueprint.storyBeat,
+      visualAction: blueprint.visualAction,
+      emotion: blueprint.emotion,
+      mustShow: [primaryRole],
       mustKeep: ["identity continuity", "style continuity"],
-      cameraIntent: plannerInput?.modeSceneStrategy || "coherent progression",
-      transitionLogic: plannerInput?.modeContinuityBias || "coherent transition",
+      cameraIntent: blueprint.cameraIntent,
+      continuityNotes,
+      transitionLogic: plannerInput?.modeContinuityBias || modeRules?.modeContinuityBias || "coherent transition",
       renderPriority: idx === 0 ? "hook" : "narrative_consistency",
       speechRelation: plannerInput?.audioStoryMode === "music_plus_text" ? "text-led over music timing" : "music-led",
-      abstractionLevel: plannerMeta?.modeRules?.abstractionAllowance || "medium",
+      abstractionLevel: modeRules?.abstractionAllowance || "medium",
+      narrativeDiscipline: modeRules?.narrativeDiscipline || "medium",
+      planningRulesApplied: planningRulesSummary,
+      plannedGenerator: "video",
+      futureGeneratorHint,
       imageUrl: "",
       videoUrl: "",
       videoPanelOpen: false,
@@ -382,7 +564,7 @@ export function buildMockComfyScenes(meta = {}) {
     styleRules: plannerInput?.styleRules || meta?.styleRules || {},
     audioStoryPolicy: plannerInput?.audioStoryPolicy || meta?.audioStoryPolicy || AUDIO_STORY_POLICIES.lyrics_music,
     textInfluence: String(plannerInput?.textInfluence || meta?.textInfluence || "none"),
-    sceneContractSchemaVersion: "comfy_scene_contract_v1",
+    sceneContractSchemaVersion: "comfy_scene_contract_v2",
   };
   plannerMeta.globalContinuity = buildComfyGlobalContinuity({ plannerInput, refsByRole: plannerInput?.refsByRole || {}, sceneRoleModel: plannerMeta.sceneRoleModel });
   return buildComfyScenesFromPlanner({ plannerInput, plannerMeta });
