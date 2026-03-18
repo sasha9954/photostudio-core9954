@@ -4690,13 +4690,45 @@ def _normalize_scene_narrative_step_for_image(scene_narrative_step: str) -> str:
     return cleaned
 
 
-def _comfy_no_text_overlay_block() -> str:
+def _scene_explicitly_requests_designed_text(*values: Any) -> bool:
+    markers = [
+        "{title}",
+        "title text",
+        "stylized title",
+        "movie title",
+        "poster title",
+        "thumbnail title",
+        "logo text",
+        "wordmark",
+        "typography",
+        "font",
+        "lettering",
+        "caption text",
+    ]
+    for value in values:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            continue
+        if any(marker in normalized for marker in markers):
+            return True
+    return False
+
+
+def _comfy_text_rendering_block(*, allow_designed_text: bool = False) -> str:
+    if allow_designed_text:
+        return "\n".join([
+            "TEXT RENDERING RULE (EXPLICITLY REQUESTED):",
+            "- readable title text/typography is allowed only because the prompt explicitly requests it",
+            "- integrate the text naturally into the scene composition, never inside a cheap overlay box or UI frame",
+            "- keep the text cinematic, production-grade, and consistent with scene lighting/perspective/materials",
+            "- still forbid subtitles, debug text, service labels, watermarks, scene numbers, fake UI, and random extra copy",
+        ])
     return "\n".join([
         "TEXT OVERLAY SAFETY (DEFAULT RULE):",
         "- no text overlays in the generated image",
         "- no captions, subtitles, labels, UI text, lower-thirds, watermarks, side annotations, typography, or debug strings",
         "- do not draw scene numbers, scene titles, scene ids, step labels, story_action, or any service/meta text",
-        "- only allow readable text when the scene explicitly requires a real in-world sign or object with text",
+        "- only allow readable text when the scene explicitly requests integrated title/typography treatment or requires a real in-world sign or object with text",
     ])
 
 
@@ -4817,6 +4849,14 @@ def _build_comfy_image_prompt_assembly(
     continuity_value = _sanitize_visual_prompt_text(continuity_input or str((planner_meta or {}).get("globalContinuity") or "").strip())
     scene_goal_value = _normalize_scene_goal_for_image(scene_goal, planner_meta)
     scene_narrative_step_value = _normalize_scene_narrative_step_for_image(scene_narrative_step)
+    allow_designed_text = _scene_explicitly_requests_designed_text(
+        scene_delta,
+        scene_text,
+        text_input,
+        scene_goal_value,
+        scene_narrative_step_value,
+        continuity_value,
+    )
     planner_meta_preview = {
         "storyControlMode": str((planner_meta or {}).get("storyControlMode") or "").strip(),
         "timelineSource": str((planner_meta or {}).get("timelineSource") or "").strip(),
@@ -4878,7 +4918,7 @@ def _build_comfy_image_prompt_assembly(
         f"- world scale context: {world_scale_context}\n"
         f"- entity scale anchors: {entity_scale_anchor_text}",
         anti_collage_block,
-        _comfy_no_text_overlay_block(),
+        _comfy_text_rendering_block(allow_designed_text=allow_designed_text),
         priority_contract_block,
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
         forbidden_changes_block,
@@ -5379,7 +5419,7 @@ def clip_image(payload: ClipImageIn):
             "CLIP WORLD LOCK: Every shot in one clip must belong to one shared world identity. Preserve the same lighting logic, atmosphere, weather state, palette, material response, and dust/fog/snow/rain state across shots. Shot variation is allowed, but world identity must remain unchanged. "
             "PROP PHYSICAL CONSISTENCY: Keep consistent size relative to hands, size relative to torso/legs, grip logic, weight impression, handle/cable behavior, and ground contact behavior. The prop must not look weightless, oversized, undersized, or physically inconsistent between scenes. If the prop is handheld, its scale must remain realistically liftable by the character. "
             "Scene text may be Russian and visual prompt may be English. Use both when available: visual prompt defines composition/action, and scene text defines narrative context and emotion. "
-            "DEFAULT NO-TEXT RULE: generated scene images must not contain captions, labels, subtitles, UI overlays, watermarks, scene numbers, scene titles, debug/meta text, side annotations, or typography unless the scene explicitly requires real in-world signage."
+            "DEFAULT NO-TEXT RULE: generated scene images must not contain captions, labels, subtitles, UI overlays, watermarks, scene numbers, scene titles, debug/meta text, side annotations, or typography unless the scene explicitly requests integrated title/typography treatment or requires real in-world signage."
         )
 
         parts = [{"text": system_prompt}]
