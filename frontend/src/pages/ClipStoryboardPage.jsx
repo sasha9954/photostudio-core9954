@@ -71,6 +71,7 @@ const CLIP_TRACE_VIDEO_POLLING = false;
 const CLIP_TRACE_COMFY_REFS = false;
 const CLIP_TRACE_BRAIN_REFRESH = false;
 const CLIP_TRACE_GRAPH_HYDRATE = false;
+const CLIP_TRACE_ASSEMBLY_SOURCE = false;
 
 function portColor(key) {
   return PORT_COLORS[key] || "#8c8c8c";
@@ -161,6 +162,10 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
 
   if (sourceType === "comfyStoryboard" && sourceHandle === "comfy_scene_video_out" && targetType === "comfyVideoPreview" && targetHandle === "comfy_scene_video_out") {
     return "comfy_video";
+  }
+
+  if (sourceType === "comfyStoryboard" && sourceHandle === "comfy_scene_video_out" && targetType === "assemblyNode") {
+    return "storyboard_to_assembly";
   }
 
   if (sourceType === "brainNode" && sourceHandle === "plan" && targetType === "storyboardNode" && targetHandle === "plan_in") {
@@ -781,7 +786,7 @@ function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16" }) {
         videoUrl,
         requestedDurationSec: getSceneRequestedDurationSec(scene),
         transitionType: resolveSceneTransitionType(scene),
-        order: idx + 1,
+        order: Number.isFinite(Number(scene?.order)) ? Number(scene.order) : idx + 1,
       };
     })
     .filter(Boolean);
@@ -798,9 +803,80 @@ function extractStoryboardScenesFromNodes(nodes = []) {
   return Array.isArray(storyboardNode?.data?.scenes) ? storyboardNode.data.scenes : [];
 }
 
+function normalizeComfyScenesForAssembly(scenes = []) {
+  return normalizeSceneCollectionWithSceneId(scenes, "comfy_scene").map((scene, idx) => {
+    const durationFromScene = normalizeDurationSec(scene?.durationSec);
+    const requestedDurationSec = durationFromScene != null
+      ? durationFromScene
+      : getSceneRequestedDurationSec({
+        requestedDurationSec: scene?.requestedDurationSec,
+        t0: scene?.startSec,
+        t1: scene?.endSec,
+      });
+    const normalizedFormat = normalizeSceneImageFormat(scene?.imageFormat || scene?.format || "9:16");
+    return {
+      ...scene,
+      sceneId: buildCanonicalSceneId(scene, idx, "comfy_scene"),
+      requestedDurationSec,
+      order: Number.isFinite(Number(scene?.order)) ? Number(scene.order) : idx + 1,
+      transitionType: resolveSceneTransitionType(scene),
+      imageFormat: normalizedFormat,
+      format: normalizedFormat,
+    };
+  });
+}
+
 function extractComfyScenesFromNodes(nodes = []) {
   const comfyStoryboardNode = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "comfyStoryboard") || null;
-  return Array.isArray(comfyStoryboardNode?.data?.mockScenes) ? comfyStoryboardNode.data.mockScenes : [];
+  return normalizeComfyScenesForAssembly(comfyStoryboardNode?.data?.mockScenes);
+}
+
+function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } = {}) {
+  const nodesList = Array.isArray(nodes) ? nodes : [];
+  const edgesList = Array.isArray(edges) ? edges : [];
+  const assemblyNode = String(assemblyNodeId || "").trim()
+    ? (nodesList.find((node) => node?.id === assemblyNodeId && node?.type === "assemblyNode") || null)
+    : (nodesList.find((node) => node?.type === "assemblyNode") || null);
+  const effectiveAssemblyNodeId = String(assemblyNode?.id || assemblyNodeId || "").trim();
+  const nodesById = new Map(nodesList.map((node) => [node?.id, node]));
+  const incomingEdge = effectiveAssemblyNodeId
+    ? edgesList.find((edge) => {
+      if (edge?.target !== effectiveAssemblyNodeId) return false;
+      const sourceType = String(nodesById.get(edge?.source)?.type || "");
+      return sourceType === "storyboardNode" || sourceType === "comfyStoryboard";
+    }) || null
+    : null;
+  const sourceNode = incomingEdge ? (nodesById.get(incomingEdge.source) || null) : null;
+
+  if (sourceNode?.type === "storyboardNode") {
+    const scenes = Array.isArray(sourceNode?.data?.scenes) ? sourceNode.data.scenes : [];
+    return {
+      assemblyNodeId: effectiveAssemblyNodeId,
+      sourceNodeId: String(sourceNode?.id || ""),
+      sourceNodeType: "storyboardNode",
+      scenesSource: "storyboard",
+      scenes,
+    };
+  }
+
+  if (sourceNode?.type === "comfyStoryboard") {
+    const scenes = normalizeComfyScenesForAssembly(sourceNode?.data?.mockScenes);
+    return {
+      assemblyNodeId: effectiveAssemblyNodeId,
+      sourceNodeId: String(sourceNode?.id || ""),
+      sourceNodeType: "comfyStoryboard",
+      scenesSource: "comfyStoryboard",
+      scenes,
+    };
+  }
+
+  return {
+    assemblyNodeId: effectiveAssemblyNodeId,
+    sourceNodeId: "",
+    sourceNodeType: "",
+    scenesSource: "none",
+    scenes: [],
+  };
 }
 
 function extractGlobalAudioUrlFromNodes(nodes = []) {
@@ -808,8 +884,11 @@ function extractGlobalAudioUrlFromNodes(nodes = []) {
   return audioNodeWithUrl?.data?.audioUrl ? String(audioNodeWithUrl.data.audioUrl) : "";
 }
 
-function buildAssemblyPayloadSignature(payload) {
+function buildAssemblyPayloadSignature(payload, options = {}) {
   return JSON.stringify({
+    scenesSource: String(options?.scenesSource || "none"),
+    sourceNodeId: String(options?.sourceNodeId || ""),
+    assemblyNodeId: String(options?.assemblyNodeId || ""),
     audioUrl: payload?.audioUrl || "",
     format: payload?.format || "9:16",
     scenes: Array.isArray(payload?.scenes)
@@ -4578,18 +4657,51 @@ Aspect ratio: ${imageFormat}`,
     scrollToVideoBlock();
   }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
 
-  const storyboardScenesForAssembly = useMemo(() => extractStoryboardScenesFromNodes(nodes), [nodes]);
+  const assemblySource = useMemo(() => resolveAssemblySource({ nodes, edges }), [nodes, edges]);
+  const assemblyScenesSource = assemblySource.scenesSource;
+  const assemblyScenesForPayload = assemblySource.scenes;
+  const assemblyReadySceneCount = useMemo(
+    () => assemblyScenesForPayload.filter((scene) => String(scene?.videoUrl || "").trim()).length,
+    [assemblyScenesForPayload]
+  );
+  const assemblyDurationEstimateSec = useMemo(
+    () => assemblyScenesForPayload.reduce((sum, scene) => sum + (Number(getSceneRequestedDurationSec(scene)) || 0), 0),
+    [assemblyScenesForPayload]
+  );
 
   const assemblyPayload = useMemo(() => {
-    const sceneFormat = storyboardScenesForAssembly.find((scene) => String(scene?.imageFormat || "").trim())?.imageFormat || "9:16";
+    const sceneFormat = assemblyScenesForPayload.find((scene) => String(scene?.imageFormat || scene?.format || "").trim())?.imageFormat
+      || assemblyScenesForPayload.find((scene) => String(scene?.format || "").trim())?.format
+      || "9:16";
     return buildAssemblyPayload({
-      scenes: storyboardScenesForAssembly,
+      scenes: assemblyScenesForPayload,
       audioUrl: globalAudioUrlRaw,
       format: sceneFormat,
     });
-  }, [globalAudioUrlRaw, storyboardScenesForAssembly]);
+  }, [assemblyScenesForPayload, globalAudioUrlRaw]);
 
-  const assemblyPayloadSignature = useMemo(() => buildAssemblyPayloadSignature(assemblyPayload), [assemblyPayload]);
+  const assemblyPayloadSignature = useMemo(
+    () => buildAssemblyPayloadSignature(assemblyPayload, assemblySource),
+    [assemblyPayload, assemblySource]
+  );
+
+  useEffect(() => {
+    if (!CLIP_TRACE_ASSEMBLY_SOURCE) return;
+    console.debug("[CLIP TRACE] assembly source", {
+      assemblyNodeId: assemblySource.assemblyNodeId,
+      sourceNodeId: assemblySource.sourceNodeId,
+      sourceNodeType: assemblySource.sourceNodeType,
+      scenesSource: assemblyScenesSource,
+      scenesCount: assemblyScenesForPayload.length,
+      readyScenesCount: assemblyReadySceneCount,
+      signatureSource: `${assemblyScenesSource}:${assemblySource.sourceNodeId || "none"}`,
+    });
+  }, [
+    assemblyReadySceneCount,
+    assemblyScenesForPayload.length,
+    assemblyScenesSource,
+    assemblySource,
+  ]);
 
   useEffect(() => {
     const prev = renderTraceSnapshotRef.current;
@@ -4832,21 +4944,18 @@ Aspect ratio: ${imageFormat}`,
   }, [isAssembling, assemblyBuildState, assemblyPayload.scenes.length, assemblyResult?.finalVideoUrl]);
 
   useEffect(() => {
-    const estimatedDurationSec = assemblyPayload.scenes.reduce(
-      (sum, scene) => sum + (Number(scene.requestedDurationSec) || 0),
-      0
-    );
     setNodes((prev) => prev.map((n) => {
       if (n.type !== "assemblyNode") return n;
       return {
         ...n,
         data: {
           ...n.data,
-          totalScenes: storyboardScenesForAssembly.length,
-          readyScenes: assemblyPayload.scenes.length,
+          totalScenes: assemblyScenesForPayload.length,
+          readyScenes: assemblyReadySceneCount,
           hasAudio: !!assemblyPayload.audioUrl,
           format: assemblyPayload.format,
-          durationSec: estimatedDurationSec,
+          durationSec: assemblyDurationEstimateSec,
+          scenesSource: assemblyScenesSource,
           canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
           isAssembling,
           status: assemblyStatus,
@@ -4867,7 +4976,10 @@ Aspect ratio: ${imageFormat}`,
     }));
   }, [
     assemblyPayload,
-    storyboardScenesForAssembly.length,
+    assemblyDurationEstimateSec,
+    assemblyReadySceneCount,
+    assemblyScenesForPayload.length,
+    assemblyScenesSource,
     isAssembling,
     assemblyStatus,
     assemblyResult,
@@ -6132,19 +6244,16 @@ onClipSec: (nodeId, value) => {
         }
 
         if (n.type === "assemblyNode") {
-          const estimatedDurationSec = assemblyPayload.scenes.reduce(
-            (sum, scene) => sum + (Number(scene.requestedDurationSec) || 0),
-            0
-          );
           return {
             ...base,
             data: {
               ...base.data,
-              totalScenes: storyboardScenesForAssembly.length,
-              readyScenes: assemblyPayload.scenes.length,
+              totalScenes: assemblyScenesForPayload.length,
+              readyScenes: assemblyReadySceneCount,
               hasAudio: !!assemblyPayload.audioUrl,
               format: assemblyPayload.format,
-              durationSec: estimatedDurationSec,
+              durationSec: assemblyDurationEstimateSec,
+              scenesSource: assemblyScenesSource,
               canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
               isAssembling,
               status: assemblyStatus,
@@ -6169,7 +6278,10 @@ return base;
       setNodes,
       removeNode,
       edges,
-      storyboardScenesForAssembly.length,
+      assemblyDurationEstimateSec,
+      assemblyReadySceneCount,
+      assemblyScenesForPayload.length,
+      assemblyScenesSource,
       assemblyPayload,
       isAssembling,
       assemblyStatus,
@@ -6479,16 +6591,19 @@ const hydrate = useCallback((source = "unknown") => {
           console.warn("[CLIP NODE TYPE MISSING]", nodeItem?.type);
         }
       });
-      const hydratedScenes = extractStoryboardScenesFromNodes(hydratedNodes);
+      const hydratedAssemblySource = resolveAssemblySource({ nodes: hydratedNodes, edges: hydratedEdges });
+      const hydratedScenes = hydratedAssemblySource.scenes;
       const hydratedComfyScenes = extractComfyScenesFromNodes(hydratedNodes);
       const hydratedAudioUrl = extractGlobalAudioUrlFromNodes(hydratedNodes);
-      const hydratedFormat = hydratedScenes.find((scene) => String(scene?.imageFormat || "").trim())?.imageFormat || "9:16";
+      const hydratedFormat = hydratedScenes.find((scene) => String(scene?.imageFormat || scene?.format || "").trim())?.imageFormat
+        || hydratedScenes.find((scene) => String(scene?.format || "").trim())?.format
+        || "9:16";
       const hydratedPayload = buildAssemblyPayload({
         scenes: hydratedScenes,
         audioUrl: hydratedAudioUrl,
         format: hydratedFormat,
       });
-      const hydratedSignature = buildAssemblyPayloadSignature(hydratedPayload);
+      const hydratedSignature = buildAssemblyPayloadSignature(hydratedPayload, hydratedAssemblySource);
       const scenarioStats = collectSceneVideoStateStats(hydratedScenes, "scene");
       const comfyStats = collectSceneVideoStateStats(hydratedComfyScenes, "comfy_scene");
       console.info("[CLIP STORAGE] hydrate payload accepted", {
@@ -6986,6 +7101,11 @@ const hydrate = useCallback((source = "unknown") => {
         }
 
         if (src.type === 'comfyStoryboard' && (params.sourceHandle || '') === 'comfy_scene_video_out') {
+          if (dst.type === 'assemblyNode' && (params.targetHandle || '') === 'assembly_in') {
+            const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === 'assembly_in'));
+            const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
+            return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          }
           if (dst.type !== 'comfyVideoPreview' || (params.targetHandle || '') !== 'comfy_scene_video_out') return eds;
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === 'comfy_scene_video_out'));
           const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
