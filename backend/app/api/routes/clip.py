@@ -1626,15 +1626,14 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     else:
         prompt_lines.append("- keep connected role identities separated and exact")
     prompt_lines.append("- do not swap identities between roles")
-    connected_women_count = sum(
-        1
-        for role in intro_active_cast_roles
-        if role_gender_locks.get(role) == "female" and connected_ref_counts.get(role, 0) > 0
+    prompt_lines.append(
+        "- exact visible cast in frame must match this package: "
+        + _intro_role_package_summary(
+            intro_active_cast_roles,
+            gender_locks=role_gender_locks,
+            species_locks=animal_species_locks,
+        )
     )
-    if connected_women_count > 0:
-        prompt_lines.append(f"- render exactly {connected_women_count} women when these female roles are connected")
-    if connected_ref_counts.get("animal", 0) > 0 and animal_species_locks.get("animal") == "dog":
-        prompt_lines.append(f"- render exactly {connected_women_count} women and 1 dog when these roles are connected" if connected_women_count > 0 else "- render exactly 1 dog when animal is connected")
     prompt_lines.extend([
         "WORLD SOURCE RULE:",
         "- world, environment, and location must come from story context and opening beats",

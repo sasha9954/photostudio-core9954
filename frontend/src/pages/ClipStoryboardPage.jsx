@@ -775,8 +775,15 @@ function normalizeIntroStylePreset(stylePreset) {
   return INTRO_STYLE_PRESETS.includes(stylePreset) ? stylePreset : "cinematic";
 }
 
+function parseLocaleFloat(value) {
+  if (typeof value === "number") return value;
+  const normalized = String(value ?? "").trim().replace(",", ".");
+  if (!normalized) return NaN;
+  return Number(normalized);
+}
+
 function normalizeIntroDurationSec(value) {
-  const raw = Number(value);
+  const raw = parseLocaleFloat(value);
   if (!Number.isFinite(raw)) return 2.5;
   return Math.max(0.5, Math.min(8, Math.round(raw * 10) / 10));
 }
@@ -3108,6 +3115,27 @@ function IntroFrameNode({ id, data }) {
   const previewFormat = normalizeIntroFramePreviewFormat(data?.previewFormat);
   const previewFormatMeta = getIntroFramePreviewFormatMeta(previewFormat);
   const durationSec = normalizeIntroDurationSec(data?.durationSec);
+  const [durationDraft, setDurationDraft] = useState(
+    () => String(durationSec).replace(".", ",")
+  );
+
+  useEffect(() => {
+    setDurationDraft(String(durationSec).replace(".", ","));
+  }, [durationSec]);
+
+  const commitDurationDraft = useCallback(() => {
+    const parsed = parseLocaleFloat(durationDraft);
+
+    if (!Number.isFinite(parsed)) {
+      setDurationDraft(String(durationSec).replace(".", ","));
+      return;
+    }
+
+    const normalized = normalizeIntroDurationSec(parsed);
+
+    setDurationDraft(String(normalized).replace(".", ","));
+    data?.onField?.(id, "durationSec", normalized);
+  }, [data, durationDraft, durationSec, id]);
   const status = String(data?.status || "idle");
   const errorMessage = String(data?.error || "").trim();
   const previewTitle = String(data?.title || "INTRO FRAME").trim() || "INTRO FRAME";
@@ -3227,12 +3255,23 @@ function IntroFrameNode({ id, data }) {
                   <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
                   <input
                     className="clipSB_input"
-                    type="number"
-                    min="0.5"
-                    max="8"
-                    step="0.1"
-                    value={durationSec}
-                    onChange={(e) => data?.onField?.(id, "durationSec", e.target.value)}
+                    type="text"
+                    inputMode="decimal"
+                    value={durationDraft}
+                    onChange={(e) => {
+                      const next = String(e.target.value || "").replace(/[^\d,.\-]/g, "");
+                      setDurationDraft(next);
+                    }}
+                    onBlur={commitDurationDraft}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        commitDurationDraft();
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    onWheel={(e) => e.currentTarget.blur()}
+                    placeholder="0,5 – 8,0"
                   />
                 </label>
               </div>
