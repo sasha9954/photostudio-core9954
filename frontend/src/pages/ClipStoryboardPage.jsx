@@ -5245,40 +5245,83 @@ Aspect ratio: ${imageFormat}`,
     });
   }, [assemblyIntroFrame, assemblyScenesForPayload, globalAudioUrlRaw]);
 
+  const assemblySourceNodeId = String(assemblySource.sourceNodeId || "");
+  const assemblySourceNodeType = String(assemblySource.sourceNodeType || "");
+  const assemblyNodeId = String(assemblySource.assemblyNodeId || "");
+  const assemblyIntroSourceNodeId = String(assemblySource.introSourceNodeId || "");
+  const assemblyIntroSourceNodeType = String(assemblySource.introSourceNodeType || "");
+  const assemblyIntroDurationSec = Number(assemblyIntroFrame?.durationSec || 0);
+  const assemblyIntroTitle = String(assemblyIntroFrame?.title || "");
+  const assemblyHasAudio = !!assemblyPayload.audioUrl;
+  const assemblyFormat = String(assemblyPayload.format || "9:16");
+  const assemblyCanAssemble = assemblyPayload.scenes.length > 0 && !isAssembling;
+  const assemblyDebugSummary = useMemo(
+    () => `main=${assemblySourceLabel}; intro=${assemblyIntroLabel}; sourceNode=${assemblySourceNodeId || "none"}; introNode=${assemblyIntroSourceNodeId || "none"}; scenes=${assemblyScenesForPayload.length}; introImage=${assemblyHasIntro ? "yes" : "no"}; introDur=${assemblyIntroDurationSec || 0}; audio=${assemblyHasAudio ? "yes" : "no"}`,
+    [
+      assemblyHasAudio,
+      assemblyHasIntro,
+      assemblyIntroDurationSec,
+      assemblyIntroLabel,
+      assemblyIntroSourceNodeId,
+      assemblyScenesForPayload.length,
+      assemblySourceLabel,
+      assemblySourceNodeId,
+    ]
+  );
+
   const assemblyPayloadSignature = useMemo(
-    () => buildAssemblyPayloadSignature(assemblyPayload, assemblySource),
-    [assemblyPayload, assemblySource]
+    () => buildAssemblyPayloadSignature(assemblyPayload, {
+      assemblyNodeId,
+      sourceNodeId: assemblySourceNodeId,
+      sourceNodeType: assemblySourceNodeType,
+      scenesSource: assemblyScenesSource,
+      introSourceNodeId: assemblyIntroSourceNodeId,
+      introSourceNodeType: assemblyIntroSourceNodeType,
+    }),
+    [
+      assemblyPayload,
+      assemblyNodeId,
+      assemblySourceNodeId,
+      assemblySourceNodeType,
+      assemblyScenesSource,
+      assemblyIntroSourceNodeId,
+      assemblyIntroSourceNodeType,
+    ]
   );
 
   useEffect(() => {
     if (!CLIP_TRACE_ASSEMBLY_SOURCE) return;
     console.debug("[CLIP TRACE] assembly source", {
-      assemblyNodeId: assemblySource.assemblyNodeId,
-      sourceNodeId: assemblySource.sourceNodeId,
-      sourceNodeType: assemblySource.sourceNodeType,
-      introSourceNodeId: assemblySource.introSourceNodeId,
-      introSourceNodeType: assemblySource.introSourceNodeType,
+      assemblyNodeId,
+      sourceNodeId: assemblySourceNodeId,
+      sourceNodeType: assemblySourceNodeType,
+      introSourceNodeId: assemblyIntroSourceNodeId,
+      introSourceNodeType: assemblyIntroSourceNodeType,
       scenesSource: assemblyScenesSource,
       scenesCount: assemblyScenesForPayload.length,
       readyScenesCount: assemblyReadySceneCount,
-      introConnected: assemblySource.introSourceNodeType === "introFrame",
+      introConnected: assemblyIntroSourceNodeType === "introFrame",
       introImagePresent: assemblyHasIntro,
-      introDuration: Number(assemblyIntroFrame?.durationSec || 0),
+      introDuration: assemblyIntroDurationSec,
       sceneIds: assemblyScenesForPayload.map((scene) => String(scene?.sceneId || "")).filter(Boolean),
       requestedDurations: assemblyScenesForPayload.map((scene) => getSceneRequestedDurationSec(scene)),
-      hasAudio: !!assemblyPayload.audioUrl,
-      format: assemblyPayload.format,
-      signatureSource: `${assemblyScenesSource}:${assemblySource.sourceNodeId || "none"}:intro:${assemblySource.introSourceNodeId || "none"}`,
+      hasAudio: assemblyHasAudio,
+      format: assemblyFormat,
+      signatureSource: `${assemblyScenesSource}:${assemblySourceNodeId || "none"}:intro:${assemblyIntroSourceNodeId || "none"}`,
     });
   }, [
-    assemblyPayload.audioUrl,
-    assemblyPayload.format,
+    assemblyFormat,
+    assemblyHasAudio,
     assemblyHasIntro,
+    assemblyIntroDurationSec,
+    assemblyIntroSourceNodeId,
+    assemblyIntroSourceNodeType,
+    assemblyNodeId,
     assemblyReadySceneCount,
-    assemblyIntroFrame?.durationSec,
     assemblyScenesForPayload,
     assemblyScenesSource,
-    assemblySource,
+    assemblySourceNodeId,
+    assemblySourceNodeType,
   ]);
 
   useEffect(() => {
@@ -5525,70 +5568,83 @@ Aspect ratio: ${imageFormat}`,
     return "ready";
   }, [isAssembling, assemblyBuildState, assemblyPayload.scenes.length, assemblyResult?.finalVideoUrl]);
 
-  useEffect(() => {
-    setNodes((prev) => prev.map((n) => {
-      if (n.type !== "assemblyNode") return n;
-      return {
-        ...n,
-        data: {
-          ...n.data,
-          totalScenes: assemblyScenesForPayload.length,
-          readyScenes: assemblyReadySceneCount,
-          hasAudio: !!assemblyPayload.audioUrl,
-          format: assemblyPayload.format,
-          durationSec: assemblyDurationEstimateSec,
-          scenesSource: assemblyScenesSource,
-          sourceLabel: assemblySourceLabel,
-          introLabel: assemblyIntroLabel,
-          hasIntro: assemblyHasIntro,
-          introDurationSec: Number(assemblyIntroFrame?.durationSec || 0),
-          introTitle: String(assemblyIntroFrame?.title || ""),
-          debugSummary: `main=${assemblySourceLabel}; intro=${assemblyIntroLabel}; sourceNode=${assemblySource.sourceNodeId || "none"}; introNode=${assemblySource.introSourceNodeId || "none"}; scenes=${assemblyScenesForPayload.length}; introImage=${assemblyHasIntro ? "yes" : "no"}; introDur=${Number(assemblyIntroFrame?.durationSec || 0) || 0}; audio=${assemblyPayload.audioUrl ? "yes" : "no"}`,
-          canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
-          isAssembling,
-          status: assemblyStatus,
-          result: assemblyResult,
-          errorMessage: assemblyError,
-          infoMessage: assemblyInfo,
-          assemblyJobId,
-          progressPercent: assemblyProgressPercent,
-          assemblyStage,
-          assemblyStageLabel,
-          assemblyStageCurrent,
-          assemblyStageTotal,
-          isStale: isAssemblyStale,
-          onAssemble: handleAssemblyBuild,
-          onStopAssemble: handleAssemblyStop,
-        },
-      };
-    }));
-  }, [
-    assemblyPayload,
-    assemblyDurationEstimateSec,
-    assemblyHasIntro,
-    assemblyIntroFrame,
-    assemblyIntroLabel,
-    assemblyReadySceneCount,
-    assemblyScenesForPayload.length,
-    assemblySource,
-    assemblySourceLabel,
-    assemblyScenesSource,
+  const assemblyNodeDataPatch = useMemo(() => ({
+    totalScenes: assemblyScenesForPayload.length,
+    readyScenes: assemblyReadySceneCount,
+    hasAudio: assemblyHasAudio,
+    format: assemblyFormat,
+    durationSec: assemblyDurationEstimateSec,
+    scenesSource: assemblyScenesSource,
+    sourceLabel: assemblySourceLabel,
+    introLabel: assemblyIntroLabel,
+    hasIntro: assemblyHasIntro,
+    introDurationSec: assemblyIntroDurationSec,
+    introTitle: assemblyIntroTitle,
+    debugSummary: assemblyDebugSummary,
+    canAssemble: assemblyCanAssemble,
     isAssembling,
-    assemblyStatus,
-    assemblyResult,
-    assemblyError,
-    assemblyInfo,
+    status: assemblyStatus,
+    result: assemblyResult,
+    errorMessage: assemblyError,
+    infoMessage: assemblyInfo,
     assemblyJobId,
-    assemblyProgressPercent,
+    progressPercent: assemblyProgressPercent,
     assemblyStage,
     assemblyStageLabel,
     assemblyStageCurrent,
     assemblyStageTotal,
-    isAssemblyStale,
+    isStale: isAssemblyStale,
+    onAssemble: handleAssemblyBuild,
+    onStopAssemble: handleAssemblyStop,
+  }), [
+    assemblyCanAssemble,
+    assemblyDebugSummary,
+    assemblyDurationEstimateSec,
+    assemblyError,
+    assemblyFormat,
+    assemblyHasAudio,
+    assemblyHasIntro,
+    assemblyInfo,
+    assemblyIntroDurationSec,
+    assemblyIntroLabel,
+    assemblyIntroTitle,
+    assemblyJobId,
+    assemblyProgressPercent,
+    assemblyReadySceneCount,
+    assemblyResult,
+    assemblyScenesForPayload.length,
+    assemblyScenesSource,
+    assemblySourceLabel,
+    assemblyStage,
+    assemblyStageCurrent,
+    assemblyStageLabel,
+    assemblyStageTotal,
+    assemblyStatus,
     handleAssemblyBuild,
     handleAssemblyStop,
-    setNodes,
+    isAssembling,
+    isAssemblyStale,
   ]);
+
+  useEffect(() => {
+    setNodes((prev) => {
+      let didChange = false;
+      const next = prev.map((n) => {
+        if (n.type !== "assemblyNode") return n;
+        const hasChanges = Object.entries(assemblyNodeDataPatch).some(([key, value]) => !Object.is(n?.data?.[key], value));
+        if (!hasChanges) return n;
+        didChange = true;
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            ...assemblyNodeDataPatch,
+          },
+        };
+      });
+      return didChange ? next : prev;
+    });
+  }, [assemblyNodeDataPatch, setNodes]);
 
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
@@ -6932,32 +6988,7 @@ onClipSec: (nodeId, value) => {
             ...base,
             data: {
               ...base.data,
-              totalScenes: assemblyScenesForPayload.length,
-              readyScenes: assemblyReadySceneCount,
-              hasAudio: !!assemblyPayload.audioUrl,
-              format: assemblyPayload.format,
-              durationSec: assemblyDurationEstimateSec,
-              scenesSource: assemblyScenesSource,
-              sourceLabel: assemblySourceLabel,
-              introLabel: assemblyIntroLabel,
-              hasIntro: assemblyHasIntro,
-              introDurationSec: Number(assemblyIntroFrame?.durationSec || 0),
-              introTitle: String(assemblyIntroFrame?.title || ""),
-              debugSummary: `main=${assemblySourceLabel}; intro=${assemblyIntroLabel}; sourceNode=${assemblySource.sourceNodeId || "none"}; introNode=${assemblySource.introSourceNodeId || "none"}; scenes=${assemblyScenesForPayload.length}; introImage=${assemblyHasIntro ? "yes" : "no"}; introDur=${Number(assemblyIntroFrame?.durationSec || 0) || 0}; audio=${assemblyPayload.audioUrl ? "yes" : "no"}`,
-              canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
-              isAssembling,
-              status: assemblyStatus,
-              result: assemblyResult,
-              errorMessage: assemblyError,
-              infoMessage: assemblyInfo,
-              assemblyJobId,
-              progressPercent: assemblyProgressPercent,
-              assemblyStage,
-              assemblyStageLabel,
-              assemblyStageCurrent,
-              assemblyStageTotal,
-              onAssemble: handleAssemblyBuild,
-              onStopAssemble: handleAssemblyStop,
+              ...assemblyNodeDataPatch,
             },
           };
         }
@@ -6968,29 +6999,7 @@ return base;
       setNodes,
       removeNode,
       edges,
-      assemblyDurationEstimateSec,
-      assemblyHasIntro,
-      assemblyIntroFrame,
-      assemblyIntroLabel,
-      assemblyReadySceneCount,
-      assemblyScenesForPayload.length,
-      assemblySource,
-      assemblySourceLabel,
-      assemblyScenesSource,
-      assemblyPayload,
-      isAssembling,
-      assemblyStatus,
-      assemblyResult,
-      assemblyError,
-      assemblyInfo,
-      assemblyJobId,
-      assemblyProgressPercent,
-      assemblyStage,
-      assemblyStageLabel,
-      assemblyStageCurrent,
-      assemblyStageTotal,
-      handleAssemblyBuild,
-      handleAssemblyStop,
+      assemblyNodeDataPatch,
       clearClipStoryboardStorageForCurrentAccount,
       stopScenarioVideoPolling,
       accountKey,
