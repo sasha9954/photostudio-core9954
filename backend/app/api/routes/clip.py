@@ -147,6 +147,10 @@ class IntroGenerateIn(BaseModel):
     importantProps: list[str] = Field(default_factory=list)
     worldContext: str | None = None
     styleContext: str | None = None
+    introMustAppear: list[str] = Field(default_factory=list)
+    introMustNotAppear: list[str] = Field(default_factory=list)
+    connectedGenderLocksByRole: dict | None = None
+    connectedSpeciesLocksByRole: dict | None = None
 
 
 class AssembleClipIn(BaseModel):
@@ -927,6 +931,87 @@ def _normalize_intro_text_list(items: Any, max_items: int = 8) -> list[str]:
     return out
 
 
+def _normalized_gender_presentation(raw: Any) -> str:
+    value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
+    if not value:
+        return ""
+    if any(token in value for token in ["female", "woman", "girl", "feminine"]):
+        return "female"
+    if any(token in value for token in ["male", "man", "boy", "masculine"]):
+        return "male"
+    return ""
+
+
+def _normalize_intro_lock_map(raw: Any, *, allowed_roles: set[str] | None = None, normalizer=None) -> dict[str, str]:
+    source = raw if isinstance(raw, dict) else {}
+    out: dict[str, str] = {}
+    for key, value in source.items():
+        role = str(key or "").strip()
+        if not role or (allowed_roles is not None and role not in allowed_roles):
+            continue
+        normalized = normalizer(value) if callable(normalizer) else str(value or "").strip()
+        normalized = str(normalized or "").strip()
+        if normalized:
+            out[role] = normalized
+    return out
+
+
+def _normalize_intro_species_lock(raw: Any) -> str:
+    value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
+    return re.sub(r"[^a-z0-9\- ]+", "", value).strip()
+
+
+def _normalize_intro_role_list(items: Any, *, allowed_roles: set[str] | None = None, max_items: int = 8) -> list[str]:
+    out: list[str] = []
+    for role in _normalize_intro_text_list(items, max_items=max_items):
+        if allowed_roles is not None and role not in allowed_roles:
+            continue
+        if role not in out:
+            out.append(role)
+    return out
+
+
+def _intro_role_descriptor(role: str, *, gender_locks: dict[str, str] | None = None, species_locks: dict[str, str] | None = None) -> str:
+    role_key = str(role or "").strip()
+    label = _intro_role_label(role_key)
+    gender_value = str((gender_locks or {}).get(role_key) or "").strip()
+    species_value = str((species_locks or {}).get(role_key) or "").strip()
+    if gender_value:
+        return f"{label} ({gender_value})"
+    if species_value:
+        return f"{label} ({species_value})"
+    return label
+
+
+def _intro_role_package_summary(active_roles: list[str], *, gender_locks: dict[str, str] | None = None, species_locks: dict[str, str] | None = None) -> str:
+    descriptors = [_intro_role_descriptor(role, gender_locks=gender_locks, species_locks=species_locks) for role in active_roles]
+    return ", ".join(item for item in descriptors if item) or "none"
+
+
+def _intro_cast_contract_preview(
+    *,
+    active_roles: list[str],
+    must_appear: list[str],
+    must_not_appear: list[str],
+    gender_locks: dict[str, str],
+    species_locks: dict[str, str],
+) -> list[str]:
+    preview_lines = [
+        f"active cast roles: {_intro_role_package_summary(active_roles, gender_locks=gender_locks, species_locks=species_locks)}",
+        f"must appear: {_intro_role_package_summary(must_appear, gender_locks=gender_locks, species_locks=species_locks)}",
+        f"must not appear: {_intro_role_package_summary(must_not_appear, gender_locks=gender_locks, species_locks=species_locks)}",
+    ]
+    if gender_locks:
+        preview_lines.append(
+            "gender locks: " + ", ".join(f"{_intro_role_label(role)}={value}" for role, value in gender_locks.items())
+        )
+    if species_locks:
+        preview_lines.append(
+            "species locks: " + ", ".join(f"{_intro_role_label(role)}={value}" for role, value in species_locks.items())
+        )
+    return preview_lines
+
+
 def _intro_role_label(role: str) -> str:
     return {
         "character_1": "character 1",
@@ -1012,21 +1097,23 @@ def _wrap_intro_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Image
 
 
 def _fit_intro_title(draw: ImageDraw.ImageDraw, title: str, box_width: int, box_height: int, preview_format: str) -> tuple[ImageFont.ImageFont, list[str], int]:
-    max_lines = 4 if preview_format == "9:16" else 3
-    max_font = max(44, min(132, int(box_width * (0.118 if preview_format == "16:9" else 0.102))))
+    max_lines = 5 if preview_format == "9:16" else 4 if preview_format == "1:1" else 3
+    width_factor = 0.142 if preview_format == "16:9" else 0.122 if preview_format == "1:1" else 0.112
+    max_font = max(48, min(156, int(box_width * width_factor)))
     min_font = 28
     for font_size in range(max_font, min_font - 1, -4):
         font = _get_intro_font(font_size, bold=True)
         lines = _wrap_intro_text(draw, title, font, box_width, max_lines)
         if not lines:
             continue
-        bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font, spacing=max(10, int(font_size * 0.16)), stroke_width=2)
+        spacing = max(10, int(font_size * 0.16))
+        bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font, spacing=spacing, stroke_width=2)
         if not bbox:
             continue
         width = bbox[2] - bbox[0]
         height = bbox[3] - bbox[1]
         if width <= box_width and height <= box_height:
-            return font, lines, max(10, int(font_size * 0.16))
+            return font, lines, spacing
     fallback_font = _get_intro_font(min_font, bold=True)
     fallback_lines = _wrap_intro_text(draw, title, fallback_font, box_width, max_lines) or [str(title or "INTRO FRAME").strip()[:60]]
     return fallback_font, fallback_lines, max(8, int(min_font * 0.16))
@@ -1054,9 +1141,10 @@ def _draw_intro_vertical_fade(overlay: Image.Image, *, top_alpha: int, bottom_al
         draw.line((0, y, width, y), fill=(6, 9, 18, min(255, alpha)))
 
 
-def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, preview_format: str) -> bytes:
+def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, preview_format: str) -> tuple[bytes, dict[str, Any]]:
     base = Image.open(io.BytesIO(raw)).convert("RGBA")
     width, height = base.size
+    normalized_preview_format = _normalize_intro_preview_format(preview_format)
     style_meta = _get_intro_style_meta(style_preset)
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     glow = Image.new("RGBA", base.size, (0, 0, 0, 0))
@@ -1065,100 +1153,126 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
     accent = _hex_to_rgba(style_meta.get("accent", "#f6d365"), 255)
     secondary = _hex_to_rgba(style_meta.get("secondary", "#5ee7df"), 255)
 
-    _draw_intro_vertical_fade(overlay, top_alpha=118, bottom_alpha=190)
+    _draw_intro_vertical_fade(overlay, top_alpha=108, bottom_alpha=206)
     glow_draw.ellipse(
         (
-            int(width * 0.04),
-            int(height * 0.03),
-            int(width * (0.32 if preview_format != "9:16" else 0.48)),
-            int(height * (0.26 if preview_format != "9:16" else 0.22)),
+            int(width * 0.02),
+            int(height * 0.02),
+            int(width * (0.38 if normalized_preview_format != "9:16" else 0.58)),
+            int(height * (0.30 if normalized_preview_format != "9:16" else 0.24)),
         ),
-        fill=_hex_to_rgba(style_meta.get("accent", "#f6d365"), 52),
+        fill=_hex_to_rgba(style_meta.get("accent", "#f6d365"), 64),
     )
     glow_draw.ellipse(
         (
-            int(width * 0.68),
-            int(height * 0.04),
-            int(width * 0.98),
-            int(height * (0.24 if preview_format != "9:16" else 0.18)),
+            int(width * 0.58),
+            int(height * 0.01),
+            int(width * 1.02),
+            int(height * (0.26 if normalized_preview_format != "9:16" else 0.19)),
         ),
-        fill=_hex_to_rgba(style_meta.get("secondary", "#5ee7df"), 42),
+        fill=_hex_to_rgba(style_meta.get("secondary", "#5ee7df"), 48),
     )
-    if style_preset == "glitch":
-        for idx in range(5):
-            y = int(height * (0.18 + idx * 0.13))
-            band_color = accent if idx % 2 == 0 else secondary
-            glow_draw.rounded_rectangle(
-                (int(width * 0.08), y, int(width * 0.92), y + max(6, height // 110)),
-                radius=max(3, height // 240),
-                fill=(band_color[0], band_color[1], band_color[2], 26),
-            )
-    glow = glow.filter(ImageFilter.GaussianBlur(radius=max(10, int(min(width, height) * 0.018))))
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=max(12, int(min(width, height) * 0.022))))
     overlay = Image.alpha_composite(overlay, glow)
 
     draw = ImageDraw.Draw(overlay)
-    margin_x = int(width * (0.065 if preview_format == "16:9" else 0.08))
+    margin_x = int(width * (0.065 if normalized_preview_format == "16:9" else 0.078))
     title_box = {
-        "9:16": (margin_x, int(height * 0.56), width - margin_x, int(height * 0.91)),
-        "1:1": (margin_x, int(height * 0.54), width - margin_x, int(height * 0.88)),
-        "16:9": (margin_x, int(height * 0.50), int(width * 0.76), int(height * 0.86)),
-    }[_normalize_intro_preview_format(preview_format)]
+        "9:16": (margin_x, int(height * 0.46), width - margin_x, int(height * 0.90)),
+        "1:1": (margin_x, int(height * 0.48), width - margin_x, int(height * 0.88)),
+        "16:9": (margin_x, int(height * 0.43), int(width * 0.82), int(height * 0.84)),
+    }[normalized_preview_format]
     title_box_w = max(120, title_box[2] - title_box[0])
     title_box_h = max(120, title_box[3] - title_box[1])
-    font, lines, spacing = _fit_intro_title(draw, title, title_box_w, title_box_h, preview_format)
+    font, lines, spacing = _fit_intro_title(draw, title, title_box_w, title_box_h, normalized_preview_format)
     title_text = "\n".join(lines)
-    title_bbox = draw.multiline_textbbox((0, 0), title_text, font=font, spacing=spacing, stroke_width=2, align="left")
+    title_bbox = draw.multiline_textbbox((0, 0), title_text, font=font, spacing=spacing, stroke_width=3, align="left")
     title_w = title_bbox[2] - title_bbox[0]
     title_h = title_bbox[3] - title_bbox[1]
     title_x = title_box[0]
-    title_y = max(title_box[1], title_box[3] - title_h)
+    title_y = max(title_box[1], min(title_box[3] - title_h, title_box[1] + max(0, (title_box_h - title_h) // 2)))
 
-    plate_pad_x = max(18, int(width * 0.018))
-    plate_pad_y = max(16, int(height * 0.015))
+    plate_pad_x = max(22, int(width * 0.024))
+    plate_pad_y = max(20, int(height * 0.02))
     plate_rect = (
         max(12, title_x - plate_pad_x),
         max(12, title_y - plate_pad_y),
         min(width - 12, title_x + title_w + plate_pad_x),
         min(height - 12, title_y + title_h + plate_pad_y),
     )
+
+    plate_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    plate_shadow_draw = ImageDraw.Draw(plate_shadow)
+    plate_shadow_draw.rounded_rectangle(
+        plate_rect,
+        radius=max(20, int(min(width, height) * 0.028)),
+        fill=(0, 0, 0, 172),
+    )
+    plate_shadow = plate_shadow.filter(ImageFilter.GaussianBlur(radius=max(10, int(min(width, height) * 0.016))))
+    overlay = Image.alpha_composite(overlay, plate_shadow)
+    draw = ImageDraw.Draw(overlay)
     draw.rounded_rectangle(
         plate_rect,
+        radius=max(20, int(min(width, height) * 0.028)),
+        fill=(5, 8, 18, 182 if normalized_preview_format == "16:9" else 194),
+        outline=(accent[0], accent[1], accent[2], 96),
+        width=max(2, int(min(width, height) * 0.0032)),
+    )
+
+    plate_highlight = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    plate_highlight_draw = ImageDraw.Draw(plate_highlight)
+    plate_highlight_draw.rounded_rectangle(
+        (
+            plate_rect[0],
+            plate_rect[1],
+            plate_rect[2],
+            min(plate_rect[3], plate_rect[1] + max(22, int((plate_rect[3] - plate_rect[1]) * 0.42))),
+        ),
         radius=max(18, int(min(width, height) * 0.024)),
-        fill=(8, 11, 21, 132 if preview_format == "16:9" else 148),
-        outline=(accent[0], accent[1], accent[2], 76),
-        width=max(1, int(min(width, height) * 0.0026)),
+        fill=(accent[0], accent[1], accent[2], 46),
     )
-    accent_bar_h = max(4, int(height * 0.006))
-    draw.rounded_rectangle(
-        (plate_rect[0], plate_rect[1], min(plate_rect[2], plate_rect[0] + int((plate_rect[2] - plate_rect[0]) * 0.42)), plate_rect[1] + accent_bar_h),
-        radius=max(3, accent_bar_h // 2),
-        fill=(accent[0], accent[1], accent[2], 215),
-    )
+    plate_highlight = plate_highlight.filter(ImageFilter.GaussianBlur(radius=max(8, int(min(width, height) * 0.012))))
+    overlay = Image.alpha_composite(overlay, plate_highlight)
 
     text_glow = Image.new("RGBA", base.size, (0, 0, 0, 0))
     text_glow_draw = ImageDraw.Draw(text_glow)
-    for dx, dy, alpha in [(0, 0, 104), (3, 3, 68), (-2, 0, 54)]:
+    for dx, dy, alpha in [(0, 0, 128), (4, 4, 84), (-3, 1, 66)]:
         text_glow_draw.multiline_text(
             (title_x + dx, title_y + dy),
             title_text,
             font=font,
             fill=(accent[0], accent[1], accent[2], alpha),
             spacing=spacing,
-            stroke_width=3,
-            stroke_fill=(7, 10, 18, min(255, alpha + 28)),
+            stroke_width=4,
+            stroke_fill=(6, 8, 16, min(255, alpha + 40)),
             align="left",
         )
-    text_glow = text_glow.filter(ImageFilter.GaussianBlur(radius=max(4, int(min(width, height) * 0.0065))))
+    text_glow = text_glow.filter(ImageFilter.GaussianBlur(radius=max(5, int(min(width, height) * 0.008))))
     overlay = Image.alpha_composite(overlay, text_glow)
+
+    text_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    text_shadow_draw = ImageDraw.Draw(text_shadow)
+    text_shadow_draw.multiline_text(
+        (title_x + max(3, int(width * 0.003)), title_y + max(4, int(height * 0.004))),
+        title_text,
+        font=font,
+        fill=(0, 0, 0, 168),
+        spacing=spacing,
+        stroke_width=4,
+        stroke_fill=(0, 0, 0, 144),
+        align="left",
+    )
+    text_shadow = text_shadow.filter(ImageFilter.GaussianBlur(radius=max(3, int(min(width, height) * 0.004))))
+    overlay = Image.alpha_composite(overlay, text_shadow)
     draw = ImageDraw.Draw(overlay)
     draw.multiline_text(
         (title_x, title_y),
         title_text,
         font=font,
-        fill=(255, 255, 255, 244),
+        fill=(255, 255, 255, 248),
         spacing=spacing,
-        stroke_width=2,
-        stroke_fill=(5, 8, 16, 235),
+        stroke_width=3,
+        stroke_fill=(4, 6, 12, 238),
         align="left",
     )
 
@@ -1171,10 +1285,35 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
     footer_y = height - int(height * 0.06) - getattr(footer_font, "size", 16)
     _draw_text_tracking(draw, (margin_x, footer_y), footer_text, footer_font, (232, 236, 255, 170), tracking=max(0, int(width * 0.0011)))
 
+    overlay_debug = {
+        "title": title,
+        "previewFormat": normalized_preview_format,
+        "titleBox": [int(v) for v in title_box],
+        "plateRect": [int(v) for v in plate_rect],
+        "fontSize": int(getattr(font, "size", 0) or 0),
+        "lines": lines,
+        "lineCount": len(lines),
+        "titleRendered": bool(title_text.strip()),
+    }
+    print(
+        "[INTRO FRAME OVERLAY] "
+        + json.dumps(
+            {
+                "title": title,
+                "previewFormat": normalized_preview_format,
+                "titleBox": overlay_debug["titleBox"],
+                "fontSize": overlay_debug["fontSize"],
+                "lines": lines,
+                "titleRendered": overlay_debug["titleRendered"],
+            },
+            ensure_ascii=False,
+        )
+    )
+
     composed = Image.alpha_composite(base, overlay).convert("RGB")
     out = io.BytesIO()
     composed.save(out, format="PNG", optimize=True)
-    return out.getvalue()
+    return out.getvalue(), overlay_debug
 
 
 def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, Any]]:
@@ -1204,6 +1343,34 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     important_props = _normalize_intro_text_list(getattr(payload, "importantProps", None), max_items=5)
     world_context = str(getattr(payload, "worldContext", "") or "").strip()
     style_context = str(getattr(payload, "styleContext", "") or "").strip()
+    intro_must_appear = _normalize_intro_role_list(getattr(payload, "introMustAppear", None), allowed_roles=COMFY_CAST_ROLES, max_items=6)
+    intro_must_not_appear = _normalize_intro_role_list(getattr(payload, "introMustNotAppear", None), allowed_roles=COMFY_CAST_ROLES, max_items=6)
+    role_gender_locks = _normalize_intro_lock_map(
+        getattr(payload, "connectedGenderLocksByRole", None),
+        allowed_roles=COMFY_CAST_ROLES,
+        normalizer=_normalized_gender_presentation,
+    )
+    animal_species_locks = _normalize_intro_lock_map(
+        getattr(payload, "connectedSpeciesLocksByRole", None),
+        allowed_roles=COMFY_CAST_ROLES,
+        normalizer=_normalize_intro_species_lock,
+    )
+
+    intro_active_cast_roles = [role for role in connected_cast_roles if role in COMFY_CAST_ROLES]
+    if not intro_must_appear:
+        intro_must_appear = list(intro_active_cast_roles)
+    hero_participants_resolved: list[str] = []
+    for role in hero_participants + supporting_participants + intro_must_appear + intro_active_cast_roles:
+        if role in COMFY_CAST_ROLES and role not in hero_participants_resolved:
+            hero_participants_resolved.append(role)
+    intro_connected_role_counts = {role: len(connected_refs_by_role.get(role) or []) for role in connected_roles}
+    intro_cast_contract_preview = _intro_cast_contract_preview(
+        active_roles=intro_active_cast_roles,
+        must_appear=intro_must_appear,
+        must_not_appear=intro_must_not_appear,
+        gender_locks=role_gender_locks,
+        species_locks=animal_species_locks,
+    )
 
     format_rule = {
         "9:16": "vertical opening frame, mobile-first composition, strong center-of-interest, generous vertical negative space",
@@ -1225,6 +1392,22 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "Do not collapse a populated cast package into an empty landscape or a single generic lone character.",
         "When multiple hero participants are available, stage them together in one premium cinematic composition whenever the framing allows it.",
         "Treat attached reference images as identity and design anchors for cast package, key props, location, and style.",
+        "INTRO CAST CONTRACT (STRICT):",
+        f"- active cast roles: {_intro_role_package_summary(intro_active_cast_roles, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
+        f"- must appear: {_intro_role_package_summary(intro_must_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
+        f"- must not appear: {_intro_role_package_summary(intro_must_not_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
+        "- preserve each connected identity separately",
+        "- preserve identity of each connected participant from its reference anchors",
+        "- must include exactly these connected participants when composition allows",
+        "- do not replace connected cast with generic random people",
+        "- do not collapse cast package into generic group of humans",
+        "- do not introduce extra unconnected human participants",
+        "- keep all connected participants readable and intentional in one hook frame",
+        "INTRO HERO COMPOSITION RULE:",
+        "- build one hook frame around the connected cast package",
+        "- title defines the dramatic promise",
+        "- composition should sell the opening conflict / mystery",
+        "- keep the cast readable and intentional",
         "INTRO FRAME STYLE RULES:",
         *[f"- {rule}" for rule in style_meta["promptRules"]],
         "INTRO FRAME FORBIDDEN ELEMENTS:",
@@ -1250,16 +1433,56 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         prompt_lines.append("Key prop anchors are connected and should be visually integrated when relevant.")
     if role_aware_cast_summary:
         prompt_lines.append(f"Role-aware cast summary: {role_aware_cast_summary}")
-    if hero_participants:
-        prompt_lines.append(f"Hero participants: {', '.join(hero_participants)}")
-    if supporting_participants:
-        prompt_lines.append(f"Supporting participants: {', '.join(supporting_participants)}")
+    if hero_participants_resolved:
+        prompt_lines.append("Hero participants resolved: " + ", ".join(hero_participants_resolved))
     if important_props:
         prompt_lines.append(f"Important props: {', '.join(important_props)}")
     if world_context:
         prompt_lines.append(f"World context: {world_context}")
     if style_context:
         prompt_lines.append(f"Style context: {style_context}")
+    if role_gender_locks:
+        prompt_lines.append("CONNECTED GENDER LOCKS (STRICT):")
+        for role, gender_value in role_gender_locks.items():
+            if gender_value == "female":
+                prompt_lines.extend([
+                    f"- {_intro_role_label(role)} must remain a distinct female character",
+                    "- preserve female identity, female body and face cues",
+                    "- no male replacement",
+                    "- no masculine anatomy",
+                    "- no generic cast substitution",
+                ])
+            elif gender_value == "male":
+                prompt_lines.extend([
+                    f"- {_intro_role_label(role)} must remain a distinct male character",
+                    "- preserve male identity, male body and face cues",
+                    "- no female replacement",
+                    "- no feminine anatomy drift",
+                    "- no generic cast substitution",
+                ])
+    if animal_species_locks:
+        prompt_lines.append("CONNECTED ANIMAL SPECIES LOCKS (STRICT):")
+        for role, species_value in animal_species_locks.items():
+            prompt_lines.append(f"- {_intro_role_label(role)} must appear as {species_value}")
+            if role == "animal" and species_value == "dog":
+                prompt_lines.extend([
+                    "- connected animal must appear as dog",
+                    "- no cat",
+                    "- no wolf",
+                    "- no species drift",
+                    "- no replacement by generic human extra",
+                    "- do not omit the dog",
+                ])
+            else:
+                prompt_lines.extend([
+                    f"- preserve {_intro_role_label(role)} species lock exactly",
+                    "- no species drift",
+                    "- do not omit the connected animal participant",
+                ])
+    if len([role for role, gender_value in role_gender_locks.items() if gender_value == "female"]) >= 2:
+        prompt_lines.append(
+            "- if two female roles are connected, render two distinct female characters, not three random people"
+        )
     if scene_count > 0:
         prompt_lines.append(f"Storyboard scene count: {scene_count}")
     prompt_lines.append(f"Intended intro duration reference: {duration_sec:.1f} seconds.")
@@ -1273,7 +1496,7 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "durationSec": round(duration_sec, 1),
         "sourceNodeTypes": source_node_types,
         "connectedRoles": connected_roles,
-        "connectedRoleCounts": {role: len(connected_refs_by_role.get(role) or []) for role in connected_roles},
+        "connectedRoleCounts": intro_connected_role_counts,
         "roleAwareCastSummary": role_aware_cast_summary or None,
         "heroParticipants": hero_participants,
         "supportingParticipants": supporting_participants,
@@ -1284,7 +1507,15 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "styleDescription": style_meta["shortDescription"],
         "styleRules": style_meta["promptRules"],
         "forbidden": style_meta["negativeRules"],
-        "promptPreview": prompt[:1200],
+        "introActiveCastRoles": intro_active_cast_roles,
+        "introMustAppear": intro_must_appear,
+        "introMustNotAppear": intro_must_not_appear,
+        "introConnectedRoleCounts": {role: intro_connected_role_counts.get(role, 0) for role in intro_active_cast_roles},
+        "introRoleGenderLocks": role_gender_locks,
+        "introAnimalSpeciesLocks": animal_species_locks,
+        "introHeroParticipantsResolved": hero_participants_resolved,
+        "introCastContractPreview": intro_cast_contract_preview,
+        "promptPreview": prompt[:1600],
     }
     return prompt, debug
 
@@ -1659,6 +1890,19 @@ def clip_intro_generate(payload: IntroGenerateIn):
 
     try:
         print(
+            "[INTRO FRAME CAST] "
+            + json.dumps(
+                {
+                    "activeCastRoles": debug.get("introActiveCastRoles") or [],
+                    "mustAppear": debug.get("introMustAppear") or [],
+                    "genderLocks": debug.get("introRoleGenderLocks") or {},
+                    "speciesLocks": debug.get("introAnimalSpeciesLocks") or {},
+                    "connectedRefCounts": debug.get("introConnectedRoleCounts") or {},
+                },
+                ensure_ascii=False,
+            )
+        )
+        print(
             "[INTRO FRAME GEMINI] request",
             json.dumps(
                 {
@@ -1696,7 +1940,7 @@ def clip_intro_generate(payload: IntroGenerateIn):
             )
 
         raw, ext = decoded
-        branded = _render_intro_frame_asset(raw, title=title, style_preset=style_preset, preview_format=preview_format)
+        branded, overlay_debug = _render_intro_frame_asset(raw, title=title, style_preset=style_preset, preview_format=preview_format)
         image_url = _save_bytes_as_asset(branded, "png")
         generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         return {
@@ -1714,6 +1958,7 @@ def clip_intro_generate(payload: IntroGenerateIn):
                 "attachedReferenceParts": inline_part_counts,
                 "attachedReferencePartTotal": len(inline_parts),
                 "backendBrandedAsset": True,
+                "overlay": overlay_debug,
             },
         }
     except Exception as exc:

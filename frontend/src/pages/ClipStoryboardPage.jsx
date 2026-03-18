@@ -1417,6 +1417,46 @@ function buildIntroStyleContext({ stylePreset = "", refsByRole = {} } = {}) {
   return `${normalizedStylePreset}${hasStyleRefs ? " + explicit style reference anchors" : " baseline"}`;
 }
 
+function normalizeIntroRoleProfileMap(...sources) {
+  const out = {};
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    for (const role of INTRO_COMFY_REF_ROLES) {
+      const profile = source?.[role];
+      if (profile && typeof profile === "object" && !out[role]) out[role] = profile;
+    }
+  }
+  return out;
+}
+
+function normalizeIntroGenderPresentation(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (["female", "woman", "girl", "feminine"].some((token) => normalized.includes(token))) return "female";
+  if (["male", "man", "boy", "masculine"].some((token) => normalized.includes(token))) return "male";
+  return "";
+}
+
+function inferIntroGenderLockFromProfile(profile) {
+  if (!profile || typeof profile !== "object") return "";
+  return normalizeIntroGenderPresentation(
+    profile?.visualProfile?.genderPresentation
+    || profile?.genderPresentation
+    || profile?.visualProfile?.gender
+    || profile?.gender
+  );
+}
+
+function inferIntroSpeciesLockFromProfile(profile) {
+  if (!profile || typeof profile !== "object") return "";
+  const speciesValue = profile?.visualProfile?.speciesLock
+    || profile?.visualProfile?.species
+    || profile?.speciesLock
+    || profile?.species
+    || profile?.animalType;
+  return String(speciesValue || "").trim().toLowerCase();
+}
+
 function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) {
   const nodesById = new Map((Array.isArray(nodes) ? nodes : []).map((node) => [node?.id, node]));
   const incoming = (Array.isArray(edges) ? edges : []).filter((edge) => edge?.target === nodeId);
@@ -1452,9 +1492,35 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || comfyBrainNode?.data?.plannerMeta?.plannerInput || {};
   const connectedRefsByRole = normalizeIntroConnectedRefsByRole(plannerInput?.refsByRole || {});
   const activeRefRoles = INTRO_COMFY_REF_ROLES.filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
+  const introActiveCastRoles = INTRO_CAST_ROLES.filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
   const heroParticipants = ["character_1", "character_2", "character_3"].filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
   const supportingParticipants = ["animal", "group"].filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
   const roleAwareCastSummary = buildIntroRoleAwareCastSummary(connectedRefsByRole);
+  const directRoleProfiles = Object.fromEntries(
+    (Array.isArray(nodes) ? nodes : [])
+      .map((node) => [resolveRefRoleForNode(node), node?.data?.refHiddenProfile])
+      .filter(([role, profile]) => !!role && profile && typeof profile === "object")
+  );
+  const roleProfiles = normalizeIntroRoleProfileMap(
+    plannerInput?.referenceProfiles,
+    comfyNode?.data?.hiddenReferenceProfiles,
+    comfyNode?.data?.plannerMeta?.referenceProfiles,
+    comfyBrainNode?.data?.hiddenReferenceProfiles,
+    comfyBrainNode?.data?.plannerMeta?.referenceProfiles,
+    directRoleProfiles,
+  );
+  const connectedGenderLocksByRole = Object.fromEntries(
+    introActiveCastRoles
+      .map((role) => [role, inferIntroGenderLockFromProfile(roleProfiles?.[role])])
+      .filter(([, value]) => !!value)
+  );
+  const connectedSpeciesLocksByRole = Object.fromEntries(
+    introActiveCastRoles
+      .map((role) => [role, inferIntroSpeciesLockFromProfile(roleProfiles?.[role])])
+      .filter(([, value]) => !!value)
+  );
+  const introMustAppear = [...introActiveCastRoles];
+  const introMustNotAppear = [];
   const worldContext = buildIntroWorldContext({
     refsByRole: connectedRefsByRole,
     sceneCount,
@@ -1483,6 +1549,11 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     worldContext,
     styleContext,
     activeRefRoles,
+    introActiveCastRoles,
+    introMustAppear,
+    introMustNotAppear,
+    connectedGenderLocksByRole,
+    connectedSpeciesLocksByRole,
   };
 }
 
@@ -2882,10 +2953,12 @@ function StoryboardPlanNode({ id, data }) {
 
 function IntroFrameNode({ id, data }) {
   const fileInputRef = useRef(null);
+  const previewKind = normalizeIntroFramePreviewKind(data?.previewKind);
   const previewUrl = useMemo(
     () => resolveAssetUrl(resolveIntroFramePreviewUrl(data)),
     [data]
   );
+  const hasBackendGeneratedAsset = previewKind === INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED && !!previewUrl;
   const autoTitle = !!data?.autoTitle;
   const styleMeta = getIntroStyleMeta(data?.stylePreset || "cinematic");
   const previewFormat = normalizeIntroFramePreviewFormat(data?.previewFormat);
@@ -3038,6 +3111,11 @@ function IntroFrameNode({ id, data }) {
           <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
             Generate вызывает backend Gemini generation и сохраняет preview как asset URL.
           </div>
+          {hasBackendGeneratedAsset ? (
+            <div className="clipSB_small" style={{ color: "#b8c4ff" }}>
+              Backend-branded asset показан как есть, без локального fake text overlay.
+            </div>
+          ) : null}
           {errorMessage ? (
             <div className="clipSB_small" style={{ color: "#ff9b9b" }}>
               Ошибка генерации: {errorMessage}
@@ -7409,6 +7487,10 @@ onClipSec: (nodeId, value) => {
                   importantProps: Array.isArray(freshContext.importantProps) ? freshContext.importantProps : [],
                   worldContext: String(freshContext.worldContext || "").trim(),
                   styleContext: String(freshContext.styleContext || "").trim(),
+                  introMustAppear: Array.isArray(freshContext.introMustAppear) ? freshContext.introMustAppear : [],
+                  introMustNotAppear: Array.isArray(freshContext.introMustNotAppear) ? freshContext.introMustNotAppear : [],
+                  connectedGenderLocksByRole: freshContext.connectedGenderLocksByRole || {},
+                  connectedSpeciesLocksByRole: freshContext.connectedSpeciesLocksByRole || {},
                 };
 
                 setNodes((prev) => prev.map((x) => (x.id === nodeId
