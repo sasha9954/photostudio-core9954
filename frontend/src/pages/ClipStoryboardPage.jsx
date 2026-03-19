@@ -3184,7 +3184,7 @@ function IntroFrameNode({ id, data }) {
         title="INTRO FRAME"
         onClose={() => data?.onRemoveNode?.(id)}
         icon={<span aria-hidden>🖼️</span>}
-        className="clipSB_nodeAssembly"
+        className="clipSB_nodeAssembly clipSB_nodeIntroFrame"
       >
         <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 840, maxWidth: "100%" }}>
           <div className="clipSB_introFrameBody">
