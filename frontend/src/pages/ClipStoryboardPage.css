@@ -1917,3 +1917,87 @@ body.ps_clip_fullscreen .mainCol {
     grid-template-columns: 1fr;
   }
 }
+
+.clipSB_introShell {
+  padding: 12px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(9, 14, 28, 0.92) 0%, rgba(6, 10, 20, 0.88) 100%);
+  border: 1px solid rgba(120, 170, 255, 0.18);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.clipSB_introMain {
+  display: grid;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.clipSB_introLeft {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.clipSB_introRight {
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.clipSB_introRightPanel {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 18px;
+  background: rgba(7, 11, 22, 0.78);
+  border: 1px solid rgba(140, 190, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 0 0 1px rgba(18, 28, 54, 0.22);
+}
+
+.clipSB_introPreviewCard {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  display: flex;
+  border-radius: 16px;
+  border: 1px solid rgba(160, 200, 255, 0.16);
+  background: var(--intro-style-background, rgba(5, 8, 16, 0.86));
+  box-shadow: 0 20px 34px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.clipSB_introPreviewCard::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(160, 200, 255, 0.10);
+}
+
+.clipSB_introActions {
+  display: grid;
+  gap: 8px;
+}
+
+.clipSB_introActions .clipSB_btn,
+.clipSB_introActions .clipSB_btnSecondary {
+  width: 100%;
+  justify-content: center;
+}
+
+@media (max-width: 1279px) {
+  .clipSB_introShell {
+    padding: 11px;
+  }
+
+  .clipSB_introMain {
+    gap: 14px;
+  }
+
+  .clipSB_introRightPanel {
+    padding: 10px;
+  }
+}
