@@ -1,5 +1,5 @@
 const RENDER_PROFILE_OPTIONS = ["comfy image", "comfy text"];
-export const AUDIO_STORY_MODE_OPTIONS = ["lyrics_music", "music_only", "music_plus_text"];
+export const AUDIO_STORY_MODE_OPTIONS = ["lyrics_music", "music_only", "music_plus_text", "speech_narrative"];
 
 const REFERENCE_HANDLE_TO_ROLE = {
   ref_character_1: "character_1",
@@ -113,6 +113,18 @@ const AUDIO_STORY_POLICIES = {
       "Ignore lyrics semantics.",
       "Text node controls narrative direction.",
       "Music controls timing, pacing, emotion and montage intensity.",
+    ],
+  },
+  speech_narrative: {
+    policyLabel: "spoken_semantics_primary",
+    lyricsUsage: "ignore",
+    storySource: "spoken_semantics",
+    textRoleDefault: "secondary support",
+    planningRules: [
+      "Spoken transcript/narration is the main semantic story source.",
+      "Plan scenes beat-by-beat from transcriptText, spokenTextHint and audioSemanticSummary.",
+      "Do not drift into generic music-video mood unrelated to the narrated topic.",
+      "If there are no character refs and no explicit people in the narration/text, keep visuals environment/object/infrastructure-only.",
     ],
   },
 };
@@ -309,6 +321,9 @@ export function getAudioStoryPolicy(audioStoryMode = "lyrics_music", { hasText =
   if (modeKey === "music_only" && hasAudio && !hasText) {
     warnings.push("music_only without text: planner should use mood/energy progression.");
   }
+  if (modeKey === "speech_narrative" && hasAudio) {
+    warnings.push("speech_narrative: spoken audio semantics should drive scene planning; text/refs are secondary support.");
+  }
   return { ...base, warnings };
 }
 
@@ -318,6 +333,7 @@ export function deriveTextInfluence({ mode = "clip", audioStoryMode = "lyrics_mu
   if (mode === "scenario") return "override";
   if (mode === "kino") return audioStoryMode === "music_only" ? "guide" : "override";
   if (mode === "reklama") return audioStoryMode === "music_only" ? "guide" : "override";
+  if (audioStoryMode === "speech_narrative") return "secondary";
   if (mode === "clip") return audioStoryMode === "music_plus_text" ? "guide" : "enhancer";
   return "guide";
 }
@@ -539,7 +555,9 @@ export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {
       continuityNotes,
       transitionLogic: plannerInput?.modeContinuityBias || modeRules?.modeContinuityBias || "coherent transition",
       renderPriority: idx === 0 ? "hook" : "narrative_consistency",
-      speechRelation: plannerInput?.audioStoryMode === "music_plus_text" ? "text-led over music timing" : "music-led",
+      speechRelation: plannerInput?.audioStoryMode === "music_plus_text"
+        ? "text-led over music timing"
+        : (plannerInput?.audioStoryMode === "speech_narrative" ? "spoken-semantics-led" : "music-led"),
       abstractionLevel: modeRules?.abstractionAllowance || "medium",
       narrativeDiscipline: modeRules?.narrativeDiscipline || "medium",
       planningRulesApplied: planningRulesSummary,

@@ -14,6 +14,19 @@ from app.engine.audio_text_preprocessor import preprocess_audio_text
 
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
 CAST_ROLES = ["character_1", "character_2", "character_3", "animal", "group"]
+EXPLICIT_PEOPLE_TOKENS = [
+    "man", "woman", "men", "women", "person", "people", "soldier", "soldiers", "worker", "workers", "guard", "guards",
+    "scientist", "scientists", "engineer", "engineers", "commander", "operator", "operators", "crowd", "villager",
+    "мужчина", "женщина", "люди", "человек", "солдат", "солдаты", "рабочий", "рабочие", "охранник", "учёный",
+    "ученый", "инженер", "командир", "оператор", "группа людей", "персонаж", "герой",
+]
+INFRASTRUCTURE_TOKENS = [
+    "bunker", "bunkers", "underground", "base", "bases", "tunnel", "tunnels", "corridor", "corridors", "facility",
+    "facilities", "military", "missile", "launch", "launch site", "launch facility", "surveillance", "archive", "schematic",
+    "map", "control room", "blast door", "steel door", "reinforced", "desert facility", "infrastructure", "iranian",
+    "бункер", "бункеры", "подзем", "база", "базы", "туннел", "коридор", "шахта", "укреплен", "укреплён", "военн",
+    "ракет", "пусков", "наблюдени", "архив", "схем", "карта", "командный пункт", "двер", "гермодвер", "инфраструктур",
+]
 
 
 def _to_float(value: Any) -> float | None:
@@ -108,7 +121,7 @@ def _load_audio_analysis(audio_url: str, audio_duration_sec: float | None) -> tu
     }, debug
 
 
-def _extract_boundaries(duration: float, analysis: dict[str, Any]) -> list[float]:
+def _extract_weighted_marks(duration: float, analysis: dict[str, Any]) -> tuple[list[float], list[tuple[float, str, int]], dict[float, int]]:
     marks = {0.0, max(0.0, duration)}
     weighted_marks: list[tuple[float, str, int]] = []
 
@@ -144,8 +157,12 @@ def _extract_boundaries(duration: float, analysis: dict[str, Any]) -> list[float
     for t, _, weight in weighted_marks:
         bucket = round(t, 1)
         score_by_bucket[bucket] = score_by_bucket.get(bucket, 0) + weight
+    return sorted(marks), weighted_marks, score_by_bucket
 
-    points = sorted(marks)
+
+def _extract_boundaries(duration: float, analysis: dict[str, Any]) -> list[float]:
+    points, _, score_by_bucket = _extract_weighted_marks(duration, analysis)
+
     compact: list[float] = [points[0]] if points else [0.0]
     for value in points[1:]:
         if value - compact[-1] >= 1.8:
@@ -179,6 +196,59 @@ def _extract_boundaries(duration: float, analysis: dict[str, Any]) -> list[float
     if dedup[-1] < duration:
         dedup.append(duration)
     return dedup
+
+
+def _select_speech_boundaries(duration: float, analysis: dict[str, Any], desired_scene_count: int) -> list[float]:
+    desired_scene_count = max(1, desired_scene_count)
+    default = _extract_boundaries(duration, analysis)
+    if desired_scene_count <= 1:
+        return [0.0, round(duration, 3)]
+
+    points, _, score_by_bucket = _extract_weighted_marks(duration, analysis)
+    candidate_points = sorted({
+        round(max(0.0, min(duration, p)), 3)
+        for p in points
+        if 0.65 < p < (duration - 0.65)
+    })
+    if not candidate_points:
+        return default
+
+    candidate_points.sort(key=lambda p: (-score_by_bucket.get(round(p, 1), 0), p))
+    selected: list[float] = []
+    min_gap = max(1.6, duration / max(2.0, desired_scene_count * 1.35))
+    target_positions = [(duration * idx / desired_scene_count) for idx in range(1, desired_scene_count)]
+
+    ordered_candidates = sorted(candidate_points, key=lambda point: (
+        min(abs(point - target) for target in target_positions),
+        -score_by_bucket.get(round(point, 1), 0),
+        point,
+    ))
+    for point in ordered_candidates:
+        if any(abs(point - existing) < min_gap for existing in selected):
+            continue
+        selected.append(point)
+        if len(selected) >= desired_scene_count - 1:
+            break
+
+    if len(selected) < desired_scene_count - 1:
+        fallback_candidates = sorted(candidate_points)
+        for point in fallback_candidates:
+            if any(abs(point - existing) < 1.2 for existing in selected):
+                continue
+            selected.append(point)
+            if len(selected) >= desired_scene_count - 1:
+                break
+
+    boundaries = [0.0] + sorted(selected[:desired_scene_count - 1]) + [round(duration, 3)]
+    dedup: list[float] = []
+    for point in boundaries:
+        if not dedup or abs(point - dedup[-1]) > 0.45:
+            dedup.append(round(point, 3))
+    if dedup[0] != 0.0:
+        dedup.insert(0, 0.0)
+    if dedup[-1] < duration:
+        dedup.append(round(duration, 3))
+    return dedup if len(dedup) >= 2 else default
 
 
 def _active_roles_for_scene(scene_idx: int, total: int, refs_by_role: dict[str, list[dict[str, str]]]) -> tuple[str, list[str], list[str], str]:
@@ -224,6 +294,68 @@ def _split_text_beats(text: str, desired_count: int) -> list[str]:
     for i in range(0, len(words), chunk):
         built.append(" ".join(words[i:i + chunk]))
     return built[:max(1, desired_count)]
+
+
+def _contains_any_token(text: str, tokens: list[str]) -> bool:
+    clean = _compact_text(text).lower()
+    if not clean:
+        return False
+    for token in tokens:
+        needle = _compact_text(token).lower()
+        if not needle:
+            continue
+        if needle.isascii() and needle.replace(" ", "").isalpha():
+            pattern = r"\b" + r"\s+".join(re.escape(part) for part in needle.split()) + r"\b"
+            if re.search(pattern, clean):
+                return True
+            continue
+        if needle in clean:
+            return True
+    return False
+
+
+def _derive_characters_allowed(refs_by_role: dict[str, list[dict[str, str]]], combined_text: str) -> bool:
+    if any(refs_by_role.get(role) for role in CAST_ROLES):
+        return True
+    return _contains_any_token(combined_text, EXPLICIT_PEOPLE_TOKENS)
+
+
+def _pick_environment_subject(refs_by_role: dict[str, list[dict[str, str]]], semantic_text: str) -> str:
+    if refs_by_role.get("location"):
+        first = refs_by_role["location"][0] or {}
+        label = _compact_text(first.get("name"))
+        if label:
+            return label
+    if refs_by_role.get("props"):
+        first = refs_by_role["props"][0] or {}
+        label = _compact_text(first.get("name"))
+        if label:
+            return label
+    if _contains_any_token(semantic_text, INFRASTRUCTURE_TOKENS):
+        return "подземная военная инфраструктура"
+    return "окружение и инфраструктура"
+
+
+def _resolve_scene_roles(
+    *,
+    scene_idx: int,
+    total: int,
+    refs_by_role: dict[str, list[dict[str, str]]],
+    characters_allowed: bool,
+    semantic_text: str,
+) -> tuple[str, list[str], list[str], str]:
+    if characters_allowed:
+        return _active_roles_for_scene(scene_idx, total, refs_by_role)
+
+    refs_used: list[str] = []
+    primary = _pick_environment_subject(refs_by_role, semantic_text)
+    if refs_by_role.get("location"):
+        refs_used.append("location")
+    if refs_by_role.get("props"):
+        refs_used.append("props")
+    if refs_by_role.get("style"):
+        refs_used.append("style")
+    return primary, [], list(dict.fromkeys(refs_used)), "environment_only_no_character_invention"
 
 
 def _phase_label(scene_idx: int, total: int) -> str:
@@ -430,12 +562,56 @@ def _build_scene_prompts(
     return image_templates.get(scene_type, image_templates["STORY_ACTION"]), video_templates.get(scene_type, video_templates["STORY_ACTION"])
 
 
+def _build_speech_scene_prompts(
+    *,
+    semantic_text: str,
+    location: str,
+    scene_idx: int,
+    total: int,
+    phase: str,
+    characters_allowed: bool,
+    world_bible: dict[str, Any],
+    refs_used: list[str],
+) -> tuple[str, str]:
+    beat = semantic_text or "документальный смысловой фрагмент"
+    lens = str(world_bible.get("lensFamily") or "35mm и 50mm кинолинзы")
+    light = str(world_bible.get("lightingLogic") or "контролируемый индустриальный свет")
+    color = str(world_bible.get("colorWorld") or "сдержанная документальная палитра")
+    style_tag = "документальная реалистичность, инфраструктурная точность, без гламура"
+    environment_focus = "среда, объекты и инфраструктура в приоритете" if not characters_allowed else "среда и действия должны оставаться предметно мотивированными"
+    subject = location if location and location != "cinematic_world_main_location" else _pick_environment_subject({"location": [], "props": []}, beat)
+    infrastructure_bias = _contains_any_token(beat, INFRASTRUCTURE_TOKENS)
+    if infrastructure_bias:
+        subject = location if location and location != "cinematic_world_main_location" else "подземный военный объект"
+    world_continuity = f"Сохранять палитру, реализм и единый документальный мир. Фаза {phase}. Рефы: {', '.join(refs_used) if refs_used else 'environment-only'}."
+
+    image_prompt = (
+        f"Документальный кинематографичный кадр: {subject}; локация {location}; смысл сцены: {beat}; "
+        f"{environment_focus}; {light}; {lens}; {color}; {style_tag}. {world_continuity}"
+    )
+
+    video_actions = [
+        f"камера медленно и осмысленно проходит через пространство {location}, раскрывая смысл фрагмента: {beat}",
+        f"пыль, воздух и дежурные источники света движутся внутри {location}, камера делает плавный push-in, подчёркивая тему: {beat}",
+        f"индустриальные огни и тени работают по усиленной документальной логике, камера панорамирует по {location}, удерживая фокус на теме: {beat}",
+        f"пространство {location} живёт сдержанным движением среды; камера делает мотивированный dolly/slide, чтобы раскрыть: {beat}",
+    ]
+    if infrastructure_bias:
+        video_actions = [
+            f"камера медленно продвигается по {location}, показывая укреплённые поверхности и инженерные детали; движение напрямую поддерживает тему: {beat}",
+            f"тусклый промышленный свет мерцает по усиленным стенам {location}, пыль движется в воздухе, камера осторожно входит глубже в пространство, раскрывая: {beat}",
+            f"тяжёлые механические элементы {location} работают или застыли в ожидании; камера проводит документальную панораму, удерживая смысл: {beat}",
+            f"ветер, пыль или вентиляция создают реалистичное движение среды вокруг {location}; камера считывает инфраструктуру как главный персонаж сцены, раскрывая: {beat}",
+        ]
+    video_prompt = video_actions[scene_idx % len(video_actions)] + f". Сохранять единый реалистичный тон и непрерывность мира от сцены к сцене."
+    return image_prompt, video_prompt
+
+
 def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
     refs_by_role = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
     analysis, audio_debug = _load_audio_analysis(str(payload.get("audioUrl") or ""), _to_float(payload.get("audioDurationSec")))
     duration = _to_float(analysis.get("duration")) or _to_float(payload.get("audioDurationSec")) or 30.0
 
-    boundaries = _extract_boundaries(duration, analysis)
     scenes: list[dict[str, Any]] = []
     text, text_source = _collect_text_inputs(payload)
     story_mode = str(payload.get("audioStoryMode") or "lyrics_music").strip() or "lyrics_music"
@@ -450,13 +626,29 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         "audioSemanticSummary": semantic_summary,
         "spokenTextHint": spoken_hint,
     })
+    spoken_meaning_primary = story_mode == "speech_narrative"
+    speech_text = _compact_text(" ".join([normalized_transcript, spoken_hint, semantic_summary]))
+    supplemental_text = _compact_text(text if text_source == "text" else payload.get("text"))
+    combined_meaning_text = _compact_text(" ".join([speech_text, supplemental_text, semantic_hint]))
+    characters_allowed = _derive_characters_allowed(refs_by_role, combined_meaning_text)
 
-    if not text:
+    if spoken_meaning_primary:
+        text = speech_text or text or semantic_hint
+        text_source = "spoken_audio" if speech_text else (text_source or "semantic_fallback")
+    elif not text:
         text = normalized_lyrics or normalized_transcript or spoken_hint
         if text:
             text_source = str(preprocess.get("textSource") or "existing_text")
 
-    text_beats = _split_text_beats(text, max(1, len(boundaries) - 1))
+    provisional_boundaries = _extract_boundaries(duration, analysis)
+    provisional_scene_count = max(1, len(provisional_boundaries) - 1)
+    text_beats = _split_text_beats(text, provisional_scene_count)
+    if spoken_meaning_primary:
+        desired_scene_count = max(1, len(text_beats) or len(_split_text_beats(speech_text or semantic_hint, provisional_scene_count)) or provisional_scene_count)
+        boundaries = _select_speech_boundaries(duration, analysis, desired_scene_count)
+        text_beats = _split_text_beats(text, max(1, len(boundaries) - 1))
+    else:
+        boundaries = provisional_boundaries
     exact_lyrics_available = bool(preprocess.get("exactLyricsAvailable"))
     transcript_available = bool(normalized_transcript)
     semantic_hint_count = len(preprocess.get("audioSemanticHints") or []) if isinstance(preprocess.get("audioSemanticHints"), list) else 0
@@ -474,23 +666,31 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         text_source = str(preprocess.get("textSource") or "semantic_fallback")
         text_beats = _split_text_beats(semantic_hint, max(1, len(boundaries) - 1))
 
+    if spoken_meaning_primary:
+        story_source = "speech_narrative"
+
     prev_scene_type: str | None = None
 
     world_bible = {
         "storyMode": story_mode,
         "visualStyle": str(payload.get("stylePreset") or "realism"),
-        "cameraLanguage": "cinematic, motivated movement, emotional closeups with contextual wides",
-        "lensFamily": "anamorphic-like 35/50/85 with selective wides",
-        "lightingLogic": "motivated practicals + controlled key/fill, continuity across scenes",
-        "productionFeel": "high-end music video realism with grounded texture",
-        "colorWorld": "cohesive cinematic palette with controlled contrast and skin fidelity",
-        "continuityRules": "same production world, stable identity, coherent lighting and lens family",
-        "characterBible": [role for role in CAST_ROLES if refs_by_role.get(role)] or ["character_1"],
+        "cameraLanguage": "documentary semantic continuity and motivated movement" if spoken_meaning_primary else "cinematic, motivated movement, emotional closeups with contextual wides",
+        "lensFamily": "35mm/50mm documentary-priority lenses with selective wides" if spoken_meaning_primary else "anamorphic-like 35/50/85 with selective wides",
+        "lightingLogic": "motivated industrial/documentary practicals with continuity across scenes" if spoken_meaning_primary else "motivated practicals + controlled key/fill, continuity across scenes",
+        "productionFeel": "coherent documentary realism with grounded infrastructure detail" if spoken_meaning_primary else "high-end music video realism with grounded texture",
+        "colorWorld": "muted documentary palette with controlled contrast and realistic materials" if spoken_meaning_primary else "cohesive cinematic palette with controlled contrast and skin fidelity",
+        "continuityRules": "same documentary world, same palette, same realism level, same infrastructure logic across scenes" if spoken_meaning_primary else "same production world, stable identity, coherent lighting and lens family",
+        "characterBible": [role for role in CAST_ROLES if refs_by_role.get(role)] if characters_allowed else [],
         "locationBible": [str((item or {}).get("name") or "") for item in (refs_by_role.get("location") or []) if str((item or {}).get("name") or "")] or ["cinematic_world_main_location"],
         "propsBible": [str((item or {}).get("name") or "") for item in (refs_by_role.get("props") or []) if str((item or {}).get("name") or "")],
-        "emotionalArc": "build → peak → resolve",
+        "emotionalArc": "semantic exposition → reveal → consequence" if spoken_meaning_primary else "build → peak → resolve",
         "refUsageSummary": {role: len(refs_by_role.get(role) or []) for role in COMFY_REF_ROLES},
+        "charactersAllowed": characters_allowed,
+        "spokenMeaningPrimary": spoken_meaning_primary,
     }
+
+    scene_semantic_sources: list[dict[str, Any]] = []
+    people_auto_added_count = 0
 
     for idx in range(len(boundaries) - 1):
         start = boundaries[idx]
@@ -501,28 +701,39 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             ((_to_float(p.get("start")) or 0.0) < end) and ((_to_float(p.get("end")) or 0.0) > start)
             for p in (analysis.get("vocalPhrases") or [])
         )
-        primary, secondary, refs_used, selection_reason = _active_roles_for_scene(idx, len(boundaries) - 1, refs_by_role)
-        location = _pick_location(refs_by_role, idx)
         beat_text = text_beats[idx % len(text_beats)] if text_beats else ""
-        section_type = _active_section_type(start, analysis)
-        scene_type, phase = _scene_type_for_story_window(
-            start=start,
-            end=end,
+        semantic_slice = beat_text or (semantic_hint if spoken_meaning_primary else "")
+        primary, secondary, refs_used, selection_reason = _resolve_scene_roles(
             scene_idx=idx,
-            total=max(1, len(boundaries) - 1),
-            analysis=analysis,
-            text_beat=beat_text,
-            story_source=story_source,
-            section_type=section_type,
-            prev_scene_type=prev_scene_type,
+            total=len(boundaries) - 1,
+            refs_by_role=refs_by_role,
+            characters_allowed=characters_allowed,
+            semantic_text=semantic_slice,
         )
+        location = _pick_location(refs_by_role, idx)
+        section_type = _active_section_type(start, analysis)
+        if spoken_meaning_primary:
+            scene_type = "ATMOSPHERIC_WIDE" if idx == 0 else ("TRANSITION_SHOT" if idx == len(boundaries) - 2 else "STORY_ACTION")
+            phase = _phase_label(idx, max(1, len(boundaries) - 1))
+        else:
+            scene_type, phase = _scene_type_for_story_window(
+                start=start,
+                end=end,
+                scene_idx=idx,
+                total=max(1, len(boundaries) - 1),
+                analysis=analysis,
+                text_beat=beat_text,
+                story_source=story_source,
+                section_type=section_type,
+                prev_scene_type=prev_scene_type,
+            )
 
         if beat_text:
             purpose = f"раскрыть сюжетный бит: {beat_text[:140]}"
             scene_goal = f"визуально и эмоционально донести: {beat_text[:180]}"
             narrative_step = f"{phase}_beat_{idx + 1}"
-            lyric_text = beat_text if scene_type == "SING_CLOSEUP" and exact_lyrics_available else ""
-            spoken_text = beat_text if scene_type in {"TALK_CLOSEUP", "STORY_ACTION", "EMOTIONAL_REACTION"} and not exact_lyrics_available else ""
+            lyric_text = beat_text if (not spoken_meaning_primary and scene_type == "SING_CLOSEUP" and exact_lyrics_available) else ""
+            spoken_text = beat_text if (spoken_meaning_primary or (scene_type in {"TALK_CLOSEUP", "STORY_ACTION", "EMOTIONAL_REACTION"} and not exact_lyrics_available)) else ""
         else:
             purpose = f"развить {section_type} фазу трека через {scene_type.lower()}"
             scene_goal = f"поддержать {phase} дугу истории по аудио-структуре"
@@ -530,27 +741,59 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             lyric_text = ""
             spoken_text = f"Смысловой переход: {semantic_hint[:120]}" if (scene_type == "TALK_CLOSEUP" and semantic_hint) else ""
 
+        if spoken_meaning_primary:
+            scene_semantic_source = "transcript_segment" if normalized_transcript else ("spoken_hint" if spoken_hint else ("audio_semantic_summary" if semantic_summary else "supplemental_text"))
+            if semantic_summary and beat_text and beat_text in semantic_summary:
+                scene_semantic_source = "audioSemanticSummary"
+        else:
+            if lyric_text:
+                scene_semantic_source = "lyricsText"
+            elif spoken_text:
+                scene_semantic_source = "spokenTextHint" if spoken_hint else "text"
+            elif beat_text:
+                scene_semantic_source = text_source or "text"
+            elif semantic_hint:
+                scene_semantic_source = "audioSemanticSummary"
+            else:
+                scene_semantic_source = "audio_structure"
+
         title = f"Сцена {idx + 1}: {scene_type.lower()}"
         continuity = f"Сохранять единый мир, цветовую логику и идентичность героев. Локация: {location}."
         continuity += f" Фаза: {phase}. Источник истории: {story_source}."
+        if spoken_meaning_primary:
+            continuity = f"Сохранять документальную/инфраструктурную логику мира, одну палитру, один уровень реализма и связанность локаций. Локация: {location}. Фаза: {phase}. Источник смысла: {scene_semantic_source}."
         emotion = _scene_emotion(scene_type, phase, has_vocal)
-        image_prompt_ru, video_prompt_ru = _build_scene_prompts(
-            scene_type=scene_type,
-            primary=primary,
-            location=location,
-            style=str(payload.get("stylePreset") or "realism"),
-            emotion=emotion,
-            beat_text=beat_text,
-            continuity_hint="Соблюдать неизменность персонажей, костюма и мира.",
-            phase=phase,
-            world_bible=world_bible,
-        )
+        if spoken_meaning_primary:
+            image_prompt_ru, video_prompt_ru = _build_speech_scene_prompts(
+                semantic_text=beat_text or semantic_hint,
+                location=location,
+                scene_idx=idx,
+                total=max(1, len(boundaries) - 1),
+                phase=phase,
+                characters_allowed=characters_allowed,
+                world_bible=world_bible,
+                refs_used=refs_used,
+            )
+        else:
+            image_prompt_ru, video_prompt_ru = _build_scene_prompts(
+                scene_type=scene_type,
+                primary=primary,
+                location=location,
+                style=str(payload.get("stylePreset") or "realism"),
+                emotion=emotion,
+                beat_text=beat_text,
+                continuity_hint="Соблюдать неизменность персонажей, костюма и мира.",
+                phase=phase,
+                world_bible=world_bible,
+            )
 
-        future_model = "sing_lipsync" if scene_type in {"SING_CLOSEUP", "TALK_CLOSEUP"} else "story_video"
+        future_model = "story_video" if spoken_meaning_primary else ("sing_lipsync" if scene_type in {"SING_CLOSEUP", "TALK_CLOSEUP"} else "story_video")
         phrase_end_near = any(abs(((_to_float(p.get("end")) or -99.0) - end)) <= 0.45 for p in (analysis.get("vocalPhrases") or []))
         pause_inside = any(start <= ((_to_float(pp) or -99.0)) <= end for pp in (analysis.get("pausePoints") or []))
         section_start_near = any(abs(((_to_float(s.get("start")) or -99.0) - start)) <= 0.45 for s in (analysis.get("sections") or []))
-        anchor_type = "phrase_end" if phrase_end_near else ("pause_point" if pause_inside else ("section_change" if section_start_near else "audio_flow"))
+        anchor_type = "speech_pause_or_sentence" if (spoken_meaning_primary and pause_inside) else ("phrase_end" if phrase_end_near else ("pause_point" if pause_inside else ("section_change" if section_start_near else "audio_flow")))
+        if not characters_allowed and any(role in CAST_ROLES for role in [primary] + secondary):
+            people_auto_added_count += 1
         scene = {
             "sceneId": f"scene_{idx + 1:03d}",
             "title": title,
@@ -574,20 +817,26 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "continuity": continuity,
             "sceneGoal": scene_goal,
             "sceneNarrativeStep": narrative_step,
+            "sceneSemanticSource": scene_semantic_source,
             "refsUsed": refs_used,
             "primaryRole": primary,
             "secondaryRoles": secondary,
             "roleSelectionReason": selection_reason,
-            "refDirectives": {role: ("hero" if role == primary else "required") for role in refs_used},
-            "heroEntityId": primary,
+            "refDirectives": {role: ("required" if role in {"location", "props"} else ("optional" if role == "style" else "hero")) for role in refs_used},
+            "heroEntityId": primary if primary in COMFY_REF_ROLES else "",
             "supportEntityIds": secondary,
-            "mustAppear": [primary] if primary else [],
+            "mustAppear": [primary] if primary and primary in COMFY_REF_ROLES else refs_used,
             "mustNotAppear": [role for role in COMFY_REF_ROLES if refs_by_role.get(role) and role not in refs_used and role not in secondary],
             "environmentLock": True,
             "styleLock": bool(payload.get("freezeStyle", False)),
-            "identityLock": True,
+            "identityLock": bool(characters_allowed),
         }
         scenes.append(scene)
+        scene_semantic_sources.append({
+            "sceneId": scene["sceneId"],
+            "sceneSemanticSource": scene_semantic_source,
+            "semanticText": beat_text or semantic_hint,
+        })
         prev_scene_type = scene_type
 
     if not scenes:
@@ -610,21 +859,27 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "continuity": "Сохранять стиль, мир и идентичность персонажа.",
             "sceneGoal": "базовый сторителлинг",
             "sceneNarrativeStep": "beat_1",
+            "sceneSemanticSource": "fallback",
             "lyricText": "",
             "spokenText": "",
             "refsUsed": [],
-            "primaryRole": "character_1",
+            "primaryRole": "" if not characters_allowed else "character_1",
             "secondaryRoles": [],
             "roleSelectionReason": "fallback_single_scene",
             "refDirectives": {},
-            "heroEntityId": "character_1",
+            "heroEntityId": "" if not characters_allowed else "character_1",
             "supportEntityIds": [],
-            "mustAppear": ["character_1"],
+            "mustAppear": [] if not characters_allowed else ["character_1"],
             "mustNotAppear": [],
             "environmentLock": True,
             "styleLock": bool(payload.get("freezeStyle", False)),
-            "identityLock": True,
+            "identityLock": bool(characters_allowed),
         }]
+        scene_semantic_sources.append({
+            "sceneId": "scene_001",
+            "sceneSemanticSource": "fallback",
+            "semanticText": semantic_hint or text,
+        })
 
     scene_type_histogram: dict[str, int] = {}
     closeup_scene_count = 0
@@ -655,6 +910,10 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "textSource": str(preprocess.get("textSource") or text_source or "none"),
             "exactLyricsAvailable": exact_lyrics_available,
             "transcriptAvailable": transcript_available,
+            "spokenMeaningPrimary": spoken_meaning_primary,
+            "charactersAllowed": characters_allowed,
+            "peopleAutoAddedCount": people_auto_added_count,
+            "sceneSemanticSource": scene_semantic_sources,
             "usedSemanticFallback": used_semantic_fallback,
             "semanticHintCount": semantic_hint_count,
             "textualBeatCount": len(text_beats),
@@ -679,6 +938,10 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 "textSource": str(preprocess.get("textSource") or text_source or "none"),
                 "exactLyricsAvailable": exact_lyrics_available,
                 "transcriptAvailable": transcript_available,
+                "spokenMeaningPrimary": spoken_meaning_primary,
+                "charactersAllowed": characters_allowed,
+                "sceneSemanticSource": scene_semantic_sources,
+                "peopleAutoAddedCount": people_auto_added_count,
                 "usedSemanticFallback": used_semantic_fallback,
                 "semanticHintCount": semantic_hint_count,
                 "audioSemanticSummary": semantic_summary,
