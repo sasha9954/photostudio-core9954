@@ -27,6 +27,71 @@ INFRASTRUCTURE_TOKENS = [
     "бункер", "бункеры", "подзем", "база", "базы", "туннел", "коридор", "шахта", "укреплен", "укреплён", "военн",
     "ракет", "пусков", "наблюдени", "архив", "схем", "карта", "командный пункт", "двер", "гермодвер", "инфраструктур",
 ]
+SEMANTIC_OBJECT_HINTS = [
+    {
+        "tokens": ["desert", "sand", "dune", "песок", "песк", "песчан", "пустын"],
+        "visual": "пустынный ландшафт, песчаные дюны, следы техники или разведки",
+        "image": "пустыня, песчаная поверхность, следы техники, обзор местности сверху или с дальнего плана",
+        "motion": "ветер гонит песок, камера ведёт разведывательный обзор территории",
+        "sfx": "ветер в пустыне, песок по металлу, далёкий гул техники",
+    },
+    {
+        "tokens": ["bunker", "бункер"],
+        "visual": "укреплённый бункер, бетонные и стальные поверхности, защищённый вход",
+        "image": "укреплённый бункер, армированный бетон, защитные конструкции, военная инфраструктура",
+        "motion": "камера приближается к укреплённому входу или проходит вдоль массивных стен",
+        "sfx": "глухой индустриальный гул, вентиляция, металлический резонанс",
+    },
+    {
+        "tokens": ["tunnel", "туннел", "коридор", "shaft", "шахта"],
+        "visual": "подземный тоннель или технологический коридор, коммуникации, кабели, глубина прохода",
+        "image": "тоннель, подземный коридор, технические коммуникации, кабели, глубинная перспектива",
+        "motion": "камера уходит в глубину тоннеля, свет и пыль движутся по коридору",
+        "sfx": "эхо шагов, вентиляция, гул подземных систем",
+    },
+    {
+        "tokens": ["blast door", "steel door", "door", "blastgate", "гермодвер", "двер", "ворота"],
+        "visual": "тяжёлая гермодверь или взрывозащитные ворота, массивные механизмы запирания",
+        "image": "тяжёлая взрывозащитная дверь, стальные запоры, герметичный вход",
+        "motion": "дверь медленно открывается или камера останавливается перед её массой и механизмами",
+        "sfx": "скрежет тяжёлого металла, гидравлика, низкий гул привода",
+    },
+    {
+        "tokens": ["missile", "rocket", "ракет", "пусков"],
+        "visual": "ракета, пусковая шахта или транспортно-пусковой контейнер как ключевой объект сцены",
+        "image": "ракета или пусковая система, военный объект, инженерные детали",
+        "motion": "камера раскрывает ракету или пусковую систему по вертикали или вдоль корпуса",
+        "sfx": "металлический гул, предупреждающие сигналы, механика пускового узла",
+    },
+    {
+        "tokens": ["satellite", "orbital", "спутник", "орбит"],
+        "visual": "спутниковая разведка, орбитальный аппарат, экран с космическими данными или спутник в кадре",
+        "image": "спутник, орбитальная техника, разведывательные данные, экран наблюдения",
+        "motion": "на экране движутся спутниковые метки или камера следует за орбитальной схемой",
+        "sfx": "электронные сигналы, тихий шум аппаратуры, пульс систем связи",
+    },
+    {
+        "tokens": ["map", "schematic", "карта", "карт", "схем"],
+        "visual": "карта местности, схема объекта, тактическая разметка, отметки входов и маршрутов",
+        "image": "карта, схема, координаты, тактические пометки, аналитический стол или экран",
+        "motion": "камера скользит по карте или слои схемы последовательно раскрывают объект",
+        "sfx": "шорох бумаги или лёгкое жужжание экрана, щелчки интерфейса",
+    },
+    {
+        "tokens": ["entrance", "entry", "вход", "въезд"],
+        "visual": "замаскированный или защищённый вход в объект, дорога, рампа или контрольно-пропускная зона",
+        "image": "вход в подземный объект, защищённая рампа, контрольно-пропускная точка",
+        "motion": "камера раскрывает вход с воздуха или медленно подходит к нему по оси",
+        "sfx": "ветер, далёкая техника, шум ворот и охранных систем",
+    },
+    {
+        "tokens": ["facility", "base", "infrastructure", "underground", "facility", "объект", "база", "подзем", "инфраструктур"],
+        "visual": "масштабный подземный или военный объект, инженерная инфраструктура, уровни и коммуникации",
+        "image": "подземный объект, инженерная инфраструктура, защищённые уровни, документальная разведка",
+        "motion": "камера связывает разные части объекта и показывает его масштаб и устройство",
+        "sfx": "индустриальный гул, вентиляция, механические вибрации комплекса",
+    },
+]
 
 
 def _to_float(value: Any) -> float | None:
@@ -336,6 +401,68 @@ def _pick_environment_subject(refs_by_role: dict[str, list[dict[str, str]]], sem
     return "окружение и инфраструктура"
 
 
+def _collect_semantic_scene_details(semantic_text: str, location: str) -> dict[str, str]:
+    beat = _compact_text(semantic_text) or "документальный смысловой фрагмент"
+    lowered = beat.lower()
+    matched_visuals: list[str] = []
+    matched_images: list[str] = []
+    matched_motion: list[str] = []
+    matched_sfx: list[str] = []
+
+    for hint in SEMANTIC_OBJECT_HINTS:
+        if any(_contains_any_token(lowered, [token]) for token in hint["tokens"]):
+            matched_visuals.append(hint["visual"])
+            matched_images.append(hint["image"])
+            matched_motion.append(hint["motion"])
+            matched_sfx.append(hint["sfx"])
+
+    if not matched_visuals:
+        if _contains_any_token(beat, INFRASTRUCTURE_TOKENS):
+            matched_visuals.append("подземная или военная инфраструктура, инженерные детали, следы реальной эксплуатации")
+            matched_images.append("документальная инфраструктурная среда, реальные инженерные детали")
+            matched_motion.append("камера последовательно раскрывает устройство объекта")
+            matched_sfx.append("низкий индустриальный фон, вентиляция, металлическое эхо")
+        else:
+            matched_visuals.append("конкретная среда и предметы, буквально соответствующие смыслу речи")
+            matched_images.append("реальная сцена без абстрактной замены смысла")
+            matched_motion.append("мотивированное движение камеры, связанное с действием или раскрытием места")
+            matched_sfx.append("натуральный звук среды, подчёркивающий место и действие")
+
+    subject = location if location and location != "cinematic_world_main_location" else _pick_environment_subject({"location": [], "props": []}, beat)
+    desert_bias = any(_contains_any_token(lowered, [token]) for token in ["desert", "sand", "dune", "песк", "пустын"])
+    visual_description = (
+        f"Показать {subject} как буквальное воплощение фразы: {beat}. "
+        f"В кадре должны быть {', '.join(dict.fromkeys(matched_visuals))}."
+    )
+    if desert_bias:
+        camera_plan = (
+            "Камера работает как воздушная или возвышенная разведка местности: сначала общий обзор пустынного рельефа, "
+            f"затем снижение/приближение к ключевому объекту. Основной приём: {matched_motion[0]}."
+        )
+    else:
+        camera_plan = (
+            f"Камера работает как осмысленная разведка/наблюдение за сценой; начать с читаемого установочного ракурса и затем "
+            f"уточнить ключевой объект. Основной приём: {matched_motion[0]}."
+        )
+    motion_plan = (
+        f"Движение в кадре должно быть смысловым, а не декоративным: {', '.join(dict.fromkeys(matched_motion))}."
+    )
+    sfx_plan = (
+        f"Звуковая среда сцены: {', '.join(dict.fromkeys(matched_sfx))}."
+    )
+    image_subject = "; ".join(dict.fromkeys(matched_images))
+    motion_subject = "; ".join(dict.fromkeys(matched_motion))
+    return {
+        "sceneMeaning": beat,
+        "visualDescription": visual_description,
+        "cameraPlan": camera_plan,
+        "motionPlan": motion_plan,
+        "sfxPlan": sfx_plan,
+        "imageSubject": image_subject,
+        "motionSubject": motion_subject,
+    }
+
+
 def _resolve_scene_roles(
     *,
     scene_idx: int,
@@ -572,7 +699,7 @@ def _build_speech_scene_prompts(
     characters_allowed: bool,
     world_bible: dict[str, Any],
     refs_used: list[str],
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, str]]:
     beat = semantic_text or "документальный смысловой фрагмент"
     lens = str(world_bible.get("lensFamily") or "35mm и 50mm кинолинзы")
     light = str(world_bible.get("lightingLogic") or "контролируемый индустриальный свет")
@@ -583,28 +710,29 @@ def _build_speech_scene_prompts(
     infrastructure_bias = _contains_any_token(beat, INFRASTRUCTURE_TOKENS)
     if infrastructure_bias:
         subject = location if location and location != "cinematic_world_main_location" else "подземный военный объект"
+    scene_brief = _collect_semantic_scene_details(beat, location)
     world_continuity = f"Сохранять палитру, реализм и единый документальный мир. Фаза {phase}. Рефы: {', '.join(refs_used) if refs_used else 'environment-only'}."
 
     image_prompt = (
         f"Документальный кинематографичный кадр: {subject}; локация {location}; смысл сцены: {beat}; "
-        f"{environment_focus}; {light}; {lens}; {color}; {style_tag}. {world_continuity}"
+        f"визуально показать: {scene_brief['imageSubject']}; {environment_focus}; {light}; {lens}; {color}; {style_tag}. {world_continuity}"
     )
 
     video_actions = [
-        f"камера медленно и осмысленно проходит через пространство {location}, раскрывая смысл фрагмента: {beat}",
-        f"пыль, воздух и дежурные источники света движутся внутри {location}, камера делает плавный push-in, подчёркивая тему: {beat}",
-        f"индустриальные огни и тени работают по усиленной документальной логике, камера панорамирует по {location}, удерживая фокус на теме: {beat}",
-        f"пространство {location} живёт сдержанным движением среды; камера делает мотивированный dolly/slide, чтобы раскрыть: {beat}",
+        f"камера медленно и осмысленно проходит через пространство {location}, раскрывая смысл фрагмента: {beat}; движение сцены: {scene_brief['motionSubject']}",
+        f"пыль, воздух и дежурные источники света движутся внутри {location}, камера делает плавный push-in, подчёркивая тему: {beat}; движение сцены: {scene_brief['motionSubject']}",
+        f"индустриальные огни и тени работают по усиленной документальной логике, камера панорамирует по {location}, удерживая фокус на теме: {beat}; движение сцены: {scene_brief['motionSubject']}",
+        f"пространство {location} живёт сдержанным движением среды; камера делает мотивированный dolly/slide, чтобы раскрыть: {beat}; движение сцены: {scene_brief['motionSubject']}",
     ]
     if infrastructure_bias:
         video_actions = [
-            f"камера медленно продвигается по {location}, показывая укреплённые поверхности и инженерные детали; движение напрямую поддерживает тему: {beat}",
-            f"тусклый промышленный свет мерцает по усиленным стенам {location}, пыль движется в воздухе, камера осторожно входит глубже в пространство, раскрывая: {beat}",
-            f"тяжёлые механические элементы {location} работают или застыли в ожидании; камера проводит документальную панораму, удерживая смысл: {beat}",
-            f"ветер, пыль или вентиляция создают реалистичное движение среды вокруг {location}; камера считывает инфраструктуру как главный персонаж сцены, раскрывая: {beat}",
+            f"камера медленно продвигается по {location}, показывая укреплённые поверхности и инженерные детали; движение напрямую поддерживает тему: {beat}; движение сцены: {scene_brief['motionSubject']}",
+            f"тусклый промышленный свет мерцает по усиленным стенам {location}, пыль движется в воздухе, камера осторожно входит глубже в пространство, раскрывая: {beat}; движение сцены: {scene_brief['motionSubject']}",
+            f"тяжёлые механические элементы {location} работают или застыли в ожидании; камера проводит документальную панораму, удерживая смысл: {beat}; движение сцены: {scene_brief['motionSubject']}",
+            f"ветер, пыль или вентиляция создают реалистичное движение среды вокруг {location}; камера считывает инфраструктуру как главный персонаж сцены, раскрывая: {beat}; движение сцены: {scene_brief['motionSubject']}",
         ]
     video_prompt = video_actions[scene_idx % len(video_actions)] + f". Сохранять единый реалистичный тон и непрерывность мира от сцены к сцене."
-    return image_prompt, video_prompt
+    return image_prompt, video_prompt, scene_brief
 
 
 def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
@@ -763,8 +891,9 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         if spoken_meaning_primary:
             continuity = f"Сохранять документальную/инфраструктурную логику мира, одну палитру, один уровень реализма и связанность локаций. Локация: {location}. Фаза: {phase}. Источник смысла: {scene_semantic_source}."
         emotion = _scene_emotion(scene_type, phase, has_vocal)
+        scene_brief = {}
         if spoken_meaning_primary:
-            image_prompt_ru, video_prompt_ru = _build_speech_scene_prompts(
+            image_prompt_ru, video_prompt_ru, scene_brief = _build_speech_scene_prompts(
                 semantic_text=beat_text or semantic_hint,
                 location=location,
                 scene_idx=idx,
@@ -810,6 +939,12 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "location": location,
             "styleKey": str(payload.get("stylePreset") or "realism"),
             "futureRenderModel": future_model,
+            "sceneText": beat_text or semantic_hint,
+            "sceneMeaning": scene_brief.get("sceneMeaning") or (beat_text or semantic_hint),
+            "visualDescription": scene_brief.get("visualDescription") or beat_text or semantic_hint,
+            "cameraPlan": scene_brief.get("cameraPlan") or "",
+            "motionPlan": scene_brief.get("motionPlan") or "",
+            "sfxPlan": scene_brief.get("sfxPlan") or "",
             "imagePromptRu": image_prompt_ru,
             "videoPromptRu": video_prompt_ru,
             "imagePromptEn": "",
@@ -883,6 +1018,12 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "location": "cinematic_world_main_location",
             "styleKey": str(payload.get("stylePreset") or "realism"),
             "futureRenderModel": "story_video",
+            "sceneText": semantic_hint or text,
+            "sceneMeaning": semantic_hint or text or "базовый сторителлинг",
+            "visualDescription": semantic_hint or text or "Документальная сцена, прямо отражающая смысл аудио без абстрактной подмены.",
+            "cameraPlan": "Осмысленный установочный ракурс с уточнением ключевого объекта сцены.",
+            "motionPlan": "Мотивированное движение камеры и среды должно раскрывать смысл речи, а не только стиль.",
+            "sfxPlan": "Натуральный атмосферный фон среды, связанный с местом и действием.",
             "imagePromptRu": fallback_image_prompt_ru,
             "videoPromptRu": fallback_video_prompt_ru,
             "imagePromptEn": fallback_image_prompt_en,

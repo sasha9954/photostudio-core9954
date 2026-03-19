@@ -274,6 +274,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- music_only: ignore lyrical semantics completely. Do not derive plot, events, world, objects, characters, or story beats from sung words. Do not build storyline from vocal text and do not substitute musical analysis with lyric interpretation. Use only rhythm, tempo, energy, dynamics, pacing, and emotional contour. If vocals exist, treat vocals as musical texture/emotional signal, never as narrative source.\n"
         "- music_plus_text: lyrics semantics must be ignored completely. TEXT node is the narrative driver for plot/events/world/objects/characters/story beats. AUDIO controls pacing, scene timing, montage rhythm, energy and emotional modulation. If lyrics conflict with TEXT, ignore lyrics semantics and follow TEXT. If TEXT is empty, fall back to a neutral music-driven storyboard without lyrics meaning.\n"
         "- speech_narrative: spoken meaning is the primary narrative driver. transcriptText, spokenTextHint, and audioSemanticSummary must drive scene planning scene-by-scene. Audio is semantic content, not only rhythm/emotion. TEXT node only supplements and clarifies the spoken meaning. If TEXT conflicts with the spoken meaning, the spoken meaning wins. Do not drift into generic cinematic mood unrelated to the speech content. If the speech topic is military, bunker, underground base, infrastructure, archival, documentary, or surveillance, stay inside that topic. Never invent romance, sunset, lifestyle, fashion, or music-video scenes unless the speech explicitly requires them.\n"
+        "- speech_narrative hard rule: for every scene first build a human-readable scene visual brief containing sceneText, sceneMeaning, visualDescription, cameraPlan, motionPlan, and sfxPlan before writing prompts. imagePromptRu must directly depict the spoken meaning; videoPromptRu must describe meaningful motion in that exact scene. Abstract style-only prompts are forbidden unless the spoken segment itself is abstract. If the speech mentions desert, bunker, tunnel, blast door, missile, satellite, map, entrance, or underground facility, those objects/environments must appear in visualDescription, imagePromptRu, and videoPromptRu.\n"
         "- Non-compliance is an error: for music_only and music_plus_text never claim lyric semantics drove the story; for speech_narrative never ignore explicit spoken meaning."
     )
     segmentation_rules = (
@@ -327,6 +328,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
         "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed,refDirectives,sceneSemanticSource,"
         "heroEntityId,supportEntityIds,mustAppear,mustNotAppear,environmentLock,styleLock,identityLock,roleSelectionReason.\n"
+        "For speech_narrative scenes also include: sceneText,sceneMeaning,visualDescription,cameraPlan,motionPlan,sfxPlan.\n"
         "LANGUAGE CONTRACT (MANDATORY): imagePromptRu MUST be Russian; imagePromptEn MUST be English; videoPromptRu MUST be Russian; videoPromptEn MUST be English. Non-compliance is an error.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
@@ -526,6 +528,12 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "startSec": start_n,
         "endSec": end_n,
         "durationSec": duration_n,
+        "sceneText": str(src.get("sceneText") or ""),
+        "sceneMeaning": str(src.get("sceneMeaning") or ""),
+        "visualDescription": str(src.get("visualDescription") or ""),
+        "cameraPlan": str(src.get("cameraPlan") or ""),
+        "motionPlan": str(src.get("motionPlan") or ""),
+        "sfxPlan": str(src.get("sfxPlan") or ""),
         "sceneNarrativeStep": str(src.get("sceneNarrativeStep") or ""),
         "sceneGoal": str(src.get("sceneGoal") or ""),
         "storyMission": str(src.get("storyMission") or ""),
