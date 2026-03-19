@@ -3186,17 +3186,10 @@ function IntroFrameNode({ id, data }) {
         icon={<span aria-hidden>🖼️</span>}
         className="clipSB_nodeAssembly"
       >
-        <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 820, maxWidth: "100%" }}>
-          <div className="clipSB_introRoot" style={{ marginTop: 10 }}>
-            <div
-              className="clipSB_introGrid"
-              style={{
-                gridTemplateColumns: isCompactLayout
-                  ? "minmax(0, 1fr)"
-                  : "minmax(320px, 1fr) 250px",
-              }}
-            >
-              <div className="clipSB_introColControls">
+        <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 840, maxWidth: "100%" }}>
+          <div className="clipSB_introFrameBody">
+            <div className="clipSB_introFrameGrid">
+              <div className="clipSB_introFrameControls">
                 <div className="clipSB_assemblyStats" style={{ marginBottom: 0 }}>
                   <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
                   <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
@@ -3324,9 +3317,9 @@ function IntroFrameNode({ id, data }) {
                   </details>
                 </div>
 
-              <div className="clipSB_introColPreview">
+              <div className="clipSB_introFramePreviewCol">
                 <div
-                  className="clipSB_introPreviewBox"
+                  className="clipSB_introFramePreviewBox"
                   style={{
                     '--intro-style-accent': `${styleMeta.accent}`,
                     '--intro-style-secondary': `${styleMeta.secondary}`,
@@ -3454,7 +3447,7 @@ function IntroFrameNode({ id, data }) {
                 )}
                 </div>
 
-                <div className="clipSB_introActions">
+                <div className="clipSB_introFrameActions">
                   <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
                     {isGenerating ? "Генерация..." : (previewUrl ? "Перегенерировать" : "Сгенерировать")}
                   </button>
@@ -3467,7 +3460,6 @@ function IntroFrameNode({ id, data }) {
                     </button>
                   ) : null}
                 </div>
-              </div>
               </div>
             </div>
 
@@ -3483,6 +3475,7 @@ function IntroFrameNode({ id, data }) {
               }}
             />
           </div>
+        </div>
       </NodeShell>
     </>
   );
