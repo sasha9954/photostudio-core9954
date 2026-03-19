@@ -4099,6 +4099,7 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
   const [scenarioVideoOpen, setScenarioVideoOpen] = useState(false);
   const [comfyImageLoading, setComfyImageLoading] = useState(false);
   const [comfyImageError, setComfyImageError] = useState("");
+  const [comfyAudioSliceLoading, setComfyAudioSliceLoading] = useState(false);
 
   const [comfyPromptSyncError, setComfyPromptSyncError] = useState("");
   const [assemblyBuildState, setAssemblyBuildState] = useState("idle");
@@ -4119,6 +4120,18 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
   const lightboxCloseTimerRef = useRef(null);
 
 const comfySelectedSceneId = String(comfySelectedScene?.sceneId || "").trim();
+const comfySelectedStartSec = Number(comfySelectedScene?.audioSliceStartSec ?? comfySelectedScene?.audioSliceT0 ?? comfySelectedScene?.startSec ?? comfySelectedScene?.start ?? comfySelectedScene?.t0 ?? 0);
+const comfySelectedEndSec = Number(comfySelectedScene?.audioSliceEndSec ?? comfySelectedScene?.audioSliceT1 ?? comfySelectedScene?.endSec ?? comfySelectedScene?.end ?? comfySelectedScene?.t1 ?? comfySelectedStartSec);
+const comfySelectedExpectedSliceSec = Number(
+  comfySelectedScene?.audioSliceDurationSec
+    ?? comfySelectedScene?.audioSliceExpectedDurationSec
+    ?? Math.max(0, comfySelectedEndSec - comfySelectedStartSec)
+);
+const comfySelectedAudioSliceStatus = String(comfySelectedScene?.audioSliceStatus || "").trim();
+const comfySelectedAudioSliceError = String(
+  comfySelectedScene?.audioSliceError || comfySelectedScene?.audioSliceLoadError || ""
+).trim();
+const comfySelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(comfySelectedScene?.audioSliceUrl), [comfySelectedScene?.audioSliceUrl]);
 const scenarioVideoLoading = isVideoJobInProgress(scenarioSelected?.videoStatus);
 const comfyVideoLoading = isVideoJobInProgress(comfySelectedScene?.videoStatus);
 const comfyHasActiveVideoJobForScene = comfyVideoLoading;
@@ -5723,6 +5736,97 @@ ${contextPrompt}`.trim(),
     }
     updateComfyScene(comfySafeIndex, { videoUrl: '', videoStatus: '', videoError: '', videoJobId: '' });
   }, [clearActiveComfyVideoJob, comfySafeIndex, comfySelectedScene?.sceneId, updateComfyScene]);
+
+  const handleComfyTakeAudio = useCallback(async () => {
+    if (!comfySelectedScene) return;
+    if (!globalAudioUrlRaw) {
+      const msg = "Не найден общий audioUrl в Audio node";
+      updateComfyScene(comfySafeIndex, {
+        audioSliceStatus: "error",
+        audioSliceError: msg,
+        audioSliceLoadError: msg,
+      });
+      return;
+    }
+
+    const sceneId = String(comfySelectedScene?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
+    const startSec = Number(comfySelectedScene?.startSec ?? comfySelectedScene?.start ?? comfySelectedScene?.t0 ?? 0);
+    const endSec = Number(comfySelectedScene?.endSec ?? comfySelectedScene?.end ?? comfySelectedScene?.t1 ?? startSec);
+    const expectedDuration = Math.max(0, endSec - startSec);
+
+    setComfyAudioSliceLoading(true);
+    updateComfyScene(comfySafeIndex, {
+      audioSliceStatus: "loading",
+      audioSliceError: "",
+      audioSliceLoadError: "",
+      audioSliceStartSec: startSec,
+      audioSliceEndSec: endSec,
+      audioSliceT0: startSec,
+      audioSliceT1: endSec,
+      audioSliceDurationSec: expectedDuration,
+      audioSliceExpectedDurationSec: expectedDuration,
+    });
+
+    try {
+      const out = await fetchJson("/api/clip/audio/slice", {
+        method: "POST",
+        body: { sceneId, startSec, endSec, audioUrl: globalAudioUrlRaw },
+      });
+      if (!out?.ok || !out?.audioSliceUrl) throw new Error(out?.hint || out?.code || "audio_slice_failed");
+      const outStartSec = Number(out?.startSec ?? out?.t0 ?? startSec);
+      const outEndSec = Number(out?.endSec ?? out?.t1 ?? endSec);
+      const durationSec = normalizeDurationSec(out?.durationSec ?? out?.audioSliceBackendDurationSec ?? out?.duration);
+      const nextExpectedDuration = Math.max(0, outEndSec - outStartSec);
+      updateComfyScene(comfySafeIndex, {
+        audioSliceUrl: String(out.audioSliceUrl || ""),
+        audioSliceStartSec: outStartSec,
+        audioSliceEndSec: outEndSec,
+        audioSliceDurationSec: durationSec ?? nextExpectedDuration,
+        audioSliceStatus: "ready",
+        audioSliceError: "",
+        audioSliceT0: outStartSec,
+        audioSliceT1: outEndSec,
+        audioSliceExpectedDurationSec: nextExpectedDuration,
+        audioSliceBackendDurationSec: durationSec,
+        audioSliceActualDurationSec: null,
+        audioSliceLoadError: "",
+      });
+    } catch (e) {
+      console.error(e);
+      const msg = String(e?.message || e || "audio_slice_failed");
+      updateComfyScene(comfySafeIndex, {
+        audioSliceStatus: "error",
+        audioSliceError: msg,
+        audioSliceLoadError: msg,
+      });
+    } finally {
+      setComfyAudioSliceLoading(false);
+    }
+  }, [comfySafeIndex, comfySelectedScene, globalAudioUrlRaw, updateComfyScene]);
+
+  const handleComfySliceLoadedMetadata = useCallback((event) => {
+    if (!comfySelectedScene) return;
+    const mediaEl = event?.currentTarget || event?.target || null;
+    const duration = mediaEl && Number.isFinite(mediaEl.duration) ? Number(mediaEl.duration) : null;
+    updateComfyScene(comfySafeIndex, {
+      audioSliceActualDurationSec: duration,
+      audioSliceStatus: "ready",
+      audioSliceError: "",
+      audioSliceLoadError: "",
+    });
+  }, [comfySafeIndex, comfySelectedScene, updateComfyScene]);
+
+  const handleComfySliceAudioError = useCallback(() => {
+    if (!comfySelectedScene) return;
+    const msg = "Не удалось загрузить вырезанный mp3-срез. Проверьте URL и наличие файла.";
+    updateComfyScene(comfySafeIndex, {
+      audioSliceActualDurationSec: null,
+      audioSliceStatus: "error",
+      audioSliceError: msg,
+      audioSliceLoadError: msg,
+    });
+  }, [comfySafeIndex, comfySelectedScene, updateComfyScene]);
 
   const handleComfyImagePromptChange = useCallback((value) => {
     const nextRu = String(value || '');
@@ -9855,6 +9959,7 @@ const hydrate = useCallback((source = "unknown") => {
                   const isActive = comfySafeIndex === index;
                   const hasImage = !!String(scene?.imageUrl || '').trim();
                   const hasVideo = !!String(scene?.videoUrl || '').trim();
+                  const hasAudioSlice = !!String(scene?.audioSliceUrl || '').trim();
                   const start = Number(scene?.startSec);
                   const end = Number(scene?.endSec);
                   const dur = Number(scene?.durationSec);
@@ -9873,6 +9978,7 @@ const hydrate = useCallback((source = "unknown") => {
                         <div className="clipSB_comfySceneId">{scene.sceneId || `scene ${index + 1}`}</div>
                         <div className="clipSB_comfyReadyIcons">
                           {hasImage ? <span className="clipSB_tag clipSB_tagOk">image-ready</span> : null}
+                          {hasAudioSlice ? <span className="clipSB_tag clipSB_tagOk">audio-ready</span> : null}
                           {!hasVideo && String(scene?.videoStatus || '').trim() === 'queued' ? <span className="clipSB_tag">video-queued</span> : null}
                           {!hasVideo && String(scene?.videoStatus || '').trim() === 'running' ? <span className="clipSB_tag">video-running</span> : null}
                           {hasVideo || String(scene?.videoStatus || '').trim() === 'done' ? <span className="clipSB_tag clipSB_tagOk">video-ready</span> : null}
@@ -9971,6 +10077,42 @@ const hydrate = useCallback((source = "unknown") => {
                       </div>
                       {comfyImageError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfyImageError}</div> : null}
                       {(String(comfySelectedScene.imagePromptSyncError || '').trim() || comfyPromptSyncError) ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>sync: {String(comfySelectedScene.imagePromptSyncError || comfyPromptSyncError || '')}</div> : null}
+                    </div>
+
+                    <div className="clipSB_comfySection">
+                      <div className="clipSB_comfyBlockTitle">AUDIO SLICE</div>
+                      <div className="clipSB_hint" style={{ marginBottom: 8 }}>Используется общий audioUrl и текущий тайминг сцены.</div>
+                      <div className="clipSB_comfyActions">
+                        <button
+                          className="clipSB_btn clipSB_btnSecondary"
+                          onClick={handleComfyTakeAudio}
+                          disabled={comfyAudioSliceLoading || comfySelectedAudioSliceStatus === 'loading' || !globalAudioUrlRaw}
+                        >
+                          {comfyAudioSliceLoading || comfySelectedAudioSliceStatus === 'loading' ? 'Делаю...' : (comfySelectedScene?.audioSliceUrl ? 'Обновить аудио' : 'Взять аудио')}
+                        </button>
+                      </div>
+                      {comfySelectedAudioSliceUrl ? (
+                        <audio
+                          key={`comfy-slice-${String(comfySelectedScene.sceneId || comfySafeIndex)}-${String(comfySelectedAudioSliceUrl || '')}`}
+                          className="clipSB_audioPlayer"
+                          controls
+                          preload="metadata"
+                          src={comfySelectedAudioSliceUrl}
+                          onLoadedMetadata={handleComfySliceLoadedMetadata}
+                          onError={handleComfySliceAudioError}
+                        />
+                      ) : (
+                        <div className="clipSB_hint">Срез ещё не создан. Нажмите «Взять аудио».</div>
+                      )}
+                      <div className="clipSB_audioDebugGrid" style={{ marginTop: 8 }}>
+                        <div className="clipSB_videoKv"><span>t0</span><span>{fmtSecAndMs(Number(comfySelectedScene.audioSliceT0 ?? comfySelectedStartSec))}</span></div>
+                        <div className="clipSB_videoKv"><span>t1</span><span>{fmtSecAndMs(Number(comfySelectedScene.audioSliceT1 ?? comfySelectedEndSec))}</span></div>
+                        <div className="clipSB_videoKv"><span>expected duration</span><span>{fmtSecAndMs(comfySelectedExpectedSliceSec)}</span></div>
+                        <div className="clipSB_videoKv"><span>backend duration</span><span>{fmtSecAndMs(comfySelectedScene.audioSliceBackendDurationSec)}</span></div>
+                        <div className="clipSB_videoKv"><span>actual duration</span><span>{fmtSecAndMs(comfySelectedScene.audioSliceActualDurationSec)}</span></div>
+                      </div>
+                      {comfySelectedAudioSliceStatus === 'loading' ? <div className="clipSB_hint">Извлекаю аудио по timeline сцены…</div> : null}
+                      {comfySelectedAudioSliceError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfySelectedAudioSliceError}</div> : null}
                     </div>
 
                     {(comfySelectedScene.imageUrl && !comfyShowVideoSection) ? (
