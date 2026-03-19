@@ -3187,17 +3187,16 @@ function IntroFrameNode({ id, data }) {
         className="clipSB_nodeAssembly"
       >
         <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 960, maxWidth: "100%" }}>
-          <div className="clipSB_introShell" style={{ marginTop: 10 }}>
+          <div className="clipSB_introUnified" style={{ marginTop: 10 }}>
             <div
-              className="clipSB_introLayout"
+              className="clipSB_introColumns"
               style={{
                 gridTemplateColumns: isCompactLayout
                   ? "minmax(0, 1fr)"
-                  : "minmax(280px, 330px) minmax(190px, 230px)",
+                  : "minmax(300px, 1fr) minmax(210px, 240px)",
               }}
             >
-              <div className="clipSB_introLeftPanel">
-                <div className="clipSB_introLeft">
+              <div className="clipSB_introLeft">
                   <div className="clipSB_assemblyStats" style={{ marginBottom: 0 }}>
                     <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
                     <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
@@ -3334,10 +3333,8 @@ function IntroFrameNode({ id, data }) {
                     </div>
                   </details>
                 </div>
-              </div>
 
-              <div className="clipSB_introRightPanel">
-                <div className="clipSB_introRight">
+              <div className="clipSB_introRight">
                   <div
                     className="clipSB_introPreviewCard"
                     style={{
@@ -3469,14 +3466,14 @@ function IntroFrameNode({ id, data }) {
 
                   <div className="clipSB_introActions">
                     <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
-                      {isGenerating ? "Generating..." : (previewUrl ? "Regenerate" : "Generate")}
+                      {isGenerating ? "Генерация..." : (previewUrl ? "Перегенерировать" : "Сгенерировать")}
                     </button>
                     <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
-                      Upload
+                      Загрузить
                     </button>
                     {previewUrl ? (
                       <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onClearImage?.(id)}>
-                        Clear
+                        Очистить
                       </button>
                     ) : null}
                   </div>
@@ -3496,7 +3493,6 @@ function IntroFrameNode({ id, data }) {
               }}
             />
           </div>
-        </div>
       </NodeShell>
     </>
   );
