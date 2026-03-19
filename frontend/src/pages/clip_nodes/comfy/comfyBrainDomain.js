@@ -149,6 +149,12 @@ export function normalizeComfyScenePrompts(scene = {}) {
   const videoPromptRu = String(scene?.videoPromptRu || scene?.videoPrompt || "").trim();
   const videoPromptEn = String(scene?.videoPromptEn || scene?.videoPrompt || "").trim();
   const sceneGoal = String(scene?.sceneGoal || "").trim();
+  const sceneText = String(scene?.sceneText || "").trim();
+  const sceneMeaning = String(scene?.sceneMeaning || "").trim();
+  const visualDescription = String(scene?.visualDescription || "").trim();
+  const cameraPlan = String(scene?.cameraPlan || "").trim();
+  const motionPlan = String(scene?.motionPlan || "").trim();
+  const sfxPlan = String(scene?.sfxPlan || "").trim();
   const storyBeat = String(scene?.storyBeat || "").trim();
   const visualAction = String(scene?.visualAction || "").trim();
   const emotion = String(scene?.emotion || "").trim();
@@ -183,6 +189,12 @@ export function normalizeComfyScenePrompts(scene = {}) {
     imagePromptEn,
     videoPromptRu,
     videoPromptEn,
+    sceneText,
+    sceneMeaning,
+    visualDescription,
+    cameraPlan,
+    motionPlan,
+    sfxPlan,
     sceneGoal,
     storyBeat,
     visualAction,
