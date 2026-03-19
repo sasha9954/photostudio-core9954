@@ -1934,7 +1934,7 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_introFrameBody {
   width: 100%;
   margin-top: 10px;
-  padding: 16px;
+  padding: 12px;
   border-radius: 18px;
   background: rgba(7, 10, 18, 0.97);
   border: 1px solid rgba(110, 150, 230, 0.16);
@@ -1943,15 +1943,15 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_introFrameGrid {
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) 250px;
-  gap: 16px;
+  grid-template-columns: minmax(300px, 1fr) 220px;
+  gap: 12px;
   align-items: start;
 }
 
 .clipSB_introFrameControls {
   min-width: 0;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   align-content: start;
 }
 
@@ -1966,9 +1966,9 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_introFramePreviewCol {
   min-width: 0;
   display: grid;
-  gap: 12px;
+  gap: 10px;
   align-content: start;
-  padding-left: 16px;
+  padding-left: 12px;
   border-left: 1px solid rgba(120, 170, 255, 0.10);
 }
 
