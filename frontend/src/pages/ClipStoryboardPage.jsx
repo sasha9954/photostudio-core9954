@@ -3203,8 +3203,7 @@ function IntroFrameNode({ id, data }) {
                       className="clipSB_input"
                       value={String(data?.title || "")}
                       onChange={(e) => data?.onField?.(id, "title", e.target.value)}
-                      disabled={autoTitle}
-                      placeholder={autoTitle ? "Авто по сюжету / сценам" : "Введите заголовок"}
+                      placeholder="Введите заголовок или используйте auto title"
                     />
                   </label>
 
