@@ -7391,6 +7391,7 @@ onClipSec: (nodeId, value) => {
             if (derived.audioStoryMode === 'lyrics_music' && derived.meaningfulAudio) warnings.push('Audio story mode: lyrics+music (lyrics и музыка вместе управляют сюжетом).');
             if (derived.audioStoryMode === 'music_only' && derived.meaningfulAudio) warnings.push('Audio story mode: music_only (lyrics игнорируются; сюжет строится по ритму/энергии/refs/mode).');
             if (derived.audioStoryMode === 'music_plus_text' && derived.meaningfulAudio) warnings.push('Audio story mode: music_plus_text (lyrics игнорируются; TEXT задаёт narrative direction).');
+            if (derived.audioStoryMode === 'speech_narrative' && derived.meaningfulAudio) warnings.push('Audio story mode: speech_narrative (spoken audio meaning is primary; transcript / spoken hints / semantic summary must drive the storyboard scene by scene).');
             if (Array.isArray(derived.audioStoryPolicy?.warnings)) derived.audioStoryPolicy.warnings.forEach((msg) => warnings.push(msg));
             if (derived.modeValue === 'scenario' && !derived.meaningfulText) warnings.push('Scenario mode без TEXT: добавьте текст для beat-by-beat дисциплины.');
             if (derived.outputValue === 'comfy text' && !String(derived.meaningfulText || '').trim()) warnings.push('Для comfy text желательно добавить richer text prompt');
@@ -9196,6 +9197,7 @@ const hydrate = useCallback((source = "unknown") => {
                     <li><code>kino + lyrics_music + refs</code></li>
                     <li><code>reklama + message in TEXT</code></li>
                     <li><code>clip + music_only + strong visual refs</code></li>
+                    <li><code>scenario + speech_narrative + transcript + infrastructure refs</code></li>
                   </ul>
                 </section>
               </div>

@@ -160,7 +160,7 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         output = "comfy image"
 
     audio_story_mode = str(data.get("audioStoryMode") or "lyrics_music").strip().lower()
-    if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text"}:
+    if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}:
         audio_story_mode = "lyrics_music"
 
     return {
@@ -260,19 +260,21 @@ def _normalize_scene_timeline(scenes: list[dict[str, Any]], audio_duration_sec: 
 
 def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
     audio_story_mode = str(payload.get("audioStoryMode") or "lyrics_music").strip().lower()
-    if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text"}:
+    if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}:
         audio_story_mode = "lyrics_music"
 
     # DEBUG VALIDATION CHECKLIST (manual):
     # 1) lyrics_music -> same song with lyrics should produce story beats that follow lyrical meaning.
     # 2) music_only -> same song should avoid lyric-derived plot; beats follow rhythm/energy only.
     # 3) music_plus_text -> same song + separate TEXT storyline should follow TEXT storyline; audio drives pace/energy.
+    # 4) speech_narrative -> spoken meaning should drive scene-by-scene documentary/story planning.
     audio_story_rules = (
         "AUDIO STORY MODE RULES (STRICT):\n"
         "- lyrics_music: lyrics semantics are explicitly allowed and should be used as a narrative driver when vocals exist. You may use lyrical meaning, verse/chorus structure, emotional lyrical phrases, and explicit lyrical motifs to shape scene goals and transitions. Build scenes from lyrics+music together, not from music alone.\n"
         "- music_only: ignore lyrical semantics completely. Do not derive plot, events, world, objects, characters, or story beats from sung words. Do not build storyline from vocal text and do not substitute musical analysis with lyric interpretation. Use only rhythm, tempo, energy, dynamics, pacing, and emotional contour. If vocals exist, treat vocals as musical texture/emotional signal, never as narrative source.\n"
         "- music_plus_text: lyrics semantics must be ignored completely. TEXT node is the narrative driver for plot/events/world/objects/characters/story beats. AUDIO controls pacing, scene timing, montage rhythm, energy and emotional modulation. If lyrics conflict with TEXT, ignore lyrics semantics and follow TEXT. If TEXT is empty, fall back to a neutral music-driven storyboard without lyrics meaning.\n"
-        "- Non-compliance is an error: for music_only and music_plus_text never claim lyric semantics drove the story."
+        "- speech_narrative: spoken meaning is the primary narrative driver. transcriptText, spokenTextHint, and audioSemanticSummary must drive scene planning scene-by-scene. Audio is semantic content, not only rhythm/emotion. TEXT node only supplements and clarifies the spoken meaning. If TEXT conflicts with the spoken meaning, the spoken meaning wins. Do not drift into generic cinematic mood unrelated to the speech content. If the speech topic is military, bunker, underground base, infrastructure, archival, documentary, or surveillance, stay inside that topic. Never invent romance, sunset, lifestyle, fashion, or music-video scenes unless the speech explicitly requires them.\n"
+        "- Non-compliance is an error: for music_only and music_plus_text never claim lyric semantics drove the story; for speech_narrative never ignore explicit spoken meaning."
     )
     segmentation_rules = (
         "SCENE SEGMENTATION RULES (HIGHEST PRIORITY):\n"
@@ -289,6 +291,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- lyrics_music: boundaries can follow lyric/sentence/sung-line endings plus music transitions.\n"
         "- music_only: ignore lyrics meaning; boundaries follow musical phrasing, energy shifts, rhythmic transitions, and structure only.\n"
         "- music_plus_text: ignore lyrics meaning; boundaries follow musical phrasing + meaningful TEXT chunks, synced to transition points.\n"
+        "- speech_narrative: boundaries must follow spoken pauses, sentence endings, topic shifts, and meaningful semantic beats. Do not segment by equal chunks. Do not use music rhythm unless spoken structure is absent.\n"
     )
 
     return (
@@ -317,16 +320,17 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- Never include unselected actors in a scene.\n"
         "- If a role is not selected for the scene, do not bring it into frame.\n"
         "- Never replace a selected actor with a generic invented version.\n"
+        "- HARD NO-CHARACTERS RULE: if there are no character refs and the transcript/text does not explicitly require people, charactersAllowed=false and you must not invent humans, women, men, crowds, portraits, or lifestyle extras. Use environment-only, infrastructure-only, archive-only, map-only, machinery-only, or object-only visuals instead.\n"
         "- Style references define visual language only and cannot cancel identity contracts.\n"
         "- Location references define world/environment identity anchors for the scene.\n"
         "- If a role is chosen as hero, that role must dominate shot semantics.\n"
         "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
-        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed,refDirectives,"
+        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed,refDirectives,sceneSemanticSource,"
         "heroEntityId,supportEntityIds,mustAppear,mustNotAppear,environmentLock,styleLock,identityLock,roleSelectionReason.\n"
         "LANGUAGE CONTRACT (MANDATORY): imagePromptRu MUST be Russian; imagePromptEn MUST be English; videoPromptRu MUST be Russian; videoPromptEn MUST be English. Non-compliance is an error.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
-        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected.\n"
+        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected, plus audioStoryMode, textSource, transcriptAvailable, spokenMeaningPrimary, charactersAllowed, sceneSemanticSource per scene, and peopleAutoAddedCount.\n"
         f"INPUT={json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -359,6 +363,7 @@ def build_comfy_planner_refinement_prompt(payload: dict[str, Any], previous_scen
         "  * lyrics_music: lyric phrase endings + music transitions.\n"
         "  * music_only: ignore lyrics semantics, use musical phrasing/energy/structure transitions only.\n"
         "  * music_plus_text: ignore lyrics semantics, follow TEXT chunks + music transitions.\n"
+        "  * speech_narrative: spoken pauses, sentence endings, topic shifts, and semantic beats. Never equal chunks.\n"
     )
     return (
         f"{base_prompt}\n\n"
@@ -573,6 +578,7 @@ def _build_segmentation_debug(scenes: list[dict[str, Any]], audio_story_mode: st
         "lyrics_music": "semantic_and_vocal_phrases_with_music_transitions",
         "music_only": "music_phrase_energy_and_structure_transitions",
         "music_plus_text": "text_meaning_chunks_synced_to_music_transitions",
+        "speech_narrative": "spoken_pauses_sentence_endings_topic_shifts_and_semantic_beats",
     }
     mode_reason = mode_reason_map.get(audio_story_mode, "music_driven_transitions")
 

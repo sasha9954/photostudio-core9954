@@ -2,7 +2,7 @@ import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.engine.comfy_brain_engine import run_comfy_plan, run_comfy_prompt_sync
 from app.engine.comfy_reference_profile import build_reference_profiles
@@ -12,6 +12,7 @@ import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+ALLOWED_AUDIO_STORY_MODES = {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}
 
 
 class RefItemIn(BaseModel):
@@ -49,6 +50,12 @@ class ClipComfyPlanIn(BaseModel):
     spokenTextHint: str = ""
     audioSemanticHints: list[str] | dict[str, Any] | str | None = None
     audioSemanticSummary: str = ""
+
+    @field_validator("audioStoryMode", mode="before")
+    @classmethod
+    def validate_audio_story_mode(cls, value: Any) -> str:
+        normalized = str(value or "lyrics_music").strip().lower()
+        return normalized if normalized in ALLOWED_AUDIO_STORY_MODES else "lyrics_music"
 
 
 class ClipComfyConnectRefsIn(BaseModel):
