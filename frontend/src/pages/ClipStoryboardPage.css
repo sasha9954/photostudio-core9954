@@ -1538,6 +1538,11 @@ body.ps_clip_fullscreen .mainCol {
   box-shadow: inset 0 0 0 1px rgba(147,221,111,.28), 0 0 22px rgba(147,221,111,.2);
 }
 
+.clipSB_nodeComfyStoryboardStateStale {
+  --node-accent: rgba(255, 188, 84, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(255,188,84,.3), 0 0 22px rgba(255,188,84,.18);
+}
+
 .clipSB_nodeComfyStoryboardStateError {
   --node-accent: rgba(255, 120, 120, 0.85);
   box-shadow: inset 0 0 0 1px rgba(255,120,120,.28), 0 0 20px rgba(255,120,120,.22);

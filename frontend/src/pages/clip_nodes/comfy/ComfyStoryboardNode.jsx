@@ -5,36 +5,44 @@ export default function ComfyStoryboardNode({ id, data }) {
   const scenes = Array.isArray(data?.mockScenes) ? data.mockScenes : [];
   const modeMeta = getModeDisplayMeta(data?.mode || "clip");
   const styleMeta = getStyleDisplayMeta(data?.stylePreset || "realism");
-  const parseStatus = data?.parseStatus || "idle";
+  const parseStatus = data?.parseStatus || (data?.isUpdating ? "updating" : (data?.isStale ? "stale" : "idle"));
   const readyImages = scenes.filter((scene) => !!scene?.imageUrl).length;
   const readyVideos = scenes.filter((scene) => !!scene?.videoUrl).length;
   const totalScenes = scenes.length || Number(data?.sceneCount || 0);
-  const isUpdating = parseStatus === "updating";
+  const isUpdating = !!data?.isUpdating || parseStatus === "updating";
+  const isBusy = !!data?.isBusy || !!data?.isGenerating || isUpdating;
   const hasScenes = totalScenes > 0;
-  const canOpenEditor = !isUpdating && hasScenes;
+  const canOpenEditor = !isBusy && hasScenes;
   const isReady = parseStatus === "ready";
   const isError = parseStatus === "error";
+  const isStale = !isUpdating && (parseStatus === "stale" || (!!data?.isStale && !isReady));
   const statusLabel = isUpdating
     ? "обновляется..."
-    : isReady
-      ? (hasScenes ? `${totalScenes} сцен готово` : "Storyboard готов")
-      : isError
-        ? "ошибка"
-        : "ожидание";
+    : isStale
+      ? (hasScenes ? "устарело" : "нужно обновить")
+      : isReady
+        ? (hasScenes ? `${totalScenes} сцен готово` : "Storyboard готов")
+        : isError
+          ? "ошибка"
+          : "ожидание";
   const statusHint = isUpdating
     ? "Получаю сцены из COMFY BRAIN..."
-    : isReady
-      ? (hasScenes ? "Сцены готовы. Можно открыть editor." : "Сцены ещё не готовы для editor.")
-      : isError
-        ? "Storyboard не обновлён из-за ошибки parse."
-        : "Ожидает parse из COMFY BRAIN.";
+    : isStale
+      ? (hasScenes ? "Сцены сохранены, но входные данные изменились. Обновите storyboard." : "Данные изменились. Запустите обновление storyboard.")
+      : isReady
+        ? (hasScenes ? "Сцены готовы. Можно открыть editor." : "Сцены ещё не готовы для editor.")
+        : isError
+          ? "Storyboard не обновлён из-за ошибки parse."
+          : "Ожидает parse из COMFY BRAIN.";
   const storyboardStateClass = isUpdating
     ? "clipSB_nodeComfyStoryboardStateUpdating"
-    : isReady
-      ? "clipSB_nodeComfyStoryboardStateReady"
-      : isError
-        ? "clipSB_nodeComfyStoryboardStateError"
-        : "";
+    : isStale
+      ? "clipSB_nodeComfyStoryboardStateStale"
+      : isReady
+        ? "clipSB_nodeComfyStoryboardStateReady"
+        : isError
+          ? "clipSB_nodeComfyStoryboardStateError"
+          : "";
 
   return (<>
     <Handle type="target" position={Position.Left} id="comfy_plan" className="clipSB_handle" style={handleStyle("comfy_plan")} />

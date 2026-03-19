@@ -3632,6 +3632,112 @@ export default function ClipStoryboardPage() {
   const bindHandlersTraceRef = useRef({ ts: 0, changed: null });
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
 
+  const buildComfyStoryboardPatch = useCallback(({
+    node,
+    nodesNow = [],
+    edgesNow = [],
+    reason = "unknown",
+  }) => {
+    const currentData = node?.data && typeof node.data === "object" ? node.data : {};
+    const rawStatus = String(currentData.parseStatus || "idle").trim().toLowerCase() || "idle";
+    const mockScenes = normalizeSceneCollectionWithSceneId(currentData.mockScenes, "comfy_scene");
+    const connectedPlanEdges = (Array.isArray(edgesNow) ? edgesNow : []).filter((edge) => edge?.target === node?.id && String(edge?.targetHandle || "") === "comfy_plan");
+    const connectedSourceIds = connectedPlanEdges.map((edge) => String(edge?.source || "")).filter(Boolean);
+    const connectedSourceNodes = connectedSourceIds
+      .map((sourceId) => (Array.isArray(nodesNow) ? nodesNow : []).find((candidate) => candidate?.id === sourceId && candidate?.type === "comfyBrain") || null)
+      .filter(Boolean);
+    const activeRequestId = String(currentData.activeRequestId || "").trim();
+    const activeRequestSourceNodeId = String(currentData.activeRequestSourceNodeId || "").trim();
+    const activeSourceNode = connectedSourceNodes.find((sourceNode) => {
+      const sourceNodeId = String(sourceNode?.id || "").trim();
+      if (activeRequestSourceNodeId && sourceNodeId !== activeRequestSourceNodeId) return false;
+      const sourceStatus = String(sourceNode?.data?.parseStatus || "").trim().toLowerCase();
+      return comfyParseInFlightRef.current.has(sourceNodeId) || sourceStatus === "parsing";
+    }) || null;
+    const hasActiveRequest = !!activeRequestId && !!activeSourceNode;
+    const sceneCount = Math.max(mockScenes.length, Number(currentData.sceneCount || 0));
+    const hasScenes = sceneCount > 0;
+    const isStale = currentData.isStale === true;
+
+    let nextStatus = ["idle", "updating", "ready", "error", "stale"].includes(rawStatus) ? rawStatus : "idle";
+    let statusReason = "keep_existing_status";
+
+    if (hasActiveRequest) {
+      nextStatus = "updating";
+      statusReason = "active_request_in_progress";
+    } else if (rawStatus === "updating") {
+      nextStatus = isStale ? "stale" : (hasScenes ? "ready" : "idle");
+      statusReason = "reset_orphaned_updating_status";
+    } else if (isStale && rawStatus !== "error") {
+      nextStatus = "stale";
+      statusReason = "stale_without_active_request";
+    } else if (hasScenes && rawStatus === "idle") {
+      nextStatus = "ready";
+      statusReason = "promote_idle_with_existing_scenes";
+    } else if (!hasScenes && rawStatus === "ready") {
+      nextStatus = "idle";
+      statusReason = "demote_ready_without_scenes";
+    }
+
+    const patch = {
+      ...currentData,
+      mockScenes,
+      sceneCount,
+      parseStatus: nextStatus,
+      isUpdating: hasActiveRequest,
+      isBusy: hasActiveRequest,
+      isGenerating: hasActiveRequest,
+      hasActiveRequest,
+      activeRequestId: hasActiveRequest ? activeRequestId : "",
+      activeRequestSourceNodeId: hasActiveRequest ? activeRequestSourceNodeId : "",
+      activeRequestStartedAt: hasActiveRequest ? String(currentData.activeRequestStartedAt || "") : "",
+    };
+
+    console.debug("[COMFY STORYBOARD] patch build", {
+      nodeId: String(node?.id || ""),
+      reason,
+      rawStatus,
+      nextStatus,
+      statusReason,
+      hasActiveRequest,
+      activeRequestId,
+      activeRequestSourceNodeId,
+      connectedSourceIds,
+      connectedSourceStates: connectedSourceNodes.map((sourceNode) => ({
+        nodeId: String(sourceNode?.id || ""),
+        parseStatus: String(sourceNode?.data?.parseStatus || ""),
+        inFlight: comfyParseInFlightRef.current.has(String(sourceNode?.id || "").trim()),
+      })),
+      fields: {
+        status: String(currentData.status || ""),
+        parseStatus: String(currentData.parseStatus || ""),
+        isUpdating: currentData.isUpdating ?? null,
+        isGenerating: currentData.isGenerating ?? null,
+        isBusy: currentData.isBusy ?? null,
+        isStale: currentData.isStale ?? null,
+        isDirty: currentData.isDirty ?? null,
+        dirty: currentData.dirty ?? null,
+        stale: currentData.stale ?? null,
+      },
+      sceneCount,
+      hasScenes,
+      plannerMetaPresent: !!currentData.plannerMeta,
+    });
+
+    if (rawStatus === "updating" && !hasActiveRequest) {
+      console.warn("[COMFY STORYBOARD] orphaned updating state reset", {
+        nodeId: String(node?.id || ""),
+        reason,
+        fallbackStatus: nextStatus,
+        activeRequestId,
+        activeRequestSourceNodeId,
+        connectedSourceIds,
+      });
+    }
+
+    return patch;
+  }, []);
+
   const summarizeComfyPayload = useCallback((payload) => {
     const refs = payload?.refsByRole && typeof payload.refsByRole === "object" ? payload.refsByRole : {};
     const refsCounts = Object.fromEntries(
@@ -7539,13 +7645,36 @@ onClipSec: (nodeId, value) => {
                 });
 
                 const comfyStoryTargets = (edgesRef.current || []).filter((e) => e.source === nodeId && e.sourceHandle === 'comfy_plan').map((e) => e.target);
+                const activeStoryboardRequestId = `comfy-parse-${parseId}`;
+
+                console.info("[COMFY STORYBOARD] request start patch", {
+                  nodeId,
+                  parseId,
+                  activeStoryboardRequestId,
+                  comfyStoryTargets,
+                  hasRealActiveRequest: true,
+                });
 
                 setNodes((prev) => prev.map((x) => {
                   if (x.id === nodeId) {
                     return { ...x, data: { ...x.data, parseStatus: 'parsing' } };
                   }
                   if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') {
-                    return { ...x, data: { ...x.data, parseStatus: 'updating' } };
+                    return {
+                      ...x,
+                      data: {
+                        ...x.data,
+                        parseStatus: 'updating',
+                        isUpdating: true,
+                        isGenerating: true,
+                        isBusy: true,
+                        hasActiveRequest: true,
+                        activeRequestId: activeStoryboardRequestId,
+                        activeRequestSourceNodeId: nodeId,
+                        activeRequestStartedAt: startedAt,
+                        isStale: false,
+                      },
+                    };
                   }
                   return x;
                 }));
@@ -7566,18 +7695,33 @@ onClipSec: (nodeId, value) => {
                     console.log(`[COMFY PARSE #${parseId}] response`, summarizeComfyResponse(response));
                   } catch (err) {
                     console.error(`[COMFY PARSE #${parseId}] error`, err);
+                    console.warn("[COMFY STORYBOARD] request failed", {
+                      nodeId,
+                      parseId,
+                      comfyStoryTargets,
+                      hasRealActiveRequest: false,
+                      error: String(err?.message || err || "unknown_error"),
+                    });
                     setNodes((prev) => prev.map((x) => {
                       if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: [String(err?.message || err)], brainWarnings: [] } };
-                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error' } };
+                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error', isUpdating: false, isGenerating: false, isBusy: false, hasActiveRequest: false, activeRequestId: '', activeRequestSourceNodeId: '', activeRequestStartedAt: '' } };
                       return x;
                     }));
                     return;
                   }
 
                   if (!response?.ok) {
+                    console.warn("[COMFY STORYBOARD] request returned non-ok response", {
+                      nodeId,
+                      parseId,
+                      comfyStoryTargets,
+                      hasRealActiveRequest: false,
+                      responseOk: !!response?.ok,
+                      errors: Array.isArray(response?.errors) ? response.errors : [],
+                    });
                     setNodes((prev) => prev.map((x) => {
                       if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: Array.isArray(response?.errors) ? response.errors : ["COMFY parse failed"], brainWarnings: Array.isArray(response?.warnings) ? response.warnings : [] } };
-                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error' } };
+                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error', isUpdating: false, isGenerating: false, isBusy: false, hasActiveRequest: false, activeRequestId: '', activeRequestSourceNodeId: '', activeRequestStartedAt: '' } };
                       return x;
                     }));
                     return;
@@ -7600,6 +7744,13 @@ onClipSec: (nodeId, value) => {
                     scenesLength: scenes.length,
                     comfyStoryTargets,
                     comfyStoryboardTargets,
+                  });
+                  console.info("[COMFY STORYBOARD] request success patch", {
+                    nodeId,
+                    parseId,
+                    comfyStoryboardTargets,
+                    hasRealActiveRequest: false,
+                    scenesLength: scenes.length,
                   });
 
                   setNodes((prev) => {
@@ -7643,6 +7794,14 @@ onClipSec: (nodeId, value) => {
                             debugFields,
                             pipelineFlow: debugFields.pipelineFlow,
                             parseStatus: 'ready',
+                            isUpdating: false,
+                            isGenerating: false,
+                            isBusy: false,
+                            hasActiveRequest: false,
+                            activeRequestId: '',
+                            activeRequestSourceNodeId: '',
+                            activeRequestStartedAt: '',
+                            isStale: false,
                           },
                         };
                       }
@@ -7670,10 +7829,16 @@ onClipSec: (nodeId, value) => {
 
 
         if (n.type === "comfyStoryboard") {
+          const comfyStoryboardPatch = buildComfyStoryboardPatch({
+            node: base,
+            nodesNow: effectiveNodes,
+            edgesNow: effectiveEdges,
+            reason: `bindHandlers:${traceReason}`,
+          });
           return {
             ...base,
             data: {
-              ...base.data,
+              ...comfyStoryboardPatch,
               onOpenComfy: (nodeId) => {
                 try { window.dispatchEvent(new CustomEvent('ps:clipOpenComfyStoryboard', { detail: { nodeId } })); } catch (e) {}
               },
@@ -8019,6 +8184,7 @@ return base;
       removeNode,
       edges,
       assemblyNodeDataPatch,
+      buildComfyStoryboardPatch,
       clearClipStoryboardStorageForCurrentAccount,
       stopScenarioVideoPolling,
       accountKey,
@@ -8201,8 +8367,29 @@ const hydrate = useCallback((source = "unknown") => {
           }
 
           if (n.type === "comfyStoryboard") {
-            data.parseStatus = ["idle", "updating", "ready", "error"].includes(String(data.parseStatus || "")) ? data.parseStatus : "idle";
+            data.parseStatus = ["idle", "updating", "ready", "error", "stale"].includes(String(data.parseStatus || "")) ? data.parseStatus : "idle";
             data.mockScenes = normalizeSceneCollectionWithSceneId(data.mockScenes, "comfy_scene");
+            data.sceneCount = Math.max(data.mockScenes.length, Number(data.sceneCount || 0));
+            if (data.parseStatus === "updating") {
+              const fallbackStatus = data.isStale === true
+                ? "stale"
+                : (data.sceneCount > 0 ? "ready" : "idle");
+              console.warn("[COMFY STORYBOARD] hydrate reset non-active updating status", {
+                nodeId: String(n.id || ""),
+                fallbackStatus,
+                activeRequestId: String(data.activeRequestId || ""),
+                activeRequestSourceNodeId: String(data.activeRequestSourceNodeId || ""),
+                sceneCount: data.sceneCount,
+              });
+              data.parseStatus = fallbackStatus;
+            }
+            data.activeRequestId = "";
+            data.activeRequestSourceNodeId = "";
+            data.activeRequestStartedAt = "";
+            data.hasActiveRequest = false;
+            data.isUpdating = false;
+            data.isGenerating = false;
+            data.isBusy = false;
           }
 
           if (n.type === "storyboardNode") {
