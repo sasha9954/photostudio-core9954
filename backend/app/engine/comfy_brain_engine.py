@@ -22,10 +22,12 @@ from app.engine.gemini_rest import post_generate_content
 logger = logging.getLogger(__name__)
 
 
-FALLBACK_GEMINI_MODEL = "gemini-2.5-flash"
+PRIMARY_GEMINI_PLANNER_MODEL = "gemini-3.1-pro-preview"
+FALLBACK_GEMINI_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-3-flash-preview").strip() or "gemini-3-flash-preview"
 GEMINI_ONLY_PLANNER_MODEL_FALLBACKS = [
     FALLBACK_GEMINI_MODEL,
     "gemini-2.5-pro",
+    "gemini-2.5-flash",
 ]
 PROMPT_SYNC_STATUS_SYNCED = "synced"
 PROMPT_SYNC_STATUS_NEEDS_SYNC = "needs_sync"
@@ -53,7 +55,10 @@ Hard constraints:
 - Never invent new characters, entities, or role names.
 - Never rename roles.
 - Genre controls every scene consistently.
+- Genre must materially shape sceneMeaning, visualIdea, newThreatOrChange, image prompts, and video prompts — not just metadata labels.
 - Audio drives pacing, scene progression, escalation, and beat timing when audio is primary.
+- For clip/gemini_only planning, sceneCountTarget is only a soft hint. You may return fewer or more scenes if the audio structure, escalation, or semantic phrasing requires it.
+- Optional analyzer cues may help timing, but they are never the source of truth for final scene boundaries.
 - Anti-stagnation is required: scenes must progress and avoid static repetition.
 - Escalation is required across the sequence unless the request explicitly calls for flat stillness.
 - If a transformed character remains physically present in a scene, that active character must remain in activeRoles.
@@ -67,6 +72,31 @@ Output contract:
 - Include: genre, sceneCount, scenes.
 - Each scene should stay compact, concrete, and production-usable.
 - No literary prose, no markdown, no explanations outside JSON."""
+
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+_GENRE_SCENE_DIRECTIVES: dict[str, dict[str, str]] = {
+    "horror": {
+        "en": "Play true horror: escalating dread, hostile negative space, predatory threat, corrupted realism, and imminent danger.",
+        "ru": "Играй в полноценный хоррор: нарастающий ужас, враждебная пустота кадра, хищная угроза, искажённый реализм и ощущение неминуемой опасности.",
+    },
+    "thriller": {
+        "en": "Play tense thriller: surveillance pressure, unstable control, sharp suspicion, tactical danger, and irreversible turns.",
+        "ru": "Играй в напряжённый триллер: давление наблюдения, потеря контроля, острая подозрительность, тактическая опасность и необратимые повороты.",
+    },
+    "romance": {
+        "en": "Play sincere romance: magnetic intimacy, vulnerable connection, longing glances, emotional reciprocity, and tender tension.",
+        "ru": "Играй в искреннюю романтику: притяжение, уязвимую близость, взгляды с тоской, эмоциональную взаимность и нежное напряжение.",
+    },
+    "melancholy": {
+        "en": "Play melancholy: aching stillness, fragile memory, emotional distance, fading warmth, and bittersweet aftertaste.",
+        "ru": "Играй в меланхолию: ноющую тишину, хрупкую память, эмоциональную дистанцию, уходящее тепло и горько-сладкое послевкусие.",
+    },
+    "dreamy": {
+        "en": "Play dreamy mood: floating transitions, soft unreality, hypnotic wonder, suspended time, and luminous ambiguity.",
+        "ru": "Играй в dreamlike-настроение: парящие переходы, мягкую нереальность, гипнотическое изумление, подвешенное время и светящуюся неоднозначность.",
+    },
+}
 
 
 def _to_float(value: Any) -> float | None:
@@ -203,6 +233,106 @@ def _normalize_genre(value: Any) -> str:
     return raw if raw.lower() in COMFY_GENRES else ""
 
 
+def _has_semantic_audio_hints(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(str(item or "").strip() for item in value)
+    if isinstance(value, dict):
+        return any(str(item or "").strip() for item in value.values())
+    return False
+
+
+def _resolve_clip_gemini_audio_story_mode(payload: dict[str, Any], requested_mode: str) -> tuple[str, str]:
+    mode = str(payload.get("mode") or "clip").strip().lower()
+    planner_mode = str(payload.get("plannerMode") or "legacy").strip().lower()
+    normalized_requested = str(requested_mode or "lyrics_music").strip().lower() or "lyrics_music"
+    if mode != "clip" or planner_mode != "gemini_only" or normalized_requested != "speech_narrative":
+        return normalized_requested, ""
+
+    transcript_text = str(payload.get("transcriptText") or "").strip()
+    spoken_text_hint = str(payload.get("spokenTextHint") or "").strip()
+    audio_semantic_summary = str(payload.get("audioSemanticSummary") or "").strip()
+    audio_semantic_hints = payload.get("audioSemanticHints")
+    lyrics_text = str(payload.get("lyricsText") or "").strip()
+    has_speech_semantic_support = any(
+        [
+            transcript_text,
+            spoken_text_hint,
+            audio_semantic_summary,
+            _has_semantic_audio_hints(audio_semantic_hints),
+        ]
+    )
+    if has_speech_semantic_support:
+        return normalized_requested, ""
+
+    fallback_mode = "lyrics_music" if lyrics_text else "music_only"
+    return fallback_mode, f"speech_narrative_disabled_without_semantic_support:{fallback_mode}"
+
+
+def _classify_prompt_language(text: Any) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return "missing"
+    has_cyrillic = bool(_CYRILLIC_RE.search(value))
+    has_latin = bool(_LATIN_RE.search(value))
+    if has_cyrillic and not has_latin:
+        return "ru"
+    if has_latin and not has_cyrillic:
+        return "en"
+    if has_cyrillic and has_latin:
+        return "mixed"
+    return "unknown"
+
+
+def _normalize_prompt_language_fields(*, ru_value: Any = "", en_value: Any = "", generic_value: Any = "") -> tuple[str, str]:
+    ru_text = str(ru_value or "").strip()
+    en_text = str(en_value or "").strip()
+    generic_text = str(generic_value or "").strip()
+
+    if ru_text and _classify_prompt_language(ru_text) == "en" and not en_text:
+        en_text, ru_text = ru_text, ""
+    if en_text and _classify_prompt_language(en_text) == "ru" and not ru_text:
+        ru_text, en_text = en_text, ""
+
+    generic_lang = _classify_prompt_language(generic_text)
+    if generic_text:
+        if generic_lang == "ru":
+            if not ru_text:
+                ru_text = generic_text
+        elif generic_lang == "en":
+            if not en_text:
+                en_text = generic_text
+        elif not en_text:
+            en_text = generic_text
+
+    return ru_text, en_text
+
+
+def _genre_scene_directive(genre: Any, language: str = "en") -> str:
+    genre_key = str(genre or "").strip().lower()
+    payload = _GENRE_SCENE_DIRECTIVES.get(genre_key) or {}
+    return str(payload.get(language) or payload.get("en") or "").strip()
+
+
+def _ensure_genre_pressure(text: Any, genre: Any, *, language: str = "en") -> str:
+    clean = str(text or "").strip()
+    directive = _genre_scene_directive(genre, language=language)
+    if not clean or not directive:
+        return clean
+    if directive.lower() in clean.lower():
+        return clean
+    separator = " " if clean.endswith((".", "!", "?")) else ". "
+    return f"{clean}{separator}{directive}"
+
+
+def _is_gemini_first_clip_mode(payload: dict[str, Any]) -> bool:
+    return (
+        str(payload.get("mode") or "clip").strip().lower() == "clip"
+        and str(payload.get("plannerMode") or "legacy").strip().lower() == "gemini_only"
+    )
+
+
 def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
     mode = str(data.get("mode") or "clip").strip().lower()
@@ -215,15 +345,18 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     if output not in {"comfy image", "comfy text"}:
         output = "comfy image"
 
-    audio_story_mode = str(data.get("audioStoryMode") or "lyrics_music").strip().lower()
-    if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}:
-        audio_story_mode = "lyrics_music"
+    requested_audio_story_mode = str(data.get("audioStoryMode") or "lyrics_music").strip().lower()
+    if requested_audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}:
+        requested_audio_story_mode = "lyrics_music"
+    audio_story_mode, audio_story_mode_guard_reason = _resolve_clip_gemini_audio_story_mode(data, requested_audio_story_mode)
 
     return {
         "mode": mode,
         "plannerMode": planner_mode,
         "output": output,
         "audioStoryMode": audio_story_mode,
+        "audioStoryModeRequested": requested_audio_story_mode,
+        "audioStoryModeGuardReason": audio_story_mode_guard_reason,
         "stylePreset": str(data.get("stylePreset") or "realism").strip().lower(),
         "genre": _normalize_genre(data.get("genre")),
         "freezeStyle": bool(data.get("freezeStyle")),
@@ -570,24 +703,64 @@ def _has_refs(refs_by_role: dict[str, Any] | None) -> bool:
     return any(isinstance(items, list) and len(items) > 0 for items in refs.values())
 
 
+def _build_optional_audio_cues(normalized: dict[str, Any]) -> dict[str, Any]:
+    audio_url = str(normalized.get("audioUrl") or "").strip()
+    if not audio_url:
+        return {}
+    analysis, _analysis_debug = _load_audio_analysis(audio_url, _to_float(normalized.get("audioDurationSec")))
+    if not isinstance(analysis, dict):
+        return {}
+
+    def _sample_marks(items: Any, keys: tuple[str, ...], limit: int = 6) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        if not isinstance(items, list):
+            return out
+        for item in items[:limit]:
+            if not isinstance(item, dict):
+                continue
+            compact: dict[str, Any] = {}
+            for key in keys:
+                value = item.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, (int, float)):
+                    compact[key] = _round_sec(_to_float(value))
+                else:
+                    text = str(value).strip()
+                    if text:
+                        compact[key] = text
+            if compact:
+                out.append(compact)
+        return out
+
+    cues = {
+        "helperOnly": True,
+        "helperRule": "Use these as optional timing or energy cues only. They must never override your own scene-boundary decision.",
+        "beatsSample": _sample_marks(analysis.get("beats"), ("time",)),
+        "downbeatsSample": _sample_marks(analysis.get("downbeats"), ("time",)),
+        "barsSample": _sample_marks(analysis.get("bars"), ("time", "index")),
+        "vocalPhrasesSample": _sample_marks(analysis.get("vocalPhrases"), ("start", "end", "text")),
+        "sectionHints": _sample_marks(analysis.get("sections"), ("start", "end", "label", "energy")),
+        "energyHints": _sample_marks(analysis.get("energyHints"), ("start", "end", "label", "energy")),
+        "pauseHints": _sample_marks(analysis.get("pauseHints"), ("start", "end", "label")),
+    }
+    return {key: value for key, value in cues.items() if value not in ("", None, [], {})}
+
+
 def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]:
     has_audio = bool(str(payload.get("audioUrl") or "").strip())
     text_value = str(payload.get("text") or "").strip()
     has_text = bool(text_value)
     has_refs = _has_refs(payload.get("refsByRole"))
     audio_story_mode = str(payload.get("audioStoryMode") or "lyrics_music").strip().lower() or "lyrics_music"
+    requested_audio_story_mode = str(payload.get("audioStoryModeRequested") or audio_story_mode).strip().lower() or audio_story_mode
     transcript_text = str(payload.get("transcriptText") or "").strip()
     spoken_text_hint = str(payload.get("spokenTextHint") or "").strip()
     audio_semantic_summary = str(payload.get("audioSemanticSummary") or "").strip()
     lyrics_text = str(payload.get("lyricsText") or "").strip()
     audio_semantic_hints = payload.get("audioSemanticHints")
     has_audio_semantic_hints = False
-    if isinstance(audio_semantic_hints, list):
-        has_audio_semantic_hints = any(str(item or "").strip() for item in audio_semantic_hints)
-    elif isinstance(audio_semantic_hints, dict):
-        has_audio_semantic_hints = any(str(item or "").strip() for item in audio_semantic_hints.values())
-    elif isinstance(audio_semantic_hints, str):
-        has_audio_semantic_hints = bool(audio_semantic_hints.strip())
+    has_audio_semantic_hints = _has_semantic_audio_hints(audio_semantic_hints)
 
     story_source = "none"
     narrative_source = "none"
@@ -598,6 +771,7 @@ def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]
     errors: list[str] = []
     weak_semantic_context = False
     semantic_context_reason = ""
+    guard_reason = str(payload.get("audioStoryModeGuardReason") or "").strip()
 
     if has_audio:
         story_source = "audio"
@@ -611,6 +785,8 @@ def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]
             if weak_semantic_context:
                 semantic_context_reason = "audio present but no transcript/hints/text support"
                 warnings.append("weak_semantic_context:audio present but no transcript/hints/text support")
+        elif requested_audio_story_mode == "speech_narrative" and guard_reason:
+            warnings.append(guard_reason)
         elif not timeline_source:
             timeline_source = "audio rhythm"
         if not story_mission_summary:
@@ -645,6 +821,8 @@ def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]
         "genre": genre,
         "weakSemanticContext": weak_semantic_context,
         "semanticContextReason": semantic_context_reason,
+        "audioStoryModeRequested": requested_audio_story_mode,
+        "audioStoryModeGuardReason": guard_reason,
         "warnings": warnings,
         "errors": errors,
         "hasAudio": has_audio,
@@ -661,11 +839,21 @@ def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]
 def _estimate_scene_count_target(normalized: dict[str, Any]) -> int:
     candidates = normalized.get("sceneCandidates") if isinstance(normalized.get("sceneCandidates"), list) else []
     candidate_count = len([item for item in candidates if isinstance(item, dict)])
-    if candidate_count > 0:
+    if candidate_count > 0 and not _is_gemini_first_clip_mode(normalized):
         return max(1, candidate_count)
 
     duration = _to_float(normalized.get("audioDurationSec"))
     if duration is not None and duration > 0:
+        if _is_gemini_first_clip_mode(normalized):
+            if duration <= 8:
+                return 3
+            if duration <= 15:
+                return 4
+            if duration <= 25:
+                return 6
+            if duration <= 40:
+                return max(7, int(round(duration / 4.5)))
+            return min(14, max(8, int(round(duration / 4.2))))
         if duration <= 8:
             return 2
         if duration <= 15:
@@ -795,6 +983,10 @@ def build_gemini_planner_input(
         "mode": normalized.get("mode") or "clip",
         "genre": normalized.get("genre") or "",
         "sceneCountTarget": _estimate_scene_count_target(normalized),
+        "sceneCountGuidance": {
+            "type": "soft_hint_only",
+            "rule": "Use sceneCountTarget as a flexible planning hint. Final scene count must follow natural semantic/audio structure instead of equal buckets.",
+        },
         "audioContext": {
             "durationSec": _to_float(normalized.get("audioDurationSec")),
             "moodSummary": str(normalized.get("audioSemanticSummary") or story.get("storyMissionSummary") or "").strip(),
@@ -813,6 +1005,8 @@ def build_gemini_planner_input(
         "compactWorldLock": _compact_world_lock(world_lock or {}),
         "compactEntityLocksSummary": _compact_entity_locks_summary(entity_locks or {}),
         "compactStoryContext": _compact_story_context(story, normalized),
+        "genreDirective": _genre_scene_directive(normalized.get("genre"), language="en"),
+        "optionalAudioCues": _build_optional_audio_cues(normalized),
     }
 
 
@@ -822,6 +1016,7 @@ def build_gemini_planner_request_text(planner_input: dict[str, Any]) -> str:
         "Return one JSON object matching the planner contract.\n"
         "Required top-level fields: genre, sceneCount, scenes.\n"
         "Required per-scene fields: sceneId, startSec, endSec, durationSec, tensionLevel, activeRoles, focalRole, continuityRule, visualIdea.\n"
+        "sceneCountTarget is a soft hint only. Final scene count and boundaries must follow the natural audio/semantic structure.\n"
         "propFunction is required only when props are active.\n"
         f"{json.dumps(planner_input, ensure_ascii=False, indent=2)}"
     )
@@ -1772,6 +1967,7 @@ def normalize_gemini_planner_response(parsed: dict[str, Any], request_input: dic
     raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
     available_refs = request_input.get("refsByRole") if isinstance(request_input.get("refsByRole"), dict) else {}
     available_roles = {role for role, items in available_refs.items() if isinstance(items, list) and items}
+    requested_genre = str(parsed.get("genre") or request_input.get("genre") or "").strip()
     estimated_scene_count = max(int(_to_float(request_input.get("sceneCountTarget")) or 0), len(raw_scenes), 1)
     fallback_duration = _to_float(request_input.get("audioContext", {}).get("durationSec")) if isinstance(request_input.get("audioContext"), dict) else None
     if fallback_duration is not None and estimated_scene_count > 0:
@@ -1835,11 +2031,12 @@ def normalize_gemini_planner_response(parsed: dict[str, Any], request_input: dic
             normalization_applied = True
             normalization_warnings.append(f"{scene_id}:prop_function_fallback_for_active_props")
 
-        image_prompt = str(raw_scene.get("imagePrompt") or raw_scene.get("visualIdea") or "").strip()
-        video_prompt = str(raw_scene.get("videoPrompt") or image_prompt or "").strip()
+        image_prompt = _ensure_genre_pressure(str(raw_scene.get("imagePrompt") or raw_scene.get("visualIdea") or "").strip(), requested_genre, language="en")
+        video_prompt = _ensure_genre_pressure(str(raw_scene.get("videoPrompt") or image_prompt or "").strip(), requested_genre, language="en")
         scene_action = str(raw_scene.get("sceneAction") or raw_scene.get("newThreatOrChange") or raw_scene.get("sceneMeaning") or "").strip()
-        scene_meaning = str(raw_scene.get("sceneMeaning") or raw_scene.get("newThreatOrChange") or raw_scene.get("visualIdea") or "").strip()
-        visual_idea = str(raw_scene.get("visualIdea") or raw_scene.get("imagePrompt") or "").strip()
+        scene_meaning = _ensure_genre_pressure(str(raw_scene.get("sceneMeaning") or raw_scene.get("newThreatOrChange") or raw_scene.get("visualIdea") or "").strip(), requested_genre, language="en")
+        visual_idea = _ensure_genre_pressure(str(raw_scene.get("visualIdea") or raw_scene.get("imagePrompt") or "").strip(), requested_genre, language="en")
+        new_threat_or_change = _ensure_genre_pressure(str(raw_scene.get("newThreatOrChange") or scene_action or scene_meaning or "").strip(), requested_genre, language="en")
         continuity_rule = str(raw_scene.get("continuityRule") or "Preserve continuity from prior scene and locked world.").strip()
         start_sec = _to_float(raw_scene.get("startSec"))
         end_sec = _to_float(raw_scene.get("endSec"))
@@ -1883,11 +2080,12 @@ def normalize_gemini_planner_response(parsed: dict[str, Any], request_input: dic
                 "sceneMeaning": scene_meaning,
                 "visualDescription": visual_idea,
                 "visualIdea": visual_idea,
-                "newThreatOrChange": str(raw_scene.get("newThreatOrChange") or "").strip(),
+                "newThreatOrChange": new_threat_or_change,
                 "continuity": continuity_rule,
                 "continuityRule": continuity_rule,
                 "imagePrompt": image_prompt,
                 "videoPrompt": video_prompt,
+                "genre": requested_genre,
                 "sceneAction": scene_action,
                 "cameraPlan": str(raw_scene.get("cameraPlan") or "").strip(),
                 "environmentMotion": str(raw_scene.get("environmentMotion") or "").strip(),
@@ -1916,7 +2114,7 @@ def normalize_gemini_planner_response(parsed: dict[str, Any], request_input: dic
         normalization_warnings.append(f"scene_count_corrected:{declared_scene_count}->{actual_scene_count}")
 
     return {
-        "genre": str(parsed.get("genre") or request_input.get("genre") or "").strip(),
+        "genre": requested_genre,
         "sceneCount": actual_scene_count,
         "scenes": normalized_scenes,
         "warnings": list(dict.fromkeys(normalization_warnings)),
@@ -1978,10 +2176,21 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
     ]
     must_not_appear = list(dict.fromkeys(must_not_appear))
 
-    image_prompt_ru = str(src.get("imagePromptRu") or src.get("imagePrompt") or "").strip()
-    image_prompt_en = str(src.get("imagePromptEn") or "").strip()
-    video_prompt_ru = str(src.get("videoPromptRu") or src.get("videoPrompt") or "").strip()
-    video_prompt_en = str(src.get("videoPromptEn") or "").strip()
+    image_prompt_ru, image_prompt_en = _normalize_prompt_language_fields(
+        ru_value=src.get("imagePromptRu"),
+        en_value=src.get("imagePromptEn"),
+        generic_value=src.get("imagePrompt"),
+    )
+    video_prompt_ru, video_prompt_en = _normalize_prompt_language_fields(
+        ru_value=src.get("videoPromptRu"),
+        en_value=src.get("videoPromptEn"),
+        generic_value=src.get("videoPrompt"),
+    )
+    scene_genre = str(src.get("genre") or "").strip()
+    image_prompt_ru = _ensure_genre_pressure(image_prompt_ru, scene_genre, language="ru")
+    image_prompt_en = _ensure_genre_pressure(image_prompt_en, scene_genre, language="en")
+    video_prompt_ru = _ensure_genre_pressure(video_prompt_ru, scene_genre, language="ru")
+    video_prompt_en = _ensure_genre_pressure(video_prompt_en, scene_genre, language="en")
     active_refs = src.get("activeRefs") if isinstance(src.get("activeRefs"), list) else refs_used
     active_refs = [str(role).strip() for role in active_refs if str(role).strip() in COMFY_REF_ROLES]
     if not active_refs:
@@ -2088,8 +2297,8 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "endSec": end_n,
         "durationSec": duration_n,
         "sceneText": str(src.get("sceneText") or ""),
-        "sceneMeaning": str(src.get("sceneMeaning") or ""),
-        "visualDescription": str(src.get("visualDescription") or ""),
+        "sceneMeaning": _ensure_genre_pressure(str(src.get("sceneMeaning") or ""), scene_genre, language="en"),
+        "visualDescription": _ensure_genre_pressure(str(src.get("visualDescription") or ""), scene_genre, language="en"),
         "cameraPlan": camera_plan,
         "cameraType": camera_type,
         "cameraMovement": camera_movement,
@@ -2376,6 +2585,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "narrativeSource": story_context.get("narrativeSource"),
                 "weakSemanticContext": story_context.get("weakSemanticContext"),
                 "semanticContextReason": story_context.get("semanticContextReason"),
+                "audioStoryModeRequested": story_context.get("audioStoryModeRequested"),
+                "audioStoryModeGuardReason": story_context.get("audioStoryModeGuardReason"),
                 "hasAudio": story_context.get("hasAudio"),
                 "hasText": story_context.get("hasText"),
                 "hasRefs": story_context.get("hasRefs"),
@@ -2412,7 +2623,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "errors": story_context.get("errors") or [],
             "debug": {
                 "plannerMode": "gemini_only",
-                "requestedModel": (settings.GEMINI_TEXT_MODEL or FALLBACK_GEMINI_MODEL or "gemini-2.5-flash").strip(),
+                "requestedModel": (settings.GEMINI_TEXT_MODEL or PRIMARY_GEMINI_PLANNER_MODEL or FALLBACK_GEMINI_MODEL).strip(),
                 "fallbackFrom": None,
                 "fallbackTo": None,
                 "effectiveModel": None,
@@ -2422,6 +2633,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "narrativeSource": story_context.get("narrativeSource"),
                 "weakSemanticContext": story_context.get("weakSemanticContext"),
                 "semanticContextReason": story_context.get("semanticContextReason"),
+                "audioStoryModeRequested": story_context.get("audioStoryModeRequested"),
+                "audioStoryModeGuardReason": story_context.get("audioStoryModeGuardReason"),
                 "hasAudio": story_context.get("hasAudio"),
                 "hasText": story_context.get("hasText"),
                 "hasRefs": story_context.get("hasRefs"),
@@ -2433,7 +2646,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             },
         }
 
-    requested_model = (settings.GEMINI_TEXT_MODEL or FALLBACK_GEMINI_MODEL or "gemini-2.5-flash").strip()
+    requested_model = (settings.GEMINI_TEXT_MODEL or PRIMARY_GEMINI_PLANNER_MODEL or FALLBACK_GEMINI_MODEL).strip()
     body = {
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3},
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT_CLIP_PLANNER}]},
@@ -2507,6 +2720,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "output": normalized.get("output"),
         "stylePreset": normalized.get("stylePreset"),
         "audioStoryMode": normalized.get("audioStoryMode"),
+        "audioStoryModeRequested": normalized.get("audioStoryModeRequested"),
+        "audioStoryModeGuardReason": normalized.get("audioStoryModeGuardReason"),
         "genre": normalized_response.get("genre") or normalized.get("genre"),
         "storyControlMode": normalized.get("storyControlMode"),
         "storyMissionSummary": normalized.get("storyMissionSummary"),
@@ -2555,6 +2770,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "narrativeSource": story_context.get("narrativeSource"),
             "weakSemanticContext": bool(story_context.get("weakSemanticContext")),
             "semanticContextReason": story_context.get("semanticContextReason") or "",
+            "audioStoryModeRequested": story_context.get("audioStoryModeRequested"),
+            "audioStoryModeGuardReason": story_context.get("audioStoryModeGuardReason"),
             "hasAudio": story_context.get("hasAudio"),
             "hasText": story_context.get("hasText"),
             "hasRefs": story_context.get("hasRefs"),

@@ -137,6 +137,68 @@ export const PROMPT_SYNC_STATUS = {
   syncError: "sync_error",
 };
 
+const CYRILLIC_RE = /[А-Яа-яЁё]/;
+const LATIN_RE = /[A-Za-z]/;
+
+function classifyPromptLanguage(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return "missing";
+  const hasCyrillic = CYRILLIC_RE.test(text);
+  const hasLatin = LATIN_RE.test(text);
+  if (hasCyrillic && !hasLatin) return "ru";
+  if (hasLatin && !hasCyrillic) return "en";
+  if (hasCyrillic && hasLatin) return "mixed";
+  return "unknown";
+}
+
+function normalizePromptLanguageFields({ ru = "", en = "", generic = "" } = {}) {
+  let ruText = String(ru || "").trim();
+  let enText = String(en || "").trim();
+  const genericText = String(generic || "").trim();
+
+  if (ruText && classifyPromptLanguage(ruText) === "en" && !enText) {
+    enText = ruText;
+    ruText = "";
+  }
+  if (enText && classifyPromptLanguage(enText) === "ru" && !ruText) {
+    ruText = enText;
+    enText = "";
+  }
+
+  if (genericText) {
+    const genericLang = classifyPromptLanguage(genericText);
+    if (genericLang === "ru") {
+      if (!ruText) ruText = genericText;
+    } else if (genericLang === "en") {
+      if (!enText) enText = genericText;
+    } else if (!enText) {
+      enText = genericText;
+    }
+  }
+
+  return { ruText, enText };
+}
+
+function resolveEffectiveClipAudioStoryMode({ mode = "clip", plannerMode = "legacy", requestedMode = "lyrics_music", lyricsText = "", transcriptText = "", spokenTextHint = "", audioSemanticSummary = "", audioSemanticHints = "" } = {}) {
+  const normalizedRequested = normalizeAudioStoryMode(requestedMode);
+  if (String(mode || "clip").toLowerCase() !== "clip" || String(plannerMode || "legacy").toLowerCase() !== "gemini_only" || normalizedRequested !== "speech_narrative") {
+    return { audioStoryMode: normalizedRequested, requestedAudioStoryMode: normalizedRequested, guardReason: "" };
+  }
+  const hasSpeechSemanticSupport = !!String(transcriptText || "").trim()
+    || !!String(spokenTextHint || "").trim()
+    || !!String(audioSemanticSummary || "").trim()
+    || hasSemanticHints(audioSemanticHints);
+  if (hasSpeechSemanticSupport) {
+    return { audioStoryMode: normalizedRequested, requestedAudioStoryMode: normalizedRequested, guardReason: "" };
+  }
+  const fallbackMode = String(lyricsText || "").trim() ? "lyrics_music" : "music_only";
+  return {
+    audioStoryMode: fallbackMode,
+    requestedAudioStoryMode: normalizedRequested,
+    guardReason: `speech_narrative_disabled_without_semantic_support:${fallbackMode}`,
+  };
+}
+
 function computePromptSync({ ru = "", en = "" } = {}) {
   const ruText = String(ru || "").trim();
   const enText = String(en || "").trim();
@@ -145,10 +207,16 @@ function computePromptSync({ ru = "", en = "" } = {}) {
 }
 
 export function normalizeComfyScenePrompts(scene = {}) {
-  const imagePromptRu = String(scene?.imagePromptRu || "").trim();
-  const imagePromptEn = String(scene?.imagePromptEn || scene?.imagePrompt || "").trim();
-  const videoPromptRu = String(scene?.videoPromptRu || "").trim();
-  const videoPromptEn = String(scene?.videoPromptEn || scene?.videoPrompt || "").trim();
+  const { ruText: imagePromptRu, enText: imagePromptEn } = normalizePromptLanguageFields({
+    ru: scene?.imagePromptRu,
+    en: scene?.imagePromptEn,
+    generic: scene?.imagePrompt,
+  });
+  const { ruText: videoPromptRu, enText: videoPromptEn } = normalizePromptLanguageFields({
+    ru: scene?.videoPromptRu,
+    en: scene?.videoPromptEn,
+    generic: scene?.videoPrompt,
+  });
   const sceneGoal = String(scene?.sceneGoal || "").trim();
   const sceneText = String(scene?.sceneText || "").trim();
   const sceneMeaning = String(scene?.sceneMeaning || "").trim();
@@ -764,7 +832,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const modeValue = String(nodeData?.mode || "clip").toLowerCase();
   const plannerMode = String(nodeData?.plannerMode || "legacy").trim().toLowerCase() === "gemini_only" ? "gemini_only" : "legacy";
   const outputValue = normalizeRenderProfile(nodeData?.output || "comfy image");
-  const audioStoryMode = normalizeAudioStoryMode(nodeData?.audioStoryMode || "lyrics_music");
+  const requestedAudioStoryMode = normalizeAudioStoryMode(nodeData?.audioStoryMode || "lyrics_music");
   const stylePreset = String(nodeData?.styleKey || "realism").toLowerCase();
   const freezeStyle = !!nodeData?.freezeStyle;
   const meaningfulAudio = audioNode?.type === "audioNode" ? String(audioNode?.data?.audioUrl || "").trim() : "";
@@ -779,8 +847,19 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const hasAudio = !!meaningfulAudio;
   const hasText = !!meaningfulText;
   const hasRefs = Object.values(refsByRole || {}).some((items) => Array.isArray(items) && items.length > 0);
+  const audioStoryModeResolution = resolveEffectiveClipAudioStoryMode({
+    mode: modeValue,
+    plannerMode,
+    requestedMode: requestedAudioStoryMode,
+    lyricsText,
+    transcriptText,
+    spokenTextHint,
+    audioSemanticSummary,
+    audioSemanticHints,
+  });
+  const audioStoryMode = audioStoryModeResolution.audioStoryMode;
   const semanticSupportPresent = !!transcriptText || !!spokenTextHint || !!audioSemanticSummary || !!meaningfulText || hasSemanticHints(audioSemanticHints);
-  const weakSemanticContext = audioStoryMode === "speech_narrative" && hasAudio && !semanticSupportPresent;
+  const weakSemanticContext = requestedAudioStoryMode === "speech_narrative" && audioStoryMode === "speech_narrative" && hasAudio && !semanticSupportPresent;
   const semanticContextReason = weakSemanticContext ? "audio present but no transcript/hints/text support" : "";
   const storyControlMode = hasAudio
     ? "audio_primary"
@@ -826,6 +905,8 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     plannerMode,
     outputValue,
     audioStoryMode,
+    requestedAudioStoryMode,
+    audioStoryModeGuardReason: audioStoryModeResolution.guardReason,
     genreValue: normalizeComfyGenre(nodeData?.genre || ""),
     stylePreset,
     freezeStyle,
