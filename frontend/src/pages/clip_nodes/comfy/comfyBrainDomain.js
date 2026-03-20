@@ -267,6 +267,10 @@ export function normalizeComfyScenePrompts(scene = {}) {
   const enPromptPresent = (scene?.enPromptPresent && typeof scene.enPromptPresent === "object")
     ? scene.enPromptPresent
     : { image: Boolean(imagePromptEn), video: Boolean(videoPromptEn) };
+  const imagePromptEditorValue = String(scene?.imagePromptEditorValue || imagePromptRu || imagePromptEn || "").trim();
+  const videoPromptEditorValue = String(scene?.videoPromptEditorValue || videoPromptRu || videoPromptEn || "").trim();
+  const imagePromptEditorLang = String(scene?.imagePromptEditorLang || (imagePromptRu ? "ru" : (imagePromptEn ? "en_fallback" : "missing"))).trim();
+  const videoPromptEditorLang = String(scene?.videoPromptEditorLang || (videoPromptRu ? "ru" : (videoPromptEn ? "en_fallback" : "missing"))).trim();
   return {
     ...scene,
     imagePromptRu,
@@ -294,6 +298,10 @@ export function normalizeComfyScenePrompts(scene = {}) {
     promptLanguageStatus,
     ruPromptMissing,
     enPromptPresent,
+    imagePromptEditorValue,
+    videoPromptEditorValue,
+    imagePromptEditorLang,
+    videoPromptEditorLang,
     refsUsed,
     activeRefs,
     refUsageReason: String(scene?.refUsageReason || "").trim(),

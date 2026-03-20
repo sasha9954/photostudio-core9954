@@ -2143,6 +2143,14 @@ body.ps_clip_fullscreen .mainCol {
   justify-content: center;
 }
 
+.clipSB_promptFallbackNote {
+  color: #ffd37a;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 211, 122, 0.09);
+  box-shadow: inset 0 0 0 1px rgba(255, 211, 122, 0.26);
+}
+
 @media (max-width: 960px) {
   .clipSB_introFrameGrid {
     grid-template-columns: 1fr;

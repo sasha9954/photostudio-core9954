@@ -362,6 +362,50 @@ def _split_text_beats(text: str, desired_count: int) -> list[str]:
     return built[:max(1, desired_count)]
 
 
+def _tension_genre_weight(genre: str) -> int:
+    normalized = str(genre or "").strip().lower()
+    if normalized in {"horror", "thriller", "noir", "action"}:
+        return 1
+    return 0
+
+
+def _emotional_escalation_present(text: str) -> bool:
+    escalation_tokens = [
+        "fear", "terror", "panic", "threat", "danger", "pursuit", "chase", "reveal", "shock", "scream", "breath",
+        "heartbeat", "escalat", "tense", "tension", "threatens", "hunt", "haunt", "run", "freeze",
+        "страх", "ужас", "паник", "угроз", "опасн", "погон", "преслед", "раскры", "шок", "крик", "дыхани",
+        "сердцеби", "напряж", "эскала", "беж", "замер", "дрож", "тень", "саспенс",
+    ]
+    return _contains_any_token(text, escalation_tokens)
+
+
+def _estimate_clip_scene_target(
+    *,
+    duration: float,
+    base_count: int,
+    refs_by_role: dict[str, list[dict[str, str]]],
+    genre: str,
+    meaning_text: str,
+    analysis: dict[str, Any],
+) -> int:
+    target = max(1, base_count)
+    cast_count = sum(1 for role in CAST_ROLES if refs_by_role.get(role))
+    if 20.0 <= duration <= 40.0:
+        target += 1
+    if _tension_genre_weight(genre):
+        target += 1
+    if cast_count >= 2:
+        target += 1
+    if _emotional_escalation_present(meaning_text):
+        target += 1
+    phrase_count = len(analysis.get("phraseBoundaries") or [])
+    pause_count = len(analysis.get("pausePoints") or [])
+    if phrase_count + pause_count >= max(4, base_count):
+        target += 1
+    density_cap = max(base_count, min(12, int(round(duration / 2.8))))
+    return max(base_count, min(density_cap, target))
+
+
 def _contains_any_token(text: str, tokens: list[str]) -> bool:
     clean = _compact_text(text).lower()
     if not clean:
@@ -818,13 +862,20 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
 
     provisional_boundaries = _extract_boundaries(duration, analysis)
     provisional_scene_count = max(1, len(provisional_boundaries) - 1)
-    text_beats = _split_text_beats(text, provisional_scene_count)
+    target_scene_count = _estimate_clip_scene_target(
+        duration=duration,
+        base_count=provisional_scene_count,
+        refs_by_role=refs_by_role,
+        genre=str(payload.get("genre") or "").strip(),
+        meaning_text=combined_meaning_text or text or semantic_hint,
+        analysis=analysis,
+    )
+    boundaries = _select_speech_boundaries(duration, analysis, target_scene_count) if target_scene_count > provisional_scene_count else provisional_boundaries
+    text_beats = _split_text_beats(text, max(1, len(boundaries) - 1))
     if spoken_meaning_primary:
-        desired_scene_count = max(1, len(text_beats) or len(_split_text_beats(speech_text or semantic_hint, provisional_scene_count)) or provisional_scene_count)
+        desired_scene_count = max(1, len(text_beats) or len(_split_text_beats(speech_text or semantic_hint, target_scene_count)) or target_scene_count)
         boundaries = _select_speech_boundaries(duration, analysis, desired_scene_count)
         text_beats = _split_text_beats(text, max(1, len(boundaries) - 1))
-    else:
-        boundaries = provisional_boundaries
     exact_lyrics_available = bool(preprocess.get("exactLyricsAvailable"))
     transcript_available = bool(normalized_transcript)
     semantic_hint_count = len(preprocess.get("audioSemanticHints") or []) if isinstance(preprocess.get("audioSemanticHints"), list) else 0
