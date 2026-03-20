@@ -7557,14 +7557,14 @@ onClipSec: (nodeId, value) => {
             const erroredRefRoles = Object.entries(refConnectionStates)
               .filter(([, meta]) => meta?.connected && String(meta?.status || '') === 'error')
               .map(([role, meta]) => `${role} — ${String(meta?.error || 'ошибка анализа')}`);
-            if (derived.narrativeSource === 'none') critical.push('Недостаточно входных данных');
+            if (derived.narrativeSource === 'none') critical.push('Нет narrative source: подключите audio или text.');
             if (pendingRefRoles.length) warnings.push(`Есть незавершённые рефы: ${pendingRefRoles.join('; ')}`);
             if (erroredRefRoles.length) warnings.push(`Есть ref-ноды с ошибкой: ${erroredRefRoles.join('; ')}`);
             if (!canGenerateComfyImage({ refsByRole: derived.refsByRole }) && (derived.meaningfulText || derived.meaningfulAudio)) {
               warnings.push('Визуальные сцены будут синтезированы из текста, аудио и режима');
             }
             if (!!derived.meaningfulAudio && !derived.meaningfulText && meaningfulRefRoles.length === 0) warnings.push('Сюжет будет выведен из аудио');
-            if (!derived.meaningfulAudio && !derived.meaningfulText && meaningfulRefRoles.length > 0) warnings.push('Сюжет будет выведен из референсов и режима');
+            if (!derived.meaningfulAudio && !derived.meaningfulText && meaningfulRefRoles.length > 0) warnings.push('Референсы ограничивают визуальный мир, но без audio/text storyboard не будет собран.');
             if (!!derived.meaningfulAudio && !derived.meaningfulText && meaningfulRefRoles.length > 0) warnings.push('Сюжет будет выведен из аудио и референсов');
             if (!derived.meaningfulAudio && derived.meaningfulText) warnings.push('Таймфреймы будут построены логически, без музыкального ритма');
             if (derived.storyControlMode === 'text_override' && derived.meaningfulAudio) warnings.push('TEXT задаёт сюжет; AUDIO используется для ритма/эмоционального контура');
@@ -7574,6 +7574,7 @@ onClipSec: (nodeId, value) => {
             if (derived.audioStoryMode === 'music_only' && derived.meaningfulAudio) warnings.push('Audio story mode: music_only (lyrics игнорируются; сюжет строится по ритму/энергии/refs/mode).');
             if (derived.audioStoryMode === 'music_plus_text' && derived.meaningfulAudio) warnings.push('Audio story mode: music_plus_text (lyrics игнорируются; TEXT задаёт narrative direction).');
             if (derived.audioStoryMode === 'speech_narrative' && derived.meaningfulAudio) warnings.push('Audio story mode: speech_narrative (spoken audio meaning is primary; transcript / spoken hints / semantic summary must drive the storyboard scene by scene).');
+            if (derived.weakSemanticContext) warnings.push(`Weak semantic context: ${derived.semanticContextReason || 'audio present but semantic support is empty'}`);
             if (Array.isArray(derived.audioStoryPolicy?.warnings)) derived.audioStoryPolicy.warnings.forEach((msg) => warnings.push(msg));
             if (derived.modeValue === 'scenario' && !derived.meaningfulText) warnings.push('Scenario mode без TEXT: добавьте текст для beat-by-beat дисциплины.');
             if (derived.outputValue === 'comfy text' && !String(derived.meaningfulText || '').trim()) warnings.push('Для comfy text желательно добавить richer text prompt');
@@ -7601,10 +7602,18 @@ onClipSec: (nodeId, value) => {
               audioDurationSec: derived.meaningfulAudioDurationSec,
               refsByRole: derived.refsByRole,
               narrativeSource: derived.narrativeSource,
+              storySource: derived.storySource,
               timelineSource: derived.timelineSource,
               storyControlMode: derived.storyControlMode,
               storyMissionSummary: derived.storyMissionSummary,
               audioStoryMode: derived.audioStoryMode,
+              lyricsText: derived.lyricsText,
+              transcriptText: derived.transcriptText,
+              spokenTextHint: derived.spokenTextHint,
+              audioSemanticHints: derived.audioSemanticHints,
+              audioSemanticSummary: derived.audioSemanticSummary,
+              weakSemanticContext: derived.weakSemanticContext,
+              semanticContextReason: derived.semanticContextReason,
               audioStoryPolicy: derived.audioStoryPolicy,
               textInfluence: derived.textInfluence,
               textNarrativeRole: derived.narrativeRoles.textNarrativeRole,
@@ -7623,6 +7632,7 @@ onClipSec: (nodeId, value) => {
               coverage: {
                 hasText: !!derived.meaningfulText,
                 hasAudio: !!derived.meaningfulAudio,
+                hasRefs: !!meaningfulRefRoles.length,
                 hasVisualAnchors: canGenerateComfyImage({ refsByRole: derived.refsByRole }),
                 roleCoverage,
               },
@@ -7631,7 +7641,7 @@ onClipSec: (nodeId, value) => {
 
             const brainSummary = {
               plannerMode: derived.plannerMode || 'legacy',
-              storySource: derived.narrativeSource,
+              storySource: derived.storySource || derived.narrativeSource,
               cast: castLabels,
               world: `location ${derived.refsByRole.location.length ? 'yes' : 'no'} • props ${derived.refsByRole.props.length ? 'yes' : 'no'} • scale ${anchors.worldScaleContext}`,
               style: `${derived.stylePreset}${derived.refsByRole.style.length ? ' + style ref' : ' only'} • ${derived.styleSemantics.styleSummary}`,
@@ -7859,7 +7869,10 @@ onClipSec: (nodeId, value) => {
                         activeRequestId: activeStoryboardRequestId,
                         activeRequestSourceNodeId: nodeId,
                         activeRequestStartedAt: startedAt,
-                        isStale: false,
+                        isStale: true,
+                        staleReason: 'updating_with_previous_result',
+                        errorMessage: '',
+                        lastKnownFreshAt: String(x?.data?.lastSuccessfulParseAt || x?.data?.lastKnownFreshAt || ''),
                       },
                     };
                   }
@@ -7891,7 +7904,7 @@ onClipSec: (nodeId, value) => {
                     });
                     setNodes((prev) => prev.map((x) => {
                       if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: [String(err?.message || err)], brainWarnings: [] } };
-                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error', isUpdating: false, isGenerating: false, isBusy: false, hasActiveRequest: false, activeRequestId: '', activeRequestSourceNodeId: '', activeRequestStartedAt: '' } };
+                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error', isUpdating: false, isGenerating: false, isBusy: false, hasActiveRequest: false, activeRequestId: '', activeRequestSourceNodeId: '', activeRequestStartedAt: '', isStale: true, staleReason: 'parse_error_previous_result_retained', errorMessage: String(err?.message || err || 'unknown_error') } };
                       return x;
                     }));
                     return;
@@ -7908,7 +7921,7 @@ onClipSec: (nodeId, value) => {
                     });
                     setNodes((prev) => prev.map((x) => {
                       if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: "error", brainCritical: Array.isArray(response?.errors) ? response.errors : ["COMFY parse failed"], brainWarnings: Array.isArray(response?.warnings) ? response.warnings : [] } };
-                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error', isUpdating: false, isGenerating: false, isBusy: false, hasActiveRequest: false, activeRequestId: '', activeRequestSourceNodeId: '', activeRequestStartedAt: '' } };
+                      if (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard') return { ...x, data: { ...x.data, parseStatus: 'error', isUpdating: false, isGenerating: false, isBusy: false, hasActiveRequest: false, activeRequestId: '', activeRequestSourceNodeId: '', activeRequestStartedAt: '', isStale: true, staleReason: 'parse_error_previous_result_retained', errorMessage: Array.isArray(response?.errors) ? response.errors.join('; ') : 'COMFY parse failed', warnings: Array.isArray(response?.warnings) ? response.warnings : (Array.isArray(x?.data?.warnings) ? x.data.warnings : []) } };
                       return x;
                     }));
                     return;
@@ -7924,6 +7937,7 @@ onClipSec: (nodeId, value) => {
                   const globalContinuity = response?.globalContinuity || "";
                   const debugFields = response?.debug || extractComfyDebugFields({ plannerInput: payload, plannerMeta: { ...plannerMeta, globalContinuity } });
                   const parsedAt = new Date().toLocaleTimeString();
+                  const parsedAtIso = new Date().toISOString();
                   const storyboardScenesWithResetState = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" }).map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") }));
 
                   console.log("[COMFY PLAN RESPONSE APPLIED]", {
@@ -7991,6 +8005,10 @@ onClipSec: (nodeId, value) => {
                             activeRequestSourceNodeId: '',
                             activeRequestStartedAt: '',
                             isStale: false,
+                            staleReason: '',
+                            errorMessage: '',
+                            lastSuccessfulParseAt: parsedAtIso,
+                            lastKnownFreshAt: parsedAtIso,
                           },
                         };
                       }
@@ -10202,6 +10220,14 @@ const hydrate = useCallback((source = "unknown") => {
                       <div className="clipSB_small">plannerMode: {String(comfyNode?.data?.plannerMode || comfyNode?.data?.plannerMeta?.plannerMode || 'legacy')}</div>
                       <div className="clipSB_small">режим: {comfyModeMeta.labelRu} • стиль: {comfyStyleMeta.labelRu}</div>
                       <div className="clipSB_small">narrative source: {comfyNode?.data?.narrativeSource || 'none'}</div>
+                      <div className="clipSB_small">storySource: {String(comfyNode?.data?.plannerMeta?.storySource || comfyNode?.data?.comfyDebug?.storySource || '—')}</div>
+                      <div className="clipSB_small">requestedModel: {String(comfyNode?.data?.comfyDebug?.requestedModel || '—')}</div>
+                      <div className="clipSB_small">fallback: {String(comfyNode?.data?.comfyDebug?.fallbackFrom || '—')} → {String(comfyNode?.data?.comfyDebug?.fallbackTo || comfyNode?.data?.comfyDebug?.effectiveModel || '—')}</div>
+                      <div className="clipSB_small">effectiveModel: {String(comfyNode?.data?.comfyDebug?.effectiveModel || '—')}</div>
+                      <div className="clipSB_small">parseFailedReason: {String(comfyNode?.data?.comfyDebug?.parseFailedReason || comfyNode?.data?.errorMessage || '—')}</div>
+                      <div className="clipSB_small">weakSemanticContext: {String(Boolean(comfyNode?.data?.comfyDebug?.weakSemanticContext ?? comfyNode?.data?.plannerMeta?.weakSemanticContext))}</div>
+                      <div className="clipSB_small">semanticContextReason: {String(comfyNode?.data?.comfyDebug?.semanticContextReason || comfyNode?.data?.plannerMeta?.semanticContextReason || '—')}</div>
+                      <div className="clipSB_small">hasAudio / hasText / hasRefs: {String(Boolean(comfyNode?.data?.comfyDebug?.hasAudio))} / {String(Boolean(comfyNode?.data?.comfyDebug?.hasText))} / {String(Boolean(comfyNode?.data?.comfyDebug?.hasRefs))}</div>
                       <div className="clipSB_small">audioDurationSec: {comfyNode?.data?.plannerMeta?.audioDurationSec ?? '—'}</div>
                       <div className="clipSB_small">timelineDurationSec: {comfyNode?.data?.plannerMeta?.timelineDurationSec ?? '—'}</div>
                       <div className="clipSB_small">sceneDurationTotalSec: {comfyNode?.data?.plannerMeta?.sceneDurationTotalSec ?? '—'}</div>
