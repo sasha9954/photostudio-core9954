@@ -650,6 +650,37 @@ def _scene_emotion(scene_type: str, phase: str, has_vocal: bool) -> str:
     return "cinematic" if has_vocal else "atmospheric"
 
 
+def _genre_hint_text(genre: str) -> str:
+    g = (genre or "").lower()
+    if g == "horror":
+        return "напряжённая атмосфера, чувство угрозы, контрастный свет, тревожные тени, саспенс"
+    if g == "romance":
+        return "интимность, мягкий свет, близость персонажей, эмоциональная теплота"
+    if g == "comedy":
+        return "лёгкость, ирония, выразительные реакции, игривое поведение"
+    if g == "drama":
+        return "сильные эмоции, внутренний конфликт, реалистичное поведение"
+    if g == "action":
+        return "динамика, энергия, движение, напряжённые действия"
+    if g == "thriller":
+        return "напряжение, ожидание, скрытая угроза, контроль ритма"
+    if g == "noir":
+        return "жёсткие тени, контраст, мрачная атмосфера, ночная сцена"
+    if g == "dreamy":
+        return "размытость, мягкие переходы, ощущение сна"
+    if g == "melancholy":
+        return "грусть, спокойствие, замедленное восприятие"
+    if g == "fashion":
+        return "фокус на стиле, одежде, позах, эстетике"
+    if g == "surreal":
+        return "нелогичные элементы, странные переходы, необычные формы"
+    if g == "performance":
+        return "сцена, выступление, экспрессия, перформанс"
+    if g == "experimental":
+        return "нестандартная визуальная логика, необычные решения"
+    return ""
+
+
 def _build_scene_prompts(
     *,
     scene_type: str,
@@ -668,35 +699,7 @@ def _build_scene_prompts(
     light = str(world_bible.get("lightingLogic") or "мотивационный кинематографичный свет")
     color = str(world_bible.get("colorWorld") or "контрастная кинопалитра")
     beat = beat_text or "развитие истории"
-    genre_hint = ""
-    g = (genre or "").lower()
-
-    if g == "horror":
-        genre_hint = "напряжённая атмосфера, чувство угрозы, контрастный свет, тревожные тени, саспенс"
-    elif g == "romance":
-        genre_hint = "интимность, мягкий свет, близость персонажей, эмоциональная теплота"
-    elif g == "comedy":
-        genre_hint = "лёгкость, ирония, выразительные реакции, playful поведение"
-    elif g == "drama":
-        genre_hint = "сильные эмоции, внутренний конфликт, реалистичное поведение"
-    elif g == "action":
-        genre_hint = "динамика, энергия, движение, напряжённые действия"
-    elif g == "thriller":
-        genre_hint = "напряжение, ожидание, скрытая угроза, контроль ритма"
-    elif g == "noir":
-        genre_hint = "жёсткие тени, контраст, мрачная атмосфера, ночная сцена"
-    elif g == "dreamy":
-        genre_hint = "размытость, мягкие переходы, ощущение сна"
-    elif g == "melancholy":
-        genre_hint = "грусть, спокойствие, замедленное восприятие"
-    elif g == "fashion":
-        genre_hint = "фокус на стиле, одежде, позах, эстетике"
-    elif g == "surreal":
-        genre_hint = "нелогичные элементы, странные переходы, необычные формы"
-    elif g == "performance":
-        genre_hint = "сцена, выступление, экспрессия, перформанс"
-    elif g == "experimental":
-        genre_hint = "нестандартная визуальная логика, необычные решения"
+    genre_hint = _genre_hint_text(genre)
 
     image_templates = {
         "SING_CLOSEUP": f"Кинематографичный ключевой кадр: крупный план {subject}, фокус на губах и глазах во время музыкальной фразы; локация {location}; {light}; {lens}; {color}; эмоция {emotion}; в кадре чувствуется момент: {beat}. {continuity_hint}",
@@ -732,6 +735,7 @@ def _build_speech_scene_prompts(
     scene_idx: int,
     total: int,
     phase: str,
+    genre: str = "",
     characters_allowed: bool,
     world_bible: dict[str, Any],
     refs_used: list[str],
@@ -744,15 +748,20 @@ def _build_speech_scene_prompts(
     environment_focus = "среда, объекты и инфраструктура в приоритете" if not characters_allowed else "среда и действия должны оставаться предметно мотивированными"
     subject = location if location and location != "cinematic_world_main_location" else _pick_environment_subject({"location": [], "props": []}, beat)
     infrastructure_bias = _contains_any_token(beat, INFRASTRUCTURE_TOKENS)
+    genre_hint = _genre_hint_text(genre)
     if infrastructure_bias:
         subject = location if location and location != "cinematic_world_main_location" else "подземный военный объект"
     scene_brief = _collect_semantic_scene_details(beat, location)
     world_continuity = f"Сохранять палитру, реализм и единый документальный мир. Фаза {phase}. Рефы: {', '.join(refs_used) if refs_used else 'environment-only'}."
+    if genre_hint:
+        world_continuity += f" Жанр: {genre}. Все сцены должны оставаться в единой жанровой тональности."
 
     image_prompt = (
         f"Документальный кинематографичный кадр: {subject}; локация {location}; смысл сцены: {beat}; "
         f"визуально показать: {scene_brief['imageSubject']}; {environment_focus}; {light}; {lens}; {color}; {style_tag}. {world_continuity}"
     )
+    if genre_hint:
+        image_prompt += f" Жанровая направленность: {genre_hint}."
 
     video_actions = [
         f"камера медленно и осмысленно проходит через пространство {location}, раскрывая смысл фрагмента: {beat}; движение сцены: {scene_brief['motionSubject']}",
@@ -768,6 +777,8 @@ def _build_speech_scene_prompts(
             f"ветер, пыль или вентиляция создают реалистичное движение среды вокруг {location}; камера считывает инфраструктуру как главный персонаж сцены, раскрывая: {beat}; движение сцены: {scene_brief['motionSubject']}",
         ]
     video_prompt = video_actions[scene_idx % len(video_actions)] + f". Сохранять единый реалистичный тон и непрерывность мира от сцены к сцене."
+    if genre_hint:
+        video_prompt += f" Учитывать жанр: {genre_hint}."
     return image_prompt, video_prompt, scene_brief
 
 
@@ -939,6 +950,7 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 scene_idx=idx,
                 total=max(1, len(boundaries) - 1),
                 phase=phase,
+                genre=genre,
                 characters_allowed=characters_allowed,
                 world_bible=world_bible,
                 refs_used=refs_used,
@@ -952,7 +964,7 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 genre=genre,
                 emotion=emotion,
                 beat_text=beat_text,
-                continuity_hint="Соблюдать неизменность персонажей, костюма и мира.",
+                continuity_hint=continuity,
                 phase=phase,
                 world_bible=world_bible,
             )
