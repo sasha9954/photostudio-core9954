@@ -144,9 +144,9 @@ function computePromptSync({ ru = "", en = "" } = {}) {
 }
 
 export function normalizeComfyScenePrompts(scene = {}) {
-  const imagePromptRu = String(scene?.imagePromptRu || scene?.imagePrompt || "").trim();
+  const imagePromptRu = String(scene?.imagePromptRu || "").trim();
   const imagePromptEn = String(scene?.imagePromptEn || scene?.imagePrompt || "").trim();
-  const videoPromptRu = String(scene?.videoPromptRu || scene?.videoPrompt || "").trim();
+  const videoPromptRu = String(scene?.videoPromptRu || "").trim();
   const videoPromptEn = String(scene?.videoPromptEn || scene?.videoPrompt || "").trim();
   const sceneGoal = String(scene?.sceneGoal || "").trim();
   const sceneText = String(scene?.sceneText || "").trim();
@@ -186,6 +186,18 @@ export function normalizeComfyScenePrompts(scene = {}) {
   const mustAppear = Array.isArray(scene?.mustAppear)
     ? scene.mustAppear.map((role) => String(role || "").trim()).filter(Boolean)
     : (heroEntityId ? [heroEntityId] : refsUsed);
+  const promptLanguageStatus = (scene?.promptLanguageStatus && typeof scene.promptLanguageStatus === "object")
+    ? scene.promptLanguageStatus
+    : {
+        image: imagePromptRu && imagePromptEn ? "ru_en_present" : (imagePromptEn ? "ru_missing_en_fallback" : (imagePromptRu ? "en_missing_ru_only" : "missing_both")),
+        video: videoPromptRu && videoPromptEn ? "ru_en_present" : (videoPromptEn ? "ru_missing_en_fallback" : (videoPromptRu ? "en_missing_ru_only" : "missing_both")),
+      };
+  const ruPromptMissing = (scene?.ruPromptMissing && typeof scene.ruPromptMissing === "object")
+    ? scene.ruPromptMissing
+    : { image: !imagePromptRu, video: !videoPromptRu };
+  const enPromptPresent = (scene?.enPromptPresent && typeof scene.enPromptPresent === "object")
+    ? scene.enPromptPresent
+    : { image: Boolean(imagePromptEn), video: Boolean(videoPromptEn) };
   return {
     ...scene,
     imagePromptRu,
@@ -210,6 +222,9 @@ export function normalizeComfyScenePrompts(scene = {}) {
     futureGeneratorHint,
     imagePrompt: imagePromptEn,
     videoPrompt: videoPromptEn,
+    promptLanguageStatus,
+    ruPromptMissing,
+    enPromptPresent,
     refsUsed,
     activeRefs,
     refUsageReason: String(scene?.refUsageReason || "").trim(),

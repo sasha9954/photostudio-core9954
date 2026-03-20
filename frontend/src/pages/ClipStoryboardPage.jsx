@@ -518,6 +518,9 @@ function mergeVideoStateBySceneId(nextScenes, existingScenes, { panelField = "" 
       "audioSliceExpectedDurationSec",
       "audioSliceBackendDurationSec",
       "audioSliceActualDurationSec",
+      "speechSafeAdjusted",
+      "speechSafeShiftMs",
+      "sliceMayCutSpeech",
     ]) {
       if ((merged?.[field] == null || merged?.[field] === "") && prev?.[field] != null && prev?.[field] !== "") {
         merged[field] = prev[field];
@@ -4683,6 +4686,7 @@ const comfyShowVideoSection = Boolean(
     const currentEnText = String(snapshot?.[enField] || "").trim();
 
     if (!ruText) {
+      if (currentEnText) return currentEnText;
       const emptyError = isImage ? "Пустой imagePromptRu" : "Пустой videoPromptRu";
       updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncError, [errorField]: emptyError });
       setComfyPromptSyncError(emptyError);
@@ -4727,6 +4731,9 @@ const comfyShowVideoSection = Boolean(
           [promptField]: translated,
           [statusField]: PROMPT_SYNC_STATUS.synced,
           [errorField]: "",
+          enPromptPresent: { ...(snapshot?.enPromptPresent || {}), [isImage ? 'image' : 'video']: Boolean(translated) },
+          promptLanguageStatus: { ...(snapshot?.promptLanguageStatus || {}), [isImage ? 'image' : 'video']: String((ruText || '').trim()) ? 'ru_en_present' : (translated ? 'ru_missing_en_fallback' : 'missing_both') },
+          ruPromptMissing: { ...(snapshot?.ruPromptMissing || {}), [isImage ? 'image' : 'video']: !String((ruText || '').trim()) },
         });
         return translated;
       } catch (e) {
@@ -4758,7 +4765,7 @@ const comfyShowVideoSection = Boolean(
       if (inflight) return await inflight;
       throw new Error("Синхронизация prompt уже выполняется");
     }
-    if (status === PROMPT_SYNC_STATUS.synced && enText) return enText;
+    if (enText) return enText;
     return await syncComfyPrompt({ idx, promptType, force: true });
   }, [getComfySceneSnapshot, syncComfyPrompt]);
 
@@ -5803,7 +5810,13 @@ ${contextPrompt}`.trim(),
     try {
       const out = await fetchJson("/api/clip/audio/slice", {
         method: "POST",
-        body: { sceneId, startSec, endSec, audioUrl: globalAudioUrlRaw },
+        body: {
+          sceneId,
+          startSec,
+          endSec,
+          audioUrl: globalAudioUrlRaw,
+          audioStoryMode: String(comfyNode?.data?.plannerMeta?.audioStoryMode || comfyNode?.data?.audioStoryMode || ""),
+        },
       });
       if (!out?.ok || !out?.audioSliceUrl) throw new Error(out?.hint || out?.code || "audio_slice_failed");
       const outStartSec = Number(out?.startSec ?? out?.t0 ?? startSec);
@@ -5823,6 +5836,9 @@ ${contextPrompt}`.trim(),
         audioSliceBackendDurationSec: durationSec,
         audioSliceActualDurationSec: null,
         audioSliceLoadError: "",
+        speechSafeAdjusted: Boolean(out?.speechSafeAdjusted),
+        speechSafeShiftMs: Number(out?.speechSafeShiftMs ?? 0),
+        sliceMayCutSpeech: Boolean(out?.sliceMayCutSpeech),
       });
     } catch (e) {
       console.error(e);
@@ -5866,9 +5882,11 @@ ${contextPrompt}`.trim(),
       imagePromptRu: nextRu,
       imagePromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
       imagePromptSyncError: '',
+      ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), image: !nextRu.trim() },
+      promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), image: nextRu.trim() ? (String(comfySelectedScene?.imagePromptEn || '').trim() ? 'ru_en_present' : 'en_missing_ru_only') : (String(comfySelectedScene?.imagePromptEn || '').trim() ? 'ru_missing_en_fallback' : 'missing_both') },
     });
     scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'image', ruText: nextRu });
-  }, [comfySafeIndex, scheduleComfyPromptSync, updateComfyScene]);
+  }, [comfySafeIndex, comfySelectedScene, scheduleComfyPromptSync, updateComfyScene]);
 
   const handleComfyVideoPromptChange = useCallback((value) => {
     const nextRu = String(value || '');
@@ -5876,9 +5894,11 @@ ${contextPrompt}`.trim(),
       videoPromptRu: nextRu,
       videoPromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
       videoPromptSyncError: '',
+      ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), video: !nextRu.trim() },
+      promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), video: nextRu.trim() ? (String(comfySelectedScene?.videoPromptEn || '').trim() ? 'ru_en_present' : 'en_missing_ru_only') : (String(comfySelectedScene?.videoPromptEn || '').trim() ? 'ru_missing_en_fallback' : 'missing_both') },
     });
     scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'video', ruText: nextRu });
-  }, [comfySafeIndex, scheduleComfyPromptSync, updateComfyScene]);
+  }, [comfySafeIndex, comfySelectedScene, scheduleComfyPromptSync, updateComfyScene]);
 
   const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
     if (!scenarioSelected) return;
@@ -6081,7 +6101,13 @@ Aspect ratio: ${imageFormat}`,
     try {
       const out = await fetchJson("/api/clip/audio/slice", {
         method: "POST",
-        body: { sceneId, startSec, endSec, audioUrl: globalAudioUrlRaw },
+        body: {
+          sceneId,
+          startSec,
+          endSec,
+          audioUrl: globalAudioUrlRaw,
+          audioStoryMode: String(scenarioSelected?.audioStoryMode || ""),
+        },
       });
       if (!out?.ok || !out?.audioSliceUrl) throw new Error(out?.hint || out?.code || "audio_slice_failed");
       const outStartSec = Number(out?.startSec ?? out?.t0 ?? startSec);
@@ -6101,6 +6127,9 @@ Aspect ratio: ${imageFormat}`,
         audioSliceBackendDurationSec: durationSec,
         audioSliceActualDurationSec: null,
         audioSliceLoadError: "",
+        speechSafeAdjusted: Boolean(out?.speechSafeAdjusted),
+        speechSafeShiftMs: Number(out?.speechSafeShiftMs ?? 0),
+        sliceMayCutSpeech: Boolean(out?.sliceMayCutSpeech),
       });
     } catch (e) {
       console.error(e);
@@ -6114,7 +6143,7 @@ Aspect ratio: ${imageFormat}`,
     } finally {
       if (idx === scenarioEditor.selected) setScenarioAudioSliceLoading(false);
     }
-  }, [globalAudioUrlRaw, scenarioEditor.selected, scenarioScenes, updateScenarioScene]);
+  }, [globalAudioUrlRaw, scenarioEditor.selected, scenarioScenes, scenarioSelected?.audioStoryMode, updateScenarioScene]);
 
   const handleScenarioVideoTakeAudio = useCallback(async () => {
     if (!scenarioSelected) return;
@@ -7309,6 +7338,9 @@ onClipSec: (nodeId, value) => {
                         ),
                         audioSliceBackendDurationSec: normalizeDurationSec(s.audioSliceBackendDurationSec),
                         audioSliceActualDurationSec: normalizeDurationSec(s.audioSliceActualDurationSec),
+                        speechSafeAdjusted: Boolean(s.speechSafeAdjusted),
+                        speechSafeShiftMs: Number(s.speechSafeShiftMs ?? 0),
+                        sliceMayCutSpeech: Boolean(s.sliceMayCutSpeech),
                         audioSliceLoadError: s.audioSliceLoadError || s.audioSliceError || "",
                         videoUrl: s.videoUrl || "",
                         videoSourceImageUrl: s.videoSourceImageUrl || "",
@@ -10125,6 +10157,9 @@ const hydrate = useCallback((source = "unknown") => {
                       <div className="clipSB_comfySplitGrid">
                         <div className="clipSB_comfySplitCol">
                           <div className="clipSB_hint">Image prompt (RU) · {COMFY_SYNC_STATUS_LABELS[comfySelectedScene.imagePromptSyncStatus] || '—'}</div>
+                          {comfySelectedScene?.ruPromptMissing?.image && comfySelectedScene?.enPromptPresent?.image ? (
+                            <div className="clipSB_small" style={{ marginBottom: 6, color: '#ffd37a' }}>RU missing, showing EN fallback below only.</div>
+                          ) : null}
                           <textarea
                             className="clipSB_textarea clipSB_comfyTextarea"
                             value={String(comfySelectedScene.imagePromptRu || '')}
@@ -10132,6 +10167,7 @@ const hydrate = useCallback((source = "unknown") => {
                             placeholder="Опиши визуал сцены для генерации изображения"
                           />
                           <div className="clipSB_small" style={{ marginTop: 6 }}>EN (model): {String(comfySelectedScene.imagePromptEn || '—')}</div>
+                          <div className="clipSB_small">promptLanguageStatus.image: {String(comfySelectedScene?.promptLanguageStatus?.image || '—')}</div>
                           {(String(comfySelectedScene.imagePromptSyncError || '').trim()) ? (
                             <div className="clipSB_hint" style={{ marginTop: 6, color: '#ff8a8a' }}>{String(comfySelectedScene.imagePromptSyncError || '')}</div>
                           ) : null}
@@ -10194,6 +10230,9 @@ const hydrate = useCallback((source = "unknown") => {
                         <div className="clipSB_videoKv"><span>expected duration</span><span>{fmtSecAndMs(comfySelectedExpectedSliceSec)}</span></div>
                         <div className="clipSB_videoKv"><span>backend duration</span><span>{fmtSecAndMs(comfySelectedScene.audioSliceBackendDurationSec)}</span></div>
                         <div className="clipSB_videoKv"><span>actual duration</span><span>{fmtSecAndMs(comfySelectedScene.audioSliceActualDurationSec)}</span></div>
+                        <div className="clipSB_videoKv"><span>speechSafeAdjusted</span><span>{String(Boolean(comfySelectedScene.speechSafeAdjusted))}</span></div>
+                        <div className="clipSB_videoKv"><span>speechSafeShiftMs</span><span>{String(comfySelectedScene.speechSafeShiftMs ?? 0)}</span></div>
+                        <div className="clipSB_videoKv"><span>sliceMayCutSpeech</span><span>{String(Boolean(comfySelectedScene.sliceMayCutSpeech))}</span></div>
                       </div>
                       {comfySelectedAudioSliceStatus === 'loading' ? <div className="clipSB_hint">Извлекаю аудио по timeline сцены…</div> : null}
                       {comfySelectedAudioSliceError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfySelectedAudioSliceError}</div> : null}
@@ -10211,6 +10250,9 @@ const hydrate = useCallback((source = "unknown") => {
                         <div className="clipSB_comfySplitGrid">
                           <div className="clipSB_comfySplitCol">
                             <div className="clipSB_hint">Video prompt (RU) · {COMFY_SYNC_STATUS_LABELS[comfySelectedScene.videoPromptSyncStatus] || '—'}</div>
+                            {comfySelectedScene?.ruPromptMissing?.video && comfySelectedScene?.enPromptPresent?.video ? (
+                              <div className="clipSB_small" style={{ marginBottom: 6, color: '#ffd37a' }}>RU missing, showing EN fallback below only.</div>
+                            ) : null}
                             <textarea
                               className="clipSB_textarea clipSB_comfyTextarea"
                               value={String(comfySelectedScene.videoPromptRu || '')}
@@ -10219,6 +10261,7 @@ const hydrate = useCallback((source = "unknown") => {
                               disabled={!comfySelectedScene.imageUrl}
                             />
                             <div className="clipSB_small" style={{ marginTop: 6 }}>EN (model): {String(comfySelectedScene.videoPromptEn || '—')}</div>
+                            <div className="clipSB_small">promptLanguageStatus.video: {String(comfySelectedScene?.promptLanguageStatus?.video || '—')}</div>
                             {(String(comfySelectedScene.videoPromptSyncError || '').trim()) ? (
                               <div className="clipSB_hint" style={{ marginTop: 6, color: '#ff8a8a' }}>{String(comfySelectedScene.videoPromptSyncError || '')}</div>
                             ) : null}

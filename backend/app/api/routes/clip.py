@@ -28,6 +28,7 @@ from app.engine.video_engine import _download_image_from_source
 from app.engine.gemini_rest import post_generate_content
 from app.engine.comfy_reference_profile import build_reference_profiles, summarize_profiles
 from app.engine.comfy_remote import run_comfy_image_to_video
+from app.engine.audio_analyzer import analyze_audio
 
 router = APIRouter()
 
@@ -96,6 +97,7 @@ class AudioSliceIn(BaseModel):
     endSec: float | None = None
     t0: float | None = None
     t1: float | None = None
+    audioStoryMode: str | None = None
 
 
 class ClipVideoIn(BaseModel):
@@ -7260,6 +7262,81 @@ def clip_image(payload: ClipImageIn):
             return JSONResponse(status_code=500, content={"ok": False, "code": "IMAGE_GENERATION_FAILED", "hint": str(e)[:300]})
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+        if math.isnan(number) or math.isinf(number):
+            return None
+        return number
+    except Exception:
+        return None
+
+
+def _safe_speech_boundaries_from_analysis(analysis: dict[str, Any]) -> list[float]:
+    candidates: list[float] = []
+    for phrase in analysis.get("vocalPhrases") or []:
+        if not isinstance(phrase, dict):
+            continue
+        for key in ("start", "end"):
+            value = _safe_float(phrase.get(key))
+            if value is not None:
+                candidates.append(round(value, 3))
+    for key in ("pausePoints", "phraseBoundaries"):
+        for item in analysis.get(key) or []:
+            value = _safe_float(item)
+            if value is not None:
+                candidates.append(round(value, 3))
+    return sorted(set(candidates))
+
+
+def _speech_boundary_inside_phrase(value: float, analysis: dict[str, Any], tolerance: float = 0.1) -> bool:
+    for phrase in analysis.get("vocalPhrases") or []:
+        if not isinstance(phrase, dict):
+            continue
+        start = _safe_float(phrase.get("start"))
+        end = _safe_float(phrase.get("end"))
+        if start is None or end is None or end <= start:
+            continue
+        if (start + tolerance) < value < (end - tolerance):
+            return True
+    return False
+
+
+def _adjust_speech_safe_slice(t0: float, t1: float, analysis: dict[str, Any]) -> tuple[float, float, dict[str, Any]]:
+    debug = {
+        "speechSafeAdjusted": False,
+        "speechSafeShiftMs": 0,
+        "sliceMayCutSpeech": False,
+    }
+    safe_points = _safe_speech_boundaries_from_analysis(analysis)
+    if not safe_points:
+        debug["sliceMayCutSpeech"] = _speech_boundary_inside_phrase(t0, analysis) or _speech_boundary_inside_phrase(t1, analysis)
+        return t0, t1, debug
+
+    original = (t0, t1)
+
+    def nearest_safe(target: float, left_limit: float, right_limit: float) -> float:
+        candidates = [point for point in safe_points if left_limit <= point <= right_limit]
+        if not candidates:
+            return target
+        return min(candidates, key=lambda point: (abs(point - target), point))
+
+    max_shift = 0.85
+    if _speech_boundary_inside_phrase(t0, analysis):
+        t0 = nearest_safe(t0, max(0.0, t0 - max_shift), min(t1 - 0.2, t0 + max_shift))
+    if _speech_boundary_inside_phrase(t1, analysis):
+        t1 = nearest_safe(t1, max(t0 + 0.2, t1 - max_shift), t1 + max_shift)
+
+    if t1 <= t0:
+        t0, t1 = original
+
+    total_shift_ms = int(round((abs(t0 - original[0]) + abs(t1 - original[1])) * 1000))
+    debug["speechSafeAdjusted"] = total_shift_ms > 0
+    debug["speechSafeShiftMs"] = total_shift_ms
+    debug["sliceMayCutSpeech"] = _speech_boundary_inside_phrase(t0, analysis) or _speech_boundary_inside_phrase(t1, analysis)
+    return round(t0, 3), round(t1, 3), debug
+
+
 def _clip_audio_slice_response(payload: AudioSliceIn):
     scene_id = (payload.sceneId or "").strip()
     if not scene_id:
@@ -7288,6 +7365,19 @@ def _clip_audio_slice_response(payload: AudioSliceIn):
             _debug_audio_slice(payload.audioUrl, path)
             return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_audioUrl", "hint": resolve_error or "audio_source_not_resolved"})
 
+        speech_slice_debug = {
+            "speechSafeAdjusted": False,
+            "speechSafeShiftMs": 0,
+            "sliceMayCutSpeech": False,
+        }
+        if str(payload.audioStoryMode or "").strip().lower() == "speech_narrative":
+            try:
+                analysis = analyze_audio(path)
+                t0, t1, speech_slice_debug = _adjust_speech_safe_slice(t0, t1, analysis)
+            except Exception as exc:
+                speech_slice_debug["sliceMayCutSpeech"] = True
+                speech_slice_debug["speechSafeAnalysisError"] = str(exc)[:160]
+
         _ensure_assets_dir()
         safe_scene = re.sub(r"[^a-zA-Z0-9_-]", "_", scene_id) or "scene"
         t0_ms = int(round(t0 * 1000))
@@ -7315,6 +7405,7 @@ def _clip_audio_slice_response(payload: AudioSliceIn):
             "t1": t1,
             "duration": duration,
             "audioSliceBackendDurationSec": duration,
+            **speech_slice_debug,
         }
     finally:
         for temp_path in temp_files:

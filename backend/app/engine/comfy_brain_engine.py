@@ -2,13 +2,14 @@ import base64
 import json
 import logging
 import mimetypes
+import re
 import socket
 import urllib.error
 import urllib.request
 from typing import Any
 
 from app.core.config import settings
-from app.engine.clip_scene_planner import plan_comfy_clip
+from app.engine.clip_scene_planner import _load_audio_analysis, plan_comfy_clip
 from app.engine.comfy_reference_profile import (
     _load_image_inline_part,
     _read_local_static_asset,
@@ -935,7 +936,7 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "You are COMFY Gemini Brain planner. Return strict JSON only.\n"
         "Top-level JSON fields required: worldLock, entityLocks, scenes, preview, warnings, debug.\n"
         "Scene contract required for every scene:\n"
-        "sceneId,startSec,endSec,durationSec,spokenText,sceneMeaning,emotion,imagePrompt,videoPrompt,sceneAction,environmentMotion,cameraPlan,sfxSuggestion,activeRefs,refUsageReason,characterRoleLogic,continuity,continuityLocksUsed,confidence.\n"
+        "sceneId,startSec,endSec,durationSec,spokenText,sceneMeaning,emotion,imagePrompt,videoPrompt,sceneAction,environmentMotion,cameraPlan,sfxSuggestion,activeRefs,refUsageReason,characterRoleLogic,continuity,continuityLocksUsed,confidence,focalSubject,visualClue,cameraIntent,forbiddenInsertions.\n"
         "Rules:\n"
         "- plannerMode is gemini_only, so you own semantic scene planning completely.\n"
         f"- Primary story source for this request is {story_source}.\n"
@@ -946,9 +947,13 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "- Keep one stable world unless the story explicitly transitions.\n"
         "- Choose active refs per scene; do not force every ref into every scene.\n"
         "- Scene duration target is 3-8 sec, usually 3-7 sec.\n"
+        "- For speech_narrative, scenes over 8.0 sec are invalid unless immediately split into smaller sub-scenes with natural speech-safe boundaries.\n"
         "- Each strong scene must contain at least two of three: character/entity action, environment motion, camera movement.\n"
         "- Avoid slideshow risk where only the camera moves.\n"
         "- imagePrompt and videoPrompt must stay compatible with the locked world and entity continuity.\n"
+        "- Write each scene as a narrative beat, not a wallpaper description: name the focal subject, the exact current event/action, the visual clue that carries narration meaning, and what the camera is meant to capture right now.\n"
+        "- Avoid generic establishing-shot filler unless the scene is explicitly an establishing scene.\n"
+        "- Do not invent dominant unexplained foreground props or oversized machines/devices/artifacts unless narration or refs explicitly require them. If no prop is required, keep the frame clean and semantically grounded.\n"
         "- preview must be extracted from the scenario, not invented separately.\n"
         "WORLD CONTINUITY:\n"
         "- environment must remain consistent across scenes.\n"
@@ -960,6 +965,7 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "- animals must keep species and pattern.\n"
         "SCENE QUALITY:\n"
         "- each scene must include action OR environment motion.\n"
+        "- the focal visual clue must come from narration meaning, not random object invention.\n"
         "- avoid static shots.\n"
         "- avoid slideshow camera-only scenes.\n"
         "REF LOGIC:\n"
@@ -1049,6 +1055,184 @@ def _normalize_scene_timeline(scenes: list[dict[str, Any]], audio_duration_sec: 
     }
 
 
+def _split_speech_text_chunks(text: str, pieces: int) -> list[str]:
+    clean = re.sub(r"\s+", " ", str(text or "").strip())
+    if pieces <= 1 or not clean:
+        return [clean] if clean else []
+
+    sentences = [chunk.strip(" -—–") for chunk in re.split(r"(?<=[.!?…])\s+|\s*[;:]\s*", clean) if chunk.strip(" -—–")]
+    source_parts = sentences if len(sentences) >= pieces else [clean]
+    if len(source_parts) >= pieces:
+        per_chunk = max(1, len(source_parts) // pieces)
+        chunks: list[str] = []
+        cursor = 0
+        for idx in range(pieces):
+            remaining_parts = len(source_parts) - cursor
+            remaining_slots = pieces - idx
+            take = max(1, round(remaining_parts / remaining_slots))
+            chunk = " ".join(source_parts[cursor:cursor + take]).strip()
+            if chunk:
+                chunks.append(chunk)
+            cursor += take
+        return chunks[:pieces]
+
+    words = clean.split(" ")
+    approx = max(4, round(len(words) / pieces))
+    chunks = []
+    for idx in range(pieces):
+        start = idx * approx
+        end = len(words) if idx == pieces - 1 else min(len(words), (idx + 1) * approx)
+        chunk = " ".join(words[start:end]).strip()
+        if chunk:
+            chunks.append(chunk)
+    return chunks[:pieces] or [clean]
+
+
+def _build_speech_split_candidates(start_sec: float, end_sec: float, analysis: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    window = max(0.0, end_sec - start_sec)
+    margin = min(0.75, max(0.35, window * 0.08))
+
+    def add_candidate(raw: Any, reason: str, priority: int) -> None:
+        point = _to_float(raw)
+        if point is None:
+            return
+        if point <= (start_sec + margin) or point >= (end_sec - margin):
+            return
+        candidates.append({"time": _round_sec(point), "reason": reason, "priority": priority})
+
+    for phrase in analysis.get("vocalPhrases") or []:
+        if not isinstance(phrase, dict):
+            continue
+        add_candidate(phrase.get("end"), "sentence_endings", 0)
+    for pause in analysis.get("pausePoints") or []:
+        add_candidate(pause, "spoken_pauses", 1)
+    for boundary in analysis.get("phraseBoundaries") or []:
+        add_candidate(boundary, "semantic_breakpoints", 2)
+
+    deduped: list[dict[str, Any]] = []
+    for candidate in sorted(candidates, key=lambda item: (item["time"], item["priority"])):
+        if deduped and abs(float(candidate["time"]) - float(deduped[-1]["time"])) < 0.45:
+            if int(candidate["priority"]) < int(deduped[-1]["priority"]):
+                deduped[-1] = candidate
+            continue
+        deduped.append(candidate)
+    return deduped
+
+
+def _pick_speech_split_points(start_sec: float, end_sec: float, analysis: dict[str, Any], pieces: int) -> tuple[list[float], list[str]]:
+    duration = max(0.0, end_sec - start_sec)
+    if pieces <= 1 or duration <= 8.0:
+        return [], []
+
+    candidates = _build_speech_split_candidates(start_sec, end_sec, analysis)
+    targets = [start_sec + (duration * idx / pieces) for idx in range(1, pieces)]
+    chosen: list[dict[str, Any]] = []
+    min_gap = max(2.0, min(6.5, duration / (pieces + 0.2) * 0.68))
+
+    for target in targets:
+        best = None
+        for candidate in candidates:
+            point = float(candidate["time"])
+            if any(abs(point - float(existing["time"])) < min_gap for existing in chosen):
+                continue
+            if point <= start_sec or point >= end_sec:
+                continue
+            score = (int(candidate["priority"]), abs(point - target), point)
+            if best is None or score < best[0]:
+                best = (score, candidate)
+        if best is not None:
+            chosen.append(best[1])
+
+    fallback_counter = 0
+    while len(chosen) < pieces - 1:
+        fallback_counter += 1
+        midpoint = start_sec + (duration * len(chosen) / pieces) + (duration / pieces / 2.0)
+        midpoint = max(start_sec + 0.8, min(end_sec - 0.8, midpoint))
+        if any(abs(midpoint - float(existing["time"])) < 1.2 for existing in chosen):
+            midpoint += 0.6 * fallback_counter
+            midpoint = max(start_sec + 0.8, min(end_sec - 0.8, midpoint))
+        chosen.append({"time": _round_sec(midpoint), "reason": "approximate_midpoint", "priority": 9})
+
+    chosen = sorted(chosen[:pieces - 1], key=lambda item: float(item["time"]))
+    return [float(item["time"]) for item in chosen], [str(item["reason"]) for item in chosen]
+
+
+def _split_oversized_speech_scenes(
+    scenes: list[dict[str, Any]],
+    normalized: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
+    audio_story_mode = str(normalized.get("audioStoryMode") or "").strip().lower()
+    debug = {
+        "oversizedSpeechScenesDetected": 0,
+        "oversizedSpeechScenesSplitCount": 0,
+        "speechSplitReasons": [],
+    }
+    if audio_story_mode != "speech_narrative" or not scenes:
+        return scenes, debug, []
+
+    analysis, analysis_debug = _load_audio_analysis(str(normalized.get("audioUrl") or ""), _to_float(normalized.get("audioDurationSec")))
+    split_scenes: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    for scene in scenes:
+        duration = max(0.0, _to_float(scene.get("durationSec")) or 0.0)
+        start_sec = _to_float(scene.get("startSec")) or 0.0
+        end_sec = _to_float(scene.get("endSec")) or start_sec
+        if duration <= 8.0 or end_sec <= start_sec:
+            split_scenes.append(scene)
+            continue
+
+        debug["oversizedSpeechScenesDetected"] += 1
+        pieces = max(2, int(duration // 7.2) + (1 if (duration % 7.2) > 0.2 else 0))
+        pieces = min(pieces, max(2, int(duration // 2.6)))
+        split_points, split_reasons = _pick_speech_split_points(start_sec, end_sec, analysis, pieces)
+        boundaries = [start_sec, *split_points, end_sec]
+        if len(boundaries) < 3:
+            warnings.append(f"speech_scene_split_failed:{scene.get('sceneId')}")
+            split_scenes.append(scene)
+            continue
+
+        text_chunks = _split_speech_text_chunks(str(scene.get("spokenText") or scene.get("sceneText") or ""), len(boundaries) - 1)
+        meaning_chunks = _split_speech_text_chunks(str(scene.get("sceneMeaning") or ""), len(boundaries) - 1)
+        for idx in range(len(boundaries) - 1):
+            part_start = boundaries[idx]
+            part_end = boundaries[idx + 1]
+            part_duration = max(0.0, part_end - part_start)
+            if part_duration < 1.2:
+                continue
+            part_scene = dict(scene)
+            part_scene["sceneId"] = f"{scene.get('sceneId') or 'scene'}-s{idx + 1}"
+            part_scene["title"] = str(scene.get("title") or f"Scene {scene.get('sceneId') or ''}").strip()
+            part_scene["startSec"] = _round_sec(part_start)
+            part_scene["endSec"] = _round_sec(part_end)
+            part_scene["durationSec"] = _round_sec(part_duration)
+            if idx < len(text_chunks):
+                part_scene["spokenText"] = text_chunks[idx]
+                if not str(part_scene.get("sceneText") or "").strip():
+                    part_scene["sceneText"] = text_chunks[idx]
+            if idx < len(meaning_chunks) and meaning_chunks[idx]:
+                part_scene["sceneMeaning"] = meaning_chunks[idx]
+            part_scene["continuity"] = "; ".join(
+                item for item in [
+                    str(scene.get("continuity") or "").strip(),
+                    f"speech beat {idx + 1}/{len(boundaries) - 1}",
+                ]
+                if item
+            )
+            split_scenes.append(part_scene)
+        debug["oversizedSpeechScenesSplitCount"] += max(0, len(boundaries) - 2)
+        debug["speechSplitReasons"].append({
+            "sceneId": str(scene.get("sceneId") or ""),
+            "durationSec": _round_sec(duration),
+            "analysisSource": analysis_debug.get("source") or "none",
+            "splitReasons": split_reasons or ["approximate_midpoint"],
+            "resultSceneCount": len(boundaries) - 1,
+        })
+
+    return split_scenes, debug, warnings
+
+
 def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
     audio_story_mode = str(payload.get("audioStoryMode") or "lyrics_music").strip().lower()
     if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}:
@@ -1117,13 +1301,16 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- Location references define world/environment identity anchors for the scene.\n"
         "- If a role is chosen as hero, that role must dominate shot semantics.\n"
         "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
-        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed,refDirectives,sceneSemanticSource,"
+        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed,refDirectives,sceneSemanticSource,focalSubject,sceneAction,visualClue,cameraIntent,environmentMotion,forbiddenInsertions,"
         "heroEntityId,supportEntityIds,mustAppear,mustNotAppear,environmentLock,styleLock,identityLock,roleSelectionReason.\n"
         "For speech_narrative scenes also include: sceneText,sceneMeaning,visualDescription,cameraPlan,motionPlan,sfxPlan.\n"
         "LANGUAGE CONTRACT (MANDATORY): imagePromptRu MUST be Russian; imagePromptEn MUST be English; videoPromptRu MUST be Russian; videoPromptEn MUST be English. Non-compliance is an error.\n"
+        "Treat every scene as a narrative beat, not a generic landscape description. Specify the focal subject, the exact action/event happening now, the visual clue that carries narration meaning, and the camera intent.\n"
+        "Avoid generic establishing-shot filler unless the scene is explicitly an establishing scene.\n"
+        "Do not invent dominant unexplained foreground props. Do not introduce oversized machines, devices, or artifacts unless the narration meaning or explicit refs require them. If no prop is required, keep the frame clean and semantically grounded.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
-        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected, plus audioStoryMode, textSource, transcriptAvailable, spokenMeaningPrimary, charactersAllowed, sceneSemanticSource per scene, and peopleAutoAddedCount.\n"
+        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected, plus audioStoryMode, textSource, transcriptAvailable, spokenMeaningPrimary, charactersAllowed, sceneSemanticSource per scene, peopleAutoAddedCount, oversizedSpeechScenesDetected, oversizedSpeechScenesSplitCount, speechSplitReasons, promptLanguageStatus, ruPromptMissing, enPromptPresent, and objectHallucinationRisk when available.\n"
         f"INPUT={json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -1373,6 +1560,8 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
 
     dynamic_score = int(bool(scene_action)) + int(bool(environment_motion)) + int(bool(camera_plan))
     weak_scene = dynamic_score < 2
+    hallucination_text = " ".join([image_prompt_en, video_prompt_en, str(src.get("visualDescription") or "")]).lower()
+    object_hallucination_risk = "high" if ("props" not in refs_used and any(token in hallucination_text for token in ["giant", "massive", "oversized", "huge machine", "device", "artifact", "monolith", "foreground object"])) else "low"
     continuity_parts = [str(src.get("continuity") or "").strip()]
     if scene_action or environment_motion:
         continuity_parts.append("scene contains active motion")
@@ -1387,10 +1576,8 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         image_sync_status = PROMPT_SYNC_STATUS_NEEDS_SYNC
         if not image_prompt_ru:
             image_missing_langs.append("ru")
-            image_prompt_ru = image_prompt_en
         if not image_prompt_en:
             image_missing_langs.append("en")
-            image_prompt_en = image_prompt_ru
     else:
         image_sync_status = PROMPT_SYNC_STATUS_NEEDS_SYNC
         image_missing_langs.extend(["ru", "en"])
@@ -1401,13 +1588,16 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         video_sync_status = PROMPT_SYNC_STATUS_NEEDS_SYNC
         if not video_prompt_ru:
             video_missing_langs.append("ru")
-            video_prompt_ru = video_prompt_en
         if not video_prompt_en:
             video_missing_langs.append("en")
-            video_prompt_en = video_prompt_ru
     else:
         video_sync_status = PROMPT_SYNC_STATUS_NEEDS_SYNC
         video_missing_langs.extend(["ru", "en"])
+
+    prompt_language_status = {
+        "image": "ru_en_present" if image_prompt_ru and image_prompt_en else ("ru_missing_en_fallback" if image_prompt_en else ("en_missing_ru_only" if image_prompt_ru else "missing_both")),
+        "video": "ru_en_present" if video_prompt_ru and video_prompt_en else ("ru_missing_en_fallback" if video_prompt_en else ("en_missing_ru_only" if video_prompt_ru else "missing_both")),
+    }
 
     return {
         "sceneId": str(src.get("sceneId") or f"scene-{idx + 1}"),
@@ -1422,6 +1612,10 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "motionPlan": str(src.get("motionPlan") or ""),
         "sfxPlan": str(src.get("sfxPlan") or ""),
         "sceneAction": scene_action,
+        "focalSubject": str(src.get("focalSubject") or src.get("primarySubject") or primary_role or "").strip(),
+        "visualClue": str(src.get("visualClue") or src.get("visualEvidence") or src.get("visualDescription") or "").strip(),
+        "cameraIntent": str(src.get("cameraIntent") or camera_plan or "").strip(),
+        "forbiddenInsertions": [str(item).strip() for item in (src.get("forbiddenInsertions") if isinstance(src.get("forbiddenInsertions"), list) else []) if str(item).strip()],
         "environmentMotion": environment_motion,
         "sfxSuggestion": str(src.get("sfxSuggestion") or src.get("sfxPlan") or "").strip(),
         "sceneNarrativeStep": str(src.get("sceneNarrativeStep") or ""),
@@ -1444,12 +1638,16 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
             "image": image_missing_langs,
             "video": video_missing_langs,
         },
+        "promptLanguageStatus": prompt_language_status,
+        "ruPromptMissing": {"image": not bool(image_prompt_ru), "video": not bool(video_prompt_ru)},
+        "enPromptPresent": {"image": bool(image_prompt_en), "video": bool(video_prompt_en)},
         "refsUsed": refs_used,
         "activeRefs": active_refs,
         "refUsageReason": ref_usage_reason,
         "characterRoleLogic": character_role_logic,
         "sceneDynamicScore": dynamic_score,
         "weakScene": weak_scene,
+        "objectHallucinationRisk": object_hallucination_risk,
         "refDirectives": ref_directives,
         "heroEntityId": hero_entity_id,
         "supportEntityIds": support_entity_ids,
@@ -1710,7 +1908,10 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
     scenes = _normalize_gemini_scenes(raw_scenes, normalized.get("refsByRole"))
     scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
-    segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
+    scenes, speech_split_debug, speech_split_warnings = _split_oversized_speech_scenes(scenes, normalized)
+    warnings.extend(speech_split_warnings)
+    timing_debug["sceneCountAfterSpeechSplit"] = len(scenes)
+    segmentation_debug = {**_build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug), **speech_split_debug}
     preview_raw = parsed.get("preview") if isinstance(parsed.get("preview"), dict) else {}
     preview = {
         **_build_preview_from_scenes(scenes, merged_world_lock),
@@ -1925,7 +2126,10 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         warnings.extend(prompt_contract_warnings)
 
     scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
-    segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
+    scenes, speech_split_debug, speech_split_warnings = _split_oversized_speech_scenes(scenes, normalized)
+    warnings.extend(speech_split_warnings)
+    timing_debug["sceneCountAfterSpeechSplit"] = len(scenes)
+    segmentation_debug = {**_build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug), **speech_split_debug}
     initial_segmentation_debug = dict(segmentation_debug)
     initial_scene_count = len(scenes)
     refinement_attempted = False
@@ -1973,7 +2177,10 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 warnings.append("segmentation_refinement_returned_invalid_scenes")
             elif len(refinement_errors) == 0:
                 scenes, timing_debug = _normalize_scene_timeline(valid_refined_scenes, normalized.get("audioDurationSec"))
-                segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
+                scenes, speech_split_debug, speech_split_warnings = _split_oversized_speech_scenes(scenes, normalized)
+                warnings.extend(speech_split_warnings)
+                timing_debug["sceneCountAfterSpeechSplit"] = len(scenes)
+                segmentation_debug = {**_build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug), **speech_split_debug}
                 parsed = refined_parsed
                 refinement_succeeded = True
                 diagnostics = {
