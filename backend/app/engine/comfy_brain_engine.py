@@ -187,6 +187,7 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "storyMissionSummary": str(data.get("storyMissionSummary") or "").strip(),
         "timelineSource": str(data.get("timelineSource") or "").strip(),
         "narrativeSource": str(data.get("narrativeSource") or "").strip(),
+        "sceneCandidates": data.get("sceneCandidates") if isinstance(data.get("sceneCandidates"), list) else (data.get("scenes") if isinstance(data.get("scenes"), list) else []),
     }
 
 
@@ -204,6 +205,50 @@ def _summarize_profile_value(value: Any) -> str:
     return ""
 
 
+def _collect_world_signal_text(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in ["text", "lyricsText", "transcriptText", "spokenTextHint", "audioSemanticSummary", "storyMissionSummary"]:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    hints = payload.get("audioSemanticHints")
+    if isinstance(hints, str) and hints.strip():
+        parts.append(hints.strip())
+    elif isinstance(hints, list):
+        parts.extend([str(item).strip() for item in hints if str(item).strip()])
+    elif isinstance(hints, dict):
+        parts.extend([f"{key}: {str(item).strip()}" for key, item in hints.items() if str(item).strip()])
+
+    scene_candidates = payload.get("sceneCandidates") if isinstance(payload.get("sceneCandidates"), list) else []
+    for scene in scene_candidates[:3]:
+        if not isinstance(scene, dict):
+            continue
+        for key in ["sceneMeaning", "visualDescription", "sceneAction", "environmentMotion", "continuity"]:
+            value = scene.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+    return " ".join(parts).strip().lower()
+
+
+def _infer_world_detail(signal_text: str, mapping: dict[str, list[str]], fallback: str) -> str:
+    haystack = f" {signal_text} "
+    for label, variants in mapping.items():
+        for variant in variants:
+            needle = str(variant or "").strip().lower()
+            if needle and f" {needle} " in haystack:
+                return label
+    return fallback
+
+
+def _append_unique_strings(items: list[str], additions: list[str]) -> list[str]:
+    out: list[str] = []
+    for item in [*items, *additions]:
+        clean = str(item or "").strip()
+        if clean and clean not in out:
+            out.append(clean)
+    return out
+
+
 def _build_world_lock(payload: dict[str, Any], reference_profiles: dict[str, Any]) -> dict[str, Any]:
     refs_by_role = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
     location_profile = reference_profiles.get("location") if isinstance(reference_profiles.get("location"), dict) else {}
@@ -211,33 +256,141 @@ def _build_world_lock(payload: dict[str, Any], reference_profiles: dict[str, Any
     location_refs = refs_by_role.get("location") if isinstance(refs_by_role.get("location"), list) else []
     style_refs = refs_by_role.get("style") if isinstance(refs_by_role.get("style"), list) else []
     visual_style = str(payload.get("stylePreset") or "realism").strip() or "realism"
+    signal_text = _collect_world_signal_text(payload)
     location_name = str(((location_refs[0] or {}).get("name")) if location_refs else "").strip() or "anchored_main_location"
     location_summary = _summarize_profile_value(location_profile.get("visualProfile") or location_profile.get("summary")) or location_name
     style_summary = _summarize_profile_value(style_profile.get("visualProfile") or style_profile.get("summary")) or visual_style
+    location_visual = location_profile.get("visualProfile") if isinstance(location_profile.get("visualProfile"), dict) else {}
+    style_visual = style_profile.get("visualProfile") if isinstance(style_profile.get("visualProfile"), dict) else {}
+
+    environment_type = _summarize_profile_value(location_visual.get("environmentType")) or _infer_world_detail(
+        signal_text,
+        {
+            "desert": ["desert", "dune", "dunes", "sandstorm", "arid"],
+            "bunker": ["bunker", "blast door", "underground base", "missile silo", "tunnel"],
+            "forest": ["forest", "woods", "woodland", "oak", "pine", "jungle"],
+            "city": ["city", "street", "downtown", "urban", "skyscraper"],
+            "industrial": ["industrial", "factory", "warehouse", "plant", "concrete complex"],
+        },
+        location_name or "anchored_main_location",
+    )
+    environment_subtype = _summarize_profile_value(location_profile.get("subtype")) or _infer_world_detail(
+        signal_text,
+        {
+            "oak forest": ["oak forest", "oak woods", "oak grove"],
+            "pine forest": ["pine forest", "conifer forest", "taiga"],
+            "concrete bunker": ["concrete bunker", "brutalist bunker", "reinforced bunker"],
+            "sand dunes": ["sand dunes", "dunes", "erg"],
+            "industrial city": ["industrial city", "factory district", "port city"],
+        },
+        _summarize_profile_value(location_profile.get("entityType")) or "single_continuous_world",
+    )
+    time_of_day = _summarize_profile_value(style_profile.get("timeOfDay")) or _infer_world_detail(
+        signal_text,
+        {
+            "sunset": ["sunset", "golden hour", "dusk"],
+            "night": ["night", "moonlight", "midnight", "after dark"],
+            "artificial light": ["artificial light", "fluorescent", "flashlight", "emergency light", "neon"],
+            "day": ["day", "daylight", "morning", "noon", "afternoon"],
+        },
+        "locked_from_input",
+    )
+    lighting_model = _summarize_profile_value(style_profile.get("lightingLogic") or style_profile.get("lighting")) or _infer_world_detail(
+        signal_text,
+        {
+            "natural sunlight": ["sunlight", "natural light", "daylight", "sunlit"],
+            "flashlight": ["flashlight", "torch beam", "searchlight"],
+            "industrial": ["industrial light", "fluorescent", "sodium vapor", "warehouse lighting"],
+            "firelight": ["firelight", "torchlight", "ember glow"],
+        },
+        f"{visual_style} continuity lighting",
+    )
+    atmosphere = _summarize_profile_value(style_profile.get("atmosphere")) or _infer_world_detail(
+        signal_text,
+        {
+            "dusty": ["dusty", "dust", "grit", "sand haze"],
+            "humid": ["humid", "wet air", "sweaty", "tropical"],
+            "fog": ["fog", "mist", "haze"],
+            "dry heat": ["dry heat", "arid heat", "heat shimmer"],
+            "sterile industrial air": ["sterile", "clinical", "recycled air"],
+        },
+        f"{visual_style} atmosphere continuity",
+    )
+    material_language = _summarize_profile_value(location_profile.get("materials") or location_visual.get("surfaceState") or location_profile.get("visualProfile")) or _infer_world_detail(
+        signal_text,
+        {
+            "sand": ["sand", "dune", "dust"],
+            "concrete": ["concrete", "cement", "reinforced"],
+            "metal": ["metal", "steel", "iron", "aluminum"],
+            "wood": ["wood", "timber", "oak", "pine"],
+            "stone": ["stone", "rock", "basalt", "granite"],
+        },
+        "preserve dominant material language",
+    )
+    color_palette = _summarize_profile_value(style_profile.get("palette") or style_profile.get("visualProfile")) or _infer_world_detail(
+        signal_text,
+        {
+            "warm desert": ["warm desert", "amber sand", "sun-baked", "ochre"],
+            "cold industrial": ["cold industrial", "steel blue", "cyan gray", "fluorescent gray"],
+            "earthy forest": ["earthy forest", "moss green", "brown bark", "green canopy"],
+            "neon urban": ["neon", "magenta", "electric blue", "city glow"],
+        },
+        style_summary,
+    )
+    continuity_rules = [
+        "Keep one continuous world unless narration explicitly transitions elsewhere.",
+        "Do not change location family, time of day, lighting logic, or material language without a story cue.",
+        "References constrain world identity; audio/text drive semantic scene selection inside that world.",
+    ]
+    world_continuity_rules = [
+        "environment must remain consistent unless explicit transition",
+        "lighting must remain physically consistent",
+        "materials must not change randomly",
+        "vegetation type must not change (oak ≠ pine)",
+        "architecture style must remain stable",
+    ]
+    forbidden_world_changes = [
+        "changing forest type without transition",
+        "changing desert type or sand color dramatically",
+        "switching from natural light to artificial without cause",
+        "changing architecture language (brutalist → sci-fi)",
+    ]
     return {
         "worldType": location_summary or location_name,
         "locationType": location_name,
-        "locationSubtype": _summarize_profile_value(location_profile.get("subtype") or location_profile.get("entityType")) or "single_continuous_world",
-        "timeOfDay": _summarize_profile_value(style_profile.get("timeOfDay")) or "locked_from_input",
-        "lighting": _summarize_profile_value(style_profile.get("lightingLogic") or style_profile.get("lighting")) or f"{visual_style} continuity lighting",
+        "locationSubtype": environment_subtype,
+        "environmentType": environment_type,
+        "environmentSubtype": environment_subtype,
+        "timeOfDay": time_of_day,
+        "time_of_day": time_of_day,
+        "lighting": lighting_model,
+        "lighting_model": lighting_model,
         "shadows": _summarize_profile_value(style_profile.get("shadowLogic")) or "keep shadow logic stable scene to scene",
         "weather": _summarize_profile_value(style_profile.get("weather")) or "hold stable unless story explicitly transitions",
-        "materials": _summarize_profile_value(location_profile.get("materials") or location_profile.get("visualProfile")) or "preserve dominant material language",
+        "materials": material_language,
+        "material_language": material_language,
         "architecture": _summarize_profile_value(location_profile.get("architecture") or location_profile.get("visualProfile")) or "preserve architecture language",
         "vegetation": _summarize_profile_value(location_profile.get("vegetation")) or "do not drift vegetation family without transition",
         "spacePhysics": _summarize_profile_value(location_profile.get("spacePhysics")) or "consistent spatial physics and scale",
-        "palette": _summarize_profile_value(style_profile.get("palette") or style_profile.get("visualProfile")) or style_summary,
-        "atmosphere": _summarize_profile_value(style_profile.get("atmosphere")) or f"{visual_style} atmosphere continuity",
-        "continuityRules": [
-            "Keep one continuous world unless narration explicitly transitions elsewhere.",
-            "Do not change location family, time of day, lighting logic, or material language without a story cue.",
-            "References constrain world identity; audio/text drive semantic scene selection inside that world.",
-        ],
-        "forbiddenWorldDrift": [
-            "No abrupt biome swap without transition.",
-            "No unexplained day/night jump.",
-            "No random architecture or weather reset between adjacent scenes.",
-        ],
+        "palette": color_palette,
+        "color_palette": color_palette,
+        "atmosphere": atmosphere,
+        "continuityRules": _append_unique_strings(continuity_rules, world_continuity_rules),
+        "world_continuity_rules": world_continuity_rules,
+        "forbiddenWorldDrift": _append_unique_strings(
+            [
+                "No abrupt biome swap without transition.",
+                "No unexplained day/night jump.",
+                "No random architecture or weather reset between adjacent scenes.",
+            ],
+            forbidden_world_changes,
+        ),
+        "forbidden_world_changes": forbidden_world_changes,
+        "signalSources": {
+            "textInput": bool(str(payload.get("text") or "").strip()),
+            "audioMeaning": bool(str(payload.get("transcriptText") or payload.get("audioSemanticSummary") or payload.get("spokenTextHint") or "").strip()),
+            "firstScenes": bool(payload.get("sceneCandidates")),
+        },
         "sourceRefs": {
             "location": [str(item.get("url") or "").strip() for item in location_refs if str(item.get("url") or "").strip()],
             "style": [str(item.get("url") or "").strip() for item in style_refs if str(item.get("url") or "").strip()],
@@ -254,16 +407,66 @@ def _build_entity_locks(payload: dict[str, Any], reference_profiles: dict[str, A
         if not profile and not refs:
             continue
         visual_profile = profile.get("visualProfile") if isinstance((profile or {}).get("visualProfile"), dict) else {}
+        entity_type = str((profile or {}).get("entityType") or role).strip() or role
+        canonical_details: dict[str, Any] = {}
+        if entity_type == "human":
+            canonical_details = {
+                "gender_presentation": _summarize_profile_value(visual_profile.get("genderPresentation")) or "locked_from_reference",
+                "body_type": _summarize_profile_value(visual_profile.get("bodyType")) or "locked_from_reference",
+                "hair": _summarize_profile_value(visual_profile.get("hair")) or "locked_from_reference",
+                "outfit": {
+                    "top": _summarize_profile_value(visual_profile.get("outfitTop") or visual_profile.get("outfit")) or "locked_from_reference",
+                    "bottom": _summarize_profile_value(visual_profile.get("outfitBottom") or visual_profile.get("outfit")) or "locked_from_reference",
+                    "shoes": _summarize_profile_value(visual_profile.get("shoes") or visual_profile.get("footwear")) or "locked_from_reference",
+                },
+                "silhouette": _summarize_profile_value(visual_profile.get("silhouette") or visual_profile.get("bodyType")) or "locked_from_reference",
+                "accessories": _summarize_profile_value(visual_profile.get("accessories")) or "locked_from_reference",
+            }
+        elif entity_type == "animal":
+            canonical_details = {
+                "species": _summarize_profile_value(visual_profile.get("species") or visual_profile.get("speciesLock")) or "locked_from_reference",
+                "breed_type": _summarize_profile_value(visual_profile.get("breedLikeAppearance")) or "locked_from_reference",
+                "fur_pattern": _summarize_profile_value(visual_profile.get("furPattern") or visual_profile.get("coat")) or "locked_from_reference",
+                "color": _summarize_profile_value(visual_profile.get("dominantColors") or visual_profile.get("coat")) or "locked_from_reference",
+                "proportions": _summarize_profile_value(visual_profile.get("bodyType") or visual_profile.get("morphology") or visual_profile.get("bodyBuild")) or "locked_from_reference",
+            }
+        elif entity_type == "object":
+            canonical_details = {
+                "object_type": _summarize_profile_value(visual_profile.get("objectCategory")) or "locked_from_reference",
+                "shape": _summarize_profile_value(visual_profile.get("silhouette")) or "locked_from_reference",
+                "material": _summarize_profile_value(visual_profile.get("material")) or "locked_from_reference",
+                "color": _summarize_profile_value(visual_profile.get("dominantColors")) or "locked_from_reference",
+                "scale_class": _summarize_profile_value(visual_profile.get("scaleClass")) or "locked_from_reference",
+            }
+        forbidden_changes = (profile or {}).get("forbiddenChanges") if isinstance((profile or {}).get("forbiddenChanges"), list) else []
+        forbidden_changes = _append_unique_strings(
+            [str(item).strip() for item in forbidden_changes if str(item).strip()],
+            [
+                "do not change outfit",
+                "do not change hair",
+                "do not change body type",
+                "do not replace object",
+                "do not change material",
+            ],
+        )
         entity_locks[role] = {
             "refId": role,
             "role": role,
             "label": str(((refs[0] or {}).get("name")) if refs else "").strip() or role,
-            "entityType": str((profile or {}).get("entityType") or role).strip() or role,
+            "entityType": entity_type,
             "visualProfile": visual_profile,
+            "canonicalDetails": canonical_details,
             "invariants": (profile or {}).get("invariants") if isinstance((profile or {}).get("invariants"), list) else [],
-            "forbiddenChanges": (profile or {}).get("forbiddenChanges") if isinstance((profile or {}).get("forbiddenChanges"), list) else [
+            "forbiddenChanges": forbidden_changes or [
                 "Do not swap identity with a different entity.",
                 "Do not mutate outfit/material/species without explicit story cause.",
+            ],
+            "forbidden_changes": forbidden_changes or [
+                "do not change outfit",
+                "do not change hair",
+                "do not change body type",
+                "do not replace object",
+                "do not change material",
             ],
             "sourceRefUrls": [str(item.get("url") or "").strip() for item in refs if str(item.get("url") or "").strip()],
         }
@@ -292,6 +495,7 @@ def _build_gemini_planner_payload(payload: dict[str, Any], world_lock: dict[str,
         "worldContext": {
             "worldLock": world_lock,
             "styleSummary": payload.get("stylePreset") or "realism",
+            "sceneCandidates": payload.get("sceneCandidates") or [],
             "locationRefs": refs_by_role.get("location") or [],
             "characterRefs": [item for role in ["character_1", "character_2", "character_3"] for item in (refs_by_role.get(role) or [])],
             "animalRefs": refs_by_role.get("animal") or [],
@@ -331,6 +535,24 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "- Avoid slideshow risk where only the camera moves.\n"
         "- imagePrompt and videoPrompt must stay compatible with the locked world and entity continuity.\n"
         "- preview must be extracted from the scenario, not invented separately.\n"
+        "WORLD CONTINUITY:\n"
+        "- environment must remain consistent across scenes.\n"
+        "- lighting must remain physically consistent.\n"
+        "- no random environment changes.\n"
+        "ENTITY LOCK:\n"
+        "- characters must keep same appearance.\n"
+        "- objects must not change shape/material.\n"
+        "- animals must keep species and pattern.\n"
+        "SCENE QUALITY:\n"
+        "- each scene must include action OR environment motion.\n"
+        "- avoid static shots.\n"
+        "- avoid slideshow camera-only scenes.\n"
+        "REF LOGIC:\n"
+        "- refs constrain visuals, not narrative meaning.\n"
+        "- choose refs per scene, not globally.\n"
+        "PREVIEW:\n"
+        "- one scene must be strong enough to be preview.\n"
+        "- it must be understandable visually.\n"
         "Return no markdown, only JSON.\n"
         f"INPUT={json.dumps(gemini_payload, ensure_ascii=False)}"
     )
@@ -656,12 +878,43 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         character_role_logic = [
             {
                 "refId": role,
-                "roleInScene": "hero" if role == primary_role else "supporting",
+                "roleInScene": "actor" if role == primary_role else "background",
                 "action": scene_action or environment_motion or "supports the scene beat",
+                "reason": ref_usage_reason or "selected because this entity is visually relevant to the scene meaning",
             }
             for role in [primary_role, *secondary_roles]
             if role in COMFY_REF_ROLES
         ]
+    else:
+        normalized_role_logic: list[dict[str, Any]] = []
+        for item in character_role_logic:
+            if not isinstance(item, dict):
+                continue
+            ref_id = str(item.get("refId") or item.get("role") or "").strip()
+            if ref_id not in COMFY_REF_ROLES:
+                continue
+            role_in_scene = str(item.get("roleInScene") or "").strip().lower()
+            if role_in_scene not in {"observer", "actor", "background"}:
+                role_in_scene = "actor" if ref_id == primary_role else "background"
+            normalized_role_logic.append(
+                {
+                    "refId": ref_id,
+                    "roleInScene": role_in_scene,
+                    "action": str(item.get("action") or scene_action or environment_motion or "supports the scene beat").strip(),
+                    "reason": str(item.get("reason") or ref_usage_reason or "selected because this entity is relevant to the scene meaning").strip(),
+                }
+            )
+        character_role_logic = normalized_role_logic
+
+    if not scene_action and not environment_motion:
+        scene_action = "character slightly shifts position, breathes, interacts subtly with environment"
+
+    dynamic_score = int(bool(scene_action)) + int(bool(environment_motion)) + int(bool(camera_plan))
+    weak_scene = dynamic_score < 2
+    continuity_parts = [str(src.get("continuity") or "").strip()]
+    if scene_action or environment_motion:
+        continuity_parts.append("scene contains active motion")
+    continuity_text = "; ".join([part for part in continuity_parts if part]).strip("; ")
 
     image_missing_langs: list[str] = []
     video_missing_langs: list[str] = []
@@ -715,7 +968,7 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "sceneOutputRule": str(src.get("sceneOutputRule") or "scene image first"),
         "primaryRole": primary_role,
         "secondaryRoles": secondary_roles,
-        "continuity": str(src.get("continuity") or ""),
+        "continuity": continuity_text,
         "continuityLocksUsed": continuity_locks_used,
         "imagePrompt": image_prompt_en,
         "videoPrompt": video_prompt_en,
@@ -733,6 +986,8 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "activeRefs": active_refs,
         "refUsageReason": ref_usage_reason,
         "characterRoleLogic": character_role_logic,
+        "sceneDynamicScore": dynamic_score,
+        "weakScene": weak_scene,
         "refDirectives": ref_directives,
         "heroEntityId": hero_entity_id,
         "supportEntityIds": support_entity_ids,
@@ -748,6 +1003,13 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "imageUrl": "",
         "videoUrl": "",
     }
+
+
+def _normalize_gemini_scenes(
+    scenes: list[dict[str, Any]],
+    available_refs_by_role: dict[str, list[dict[str, str]]] | None = None,
+) -> list[dict[str, Any]]:
+    return [_normalize_scene(scene, idx, available_refs_by_role) for idx, scene in enumerate(scenes)]
 
 
 def _build_segmentation_debug(scenes: list[dict[str, Any]], audio_story_mode: str, timing_debug: dict[str, Any]) -> dict[str, Any]:
@@ -813,21 +1075,48 @@ def _build_preview_from_scenes(scenes: list[dict[str, Any]], world_lock: dict[st
             "previewType": "none",
             "activeRefs": [],
             "imagePrompt": "",
+            "previewScore": 0,
             "continuityNotes": str(world_lock.get("atmosphere") or ""),
         }
-    best_scene = max(
-        scenes,
-        key=lambda scene: (
-            len(scene.get("activeRefs") or []),
-            _to_float(scene.get("confidence")) or 0.0,
-            _to_float(scene.get("durationSec")) or 0.0,
+
+    def _preview_score(scene: dict[str, Any]) -> int:
+        score = 0
+        if str(scene.get("sceneAction") or "").strip():
+            score += 2
+        strong_visual_focus = bool(scene.get("primaryRole")) or "location" in (scene.get("activeRefs") or []) or "props" in (scene.get("activeRefs") or [])
+        if strong_visual_focus:
+            score += 2
+        if str(scene.get("sceneMeaning") or scene.get("visualDescription") or scene.get("imagePromptEn") or scene.get("imagePrompt") or "").strip():
+            score += 2
+        if any(role in (scene.get("activeRefs") or []) for role in ["character_1", "character_2", "character_3", "group", "animal"]):
+            score += 1
+        if "contrast" in str(scene.get("imagePromptEn") or scene.get("imagePrompt") or "").lower() or "light" in str(scene.get("continuity") or "").lower():
+            score += 1
+        return score
+
+    scored_scenes = [(scene, _preview_score(scene)) for scene in scenes]
+    best_scene, best_score = max(
+        scored_scenes,
+        key=lambda item: (
+            item[1],
+            _to_float(item[0].get("sceneDynamicScore")) or 0.0,
+            _to_float(item[0].get("confidence")) or 0.0,
+            _to_float(item[0].get("durationSec")) or 0.0,
         ),
     )
+    preview_type = "environment_scene"
+    if str(best_scene.get("sceneAction") or "").strip():
+        preview_type = "action_scene"
+    elif any(role in (best_scene.get("activeRefs") or []) for role in ["character_1", "character_2", "character_3", "group", "animal"]):
+        preview_type = "hero_scene"
     return {
         "sourceSceneId": str(best_scene.get("sceneId") or ""),
-        "previewType": "hero_scene_extraction",
+        "previewType": preview_type,
         "activeRefs": list(best_scene.get("activeRefs") or []),
         "imagePrompt": str(best_scene.get("imagePromptEn") or best_scene.get("imagePrompt") or ""),
+        "previewScore": best_score,
+        "worldLock": world_lock,
+        "entityLocksUsed": list(best_scene.get("activeRefs") or []),
         "continuityNotes": str(best_scene.get("continuity") or world_lock.get("atmosphere") or ""),
     }
 
@@ -873,7 +1162,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     merged_entity_locks = {**entity_locks, **parsed_entity_locks}
 
     raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
-    scenes = [_normalize_scene(scene, idx, normalized.get("refsByRole")) for idx, scene in enumerate(raw_scenes)]
+    scenes = _normalize_gemini_scenes(raw_scenes, normalized.get("refsByRole"))
     scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
     segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
     preview_raw = parsed.get("preview") if isinstance(parsed.get("preview"), dict) else {}
@@ -918,12 +1207,38 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "rawPreview": diagnostics.get("rawPreview") or "",
             "geminiPayload": gemini_payload,
             "worldLock": merged_world_lock,
+            "worldLockSummary": {
+                "environmentType": merged_world_lock.get("environmentType"),
+                "environmentSubtype": merged_world_lock.get("environmentSubtype"),
+                "timeOfDay": merged_world_lock.get("timeOfDay"),
+                "lighting": merged_world_lock.get("lighting"),
+                "atmosphere": merged_world_lock.get("atmosphere"),
+                "palette": merged_world_lock.get("palette"),
+            },
             "entityLocks": merged_entity_locks,
+            "entityLockSummary": {
+                role: {
+                    "entityType": lock.get("entityType"),
+                    "label": lock.get("label"),
+                    "canonicalDetails": lock.get("canonicalDetails"),
+                    "forbiddenChanges": lock.get("forbiddenChanges"),
+                }
+                for role, lock in merged_entity_locks.items()
+                if isinstance(lock, dict)
+            },
             "preview": preview,
             "timing": timing_debug,
             "segmentation": segmentation_debug,
             "referenceProfilesSummary": summarize_profiles(reference_profiles),
             "activeRolesByScene": {str(scene.get("sceneId") or ""): list(scene.get("activeRefs") or []) for scene in scenes},
+            "sceneDynamicScores": {
+                str(scene.get("sceneId") or ""): {
+                    "sceneDynamicScore": scene.get("sceneDynamicScore"),
+                    "weakScene": scene.get("weakScene"),
+                }
+                for scene in scenes
+            },
+            "previewScore": preview.get("previewScore"),
         },
     }
 
