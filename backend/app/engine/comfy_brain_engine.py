@@ -24,11 +24,14 @@ logger = logging.getLogger(__name__)
 
 PRIMARY_GEMINI_PLANNER_MODEL = "gemini-3.1-pro-preview"
 FALLBACK_GEMINI_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-3-flash-preview").strip() or "gemini-3-flash-preview"
+RAW_GEMINI_FALLBACK_CHAIN = str(getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK_CHAIN", "") or "").strip()
 GEMINI_ONLY_PLANNER_MODEL_FALLBACKS = [
-    FALLBACK_GEMINI_MODEL,
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
+    model.strip()
+    for model in (RAW_GEMINI_FALLBACK_CHAIN.split(",") if RAW_GEMINI_FALLBACK_CHAIN else [FALLBACK_GEMINI_MODEL, "gemini-2.5-pro", "gemini-2.5-flash"])
+    if model.strip()
 ]
+if FALLBACK_GEMINI_MODEL not in GEMINI_ONLY_PLANNER_MODEL_FALLBACKS:
+    GEMINI_ONLY_PLANNER_MODEL_FALLBACKS.insert(0, FALLBACK_GEMINI_MODEL)
 PROMPT_SYNC_STATUS_SYNCED = "synced"
 PROMPT_SYNC_STATUS_NEEDS_SYNC = "needs_sync"
 PROMPT_SYNC_STATUS_SYNCING = "syncing"
@@ -57,9 +60,13 @@ Hard constraints:
 - Genre controls every scene consistently.
 - Genre must materially shape sceneMeaning, visualIdea, newThreatOrChange, image prompts, and video prompts — not just metadata labels.
 - Audio drives pacing, scene progression, escalation, and beat timing when audio is primary.
-- For clip/gemini_only planning, sceneCountTarget is only a soft hint. You may return fewer or more scenes if the audio structure, escalation, or semantic phrasing requires it.
-- Optional analyzer cues may help timing, but they are never the source of truth for final scene boundaries.
+- For clip/gemini_only planning, you must decide scene count yourself. Scene count is not predetermined by the client.
+- Derive scene boundaries from natural audio/semantic structure: phrase endings, pauses, energy shifts, repeated hooks, semantic pivots, dramatic turns, and escalation beats.
+- Do not split the clip into evenly sized chunks unless the source genuinely supports it. Uneven scene durations are allowed and expected when justified.
+- Optional analyzer cues may help timing, but they are helper-only and never the source of truth for final scene boundaries or scene count.
 - Anti-stagnation is required: scenes must progress and avoid static repetition.
+- Each scene must introduce at least one meaningful change: new action, threat, information, emotional state, spatial constraint, or escalation beat.
+- Do not generate filler scenes that only restate the same moment with cosmetic variation.
 - Escalation is required across the sequence unless the request explicitly calls for flat stillness.
 - If a transformed character remains physically present in a scene, that active character must remain in activeRoles.
 - tensionLevel must be numeric 1-10, or clearly convertible to that scale.
@@ -77,24 +84,24 @@ _CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
 _GENRE_SCENE_DIRECTIVES: dict[str, dict[str, str]] = {
     "horror": {
-        "en": "Play true horror: escalating dread, hostile negative space, predatory threat, corrupted realism, and imminent danger.",
-        "ru": "Играй в полноценный хоррор: нарастающий ужас, враждебная пустота кадра, хищная угроза, искажённый реализм и ощущение неминуемой опасности.",
+        "en": "Play true horror: escalating dread, active threat, corrupted realism, trap logic, safety violation, and imminent attack.",
+        "ru": "Играй в полноценный хоррор: нарастающий ужас, активную угрозу, искажённый реализм, ловушку, нарушение безопасности и ощущение неминуемой атаки.",
     },
     "thriller": {
-        "en": "Play tense thriller: surveillance pressure, unstable control, sharp suspicion, tactical danger, and irreversible turns.",
-        "ru": "Играй в напряжённый триллер: давление наблюдения, потеря контроля, острая подозрительность, тактическая опасность и необратимые повороты.",
+        "en": "Play tense thriller: suspicion, pursuit, hidden intent, tactical pressure, unstable control, and hard revelations.",
+        "ru": "Играй в напряжённый триллер: подозрение, преследование, скрытый умысел, тактическое давление, потерю контроля и жёсткие раскрытия.",
     },
     "romance": {
-        "en": "Play sincere romance: magnetic intimacy, vulnerable connection, longing glances, emotional reciprocity, and tender tension.",
-        "ru": "Играй в искреннюю романтику: притяжение, уязвимую близость, взгляды с тоской, эмоциональную взаимность и нежное напряжение.",
+        "en": "Play sincere romance: emotional reciprocity, longing, intimacy, vulnerability, and relational change that truly matters.",
+        "ru": "Играй в искреннюю романтику: эмоциональную взаимность, тоску, близость, уязвимость и по-настоящему значимые изменения в отношениях.",
     },
     "melancholy": {
-        "en": "Play melancholy: aching stillness, fragile memory, emotional distance, fading warmth, and bittersweet aftertaste.",
-        "ru": "Играй в меланхолию: ноющую тишину, хрупкую память, эмоциональную дистанцию, уходящее тепло и горько-сладкое послевкусие.",
+        "en": "Play melancholy: emptiness, fragile memory, emotional distance, fading warmth, and pain that still lingers.",
+        "ru": "Играй в меланхолию: пустоту, хрупкую память, эмоциональную дистанцию, уходящее тепло и боль, которая всё ещё держится внутри.",
     },
     "dreamy": {
-        "en": "Play dreamy mood: floating transitions, soft unreality, hypnotic wonder, suspended time, and luminous ambiguity.",
-        "ru": "Играй в dreamlike-настроение: парящие переходы, мягкую нереальность, гипнотическое изумление, подвешенное время и светящуюся неоднозначность.",
+        "en": "Play dreamy mood: suspended time, surreal softness, dream logic, floating transitions, and luminous ambiguity.",
+        "ru": "Играй в dreamlike-настроение: подвешенное время, сюрреалистическую мягкость, логику сна, парящие переходы и светящуюся неоднозначность.",
     },
 }
 
@@ -735,7 +742,7 @@ def _build_optional_audio_cues(normalized: dict[str, Any]) -> dict[str, Any]:
 
     cues = {
         "helperOnly": True,
-        "helperRule": "Use these as optional timing or energy cues only. They must never override your own scene-boundary decision.",
+        "helperRule": "Use these as optional timing, phrase, pause, or energy hints only. They must never override your own scene-count or scene-boundary decisions.",
         "beatsSample": _sample_marks(analysis.get("beats"), ("time",)),
         "downbeatsSample": _sample_marks(analysis.get("downbeats"), ("time",)),
         "barsSample": _sample_marks(analysis.get("bars"), ("time", "index")),
@@ -982,10 +989,14 @@ def build_gemini_planner_input(
     return {
         "mode": normalized.get("mode") or "clip",
         "genre": normalized.get("genre") or "",
-        "sceneCountTarget": _estimate_scene_count_target(normalized),
-        "sceneCountGuidance": {
-            "type": "soft_hint_only",
-            "rule": "Use sceneCountTarget as a flexible planning hint. Final scene count must follow natural semantic/audio structure instead of equal buckets.",
+        "sceneCountHint": {
+            "optional": True,
+            "reason": "debug_only_gemini_must_decide_scene_count",
+            "value": None,
+        },
+        "sceneBoundaryDirective": {
+            "owner": "gemini",
+            "rule": "Determine scene count and scene boundaries from semantics, phrase endings, pauses, energy shifts, pacing, escalation, and dramatic progression. Never optimize for equal timing buckets.",
         },
         "audioContext": {
             "durationSec": _to_float(normalized.get("audioDurationSec")),
@@ -1006,6 +1017,7 @@ def build_gemini_planner_input(
         "compactEntityLocksSummary": _compact_entity_locks_summary(entity_locks or {}),
         "compactStoryContext": _compact_story_context(story, normalized),
         "genreDirective": _genre_scene_directive(normalized.get("genre"), language="en"),
+        "sceneChangeRequirement": "Each scene must introduce at least one meaningful change: action, threat, information, relation, spatial condition, emotional state, or world-state escalation.",
         "optionalAudioCues": _build_optional_audio_cues(normalized),
     }
 
@@ -1016,7 +1028,12 @@ def build_gemini_planner_request_text(planner_input: dict[str, Any]) -> str:
         "Return one JSON object matching the planner contract.\n"
         "Required top-level fields: genre, sceneCount, scenes.\n"
         "Required per-scene fields: sceneId, startSec, endSec, durationSec, tensionLevel, activeRoles, focalRole, continuityRule, visualIdea.\n"
-        "sceneCountTarget is a soft hint only. Final scene count and boundaries must follow the natural audio/semantic structure.\n"
+        "You must decide scene count yourself. Scene count is your decision, not a hard client instruction.\n"
+        "Derive scene boundaries from audio semantics, vocal phrases, pauses, energy shifts, pacing, escalation, repeated hooks, and dramatic progression.\n"
+        "Do not follow equal timing buckets or optimize for evenly sized chunks unless the source genuinely supports it.\n"
+        "Uneven scene durations are allowed and expected when justified.\n"
+        "Each scene must be a story event and introduce at least one meaningful change. Do not generate filler scenes with cosmetic variation only.\n"
+        "Genre must materially shape sceneMeaning, visualIdea, newThreatOrChange, imagePrompt, and videoPrompt.\n"
         "propFunction is required only when props are active.\n"
         f"{json.dumps(planner_input, ensure_ascii=False, indent=2)}"
     )
@@ -1968,7 +1985,10 @@ def normalize_gemini_planner_response(parsed: dict[str, Any], request_input: dic
     available_refs = request_input.get("refsByRole") if isinstance(request_input.get("refsByRole"), dict) else {}
     available_roles = {role for role, items in available_refs.items() if isinstance(items, list) and items}
     requested_genre = str(parsed.get("genre") or request_input.get("genre") or "").strip()
-    estimated_scene_count = max(int(_to_float(request_input.get("sceneCountTarget")) or 0), len(raw_scenes), 1)
+    scene_count_hint = request_input.get("sceneCountHint") if isinstance(request_input.get("sceneCountHint"), dict) else {}
+    hinted_scene_count = int(_to_float(scene_count_hint.get("value")) or 0) if scene_count_hint else 0
+    parsed_scene_count = int(_to_float(parsed.get("sceneCount")) or 0)
+    estimated_scene_count = max(parsed_scene_count, hinted_scene_count, len(raw_scenes), 1)
     fallback_duration = _to_float(request_input.get("audioContext", {}).get("durationSec")) if isinstance(request_input.get("audioContext"), dict) else None
     if fallback_duration is not None and estimated_scene_count > 0:
         fallback_duration = fallback_duration / estimated_scene_count
