@@ -6007,18 +6007,22 @@ ${contextPrompt}`.trim(),
     const nextValue = String(value || '');
     const hasRu = !!String(comfySelectedScene?.imagePromptRu || '').trim();
     const hasEn = !!String(comfySelectedScene?.imagePromptEn || '').trim();
-    if (!hasRu && hasEn) {
+    const sourceEn = String(comfySelectedScene?.imagePromptEnSource || '').trim();
+    if (!hasRu && hasEn && comfySelectedScene?.imagePromptEditorLang === 'en_fallback') {
       updateComfyScene(comfySafeIndex, {
-        imagePromptEn: nextValue,
-        imagePrompt: nextValue,
+        imagePromptRu: nextValue,
+        imagePromptEn: '',
+        imagePrompt: '',
+        imagePromptEnSource: sourceEn || String(comfySelectedScene?.imagePromptEn || ''),
         imagePromptEditorValue: nextValue,
-        imagePromptEditorLang: nextValue.trim() ? 'en_fallback' : 'missing',
+        imagePromptEditorLang: nextValue.trim() ? 'ru' : 'missing',
         imagePromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
         imagePromptSyncError: '',
-        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), image: !!nextValue.trim() },
-        ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), image: true },
-        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), image: nextValue.trim() ? 'ru_missing_en_fallback' : 'missing_both' },
+        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), image: false },
+        ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), image: !nextValue.trim() },
+        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), image: nextValue.trim() ? 'en_missing_ru_only' : 'missing_both' },
       });
+      scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'image', ruText: nextValue });
       return;
     }
     updateComfyScene(comfySafeIndex, {
@@ -6037,18 +6041,22 @@ ${contextPrompt}`.trim(),
     const nextValue = String(value || '');
     const hasRu = !!String(comfySelectedScene?.videoPromptRu || '').trim();
     const hasEn = !!String(comfySelectedScene?.videoPromptEn || '').trim();
-    if (!hasRu && hasEn) {
+    const sourceEn = String(comfySelectedScene?.videoPromptEnSource || '').trim();
+    if (!hasRu && hasEn && comfySelectedScene?.videoPromptEditorLang === 'en_fallback') {
       updateComfyScene(comfySafeIndex, {
-        videoPromptEn: nextValue,
-        videoPrompt: nextValue,
+        videoPromptRu: nextValue,
+        videoPromptEn: '',
+        videoPrompt: '',
+        videoPromptEnSource: sourceEn || String(comfySelectedScene?.videoPromptEn || ''),
         videoPromptEditorValue: nextValue,
-        videoPromptEditorLang: nextValue.trim() ? 'en_fallback' : 'missing',
+        videoPromptEditorLang: nextValue.trim() ? 'ru' : 'missing',
         videoPromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
         videoPromptSyncError: '',
-        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), video: !!nextValue.trim() },
-        ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), video: true },
-        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), video: nextValue.trim() ? 'ru_missing_en_fallback' : 'missing_both' },
+        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), video: false },
+        ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), video: !nextValue.trim() },
+        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), video: nextValue.trim() ? 'en_missing_ru_only' : 'missing_both' },
       });
+      scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'video', ruText: nextValue });
       return;
     }
     updateComfyScene(comfySafeIndex, {
@@ -10354,6 +10362,11 @@ const hydrate = useCallback((source = "unknown") => {
                             onChange={(e) => handleComfyImagePromptChange(e.target.value)}
                             placeholder="Сгенерированный prompt сцены появится здесь автоматически"
                           />
+                          {String(comfySelectedScene.imagePromptEnSource || '').trim() ? (
+                            <div className="clipSB_small" style={{ marginTop: 6 }}>
+                              {`Original EN fallback source: ${String(comfySelectedScene.imagePromptEnSource || '—')}`}
+                            </div>
+                          ) : null}
                           <div className="clipSB_small" style={{ marginTop: 6 }}>
                             {comfySelectedScene?.imagePromptEditorLang === 'en_fallback'
                               ? `EN source (editable): ${String(comfySelectedScene.imagePromptEn || '—')}`
@@ -10452,6 +10465,11 @@ const hydrate = useCallback((source = "unknown") => {
                               placeholder="Сгенерированный video prompt сцены появится здесь автоматически"
                               disabled={!comfySelectedScene.imageUrl}
                             />
+                            {String(comfySelectedScene.videoPromptEnSource || '').trim() ? (
+                              <div className="clipSB_small" style={{ marginTop: 6 }}>
+                                {`Original EN fallback source: ${String(comfySelectedScene.videoPromptEnSource || '—')}`}
+                              </div>
+                            ) : null}
                             <div className="clipSB_small" style={{ marginTop: 6 }}>
                               {comfySelectedScene?.videoPromptEditorLang === 'en_fallback'
                                 ? `EN source (editable): ${String(comfySelectedScene.videoPromptEn || '—')}`
