@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_IMAGE_MODEL: str = "gemini-3.1-flash-image-preview"
     GEMINI_VISION_MODEL: str = "gemini-2.5-flash"
-    GEMINI_TEXT_MODEL: str = "gemini-2.5-flash"
+    GEMINI_TEXT_MODEL: str = "gemini-3.1-pro-preview"
+    GEMINI_TEXT_MODEL_FALLBACK: str = "gemini-3-flash-preview"
     ENGINE_DEBUG: bool = False
 
     # KIE / Kling video generation

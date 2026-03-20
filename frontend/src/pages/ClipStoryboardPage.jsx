@@ -8168,9 +8168,12 @@ onClipSec: (nodeId, value) => {
             nodes: effectiveNodes,
             edges: effectiveEdges,
           });
-          const resolvedTitle = base.data?.autoTitle
-            ? buildIntroFrameAutoTitle({ textValue: introContext.titleText, scenes: introContext.scenes })
-            : String(base.data?.title || "");
+          const hasManualTitle = !!String(base.data?.title || "").trim() && (!!base.data?.manualTitle || !base.data?.autoTitle);
+          const resolvedTitle = hasManualTitle
+            ? String(base.data?.title || "")
+            : (base.data?.autoTitle
+              ? buildIntroFrameAutoTitle({ textValue: introContext.titleText, scenes: introContext.scenes })
+              : String(base.data?.title || ""));
           return {
             ...base,
             data: {
@@ -8188,6 +8191,7 @@ onClipSec: (nodeId, value) => {
                   if (!!value) {
                     const freshContext = collectIntroFrameContext({ nodeId, nodes: prev, edges: edgesRef.current || [] });
                     nextData.title = buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes });
+                    nextData.manualTitle = false;
                     nextData.altTitles = [nextData.title].filter(Boolean);
                   }
                 } else if (key === "stylePreset") {
@@ -8198,6 +8202,8 @@ onClipSec: (nodeId, value) => {
                   nextData.durationSec = normalizeIntroDurationSec(value);
                 } else if (key === "title") {
                   nextData.title = String(value || "");
+                  nextData.manualTitle = !!String(value || "").trim();
+                  if (nextData.manualTitle) nextData.autoTitle = false;
                 } else {
                   nextData[key] = value;
                 }
@@ -8235,9 +8241,13 @@ onClipSec: (nodeId, value) => {
                   nodes: nodesRef.current || [],
                   edges: edgesRef.current || [],
                 });
-                const nextTitle = currentNode?.data?.autoTitle
-                  ? buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes })
-                  : String(currentNode?.data?.title || "").trim() || freshContext.autoTitle;
+                const manualTitle = String(currentNode?.data?.title || "").trim();
+                const preserveManualTitle = !!manualTitle && (!!currentNode?.data?.manualTitle || !currentNode?.data?.autoTitle);
+                const nextTitle = preserveManualTitle
+                  ? manualTitle
+                  : (currentNode?.data?.autoTitle
+                    ? buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes })
+                    : manualTitle || freshContext.autoTitle);
                 const storyContext = buildIntroFrameStoryContextText(freshContext);
                 const payload = {
                   title: nextTitle,
@@ -8268,6 +8278,7 @@ onClipSec: (nodeId, value) => {
                     data: {
                       ...x.data,
                       title: nextTitle,
+                      manualTitle: preserveManualTitle,
                       contextSummary: freshContext.summary,
                       contextSceneCount: freshContext.sceneCount,
                       sourceNodeIds: freshContext.sourceNodeIds,
@@ -8309,12 +8320,12 @@ onClipSec: (nodeId, value) => {
                       ...x,
                       data: {
                         ...x.data,
-                        title: String(out?.title || nextTitle || ""),
+                        title: preserveManualTitle ? nextTitle : String(out?.title || nextTitle || ""),
                         imageUrl: String(out.imageUrl || ""),
                         previewKind: INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED,
                         status: "ready",
                         generatedAt: String(out.generatedAt || new Date().toISOString()),
-                        altTitles: [String(out?.title || nextTitle || "")].filter(Boolean),
+                        altTitles: [preserveManualTitle ? nextTitle : "", String(out?.title || nextTitle || "")].filter(Boolean),
                         error: "",
                         debug: out?.debug && typeof out.debug === "object" ? out.debug : {},
                       },
@@ -8997,7 +9008,7 @@ const hydrate = useCallback((source = "unknown") => {
         id,
         type: "introFrame",
         position: { x: centerX + jitterX, y: centerY + jitterY },
-        data: { title: "", autoTitle: true, stylePreset: "cinematic", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
+        data: { title: "", autoTitle: true, manualTitle: false, stylePreset: "cinematic", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
       };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
