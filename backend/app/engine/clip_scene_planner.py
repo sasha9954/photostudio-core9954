@@ -798,9 +798,11 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         story_source = "speech_narrative"
 
     prev_scene_type: str | None = None
+    genre = str(payload.get("genre") or "").strip()
 
     world_bible = {
         "storyMode": story_mode,
+        "genre": genre,
         "visualStyle": str(payload.get("stylePreset") or "realism"),
         "cameraLanguage": "documentary semantic continuity and motivated movement" if spoken_meaning_primary else "cinematic, motivated movement, emotional closeups with contextual wides",
         "lensFamily": "35mm/50mm documentary-priority lenses with selective wides" if spoken_meaning_primary else "anamorphic-like 35/50/85 with selective wides",
@@ -888,6 +890,8 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         title = f"Сцена {idx + 1}: {scene_type.lower()}"
         continuity = f"Сохранять единый мир, цветовую логику и идентичность героев. Локация: {location}."
         continuity += f" Фаза: {phase}. Источник истории: {story_source}."
+        if genre:
+            continuity += f" Жанр: {genre}."
         if spoken_meaning_primary:
             continuity = f"Сохранять документальную/инфраструктурную логику мира, одну палитру, один уровень реализма и связанность локаций. Локация: {location}. Фаза: {phase}. Источник смысла: {scene_semantic_source}."
         emotion = _scene_emotion(scene_type, phase, has_vocal)
@@ -1074,6 +1078,7 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "output": payload.get("output", "comfy image"),
             "stylePreset": payload.get("stylePreset", "realism"),
             "audioStoryMode": story_mode,
+            "genre": genre,
             "storyControlMode": payload.get("storyControlMode") or "",
             "storyMissionSummary": payload.get("storyMissionSummary") or "",
             "timelineSource": payload.get("timelineSource") or "audio_structure",

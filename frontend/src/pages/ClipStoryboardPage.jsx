@@ -33,6 +33,7 @@ import {
   buildComfyGlobalContinuity,
   buildMockComfyScenes,
   deriveComfyBrainState,
+  normalizeComfyGenre,
   extractComfyDebugFields,
   normalizeStoryboardSourceValue,
   normalizeComfyScenePrompts,
@@ -7666,6 +7667,7 @@ onClipSec: (nodeId, value) => {
               plannerMode: String(derived.plannerMode || "legacy"),
               output: derived.outputValue,
               stylePreset: derived.stylePreset,
+              genre: derived.genreValue,
               freezeStyle: derived.freezeStyle,
               meaningfulText: derived.meaningfulText,
               meaningfulAudio: derived.meaningfulAudio,
@@ -7715,6 +7717,7 @@ onClipSec: (nodeId, value) => {
               cast: castLabels,
               world: `location ${derived.refsByRole.location.length ? 'yes' : 'no'} • props ${derived.refsByRole.props.length ? 'yes' : 'no'} • scale ${anchors.worldScaleContext}`,
               style: `${derived.stylePreset}${derived.refsByRole.style.length ? ' + style ref' : ' only'} • ${derived.styleSemantics.styleSummary}`,
+              genre: derived.genreValue || '—',
               worldCompact: `${derived.refsByRole.location.length ? 'location' : ''}${derived.refsByRole.location.length && derived.refsByRole.props.length ? ' + ' : ''}${derived.refsByRole.props.length ? 'props' : ''}` || 'none',
               styleCompact: `${derived.stylePreset}${derived.refsByRole.style.length ? ' + ref' : ''}`,
               sourceArbitration: `${derived.narrativeSource} • ${derived.storyControlMode}`,
@@ -7831,6 +7834,7 @@ onClipSec: (nodeId, value) => {
               onPlannerMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, plannerMode: value === "gemini_only" ? "gemini_only" : "legacy" } } : x))),
               onMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x))),
               onOutput: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, output: normalizeRenderProfile(value) } } : x))),
+              onGenre: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, genre: normalizeComfyGenre(value) } } : x))),
               onAudioStoryMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, audioStoryMode: normalizeAudioStoryMode(value) } } : x))),
               onStyle: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, styleKey: value } } : x))),
               onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
@@ -7873,11 +7877,17 @@ onClipSec: (nodeId, value) => {
                   }
                   const freshPresentation = buildComfyBrainPresentation(freshDerived);
 
+                  if (freshDerived.modeValue === "clip" && !freshDerived.meaningfulAudio) {
+                    notify({ type: "warning", title: "AUDIO required", message: "Для режима CLIP сначала подключите AUDIO." });
+                    return;
+                  }
+
                 const payload = {
                   mode: freshDerived.modeValue,
                   plannerMode: String(freshDerived.plannerMode || "legacy"),
                   output: freshDerived.outputValue,
                   stylePreset: freshDerived.stylePreset,
+                  genre: freshDerived.genreValue,
                   freezeStyle: freshDerived.freezeStyle,
                   text: freshDerived.meaningfulText || "",
                   lyricsText: String(freshDerived.lyricsText || "").trim(),
@@ -7952,7 +7962,7 @@ onClipSec: (nodeId, value) => {
                   let response;
                   try {
                     if (USE_COMFY_MOCK) {
-                      const plannerMeta = { plannerInput: payload, mode: payload.mode, plannerMode: payload.plannerMode, output: payload.output, stylePreset: payload.stylePreset, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, audioStoryMode: payload.audioStoryMode, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
+                      const plannerMeta = { plannerInput: payload, mode: payload.mode, plannerMode: payload.plannerMode, output: payload.output, stylePreset: payload.stylePreset, genre: payload.genre, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, audioStoryMode: payload.audioStoryMode, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
                       const scenes = buildMockComfyScenes(plannerMeta);
                       response = { ok: true, planMeta: plannerMeta, globalContinuity: scenes[0]?.plannerMeta?.globalContinuity || "", scenes, warnings: plannerMeta.warnings, errors: [], debug: {} };
                     } else {
@@ -8992,7 +9002,7 @@ const hydrate = useCallback((source = "unknown") => {
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else if (type === "comfyBrain") {
-      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', plannerMode: 'legacy', output: 'comfy image', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
+      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', plannerMode: 'legacy', output: 'comfy image', genre: '', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
     } else if (type === "comfyStoryboard") {
       node = { id, type: "comfyStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mockScenes: [], sceneCount: 0, mode: 'clip', parseStatus: 'idle' } };
     } else if (type === "comfyVideoPreview") {

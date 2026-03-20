@@ -1,5 +1,6 @@
 const RENDER_PROFILE_OPTIONS = ["comfy image", "comfy text"];
 export const AUDIO_STORY_MODE_OPTIONS = ["lyrics_music", "music_only", "music_plus_text", "speech_narrative"];
+export const COMFY_BRAIN_GENRE_OPTIONS = ["Horror", "Romance", "Comedy", "Drama", "Action", "Thriller", "Noir", "Dreamy", "Melancholy", "Fashion", "Surreal", "Performance", "Experimental"];
 
 const REFERENCE_HANDLE_TO_ROLE = {
   ref_character_1: "character_1",
@@ -249,6 +250,12 @@ export function normalizeAudioStoryMode(value) {
   return AUDIO_STORY_MODE_OPTIONS.includes(normalized) ? normalized : "lyrics_music";
 }
 
+export function normalizeComfyGenre(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  const matched = COMFY_BRAIN_GENRE_OPTIONS.find((option) => option.toLowerCase() === normalized);
+  return matched || "";
+}
+
 export function normalizeRoleList(input = []) {
   const unique = new Set();
   (Array.isArray(input) ? input : []).forEach((raw) => {
@@ -374,9 +381,10 @@ export function deriveTextInfluence({ mode = "clip", audioStoryMode = "lyrics_mu
 export function buildComfyGlobalContinuity({ plannerInput = {}, refsByRole = {}, sceneRoleModel = {} } = {}) {
   const mode = plannerInput.mode || "clip";
   const style = plannerInput.stylePreset || "realism";
+  const genre = String(plannerInput.genre || "").trim();
   const cast = (sceneRoleModel.cast || []).join(", ") || "character_1";
   const world = ["location", "props", "style"].filter((role) => (refsByRole[role] || []).length > 0).join(", ") || "implicit world";
-  return `Mode ${mode}. Style ${style}. Keep cast (${cast}) and world anchors (${world}) consistent scene-to-scene.`;
+  return `Mode ${mode}.${genre ? ` Genre ${genre}.` : ""} Style ${style}. Keep cast (${cast}) and world anchors (${world}) consistent scene-to-scene.`;
 }
 
 function getRoleLabelRu(role = "") {
@@ -481,12 +489,14 @@ function buildContinuityNotes({ plannerInput = {}, plannerMeta = {}, primaryRole
   const locationAnchor = Array.isArray(refsByRole.location) && refsByRole.location.length > 0 ? "та же локация" : "тот же тип пространства";
   const propAnchor = Array.isArray(refsByRole.props) && refsByRole.props.length > 0 ? "те же ключевые предметы" : "без смены ключевых объектов";
   const styleAnchor = plannerInput?.stylePreset ? `стиль ${plannerInput.stylePreset}` : "тот же визуальный стиль";
+  const genreAnchor = plannerInput?.genre ? `жанр ${plannerInput.genre}` : "";
   const castAnchor = primaryRole ? `тот же ${getRoleLabelRu(primaryRole)}` : "тот же герой";
-  return [castAnchor, locationAnchor, propAnchor, styleAnchor, blueprint.continuityFocus].filter(Boolean).join(", ");
+  return [castAnchor, locationAnchor, propAnchor, styleAnchor, genreAnchor, blueprint.continuityFocus].filter(Boolean).join(", ");
 }
 
 function buildPromptPackage({ idx = 0, stylePreset = "realism", primaryRole = "character_1", plannerInput = {}, plannerMeta = {}, blueprint = {}, continuityNotes = "" } = {}) {
   const storyMission = String(plannerInput?.storyMissionSummary || plannerMeta?.storyMissionSummary || "").trim();
+  const genre = String(plannerInput?.genre || plannerMeta?.genre || "").trim();
   const primaryRoleRu = getRoleLabelRu(primaryRole);
   const worldHint = Array.isArray(plannerInput?.refsByRole?.location) && plannerInput.refsByRole.location.length > 0 ? "anchored to the established location" : "in a consistent cinematic environment";
   const styleSummary = String(plannerMeta?.styleRules?.styleSummary || plannerInput?.styleSemantics?.styleSummary || "").trim();
@@ -496,6 +506,7 @@ function buildPromptPackage({ idx = 0, stylePreset = "realism", primaryRole = "c
     `Show ${blueprint.visualAction ? blueprint.visualAction.toLowerCase() : "a decisive story moment"}.`,
     `Environment: ${worldHint}.`,
     `Mood: ${blueprint.emotion || "focused cinematic emotion"}.`,
+    genre ? `Genre direction: ${genre}.` : "",
     `Style: ${stylePreset}${styleSummary ? `, ${styleSummary}` : ""}.`,
     storyMission ? `Story context: ${storyMission}.` : "",
   ].filter(Boolean).join(" ");
@@ -610,6 +621,7 @@ export function buildMockComfyScenes(meta = {}) {
     mode: String(plannerInput?.mode || meta?.mode || "clip"),
     output: normalizeRenderProfile(plannerInput?.output || meta?.output || "comfy image"),
     stylePreset: String(plannerInput?.stylePreset || meta?.stylePreset || "realism"),
+    genre: normalizeComfyGenre(plannerInput?.genre || meta?.genre || ""),
     narrativeSource: String(plannerInput?.narrativeSource || meta?.narrativeSource || "none"),
     timelineSource: String(plannerInput?.timelineSource || meta?.timelineSource || "logic"),
     warnings: Array.isArray(meta?.warnings) ? meta.warnings : [],
@@ -814,6 +826,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     plannerMode,
     outputValue,
     audioStoryMode,
+    genreValue: normalizeComfyGenre(nodeData?.genre || ""),
     stylePreset,
     freezeStyle,
     meaningfulText,
@@ -858,6 +871,7 @@ export function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } 
     plannerMode: plannerInput.plannerMode || plannerMeta.plannerMode || "legacy",
     output: plannerInput.output,
     stylePreset: plannerInput.stylePreset,
+    genre: plannerInput.genre || plannerMeta.genre || "",
     storyControlMode: plannerInput.storyControlMode,
     narrativeSource: normalizedNarrativeSource,
     storySource: normalizedStorySource,

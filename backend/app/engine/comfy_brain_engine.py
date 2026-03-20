@@ -36,6 +36,7 @@ COMFY_REF_DIRECTIVES = {"hero", "supporting", "environment_required", "required"
 COMFY_ACTIVE_DIRECTIVES = {"hero", "supporting", "environment_required", "required"}
 COMFY_FALLBACK_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "group", "animal", "location", "props", "style"]
 COMFY_PLANNER_MODES = {"legacy", "gemini_only"}
+COMFY_GENRES = {"horror", "romance", "comedy", "drama", "action", "thriller", "noir", "dreamy", "melancholy", "fashion", "surreal", "performance", "experimental"}
 GEMINI_ONLY_MEDIA_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "group", "animal", "props", "location", "style"]
 MAX_GEMINI_IMAGE_PARTS = 8
 MAX_GEMINI_AUDIO_INLINE_BYTES = 20 * 1024 * 1024
@@ -173,6 +174,11 @@ def _normalize_scene_ref_roles(src: dict[str, Any], available_refs_by_role: dict
     return active_roles, directives, primary_role, secondary_roles
 
 
+def _normalize_genre(value: Any) -> str:
+    raw = str(value or "").strip()
+    return raw if raw.lower() in COMFY_GENRES else ""
+
+
 def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
     mode = str(data.get("mode") or "clip").strip().lower()
@@ -195,6 +201,7 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "output": output,
         "audioStoryMode": audio_story_mode,
         "stylePreset": str(data.get("stylePreset") or "realism").strip().lower(),
+        "genre": _normalize_genre(data.get("genre")),
         "freezeStyle": bool(data.get("freezeStyle")),
         "text": str(data.get("text") or "").strip(),
         "lyricsText": str(data.get("lyricsText") or "").strip(),
@@ -562,6 +569,7 @@ def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]
     narrative_source = "none"
     timeline_source = str(payload.get("timelineSource") or "").strip()
     story_mission_summary = str(payload.get("storyMissionSummary") or "").strip()
+    genre = str(payload.get("genre") or "").strip()
     warnings: list[str] = []
     errors: list[str] = []
     weak_semantic_context = False
@@ -610,6 +618,7 @@ def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]
         "narrativeSource": narrative_source,
         "timelineSource": timeline_source,
         "storyMissionSummary": story_mission_summary,
+        "genre": genre,
         "weakSemanticContext": weak_semantic_context,
         "semanticContextReason": semantic_context_reason,
         "warnings": warnings,
@@ -952,6 +961,7 @@ def _build_gemini_planner_payload(payload: dict[str, Any], world_lock: dict[str,
     return {
         "plannerMode": "gemini_only",
         "mode": payload.get("mode") or "clip",
+        "genre": payload.get("genre") or "",
         "audio": {
             "audioUrl": payload.get("audioUrl") or "",
             "durationSec": payload.get("audioDurationSec"),
@@ -1018,6 +1028,7 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
     story_source = str(story_context.get("storySource") or "audio").strip() or "audio"
     timeline_source = str(story_context.get("timelineSource") or "logic").strip() or "logic"
     story_mission_summary = str(story_context.get("storyMissionSummary") or "").strip()
+    genre = str(gemini_payload.get("genre") or story_context.get("genre") or "").strip()
     weak_semantic_context = bool(story_context.get("weakSemanticContext"))
     semantic_context_reason = str(story_context.get("semanticContextReason") or "").strip()
     return (
@@ -1081,6 +1092,7 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "- it must be understandable visually.\n"
         f"- timelineSource={timeline_source}.\n"
         f"- storyMissionSummary={story_mission_summary or 'not_provided'}.\n"
+        f"- selectedGenre={genre or 'not_provided'}.\n"
         f"- weakSemanticContext={json.dumps({'value': weak_semantic_context, 'reason': semantic_context_reason}, ensure_ascii=False)}.\n"
         "DEBUG:\n"
         "- In debug include cameraContinuityScore, transitionTypesByScene, humanAnchorCoverage, scenesWithHumanAnchor, visualModesByScene, cameraTypesByScene, continuationChainCount, and randomCutRisk when possible.\n"
@@ -2119,6 +2131,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "output": normalized.get("output"),
         "stylePreset": normalized.get("stylePreset"),
         "audioStoryMode": normalized.get("audioStoryMode"),
+        "genre": normalized.get("genre"),
         "storyControlMode": normalized.get("storyControlMode"),
         "storyMissionSummary": normalized.get("storyMissionSummary"),
         "timelineSource": normalized.get("timelineSource") or "gemini_semantic_scene_planning",
@@ -2414,7 +2427,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
 
     plan_meta = (
         {
-            **({"mode": normalized["mode"], "plannerMode": normalized["plannerMode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"], "audioStoryMode": normalized["audioStoryMode"]}),
+            **({"mode": normalized["mode"], "plannerMode": normalized["plannerMode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"], "genre": normalized.get("genre"), "audioStoryMode": normalized["audioStoryMode"]}),
             **(parsed.get("planMeta") if isinstance(parsed.get("planMeta"), dict) else {}),
         }
     )

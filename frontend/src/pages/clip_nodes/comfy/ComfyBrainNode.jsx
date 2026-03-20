@@ -1,10 +1,12 @@
 import React from "react";
+import { COMFY_BRAIN_GENRE_OPTIONS, normalizeComfyGenre } from "./comfyBrainDomain";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 
 export default function ComfyBrainNode({ id, data }) {
   const mode = data?.mode || "clip";
   const plannerMode = data?.plannerMode || "legacy";
   const output = data?.output || "comfy image";
+  const genre = normalizeComfyGenre(data?.genre || "");
   const parseStatus = data?.parseStatus || "idle";
   const isParsing = parseStatus === "parsing";
   const isReady = parseStatus === "ready";
@@ -50,6 +52,16 @@ export default function ComfyBrainNode({ id, data }) {
           <select className="clipSB_select" value={visibleOutput} onChange={(e) => data?.onOutput?.(id, e.target.value)}>
             {output !== "comfy image" ? <option value={output} hidden>{String(output || "comfy image")}</option> : null}
             <option value="comfy image">comfy image</option>
+          </select>
+        </section>
+
+        <section className="clipSB_comfyBrainSection">
+          <div className="clipSB_brainLabel">GENRE</div>
+          <select className="clipSB_select" value={genre} onChange={(e) => data?.onGenre?.(id, e.target.value)}>
+            {!genre ? <option value="">Select genre</option> : null}
+            {COMFY_BRAIN_GENRE_OPTIONS.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
           </select>
         </section>
 

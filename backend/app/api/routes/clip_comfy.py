@@ -14,6 +14,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 ALLOWED_AUDIO_STORY_MODES = {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}
 ALLOWED_PLANNER_MODES = {"legacy", "gemini_only"}
+ALLOWED_COMFY_GENRES = {"horror", "romance", "comedy", "drama", "action", "thriller", "noir", "dreamy", "melancholy", "fashion", "surreal", "performance", "experimental"}
 
 
 class RefItemIn(BaseModel):
@@ -37,6 +38,7 @@ class ClipComfyPlanIn(BaseModel):
     plannerMode: str = "legacy"
     output: str = "comfy image"
     stylePreset: str = "realism"
+    genre: str = ""
     freezeStyle: bool = False
     text: str = ""
     audioUrl: str = ""
@@ -64,6 +66,12 @@ class ClipComfyPlanIn(BaseModel):
     def validate_planner_mode(cls, value: Any) -> str:
         normalized = str(value or "legacy").strip().lower()
         return normalized if normalized in ALLOWED_PLANNER_MODES else "legacy"
+
+    @field_validator("genre", mode="before")
+    @classmethod
+    def validate_genre(cls, value: Any) -> str:
+        raw = str(value or "").strip()
+        return raw if raw.lower() in ALLOWED_COMFY_GENRES else ""
 
 
 class ClipComfyConnectRefsIn(BaseModel):
