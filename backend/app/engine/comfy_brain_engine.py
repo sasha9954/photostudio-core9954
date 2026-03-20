@@ -1864,7 +1864,7 @@ def normalize_gemini_planner_response(parsed: dict[str, Any], request_input: dic
                 normalization_warnings.append(f"{scene_id}:duration_sec_fallback_default")
             normalization_applied = True
 
-        if duration_sec is None or duration_sec < 0:
+        if duration_sec is None or duration_sec <= 0:
             duration_sec = 1.0
             normalization_applied = True
             normalization_warnings.append(f"{scene_id}:duration_sec_clamped_minimum")
