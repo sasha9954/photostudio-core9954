@@ -39,6 +39,9 @@ COMFY_PLANNER_MODES = {"legacy", "gemini_only"}
 GEMINI_ONLY_MEDIA_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "group", "animal", "props", "location", "style"]
 MAX_GEMINI_IMAGE_PARTS = 8
 MAX_GEMINI_AUDIO_INLINE_BYTES = 20 * 1024 * 1024
+GEMINI_ONLY_TRANSITION_TYPES = {"start", "continuation", "enter_transition", "justified_cut", "match_cut", "perspective_shift"}
+GEMINI_ONLY_HUMAN_ANCHOR_TYPES = {"character", "POV", "human_trace", "none"}
+GEMINI_ONLY_VISUAL_MODE_DEFAULT = "cinematic_real_world"
 
 
 def _to_float(value: Any) -> float | None:
@@ -284,6 +287,72 @@ def normalize_entity_type(raw_type: Any) -> str:
     if any(token in compact for token in ["group", "crowd", "people"]):
         return "group"
     return "unknown"
+
+
+def _normalize_transition_type(raw_value: Any, idx: int) -> str:
+    value = str(raw_value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    alias_map = {
+        "continuous": "continuation",
+        "continue": "continuation",
+        "same_camera": "continuation",
+        "single": "justified_cut",
+        "hard_cut": "justified_cut",
+        "cut": "justified_cut",
+        "entry_transition": "enter_transition",
+        "enter": "enter_transition",
+        "match": "match_cut",
+        "pov_shift": "perspective_shift",
+    }
+    clean = alias_map.get(value, value)
+    if clean in GEMINI_ONLY_TRANSITION_TYPES:
+        return clean
+    return "start" if idx == 0 else "continuation"
+
+
+def _normalize_human_anchor_type(raw_value: Any, active_refs: list[str], src: dict[str, Any]) -> str:
+    value = str(raw_value or "").strip()
+    if value in GEMINI_ONLY_HUMAN_ANCHOR_TYPES:
+        return value
+
+    if any(role in active_refs for role in ["character_1", "character_2", "character_3", "group"]):
+        return "character"
+
+    text_blob = " ".join(
+        [
+            str(src.get("imagePromptRu") or src.get("imagePrompt") or ""),
+            str(src.get("imagePromptEn") or ""),
+            str(src.get("videoPromptRu") or src.get("videoPrompt") or ""),
+            str(src.get("videoPromptEn") or ""),
+            str(src.get("sceneAction") or ""),
+            str(src.get("visualDescription") or ""),
+            str(src.get("cameraPlan") or src.get("cameraIntent") or ""),
+        ]
+    ).lower()
+    if any(token in text_blob for token in ["pov", "point of view", "first-person", "first person", "through the eyes", "from the explorer's view"]):
+        return "POV"
+    if any(token in text_blob for token in ["footprint", "footprints", "shadow", "hand", "hands", "glove", "breath", "breathing", "flashlight beam", "helmet cam", "equipment"]):
+        return "human_trace"
+    return "none"
+
+
+def _infer_camera_type(camera_text: str) -> str:
+    text = str(camera_text or "").strip().lower()
+    if not text:
+        return "locked_camera"
+    camera_markers = [
+        ("drone", ["drone", "aerial", "bird's-eye", "birds-eye", "overhead flyover", "helicopter"]),
+        ("handheld", ["handheld", "shaky cam", "shoulder cam", "body cam", "helmet cam"]),
+        ("dolly", ["dolly", "track", "tracking shot", "slider"]),
+        ("crane", ["crane", "jib"]),
+        ("steadicam", ["steadicam", "gimbal", "stabilized follow"]),
+        ("POV", ["pov", "point of view", "first-person", "first person"]),
+        ("static", ["static", "locked off", "tripod", "still frame"]),
+        ("push_in", ["push in", "push-in"]),
+    ]
+    for label, markers in camera_markers:
+        if any(marker in text for marker in markers):
+            return label
+    return "cinematic_camera"
 
 
 def _extract_audio_mime_type(url: str, headers: dict[str, str], data: bytes) -> str:
@@ -920,6 +989,25 @@ def _build_gemini_planner_payload(payload: dict[str, Any], world_lock: dict[str,
             "avoidGenericEpicFiller": True,
             "avoidSlideshowOnlyCameraMoves": True,
             "requireSceneActionOrEnvironmentMotion": True,
+            "directorLayer": {
+                "sequenceMindset": "connected_cinematic_sequence",
+                "cameraContinuity": "prefer continuation over cut; camera persists across scenes unless a justified cut occurs",
+                "cameraIdentity": "camera is a physical entity and cannot teleport or randomly change form",
+                "allowedTransitionTypes": sorted(GEMINI_ONLY_TRANSITION_TYPES),
+                "defaultTransitionType": "continuation",
+                "scaleTransitionRule": "sky_ground_underground transitions allowed only through continuous physical camera movement",
+                "forbiddenScaleTransitions": [
+                    "cross-section",
+                    "earth layers",
+                    "schematic depth explanation",
+                    "diagrammatic cutaway",
+                    "abstract globe/map transition",
+                ],
+                "humanAnchorCoverageTarget": 0.3,
+                "humanAnchorEarlyBias": True,
+                "defaultVisualMode": GEMINI_ONLY_VISUAL_MODE_DEFAULT,
+                "imageVideoPromptAlignment": "imagePrompt is a frame from current shot; videoPrompt continues motion from that frame",
+            },
         },
         "storyContext": story_context,
     }
@@ -936,7 +1024,7 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "You are COMFY Gemini Brain planner. Return strict JSON only.\n"
         "Top-level JSON fields required: worldLock, entityLocks, scenes, preview, warnings, debug.\n"
         "Scene contract required for every scene:\n"
-        "sceneId,startSec,endSec,durationSec,spokenText,sceneMeaning,emotion,imagePrompt,videoPrompt,sceneAction,environmentMotion,cameraPlan,sfxSuggestion,activeRefs,refUsageReason,characterRoleLogic,continuity,continuityLocksUsed,confidence,focalSubject,visualClue,cameraIntent,forbiddenInsertions.\n"
+        "sceneId,startSec,endSec,durationSec,spokenText,sceneMeaning,emotion,imagePrompt,videoPrompt,sceneAction,environmentMotion,cameraPlan,sfxSuggestion,activeRefs,refUsageReason,characterRoleLogic,continuity,continuityLocksUsed,confidence,focalSubject,visualClue,cameraIntent,forbiddenInsertions,transitionType,cameraType,cameraMovement,cameraPosition,visualMode,humanAnchorType.\n"
         "Rules:\n"
         "- plannerMode is gemini_only, so you own semantic scene planning completely.\n"
         f"- Primary story source for this request is {story_source}.\n"
@@ -950,7 +1038,21 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "- For speech_narrative, scenes over 8.0 sec are invalid unless immediately split into smaller sub-scenes with natural speech-safe boundaries.\n"
         "- Each strong scene must contain at least two of three: character/entity action, environment motion, camera movement.\n"
         "- Avoid slideshow risk where only the camera moves.\n"
-        "- imagePrompt and videoPrompt must stay compatible with the locked world and entity continuity.\n"
+        "- This is not a list of isolated shots. This is a connected cinematic sequence.\n"
+        "- Every scene must follow the previous scene logically, preserve momentum, preserve world continuity, preserve camera logic, and feel editable into one coherent montage.\n"
+        "- The camera must persist across scenes unless a justified cut occurs.\n"
+        "- Prefer continuation over cut. Cuts should be rare and meaningful.\n"
+        "- Treat the camera as a physical entity inside the world. It cannot teleport. It cannot instantly change form without reason.\n"
+        "- Allowed scene-to-scene transitions: continuation, enter_transition, justified_cut, match_cut, perspective_shift. First scene must use start.\n"
+        "- Forbidden camera behavior: random drone -> handheld -> dolly switching without narrative motivation, unexplained camera-type changes, sudden abstract observer perspective.\n"
+        "- Scale transitions between sky / ground / underground are allowed only through continuous physical camera movement or a logical shot chain: aerial descent, zoom into terrain, dive toward a specific location, approach a real entrance, enter a physical opening.\n"
+        "- Forbidden scale transitions: cross-section, earth layers, schematic depth explanation, diagrammatic cutaway, abstract globe/map transition.\n"
+        f"- visualMode defaults to {GEMINI_ONLY_VISUAL_MODE_DEFAULT} unless the request explicitly demands another grounded mode.\n"
+        "- At least 30% of scenes should include a human anchor through one of: character, POV, human_trace. If the sequence runs multiple scenes, introduce that anchor early instead of only at the end.\n"
+        "- If character refs exist, use them softly as observer / explorer / witness rather than forcing them into every scene.\n"
+        "- If character refs do not exist, human anchor may be footprints, shadow, hands, flashlight beam, breathing POV, equipment, or other subtle human trace.\n"
+        "- imagePrompt and videoPrompt must stay compatible with the locked world and entity continuity and must describe the same shot family.\n"
+        "- imagePrompt should read like a frame from the current camera position; videoPrompt should continue motion from that same frame instead of jumping to a different shot.\n"
         "- Write each scene as a narrative beat, not a wallpaper description: name the focal subject, the exact current event/action, the visual clue that carries narration meaning, and what the camera is meant to capture right now.\n"
         "- Avoid generic establishing-shot filler unless the scene is explicitly an establishing scene.\n"
         "- Do not invent dominant unexplained foreground props or oversized machines/devices/artifacts unless narration or refs explicitly require them. If no prop is required, keep the frame clean and semantically grounded.\n"
@@ -968,6 +1070,9 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "- the focal visual clue must come from narration meaning, not random object invention.\n"
         "- avoid static shots.\n"
         "- avoid slideshow camera-only scenes.\n"
+        "- transitionType should default to continuation whenever possible.\n"
+        "- cameraType, cameraMovement, and cameraPosition should preserve physical continuity from scene to scene.\n"
+        "- justified_cut and perspective_shift require explicit narrative reason inside continuity or refUsageReason.\n"
         "REF LOGIC:\n"
         "- refs constrain visuals, not narrative meaning.\n"
         "- choose refs per scene, not globally.\n"
@@ -977,6 +1082,8 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         f"- timelineSource={timeline_source}.\n"
         f"- storyMissionSummary={story_mission_summary or 'not_provided'}.\n"
         f"- weakSemanticContext={json.dumps({'value': weak_semantic_context, 'reason': semantic_context_reason}, ensure_ascii=False)}.\n"
+        "DEBUG:\n"
+        "- In debug include cameraContinuityScore, transitionTypesByScene, humanAnchorCoverage, scenesWithHumanAnchor, visualModesByScene, cameraTypesByScene, continuationChainCount, and randomCutRisk when possible.\n"
         "Return no markdown, only JSON.\n"
         f"INPUT={json.dumps(gemini_payload, ensure_ascii=False)}"
     )
@@ -1519,6 +1626,11 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
     scene_action = str(src.get("sceneAction") or src.get("visualAction") or src.get("sceneNarrativeStep") or "").strip()
     environment_motion = str(src.get("environmentMotion") or src.get("motionPlan") or "").strip()
     camera_plan = str(src.get("cameraPlan") or src.get("cameraIntent") or "").strip()
+    transition_type = _normalize_transition_type(src.get("transitionType"), idx)
+    camera_type = str(src.get("cameraType") or "").strip() or _infer_camera_type(camera_plan)
+    camera_movement = str(src.get("cameraMovement") or src.get("cameraMove") or environment_motion or "").strip()
+    camera_position = str(src.get("cameraPosition") or src.get("cameraPlacement") or "").strip()
+    visual_mode = str(src.get("visualMode") or GEMINI_ONLY_VISUAL_MODE_DEFAULT).strip() or GEMINI_ONLY_VISUAL_MODE_DEFAULT
     ref_usage_reason = str(src.get("refUsageReason") or src.get("roleSelectionReason") or "").strip()
     continuity_locks_used = src.get("continuityLocksUsed") if isinstance(src.get("continuityLocksUsed"), list) else []
     continuity_locks_used = [str(item).strip() for item in continuity_locks_used if str(item).strip()]
@@ -1562,9 +1674,16 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
     weak_scene = dynamic_score < 2
     hallucination_text = " ".join([image_prompt_en, video_prompt_en, str(src.get("visualDescription") or "")]).lower()
     object_hallucination_risk = "high" if ("props" not in refs_used and any(token in hallucination_text for token in ["giant", "massive", "oversized", "huge machine", "device", "artifact", "monolith", "foreground object"])) else "low"
+    human_anchor_type = _normalize_human_anchor_type(src.get("humanAnchorType"), active_refs, src)
     continuity_parts = [str(src.get("continuity") or "").strip()]
     if scene_action or environment_motion:
         continuity_parts.append("scene contains active motion")
+    if transition_type == "continuation":
+        continuity_parts.append("prefer continued camera movement from previous scene")
+    elif transition_type == "enter_transition":
+        continuity_parts.append("camera physically enters the next space")
+    elif transition_type in {"justified_cut", "perspective_shift", "match_cut"}:
+        continuity_parts.append(f"{transition_type} must be narratively justified")
     continuity_text = "; ".join([part for part in continuity_parts if part]).strip("; ")
 
     image_missing_langs: list[str] = []
@@ -1609,12 +1728,18 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "sceneMeaning": str(src.get("sceneMeaning") or ""),
         "visualDescription": str(src.get("visualDescription") or ""),
         "cameraPlan": camera_plan,
+        "cameraType": camera_type,
+        "cameraMovement": camera_movement,
+        "cameraPosition": camera_position,
         "motionPlan": str(src.get("motionPlan") or ""),
         "sfxPlan": str(src.get("sfxPlan") or ""),
         "sceneAction": scene_action,
         "focalSubject": str(src.get("focalSubject") or src.get("primarySubject") or primary_role or "").strip(),
         "visualClue": str(src.get("visualClue") or src.get("visualEvidence") or src.get("visualDescription") or "").strip(),
         "cameraIntent": str(src.get("cameraIntent") or camera_plan or "").strip(),
+        "transitionType": transition_type,
+        "visualMode": visual_mode,
+        "humanAnchorType": human_anchor_type,
         "forbiddenInsertions": [str(item).strip() for item in (src.get("forbiddenInsertions") if isinstance(src.get("forbiddenInsertions"), list) else []) if str(item).strip()],
         "environmentMotion": environment_motion,
         "sfxSuggestion": str(src.get("sfxSuggestion") or src.get("sfxPlan") or "").strip(),
@@ -1670,6 +1795,71 @@ def _normalize_gemini_scenes(
     available_refs_by_role: dict[str, list[dict[str, str]]] | None = None,
 ) -> list[dict[str, Any]]:
     return [_normalize_scene(scene, idx, available_refs_by_role) for idx, scene in enumerate(scenes)]
+
+
+def _build_director_debug(scenes: list[dict[str, Any]]) -> dict[str, Any]:
+    if not scenes:
+        return {
+            "cameraContinuityScore": 0.0,
+            "transitionTypesByScene": {},
+            "humanAnchorCoverage": 0.0,
+            "scenesWithHumanAnchor": [],
+            "visualModesByScene": {},
+            "cameraTypesByScene": {},
+            "continuationChainCount": 0,
+            "randomCutRisk": "unknown",
+        }
+
+    transition_types_by_scene = {str(scene.get("sceneId") or f"scene-{idx + 1}"): str(scene.get("transitionType") or "") for idx, scene in enumerate(scenes)}
+    visual_modes_by_scene = {str(scene.get("sceneId") or f"scene-{idx + 1}"): str(scene.get("visualMode") or "") for idx, scene in enumerate(scenes)}
+    camera_types_by_scene = {str(scene.get("sceneId") or f"scene-{idx + 1}"): str(scene.get("cameraType") or "") for idx, scene in enumerate(scenes)}
+    scenes_with_human_anchor = [
+        str(scene.get("sceneId") or f"scene-{idx + 1}")
+        for idx, scene in enumerate(scenes)
+        if str(scene.get("humanAnchorType") or "none") != "none"
+    ]
+    human_anchor_coverage = len(scenes_with_human_anchor) / max(1, len(scenes))
+
+    continuation_chain_count = 0
+    continuity_points = 0
+    possible_points = max(0, len(scenes) - 1)
+    for idx in range(1, len(scenes)):
+        prev = scenes[idx - 1]
+        cur = scenes[idx]
+        transition_type = str(cur.get("transitionType") or "")
+        prev_camera = str(prev.get("cameraType") or "")
+        cur_camera = str(cur.get("cameraType") or "")
+        if transition_type in {"continuation", "enter_transition"}:
+            continuation_chain_count += 1
+            continuity_points += 1
+            if prev_camera and cur_camera and prev_camera == cur_camera:
+                continuity_points += 1
+        elif transition_type == "justified_cut":
+            continuity_points += 0.5
+        elif transition_type == "match_cut":
+            continuity_points += 0.75
+        elif transition_type == "perspective_shift":
+            continuity_points += 0.5
+
+    max_points = max(1.0, possible_points * 2.0)
+    camera_continuity_score = round((continuity_points / max_points) * 100.0, 1)
+    unjustified_cut_like_count = sum(1 for idx, scene in enumerate(scenes) if idx > 0 and str(scene.get("transitionType") or "") == "justified_cut")
+    random_cut_risk = "low"
+    if unjustified_cut_like_count >= max(2, len(scenes) // 3):
+        random_cut_risk = "medium"
+    if unjustified_cut_like_count >= max(3, len(scenes) // 2):
+        random_cut_risk = "high"
+
+    return {
+        "cameraContinuityScore": camera_continuity_score,
+        "transitionTypesByScene": transition_types_by_scene,
+        "humanAnchorCoverage": round(human_anchor_coverage, 3),
+        "scenesWithHumanAnchor": scenes_with_human_anchor,
+        "visualModesByScene": visual_modes_by_scene,
+        "cameraTypesByScene": camera_types_by_scene,
+        "continuationChainCount": continuation_chain_count,
+        "randomCutRisk": random_cut_risk,
+    }
 
 
 def _build_segmentation_debug(scenes: list[dict[str, Any]], audio_story_mode: str, timing_debug: dict[str, Any]) -> dict[str, Any]:
@@ -1912,6 +2102,9 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     warnings.extend(speech_split_warnings)
     timing_debug["sceneCountAfterSpeechSplit"] = len(scenes)
     segmentation_debug = {**_build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug), **speech_split_debug}
+    director_debug = _build_director_debug(scenes)
+    if float(director_debug.get("humanAnchorCoverage") or 0.0) < 0.3:
+        warnings.append("director_human_anchor_coverage_below_target")
     preview_raw = parsed.get("preview") if isinstance(parsed.get("preview"), dict) else {}
     preview = {
         **_build_preview_from_scenes(scenes, merged_world_lock),
@@ -1939,7 +2132,12 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "worldLock": merged_world_lock,
         "entityLocks": merged_entity_locks,
         "preview": preview,
-        "summary": {"sceneCount": len(scenes)},
+        "summary": {
+            "sceneCount": len(scenes),
+            "cameraContinuityScore": director_debug.get("cameraContinuityScore"),
+            "humanAnchorCoverage": director_debug.get("humanAnchorCoverage"),
+            "continuationChainCount": director_debug.get("continuationChainCount"),
+        },
     }
     return {
         "ok": len(errors) == 0,
@@ -1993,6 +2191,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "preview": preview,
             "timing": timing_debug,
             "segmentation": segmentation_debug,
+            **director_debug,
             "referenceProfilesSummary": summarize_profiles(reference_profiles),
             "activeRolesByScene": {str(scene.get("sceneId") or ""): list(scene.get("activeRefs") or []) for scene in scenes},
             **media_debug,

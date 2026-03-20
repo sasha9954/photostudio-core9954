@@ -854,7 +854,9 @@ function getIntroStyleMeta(stylePreset = "cinematic") {
 
 function resolveSceneTransitionType(scene) {
   const raw = String(scene?.transitionType || "single").toLowerCase();
-  if (raw === "continuous" || raw === "single" || raw === "hard_cut") return raw;
+  if (raw === "continuous" || raw === "continuation" || raw === "enter_transition") return "continuous";
+  if (raw === "hard_cut" || raw === "justified_cut") return "hard_cut";
+  if (raw === "single" || raw === "match_cut" || raw === "perspective_shift" || raw === "start") return "single";
   return "single";
 }
 
@@ -9854,7 +9856,12 @@ const hydrate = useCallback((source = "unknown") => {
                       <div className="clipSB_kv" style={{ display: "grid", gridTemplateColumns: "160px 1fr", rowGap: 6, columnGap: 8, alignItems: "start" }}>
                         <span>audioType</span><span>{String(scenarioSelected.audioType || "") || "—"}</span>
                         <span>sceneType</span><span>{String(scenarioSelected.sceneType || "") || "—"}</span>
-                        <span>transitionType</span><span>{scenarioSelectedTransitionType}</span>
+                        <span>transitionType</span><span>{String(scenarioSelected.transitionType || scenarioSelectedTransitionType || "") || "—"}</span>
+                        <span>cameraType</span><span>{String(scenarioSelected.cameraType || "") || "—"}</span>
+                        <span>cameraMovement</span><span>{String(scenarioSelected.cameraMovement || "") || "—"}</span>
+                        <span>cameraPosition</span><span>{String(scenarioSelected.cameraPosition || "") || "—"}</span>
+                        <span>visualMode</span><span>{String(scenarioSelected.visualMode || "") || "—"}</span>
+                        <span>humanAnchorType</span><span>{String(scenarioSelected.humanAnchorType || "") || "—"}</span>
                         <span>hasVocals</span><span>{String(!!scenarioSelected.hasVocals)}</span>
                         <span>isLipSync</span><span>{String(!!scenarioSelected.isLipSync || !!scenarioSelected.lipSync)}</span>
                         <span>lyricFragment</span><span>{String(scenarioSelected.lyricFragment || "") || "—"}</span>
