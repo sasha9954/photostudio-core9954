@@ -1,10 +1,21 @@
+import base64
 import json
 import logging
+import mimetypes
+import socket
+import urllib.error
+import urllib.request
 from typing import Any
 
 from app.core.config import settings
 from app.engine.clip_scene_planner import plan_comfy_clip
-from app.engine.comfy_reference_profile import build_reference_profiles, summarize_profiles
+from app.engine.comfy_reference_profile import (
+    _load_image_inline_part,
+    _read_local_static_asset,
+    _resolve_reference_url,
+    build_reference_profiles,
+    summarize_profiles,
+)
 from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
@@ -20,6 +31,9 @@ COMFY_REF_DIRECTIVES = {"hero", "supporting", "environment_required", "required"
 COMFY_ACTIVE_DIRECTIVES = {"hero", "supporting", "environment_required", "required"}
 COMFY_FALLBACK_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "group", "animal", "location", "props", "style"]
 COMFY_PLANNER_MODES = {"legacy", "gemini_only"}
+GEMINI_ONLY_MEDIA_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "group", "animal", "props", "location", "style"]
+MAX_GEMINI_IMAGE_PARTS = 8
+MAX_GEMINI_AUDIO_INLINE_BYTES = 20 * 1024 * 1024
 
 
 def _to_float(value: Any) -> float | None:
@@ -203,6 +217,203 @@ def _summarize_profile_value(value: Any) -> str:
         parts = [f"{key}: {str(item).strip()}" for key, item in value.items() if str(item).strip()]
         return "; ".join(parts[:8])
     return ""
+
+
+def normalize_entity_type(raw_type: Any) -> str:
+    value = str(raw_type or "").strip().lower()
+    if not value:
+        return "unknown"
+
+    compact = value.replace("-", "_").replace(" ", "_")
+    direct_map = {
+        "human": "human",
+        "person": "human",
+        "people": "human",
+        "character": "human",
+        "character_ref": "human",
+        "woman": "human",
+        "man": "human",
+        "girl": "human",
+        "boy": "human",
+        "actor": "human",
+        "actress": "human",
+        "animal": "animal",
+        "pet": "animal",
+        "dog": "animal",
+        "cat": "animal",
+        "horse": "animal",
+        "bird": "animal",
+        "wolf": "animal",
+        "object": "object",
+        "prop": "object",
+        "props": "object",
+        "item": "object",
+        "accessory": "object",
+        "thing": "object",
+        "location": "location",
+        "environment": "location",
+        "place": "location",
+        "scene": "location",
+        "background": "location",
+        "style": "style",
+        "aesthetic": "style",
+        "visual_style": "style",
+        "look": "style",
+        "group": "group",
+        "crowd": "group",
+        "people_group": "group",
+    }
+    if compact in direct_map:
+        return direct_map[compact]
+
+    if any(token in compact for token in ["character", "person", "human", "woman", "man", "actor", "actress"]):
+        return "human"
+    if any(token in compact for token in ["animal", "pet", "dog", "cat", "horse", "bird", "wolf"]):
+        return "animal"
+    if any(token in compact for token in ["object", "prop", "item", "accessory", "thing"]):
+        return "object"
+    if any(token in compact for token in ["location", "environment", "place", "scene", "background"]):
+        return "location"
+    if any(token in compact for token in ["style", "aesthetic", "visual"]):
+        return "style"
+    if any(token in compact for token in ["group", "crowd", "people"]):
+        return "group"
+    return "unknown"
+
+
+def _extract_audio_mime_type(url: str, headers: dict[str, str], data: bytes) -> str:
+    header_mime = str(headers.get("content-type") or "").split(";")[0].strip().lower()
+    if header_mime.startswith("audio/"):
+        return header_mime
+    guessed_from_url, _ = mimetypes.guess_type(url)
+    if guessed_from_url and guessed_from_url.startswith("audio/"):
+        return guessed_from_url
+    if data.startswith(b"ID3") or data[:2] == b"\xff\xfb":
+        return "audio/mpeg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WAVE":
+        return "audio/wav"
+    if data.startswith(b"OggS"):
+        return "audio/ogg"
+    if len(data) > 12 and data[4:8] == b"ftyp":
+        return "audio/mp4"
+    return ""
+
+
+def _load_audio_inline_part(audio_url: str) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    resolved = _resolve_reference_url(audio_url)
+    if not resolved:
+        return None, "missing_audio_url", None
+
+    data: bytes
+    data_source_for_mime = resolved
+    headers: dict[str, str] = {}
+    local_data, local_source, local_error = _read_local_static_asset(resolved)
+    if local_error and local_error != "local_asset_not_found":
+        return None, local_error, None
+    if local_data is not None:
+        data = local_data
+        data_source_for_mime = local_source
+    else:
+        req = urllib.request.Request(resolved, headers={"User-Agent": "photostudio-gemini-planner/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = resp.read()
+                headers = {str(k).lower(): str(v) for k, v in resp.headers.items()}
+        except urllib.error.HTTPError as exc:
+            return None, "audio_http_error", f"http_status:{exc.code}"
+        except (socket.timeout, TimeoutError):
+            return None, "audio_timeout", None
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, socket.timeout):
+                return None, "audio_timeout", None
+            return None, "audio_download_failed", str(exc.reason)[:180] if exc.reason else None
+        except ValueError:
+            return None, "audio_download_failed", None
+        except Exception as exc:
+            return None, "audio_download_failed", str(exc)[:180]
+
+    if not data:
+        return None, "audio_download_failed", None
+
+    mime_type = _extract_audio_mime_type(data_source_for_mime, headers, data)
+    if not mime_type:
+        return None, "audio_invalid_mime", None
+    if len(data) > MAX_GEMINI_AUDIO_INLINE_BYTES:
+        return None, "audio_too_large_for_inline", f"bytes:{len(data)}"
+
+    return {
+        "inlineData": {
+            "mimeType": mime_type,
+            "data": base64.b64encode(data).decode("ascii"),
+        }
+    }, "inline_audio_attached", None
+
+
+def _build_gemini_only_multimodal_parts(normalized: dict[str, Any], gemini_payload: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    parts: list[dict[str, Any]] = [{"text": _build_gemini_only_planner_prompt(gemini_payload)}]
+    refs_by_role = normalized.get("refsByRole") if isinstance(normalized.get("refsByRole"), dict) else {}
+
+    audio_part_attached = False
+    audio_attach_reason = "missing_audio_url"
+    audio_attach_error = None
+    audio_url = str(normalized.get("audioUrl") or "").strip()
+    if audio_url:
+        audio_part, audio_attach_reason, audio_attach_error = _load_audio_inline_part(audio_url)
+        if audio_part:
+            parts.append(audio_part)
+            audio_part_attached = True
+
+    attached_ref_roles: list[str] = []
+    skipped_ref_roles: dict[str, str] = {}
+    image_attach_errors: list[str] = []
+    image_parts_attached_count = 0
+
+    for role in GEMINI_ONLY_MEDIA_ROLE_PRIORITY:
+        if image_parts_attached_count >= MAX_GEMINI_IMAGE_PARTS:
+            skipped_ref_roles[role] = "global_image_part_limit_reached"
+            continue
+        refs = refs_by_role.get(role) if isinstance(refs_by_role.get(role), list) else []
+        if not refs:
+            skipped_ref_roles[role] = "no_refs"
+            continue
+
+        attached_for_role = False
+        first_error = None
+        for item in refs[:2]:
+            ref_url = str((item or {}).get("url") or "").strip()
+            if not ref_url:
+                first_error = first_error or "missing_ref_url"
+                continue
+            image_part, image_error = _load_image_inline_part(ref_url)
+            if image_part:
+                parts.append({"text": f"Reference image for role {role}."})
+                parts.append(image_part)
+                attached_ref_roles.append(role)
+                image_parts_attached_count += 1
+                attached_for_role = True
+                break
+            first_error = first_error or image_error or "image_attach_failed"
+        if attached_for_role:
+            continue
+        skipped_ref_roles[role] = first_error or "image_attach_failed"
+        image_attach_errors.append(f"{role}:{first_error or 'image_attach_failed'}")
+
+    return parts, {
+        "audioPartAttached": audio_part_attached,
+        "audioAttachReason": audio_attach_reason,
+        "audioAttachError": audio_attach_error,
+        "imagePartsAttachedCount": image_parts_attached_count,
+        "attachedRefRoles": attached_ref_roles,
+        "skippedRefRoles": skipped_ref_roles,
+        "imageAttachErrors": image_attach_errors,
+        "mediaAttachSummary": {
+            "audio": "attached" if audio_part_attached else "not_attached",
+            "audioReason": audio_attach_reason,
+            "imagePartsAttachedCount": image_parts_attached_count,
+            "attachedRefRoles": attached_ref_roles,
+            "skippedRefRoleCount": len(skipped_ref_roles),
+        },
+    }
 
 
 def _collect_world_signal_text(payload: dict[str, Any]) -> str:
@@ -407,9 +618,10 @@ def _build_entity_locks(payload: dict[str, Any], reference_profiles: dict[str, A
         if not profile and not refs:
             continue
         visual_profile = profile.get("visualProfile") if isinstance((profile or {}).get("visualProfile"), dict) else {}
-        entity_type = str((profile or {}).get("entityType") or role).strip() or role
+        raw_entity_type = str((profile or {}).get("entityType") or role).strip() or role
+        normalized_entity_type = normalize_entity_type(raw_entity_type or role)
         canonical_details: dict[str, Any] = {}
-        if entity_type == "human":
+        if normalized_entity_type == "human":
             canonical_details = {
                 "gender_presentation": _summarize_profile_value(visual_profile.get("genderPresentation")) or "locked_from_reference",
                 "body_type": _summarize_profile_value(visual_profile.get("bodyType")) or "locked_from_reference",
@@ -422,7 +634,7 @@ def _build_entity_locks(payload: dict[str, Any], reference_profiles: dict[str, A
                 "silhouette": _summarize_profile_value(visual_profile.get("silhouette") or visual_profile.get("bodyType")) or "locked_from_reference",
                 "accessories": _summarize_profile_value(visual_profile.get("accessories")) or "locked_from_reference",
             }
-        elif entity_type == "animal":
+        elif normalized_entity_type == "animal":
             canonical_details = {
                 "species": _summarize_profile_value(visual_profile.get("species") or visual_profile.get("speciesLock")) or "locked_from_reference",
                 "breed_type": _summarize_profile_value(visual_profile.get("breedLikeAppearance")) or "locked_from_reference",
@@ -430,7 +642,7 @@ def _build_entity_locks(payload: dict[str, Any], reference_profiles: dict[str, A
                 "color": _summarize_profile_value(visual_profile.get("dominantColors") or visual_profile.get("coat")) or "locked_from_reference",
                 "proportions": _summarize_profile_value(visual_profile.get("bodyType") or visual_profile.get("morphology") or visual_profile.get("bodyBuild")) or "locked_from_reference",
             }
-        elif entity_type == "object":
+        elif normalized_entity_type == "object":
             canonical_details = {
                 "object_type": _summarize_profile_value(visual_profile.get("objectCategory")) or "locked_from_reference",
                 "shape": _summarize_profile_value(visual_profile.get("silhouette")) or "locked_from_reference",
@@ -453,7 +665,9 @@ def _build_entity_locks(payload: dict[str, Any], reference_profiles: dict[str, A
             "refId": role,
             "role": role,
             "label": str(((refs[0] or {}).get("name")) if refs else "").strip() or role,
-            "entityType": entity_type,
+            "entityType": normalized_entity_type,
+            "rawEntityType": raw_entity_type,
+            "normalizedEntityType": normalized_entity_type,
             "visualProfile": visual_profile,
             "canonicalDetails": canonical_details,
             "invariants": (profile or {}).get("invariants") if isinstance((profile or {}).get("invariants"), list) else [],
@@ -873,13 +1087,16 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
     ref_usage_reason = str(src.get("refUsageReason") or src.get("roleSelectionReason") or "").strip()
     continuity_locks_used = src.get("continuityLocksUsed") if isinstance(src.get("continuityLocksUsed"), list) else []
     continuity_locks_used = [str(item).strip() for item in continuity_locks_used if str(item).strip()]
+    if not scene_action and not environment_motion:
+        scene_action = "character slightly shifts position, breathes, interacts subtly with environment"
+    role_logic_action = scene_action or environment_motion or "supports the scene beat"
     character_role_logic = src.get("characterRoleLogic") if isinstance(src.get("characterRoleLogic"), list) else []
     if not character_role_logic:
         character_role_logic = [
             {
                 "refId": role,
                 "roleInScene": "actor" if role == primary_role else "background",
-                "action": scene_action or environment_motion or "supports the scene beat",
+                "action": role_logic_action,
                 "reason": ref_usage_reason or "selected because this entity is visually relevant to the scene meaning",
             }
             for role in [primary_role, *secondary_roles]
@@ -900,14 +1117,11 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
                 {
                     "refId": ref_id,
                     "roleInScene": role_in_scene,
-                    "action": str(item.get("action") or scene_action or environment_motion or "supports the scene beat").strip(),
+                    "action": str(item.get("action") or role_logic_action).strip(),
                     "reason": str(item.get("reason") or ref_usage_reason or "selected because this entity is relevant to the scene meaning").strip(),
                 }
             )
         character_role_logic = normalized_role_logic
-
-    if not scene_action and not environment_motion:
-        scene_action = "character slightly shifts position, breathes, interacts subtly with environment"
 
     dynamic_score = int(bool(scene_action)) + int(bool(environment_motion)) + int(bool(camera_plan))
     weak_scene = dynamic_score < 2
@@ -1126,6 +1340,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     world_lock = _build_world_lock(normalized, reference_profiles)
     entity_locks = _build_entity_locks(normalized, reference_profiles)
     gemini_payload = _build_gemini_planner_payload(normalized, world_lock, entity_locks)
+    multimodal_parts, media_debug = _build_gemini_only_multimodal_parts(normalized, gemini_payload)
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
@@ -1141,13 +1356,24 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "worldLock": world_lock,
                 "entityLocks": entity_locks,
                 "geminiPayload": gemini_payload,
+                **media_debug,
+                "rawEntityTypesByRole": {
+                    role: lock.get("rawEntityType")
+                    for role, lock in entity_locks.items()
+                    if isinstance(lock, dict)
+                },
+                "normalizedEntityTypesByRole": {
+                    role: lock.get("normalizedEntityType") or lock.get("entityType")
+                    for role, lock in entity_locks.items()
+                    if isinstance(lock, dict)
+                },
             },
         }
 
     requested_model = (settings.GEMINI_TEXT_MODEL or FALLBACK_GEMINI_MODEL or "gemini-2.5-flash").strip()
     body = {
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3},
-        "contents": [{"role": "user", "parts": [{"text": _build_gemini_only_planner_prompt(gemini_payload)}]}],
+        "contents": [{"role": "user", "parts": multimodal_parts}],
     }
     parsed, diagnostics = _call_gemini_plan(api_key, requested_model, body)
 
@@ -1219,6 +1445,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "entityLockSummary": {
                 role: {
                     "entityType": lock.get("entityType"),
+                    "rawEntityType": lock.get("rawEntityType"),
+                    "normalizedEntityType": lock.get("normalizedEntityType"),
                     "label": lock.get("label"),
                     "canonicalDetails": lock.get("canonicalDetails"),
                     "forbiddenChanges": lock.get("forbiddenChanges"),
@@ -1231,6 +1459,17 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "segmentation": segmentation_debug,
             "referenceProfilesSummary": summarize_profiles(reference_profiles),
             "activeRolesByScene": {str(scene.get("sceneId") or ""): list(scene.get("activeRefs") or []) for scene in scenes},
+            **media_debug,
+            "rawEntityTypesByRole": {
+                role: lock.get("rawEntityType")
+                for role, lock in merged_entity_locks.items()
+                if isinstance(lock, dict)
+            },
+            "normalizedEntityTypesByRole": {
+                role: lock.get("normalizedEntityType") or lock.get("entityType")
+                for role, lock in merged_entity_locks.items()
+                if isinstance(lock, dict)
+            },
             "sceneDynamicScores": {
                 str(scene.get("sceneId") or ""): {
                     "sceneDynamicScore": scene.get("sceneDynamicScore"),
