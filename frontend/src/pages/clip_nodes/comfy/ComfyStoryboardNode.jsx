@@ -33,7 +33,7 @@ export default function ComfyStoryboardNode({ id, data }) {
   const statusHint = isUpdating
     ? (hasScenes ? "Идёт новый parse. Текущие сцены сохранены как stale до прихода нового результата." : "Получаю сцены из COMFY BRAIN...")
     : isError && isStale
-      ? (hasScenes ? "Новый parse завершился ошибкой. На экране остаётся прошлый storyboard, он помечен как stale." : "Новый parse завершился ошибкой, свежий storyboard не получен.")
+      ? (hasScenes ? "Новый parse завершился ошибкой. На экране остаётся прошлый storyboard, он помечен как stale. Editor откроет именно сохранённый старый результат." : "Новый parse завершился ошибкой, свежий storyboard не получен.")
     : isStale
       ? (hasScenes ? "Сцены сохранены, но входные данные изменились. Обновите storyboard." : "Данные изменились. Запустите обновление storyboard.")
       : isReady
@@ -41,6 +41,11 @@ export default function ComfyStoryboardNode({ id, data }) {
         : isError
           ? "Storyboard не обновлён из-за ошибки parse."
           : "Ожидает parse из COMFY BRAIN.";
+  const openEditorLabel = isError && isStale && hasScenes
+    ? "Открыть stale editor"
+    : isStale && hasScenes
+      ? "Открыть stale editor"
+      : "Открыть editor";
   const storyboardStateClass = isUpdating
     ? "clipSB_nodeComfyStoryboardStateUpdating"
     : isStale
@@ -67,9 +72,10 @@ export default function ComfyStoryboardNode({ id, data }) {
       </div>
       <div className="clipSB_selectHint" style={{ marginTop: 6 }}>{statusHint}</div>
       {errorMessage ? <div className="clipSB_small" style={{ marginTop: 6, color: "#ff8a8a" }}>Ошибка parse: {errorMessage}</div> : null}
+      {isError && isStale && hasScenes ? <div className="clipSB_small" style={{ marginTop: 6, color: "#ffb86c" }}>⚠ Сохранён предыдущий storyboard. Это не свежий parse result.</div> : null}
       {weakSemanticWarning ? <div className="clipSB_small" style={{ marginTop: 6, color: "#ffb86c" }}>⚠ {weakSemanticWarning}</div> : null}
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button className="clipSB_btn" onClick={() => data?.onOpenComfy?.(id)} disabled={!canOpenEditor}>Открыть editor</button>
+        <button className="clipSB_btn" onClick={() => data?.onOpenComfy?.(id)} disabled={!canOpenEditor} title={isError && isStale && hasScenes ? "Откроется сохранённый stale storyboard после failed parse" : undefined}>{openEditorLabel}</button>
       </div>
     </NodeShell>
   </>);

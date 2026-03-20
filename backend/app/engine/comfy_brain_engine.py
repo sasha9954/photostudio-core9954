@@ -499,7 +499,7 @@ def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]
 
     if has_audio:
         story_source = "audio"
-        narrative_source = "audio_primary"
+        narrative_source = "audio"
         if audio_story_mode == "speech_narrative":
             timeline_source = "spoken semantic flow"
             if not story_mission_summary:
@@ -520,18 +520,20 @@ def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]
                 story_mission_summary = "Build scenes from audio meaning, pacing and progression."
     elif has_text:
         story_source = "text"
-        narrative_source = "text_primary"
+        narrative_source = "text"
         if not timeline_source:
             timeline_source = "text semantic flow"
         if not story_mission_summary:
             story_mission_summary = text_value[:220]
     else:
-        errors.append("No audio or text source for storyboard planning")
+        errors.append("no_story_source")
         warnings.append("narrative_source_missing")
         if not timeline_source:
             timeline_source = "none"
         if not story_mission_summary:
             story_mission_summary = "Narrative source missing."
+
+    story_source, narrative_source = _normalize_story_sources(story_source, narrative_source)
 
     return {
         "storySource": story_source,
@@ -562,18 +564,69 @@ def _build_gemini_only_model_candidates(requested_model: str) -> list[str]:
     return candidates
 
 
+def _normalize_story_sources(story_source: Any, narrative_source: Any) -> tuple[str, str]:
+    normalized_story = str(story_source or "").strip().lower()
+    if normalized_story not in {"audio", "text", "none"}:
+        normalized_story = "none"
+
+    normalized_narrative = str(narrative_source or "").strip().lower()
+    if normalized_story == "audio":
+        if normalized_narrative not in {"audio", "audio_primary"}:
+            normalized_narrative = "audio"
+        else:
+            normalized_narrative = "audio"
+    elif normalized_story == "text":
+        if normalized_narrative not in {"text", "text_primary"}:
+            normalized_narrative = "text"
+        else:
+            normalized_narrative = "text"
+    else:
+        normalized_narrative = "none"
+
+    return normalized_story, normalized_narrative
+
+
+def _sanitize_gemini_error(diagnostics: dict[str, Any], resp: dict[str, Any] | None = None) -> tuple[str, str]:
+    http_status = diagnostics.get("httpStatus")
+    error_text = str((resp or {}).get("text") or diagnostics.get("errorText") or "").strip()
+    error_text_l = error_text.lower()
+    unsupported_markers = ["not supported", "unsupported", "not found", "generatecontent"]
+    looks_unsupported = (
+        any(marker in error_text_l for marker in unsupported_markers)
+        and "model" in error_text_l
+    ) or "model is not supported" in error_text_l or "not supported for generatecontent" in error_text_l or "unsupported for generatecontent" in error_text_l
+
+    if http_status in {400, 404} and looks_unsupported:
+        return "gemini_model_not_supported", "Gemini model is not supported for generateContent"
+    if http_status:
+        return f"gemini_http_error:{http_status}", f"Gemini request failed with HTTP {http_status}"
+    if isinstance(resp, dict) and resp.get("errors") == ["gemini_invalid_json"]:
+        return "gemini_invalid_json", "Gemini returned invalid JSON"
+    return "gemini_request_failed", "Gemini request failed"
+
+
 def _should_fallback_gemini_model(resp: dict[str, Any] | None, diagnostics: dict[str, Any]) -> bool:
     if not isinstance(resp, dict):
         return False
     http_status = diagnostics.get("httpStatus")
     error_text = str(resp.get("text") or diagnostics.get("errorText") or "").lower()
-    if http_status != 404:
+    if http_status not in {400, 404}:
         return False
-    return (
-        "not found" in error_text
-        or "not supported for generatecontent" in error_text
-        or "unsupported for generatecontent" in error_text
-    )
+
+    unsupported_markers = [
+        "not supported",
+        "unsupported",
+        "not found",
+        "generatecontent",
+    ]
+    has_unsupported_marker = any(marker in error_text for marker in unsupported_markers)
+    model_hint = "model" in error_text or "models/" in error_text
+
+    if http_status == 404:
+        return has_unsupported_marker
+    if http_status == 400:
+        return has_unsupported_marker and model_hint
+    return False
 
 
 def _build_world_lock(payload: dict[str, Any], reference_profiles: dict[str, Any]) -> dict[str, Any]:
@@ -1140,10 +1193,13 @@ def _call_gemini_plan(api_key: str, model: str, body: dict[str, Any]) -> tuple[d
         "errorText": str((resp or {}).get("text") or "")[:3000] if isinstance(resp, dict) else "",
         "fallbackFrom": None,
         "fallbackTo": None,
+        "sanitizedError": "",
     }
     if isinstance(resp, dict) and resp.get("__http_error__"):
-        logger.warning("[COMFY PLAN] gemini http error model=%s status=%s", model, resp.get("status"))
-        return {"errors": ["gemini_http_error"], "debug": {"httpStatus": http_status}}, diagnostics
+        error_code, sanitized_error = _sanitize_gemini_error(diagnostics, resp)
+        diagnostics["sanitizedError"] = sanitized_error
+        logger.warning("[COMFY PLAN] gemini http error model=%s status=%s code=%s", model, resp.get("status"), error_code)
+        return {"errors": [error_code], "debug": {"httpStatus": http_status, "sanitizedError": sanitized_error}}, diagnostics
 
     parsed = _extract_json(raw)
     if not isinstance(parsed, dict):
@@ -1165,6 +1221,7 @@ def _call_gemini_plan_with_model_fallback(api_key: str, requested_model: str, bo
         "fallbackFrom": None,
         "fallbackTo": None,
         "modelCandidates": model_candidates,
+        "sanitizedError": "",
     }
 
     for idx, candidate_model in enumerate(model_candidates):
@@ -1507,9 +1564,19 @@ def _build_preview_from_scenes(scenes: list[dict[str, Any]], world_lock: dict[st
 
 def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     story_context = _derive_gemini_only_story_context(normalized)
+    story_source, narrative_source = _normalize_story_sources(
+        story_context.get("storySource") or normalized.get("storySource"),
+        story_context.get("narrativeSource") or normalized.get("narrativeSource"),
+    )
+    story_context = {
+        **story_context,
+        "storySource": story_source,
+        "narrativeSource": narrative_source,
+    }
     normalized = {
         **normalized,
-        "narrativeSource": story_context.get("narrativeSource") or normalized.get("narrativeSource"),
+        "storySource": story_source,
+        "narrativeSource": narrative_source,
         "timelineSource": story_context.get("timelineSource") or normalized.get("timelineSource"),
         "storyMissionSummary": story_context.get("storyMissionSummary") or normalized.get("storyMissionSummary"),
     }
@@ -1531,6 +1598,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "debug": {
                 "plannerMode": "gemini_only",
                 "storySource": story_context.get("storySource"),
+                "narrativeSource": story_context.get("narrativeSource"),
                 "weakSemanticContext": story_context.get("weakSemanticContext"),
                 "semanticContextReason": story_context.get("semanticContextReason"),
                 "hasAudio": story_context.get("hasAudio"),
@@ -1573,7 +1641,9 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "fallbackTo": None,
                 "effectiveModel": None,
                 "parseFailedReason": "; ".join(story_context.get("errors") or []),
+                "sanitizedError": "; ".join(story_context.get("errors") or []),
                 "storySource": story_context.get("storySource"),
+                "narrativeSource": story_context.get("narrativeSource"),
                 "weakSemanticContext": story_context.get("weakSemanticContext"),
                 "semanticContextReason": story_context.get("semanticContextReason"),
                 "hasAudio": story_context.get("hasAudio"),
@@ -1599,9 +1669,14 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     ]
     errors = [str(item) for item in (parsed.get("errors") if isinstance(parsed.get("errors"), list) else []) if str(item).strip()]
     if diagnostics.get("httpStatus"):
-        errors.append(f"gemini_http_error:{diagnostics['httpStatus']}")
-        if diagnostics.get("errorText"):
-            errors.append(str(diagnostics.get("errorText")))
+        error_code, sanitized_error = _sanitize_gemini_error(diagnostics, parsed)
+        if error_code not in errors:
+            errors.append(error_code)
+        if sanitized_error and sanitized_error not in errors:
+            errors.append(sanitized_error)
+        http_error_code = f"gemini_http_error:{diagnostics['httpStatus']}"
+        if http_error_code not in errors:
+            errors.append(http_error_code)
     if diagnostics.get("fallbackFrom") and diagnostics.get("fallbackTo"):
         warnings.append(f"gemini_model_fallback:{diagnostics['fallbackFrom']}->{diagnostics['fallbackTo']}")
 
@@ -1631,8 +1706,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "storyControlMode": normalized.get("storyControlMode"),
         "storyMissionSummary": normalized.get("storyMissionSummary"),
         "timelineSource": normalized.get("timelineSource") or "gemini_semantic_scene_planning",
-        "narrativeSource": normalized.get("narrativeSource") or "audio_primary",
-        "storySource": story_context.get("storySource") or "audio",
+        "narrativeSource": narrative_source,
+        "storySource": story_source,
         "weakSemanticContext": bool(story_context.get("weakSemanticContext")),
         "semanticContextReason": story_context.get("semanticContextReason") or "",
         "audioDurationSec": timing_debug.get("audioDurationSec"),
@@ -1660,7 +1735,9 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "httpStatus": diagnostics.get("httpStatus"),
             "rawPreview": diagnostics.get("rawPreview") or "",
             "parseFailedReason": "; ".join(errors) if errors else "",
+            "sanitizedError": diagnostics.get("sanitizedError") or ("; ".join(errors) if errors else ""),
             "storySource": story_context.get("storySource"),
+            "narrativeSource": story_context.get("narrativeSource"),
             "weakSemanticContext": bool(story_context.get("weakSemanticContext")),
             "semanticContextReason": story_context.get("semanticContextReason") or "",
             "hasAudio": story_context.get("hasAudio"),
