@@ -13,6 +13,7 @@ import logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 ALLOWED_AUDIO_STORY_MODES = {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}
+ALLOWED_PLANNER_MODES = {"legacy", "gemini_only"}
 
 
 class RefItemIn(BaseModel):
@@ -33,6 +34,7 @@ class ClipComfyPromptSyncIn(BaseModel):
 
 class ClipComfyPlanIn(BaseModel):
     mode: str = "clip"
+    plannerMode: str = "legacy"
     output: str = "comfy image"
     stylePreset: str = "realism"
     freezeStyle: bool = False
@@ -56,6 +58,12 @@ class ClipComfyPlanIn(BaseModel):
     def validate_audio_story_mode(cls, value: Any) -> str:
         normalized = str(value or "lyrics_music").strip().lower()
         return normalized if normalized in ALLOWED_AUDIO_STORY_MODES else "lyrics_music"
+
+    @field_validator("plannerMode", mode="before")
+    @classmethod
+    def validate_planner_mode(cls, value: Any) -> str:
+        normalized = str(value or "legacy").strip().lower()
+        return normalized if normalized in ALLOWED_PLANNER_MODES else "legacy"
 
 
 class ClipComfyConnectRefsIn(BaseModel):

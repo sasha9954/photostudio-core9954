@@ -19,6 +19,7 @@ COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group
 COMFY_REF_DIRECTIVES = {"hero", "supporting", "environment_required", "required", "optional", "omit"}
 COMFY_ACTIVE_DIRECTIVES = {"hero", "supporting", "environment_required", "required"}
 COMFY_FALLBACK_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "group", "animal", "location", "props", "style"]
+COMFY_PLANNER_MODES = {"legacy", "gemini_only"}
 
 
 def _to_float(value: Any) -> float | None:
@@ -155,6 +156,9 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     mode = str(data.get("mode") or "clip").strip().lower()
     if mode not in {"clip", "kino", "reklama", "scenario"}:
         mode = "clip"
+    planner_mode = str(data.get("plannerMode") or "legacy").strip().lower()
+    if planner_mode not in COMFY_PLANNER_MODES:
+        planner_mode = "legacy"
     output = str(data.get("output") or "comfy image").strip().lower()
     if output not in {"comfy image", "comfy text"}:
         output = "comfy image"
@@ -165,6 +169,7 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
 
     return {
         "mode": mode,
+        "plannerMode": planner_mode,
         "output": output,
         "audioStoryMode": audio_story_mode,
         "stylePreset": str(data.get("stylePreset") or "realism").strip().lower(),
@@ -183,6 +188,152 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "timelineSource": str(data.get("timelineSource") or "").strip(),
         "narrativeSource": str(data.get("narrativeSource") or "").strip(),
     }
+
+
+def _summarize_profile_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(parts[:8])
+    if isinstance(value, dict):
+        parts = [f"{key}: {str(item).strip()}" for key, item in value.items() if str(item).strip()]
+        return "; ".join(parts[:8])
+    return ""
+
+
+def _build_world_lock(payload: dict[str, Any], reference_profiles: dict[str, Any]) -> dict[str, Any]:
+    refs_by_role = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
+    location_profile = reference_profiles.get("location") if isinstance(reference_profiles.get("location"), dict) else {}
+    style_profile = reference_profiles.get("style") if isinstance(reference_profiles.get("style"), dict) else {}
+    location_refs = refs_by_role.get("location") if isinstance(refs_by_role.get("location"), list) else []
+    style_refs = refs_by_role.get("style") if isinstance(refs_by_role.get("style"), list) else []
+    visual_style = str(payload.get("stylePreset") or "realism").strip() or "realism"
+    location_name = str(((location_refs[0] or {}).get("name")) if location_refs else "").strip() or "anchored_main_location"
+    location_summary = _summarize_profile_value(location_profile.get("visualProfile") or location_profile.get("summary")) or location_name
+    style_summary = _summarize_profile_value(style_profile.get("visualProfile") or style_profile.get("summary")) or visual_style
+    return {
+        "worldType": location_summary or location_name,
+        "locationType": location_name,
+        "locationSubtype": _summarize_profile_value(location_profile.get("subtype") or location_profile.get("entityType")) or "single_continuous_world",
+        "timeOfDay": _summarize_profile_value(style_profile.get("timeOfDay")) or "locked_from_input",
+        "lighting": _summarize_profile_value(style_profile.get("lightingLogic") or style_profile.get("lighting")) or f"{visual_style} continuity lighting",
+        "shadows": _summarize_profile_value(style_profile.get("shadowLogic")) or "keep shadow logic stable scene to scene",
+        "weather": _summarize_profile_value(style_profile.get("weather")) or "hold stable unless story explicitly transitions",
+        "materials": _summarize_profile_value(location_profile.get("materials") or location_profile.get("visualProfile")) or "preserve dominant material language",
+        "architecture": _summarize_profile_value(location_profile.get("architecture") or location_profile.get("visualProfile")) or "preserve architecture language",
+        "vegetation": _summarize_profile_value(location_profile.get("vegetation")) or "do not drift vegetation family without transition",
+        "spacePhysics": _summarize_profile_value(location_profile.get("spacePhysics")) or "consistent spatial physics and scale",
+        "palette": _summarize_profile_value(style_profile.get("palette") or style_profile.get("visualProfile")) or style_summary,
+        "atmosphere": _summarize_profile_value(style_profile.get("atmosphere")) or f"{visual_style} atmosphere continuity",
+        "continuityRules": [
+            "Keep one continuous world unless narration explicitly transitions elsewhere.",
+            "Do not change location family, time of day, lighting logic, or material language without a story cue.",
+            "References constrain world identity; audio/text drive semantic scene selection inside that world.",
+        ],
+        "forbiddenWorldDrift": [
+            "No abrupt biome swap without transition.",
+            "No unexplained day/night jump.",
+            "No random architecture or weather reset between adjacent scenes.",
+        ],
+        "sourceRefs": {
+            "location": [str(item.get("url") or "").strip() for item in location_refs if str(item.get("url") or "").strip()],
+            "style": [str(item.get("url") or "").strip() for item in style_refs if str(item.get("url") or "").strip()],
+        },
+    }
+
+
+def _build_entity_locks(payload: dict[str, Any], reference_profiles: dict[str, Any]) -> dict[str, Any]:
+    refs_by_role = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
+    entity_locks: dict[str, Any] = {}
+    for role in COMFY_REF_ROLES:
+        profile = reference_profiles.get(role) if isinstance(reference_profiles.get(role), dict) else None
+        refs = refs_by_role.get(role) if isinstance(refs_by_role.get(role), list) else []
+        if not profile and not refs:
+            continue
+        visual_profile = profile.get("visualProfile") if isinstance((profile or {}).get("visualProfile"), dict) else {}
+        entity_locks[role] = {
+            "refId": role,
+            "role": role,
+            "label": str(((refs[0] or {}).get("name")) if refs else "").strip() or role,
+            "entityType": str((profile or {}).get("entityType") or role).strip() or role,
+            "visualProfile": visual_profile,
+            "invariants": (profile or {}).get("invariants") if isinstance((profile or {}).get("invariants"), list) else [],
+            "forbiddenChanges": (profile or {}).get("forbiddenChanges") if isinstance((profile or {}).get("forbiddenChanges"), list) else [
+                "Do not swap identity with a different entity.",
+                "Do not mutate outfit/material/species without explicit story cause.",
+            ],
+            "sourceRefUrls": [str(item.get("url") or "").strip() for item in refs if str(item.get("url") or "").strip()],
+        }
+    return entity_locks
+
+
+def _build_gemini_planner_payload(payload: dict[str, Any], world_lock: dict[str, Any], entity_locks: dict[str, Any]) -> dict[str, Any]:
+    refs_by_role = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
+    return {
+        "plannerMode": "gemini_only",
+        "mode": payload.get("mode") or "clip",
+        "audio": {
+            "audioUrl": payload.get("audioUrl") or "",
+            "durationSec": payload.get("audioDurationSec"),
+            "audioIsPrimaryMeaningSource": True,
+            "audioStoryMode": payload.get("audioStoryMode") or "lyrics_music",
+        },
+        "textContext": {
+            "scriptText": payload.get("text") or "",
+            "lyricsText": payload.get("lyricsText") or "",
+            "transcriptText": payload.get("transcriptText") or "",
+            "spokenTextHint": payload.get("spokenTextHint") or "",
+            "audioSemanticSummary": payload.get("audioSemanticSummary") or "",
+            "textRole": "fallback_only" if payload.get("audioStoryMode") == "speech_narrative" else "support",
+        },
+        "worldContext": {
+            "worldLock": world_lock,
+            "styleSummary": payload.get("stylePreset") or "realism",
+            "locationRefs": refs_by_role.get("location") or [],
+            "characterRefs": [item for role in ["character_1", "character_2", "character_3"] for item in (refs_by_role.get(role) or [])],
+            "animalRefs": refs_by_role.get("animal") or [],
+            "propRefs": refs_by_role.get("props") or [],
+            "styleRefs": refs_by_role.get("style") or [],
+            "entityLocks": entity_locks,
+            "globalRules": world_lock.get("continuityRules") or [],
+        },
+        "planningRules": {
+            "sceneDurationMinSec": 3,
+            "sceneDurationMaxSec": 8,
+            "oneCompleteThoughtPerScene": True,
+            "refsConstrainVisualsNotMeaning": True,
+            "allowEnvironmentalScenesWithoutCharacters": True,
+            "chooseActiveRefsPerScene": True,
+            "avoidGenericEpicFiller": True,
+            "avoidSlideshowOnlyCameraMoves": True,
+            "requireSceneActionOrEnvironmentMotion": True,
+        },
+    }
+
+
+def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
+    return (
+        "You are COMFY Gemini Brain planner. Return strict JSON only.\n"
+        "Top-level JSON fields required: worldLock, entityLocks, scenes, preview, warnings, debug.\n"
+        "Scene contract required for every scene:\n"
+        "sceneId,startSec,endSec,durationSec,spokenText,sceneMeaning,emotion,imagePrompt,videoPrompt,sceneAction,environmentMotion,cameraPlan,sfxSuggestion,activeRefs,refUsageReason,characterRoleLogic,continuity,continuityLocksUsed,confidence.\n"
+        "Rules:\n"
+        "- plannerMode is gemini_only, so you own semantic scene planning completely.\n"
+        "- Audio is primary meaning source. Text is fallback/support.\n"
+        "- First lock the world, then lock entities, then plan scenes, then select preview from the resulting scenes.\n"
+        "- Keep one stable world unless the story explicitly transitions.\n"
+        "- Choose active refs per scene; do not force every ref into every scene.\n"
+        "- Scene duration target is 3-8 sec, usually 3-7 sec.\n"
+        "- Each strong scene must contain at least two of three: character/entity action, environment motion, camera movement.\n"
+        "- Avoid slideshow risk where only the camera moves.\n"
+        "- imagePrompt and videoPrompt must stay compatible with the locked world and entity continuity.\n"
+        "- preview must be extracted from the scenario, not invented separately.\n"
+        "Return no markdown, only JSON.\n"
+        f"INPUT={json.dumps(gemini_payload, ensure_ascii=False)}"
+    )
 
 
 def _normalize_scene_timeline(scenes: list[dict[str, Any]], audio_duration_sec: float | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -490,6 +641,27 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
     image_prompt_en = str(src.get("imagePromptEn") or "").strip()
     video_prompt_ru = str(src.get("videoPromptRu") or src.get("videoPrompt") or "").strip()
     video_prompt_en = str(src.get("videoPromptEn") or "").strip()
+    active_refs = src.get("activeRefs") if isinstance(src.get("activeRefs"), list) else refs_used
+    active_refs = [str(role).strip() for role in active_refs if str(role).strip() in COMFY_REF_ROLES]
+    if not active_refs:
+        active_refs = refs_used
+    scene_action = str(src.get("sceneAction") or src.get("visualAction") or src.get("sceneNarrativeStep") or "").strip()
+    environment_motion = str(src.get("environmentMotion") or src.get("motionPlan") or "").strip()
+    camera_plan = str(src.get("cameraPlan") or src.get("cameraIntent") or "").strip()
+    ref_usage_reason = str(src.get("refUsageReason") or src.get("roleSelectionReason") or "").strip()
+    continuity_locks_used = src.get("continuityLocksUsed") if isinstance(src.get("continuityLocksUsed"), list) else []
+    continuity_locks_used = [str(item).strip() for item in continuity_locks_used if str(item).strip()]
+    character_role_logic = src.get("characterRoleLogic") if isinstance(src.get("characterRoleLogic"), list) else []
+    if not character_role_logic:
+        character_role_logic = [
+            {
+                "refId": role,
+                "roleInScene": "hero" if role == primary_role else "supporting",
+                "action": scene_action or environment_motion or "supports the scene beat",
+            }
+            for role in [primary_role, *secondary_roles]
+            if role in COMFY_REF_ROLES
+        ]
 
     image_missing_langs: list[str] = []
     video_missing_langs: list[str] = []
@@ -531,9 +703,12 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "sceneText": str(src.get("sceneText") or ""),
         "sceneMeaning": str(src.get("sceneMeaning") or ""),
         "visualDescription": str(src.get("visualDescription") or ""),
-        "cameraPlan": str(src.get("cameraPlan") or ""),
+        "cameraPlan": camera_plan,
         "motionPlan": str(src.get("motionPlan") or ""),
         "sfxPlan": str(src.get("sfxPlan") or ""),
+        "sceneAction": scene_action,
+        "environmentMotion": environment_motion,
+        "sfxSuggestion": str(src.get("sfxSuggestion") or src.get("sfxPlan") or "").strip(),
         "sceneNarrativeStep": str(src.get("sceneNarrativeStep") or ""),
         "sceneGoal": str(src.get("sceneGoal") or ""),
         "storyMission": str(src.get("storyMission") or ""),
@@ -541,6 +716,7 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "primaryRole": primary_role,
         "secondaryRoles": secondary_roles,
         "continuity": str(src.get("continuity") or ""),
+        "continuityLocksUsed": continuity_locks_used,
         "imagePrompt": image_prompt_en,
         "videoPrompt": video_prompt_en,
         "imagePromptRu": image_prompt_ru,
@@ -554,6 +730,9 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
             "video": video_missing_langs,
         },
         "refsUsed": refs_used,
+        "activeRefs": active_refs,
+        "refUsageReason": ref_usage_reason,
+        "characterRoleLogic": character_role_logic,
         "refDirectives": ref_directives,
         "heroEntityId": hero_entity_id,
         "supportEntityIds": support_entity_ids,
@@ -562,6 +741,8 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "environmentLock": bool(src.get("environmentLock", "location" in must_appear or ref_directives.get("location") == "environment_required")),
         "styleLock": bool(src.get("styleLock", "style" in refs_used or ref_directives.get("style") in {"required", "optional"})),
         "identityLock": bool(src.get("identityLock", any(role in refs_used for role in ["character_1", "character_2", "character_3", "group", "animal", "props"]))),
+        "spokenText": str(src.get("spokenText") or ""),
+        "confidence": _to_float(src.get("confidence")) or 0.0,
         "roleSelectionReason": str(src.get("roleSelectionReason") or "").strip(),
         # Runtime render-state fields are intentionally initialized outside planner contract.
         "imageUrl": "",
@@ -625,11 +806,136 @@ def _needs_segmentation_refinement(segmentation_debug: dict[str, Any], audio_dur
     return (len(reasons) > 0), reasons
 
 
+def _build_preview_from_scenes(scenes: list[dict[str, Any]], world_lock: dict[str, Any]) -> dict[str, Any]:
+    if not scenes:
+        return {
+            "sourceSceneId": "",
+            "previewType": "none",
+            "activeRefs": [],
+            "imagePrompt": "",
+            "continuityNotes": str(world_lock.get("atmosphere") or ""),
+        }
+    best_scene = max(
+        scenes,
+        key=lambda scene: (
+            len(scene.get("activeRefs") or []),
+            _to_float(scene.get("confidence")) or 0.0,
+            _to_float(scene.get("durationSec")) or 0.0,
+        ),
+    )
+    return {
+        "sourceSceneId": str(best_scene.get("sceneId") or ""),
+        "previewType": "hero_scene_extraction",
+        "activeRefs": list(best_scene.get("activeRefs") or []),
+        "imagePrompt": str(best_scene.get("imagePromptEn") or best_scene.get("imagePrompt") or ""),
+        "continuityNotes": str(best_scene.get("continuity") or world_lock.get("atmosphere") or ""),
+    }
+
+
+def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
+    reference_profiles = build_reference_profiles(normalized.get("refsByRole") or {})
+    world_lock = _build_world_lock(normalized, reference_profiles)
+    entity_locks = _build_entity_locks(normalized, reference_profiles)
+    gemini_payload = _build_gemini_planner_payload(normalized, world_lock, entity_locks)
+
+    api_key = (settings.GEMINI_API_KEY or "").strip()
+    if not api_key:
+        return {
+            "ok": False,
+            "planMeta": {"plannerMode": "gemini_only"},
+            "globalContinuity": world_lock,
+            "scenes": [],
+            "warnings": [],
+            "errors": ["GEMINI_API_KEY missing"],
+            "debug": {
+                "plannerMode": "gemini_only",
+                "worldLock": world_lock,
+                "entityLocks": entity_locks,
+                "geminiPayload": gemini_payload,
+            },
+        }
+
+    requested_model = (settings.GEMINI_TEXT_MODEL or FALLBACK_GEMINI_MODEL or "gemini-2.5-flash").strip()
+    body = {
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3},
+        "contents": [{"role": "user", "parts": [{"text": _build_gemini_only_planner_prompt(gemini_payload)}]}],
+    }
+    parsed, diagnostics = _call_gemini_plan(api_key, requested_model, body)
+
+    warnings = [str(item) for item in (parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []) if str(item).strip()]
+    errors = [str(item) for item in (parsed.get("errors") if isinstance(parsed.get("errors"), list) else []) if str(item).strip()]
+    if diagnostics.get("httpStatus"):
+        errors.append(f"gemini_http_error:{diagnostics['httpStatus']}")
+
+    parsed_world_lock = parsed.get("worldLock") if isinstance(parsed.get("worldLock"), dict) else {}
+    merged_world_lock = {**world_lock, **parsed_world_lock}
+    parsed_entity_locks = parsed.get("entityLocks") if isinstance(parsed.get("entityLocks"), dict) else {}
+    merged_entity_locks = {**entity_locks, **parsed_entity_locks}
+
+    raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
+    scenes = [_normalize_scene(scene, idx, normalized.get("refsByRole")) for idx, scene in enumerate(raw_scenes)]
+    scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
+    segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
+    preview_raw = parsed.get("preview") if isinstance(parsed.get("preview"), dict) else {}
+    preview = {
+        **_build_preview_from_scenes(scenes, merged_world_lock),
+        **preview_raw,
+    }
+    if not preview.get("sourceSceneId") and scenes:
+        preview["sourceSceneId"] = str((scenes[0] or {}).get("sceneId") or "")
+
+    plan_meta = {
+        "mode": normalized.get("mode"),
+        "plannerMode": "gemini_only",
+        "output": normalized.get("output"),
+        "stylePreset": normalized.get("stylePreset"),
+        "audioStoryMode": normalized.get("audioStoryMode"),
+        "storyControlMode": normalized.get("storyControlMode"),
+        "storyMissionSummary": normalized.get("storyMissionSummary"),
+        "timelineSource": "gemini_semantic_scene_planning",
+        "narrativeSource": normalized.get("narrativeSource") or "audio_primary",
+        "audioDurationSec": timing_debug.get("audioDurationSec"),
+        "timelineDurationSec": timing_debug.get("timelineDurationSec"),
+        "sceneDurationTotalSec": timing_debug.get("sceneDurationTotalSec"),
+        "worldLock": merged_world_lock,
+        "entityLocks": merged_entity_locks,
+        "preview": preview,
+        "summary": {"sceneCount": len(scenes)},
+    }
+    return {
+        "ok": len(errors) == 0,
+        "planMeta": plan_meta,
+        "globalContinuity": merged_world_lock,
+        "scenes": scenes,
+        "warnings": warnings,
+        "errors": errors,
+        "debug": {
+            **(parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {}),
+            "plannerMode": "gemini_only",
+            "requestedModel": diagnostics.get("requestedModel") or requested_model,
+            "effectiveModel": diagnostics.get("effectiveModel") or requested_model,
+            "httpStatus": diagnostics.get("httpStatus"),
+            "rawPreview": diagnostics.get("rawPreview") or "",
+            "geminiPayload": gemini_payload,
+            "worldLock": merged_world_lock,
+            "entityLocks": merged_entity_locks,
+            "preview": preview,
+            "timing": timing_debug,
+            "segmentation": segmentation_debug,
+            "referenceProfilesSummary": summarize_profiles(reference_profiles),
+            "activeRolesByScene": {str(scene.get("sceneId") or ""): list(scene.get("activeRefs") or []) for scene in scenes},
+        },
+    }
+
+
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
+    if normalized.get("plannerMode") == "gemini_only":
+        return _run_comfy_plan_gemini_only(normalized)
     if normalized.get("mode") == "clip":
         logger.info(
-            "[COMFY PLAN][clip] audioStoryMode=%s text=%s lyricsText=%s transcriptText=%s spokenHint=%s semanticHints=%s semanticSummary=%s audio=%s",
+            "[COMFY PLAN][clip] plannerMode=%s audioStoryMode=%s text=%s lyricsText=%s transcriptText=%s spokenHint=%s semanticHints=%s semanticSummary=%s audio=%s",
+            normalized.get("plannerMode"),
             normalized.get("audioStoryMode"),
             bool(normalized.get("text")),
             bool(normalized.get("lyricsText")),
@@ -641,6 +947,11 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         )
         clip_result = plan_comfy_clip(normalized)
         clip_meta = clip_result.get("planMeta") if isinstance(clip_result, dict) else {}
+        if isinstance(clip_meta, dict):
+            clip_meta["plannerMode"] = normalized.get("plannerMode") or "legacy"
+        clip_debug = clip_result.get("debug") if isinstance(clip_result.get("debug"), dict) else {}
+        if isinstance(clip_debug, dict):
+            clip_debug["plannerMode"] = normalized.get("plannerMode") or "legacy"
         logger.info(
             "[COMFY PLAN][clip] resolved textSource=%s exactLyricsAvailable=%s transcriptAvailable=%s usedSemanticFallback=%s semanticHintCount=%s",
             (clip_meta or {}).get("textSource"),
@@ -660,7 +971,8 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     # VERIFY EXACT FILE + EXACT MODEL for COMFY planner requests.
     hard_debug_disable_fallback = True
     logger.info(
-        "[COMFY PLAN] request summary mode=%s output=%s style=%s audioStoryMode=%s",
+        "[COMFY PLAN] request summary plannerMode=%s mode=%s output=%s style=%s audioStoryMode=%s",
+        normalized["plannerMode"],
         normalized["mode"],
         normalized["output"],
         normalized["stylePreset"],
@@ -807,7 +1119,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
 
     plan_meta = (
         {
-            **({"mode": normalized["mode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"], "audioStoryMode": normalized["audioStoryMode"]}),
+            **({"mode": normalized["mode"], "plannerMode": normalized["plannerMode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"], "audioStoryMode": normalized["audioStoryMode"]}),
             **(parsed.get("planMeta") if isinstance(parsed.get("planMeta"), dict) else {}),
         }
     )
@@ -835,6 +1147,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "httpStatus": diagnostics.get("httpStatus"),
             "rawPreview": diagnostics.get("rawPreview") or "",
             "normalizedPayload": normalized,
+            "plannerMode": normalized["plannerMode"],
             "fallbackFrom": diagnostics.get("fallbackFrom"),
             "normalizedScenesCount": len(scenes),
             "timing": timing_debug,

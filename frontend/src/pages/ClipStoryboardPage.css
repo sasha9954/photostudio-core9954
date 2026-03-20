@@ -1516,6 +1516,15 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_nodeComfyBrain { --node-accent: rgba(77, 216, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(77,216,255,.24), 0 0 22px rgba(77,216,255,.18); }
+.clipSB_nodeComfyBrainPlannerLegacy { --node-accent: rgba(77, 216, 255, 0.78); }
+.clipSB_nodeComfyBrainPlannerGemini {
+  --node-accent: rgba(167, 139, 250, 0.92);
+  background:
+    radial-gradient(circle at top right, rgba(129, 140, 248, .16), transparent 42%),
+    radial-gradient(circle at bottom left, rgba(244, 114, 182, .14), transparent 38%),
+    rgba(10, 10, 20, .92);
+  box-shadow: inset 0 0 0 1px rgba(167,139,250,.34), 0 0 26px rgba(167,139,250,.24);
+}
 .clipSB_nodeComfyStoryboard { --node-accent: rgba(106, 168, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(106,168,255,.24), 0 0 22px rgba(106,168,255,.18); }
 .clipSB_nodeComfyVideo { --node-accent: rgba(125, 249, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(125,249,255,.24), 0 0 22px rgba(125,249,255,.18); }
 
@@ -1571,6 +1580,35 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_badge { display:inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 11px; background: rgba(255,255,255,.08); margin-bottom: 8px; }
 .clipSB_grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .clipSB_brainLabel { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: rgba(255,255,255,.62); margin: 0 0 5px; text-transform: uppercase; }
+.clipSB_comfyPlannerModeRow { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 2px; }
+.clipSB_comfyPlannerBadges { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.clipSB_comfyPlannerSwitch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.06);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+}
+.clipSB_comfyPlannerSwitchBtn {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255,255,255,.68);
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.clipSB_comfyPlannerSwitchBtn.isActive {
+  background: linear-gradient(135deg, rgba(106,168,255,.28), rgba(77,216,255,.22));
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(19, 34, 64, .28);
+}
+.clipSB_nodeComfyBrainPlannerGemini .clipSB_comfyPlannerSwitchBtn.isActive {
+  background: linear-gradient(135deg, rgba(167,139,250,.36), rgba(244,114,182,.26));
+}
 .clipSB_selectHint { margin-top: 6px; font-size: 11px; line-height: 1.35; color: rgba(255,255,255,.58); }
 .clipSB_toggleRow { display:flex; justify-content:flex-start; margin-top:8px; font-size:12px; color: rgba(255,255,255,.8); }
 .clipSB_toggleRow label { display: inline-flex; align-items: center; gap: 6px; }

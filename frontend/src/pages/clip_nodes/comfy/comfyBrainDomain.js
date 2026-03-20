@@ -177,6 +177,9 @@ export function normalizeComfyScenePrompts(scene = {}) {
   const refsUsed = Array.isArray(scene?.refsUsed)
     ? scene.refsUsed.map((role) => String(role || "").trim()).filter(Boolean)
     : [];
+  const activeRefs = Array.isArray(scene?.activeRefs)
+    ? scene.activeRefs.map((role) => String(role || "").trim()).filter(Boolean)
+    : refsUsed;
   const primaryRole = String(scene?.primaryRole || "").trim();
   const fallbackHero = primaryRole || refsUsed[0] || "";
   const heroEntityId = String(scene?.heroEntityId || fallbackHero).trim();
@@ -208,6 +211,9 @@ export function normalizeComfyScenePrompts(scene = {}) {
     imagePrompt: imagePromptEn,
     videoPrompt: videoPromptEn,
     refsUsed,
+    activeRefs,
+    refUsageReason: String(scene?.refUsageReason || "").trim(),
+    characterRoleLogic: Array.isArray(scene?.characterRoleLogic) ? scene.characterRoleLogic : [],
     primaryRole,
     heroEntityId,
     mustAppear,
@@ -715,6 +721,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const audioNode = pickConnectedNode("audio");
   const textNode = pickConnectedNode("text");
   const modeValue = String(nodeData?.mode || "clip").toLowerCase();
+  const plannerMode = String(nodeData?.plannerMode || "legacy").trim().toLowerCase() === "gemini_only" ? "gemini_only" : "legacy";
   const outputValue = normalizeRenderProfile(nodeData?.output || "comfy image");
   const audioStoryMode = normalizeAudioStoryMode(nodeData?.audioStoryMode || "lyrics_music");
   const stylePreset = String(nodeData?.styleKey || "realism").toLowerCase();
@@ -753,6 +760,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
 
   return {
     modeValue,
+    plannerMode,
     outputValue,
     audioStoryMode,
     stylePreset,
@@ -777,6 +785,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
 export function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } = {}) {
   return {
     mode: plannerInput.mode,
+    plannerMode: plannerInput.plannerMode || plannerMeta.plannerMode || "legacy",
     output: plannerInput.output,
     stylePreset: plannerInput.stylePreset,
     storyControlMode: plannerInput.storyControlMode,
@@ -789,6 +798,9 @@ export function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } 
     audioStoryPolicy: plannerInput.audioStoryPolicy,
     warnings: plannerMeta.warnings || [],
     globalContinuity: plannerMeta.globalContinuity || "",
+    worldLock: plannerMeta.worldLock || {},
+    entityLocks: plannerMeta.entityLocks || {},
+    preview: plannerMeta.preview || {},
     primaryRole: plannerMeta?.sceneRoleModel?.primarySubject || "character_1",
     secondaryRoles: plannerMeta?.sceneRoleModel?.secondarySubjects || [],
     pipelineFlow: "brain → per-scene prompts/rules → scene image → scene video",

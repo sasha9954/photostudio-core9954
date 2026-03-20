@@ -7592,6 +7592,7 @@ onClipSec: (nodeId, value) => {
 
             const plannerInput = {
               mode: derived.modeValue,
+              plannerMode: String(derived.plannerMode || "legacy"),
               output: derived.outputValue,
               stylePreset: derived.stylePreset,
               freezeStyle: derived.freezeStyle,
@@ -7629,6 +7630,7 @@ onClipSec: (nodeId, value) => {
             };
 
             const brainSummary = {
+              plannerMode: derived.plannerMode || 'legacy',
               storySource: derived.narrativeSource,
               cast: castLabels,
               world: `location ${derived.refsByRole.location.length ? 'yes' : 'no'} • props ${derived.refsByRole.props.length ? 'yes' : 'no'} • scale ${anchors.worldScaleContext}`,
@@ -7746,6 +7748,7 @@ onClipSec: (nodeId, value) => {
                 referenceProfiles: hiddenReferenceProfiles,
               },
               onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
+              onPlannerMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, plannerMode: value === "gemini_only" ? "gemini_only" : "legacy" } } : x))),
               onMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x))),
               onOutput: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, output: normalizeRenderProfile(value) } } : x))),
               onAudioStoryMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, audioStoryMode: normalizeAudioStoryMode(value) } } : x))),
@@ -7792,6 +7795,7 @@ onClipSec: (nodeId, value) => {
 
                 const payload = {
                   mode: freshDerived.modeValue,
+                  plannerMode: String(freshDerived.plannerMode || "legacy"),
                   output: freshDerived.outputValue,
                   stylePreset: freshDerived.stylePreset,
                   freezeStyle: freshDerived.freezeStyle,
@@ -7865,7 +7869,7 @@ onClipSec: (nodeId, value) => {
                   let response;
                   try {
                     if (USE_COMFY_MOCK) {
-                      const plannerMeta = { plannerInput: payload, mode: payload.mode, output: payload.output, stylePreset: payload.stylePreset, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, audioStoryMode: payload.audioStoryMode, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
+                      const plannerMeta = { plannerInput: payload, mode: payload.mode, plannerMode: payload.plannerMode, output: payload.output, stylePreset: payload.stylePreset, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, audioStoryMode: payload.audioStoryMode, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
                       const scenes = buildMockComfyScenes(plannerMeta);
                       response = { ok: true, planMeta: plannerMeta, globalContinuity: scenes[0]?.plannerMeta?.globalContinuity || "", scenes, warnings: plannerMeta.warnings, errors: [], debug: {} };
                     } else {
@@ -7945,6 +7949,7 @@ onClipSec: (nodeId, value) => {
                             ...x.data,
                             parseStatus: 'ready',
                             parsedAt,
+                            plannerMode: String(plannerMeta?.plannerMode || payload?.plannerMode || freshDerived.plannerMode || "legacy"),
                             mockScenes: resetBrainScenes.map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
                             lastPlannerMeta: { ...plannerMeta, globalContinuity, debugFields },
                             comfyDebug: debugFields,
@@ -7961,6 +7966,7 @@ onClipSec: (nodeId, value) => {
                             mockScenes: storyboardScenesWithResetState,
                             sceneCount: scenes.length,
                             mode: freshDerived.modeValue,
+                            plannerMode: String(plannerMeta?.plannerMode || payload?.plannerMode || freshDerived.plannerMode || "legacy"),
                             output: freshDerived.outputValue,
                             stylePreset: freshDerived.stylePreset,
                             narrativeSource: freshDerived.narrativeSource,
@@ -8879,7 +8885,7 @@ const hydrate = useCallback((source = "unknown") => {
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else if (type === "comfyBrain") {
-      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', output: 'comfy image', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
+      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', plannerMode: 'legacy', output: 'comfy image', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
     } else if (type === "comfyStoryboard") {
       node = { id, type: "comfyStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mockScenes: [], sceneCount: 0, mode: 'clip', parseStatus: 'idle' } };
     } else if (type === "comfyVideoPreview") {
@@ -10001,11 +10007,13 @@ const hydrate = useCallback((source = "unknown") => {
                       <div className="clipSB_comfyInfoGrid">
                         <div className="clipSB_comfyKv"><span>Сцена</span><strong>{comfySelectedScene.title || '—'}</strong></div>
                         <div className="clipSB_comfyKv"><span>Время</span><strong>{Number.isFinite(Number(comfySelectedScene.startSec)) && Number.isFinite(Number(comfySelectedScene.endSec)) ? `${Number(comfySelectedScene.startSec).toFixed(1)}–${Number(comfySelectedScene.endSec).toFixed(1)}s` : `${Number(comfySelectedScene.durationSec || 0).toFixed(1)}s`}</strong></div>
+                        <div className="clipSB_comfyKv"><span>Planner</span><strong>{String(comfyNode?.data?.plannerMode || comfyNode?.data?.plannerMeta?.plannerMode || 'legacy')}</strong></div>
                         <div className="clipSB_comfyKv"><span>Тип сцены</span><strong>{comfySelectedScene.sceneType || '—'}</strong></div>
                         <div className="clipSB_comfyKv"><span>Рендер-модель</span><strong>{comfySelectedScene.futureRenderModel || '—'}</strong></div>
                         <div className="clipSB_comfyKv"><span>Anchor</span><strong>{comfySelectedScene.anchorType || '—'}</strong></div>
                         <div className="clipSB_comfyKv"><span>Primary role</span><strong>{comfySelectedScene.primaryRole || '—'}</strong></div>
                         <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Refs used</span><strong>{Array.isArray(comfySelectedScene.refsUsed) && comfySelectedScene.refsUsed.length ? comfySelectedScene.refsUsed.join(', ') : '—'}</strong></div>
+                        <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Active refs</span><strong>{Array.isArray(comfySelectedScene.activeRefs) && comfySelectedScene.activeRefs.length ? comfySelectedScene.activeRefs.join(', ') : '—'}</strong></div>
                         <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Цель</span><strong>{comfySelectedScene.sceneGoal || comfySelectedScene.sceneNarrativeStep || '—'}</strong></div>
                       </div>
                     </div>
@@ -10013,6 +10021,7 @@ const hydrate = useCallback((source = "unknown") => {
                     <div className="clipSB_comfySection">
                       <div className="clipSB_comfyBlockTitle">WORLD BIBLE</div>
                       <div className="clipSB_small">storyMode: {String(comfyNode?.data?.plannerMeta?.worldBible?.storyMode || comfyNode?.data?.plannerMeta?.audioStoryMode || '—')}</div>
+                      <div className="clipSB_small">plannerMode: {String(comfyNode?.data?.plannerMeta?.plannerMode || comfyNode?.data?.plannerMode || 'legacy')}</div>
                       <div className="clipSB_small">visualStyle: {String(comfyNode?.data?.plannerMeta?.worldBible?.visualStyle || comfyNode?.data?.stylePreset || '—')}</div>
                       <div className="clipSB_small">lensFamily: {String(comfyNode?.data?.plannerMeta?.worldBible?.lensFamily || '—')}</div>
                       <div className="clipSB_small">lightingLogic: {String(comfyNode?.data?.plannerMeta?.worldBible?.lightingLogic || '—')}</div>
@@ -10029,6 +10038,8 @@ const hydrate = useCallback((source = "unknown") => {
                       <div className="clipSB_small">audioSemanticSummary: {String(comfyNode?.data?.comfyDebug?.analysis?.audioSemanticSummary || '—')}</div>
                       <div className="clipSB_small">closeupSceneCount: {String(comfyNode?.data?.plannerMeta?.closeupSceneCount ?? comfyNode?.data?.comfyDebug?.analysis?.closeupSceneCount ?? '—')}</div>
                       <div className="clipSB_small">sceneTypeHistogram: {formatSceneTypeHistogram(comfyNode?.data?.plannerMeta?.sceneTypeHistogram || comfyNode?.data?.comfyDebug?.analysis?.sceneTypeHistogram)}</div>
+                      <div className="clipSB_small">worldLock.locationType: {String(comfyNode?.data?.plannerMeta?.worldLock?.locationType || comfyNode?.data?.comfyDebug?.worldLock?.locationType || '—')}</div>
+                      <div className="clipSB_small">worldLock.lighting: {String(comfyNode?.data?.plannerMeta?.worldLock?.lighting || comfyNode?.data?.comfyDebug?.worldLock?.lighting || '—')}</div>
                     </div>
 
                     <div className="clipSB_comfySection">
@@ -10188,11 +10199,14 @@ const hydrate = useCallback((source = "unknown") => {
                     <details className="clipSB_scenarioEditRow" style={{ marginTop: 8 }}>
                       <summary className="clipSB_hint" style={{ cursor: 'pointer' }}>DEBUG</summary>
                       <div className="clipSB_small" style={{ marginTop: 8 }}>pipeline: {(Array.isArray(comfyNode?.data?.pipelineFlow) ? comfyNode.data.pipelineFlow.join(' → ') : 'brain → scene image → scene video')}</div>
+                      <div className="clipSB_small">plannerMode: {String(comfyNode?.data?.plannerMode || comfyNode?.data?.plannerMeta?.plannerMode || 'legacy')}</div>
                       <div className="clipSB_small">режим: {comfyModeMeta.labelRu} • стиль: {comfyStyleMeta.labelRu}</div>
                       <div className="clipSB_small">narrative source: {comfyNode?.data?.narrativeSource || 'none'}</div>
                       <div className="clipSB_small">audioDurationSec: {comfyNode?.data?.plannerMeta?.audioDurationSec ?? '—'}</div>
                       <div className="clipSB_small">timelineDurationSec: {comfyNode?.data?.plannerMeta?.timelineDurationSec ?? '—'}</div>
                       <div className="clipSB_small">sceneDurationTotalSec: {comfyNode?.data?.plannerMeta?.sceneDurationTotalSec ?? '—'}</div>
+                      <div className="clipSB_small">preview.sourceSceneId: {String(comfyNode?.data?.plannerMeta?.preview?.sourceSceneId || comfyNode?.data?.comfyDebug?.preview?.sourceSceneId || '—')}</div>
+                      <div className="clipSB_small">preview.activeRefs: {Array.isArray(comfyNode?.data?.plannerMeta?.preview?.activeRefs || comfyNode?.data?.comfyDebug?.preview?.activeRefs) ? (comfyNode?.data?.plannerMeta?.preview?.activeRefs || comfyNode?.data?.comfyDebug?.preview?.activeRefs).join(', ') : '—'}</div>
                       <div className="clipSB_small">warnings: {(Array.isArray(comfyNode?.data?.warnings) ? comfyNode.data.warnings.join(' | ') : '') || 'none'}</div>
                     </details>
                   </>
