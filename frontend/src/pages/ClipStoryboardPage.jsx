@@ -1420,6 +1420,128 @@ function truncateIntroText(value, maxLength = 84) {
   return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
 }
 
+function splitIntroPreviewWord(word = "", maxChars = 12) {
+  const clean = String(word || "").trim();
+  if (!clean) return [];
+  if (clean.length <= maxChars) return [clean];
+  const parts = [];
+  let rest = clean;
+  while (rest.length > maxChars) {
+    const take = Math.max(4, maxChars - 1);
+    parts.push(`${rest.slice(0, take)}-`);
+    rest = rest.slice(take);
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
+function wrapIntroPreviewTitle({ ctx, text, maxWidth, maxLines }) {
+  const rawWords = String(text || "").split(/\s+/).filter(Boolean);
+  if (!rawWords.length) return [];
+  const words = rawWords.flatMap((word) => splitIntroPreviewWord(word, 14));
+  const lines = [];
+  let current = "";
+  for (let idx = 0; idx < words.length; idx += 1) {
+    const candidate = current ? `${current} ${words[idx]}` : words[idx];
+    if (current && ctx.measureText(candidate).width > maxWidth) {
+      lines.push(current);
+      current = words[idx];
+      if (lines.length >= maxLines - 1) break;
+      continue;
+    }
+    current = candidate;
+  }
+  if (current && lines.length < maxLines) lines.push(current);
+  const renderedWordCount = lines.join(" ").replace(/…/g, "").split(/\s+/).filter(Boolean).length;
+  if (renderedWordCount < words.length && lines.length) {
+    lines[lines.length - 1] = `${lines[lines.length - 1].replace(/[.,!?;:\-–—\s]+$/g, "")}…`;
+  }
+  return lines.slice(0, maxLines);
+}
+
+function fitIntroPreviewTitleLayout({ title = "", previewFormatMeta }) {
+  const safeTitle = truncateIntroText(title || "INTRO FRAME", previewFormatMeta.titleMaxChars) || "INTRO FRAME";
+  if (typeof document === "undefined") {
+    return {
+      lines: [safeTitle],
+      fontSize: previewFormatMeta.titleFontPx,
+      lineHeight: previewFormatMeta.titleLineHeight,
+      plateMaxWidth: previewFormatMeta.width * 0.78,
+      platePaddingX: 18,
+      platePaddingY: 16,
+      maxPlateHeight: Math.round(previewFormatMeta.height * 0.3),
+    };
+  }
+
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return {
+      lines: [safeTitle],
+      fontSize: previewFormatMeta.titleFontPx,
+      lineHeight: previewFormatMeta.titleLineHeight,
+      plateMaxWidth: previewFormatMeta.width * 0.78,
+      platePaddingX: 18,
+      platePaddingY: 16,
+      maxPlateHeight: Math.round(previewFormatMeta.height * 0.3),
+    };
+  }
+
+  const isLandscape = previewFormatMeta.aspectRatio > 1.2;
+  const isPortrait = previewFormatMeta.aspectRatio < 0.9;
+  const maxLines = isPortrait ? 4 : 3;
+  const widthRatio = isLandscape ? 0.62 : (isPortrait ? 0.84 : 0.78);
+  const boxWidth = Math.round(previewFormatMeta.width * widthRatio);
+  const maxPlateHeight = Math.round(previewFormatMeta.height * (isPortrait ? 0.34 : 0.26));
+  const paddingX = isLandscape ? 18 : 16;
+  const paddingY = isPortrait ? 16 : 14;
+  const maxFont = previewFormatMeta.titleFontPx;
+  const minFont = isPortrait ? 20 : 18;
+
+  for (let fontSize = maxFont; fontSize >= minFont; fontSize -= 1) {
+    const lineHeight = Math.round(fontSize * (isPortrait ? 1.05 : 1.08));
+    ctx.font = `900 ${fontSize}px Arial`;
+    const lines = wrapIntroPreviewTitle({
+      ctx,
+      text: safeTitle,
+      maxWidth: boxWidth - paddingX * 2,
+      maxLines,
+    });
+    if (!lines.length) continue;
+    const longestLine = Math.max(...lines.map((line) => ctx.measureText(line).width));
+    const contentHeight = lines.length * lineHeight;
+    const plateHeight = contentHeight + paddingY * 2;
+    if (longestLine <= (boxWidth - paddingX * 2) && plateHeight <= maxPlateHeight) {
+      return {
+        lines,
+        fontSize,
+        lineHeight,
+        plateMaxWidth: boxWidth,
+        platePaddingX: paddingX,
+        platePaddingY: paddingY,
+        maxPlateHeight,
+      };
+    }
+  }
+
+  const fallbackFontSize = minFont;
+  ctx.font = `900 ${fallbackFontSize}px Arial`;
+  return {
+    lines: wrapIntroPreviewTitle({
+      ctx,
+      text: safeTitle,
+      maxWidth: boxWidth - paddingX * 2,
+      maxLines,
+    }) || [safeTitle],
+    fontSize: fallbackFontSize,
+    lineHeight: Math.round(fallbackFontSize * (isPortrait ? 1.05 : 1.08)),
+    plateMaxWidth: boxWidth,
+    platePaddingX: paddingX,
+    platePaddingY: paddingY,
+    maxPlateHeight,
+  };
+}
+
 function buildIntroFrameAutoTitle({ textValue = "", scenes = [] } = {}) {
   const text = truncateIntroText(textValue, 72);
   if (text) {
@@ -1777,6 +1899,7 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
   const meta = getIntroStyleMeta(stylePreset);
   const width = formatMeta.width;
   const height = formatMeta.height;
+  const titleLayout = fitIntroPreviewTitleLayout({ title: safeTitle, previewFormatMeta: formatMeta });
   if (typeof document !== "undefined") {
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -1827,13 +1950,13 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
       };
 
       drawWrapped(
-        safeTitle,
+        titleLayout.lines.join(" "),
         formatMeta.paddingX,
         formatMeta.paddingTop + Math.max(68, Math.round(height * 0.12)),
-        width - formatMeta.paddingX * 2,
-        formatMeta.titleLineHeight,
-        formatMeta.titleMaxLines,
-        `900 ${formatMeta.titleFontPx}px Arial`,
+        titleLayout.plateMaxWidth,
+        titleLayout.lineHeight,
+        titleLayout.lines.length,
+        `900 ${titleLayout.fontSize}px Arial`,
         "#ffffff"
       );
       ctx.fillStyle = meta.accent;
@@ -1870,8 +1993,8 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
       <rect x="${formatMeta.paddingX}" y="${formatMeta.accentY}" width="${formatMeta.accentWidth}" height="${Math.max(4, Math.round(height * 0.011))}" rx="2" fill="url(#accent)" opacity="0.92"/>
       <text x="${formatMeta.paddingX}" y="${formatMeta.paddingTop}" fill="${meta.accent}" font-size="${Math.max(18, Math.round(width * 0.036))}" font-family="Arial, Helvetica, sans-serif" font-weight="700" letter-spacing="4">${meta.label.toUpperCase()}</text>
       <foreignObject x="${formatMeta.paddingX}" y="${formatMeta.paddingTop + Math.max(28, Math.round(height * 0.06))}" width="${width - formatMeta.paddingX * 2}" height="${formatMeta.titleBoxHeight}">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:${formatMeta.titleFontPx}px;line-height:${(formatMeta.titleLineHeight / formatMeta.titleFontPx).toFixed(2)};font-weight:900;color:white;text-transform:uppercase;letter-spacing:0.02em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:${formatMeta.titleMaxLines};-webkit-box-orient:vertical;word-break:break-word;">
-          ${safeTitle}
+        <div xmlns="http://www.w3.org/1999/xhtml" style="max-width:${titleLayout.plateMaxWidth}px;max-height:${titleLayout.maxPlateHeight}px;padding:${titleLayout.platePaddingY}px ${titleLayout.platePaddingX}px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;font-size:${titleLayout.fontSize}px;line-height:${(titleLayout.lineHeight / titleLayout.fontSize).toFixed(2)};font-weight:900;color:white;text-transform:uppercase;letter-spacing:0.018em;overflow:hidden;display:grid;align-content:center;word-break:break-word;overflow-wrap:anywhere;background:linear-gradient(180deg, rgba(4,6,12,0.74) 0%, rgba(4,6,12,0.92) 100%);border:1px solid ${meta.accent}55;border-radius:18px;">
+          ${titleLayout.lines.map((line) => `<div>${line}</div>`).join("")}
         </div>
       </foreignObject>
       <foreignObject x="${formatMeta.paddingX}" y="${formatMeta.contextY}" width="${width - formatMeta.paddingX * 2}" height="${formatMeta.contextBoxHeight}">
@@ -3203,13 +3326,6 @@ function IntroFrameNode({ id, data }) {
   const previewTitle = String(data?.title || "INTRO FRAME").trim() || "INTRO FRAME";
   const previewContext = String(data?.contextSummary || "Story preview").trim() || "Story preview";
   const previewContextShort = truncateIntroText(previewContext, 148);
-  const denseTitle = previewTitle.length > 44;
-  const titleClamp = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT ? 4 : 3;
-  const titleFontSize = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT
-    ? (denseTitle ? 32 : 38)
-    : previewFormat === INTRO_FRAME_PREVIEW_FORMATS.SQUARE
-      ? (denseTitle ? 28 : 34)
-      : (denseTitle ? 24 : 30);
   const contextClamp = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT ? 2 : 1;
   const statusLabel = status === "ready"
     ? "preview готов"
@@ -3228,6 +3344,10 @@ function IntroFrameNode({ id, data }) {
     : {};
   const attachedInlineRoles = Array.isArray(debug?.attachedInlineReferenceRoles) ? debug.attachedInlineReferenceRoles : [];
   const overlayDebug = debug?.overlay && typeof debug.overlay === "object" ? debug.overlay : {};
+  const previewTitleLayout = useMemo(
+    () => fitIntroPreviewTitleLayout({ title: previewTitle, previewFormatMeta }),
+    [previewFormatMeta, previewTitle]
+  );
   const detailRows = [
     activeCastRoles.length ? ["Active cast", activeCastRoles.join(", ")] : null,
     mustAppearRoles.length ? ["Must appear", mustAppearRoles.join(", ")] : null,
@@ -3454,32 +3574,36 @@ function IntroFrameNode({ id, data }) {
                         <div
                           style={{
                             alignSelf: "start",
-                            maxWidth: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "78%" : "100%",
-                            padding: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "16px 18px 14px" : "18px 18px 16px",
+                            width: "100%",
+                            maxWidth: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "72%" : "100%",
+                            maxHeight: `${previewTitleLayout.maxPlateHeight}px`,
+                            padding: `${previewTitleLayout.platePaddingY}px ${previewTitleLayout.platePaddingX}px`,
                             borderRadius: 18,
                             background: "linear-gradient(180deg, rgba(4,6,12,0.74) 0%, rgba(4,6,12,0.92) 100%)",
                             border: `1px solid ${styleMeta.accent}55`,
                             boxShadow: `0 10px 30px ${styleMeta.accent}30, inset 0 1px 0 rgba(255,255,255,0.08)`,
+                            overflow: "hidden",
                           }}
                         >
                           <div
                             style={{
-                              fontSize: titleFontSize,
-                              lineHeight: denseTitle ? 1.02 : 1.06,
+                              fontSize: previewTitleLayout.fontSize,
+                              lineHeight: `${previewTitleLayout.lineHeight}px`,
                               fontWeight: 900,
-                              letterSpacing: denseTitle ? "0.012em" : "0.03em",
+                              letterSpacing: "0.018em",
                               textTransform: "uppercase",
                               color: "#ffffff",
                               textShadow: "0 2px 0 rgba(0,0,0,0.32), 0 0 18px rgba(255,255,255,0.12)",
                               overflow: "hidden",
-                              display: "-webkit-box",
-                              WebkitBoxOrient: "vertical",
-                              WebkitLineClamp: titleClamp,
+                              display: "grid",
+                              gap: 2,
                               wordBreak: "break-word",
-                              textOverflow: "ellipsis",
+                              overflowWrap: "anywhere",
                             }}
                           >
-                            {previewTitle}
+                            {previewTitleLayout.lines.map((line, index) => (
+                              <span key={`${line}-${index}`}>{line}</span>
+                            ))}
                           </div>
                         </div>
                         <div style={{ width: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "72%" : "100%", height: 4, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
@@ -5880,27 +6004,63 @@ ${contextPrompt}`.trim(),
   }, [comfySafeIndex, comfySelectedScene, updateComfyScene]);
 
   const handleComfyImagePromptChange = useCallback((value) => {
-    const nextRu = String(value || '');
+    const nextValue = String(value || '');
+    const hasRu = !!String(comfySelectedScene?.imagePromptRu || '').trim();
+    const hasEn = !!String(comfySelectedScene?.imagePromptEn || '').trim();
+    if (!hasRu && hasEn) {
+      updateComfyScene(comfySafeIndex, {
+        imagePromptEn: nextValue,
+        imagePrompt: nextValue,
+        imagePromptEditorValue: nextValue,
+        imagePromptEditorLang: nextValue.trim() ? 'en_fallback' : 'missing',
+        imagePromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
+        imagePromptSyncError: '',
+        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), image: !!nextValue.trim() },
+        ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), image: true },
+        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), image: nextValue.trim() ? 'ru_missing_en_fallback' : 'missing_both' },
+      });
+      return;
+    }
     updateComfyScene(comfySafeIndex, {
-      imagePromptRu: nextRu,
+      imagePromptRu: nextValue,
+      imagePromptEditorValue: nextValue,
+      imagePromptEditorLang: nextValue.trim() ? 'ru' : (hasEn ? 'en_fallback' : 'missing'),
       imagePromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
       imagePromptSyncError: '',
-      ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), image: !nextRu.trim() },
-      promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), image: nextRu.trim() ? (String(comfySelectedScene?.imagePromptEn || '').trim() ? 'ru_en_present' : 'en_missing_ru_only') : (String(comfySelectedScene?.imagePromptEn || '').trim() ? 'ru_missing_en_fallback' : 'missing_both') },
+      ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), image: !nextValue.trim() },
+      promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), image: nextValue.trim() ? (String(comfySelectedScene?.imagePromptEn || '').trim() ? 'ru_en_present' : 'en_missing_ru_only') : (String(comfySelectedScene?.imagePromptEn || '').trim() ? 'ru_missing_en_fallback' : 'missing_both') },
     });
-    scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'image', ruText: nextRu });
+    scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'image', ruText: nextValue });
   }, [comfySafeIndex, comfySelectedScene, scheduleComfyPromptSync, updateComfyScene]);
 
   const handleComfyVideoPromptChange = useCallback((value) => {
-    const nextRu = String(value || '');
+    const nextValue = String(value || '');
+    const hasRu = !!String(comfySelectedScene?.videoPromptRu || '').trim();
+    const hasEn = !!String(comfySelectedScene?.videoPromptEn || '').trim();
+    if (!hasRu && hasEn) {
+      updateComfyScene(comfySafeIndex, {
+        videoPromptEn: nextValue,
+        videoPrompt: nextValue,
+        videoPromptEditorValue: nextValue,
+        videoPromptEditorLang: nextValue.trim() ? 'en_fallback' : 'missing',
+        videoPromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
+        videoPromptSyncError: '',
+        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), video: !!nextValue.trim() },
+        ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), video: true },
+        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), video: nextValue.trim() ? 'ru_missing_en_fallback' : 'missing_both' },
+      });
+      return;
+    }
     updateComfyScene(comfySafeIndex, {
-      videoPromptRu: nextRu,
+      videoPromptRu: nextValue,
+      videoPromptEditorValue: nextValue,
+      videoPromptEditorLang: nextValue.trim() ? 'ru' : (hasEn ? 'en_fallback' : 'missing'),
       videoPromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
       videoPromptSyncError: '',
-      ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), video: !nextRu.trim() },
-      promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), video: nextRu.trim() ? (String(comfySelectedScene?.videoPromptEn || '').trim() ? 'ru_en_present' : 'en_missing_ru_only') : (String(comfySelectedScene?.videoPromptEn || '').trim() ? 'ru_missing_en_fallback' : 'missing_both') },
+      ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), video: !nextValue.trim() },
+      promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), video: nextValue.trim() ? (String(comfySelectedScene?.videoPromptEn || '').trim() ? 'ru_en_present' : 'en_missing_ru_only') : (String(comfySelectedScene?.videoPromptEn || '').trim() ? 'ru_missing_en_fallback' : 'missing_both') },
     });
-    scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'video', ruText: nextRu });
+    scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'video', ruText: nextValue });
   }, [comfySafeIndex, comfySelectedScene, scheduleComfyPromptSync, updateComfyScene]);
 
   const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
@@ -10184,17 +10344,21 @@ const hydrate = useCallback((source = "unknown") => {
                       <div className="clipSB_comfyBlockTitle">IMAGE · {comfyModeMeta.labelRu} / {comfyStyleMeta.labelRu}</div>
                       <div className="clipSB_comfySplitGrid">
                         <div className="clipSB_comfySplitCol">
-                          <div className="clipSB_hint">Image prompt (RU) · {COMFY_SYNC_STATUS_LABELS[comfySelectedScene.imagePromptSyncStatus] || '—'}</div>
-                          {comfySelectedScene?.ruPromptMissing?.image && comfySelectedScene?.enPromptPresent?.image ? (
-                            <div className="clipSB_small" style={{ marginBottom: 6, color: '#ffd37a' }}>RU missing, showing EN fallback below only.</div>
+                          <div className="clipSB_hint">Image prompt · {COMFY_SYNC_STATUS_LABELS[comfySelectedScene.imagePromptSyncStatus] || '—'}</div>
+                          {comfySelectedScene?.imagePromptEditorLang === 'en_fallback' ? (
+                            <div className="clipSB_small clipSB_promptFallbackNote" style={{ marginBottom: 6 }}>EN fallback loaded into editor.</div>
                           ) : null}
                           <textarea
                             className="clipSB_textarea clipSB_comfyTextarea"
-                            value={String(comfySelectedScene.imagePromptRu || '')}
+                            value={String(comfySelectedScene.imagePromptEditorValue || '')}
                             onChange={(e) => handleComfyImagePromptChange(e.target.value)}
-                            placeholder="Опиши визуал сцены для генерации изображения"
+                            placeholder="Сгенерированный prompt сцены появится здесь автоматически"
                           />
-                          <div className="clipSB_small" style={{ marginTop: 6 }}>EN (model): {String(comfySelectedScene.imagePromptEn || '—')}</div>
+                          <div className="clipSB_small" style={{ marginTop: 6 }}>
+                            {comfySelectedScene?.imagePromptEditorLang === 'en_fallback'
+                              ? `EN source (editable): ${String(comfySelectedScene.imagePromptEn || '—')}`
+                              : `EN (model): ${String(comfySelectedScene.imagePromptEn || '—')}`}
+                          </div>
                           <div className="clipSB_small">promptLanguageStatus.image: {String(comfySelectedScene?.promptLanguageStatus?.image || '—')}</div>
                           {(String(comfySelectedScene.imagePromptSyncError || '').trim()) ? (
                             <div className="clipSB_hint" style={{ marginTop: 6, color: '#ff8a8a' }}>{String(comfySelectedScene.imagePromptSyncError || '')}</div>
@@ -10276,19 +10440,23 @@ const hydrate = useCallback((source = "unknown") => {
                       <div className="clipSB_videoBlock">
                         <div className="clipSB_comfyBlockTitle">VIDEO · {comfyModeMeta.labelRu} / {comfyStyleMeta.labelRu}</div>
                         <div className="clipSB_comfySplitGrid">
-                          <div className="clipSB_comfySplitCol">
-                            <div className="clipSB_hint">Video prompt (RU) · {COMFY_SYNC_STATUS_LABELS[comfySelectedScene.videoPromptSyncStatus] || '—'}</div>
-                            {comfySelectedScene?.ruPromptMissing?.video && comfySelectedScene?.enPromptPresent?.video ? (
-                              <div className="clipSB_small" style={{ marginBottom: 6, color: '#ffd37a' }}>RU missing, showing EN fallback below only.</div>
+                        <div className="clipSB_comfySplitCol">
+                            <div className="clipSB_hint">Video prompt · {COMFY_SYNC_STATUS_LABELS[comfySelectedScene.videoPromptSyncStatus] || '—'}</div>
+                            {comfySelectedScene?.videoPromptEditorLang === 'en_fallback' ? (
+                              <div className="clipSB_small clipSB_promptFallbackNote" style={{ marginBottom: 6 }}>EN fallback loaded into editor.</div>
                             ) : null}
                             <textarea
                               className="clipSB_textarea clipSB_comfyTextarea"
-                              value={String(comfySelectedScene.videoPromptRu || '')}
+                              value={String(comfySelectedScene.videoPromptEditorValue || '')}
                               onChange={(e) => handleComfyVideoPromptChange(e.target.value)}
-                              placeholder="Опиши действие камеры и движение в кадре"
+                              placeholder="Сгенерированный video prompt сцены появится здесь автоматически"
                               disabled={!comfySelectedScene.imageUrl}
                             />
-                            <div className="clipSB_small" style={{ marginTop: 6 }}>EN (model): {String(comfySelectedScene.videoPromptEn || '—')}</div>
+                            <div className="clipSB_small" style={{ marginTop: 6 }}>
+                              {comfySelectedScene?.videoPromptEditorLang === 'en_fallback'
+                                ? `EN source (editable): ${String(comfySelectedScene.videoPromptEn || '—')}`
+                                : `EN (model): ${String(comfySelectedScene.videoPromptEn || '—')}`}
+                            </div>
                             <div className="clipSB_small">promptLanguageStatus.video: {String(comfySelectedScene?.promptLanguageStatus?.video || '—')}</div>
                             {(String(comfySelectedScene.videoPromptSyncError || '').trim()) ? (
                               <div className="clipSB_hint" style={{ marginTop: 6, color: '#ff8a8a' }}>{String(comfySelectedScene.videoPromptSyncError || '')}</div>

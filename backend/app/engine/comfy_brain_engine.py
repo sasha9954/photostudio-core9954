@@ -2262,8 +2262,15 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
             )
         character_role_logic = normalized_role_logic
 
-    dynamic_score = int(bool(scene_action)) + int(bool(environment_motion)) + int(bool(camera_plan))
-    weak_scene = dynamic_score < 2
+    dynamic_score = 0
+    dynamic_score += 2 if scene_action else 0
+    dynamic_score += 2 if (environment_motion or str(src.get("motionPlan") or "").strip()) else 0
+    dynamic_score += 1 if camera_plan else 0
+    dynamic_score += 1 if str(src.get("visualDescription") or src.get("visualClue") or "").strip() else 0
+    dynamic_score += 1 if transition_type in {"enter_transition", "justified_cut", "perspective_shift", "match_cut"} else 0
+    dynamic_score += 1 if len(active_refs) >= 2 or len(support_entity_ids) >= 1 else 0
+    dynamic_score += 1 if str(src.get("sceneMeaning") or "").strip() else 0
+    weak_scene = dynamic_score < 3
     hallucination_text = " ".join([image_prompt_en, video_prompt_en, str(src.get("visualDescription") or "")]).lower()
     object_hallucination_risk = "high" if ("props" not in refs_used and any(token in hallucination_text for token in ["giant", "massive", "oversized", "huge machine", "device", "artifact", "monolith", "foreground object"])) else "low"
     human_anchor_type = _normalize_human_anchor_type(src.get("humanAnchorType"), active_refs, src)
@@ -2309,6 +2316,10 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "image": "ru_en_present" if image_prompt_ru and image_prompt_en else ("ru_missing_en_fallback" if image_prompt_en else ("en_missing_ru_only" if image_prompt_ru else "missing_both")),
         "video": "ru_en_present" if video_prompt_ru and video_prompt_en else ("ru_missing_en_fallback" if video_prompt_en else ("en_missing_ru_only" if video_prompt_ru else "missing_both")),
     }
+    image_prompt_editor_value = str(src.get("imagePromptEditorValue") or image_prompt_ru or image_prompt_en or "").strip()
+    video_prompt_editor_value = str(src.get("videoPromptEditorValue") or video_prompt_ru or video_prompt_en or "").strip()
+    image_prompt_editor_lang = str(src.get("imagePromptEditorLang") or ("ru" if image_prompt_ru else ("en_fallback" if image_prompt_en else "missing"))).strip()
+    video_prompt_editor_lang = str(src.get("videoPromptEditorLang") or ("ru" if video_prompt_ru else ("en_fallback" if video_prompt_en else "missing"))).strip()
 
     return {
         "sceneId": str(src.get("sceneId") or f"scene-{idx + 1}"),
@@ -2358,6 +2369,10 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "promptLanguageStatus": prompt_language_status,
         "ruPromptMissing": {"image": not bool(image_prompt_ru), "video": not bool(video_prompt_ru)},
         "enPromptPresent": {"image": bool(image_prompt_en), "video": bool(video_prompt_en)},
+        "imagePromptEditorValue": image_prompt_editor_value,
+        "videoPromptEditorValue": video_prompt_editor_value,
+        "imagePromptEditorLang": image_prompt_editor_lang,
+        "videoPromptEditorLang": video_prompt_editor_lang,
         "refsUsed": refs_used,
         "activeRefs": active_refs,
         "refUsageReason": ref_usage_reason,
