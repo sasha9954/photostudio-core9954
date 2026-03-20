@@ -6400,6 +6400,7 @@ def _build_comfy_image_prompt_assembly(
         identity_layer_block,
         physics_blocks["lightWorldBlock"],
         physics_blocks["subjectIdentityBlock"],
+        physics_blocks["physicalSceneStateBlock"],
         physics_blocks["environmentContactBlock"],
         physics_blocks["geometryBlock"],
         physics_blocks["textureBlock"],
@@ -6408,8 +6409,6 @@ def _build_comfy_image_prompt_assembly(
         "WORLD / LOCATION ANCHOR:\n" + f"- {effective_location_anchor or location_anchor}",
         "STYLE ANCHOR:\n" + f"- {effective_style_anchor or style_anchor}",
         "PROPS ANCHOR:\n" + ("- props/items connected and must be preserved" if props_entities else "- no explicit props refs"),
-        scene_meaning_block,
-        continuity_block,
         anti_collage_block,
         physics_blocks["negativeConstraintsBlock"],
         _comfy_text_rendering_block(allow_designed_text=allow_designed_text),
@@ -6417,7 +6416,6 @@ def _build_comfy_image_prompt_assembly(
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
         anatomy_lock_block,
         forbidden_changes_block,
-        source_control_block,
         "CHARACTER ANCHOR:\n" + f"- {effective_character_anchor or 'coherent single-character identity across all scenes'}",
     ])
 
@@ -6471,6 +6469,10 @@ def _build_comfy_image_prompt_assembly(
         "antiCollageBlockPreview": anti_collage_block,
         "lightWorldBlockPreview": physics_blocks["lightWorldBlock"],
         "subjectIdentityBlockPreview": physics_blocks["subjectIdentityBlock"],
+        "sceneMeaningBlockPreview": scene_meaning_block,
+        "continuityBlockPreview": continuity_block,
+        "sourceControlBlockPreview": source_control_block,
+        "physicalSceneStateBlockPreview": physics_blocks["physicalSceneStateBlock"],
         "environmentContactBlockPreview": physics_blocks["environmentContactBlock"],
         "geometryBlockPreview": physics_blocks["geometryBlock"],
         "textureBlockPreview": physics_blocks["textureBlock"],
@@ -8145,21 +8147,12 @@ def clip_video(payload: ClipVideoIn):
         f"resolved_mode={mode}"
     )
 
-    effective_prompt = ""
-    if mode == "continuous":
-        effective_prompt = build_clip_video_motion_prompt(
-            base_prompt=str(payload.videoPrompt or "").strip(),
-            transition_prompt=str(payload.transitionActionPrompt or "").strip(),
-            fmt=output_format,
-            seconds=payload.requestedDurationSec,
-        )
-    else:
-        effective_prompt = build_clip_video_motion_prompt(
-            base_prompt=str(payload.videoPrompt or "").strip(),
-            transition_prompt=str(payload.transitionActionPrompt or "").strip(),
-            fmt=output_format,
-            seconds=payload.requestedDurationSec,
-        )
+    effective_prompt = build_clip_video_motion_prompt(
+        base_prompt=str(payload.videoPrompt or "").strip(),
+        transition_prompt=str(payload.transitionActionPrompt or "").strip(),
+        fmt=output_format,
+        seconds=payload.requestedDurationSec,
+    )
     if mode == "lipsync":
         effective_prompt = _build_lipsync_avatar_prompt(effective_prompt, str(payload.shotType or ""))
     if not effective_prompt:

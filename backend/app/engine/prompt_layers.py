@@ -71,8 +71,13 @@ def build_physics_first_image_blocks(
     effective_style_anchor: str,
     continuity_hint: str,
 ) -> dict[str, str]:
-    subject_scene_state = clean_physics_prompt_text(scene_delta, scene_text, scene_goal)
-    mood_source = clean_physics_prompt_text(scene_text, scene_goal, continuity_hint, effective_style_anchor, style)
+    physical_scene_state = clean_physics_prompt_text(scene_delta, scene_text, scene_goal)
+    continuity_physics = (
+        "preserve one continuous physical world with the same lighting behavior, subject identity, material response, and shadow logic"
+        if _clean_line(continuity_hint)
+        else ""
+    )
+    mood_source = clean_physics_prompt_text(scene_text, scene_goal, effective_style_anchor, style)
     light_world = _as_block("LIGHT WORLD", [
         lighting_anchor or "one coherent light world with believable practical and ambient sources",
         weather_anchor,
@@ -83,12 +88,14 @@ def build_physics_first_image_blocks(
     ])
     subject_identity = _as_block("SUBJECT IDENTITY", [
         effective_character_anchor or "preserve the exact established subject identity from references",
-        subject_scene_state,
         "preserve face, hair, body proportions, wardrobe identity, accessories, and species/object identity from references",
+        "identity remains stable across camera, pose, expression, and lighting changes",
     ])
     environment_contact = _as_block("ENVIRONMENT CONTACT / PHYSICAL INTEGRATION", [
         effective_location_anchor or location_anchor,
         environment_anchor,
+        physical_scene_state,
+        continuity_physics,
         world_scale_context,
         entity_scale_anchor_text,
         "subject must feel physically present in the location with grounded feet and contact shadows",
@@ -96,7 +103,7 @@ def build_physics_first_image_blocks(
         "no pasted-on subject or cutout separation from the world",
     ])
     geometry = _as_block("GEOMETRY / CAMERA", [
-        subject_scene_state,
+        physical_scene_state,
         "prefer real optics language such as eye-level medium shot, 35mm or 50mm lens, f/2.8, natural depth of field",
         "camera framing should feel photographed rather than stylized metadata or cinematic buzzwords",
     ])
@@ -108,6 +115,7 @@ def build_physics_first_image_blocks(
     ])
     mood_physics = _as_block("MOOD PHYSICS", [
         mood_source or style,
+        continuity_physics,
         "express mood as physical scene state, body tension, air density, temperature, and believable shadow behavior",
         "restrained threat or quiet tension should remain realistic and grounded when the scene is dark or unsettling",
     ])
@@ -123,6 +131,11 @@ def build_physics_first_image_blocks(
         "no extra limbs",
         "no text, watermark, or UI overlays",
     ])
+    physical_scene_state_block = _as_block("PHYSICAL SCENE STATE", [
+        physical_scene_state,
+        continuity_physics,
+        "translate story intent into visible action, body mechanics, material response, and environmental behavior",
+    ])
     return {
         "lightWorldBlock": light_world,
         "subjectIdentityBlock": subject_identity,
@@ -131,7 +144,13 @@ def build_physics_first_image_blocks(
         "textureBlock": texture,
         "moodPhysicsBlock": mood_physics,
         "negativeConstraintsBlock": negative_constraints,
+        "physicalSceneStateBlock": physical_scene_state_block,
     }
+
+
+def is_clip_video_motion_prompt(prompt: str) -> bool:
+    normalized = str(prompt or "").strip().lower()
+    return normalized.startswith("clip video motion:")
 
 
 def build_clip_video_motion_prompt(

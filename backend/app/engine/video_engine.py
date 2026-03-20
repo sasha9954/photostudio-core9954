@@ -15,7 +15,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
-from app.engine.prompt_layers import build_clip_video_motion_prompt
+from app.engine.prompt_layers import build_clip_video_motion_prompt, is_clip_video_motion_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -503,7 +503,7 @@ def _veo_request(
         time.sleep(max(8, min(12, poll_interval_seconds)))
 
     raise TimeoutError("VIDEO_TIMEOUT")
-def generate_video(kind: str, source_image: str, fmt: str, model: str, camera: str, prompt: str, seconds: int, lighting: str = "soft") -> dict:
+def generate_video(kind: str, source_image: str, fmt: str, model: str, camera: str, prompt: str, seconds: int, lighting: str = "soft", motion_prompt_mode: str = "default") -> dict:
     try:
         job_id = f"job_{int(time.time() * 1000)}"
         if kind != "video_from_image":
@@ -538,18 +538,23 @@ def generate_video(kind: str, source_image: str, fmt: str, model: str, camera: s
         else:
             lighting_prompt = "Neutral environment-driven lighting consistent with scene sources"
 
-        # Prepend lighting so both Kling and Veo see it.
+        # Keep clip-specific motion wrapping opt-in so non-clip callers preserve prior behavior.
         world_lock = "Relight all characters and props to match the same scene environment. Ignore source/reference lighting. Keep consistent light direction, color temperature, ambient bounce, reflections, atmospheric diffusion, and contact shadows. No studio or invisible lights."
-        prompt = "\n".join([
-            build_clip_video_motion_prompt(
-                base_prompt=prompt,
+        raw_prompt = str(prompt or "").strip()
+        normalized_motion_mode = str(motion_prompt_mode or "default").strip().lower()
+        if is_clip_video_motion_prompt(raw_prompt):
+            motion_prompt = raw_prompt
+        elif normalized_motion_mode == "clip":
+            motion_prompt = build_clip_video_motion_prompt(
+                base_prompt=raw_prompt,
                 transition_prompt="",
                 camera=camera,
                 fmt=fmt,
                 seconds=seconds,
-            ),
-            f"{lighting_prompt}. {world_lock}",
-        ]).strip()
+            )
+        else:
+            motion_prompt = raw_prompt
+        prompt = "\n".join([part for part in [motion_prompt, f"{lighting_prompt}. {world_lock}"] if str(part or "").strip()]).strip()
 
         if model == "classic":
             api_key = load_env_value("KLING_API_KEY")
