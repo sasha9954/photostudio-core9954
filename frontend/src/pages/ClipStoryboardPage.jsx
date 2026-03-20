@@ -6009,18 +6009,19 @@ ${contextPrompt}`.trim(),
     const hasEn = !!String(comfySelectedScene?.imagePromptEn || '').trim();
     const sourceEn = String(comfySelectedScene?.imagePromptEnSource || '').trim();
     if (!hasRu && hasEn && comfySelectedScene?.imagePromptEditorLang === 'en_fallback') {
+      const preservedEn = String(comfySelectedScene?.imagePromptEn || '');
       updateComfyScene(comfySafeIndex, {
         imagePromptRu: nextValue,
-        imagePromptEn: '',
-        imagePrompt: '',
-        imagePromptEnSource: sourceEn || String(comfySelectedScene?.imagePromptEn || ''),
+        imagePromptEn: preservedEn,
+        imagePrompt: preservedEn,
+        imagePromptEnSource: sourceEn || preservedEn,
         imagePromptEditorValue: nextValue,
-        imagePromptEditorLang: nextValue.trim() ? 'ru' : 'missing',
+        imagePromptEditorLang: 'ru',
         imagePromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
         imagePromptSyncError: '',
-        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), image: false },
+        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), image: Boolean(preservedEn.trim()) },
         ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), image: !nextValue.trim() },
-        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), image: nextValue.trim() ? 'en_missing_ru_only' : 'missing_both' },
+        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), image: nextValue.trim() ? 'ru_en_present' : 'ru_missing_en_fallback' },
       });
       scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'image', ruText: nextValue });
       return;
@@ -6043,18 +6044,19 @@ ${contextPrompt}`.trim(),
     const hasEn = !!String(comfySelectedScene?.videoPromptEn || '').trim();
     const sourceEn = String(comfySelectedScene?.videoPromptEnSource || '').trim();
     if (!hasRu && hasEn && comfySelectedScene?.videoPromptEditorLang === 'en_fallback') {
+      const preservedEn = String(comfySelectedScene?.videoPromptEn || '');
       updateComfyScene(comfySafeIndex, {
         videoPromptRu: nextValue,
-        videoPromptEn: '',
-        videoPrompt: '',
-        videoPromptEnSource: sourceEn || String(comfySelectedScene?.videoPromptEn || ''),
+        videoPromptEn: preservedEn,
+        videoPrompt: preservedEn,
+        videoPromptEnSource: sourceEn || preservedEn,
         videoPromptEditorValue: nextValue,
-        videoPromptEditorLang: nextValue.trim() ? 'ru' : 'missing',
+        videoPromptEditorLang: 'ru',
         videoPromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
         videoPromptSyncError: '',
-        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), video: false },
+        enPromptPresent: { ...(comfySelectedScene?.enPromptPresent || {}), video: Boolean(preservedEn.trim()) },
         ruPromptMissing: { ...(comfySelectedScene?.ruPromptMissing || {}), video: !nextValue.trim() },
-        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), video: nextValue.trim() ? 'en_missing_ru_only' : 'missing_both' },
+        promptLanguageStatus: { ...(comfySelectedScene?.promptLanguageStatus || {}), video: nextValue.trim() ? 'ru_en_present' : 'ru_missing_en_fallback' },
       });
       scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'video', ruText: nextValue });
       return;
