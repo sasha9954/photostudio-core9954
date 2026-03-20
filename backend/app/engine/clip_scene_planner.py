@@ -656,6 +656,7 @@ def _build_scene_prompts(
     primary: str,
     location: str,
     style: str,
+    genre: str = "",
     emotion: str,
     beat_text: str,
     continuity_hint: str,
@@ -667,6 +668,35 @@ def _build_scene_prompts(
     light = str(world_bible.get("lightingLogic") or "мотивационный кинематографичный свет")
     color = str(world_bible.get("colorWorld") or "контрастная кинопалитра")
     beat = beat_text or "развитие истории"
+    genre_hint = ""
+    g = (genre or "").lower()
+
+    if g == "horror":
+        genre_hint = "напряжённая атмосфера, чувство угрозы, контрастный свет, тревожные тени, саспенс"
+    elif g == "romance":
+        genre_hint = "интимность, мягкий свет, близость персонажей, эмоциональная теплота"
+    elif g == "comedy":
+        genre_hint = "лёгкость, ирония, выразительные реакции, playful поведение"
+    elif g == "drama":
+        genre_hint = "сильные эмоции, внутренний конфликт, реалистичное поведение"
+    elif g == "action":
+        genre_hint = "динамика, энергия, движение, напряжённые действия"
+    elif g == "thriller":
+        genre_hint = "напряжение, ожидание, скрытая угроза, контроль ритма"
+    elif g == "noir":
+        genre_hint = "жёсткие тени, контраст, мрачная атмосфера, ночная сцена"
+    elif g == "dreamy":
+        genre_hint = "размытость, мягкие переходы, ощущение сна"
+    elif g == "melancholy":
+        genre_hint = "грусть, спокойствие, замедленное восприятие"
+    elif g == "fashion":
+        genre_hint = "фокус на стиле, одежде, позах, эстетике"
+    elif g == "surreal":
+        genre_hint = "нелогичные элементы, странные переходы, необычные формы"
+    elif g == "performance":
+        genre_hint = "сцена, выступление, экспрессия, перформанс"
+    elif g == "experimental":
+        genre_hint = "нестандартная визуальная логика, необычные решения"
 
     image_templates = {
         "SING_CLOSEUP": f"Кинематографичный ключевой кадр: крупный план {subject}, фокус на губах и глазах во время музыкальной фразы; локация {location}; {light}; {lens}; {color}; эмоция {emotion}; в кадре чувствуется момент: {beat}. {continuity_hint}",
@@ -686,7 +716,13 @@ def _build_scene_prompts(
         "TRANSITION_SHOT": f"Переход внутри той же сцены: {subject} завершает действие и входит в новое состояние, в {location} смещается свет и глубина фона; камера делает связующее движение (arc/slide) к точке выхода сцены, сохраняя непрерывность мира.",
         "STORY_ACTION": f"В той же сцене {subject} выполняет четкое сюжетное действие, пластика тела и лицо отражают {emotion}; в локации {location} есть естественное движение среды и второго плана; камера следует за действием мотивированным трекингом с мягкой сменой крупности, реалистично и кинематографично.",
     }
-    return image_templates.get(scene_type, image_templates["STORY_ACTION"]), video_templates.get(scene_type, video_templates["STORY_ACTION"])
+    image_prompt_ru = image_templates.get(scene_type, image_templates["STORY_ACTION"])
+    video_prompt_ru = video_templates.get(scene_type, video_templates["STORY_ACTION"])
+    if genre_hint:
+        image_prompt_ru = f"{image_prompt_ru}. Жанровая направленность: {genre_hint}."
+    if genre_hint:
+        video_prompt_ru = f"{video_prompt_ru}. Учитывать жанр: {genre_hint}."
+    return image_prompt_ru, video_prompt_ru
 
 
 def _build_speech_scene_prompts(
@@ -891,7 +927,7 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         continuity = f"Сохранять единый мир, цветовую логику и идентичность героев. Локация: {location}."
         continuity += f" Фаза: {phase}. Источник истории: {story_source}."
         if genre:
-            continuity += f" Жанр: {genre}."
+            continuity += f" Жанр: {genre}. Все сцены должны строго соответствовать выбранной жанровой тональности."
         if spoken_meaning_primary:
             continuity = f"Сохранять документальную/инфраструктурную логику мира, одну палитру, один уровень реализма и связанность локаций. Локация: {location}. Фаза: {phase}. Источник смысла: {scene_semantic_source}."
         emotion = _scene_emotion(scene_type, phase, has_vocal)
@@ -913,6 +949,7 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 primary=primary,
                 location=location,
                 style=str(payload.get("stylePreset") or "realism"),
+                genre=genre,
                 emotion=emotion,
                 beat_text=beat_text,
                 continuity_hint="Соблюдать неизменность персонажей, костюма и мира.",
