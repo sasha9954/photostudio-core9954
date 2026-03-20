@@ -586,6 +586,26 @@ def _normalize_story_sources(story_source: Any, narrative_source: Any) -> tuple[
     return normalized_story, normalized_narrative
 
 
+def _humanize_storyboard_error(error_code: Any) -> str:
+    code = str(error_code or "").strip()
+    if not code:
+        return ""
+    if code == "no_story_source":
+        return "No audio or text source for storyboard planning"
+    if code == "gemini_model_not_supported":
+        return "Gemini model is not supported for generateContent"
+    if code == "gemini_invalid_json":
+        return "Gemini returned invalid JSON"
+    if code == "gemini_request_failed":
+        return "Gemini request failed"
+    if code == "gemini_api_key_missing":
+        return "GEMINI_API_KEY is missing"
+    if code.startswith("gemini_http_error:"):
+        status_code = code.split(":", 1)[1].strip() or "unknown"
+        return f"Gemini request failed with HTTP {status_code}"
+    return code.replace("_", " ")
+
+
 def _sanitize_gemini_error(diagnostics: dict[str, Any], resp: dict[str, Any] | None = None) -> tuple[str, str]:
     http_status = diagnostics.get("httpStatus")
     error_text = str((resp or {}).get("text") or diagnostics.get("errorText") or "").strip()
@@ -1203,6 +1223,7 @@ def _call_gemini_plan(api_key: str, model: str, body: dict[str, Any]) -> tuple[d
 
     parsed = _extract_json(raw)
     if not isinstance(parsed, dict):
+        diagnostics["sanitizedError"] = _humanize_storyboard_error("gemini_invalid_json")
         logger.warning("[COMFY PLAN] gemini invalid json model=%s", model)
         return {"errors": ["gemini_invalid_json"]}, diagnostics
 
@@ -1588,15 +1609,17 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
+        missing_key_error = "gemini_api_key_missing"
         return {
             "ok": False,
             "planMeta": {"plannerMode": "gemini_only"},
             "globalContinuity": world_lock,
             "scenes": [],
             "warnings": [],
-            "errors": ["GEMINI_API_KEY missing", *story_context.get("errors", [])],
+            "errors": [missing_key_error, *story_context.get("errors", [])],
             "debug": {
                 "plannerMode": "gemini_only",
+                "sanitizedError": _humanize_storyboard_error(missing_key_error),
                 "storySource": story_context.get("storySource"),
                 "narrativeSource": story_context.get("narrativeSource"),
                 "weakSemanticContext": story_context.get("weakSemanticContext"),
@@ -1622,6 +1645,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         }
 
     if story_context.get("errors"):
+        primary_story_error = str((story_context.get("errors") or [""])[0] or "").strip()
         return {
             "ok": False,
             "planMeta": {
@@ -1640,8 +1664,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "fallbackFrom": None,
                 "fallbackTo": None,
                 "effectiveModel": None,
-                "parseFailedReason": "; ".join(story_context.get("errors") or []),
-                "sanitizedError": "; ".join(story_context.get("errors") or []),
+                "parseFailedReason": primary_story_error,
+                "sanitizedError": _humanize_storyboard_error(primary_story_error),
                 "storySource": story_context.get("storySource"),
                 "narrativeSource": story_context.get("narrativeSource"),
                 "weakSemanticContext": story_context.get("weakSemanticContext"),
@@ -1649,6 +1673,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "hasAudio": story_context.get("hasAudio"),
                 "hasText": story_context.get("hasText"),
                 "hasRefs": story_context.get("hasRefs"),
+                "errorText": "",
                 "worldLock": world_lock,
                 "entityLocks": entity_locks,
                 "geminiPayload": gemini_payload,
@@ -1672,11 +1697,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         error_code, sanitized_error = _sanitize_gemini_error(diagnostics, parsed)
         if error_code not in errors:
             errors.append(error_code)
-        if sanitized_error and sanitized_error not in errors:
-            errors.append(sanitized_error)
-        http_error_code = f"gemini_http_error:{diagnostics['httpStatus']}"
-        if http_error_code not in errors:
-            errors.append(http_error_code)
+        if sanitized_error and not diagnostics.get("sanitizedError"):
+            diagnostics["sanitizedError"] = sanitized_error
     if diagnostics.get("fallbackFrom") and diagnostics.get("fallbackTo"):
         warnings.append(f"gemini_model_fallback:{diagnostics['fallbackFrom']}->{diagnostics['fallbackTo']}")
 
@@ -1734,8 +1756,9 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "effectiveModel": diagnostics.get("effectiveModel") or requested_model,
             "httpStatus": diagnostics.get("httpStatus"),
             "rawPreview": diagnostics.get("rawPreview") or "",
+            "errorText": diagnostics.get("errorText") or "",
             "parseFailedReason": "; ".join(errors) if errors else "",
-            "sanitizedError": diagnostics.get("sanitizedError") or ("; ".join(errors) if errors else ""),
+            "sanitizedError": diagnostics.get("sanitizedError") or _humanize_storyboard_error((errors[0] if errors else "")),
             "storySource": story_context.get("storySource"),
             "narrativeSource": story_context.get("narrativeSource"),
             "weakSemanticContext": bool(story_context.get("weakSemanticContext")),
@@ -1856,7 +1879,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     logger.warning("[%s] effective_model_before_request=%s", debug_signature, requested_model)
     print(f"[{debug_signature}] HARD MODEL = {requested_model}")
     if not api_key:
-        return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["GEMINI_API_KEY missing"], "debug": {"debugSignature": debug_signature, "moduleFile": module_file, "requestedModel": requested_model, "effectiveModel": None, "httpStatus": None, "rawPreview": "", "normalizedPayload": normalized, "fallbackFrom": None, "normalizedScenesCount": 0}}
+        return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["gemini_api_key_missing"], "debug": {"debugSignature": debug_signature, "moduleFile": module_file, "requestedModel": requested_model, "effectiveModel": None, "httpStatus": None, "rawPreview": "", "sanitizedError": _humanize_storyboard_error("gemini_api_key_missing"), "normalizedPayload": normalized, "fallbackFrom": None, "normalizedScenesCount": 0}}
 
     body = {
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4},

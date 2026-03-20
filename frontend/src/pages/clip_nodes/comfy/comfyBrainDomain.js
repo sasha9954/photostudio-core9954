@@ -622,6 +622,14 @@ function hasSemanticHints(value) {
   return !!String(value || "").trim();
 }
 
+export function normalizeStoryboardSourceValue(value, fallback = "none") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "audio_primary") return "audio";
+  if (normalized === "text_primary") return "text";
+  if (normalized === "audio" || normalized === "text" || normalized === "none") return normalized;
+  return fallback;
+}
+
 export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [], edgesNow = [], normalizeRefDataFn } = {}) {
   const incoming = (edgesNow || []).filter((e) => e.target === nodeId);
   const pickConnectedNode = (handleId) => {
@@ -822,14 +830,22 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
 }
 
 export function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } = {}) {
+  const normalizedNarrativeSource = normalizeStoryboardSourceValue(
+    plannerInput.narrativeSource || plannerMeta.narrativeSource,
+    "none",
+  );
+  const normalizedStorySource = normalizeStoryboardSourceValue(
+    plannerInput.storySource || plannerMeta.storySource || normalizedNarrativeSource,
+    normalizedNarrativeSource,
+  );
   return {
     mode: plannerInput.mode,
     plannerMode: plannerInput.plannerMode || plannerMeta.plannerMode || "legacy",
     output: plannerInput.output,
     stylePreset: plannerInput.stylePreset,
     storyControlMode: plannerInput.storyControlMode,
-    narrativeSource: plannerInput.narrativeSource,
-    storySource: plannerInput.storySource || plannerMeta.storySource || plannerInput.narrativeSource,
+    narrativeSource: normalizedNarrativeSource,
+    storySource: normalizedStorySource,
     timelineSource: plannerInput.timelineSource,
     audioStoryMode: plannerInput.audioStoryMode,
     weakSemanticContext: !!plannerInput.weakSemanticContext,
