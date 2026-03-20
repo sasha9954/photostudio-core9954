@@ -1,38 +1,15 @@
 import React from "react";
-import { Handle, Position, NodeShell, getModeDisplayMeta, getStyleDisplayMeta, handleStyle } from "./comfyNodeShared";
+import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 
 export default function ComfyBrainNode({ id, data }) {
   const mode = data?.mode || "clip";
   const plannerMode = data?.plannerMode || "legacy";
   const output = data?.output || "comfy image";
-  const styleKey = data?.styleKey || "realism";
-  const modeMeta = getModeDisplayMeta(mode);
-  const styleMeta = getStyleDisplayMeta(styleKey);
-  const freezeStyle = !!data?.freezeStyle;
   const parseStatus = data?.parseStatus || "idle";
-  const audioStoryMode = data?.audioStoryMode || "lyrics_music";
   const isParsing = parseStatus === "parsing";
   const isReady = parseStatus === "ready";
   const isError = parseStatus === "error";
-  const statusLabel = isParsing
-    ? "генерация..."
-    : isReady
-      ? "готово"
-      : isError
-        ? "ошибка"
-        : "ожидание";
   const parseButtonLabel = isParsing ? "Разбираю..." : "Разобрать";
-  const connectedRefsSummary = Array.isArray(data?.connectedRefsSummary) ? data.connectedRefsSummary : [];
-  const connectedRefsWarnings = Array.isArray(data?.connectedRefsWarnings) ? data.connectedRefsWarnings : [];
-  const brainWarnings = Array.isArray(data?.brainWarnings) ? data.brainWarnings.filter(Boolean) : [];
-  const brainCritical = Array.isArray(data?.brainCritical) ? data.brainCritical.filter(Boolean) : [];
-  const parseHint = isParsing
-    ? "Идёт анализ аудио и построение сцен. Повторный запуск временно заблокирован."
-    : isReady
-      ? "Storyboard собран. Можно открыть editor и продолжать работу."
-      : isError
-        ? "Не удалось завершить разбор. Проверь входы и попробуй снова."
-        : "Готов к разбору storyboard.";
   const brainStateClass = isParsing
     ? "clipSB_nodeComfyBrainStateParsing"
     : isReady
@@ -41,7 +18,8 @@ export default function ComfyBrainNode({ id, data }) {
         ? "clipSB_nodeComfyBrainStateError"
         : "";
   const plannerModeClass = plannerMode === "gemini_only" ? "clipSB_nodeComfyBrainPlannerGemini" : "clipSB_nodeComfyBrainPlannerLegacy";
-  const plannerModeLabel = plannerMode === "gemini_only" ? "Gemini" : "Current";
+  const visibleMode = ["clip", "kino"].includes(String(mode || "").toLowerCase()) ? mode : "clip";
+  const visibleOutput = output === "comfy image" ? output : "comfy image";
 
   return (<>
     {["audio","text","ref_character_1","ref_character_2","ref_character_3","ref_animal","ref_group","ref_location","ref_style","ref_props"].map((h, i) => (
@@ -49,73 +27,35 @@ export default function ComfyBrainNode({ id, data }) {
     ))}
     <Handle type="source" position={Position.Right} id="comfy_plan" className="clipSB_handle" style={handleStyle("comfy_plan")} />
     <NodeShell title="COMFY BRAIN" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧠</span>} className={`clipSB_nodeComfyBrain ${brainStateClass} ${plannerModeClass}`.trim()}>
-      <div className="clipSB_comfyPlannerModeRow">
-        <div>
+      <div className="clipSB_comfyBrainPanel">
+        <section className="clipSB_comfyBrainSection">
           <div className="clipSB_brainLabel">PLANNER</div>
           <div className="clipSB_comfyPlannerSwitch" role="tablist" aria-label="Planner mode switch">
             <button type="button" className={`clipSB_comfyPlannerSwitchBtn ${plannerMode === "legacy" ? "isActive" : ""}`.trim()} onClick={() => data?.onPlannerMode?.(id, "legacy")}>Current</button>
             <button type="button" className={`clipSB_comfyPlannerSwitchBtn ${plannerMode === "gemini_only" ? "isActive" : ""}`.trim()} onClick={() => data?.onPlannerMode?.(id, "gemini_only")}>Gemini</button>
           </div>
-          <div className="clipSB_selectHint">{plannerMode === "gemini_only" ? "Gemini Brain отвечает за semantic scenes, active refs и continuity внутри контракта." : "Current / legacy planner остаётся source of truth и работает без изменений."}</div>
+        </section>
+
+        <section className="clipSB_comfyBrainSection clipSB_comfyBrainSectionMode">
+          <div className="clipSB_brainLabel">MODE</div>
+          <select className="clipSB_select clipSB_comfyModeSelect" value={visibleMode} onChange={(e) => data?.onMode?.(id, e.target.value)}>
+            {!["clip", "kino"].includes(String(mode || "").toLowerCase()) ? <option value={mode} hidden>{String(mode || "clip")}</option> : null}
+            <option value="clip">clip</option>
+            <option value="kino">kino</option>
+          </select>
+        </section>
+
+        <section className="clipSB_comfyBrainSection">
+          <div className="clipSB_brainLabel">OUTPUT</div>
+          <select className="clipSB_select" value={visibleOutput} onChange={(e) => data?.onOutput?.(id, e.target.value)}>
+            {output !== "comfy image" ? <option value={output} hidden>{String(output || "comfy image")}</option> : null}
+            <option value="comfy image">comfy image</option>
+          </select>
+        </section>
+
+        <div className="clipSB_comfyBrainActions">
+          <button className="clipSB_btn clipSB_comfyBrainParseBtn" onClick={() => data?.onParse?.(id)} disabled={isParsing}>{parseButtonLabel}</button>
         </div>
-        <div className="clipSB_comfyPlannerBadges">
-          <span className="clipSB_tag">{`BRAIN: ${plannerMode === "gemini_only" ? "GEMINI" : "CURRENT"}`}</span>
-          <span className="clipSB_tag">{`Planner: ${plannerMode}`}</span>
-        </div>
-      </div>
-
-      <div className="clipSB_grid2" style={{ marginTop: 6 }}>
-        <div><div className="clipSB_brainLabel">MODE</div><select className="clipSB_select" value={mode} onChange={(e) => data?.onMode?.(id, e.target.value)}><option value="clip">Клип</option><option value="kino">Кино</option><option value="reklama">Реклама</option><option value="scenario">Сценарий</option></select><div className="clipSB_selectHint">{`${modeMeta.descriptionRu} • MODE управляет драматургическим каркасом.`}</div></div>
-        <div><div className="clipSB_brainLabel">OUTPUT</div><select className="clipSB_select" value={output} onChange={(e) => data?.onOutput?.(id, e.target.value)}><option value="comfy image">comfy image</option><option value="comfy text">comfy text</option></select><div className="clipSB_selectHint">Формат результата storyboard.</div></div>
-      </div>
-
-      <div style={{ marginTop: 8 }}><div className="clipSB_brainLabel">STYLE</div><select className="clipSB_select" value={styleKey} onChange={(e) => data?.onStyle?.(id, e.target.value)}><option value="realism">Реализм</option><option value="film">Кино-стиль</option><option value="neon">Неон</option><option value="glossy">Глянец</option><option value="soft">Мягкий</option></select><div className="clipSB_selectHint">{`${styleMeta.descriptionRu} • STYLE влияет на визуал и не переписывает сюжет MODE.`}</div></div>
-
-
-      <div style={{ marginTop: 8 }}><div className="clipSB_brainLabel">AUDIO STORY MODE</div><select className="clipSB_select" value={audioStoryMode} onChange={(e) => data?.onAudioStoryMode?.(id, e.target.value)}><option value="lyrics_music">lyrics + music</option><option value="music_only">music only</option><option value="music_plus_text">music + text</option><option value="speech_narrative">speech / narration</option></select><div className="clipSB_selectHint">lyrics+music: lyrics + music jointly drive story; music_only: lyrics игнорируются, строим progression по ритму/энергии; music_plus_text: lyrics игнорируются, TEXT задаёт смысл; speech / narration: spoken audio is the primary semantic story source, text only supplements meaning.</div></div>
-
-      <div className="clipSB_toggleRow"><label><input type="checkbox" checked={freezeStyle} onChange={(e) => data?.onFreezeStyle?.(id, e.target.checked)} /> freeze style</label></div>
-
-      <div className="clipSB_small" style={{ marginTop: 8 }}>status: {statusLabel}{data?.parsedAt ? ` • ${data.parsedAt}` : ""}</div>
-      <div className="clipSB_small">planner mode: {plannerModeLabel}</div>
-      <div className="clipSB_selectHint" style={{ marginTop: 6 }}>{parseHint}</div>
-      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <button className="clipSB_btn" onClick={() => data?.onParse?.(id)} disabled={isParsing}>{parseButtonLabel}</button>
-      </div>
-
-      <div style={{ marginTop: 8 }}>
-        <div className="clipSB_brainLabel">Подключённые рефы</div>
-        {connectedRefsSummary.length ? (
-          connectedRefsSummary.map((item, idx) => (
-            <div key={`${item?.role || "role"}-${idx}`} className="clipSB_small">{String(item?.role || "ref")} — {String(item?.label || "персонаж")}</div>
-          ))
-        ) : (
-          <div className="clipSB_small">Рефы не подключены</div>
-        )}
-        {connectedRefsWarnings.length ? (
-          <div className="clipSB_refWarningsBlock">
-            <div className="clipSB_brainLabel">Есть незавершённые рефы</div>
-            {connectedRefsWarnings.map((item, idx) => (
-              <div key={`${item?.role || "warn"}-${idx}`} className="clipSB_small">{String(item?.role || "ref")} — {String(item?.message || "добавьте реф")}</div>
-            ))}
-          </div>
-        ) : null}
-        {brainCritical.length ? (
-          <div className="clipSB_refWarningsBlock">
-            <div className="clipSB_brainLabel">Critical</div>
-            {brainCritical.map((item, idx) => (
-              <div key={`critical-${idx}`} className="clipSB_small" style={{ color: "#ff8a8a" }}>{String(item || "")}</div>
-            ))}
-          </div>
-        ) : null}
-        {brainWarnings.length ? (
-          <div className="clipSB_refWarningsBlock">
-            <div className="clipSB_brainLabel">Warnings</div>
-            {brainWarnings.slice(0, 4).map((item, idx) => (
-              <div key={`brain-warning-${idx}`} className="clipSB_small">{String(item || "")}</div>
-            ))}
-          </div>
-        ) : null}
       </div>
     </NodeShell>
   </>);

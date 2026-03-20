@@ -1515,7 +1515,14 @@ body.ps_clip_fullscreen .mainCol {
   100% { box-shadow: 0 0 0 14px rgba(106,168,255,0); }
 }
 
-.clipSB_nodeComfyBrain { --node-accent: rgba(77, 216, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(77,216,255,.24), 0 0 22px rgba(77,216,255,.18); }
+.clipSB_nodeComfyBrain {
+  --node-accent: rgba(77, 216, 255, 0.78);
+  background:
+    radial-gradient(circle at top right, rgba(77, 216, 255, .12), transparent 38%),
+    radial-gradient(circle at bottom left, rgba(88, 116, 255, .10), transparent 34%),
+    rgba(8, 10, 18, 0.90);
+  box-shadow: inset 0 0 0 1px rgba(77,216,255,.24), 0 0 22px rgba(77,216,255,.18);
+}
 .clipSB_nodeComfyBrainPlannerLegacy { --node-accent: rgba(77, 216, 255, 0.78); }
 .clipSB_nodeComfyBrainPlannerGemini {
   --node-accent: rgba(167, 139, 250, 0.92);
@@ -1579,13 +1586,14 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_badge { display:inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 11px; background: rgba(255,255,255,.08); margin-bottom: 8px; }
 .clipSB_grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.clipSB_brainLabel { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: rgba(255,255,255,.62); margin: 0 0 5px; text-transform: uppercase; }
+.clipSB_brainLabel { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: rgba(255,255,255,.62); margin: 0; text-transform: uppercase; }
 .clipSB_comfyPlannerModeRow { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 2px; }
 .clipSB_comfyPlannerBadges { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .clipSB_comfyPlannerSwitch {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
+  width: 100%;
   padding: 4px;
   border-radius: 999px;
   background: rgba(255,255,255,.06);
@@ -1623,6 +1631,55 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_inlineBtns { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
 .clipSB_previewCard { margin-top:8px; border-radius: 12px; padding: 10px; min-height: 120px; background: rgba(255,255,255,.04); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); display:flex; align-items:center; justify-content:center; }
 .clipSB_drawerGroupTitle { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: rgba(255,255,255,.62); margin: 4px 2px; text-transform: uppercase; }
+.clipSB_comfyBrainPanel {
+  display: grid;
+  gap: 14px;
+}
+
+.clipSB_comfyBrainSection {
+  display: grid;
+  gap: 8px;
+}
+
+.clipSB_comfyBrainSectionMode {
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.08),
+    0 14px 28px rgba(0,0,0,.18);
+}
+
+.clipSB_comfyModeSelect {
+  min-height: 48px;
+  font-size: 15px;
+  font-weight: 700;
+  padding: 13px 42px 13px 14px;
+  border-radius: 14px;
+  background-color: rgba(8, 12, 24, 0.84);
+  border-color: rgba(125, 198, 255, 0.24);
+  box-shadow:
+    inset 0 0 0 1px rgba(125, 198, 255, 0.10),
+    0 12px 24px rgba(0, 0, 0, 0.20);
+}
+
+.clipSB_comfyModeSelect:focus {
+  border-color: rgba(125, 198, 255, 0.42);
+  box-shadow:
+    inset 0 0 0 1px rgba(125, 198, 255, 0.18),
+    0 14px 28px rgba(0, 0, 0, 0.24);
+}
+
+.clipSB_comfyBrainActions {
+  margin-top: 2px;
+}
+
+.clipSB_comfyBrainParseBtn {
+  width: 100%;
+  justify-content: center;
+}
+
 
 .clipSB_refSourceMeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .clipSB_refSourceBadge { margin-bottom: 0; }
