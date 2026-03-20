@@ -384,7 +384,7 @@ export function buildComfyGlobalContinuity({ plannerInput = {}, refsByRole = {},
   const genre = String(plannerInput.genre || "").trim();
   const cast = (sceneRoleModel.cast || []).join(", ") || "character_1";
   const world = ["location", "props", "style"].filter((role) => (refsByRole[role] || []).length > 0).join(", ") || "implicit world";
-  return `Mode ${mode}.${genre ? ` Genre ${genre}.` : ""} Style ${style}. Keep cast (${cast}) and world anchors (${world}) consistent scene-to-scene.`;
+  return `Mode ${mode}.${genre ? ` Genre ${genre} (strict tone control).` : ""} Style ${style}. Keep cast (${cast}) and world anchors (${world}) consistent scene-to-scene.`;
 }
 
 function getRoleLabelRu(role = "") {
@@ -489,7 +489,7 @@ function buildContinuityNotes({ plannerInput = {}, plannerMeta = {}, primaryRole
   const locationAnchor = Array.isArray(refsByRole.location) && refsByRole.location.length > 0 ? "та же локация" : "тот же тип пространства";
   const propAnchor = Array.isArray(refsByRole.props) && refsByRole.props.length > 0 ? "те же ключевые предметы" : "без смены ключевых объектов";
   const styleAnchor = plannerInput?.stylePreset ? `стиль ${plannerInput.stylePreset}` : "тот же визуальный стиль";
-  const genreAnchor = plannerInput?.genre ? `жанр ${plannerInput.genre}` : "";
+  const genreAnchor = plannerInput?.genre ? `строго жанр ${plannerInput.genre}` : "";
   const castAnchor = primaryRole ? `тот же ${getRoleLabelRu(primaryRole)}` : "тот же герой";
   return [castAnchor, locationAnchor, propAnchor, styleAnchor, genreAnchor, blueprint.continuityFocus].filter(Boolean).join(", ");
 }
