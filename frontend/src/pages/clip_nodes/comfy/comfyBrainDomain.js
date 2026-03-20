@@ -616,6 +616,12 @@ export function buildMockComfyScenes(meta = {}) {
   return buildComfyScenesFromPlanner({ plannerInput, plannerMeta });
 }
 
+function hasSemanticHints(value) {
+  if (Array.isArray(value)) return value.some((item) => !!String(item || "").trim());
+  if (value && typeof value === "object") return Object.values(value).some((item) => !!String(item || "").trim());
+  return !!String(value || "").trim();
+}
+
 export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [], edgesNow = [], normalizeRefDataFn } = {}) {
   const incoming = (edgesNow || []).filter((e) => e.target === nodeId);
   const pickConnectedNode = (handleId) => {
@@ -730,15 +736,37 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const audioDurationRaw = Number(audioNode?.data?.audioDurationSec || 0);
   const meaningfulAudioDurationSec = Number.isFinite(audioDurationRaw) && audioDurationRaw > 0 ? audioDurationRaw : null;
   const meaningfulText = textNode?.type === "textNode" ? String(textNode?.data?.textValue || "").trim() : "";
-  const storyControlMode = detectStoryControlMode({ meaningfulText, meaningfulAudio, refsByRole });
+  const lyricsText = audioNode?.type === "audioNode" ? String(audioNode?.data?.lyricsText || "").trim() : "";
+  const transcriptText = audioNode?.type === "audioNode" ? String(audioNode?.data?.transcriptText || "").trim() : "";
+  const spokenTextHint = audioNode?.type === "audioNode" ? String(audioNode?.data?.spokenTextHint || "").trim() : "";
+  const audioSemanticSummary = audioNode?.type === "audioNode" ? String(audioNode?.data?.audioSemanticSummary || "").trim() : "";
+  const audioSemanticHints = audioNode?.type === "audioNode" ? (audioNode?.data?.audioSemanticHints || "") : "";
+  const hasAudio = !!meaningfulAudio;
+  const hasText = !!meaningfulText;
+  const hasRefs = Object.values(refsByRole || {}).some((items) => Array.isArray(items) && items.length > 0);
+  const semanticSupportPresent = !!transcriptText || !!spokenTextHint || !!audioSemanticSummary || !!meaningfulText || hasSemanticHints(audioSemanticHints);
+  const weakSemanticContext = audioStoryMode === "speech_narrative" && hasAudio && !semanticSupportPresent;
+  const semanticContextReason = weakSemanticContext ? "audio present but no transcript/hints/text support" : "";
+  const storyControlMode = hasAudio
+    ? "audio_primary"
+    : hasText
+      ? "text_override"
+      : detectStoryControlMode({ meaningfulText, meaningfulAudio, refsByRole });
   const narrativeRoles = deriveStoryNarrativeRoles(storyControlMode);
-  const narrativeSource = meaningfulText && meaningfulAudio ? "text+audio" : meaningfulText ? "text" : meaningfulAudio ? "audio" : "refs";
-  const timelineSource = meaningfulAudio ? "audio rhythm" : "logic";
+  const narrativeSource = hasAudio ? "audio" : hasText ? "text" : "none";
+  const storySource = narrativeSource;
+  const timelineSource = hasAudio
+    ? (audioStoryMode === "speech_narrative" ? "spoken semantic flow" : "audio rhythm")
+    : hasText
+      ? "text semantic flow"
+      : "none";
   const modeSemantics = getModeSemantics(modeValue);
   const styleSemantics = getStyleSemantics(stylePreset);
   const audioStoryPolicy = getAudioStoryPolicy(audioStoryMode, { hasText: !!meaningfulText, hasAudio: !!meaningfulAudio });
   const textInfluence = deriveTextInfluence({ mode: modeValue, audioStoryMode, hasText: !!meaningfulText, storyControlMode });
-  const storyMissionSummary = buildStoryMissionSummary({ meaningfulText, storyControlMode, mode: modeValue });
+  const storyMissionSummary = hasAudio && audioStoryMode === "speech_narrative"
+    ? "Build scenes from spoken meaning and semantic progression."
+    : buildStoryMissionSummary({ meaningfulText, storyControlMode, mode: modeValue });
 
   if (CLIP_TRACE_COMFY_REFS) {
     const tracedRoles = ["character_2", "character_3"];
@@ -768,16 +796,27 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     meaningfulText,
     meaningfulAudio,
     meaningfulAudioDurationSec,
+    lyricsText,
+    transcriptText,
+    spokenTextHint,
+    audioSemanticSummary,
+    audioSemanticHints,
     refsByRole,
     storyControlMode,
     narrativeRoles,
     narrativeSource,
+    storySource,
     timelineSource,
     modeSemantics,
     styleSemantics,
     audioStoryPolicy,
     textInfluence,
     storyMissionSummary,
+    weakSemanticContext,
+    semanticContextReason,
+    hasAudio,
+    hasText,
+    hasRefs,
     refConnectionStates,
   };
 }
@@ -790,8 +829,14 @@ export function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } 
     stylePreset: plannerInput.stylePreset,
     storyControlMode: plannerInput.storyControlMode,
     narrativeSource: plannerInput.narrativeSource,
+    storySource: plannerInput.storySource || plannerMeta.storySource || plannerInput.narrativeSource,
     timelineSource: plannerInput.timelineSource,
     audioStoryMode: plannerInput.audioStoryMode,
+    weakSemanticContext: !!plannerInput.weakSemanticContext,
+    semanticContextReason: plannerInput.semanticContextReason || "",
+    hasAudio: !!plannerInput.meaningfulAudio,
+    hasText: !!plannerInput.meaningfulText,
+    hasRefs: !!plannerInput?.coverage?.hasRefs,
     textInfluence: plannerInput.textInfluence,
     modeRules: plannerInput.modeRules,
     styleRules: plannerInput.styleRules,

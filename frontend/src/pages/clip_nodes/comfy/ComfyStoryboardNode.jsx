@@ -16,9 +16,14 @@ export default function ComfyStoryboardNode({ id, data }) {
   const isReady = parseStatus === "ready";
   const isError = parseStatus === "error";
   const isStale = !isUpdating && (parseStatus === "stale" || (!!data?.isStale && !isReady));
+  const warnings = Array.isArray(data?.warnings) ? data.warnings.filter(Boolean) : [];
+  const weakSemanticWarning = warnings.find((item) => String(item || "").toLowerCase().includes("weak semantic context")) || "";
+  const errorMessage = String(data?.errorMessage || "").trim();
   const statusLabel = isUpdating
     ? "обновляется..."
-    : isStale
+    : isError && isStale
+      ? "ошибка • старый результат"
+      : isStale
       ? (hasScenes ? "устарело" : "нужно обновить")
       : isReady
         ? (hasScenes ? `${totalScenes} сцен готово` : "Storyboard готов")
@@ -26,7 +31,9 @@ export default function ComfyStoryboardNode({ id, data }) {
           ? "ошибка"
           : "ожидание";
   const statusHint = isUpdating
-    ? "Получаю сцены из COMFY BRAIN..."
+    ? (hasScenes ? "Идёт новый parse. Текущие сцены сохранены как stale до прихода нового результата." : "Получаю сцены из COMFY BRAIN...")
+    : isError && isStale
+      ? (hasScenes ? "Новый parse завершился ошибкой. На экране остаётся прошлый storyboard, он помечен как stale." : "Новый parse завершился ошибкой, свежий storyboard не получен.")
     : isStale
       ? (hasScenes ? "Сцены сохранены, но входные данные изменились. Обновите storyboard." : "Данные изменились. Запустите обновление storyboard.")
       : isReady
@@ -59,6 +66,8 @@ export default function ComfyStoryboardNode({ id, data }) {
         {modeMeta.labelRu} • {styleMeta.labelRu}
       </div>
       <div className="clipSB_selectHint" style={{ marginTop: 6 }}>{statusHint}</div>
+      {errorMessage ? <div className="clipSB_small" style={{ marginTop: 6, color: "#ff8a8a" }}>Ошибка parse: {errorMessage}</div> : null}
+      {weakSemanticWarning ? <div className="clipSB_small" style={{ marginTop: 6, color: "#ffb86c" }}>⚠ {weakSemanticWarning}</div> : null}
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <button className="clipSB_btn" onClick={() => data?.onOpenComfy?.(id)} disabled={!canOpenEditor}>Открыть editor</button>
       </div>

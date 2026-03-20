@@ -24,6 +24,8 @@ export default function ComfyBrainNode({ id, data }) {
   const parseButtonLabel = isParsing ? "Разбираю..." : "Разобрать";
   const connectedRefsSummary = Array.isArray(data?.connectedRefsSummary) ? data.connectedRefsSummary : [];
   const connectedRefsWarnings = Array.isArray(data?.connectedRefsWarnings) ? data.connectedRefsWarnings : [];
+  const brainWarnings = Array.isArray(data?.brainWarnings) ? data.brainWarnings.filter(Boolean) : [];
+  const brainCritical = Array.isArray(data?.brainCritical) ? data.brainCritical.filter(Boolean) : [];
   const parseHint = isParsing
     ? "Идёт анализ аудио и построение сцен. Повторный запуск временно заблокирован."
     : isReady
@@ -95,6 +97,22 @@ export default function ComfyBrainNode({ id, data }) {
             <div className="clipSB_brainLabel">Есть незавершённые рефы</div>
             {connectedRefsWarnings.map((item, idx) => (
               <div key={`${item?.role || "warn"}-${idx}`} className="clipSB_small">{String(item?.role || "ref")} — {String(item?.message || "добавьте реф")}</div>
+            ))}
+          </div>
+        ) : null}
+        {brainCritical.length ? (
+          <div className="clipSB_refWarningsBlock">
+            <div className="clipSB_brainLabel">Critical</div>
+            {brainCritical.map((item, idx) => (
+              <div key={`critical-${idx}`} className="clipSB_small" style={{ color: "#ff8a8a" }}>{String(item || "")}</div>
+            ))}
+          </div>
+        ) : null}
+        {brainWarnings.length ? (
+          <div className="clipSB_refWarningsBlock">
+            <div className="clipSB_brainLabel">Warnings</div>
+            {brainWarnings.slice(0, 4).map((item, idx) => (
+              <div key={`brain-warning-${idx}`} className="clipSB_small">{String(item || "")}</div>
             ))}
           </div>
         ) : null}

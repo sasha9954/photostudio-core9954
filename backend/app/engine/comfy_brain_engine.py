@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 FALLBACK_GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_ONLY_PLANNER_MODEL_FALLBACKS = [
+    FALLBACK_GEMINI_MODEL,
+    "gemini-2.5-pro",
+]
 PROMPT_SYNC_STATUS_SYNCED = "synced"
 PROMPT_SYNC_STATUS_NEEDS_SYNC = "needs_sync"
 PROMPT_SYNC_STATUS_SYNCING = "syncing"
@@ -460,6 +464,118 @@ def _append_unique_strings(items: list[str], additions: list[str]) -> list[str]:
     return out
 
 
+def _has_refs(refs_by_role: dict[str, Any] | None) -> bool:
+    refs = refs_by_role if isinstance(refs_by_role, dict) else {}
+    return any(isinstance(items, list) and len(items) > 0 for items in refs.values())
+
+
+def _derive_gemini_only_story_context(payload: dict[str, Any]) -> dict[str, Any]:
+    has_audio = bool(str(payload.get("audioUrl") or "").strip())
+    text_value = str(payload.get("text") or "").strip()
+    has_text = bool(text_value)
+    has_refs = _has_refs(payload.get("refsByRole"))
+    audio_story_mode = str(payload.get("audioStoryMode") or "lyrics_music").strip().lower() or "lyrics_music"
+    transcript_text = str(payload.get("transcriptText") or "").strip()
+    spoken_text_hint = str(payload.get("spokenTextHint") or "").strip()
+    audio_semantic_summary = str(payload.get("audioSemanticSummary") or "").strip()
+    lyrics_text = str(payload.get("lyricsText") or "").strip()
+    audio_semantic_hints = payload.get("audioSemanticHints")
+    has_audio_semantic_hints = False
+    if isinstance(audio_semantic_hints, list):
+        has_audio_semantic_hints = any(str(item or "").strip() for item in audio_semantic_hints)
+    elif isinstance(audio_semantic_hints, dict):
+        has_audio_semantic_hints = any(str(item or "").strip() for item in audio_semantic_hints.values())
+    elif isinstance(audio_semantic_hints, str):
+        has_audio_semantic_hints = bool(audio_semantic_hints.strip())
+
+    story_source = "none"
+    narrative_source = "none"
+    timeline_source = str(payload.get("timelineSource") or "").strip()
+    story_mission_summary = str(payload.get("storyMissionSummary") or "").strip()
+    warnings: list[str] = []
+    errors: list[str] = []
+    weak_semantic_context = False
+    semantic_context_reason = ""
+
+    if has_audio:
+        story_source = "audio"
+        narrative_source = "audio_primary"
+        if audio_story_mode == "speech_narrative":
+            timeline_source = "spoken semantic flow"
+            if not story_mission_summary:
+                story_mission_summary = "Build scenes from spoken meaning and semantic progression."
+            semantic_support_present = any([transcript_text, spoken_text_hint, audio_semantic_summary, text_value])
+            weak_semantic_context = not semantic_support_present
+            if weak_semantic_context:
+                semantic_context_reason = "audio present but no transcript/hints/text support"
+                warnings.append("weak_semantic_context:audio present but no transcript/hints/text support")
+        elif not timeline_source:
+            timeline_source = "audio rhythm"
+        if not story_mission_summary:
+            if audio_story_mode == "music_only":
+                story_mission_summary = "Build scenes from audio rhythm and emotional contour."
+            elif audio_story_mode == "music_plus_text" and has_text:
+                story_mission_summary = text_value[:220]
+            else:
+                story_mission_summary = "Build scenes from audio meaning, pacing and progression."
+    elif has_text:
+        story_source = "text"
+        narrative_source = "text_primary"
+        if not timeline_source:
+            timeline_source = "text semantic flow"
+        if not story_mission_summary:
+            story_mission_summary = text_value[:220]
+    else:
+        errors.append("No audio or text source for storyboard planning")
+        warnings.append("narrative_source_missing")
+        if not timeline_source:
+            timeline_source = "none"
+        if not story_mission_summary:
+            story_mission_summary = "Narrative source missing."
+
+    return {
+        "storySource": story_source,
+        "narrativeSource": narrative_source,
+        "timelineSource": timeline_source,
+        "storyMissionSummary": story_mission_summary,
+        "weakSemanticContext": weak_semantic_context,
+        "semanticContextReason": semantic_context_reason,
+        "warnings": warnings,
+        "errors": errors,
+        "hasAudio": has_audio,
+        "hasText": has_text,
+        "hasRefs": has_refs,
+        "hasTranscriptText": bool(transcript_text),
+        "hasSpokenTextHint": bool(spoken_text_hint),
+        "hasAudioSemanticSummary": bool(audio_semantic_summary),
+        "hasAudioSemanticHints": has_audio_semantic_hints,
+        "hasLyricsText": bool(lyrics_text),
+    }
+
+
+def _build_gemini_only_model_candidates(requested_model: str) -> list[str]:
+    candidates: list[str] = []
+    for model in [requested_model, *GEMINI_ONLY_PLANNER_MODEL_FALLBACKS]:
+        clean = str(model or "").strip()
+        if clean and clean not in candidates:
+            candidates.append(clean)
+    return candidates
+
+
+def _should_fallback_gemini_model(resp: dict[str, Any] | None, diagnostics: dict[str, Any]) -> bool:
+    if not isinstance(resp, dict):
+        return False
+    http_status = diagnostics.get("httpStatus")
+    error_text = str(resp.get("text") or diagnostics.get("errorText") or "").lower()
+    if http_status != 404:
+        return False
+    return (
+        "not found" in error_text
+        or "not supported for generatecontent" in error_text
+        or "unsupported for generatecontent" in error_text
+    )
+
+
 def _build_world_lock(payload: dict[str, Any], reference_profiles: dict[str, Any]) -> dict[str, Any]:
     refs_by_role = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
     location_profile = reference_profiles.get("location") if isinstance(reference_profiles.get("location"), dict) else {}
@@ -689,13 +805,14 @@ def _build_entity_locks(payload: dict[str, Any], reference_profiles: dict[str, A
 
 def _build_gemini_planner_payload(payload: dict[str, Any], world_lock: dict[str, Any], entity_locks: dict[str, Any]) -> dict[str, Any]:
     refs_by_role = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
+    story_context = _derive_gemini_only_story_context(payload)
     return {
         "plannerMode": "gemini_only",
         "mode": payload.get("mode") or "clip",
         "audio": {
             "audioUrl": payload.get("audioUrl") or "",
             "durationSec": payload.get("audioDurationSec"),
-            "audioIsPrimaryMeaningSource": True,
+            "audioIsPrimaryMeaningSource": story_context.get("storySource") == "audio",
             "audioStoryMode": payload.get("audioStoryMode") or "lyrics_music",
         },
         "textContext": {
@@ -704,7 +821,8 @@ def _build_gemini_planner_payload(payload: dict[str, Any], world_lock: dict[str,
             "transcriptText": payload.get("transcriptText") or "",
             "spokenTextHint": payload.get("spokenTextHint") or "",
             "audioSemanticSummary": payload.get("audioSemanticSummary") or "",
-            "textRole": "fallback_only" if payload.get("audioStoryMode") == "speech_narrative" else "support",
+            "audioSemanticHints": payload.get("audioSemanticHints") or "",
+            "textRole": "fallback_only" if payload.get("audioStoryMode") == "speech_narrative" and story_context.get("storySource") == "audio" else ("primary" if story_context.get("storySource") == "text" else "support"),
         },
         "worldContext": {
             "worldLock": world_lock,
@@ -729,10 +847,17 @@ def _build_gemini_planner_payload(payload: dict[str, Any], world_lock: dict[str,
             "avoidSlideshowOnlyCameraMoves": True,
             "requireSceneActionOrEnvironmentMotion": True,
         },
+        "storyContext": story_context,
     }
 
 
 def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
+    story_context = gemini_payload.get("storyContext") if isinstance(gemini_payload.get("storyContext"), dict) else {}
+    story_source = str(story_context.get("storySource") or "audio").strip() or "audio"
+    timeline_source = str(story_context.get("timelineSource") or "logic").strip() or "logic"
+    story_mission_summary = str(story_context.get("storyMissionSummary") or "").strip()
+    weak_semantic_context = bool(story_context.get("weakSemanticContext"))
+    semantic_context_reason = str(story_context.get("semanticContextReason") or "").strip()
     return (
         "You are COMFY Gemini Brain planner. Return strict JSON only.\n"
         "Top-level JSON fields required: worldLock, entityLocks, scenes, preview, warnings, debug.\n"
@@ -740,7 +865,10 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "sceneId,startSec,endSec,durationSec,spokenText,sceneMeaning,emotion,imagePrompt,videoPrompt,sceneAction,environmentMotion,cameraPlan,sfxSuggestion,activeRefs,refUsageReason,characterRoleLogic,continuity,continuityLocksUsed,confidence.\n"
         "Rules:\n"
         "- plannerMode is gemini_only, so you own semantic scene planning completely.\n"
-        "- Audio is primary meaning source. Text is fallback/support.\n"
+        f"- Primary story source for this request is {story_source}.\n"
+        "- If storySource=audio, audio meaning is primary and refs only constrain the world/continuity.\n"
+        "- If storySource=text, text semantics are primary and refs only constrain the world/continuity.\n"
+        "- If refs exist, use them as optional continuity anchors, not as mandatory narrative source.\n"
         "- First lock the world, then lock entities, then plan scenes, then select preview from the resulting scenes.\n"
         "- Keep one stable world unless the story explicitly transitions.\n"
         "- Choose active refs per scene; do not force every ref into every scene.\n"
@@ -767,6 +895,9 @@ def _build_gemini_only_planner_prompt(gemini_payload: dict[str, Any]) -> str:
         "PREVIEW:\n"
         "- one scene must be strong enough to be preview.\n"
         "- it must be understandable visually.\n"
+        f"- timelineSource={timeline_source}.\n"
+        f"- storyMissionSummary={story_mission_summary or 'not_provided'}.\n"
+        f"- weakSemanticContext={json.dumps({'value': weak_semantic_context, 'reason': semantic_context_reason}, ensure_ascii=False)}.\n"
         "Return no markdown, only JSON.\n"
         f"INPUT={json.dumps(gemini_payload, ensure_ascii=False)}"
     )
@@ -1006,6 +1137,9 @@ def _call_gemini_plan(api_key: str, model: str, body: dict[str, Any]) -> tuple[d
         "effectiveModel": model,
         "httpStatus": http_status,
         "rawPreview": raw_preview,
+        "errorText": str((resp or {}).get("text") or "")[:3000] if isinstance(resp, dict) else "",
+        "fallbackFrom": None,
+        "fallbackTo": None,
     }
     if isinstance(resp, dict) and resp.get("__http_error__"):
         logger.warning("[COMFY PLAN] gemini http error model=%s status=%s", model, resp.get("status"))
@@ -1017,6 +1151,42 @@ def _call_gemini_plan(api_key: str, model: str, body: dict[str, Any]) -> tuple[d
         return {"errors": ["gemini_invalid_json"]}, diagnostics
 
     return parsed, diagnostics
+
+
+def _call_gemini_plan_with_model_fallback(api_key: str, requested_model: str, body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    model_candidates = _build_gemini_only_model_candidates(requested_model)
+    last_parsed: dict[str, Any] = {"errors": ["gemini_http_error"]}
+    last_diagnostics: dict[str, Any] = {
+        "requestedModel": requested_model,
+        "effectiveModel": requested_model,
+        "httpStatus": None,
+        "rawPreview": "",
+        "errorText": "",
+        "fallbackFrom": None,
+        "fallbackTo": None,
+        "modelCandidates": model_candidates,
+    }
+
+    for idx, candidate_model in enumerate(model_candidates):
+        parsed, diagnostics = _call_gemini_plan(api_key, candidate_model, body)
+        diagnostics["requestedModel"] = requested_model
+        diagnostics["modelCandidates"] = model_candidates
+        if idx > 0:
+            diagnostics["fallbackFrom"] = model_candidates[idx - 1]
+            diagnostics["fallbackTo"] = candidate_model
+        if not _should_fallback_gemini_model(parsed, diagnostics):
+            return parsed, diagnostics
+        last_parsed = parsed
+        last_diagnostics = diagnostics
+        logger.warning(
+            "[COMFY PLAN] gemini_only model fallback requested=%s fallback_from=%s fallback_to=%s status=%s",
+            requested_model,
+            diagnostics.get("fallbackFrom") or candidate_model,
+            candidate_model,
+            diagnostics.get("httpStatus"),
+        )
+
+    return last_parsed, last_diagnostics
 
 
 def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: dict[str, list[dict[str, str]]] | None = None) -> dict[str, Any]:
@@ -1336,6 +1506,13 @@ def _build_preview_from_scenes(scenes: list[dict[str, Any]], world_lock: dict[st
 
 
 def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
+    story_context = _derive_gemini_only_story_context(normalized)
+    normalized = {
+        **normalized,
+        "narrativeSource": story_context.get("narrativeSource") or normalized.get("narrativeSource"),
+        "timelineSource": story_context.get("timelineSource") or normalized.get("timelineSource"),
+        "storyMissionSummary": story_context.get("storyMissionSummary") or normalized.get("storyMissionSummary"),
+    }
     reference_profiles = build_reference_profiles(normalized.get("refsByRole") or {})
     world_lock = _build_world_lock(normalized, reference_profiles)
     entity_locks = _build_entity_locks(normalized, reference_profiles)
@@ -1350,9 +1527,15 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "globalContinuity": world_lock,
             "scenes": [],
             "warnings": [],
-            "errors": ["GEMINI_API_KEY missing"],
+            "errors": ["GEMINI_API_KEY missing", *story_context.get("errors", [])],
             "debug": {
                 "plannerMode": "gemini_only",
+                "storySource": story_context.get("storySource"),
+                "weakSemanticContext": story_context.get("weakSemanticContext"),
+                "semanticContextReason": story_context.get("semanticContextReason"),
+                "hasAudio": story_context.get("hasAudio"),
+                "hasText": story_context.get("hasText"),
+                "hasRefs": story_context.get("hasRefs"),
                 "worldLock": world_lock,
                 "entityLocks": entity_locks,
                 "geminiPayload": gemini_payload,
@@ -1370,17 +1553,57 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             },
         }
 
+    if story_context.get("errors"):
+        return {
+            "ok": False,
+            "planMeta": {
+                "plannerMode": "gemini_only",
+                "storyMissionSummary": normalized.get("storyMissionSummary"),
+                "timelineSource": normalized.get("timelineSource"),
+                "narrativeSource": normalized.get("narrativeSource"),
+            },
+            "globalContinuity": world_lock,
+            "scenes": [],
+            "warnings": story_context.get("warnings") or [],
+            "errors": story_context.get("errors") or [],
+            "debug": {
+                "plannerMode": "gemini_only",
+                "requestedModel": (settings.GEMINI_TEXT_MODEL or FALLBACK_GEMINI_MODEL or "gemini-2.5-flash").strip(),
+                "fallbackFrom": None,
+                "fallbackTo": None,
+                "effectiveModel": None,
+                "parseFailedReason": "; ".join(story_context.get("errors") or []),
+                "storySource": story_context.get("storySource"),
+                "weakSemanticContext": story_context.get("weakSemanticContext"),
+                "semanticContextReason": story_context.get("semanticContextReason"),
+                "hasAudio": story_context.get("hasAudio"),
+                "hasText": story_context.get("hasText"),
+                "hasRefs": story_context.get("hasRefs"),
+                "worldLock": world_lock,
+                "entityLocks": entity_locks,
+                "geminiPayload": gemini_payload,
+                **media_debug,
+            },
+        }
+
     requested_model = (settings.GEMINI_TEXT_MODEL or FALLBACK_GEMINI_MODEL or "gemini-2.5-flash").strip()
     body = {
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3},
         "contents": [{"role": "user", "parts": multimodal_parts}],
     }
-    parsed, diagnostics = _call_gemini_plan(api_key, requested_model, body)
+    parsed, diagnostics = _call_gemini_plan_with_model_fallback(api_key, requested_model, body)
 
-    warnings = [str(item) for item in (parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []) if str(item).strip()]
+    warnings = [
+        *[str(item) for item in (parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []) if str(item).strip()],
+        *[str(item) for item in (story_context.get("warnings") if isinstance(story_context.get("warnings"), list) else []) if str(item).strip()],
+    ]
     errors = [str(item) for item in (parsed.get("errors") if isinstance(parsed.get("errors"), list) else []) if str(item).strip()]
     if diagnostics.get("httpStatus"):
         errors.append(f"gemini_http_error:{diagnostics['httpStatus']}")
+        if diagnostics.get("errorText"):
+            errors.append(str(diagnostics.get("errorText")))
+    if diagnostics.get("fallbackFrom") and diagnostics.get("fallbackTo"):
+        warnings.append(f"gemini_model_fallback:{diagnostics['fallbackFrom']}->{diagnostics['fallbackTo']}")
 
     parsed_world_lock = parsed.get("worldLock") if isinstance(parsed.get("worldLock"), dict) else {}
     merged_world_lock = {**world_lock, **parsed_world_lock}
@@ -1407,8 +1630,11 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "audioStoryMode": normalized.get("audioStoryMode"),
         "storyControlMode": normalized.get("storyControlMode"),
         "storyMissionSummary": normalized.get("storyMissionSummary"),
-        "timelineSource": "gemini_semantic_scene_planning",
+        "timelineSource": normalized.get("timelineSource") or "gemini_semantic_scene_planning",
         "narrativeSource": normalized.get("narrativeSource") or "audio_primary",
+        "storySource": story_context.get("storySource") or "audio",
+        "weakSemanticContext": bool(story_context.get("weakSemanticContext")),
+        "semanticContextReason": story_context.get("semanticContextReason") or "",
         "audioDurationSec": timing_debug.get("audioDurationSec"),
         "timelineDurationSec": timing_debug.get("timelineDurationSec"),
         "sceneDurationTotalSec": timing_debug.get("sceneDurationTotalSec"),
@@ -1428,9 +1654,18 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             **(parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {}),
             "plannerMode": "gemini_only",
             "requestedModel": diagnostics.get("requestedModel") or requested_model,
+            "fallbackFrom": diagnostics.get("fallbackFrom"),
+            "fallbackTo": diagnostics.get("fallbackTo"),
             "effectiveModel": diagnostics.get("effectiveModel") or requested_model,
             "httpStatus": diagnostics.get("httpStatus"),
             "rawPreview": diagnostics.get("rawPreview") or "",
+            "parseFailedReason": "; ".join(errors) if errors else "",
+            "storySource": story_context.get("storySource"),
+            "weakSemanticContext": bool(story_context.get("weakSemanticContext")),
+            "semanticContextReason": story_context.get("semanticContextReason") or "",
+            "hasAudio": story_context.get("hasAudio"),
+            "hasText": story_context.get("hasText"),
+            "hasRefs": story_context.get("hasRefs"),
             "geminiPayload": gemini_payload,
             "worldLock": merged_world_lock,
             "worldLockSummary": {
