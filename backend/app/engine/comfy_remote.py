@@ -404,12 +404,31 @@ def run_comfy_image_to_video(
     requested_duration_sec: float,
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
+    logger.info(
+        "[COMFY REMOTE] enter run_comfy_image_to_video filename=%s size_bytes=%s width=%s height=%s requested_duration_sec=%s seed=%s",
+        str(image_filename or "").strip() or "source.jpg",
+        len(image_bytes or b""),
+        int(width),
+        int(height),
+        float(requested_duration_sec),
+        seed,
+    )
     try:
         workflow = load_workflow_json(str(settings.COMFY_IMAGE_VIDEO_WORKFLOW or ""))
     except Exception as exc:
         return None, f"workflow_load_failed:{str(exc)[:300]}"
 
+    logger.info(
+        "[COMFY REMOTE] calling upload_image_to_comfy filename=%s size_bytes=%s",
+        str(image_filename or "").strip() or "source.jpg",
+        len(image_bytes or b""),
+    )
     uploaded_name, upload_err = upload_image_to_comfy(image_bytes, image_filename)
+    logger.info(
+        "[COMFY REMOTE] upload_image_to_comfy returned uploaded_name=%s upload_err=%s",
+        uploaded_name,
+        upload_err,
+    )
     if upload_err or not uploaded_name:
         return None, f"upload_failed:{upload_err or 'unknown_upload_error'}"
 
