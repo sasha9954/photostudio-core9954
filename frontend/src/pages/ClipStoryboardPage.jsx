@@ -2695,6 +2695,27 @@ function formatContinuityForDisplay(value) {
   return text.replace(/,\s*/g, ",\n").replace(/;\s*/g, ";\n");
 }
 
+function ComfyCollapsibleSection({ title, defaultOpen = false, children, className = "", contentClassName = "" }) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <section className={["clipSB_comfySection", "clipSB_comfyAccordion", isOpen ? "isOpen" : "", className].filter(Boolean).join(" ")}>
+      <button
+        type="button"
+        className="clipSB_comfyAccordionHeader"
+        onClick={() => setIsOpen((prev) => !prev)}
+        aria-expanded={isOpen}
+      >
+        <span className="clipSB_comfyBlockTitle" style={{ marginBottom: 0 }}>{title}</span>
+        <span className="clipSB_comfyAccordionIcon" aria-hidden>{isOpen ? "−" : "+"}</span>
+      </button>
+      <div className={["clipSB_comfyAccordionBody", isOpen ? "isOpen" : "", contentClassName].filter(Boolean).join(" ")}>
+        <div className="clipSB_comfyAccordionInner">{children}</div>
+      </div>
+    </section>
+  );
+}
+
 async function getAudioDurationSec(url) {
   // Browser-side duration probe (metadata only)
   return await new Promise((resolve) => {
@@ -10307,9 +10328,28 @@ const hydrate = useCallback((source = "unknown") => {
                 ) : (
                   <>
                     <div className="clipSB_comfySection clipSB_comfyTopSection">
+                      <div className="clipSB_comfyHero">
+                        <div className="clipSB_comfyHeroPrimary">
+                          <div className="clipSB_comfyHeroEyebrow">{comfySelectedScene.sceneId || `scene ${comfySafeIndex + 1}`}</div>
+                          <div className="clipSB_comfyHeroTitle">{comfySelectedScene.title || '—'}</div>
+                          <div className="clipSB_comfyHeroMeta">
+                            <span>{Number.isFinite(Number(comfySelectedScene.startSec)) && Number.isFinite(Number(comfySelectedScene.endSec)) ? `${Number(comfySelectedScene.startSec).toFixed(1)}–${Number(comfySelectedScene.endSec).toFixed(1)}s` : `${Number(comfySelectedScene.durationSec || 0).toFixed(1)}s`}</span>
+                            {String(comfySelectedScene.videoStatus || '').trim() ? <span>• status: {String(comfySelectedScene.videoStatus || '').trim()}</span> : null}
+                          </div>
+                        </div>
+                        <div className="clipSB_comfyHeroBadges">
+                          {String(comfySelectedScene.imageUrl || '').trim() ? <span className="clipSB_tag clipSB_tagOk">image-ready</span> : null}
+                          {String(comfySelectedScene.audioSliceUrl || '').trim() ? <span className="clipSB_tag clipSB_tagOk">audio-ready</span> : null}
+                          {!String(comfySelectedScene.videoUrl || '').trim() && String(comfySelectedScene.videoStatus || '').trim() === 'queued' ? <span className="clipSB_tag">video-queued</span> : null}
+                          {!String(comfySelectedScene.videoUrl || '').trim() && String(comfySelectedScene.videoStatus || '').trim() === 'running' ? <span className="clipSB_tag">video-running</span> : null}
+                          {String(comfySelectedScene.videoUrl || '').trim() || String(comfySelectedScene.videoStatus || '').trim() === 'done' ? <span className="clipSB_tag clipSB_tagOk">video-ready</span> : null}
+                          {(String(comfySelectedScene.videoStatus || '').trim() === 'error' || String(comfySelectedScene.videoStatus || '').trim() === 'not_found') ? <span className="clipSB_tag clipSB_tagWarn">video-error</span> : null}
+                        </div>
+                      </div>
+                    </div>
+
+                    <ComfyCollapsibleSection title="Scene Info">
                       <div className="clipSB_comfyInfoGrid">
-                        <div className="clipSB_comfyKv"><span>Сцена</span><strong>{comfySelectedScene.title || '—'}</strong></div>
-                        <div className="clipSB_comfyKv"><span>Время</span><strong>{Number.isFinite(Number(comfySelectedScene.startSec)) && Number.isFinite(Number(comfySelectedScene.endSec)) ? `${Number(comfySelectedScene.startSec).toFixed(1)}–${Number(comfySelectedScene.endSec).toFixed(1)}s` : `${Number(comfySelectedScene.durationSec || 0).toFixed(1)}s`}</strong></div>
                         <div className="clipSB_comfyKv"><span>Planner</span><strong>{String(comfyNode?.data?.plannerMode || comfyNode?.data?.plannerMeta?.plannerMode || 'legacy')}</strong></div>
                         <div className="clipSB_comfyKv"><span>Тип сцены</span><strong>{comfySelectedScene.sceneType || '—'}</strong></div>
                         <div className="clipSB_comfyKv"><span>Рендер-модель</span><strong>{comfySelectedScene.futureRenderModel || '—'}</strong></div>
@@ -10319,9 +10359,13 @@ const hydrate = useCallback((source = "unknown") => {
                         <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Active refs</span><strong>{Array.isArray(comfySelectedScene.activeRefs) && comfySelectedScene.activeRefs.length ? comfySelectedScene.activeRefs.join(', ') : '—'}</strong></div>
                         <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Цель</span><strong>{comfySelectedScene.sceneGoal || comfySelectedScene.sceneNarrativeStep || '—'}</strong></div>
                       </div>
-                    </div>
+                      <div style={{ marginTop: 12 }}>
+                        <div className="clipSB_comfyBlockTitle">Континуити</div>
+                        <pre className="clipSB_comfyContinuity">{formatContinuityForDisplay(comfySelectedScene.continuity || comfyNode?.data?.plannerMeta?.globalContinuity || '—')}</pre>
+                      </div>
+                    </ComfyCollapsibleSection>
 
-                    <div className="clipSB_comfySection">
+                    <ComfyCollapsibleSection title="World Bible">
                       <div className="clipSB_comfyBlockTitle">WORLD BIBLE</div>
                       <div className="clipSB_small">storyMode: {String(comfyNode?.data?.plannerMeta?.worldBible?.storyMode || comfyNode?.data?.plannerMeta?.audioStoryMode || '—')}</div>
                       <div className="clipSB_small">plannerMode: {String(comfyNode?.data?.plannerMeta?.plannerMode || comfyNode?.data?.plannerMode || 'legacy')}</div>
@@ -10343,12 +10387,7 @@ const hydrate = useCallback((source = "unknown") => {
                       <div className="clipSB_small">sceneTypeHistogram: {formatSceneTypeHistogram(comfyNode?.data?.plannerMeta?.sceneTypeHistogram || comfyNode?.data?.comfyDebug?.analysis?.sceneTypeHistogram)}</div>
                       <div className="clipSB_small">worldLock.locationType: {String(comfyNode?.data?.plannerMeta?.worldLock?.locationType || comfyNode?.data?.comfyDebug?.worldLock?.locationType || '—')}</div>
                       <div className="clipSB_small">worldLock.lighting: {String(comfyNode?.data?.plannerMeta?.worldLock?.lighting || comfyNode?.data?.comfyDebug?.worldLock?.lighting || '—')}</div>
-                    </div>
-
-                    <div className="clipSB_comfySection">
-                      <div className="clipSB_comfyBlockTitle">Континуити</div>
-                      <pre className="clipSB_comfyContinuity">{formatContinuityForDisplay(comfySelectedScene.continuity || comfyNode?.data?.plannerMeta?.globalContinuity || '—')}</pre>
-                    </div>
+                    </ComfyCollapsibleSection>
 
                     <div className="clipSB_comfySection">
                       <div className="clipSB_comfyBlockTitle">IMAGE · {comfyModeMeta.labelRu} / {comfyStyleMeta.labelRu}</div>
@@ -10406,7 +10445,7 @@ const hydrate = useCallback((source = "unknown") => {
                       {(String(comfySelectedScene.imagePromptSyncError || '').trim() || comfyPromptSyncError) ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>sync: {String(comfySelectedScene.imagePromptSyncError || comfyPromptSyncError || '')}</div> : null}
                     </div>
 
-                    <div className="clipSB_comfySection">
+                    <ComfyCollapsibleSection title="Audio / Timing">
                       <div className="clipSB_comfyBlockTitle">AUDIO SLICE</div>
                       <div className="clipSB_hint" style={{ marginBottom: 8 }}>Используется общий audioUrl и текущий тайминг сцены.</div>
                       <div className="clipSB_comfyActions">
@@ -10443,7 +10482,7 @@ const hydrate = useCallback((source = "unknown") => {
                       </div>
                       {comfySelectedAudioSliceStatus === 'loading' ? <div className="clipSB_hint">Извлекаю аудио по timeline сцены…</div> : null}
                       {comfySelectedAudioSliceError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfySelectedAudioSliceError}</div> : null}
-                    </div>
+                    </ComfyCollapsibleSection>
 
                     {(comfySelectedScene.imageUrl && !comfyShowVideoSection) ? (
                       <div className="clipSB_comfySection">
@@ -10528,9 +10567,8 @@ const hydrate = useCallback((source = "unknown") => {
                       </div>
                     ) : null}
 
-                    <details className="clipSB_scenarioEditRow" style={{ marginTop: 8 }}>
-                      <summary className="clipSB_hint" style={{ cursor: 'pointer' }}>DEBUG</summary>
-                      <div className="clipSB_small" style={{ marginTop: 8 }}>pipeline: {(Array.isArray(comfyNode?.data?.pipelineFlow) ? comfyNode.data.pipelineFlow.join(' → ') : 'brain → scene image → scene video')}</div>
+                    <ComfyCollapsibleSection title="Debug">
+                      <div className="clipSB_small">pipeline: {(Array.isArray(comfyNode?.data?.pipelineFlow) ? comfyNode.data.pipelineFlow.join(' → ') : 'brain → scene image → scene video')}</div>
                       <div className="clipSB_small">plannerMode: {String(comfyNode?.data?.plannerMode || comfyNode?.data?.plannerMeta?.plannerMode || 'legacy')}</div>
                       <div className="clipSB_small">режим: {comfyModeMeta.labelRu} • стиль: {comfyStyleMeta.labelRu}</div>
                       <div className="clipSB_small">narrative source: {normalizeStoryboardSourceValue(comfyNode?.data?.narrativeSource || comfyNode?.data?.plannerMeta?.narrativeSource || comfyNode?.data?.comfyDebug?.narrativeSource, 'none')}</div>
@@ -10551,7 +10589,7 @@ const hydrate = useCallback((source = "unknown") => {
                       <div className="clipSB_small">preview.sourceSceneId: {String(comfyNode?.data?.plannerMeta?.preview?.sourceSceneId || comfyNode?.data?.comfyDebug?.preview?.sourceSceneId || '—')}</div>
                       <div className="clipSB_small">preview.activeRefs: {Array.isArray(comfyNode?.data?.plannerMeta?.preview?.activeRefs || comfyNode?.data?.comfyDebug?.preview?.activeRefs) ? (comfyNode?.data?.plannerMeta?.preview?.activeRefs || comfyNode?.data?.comfyDebug?.preview?.activeRefs).join(', ') : '—'}</div>
                       <div className="clipSB_small">warnings: {(Array.isArray(comfyNode?.data?.warnings) ? comfyNode.data.warnings.join(' | ') : '') || 'none'}</div>
-                    </details>
+                    </ComfyCollapsibleSection>
                   </>
                 )}
               </div>
