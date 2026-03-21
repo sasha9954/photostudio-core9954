@@ -13,6 +13,12 @@
   --family-narrative-glow: rgba(184, 106, 63, 0.18);
   --family-narrative-active: rgba(205, 136, 94, 0.56);
 
+  --family-text: var(--family-narrative);
+  --family-text-soft: var(--family-narrative-soft);
+  --family-text-header: var(--family-narrative-header);
+  --family-text-glow: var(--family-narrative-glow);
+  --family-text-active: var(--family-narrative-active);
+
   --family-brain: #4db6ff;
   --family-brain-soft: rgba(77, 182, 255, 0.16);
   --family-brain-header: rgba(77, 182, 255, 0.2);
@@ -48,6 +54,42 @@
   --family-assembly-header: rgba(216, 177, 90, 0.22);
   --family-assembly-glow: rgba(216, 177, 90, 0.18);
   --family-assembly-active: rgba(228, 198, 121, 0.58);
+
+  --family-ref-character: #16d4de;
+  --family-ref-character-soft: rgba(22, 212, 222, 0.16);
+  --family-ref-character-header: rgba(22, 212, 222, 0.22);
+  --family-ref-character-glow: rgba(22, 212, 222, 0.14);
+  --family-ref-character-active: rgba(31, 200, 255, 0.44);
+
+  --family-ref-location: #7f95b3;
+  --family-ref-location-soft: rgba(127, 149, 179, 0.16);
+  --family-ref-location-header: rgba(127, 149, 179, 0.22);
+  --family-ref-location-glow: rgba(127, 149, 179, 0.14);
+  --family-ref-location-active: rgba(158, 181, 211, 0.44);
+
+  --family-ref-style: #b86a3f;
+  --family-ref-style-soft: rgba(184, 106, 63, 0.16);
+  --family-ref-style-header: rgba(184, 106, 63, 0.22);
+  --family-ref-style-glow: rgba(184, 106, 63, 0.14);
+  --family-ref-style-active: rgba(205, 136, 94, 0.44);
+
+  --family-ref-items: #86b26d;
+  --family-ref-items-soft: rgba(134, 178, 109, 0.16);
+  --family-ref-items-header: rgba(134, 178, 109, 0.22);
+  --family-ref-items-glow: rgba(134, 178, 109, 0.14);
+  --family-ref-items-active: rgba(147, 221, 111, 0.42);
+
+  --family-ref-animal: #c98b56;
+  --family-ref-animal-soft: rgba(201, 139, 86, 0.16);
+  --family-ref-animal-header: rgba(201, 139, 86, 0.22);
+  --family-ref-animal-glow: rgba(201, 139, 86, 0.14);
+  --family-ref-animal-active: rgba(255, 183, 77, 0.42);
+
+  --family-ref-group: #b35f8e;
+  --family-ref-group-soft: rgba(179, 95, 142, 0.16);
+  --family-ref-group-header: rgba(179, 95, 142, 0.22);
+  --family-ref-group-glow: rgba(179, 95, 142, 0.14);
+  --family-ref-group-active: rgba(240, 98, 146, 0.42);
 
   position: relative;
   width: 100%;
@@ -194,7 +236,7 @@
 }
 
 .clipSB_nodeAudio { --node-accent: var(--family-audio); --node-accent-soft: var(--family-audio-soft); --node-accent-header: var(--family-audio-header); --node-accent-glow: var(--family-audio-glow); --node-accent-active: var(--family-audio-active); }
-.clipSB_nodeText { --node-accent: var(--family-narrative); --node-accent-soft: var(--family-narrative-soft); --node-accent-header: var(--family-narrative-header); --node-accent-glow: var(--family-narrative-glow); --node-accent-active: var(--family-narrative-active); }
+.clipSB_nodeText { --node-accent: var(--family-text); --node-accent-soft: var(--family-text-soft); --node-accent-header: var(--family-text-header); --node-accent-glow: var(--family-text-glow); --node-accent-active: var(--family-text-active); }
 .clipSB_nodeBrain,
 .clipSB_nodeComfyBrain { --node-accent: var(--family-brain); --node-accent-soft: var(--family-brain-soft); --node-accent-header: var(--family-brain-header); --node-accent-glow: var(--family-brain-glow); --node-accent-active: var(--family-brain-active); }
 .clipSB_nodeStoryboard,
@@ -208,10 +250,36 @@
   max-width: 840px;
 }
 
-.clipSB_nodeRef--ref_character { --node-accent: rgba(52, 213, 215, 0.75); box-shadow: inset 0 0 0 1px rgba(52, 213, 215, 0.22), 0 0 18px rgba(52, 213, 215, 0.14); }
-.clipSB_nodeRef--ref_location { --node-accent: rgba(179, 123, 255, 0.76); box-shadow: inset 0 0 0 1px rgba(179, 123, 255, 0.24), 0 0 18px rgba(179, 123, 255, 0.14); }
-.clipSB_nodeRef--ref_style { --node-accent: rgba(255, 194, 91, 0.78); box-shadow: inset 0 0 0 1px rgba(255, 194, 91, 0.24), 0 0 18px rgba(255, 194, 91, 0.14); }
-.clipSB_nodeRef--ref_items { --node-accent: rgba(147, 221, 111, 0.76); box-shadow: inset 0 0 0 1px rgba(147, 221, 111, 0.22), 0 0 18px rgba(147, 221, 111, 0.14); }
+.clipSB_nodeRef--ref_character,
+.clipSB_nodeRef2,
+.clipSB_nodeRef3 {
+  --node-accent: var(--family-ref-character);
+  --node-accent-soft: var(--family-ref-character-soft);
+  --node-accent-header: var(--family-ref-character-header);
+  --node-accent-glow: var(--family-ref-character-glow);
+  --node-accent-active: var(--family-ref-character-active);
+}
+.clipSB_nodeRef--ref_location {
+  --node-accent: var(--family-ref-location);
+  --node-accent-soft: var(--family-ref-location-soft);
+  --node-accent-header: var(--family-ref-location-header);
+  --node-accent-glow: var(--family-ref-location-glow);
+  --node-accent-active: var(--family-ref-location-active);
+}
+.clipSB_nodeRef--ref_style {
+  --node-accent: var(--family-ref-style);
+  --node-accent-soft: var(--family-ref-style-soft);
+  --node-accent-header: var(--family-ref-style-header);
+  --node-accent-glow: var(--family-ref-style-glow);
+  --node-accent-active: var(--family-ref-style-active);
+}
+.clipSB_nodeRef--ref_items {
+  --node-accent: var(--family-ref-items);
+  --node-accent-soft: var(--family-ref-items-soft);
+  --node-accent-header: var(--family-ref-items-header);
+  --node-accent-glow: var(--family-ref-items-glow);
+  --node-accent-active: var(--family-ref-items-active);
+}
 
 .clipSB_nodeRefDraft {
   --node-accent: rgba(255, 108, 108, 0.9) !important;
@@ -1634,11 +1702,11 @@ body.ps_clip_fullscreen .mainCol {
 }
 .clipSB_nodeComfyBrainPlannerLegacy { --node-accent: var(--family-brain); --node-accent-soft: var(--family-brain-soft); --node-accent-header: var(--family-brain-header); --node-accent-glow: var(--family-brain-glow); --node-accent-active: var(--family-brain-active); }
 .clipSB_nodeComfyBrainPlannerGemini {
-  --node-accent: var(--family-music);
-  --node-accent-soft: var(--family-music-soft);
-  --node-accent-header: var(--family-music-header);
-  --node-accent-glow: var(--family-music-glow);
-  --node-accent-active: var(--family-music-active);
+  --node-accent: var(--family-brain);
+  --node-accent-soft: var(--family-brain-soft);
+  --node-accent-header: var(--family-brain-header);
+  --node-accent-glow: var(--family-brain-glow);
+  --node-accent-active: var(--family-brain-active);
 }
 .clipSB_nodeComfyStoryboard,
 .clipSB_nodeComfyVideo { background: var(--bg-node); }
@@ -1685,10 +1753,20 @@ body.ps_clip_fullscreen .mainCol {
   --node-accent: rgba(255, 120, 120, 0.85);
   box-shadow: inset 0 0 0 1px rgba(255,120,120,.28), 0 0 20px rgba(255,120,120,.22);
 }
-.clipSB_nodeRef2 { --node-accent: rgba(0, 188, 212, 0.78); box-shadow: inset 0 0 0 1px rgba(0,188,212,.24), 0 0 18px rgba(0,188,212,.18); }
-.clipSB_nodeRef3 { --node-accent: rgba(38, 198, 218, 0.78); box-shadow: inset 0 0 0 1px rgba(38,198,218,.24), 0 0 18px rgba(38,198,218,.18); }
-.clipSB_nodeRefAnimal { --node-accent: rgba(255, 183, 77, 0.78); box-shadow: inset 0 0 0 1px rgba(255,183,77,.24), 0 0 18px rgba(255,183,77,.18); }
-.clipSB_nodeRefGroup { --node-accent: rgba(240, 98, 146, 0.78); box-shadow: inset 0 0 0 1px rgba(240,98,146,.24), 0 0 18px rgba(240,98,146,.18); }
+.clipSB_nodeRefAnimal {
+  --node-accent: var(--family-ref-animal);
+  --node-accent-soft: var(--family-ref-animal-soft);
+  --node-accent-header: var(--family-ref-animal-header);
+  --node-accent-glow: var(--family-ref-animal-glow);
+  --node-accent-active: var(--family-ref-animal-active);
+}
+.clipSB_nodeRefGroup {
+  --node-accent: var(--family-ref-group);
+  --node-accent-soft: var(--family-ref-group-soft);
+  --node-accent-header: var(--family-ref-group-header);
+  --node-accent-glow: var(--family-ref-group-glow);
+  --node-accent-active: var(--family-ref-group-active);
+}
 
 .clipSB_badge { display:inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 11px; color: var(--text-main); background: color-mix(in srgb, var(--node-accent) 18%, rgba(255,255,255,.04)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--node-accent) 24%, transparent); margin-bottom: 8px; }
 .clipSB_grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -1722,6 +1800,31 @@ body.ps_clip_fullscreen .mainCol {
 }
 .clipSB_nodeComfyBrainPlannerGemini .clipSB_comfyPlannerSwitchBtn.isActive {
   background: linear-gradient(135deg, rgba(167,139,250,.36), rgba(244,114,182,.26));
+}
+.clipSB_comfyPlannerBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,.84);
+  background: rgba(255,255,255,.05);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+}
+.clipSB_comfyPlannerBadge--legacy {
+  color: rgba(192, 225, 255, 0.92);
+  background: rgba(77, 182, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(77, 182, 255, 0.22);
+}
+.clipSB_comfyPlannerBadge--gemini {
+  color: rgba(237, 220, 255, 0.92);
+  background: rgba(167, 139, 250, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.24);
 }
 .clipSB_selectHint { margin-top: 6px; font-size: 11px; line-height: 1.35; color: rgba(255,255,255,.58); }
 .clipSB_toggleRow { display:flex; justify-content:flex-start; margin-top:8px; font-size:12px; color: rgba(255,255,255,.8); }

@@ -7,6 +7,8 @@ const COMFY_BRAIN_FORMAT_OPTIONS = ["9:16", "16:9", "1:1"];
 export default function ComfyBrainNode({ id, data }) {
   const mode = data?.mode || "clip";
   const plannerMode = data?.plannerMode || "legacy";
+  const plannerBadgeLabel = plannerMode === "gemini_only" ? "Gemini" : "Legacy";
+  const plannerBadgeClass = plannerMode === "gemini_only" ? "clipSB_comfyPlannerBadge clipSB_comfyPlannerBadge--gemini" : "clipSB_comfyPlannerBadge clipSB_comfyPlannerBadge--legacy";
   const output = data?.output || "comfy image";
   const genre = normalizeComfyGenre(data?.genre || "");
   const format = COMFY_BRAIN_FORMAT_OPTIONS.includes(data?.format) ? data.format : "9:16";
@@ -39,6 +41,7 @@ export default function ComfyBrainNode({ id, data }) {
             <button type="button" className={`clipSB_comfyPlannerSwitchBtn ${plannerMode === "legacy" ? "isActive" : ""}`.trim()} onClick={() => data?.onPlannerMode?.(id, "legacy")}>Current</button>
             <button type="button" className={`clipSB_comfyPlannerSwitchBtn ${plannerMode === "gemini_only" ? "isActive" : ""}`.trim()} onClick={() => data?.onPlannerMode?.(id, "gemini_only")}>Gemini</button>
           </div>
+          <div className={plannerBadgeClass}>{plannerBadgeLabel}</div>
         </section>
 
         <section className="clipSB_comfyBrainSection clipSB_comfyBrainSectionMode">

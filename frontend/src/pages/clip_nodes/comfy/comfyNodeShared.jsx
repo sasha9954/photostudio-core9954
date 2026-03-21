@@ -23,7 +23,7 @@ export function getModeDisplayMeta(mode = "clip") { return MODE_DISPLAY_META[Str
 export function getStyleDisplayMeta(stylePreset = "realism") { return STYLE_DISPLAY_META[String(stylePreset || "realism").toLowerCase()] || STYLE_DISPLAY_META.realism; }
 
 const PORT_COLORS = {
-  audio: "var(--family-audio)", text: "var(--family-narrative)", ref_character_1: "#16d4de", ref_character_2: "#00bdd6", ref_character_3: "#1fc8ff", ref_animal: "#c98b56", ref_group: "#b35f8e", ref_location: "#7f95b3", ref_style: "#b86a3f", ref_props: "#86b26d", ref_items: "#86b26d", comfy_plan: "var(--family-brain)", comfy_video: "var(--family-generation)", intro_context: "var(--family-narrative)",
+  audio: "var(--family-audio)", text: "var(--family-text)", ref_character_1: "var(--family-ref-character)", ref_character_2: "var(--family-ref-character)", ref_character_3: "var(--family-ref-character)", ref_animal: "var(--family-ref-animal)", ref_group: "var(--family-ref-group)", ref_location: "var(--family-ref-location)", ref_style: "var(--family-ref-style)", ref_props: "var(--family-ref-items)", ref_items: "var(--family-ref-items)", comfy_plan: "var(--family-brain)", comfy_video: "var(--family-generation)", intro_context: "var(--family-text)",
 };
 
 const HANDLE_BASE_STYLE = {
