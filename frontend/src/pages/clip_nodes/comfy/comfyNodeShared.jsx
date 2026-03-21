@@ -23,7 +23,7 @@ export function getModeDisplayMeta(mode = "clip") { return MODE_DISPLAY_META[Str
 export function getStyleDisplayMeta(stylePreset = "realism") { return STYLE_DISPLAY_META[String(stylePreset || "realism").toLowerCase()] || STYLE_DISPLAY_META.realism; }
 
 const PORT_COLORS = {
-  audio: "#ff5f7d", text: "#6fa8ff", ref_character_1: "#16d4de", ref_character_2: "#00bdd6", ref_character_3: "#1fc8ff", ref_animal: "#ffb347", ref_group: "#ff5f97", ref_location: "#a56fff", ref_style: "#ffcb52", ref_props: "#8ddf48", ref_items: "#8ddf48", comfy_plan: "#38d4ff", comfy_video: "#5ef2ff",
+  audio: "#ff5f7d", text: "#6fa8ff", ref_character_1: "#16d4de", ref_character_2: "#00bdd6", ref_character_3: "#1fc8ff", ref_animal: "#ffb347", ref_group: "#ff5f97", ref_location: "#a56fff", ref_style: "#ffcb52", ref_props: "#8ddf48", ref_items: "#8ddf48", comfy_plan: "#38d4ff", comfy_video: "#5ef2ff", intro_context: "#ff9d5c",
 };
 
 const HANDLE_BASE_STYLE = {
