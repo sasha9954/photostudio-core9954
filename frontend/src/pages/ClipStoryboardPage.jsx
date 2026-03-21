@@ -1460,7 +1460,7 @@ function wrapIntroPreviewTitle({ ctx, text, maxWidth, maxLines }) {
 }
 
 function fitIntroPreviewTitleLayout({ title = "", previewFormatMeta }) {
-  const safeTitle = truncateIntroText(title || "INTRO FRAME", previewFormatMeta.titleMaxChars) || "INTRO FRAME";
+  const safeTitle = truncateIntroText(title || "Intro frame", previewFormatMeta.titleMaxChars) || "Intro frame";
   if (typeof document === "undefined") {
     return {
       lines: [safeTitle],
@@ -1496,9 +1496,9 @@ function fitIntroPreviewTitleLayout({ title = "", previewFormatMeta }) {
   const paddingX = isLandscape ? 18 : 16;
   const paddingY = isPortrait ? 16 : 14;
   const maxFont = previewFormatMeta.titleFontPx;
-  const minFont = isPortrait ? 20 : 18;
+  const minFont = isPortrait ? 18 : 16;
 
-  for (let fontSize = maxFont; fontSize >= minFont; fontSize -= 1) {
+  for (let fontSize = maxFont; fontSize >= minFont; fontSize -= 0.5) {
     const lineHeight = Math.round(fontSize * (isPortrait ? 1.05 : 1.08));
     ctx.font = `900 ${fontSize}px Arial`;
     const lines = wrapIntroPreviewTitle({
@@ -1546,11 +1546,11 @@ function buildIntroFrameAutoTitle({ textValue = "", scenes = [] } = {}) {
   const text = truncateIntroText(textValue, 72);
   if (text) {
     const words = text.split(" ").filter(Boolean).slice(0, 6);
-    return words.join(" ").toUpperCase();
+    return words.join(" ");
   }
   const firstScene = Array.isArray(scenes) ? scenes.find((scene) => String(getSceneUiDescription(scene) || "").trim()) : null;
   const fallback = truncateIntroText(getSceneUiDescription(firstScene) || firstScene?.title || "", 56);
-  return fallback ? fallback.toUpperCase() : "CINEMATIC INTRO";
+  return fallback || "Cinematic Intro";
 }
 
 function normalizeIntroConnectedRefsByRole(refsByRole = {}) {
@@ -1894,7 +1894,7 @@ function buildIntroFrameStoryContextText(context = {}) {
 
 function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", contextSummary = "", previewFormat = INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE } = {}) {
   const formatMeta = getIntroFramePreviewFormatMeta(previewFormat);
-  const safeTitle = truncateIntroText(title || "INTRO FRAME", formatMeta.titleMaxChars) || "INTRO FRAME";
+  const safeTitle = truncateIntroText(title || "Intro frame", formatMeta.titleMaxChars) || "Intro frame";
   const safeContext = truncateIntroText(contextSummary || "Story preview", formatMeta.contextMaxChars) || "Story preview";
   const meta = getIntroStyleMeta(stylePreset);
   const width = formatMeta.width;
@@ -1993,7 +1993,7 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
       <rect x="${formatMeta.paddingX}" y="${formatMeta.accentY}" width="${formatMeta.accentWidth}" height="${Math.max(4, Math.round(height * 0.011))}" rx="2" fill="url(#accent)" opacity="0.92"/>
       <text x="${formatMeta.paddingX}" y="${formatMeta.paddingTop}" fill="${meta.accent}" font-size="${Math.max(18, Math.round(width * 0.036))}" font-family="Arial, Helvetica, sans-serif" font-weight="700" letter-spacing="4">${meta.label.toUpperCase()}</text>
       <foreignObject x="${formatMeta.paddingX}" y="${formatMeta.paddingTop + Math.max(28, Math.round(height * 0.06))}" width="${width - formatMeta.paddingX * 2}" height="${formatMeta.titleBoxHeight}">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="max-width:${titleLayout.plateMaxWidth}px;max-height:${titleLayout.maxPlateHeight}px;padding:${titleLayout.platePaddingY}px ${titleLayout.platePaddingX}px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;font-size:${titleLayout.fontSize}px;line-height:${(titleLayout.lineHeight / titleLayout.fontSize).toFixed(2)};font-weight:900;color:white;text-transform:uppercase;letter-spacing:0.018em;overflow:hidden;display:grid;align-content:center;word-break:break-word;overflow-wrap:anywhere;background:linear-gradient(180deg, rgba(4,6,12,0.74) 0%, rgba(4,6,12,0.92) 100%);border:1px solid ${meta.accent}55;border-radius:18px;">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="max-width:${titleLayout.plateMaxWidth}px;max-height:${titleLayout.maxPlateHeight}px;padding:${titleLayout.platePaddingY}px ${titleLayout.platePaddingX}px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;font-size:${titleLayout.fontSize}px;line-height:${(titleLayout.lineHeight / titleLayout.fontSize).toFixed(2)};font-weight:900;color:white;letter-spacing:0.018em;overflow:hidden;display:grid;align-content:center;word-break:break-word;overflow-wrap:anywhere;background:linear-gradient(180deg, rgba(4,6,12,0.74) 0%, rgba(4,6,12,0.92) 100%);border:1px solid ${meta.accent}55;border-radius:18px;">
           ${titleLayout.lines.map((line) => `<div>${line}</div>`).join("")}
         </div>
       </foreignObject>
@@ -3354,7 +3354,7 @@ function IntroFrameNode({ id, data }) {
   }, [data, durationDraft, durationSec, id]);
   const status = String(data?.status || "idle");
   const errorMessage = String(data?.error || "").trim();
-  const previewTitle = String(data?.title || "INTRO FRAME").trim() || "INTRO FRAME";
+  const previewTitle = String(data?.title || "Intro frame").trim() || "Intro frame";
   const previewContext = String(data?.contextSummary || "Story preview").trim() || "Story preview";
   const previewContextShort = truncateIntroText(previewContext, 148);
   const contextClamp = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT ? 2 : 1;
