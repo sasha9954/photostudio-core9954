@@ -1111,7 +1111,8 @@ def _resolve_intro_composition_plan(
     if mode == "subject_led":
         prompt_lines.extend([
             "Visible characters and/or objects MUST remain the main heroes of the thumbnail.",
-            "Allocate roughly 50-60% of the visual attention to the visible subjects and reserve the remaining 40-50% for text, glow, arrows, accents, overlays, and supporting design.",
+            "They should occupy roughly 50-60% of the visual attention.",
+            "Text, glow, arrows, accents, overlays, and decorative elements should occupy the remaining 40-50%.",
             "Do NOT let text, graphics, glow, or decorative overlays overpower the subject heroes.",
             "Do NOT hide faces, bodies, or the main object core unless absolutely necessary for readability.",
             "Subject readability and focal clarity are high priority and must survive the final composition.",
@@ -1911,14 +1912,13 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "16:9": "widescreen opening frame, cinematic panoramic balance, horizontal staging with premium depth",
     }[preview_format]
 
-    prompt_lines = [
+    base_thumbnail_prompt_lines = [
         "Create one premium opening-frame still image for a clip intro preview.",
         f"Target aspect ratio: {preview_format}. Composition rule: {format_rule}.",
         f"Style preset: {style_meta['label']}. Visual intent: {style_meta['shortDescription']}",
         f"Style preset composition bias: {style_meta['compositionBias']}.",
         f"Style palette / mood: {style_meta['palette']} / {style_meta['mood']}.",
         f"Text treatment: {style_meta['textTreatment']}. Graphic accents: {style_meta['graphicAccentsPreference']}. Overlays: {style_meta['overlays']}.",
-        f"Prompt fragment: {style_meta['promptFragment']}.",
         f"Title concept for story guidance only: {title}.",
         "Keep the image as one clean hook frame, not a collage, poster mockup, or UI layout.",
         "Attached reference images are the exact cast package and exact world anchors.",
@@ -1930,6 +1930,20 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "Do not place text over the main object core if it can be avoided.",
         "Title should support the composition, not destroy it.",
         "Avoid turning the thumbnail into mostly text.",
+        "Keep the thumbnail readable at small size.",
+    ]
+    style_fragment_lines = [
+        f"Prompt fragment: {style_meta['promptFragment']}.",
+    ]
+    style_rule_lines = [
+        "INTRO FRAME STYLE RULES:",
+        *[f"- {rule}" for rule in style_meta["promptRules"]],
+    ]
+    composition_lines = [
+        "COMPOSITION SYSTEM:",
+        *composition_plan["promptLines"],
+    ]
+    prompt_lines = [
         "STRICT INTRO CONTRACT:",
         f"- active cast package: {_intro_role_package_summary(intro_active_cast_roles, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
         f"- must appear: {_intro_role_package_summary(intro_must_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
@@ -1957,15 +1971,6 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "- do not turn the cast package into a generic crowd scene",
         "ROLE SEPARATION LOCK:",
     ]
-    style_rule_lines = [
-        "INTRO FRAME STYLE RULES:",
-        *[f"- {rule}" for rule in style_meta["promptRules"]],
-    ]
-    composition_lines = [
-        "COMPOSITION SYSTEM:",
-        *composition_plan["promptLines"],
-    ]
-    _append_unique_prompt_lines(prompt_lines, style_rule_lines, composition_lines)
     exact_role_separation_lines = []
     for role in intro_active_cast_roles:
         if connected_ref_counts.get(role, 0) > 0:
@@ -2040,7 +2045,6 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         context_lines.append(f"World context: {world_context}")
     if style_context:
         context_lines.append(f"Style context: {style_context}")
-    _append_unique_prompt_lines(prompt_lines, context_lines)
     if role_gender_locks:
         prompt_lines.append("CONNECTED GENDER LOCKS:")
         for role, gender_value in role_gender_locks.items():
@@ -2097,19 +2101,27 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
                 for role in strict_identity_package_roles
             )
         )
-    _append_unique_prompt_lines(
-        prompt_lines,
-        [
-            "INTRO FRAME FORBIDDEN ELEMENTS:",
-            *[f"- {rule}" for rule in style_meta["negativeRules"]],
-            _comfy_text_rendering_block(allow_designed_text=False),
-        ],
-    )
+    negative_rule_lines = [
+        "INTRO FRAME FORBIDDEN ELEMENTS:",
+        *[f"- {rule}" for rule in style_meta["negativeRules"]],
+        _comfy_text_rendering_block(allow_designed_text=False),
+    ]
     if scene_count > 0:
         prompt_lines.append(f"Storyboard scene count: {scene_count}")
     prompt_lines.append(f"Intended intro duration reference: {duration_sec:.1f} seconds.")
 
-    prompt = "\n".join(line for line in prompt_lines if str(line or "").strip())
+    final_prompt_lines: list[str] = []
+    final_prompt_parts = [
+        base_thumbnail_prompt_lines,
+        style_fragment_lines,
+        style_rule_lines,
+        composition_lines,
+        context_lines,
+        prompt_lines,
+        negative_rule_lines,
+    ]
+    _append_unique_prompt_lines(final_prompt_lines, *final_prompt_parts)
+    prompt = "\n".join(line for line in final_prompt_lines if str(line or "").strip())
     debug = {
         "rawConnectedRefsByRoleCounts": {role: len(connected_refs_by_role.get(role) or []) for role in connected_refs_by_role},
         "title": title,
@@ -2140,6 +2152,7 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "styleOverlays": style_meta["overlays"],
         "stylePromptFragment": style_meta["promptFragment"],
         "styleRules": style_meta["promptRules"],
+        "negativeRules": style_meta["negativeRules"],
         "forbidden": style_meta["negativeRules"],
         "introActiveCastRoles": intro_active_cast_roles,
         "introMustAppear": intro_must_appear,

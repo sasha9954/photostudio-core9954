@@ -3703,6 +3703,9 @@ function IntroFrameNode({ id, data }) {
       : "черновик";
   const selectedStylePreset = normalizeIntroStylePreset(data?.stylePreset || "cinematic_dark");
   const selectedStyleMeta = getIntroStyleMeta(selectedStylePreset);
+  const selectedNegativeRules = Array.isArray(selectedStyleMeta?.negativeRules) && selectedStyleMeta.negativeRules.length
+    ? selectedStyleMeta.negativeRules
+    : (Array.isArray(selectedStyleMeta?.forbidden) ? selectedStyleMeta.forbidden : []);
   const isGenerating = status === "generating" || status === "preview_generating";
   const debug = data?.debug && typeof data.debug === "object" ? data.debug : {};
   const compositionMode = String(debug?.compositionMode || "").trim();
@@ -3733,6 +3736,14 @@ function IntroFrameNode({ id, data }) {
     attachedInlineRoles.length ? ["Inline refs", attachedInlineRoles.join(", ")] : null,
     Object.keys(attachedReferenceParts).length ? ["Attached parts", Object.entries(attachedReferenceParts).map(([role, count]) => `${role}:${count}`).join(" • ")] : null,
     overlayDebug?.titleRendered ? ["Overlay", `font ${overlayDebug?.fontSize || 0}px • ${Array.isArray(overlayDebug?.lines) ? overlayDebug.lines.length : 0} lines`] : null,
+  ].filter(Boolean);
+  const debugSummaryParts = [
+    `style ${selectedStylePreset}`,
+    compositionMode ? `composition ${compositionMode}` : "",
+    compositionFocusTargets.length ? `focus ${compositionFocusTargets.join(", ")}` : "",
+    (compositionWeights?.subject || compositionWeights?.support)
+      ? `weights ${[compositionWeights?.subject, compositionWeights?.support].filter(Boolean).join(" / ")}`
+      : "",
   ].filter(Boolean);
 
   return (
@@ -3833,6 +3844,22 @@ function IntroFrameNode({ id, data }) {
                   >
                     Story context: {previewContextShort || "не подключён"}
                   </div>
+                  {debugSummaryParts.length ? (
+                    <div
+                      className="clipSB_small"
+                      title={debugSummaryParts.join(" • ")}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 12,
+                        border: `1px solid ${selectedStyleMeta.accent}26`,
+                        background: "rgba(10,14,28,0.48)",
+                        color: "rgba(223,230,255,0.82)",
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      Debug: {debugSummaryParts.join(" • ")}
+                    </div>
+                  ) : null}
 
                   {errorMessage ? (
                     <div className="clipSB_introError clipSB_small">
@@ -3853,7 +3880,7 @@ function IntroFrameNode({ id, data }) {
                         Rules: {selectedStyleMeta.promptRules.join(" • ")}
                       </div>
                       <div className="clipSB_small" style={{ color: "rgba(255,188,188,0.72)", lineHeight: 1.35 }}>
-                        Avoid: {selectedStyleMeta.negativeRules.join(" • ")}
+                        Avoid: {selectedNegativeRules.join(" • ")}
                       </div>
                       <div className="clipSB_small" style={{ color: "#9fb0ff", lineHeight: 1.4 }}>
                         Generate вызывает backend Gemini generation и сохраняет preview как asset URL.
