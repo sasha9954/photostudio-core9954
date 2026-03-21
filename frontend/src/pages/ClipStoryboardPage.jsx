@@ -9990,16 +9990,79 @@ const hydrate = useCallback((source = "unknown") => {
                   </ul>
                 </section>
                 <section className="clipSB_guideCard">
+                  <h4>FORMAT / CANVAS</h4>
+                  <ul>
+                    <li><b>9:16</b> — mobile / TikTok / Reels.</li>
+                    <li><b>16:9</b> — YouTube / cinematic.</li>
+                    <li><b>1:1</b> — universal / product / ads.</li>
+                  </ul>
+                  <p>FORMAT задаёт композицию сцены, кадрирование героя, место для текста и ритм монтажа.</p>
+                  <p><b>Важно:</b> выбирай FORMAT до генерации — он влияет на весь сценарий.</p>
+                </section>
+                <section className="clipSB_guideCard">
+                  <h4>FOCUS</h4>
+                  <ul>
+                    <li><b>character</b> — face, reaction, emotion.</li>
+                    <li><b>object</b> — product / item / prop.</li>
+                    <li><b>environment</b> — world, atmosphere, location.</li>
+                  </ul>
+                  <p>Главный субъект должен забирать примерно 50–60% внимания зрителя. Остальное только поддерживает его.</p>
+                </section>
+                <section className="clipSB_guideCard">
                   <h4>TEXT</h4>
-                  <p>TEXT может <b>override</b>, <b>guide</b> или <b>enhance</b> story в зависимости от MODE.</p>
+                  <p>TEXT controls meaning:</p>
+                  <ul>
+                    <li><b>override</b> → напрямую задаёт историю.</li>
+                    <li><b>guide</b> → направляет логику сцен.</li>
+                    <li><b>enhance</b> → усиливает основную идею.</li>
+                  </ul>
                 </section>
                 <section className="clipSB_guideCard">
                   <h4>STYLE</h4>
                   <p>STYLE усиливает визуал и не должен ломать драматургию MODE.</p>
+                  <p>STYLE — это не сама история, а усиление атмосферы и подачи.</p>
+                </section>
+                <section className="clipSB_guideCard">
+                  <h4>HOOK / PREVIEW</h4>
+                  <p>Сильный preview обычно строится так:</p>
+                  <ul>
+                    <li><b>1</b> — headline / intrigue.</li>
+                    <li><b>2</b> — emotion / face / action.</li>
+                    <li><b>3</b> — contrast / light / situation.</li>
+                  </ul>
+                  <p>Держи hook в 2–5 словах, не перекрывай лица, оставляй information gap и повод кликнуть.</p>
+                </section>
+                <section className="clipSB_guideCard">
+                  <h4>FLOW</h4>
+                  <p><b>COMFY BRAIN → STORYBOARD → INTRO FRAME → ASSEMBLY</b></p>
+                  <ul>
+                    <li><b>Brain</b> — sets the rules: mode, format, style.</li>
+                    <li><b>Storyboard</b> — splits the story into scenes.</li>
+                    <li><b>Intro Frame</b> — builds preview / first frame.</li>
+                    <li><b>Assembly</b> — collects the final video.</li>
+                  </ul>
                 </section>
                 <section className="clipSB_guideCard">
                   <h4>REFS</h4>
                   <p>REFS фиксируют персонажей, мир и continuity между сценами.</p>
+                </section>
+                <section className="clipSB_guideCard">
+                  <h4>WHAT NOT TO DO</h4>
+                  <ul>
+                    <li>Не перегружай сцену слишком большим количеством объектов.</li>
+                    <li>Не смешивай слишком много стилей.</li>
+                    <li>Не используй длинные title / hook.</li>
+                    <li>Не меняй FORMAT внутри одного сценария.</li>
+                    <li>Не меняй REFS между сценами без причины.</li>
+                  </ul>
+                </section>
+                <section className="clipSB_guideCard clipSB_guideCardCombo">
+                  <h4>QUICK RECIPES</h4>
+                  <ul>
+                    <li><b>YouTube / clickable</b> — <code>mode: clip • format: 16:9 • focus: character • text: short hook • style: high contrast</code></li>
+                    <li><b>Cinematic</b> — <code>mode: kino • format: 16:9 • focus: environment + character • style: film</code></li>
+                    <li><b>TikTok / vertical</b> — <code>mode: clip • format: 9:16 • focus: emotion • text: minimal • style: dynamic / clear</code></li>
+                  </ul>
                 </section>
                 <section className="clipSB_guideCard clipSB_guideCardCombo">
                   <h4>Как комбинировать</h4>
