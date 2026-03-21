@@ -177,10 +177,14 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
     if not safe_prompt_id:
         return None, "prompt_id_empty"
 
-    deadline = time.time() + max(600, int(timeout_sec or 0))
+    deadline = time.time() + max(1800, int(timeout_sec or 0))
     sleep_sec = max(2, int(poll_interval_sec or 2))
     connect_timeout = max(20, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 20))
     read_timeout = max(120, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 120))
+    last_valid_payload: dict | None = None
+    saw_valid_history_payload = False
+    last_response_status: int | None = None
+    last_response_body_snippet = ""
 
     while time.time() < deadline:
         url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/history/{safe_prompt_id}"
@@ -193,6 +197,8 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
         try:
             resp = requests.get(url, timeout=(connect_timeout, read_timeout))
             body_snippet = _response_body_snippet(resp)
+            last_response_status = resp.status_code
+            last_response_body_snippet = body_snippet
             logger.info("[COMFY REMOTE] history response status=%s body=%r", resp.status_code, body_snippet)
             if resp.status_code >= 400:
                 logger.warning(
@@ -212,6 +218,29 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
                 )
                 time.sleep(sleep_sec)
                 continue
+            saw_valid_history_payload = True
+            last_valid_payload = payload
+            logger.info(
+                "[COMFY REMOTE] history payload prompt_id=%s top_level_keys=%s contains_prompt_id=%s",
+                safe_prompt_id,
+                list(payload.keys())[:20],
+                safe_prompt_id in payload,
+            )
+            if isinstance(payload.get(safe_prompt_id), dict):
+                entry = payload.get(safe_prompt_id) or {}
+                logger.info(
+                    "[COMFY REMOTE] history prompt entry keys prompt_id=%s keys=%s",
+                    safe_prompt_id,
+                    list(entry.keys())[:50],
+                )
+                outputs = entry.get("outputs")
+                if isinstance(outputs, dict):
+                    logger.info(
+                        "[COMFY REMOTE] history outputs keys prompt_id=%s keys=%s",
+                        safe_prompt_id,
+                        list(outputs.keys())[:50],
+                    )
+                return payload, None
         except ConnectTimeout as exc:
             logger.warning(
                 "[COMFY REMOTE] history connect timeout prompt_id=%s error=%s",
@@ -242,10 +271,24 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
             logger.exception("[COMFY REMOTE] history unexpected error url=%s prompt_id=%s", url, safe_prompt_id)
             return None, f"history_unexpected_error:{str(exc)[:300]}"
 
-        if isinstance(payload, dict) and isinstance(payload.get(safe_prompt_id), dict):
-            return payload, None
         time.sleep(sleep_sec)
 
+    if isinstance(last_valid_payload, dict) and isinstance(last_valid_payload.get(safe_prompt_id), dict):
+        logger.info(
+            "[COMFY REMOTE] history final payload used after deadline prompt_id=%s timeout_sec=%s",
+            safe_prompt_id,
+            timeout_sec,
+        )
+        return last_valid_payload, None
+
+    logger.warning(
+        "[COMFY REMOTE] history wait timeout prompt_id=%s timeout_sec=%s saw_valid_history_payload=%s last_status=%s last_body=%r",
+        safe_prompt_id,
+        timeout_sec,
+        saw_valid_history_payload,
+        last_response_status,
+        last_response_body_snippet,
+    )
     return None, "timeout"
 
 
@@ -255,25 +298,26 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
 
     logger.info("[COMFY REMOTE] history top-level keys=%s", list(history_payload.keys()))
 
-    def _extract_file_ref(candidate) -> str | None:
+    def _extract_file_ref(candidate) -> tuple[str | None, dict | None]:
         if isinstance(candidate, str):
             value = candidate.strip()
-            return value or None
+            return (value or None), None
         if not isinstance(candidate, dict):
-            return None
+            return None, None
 
         filename = str(candidate.get("filename") or "").strip()
         subfolder = str(candidate.get("subfolder") or "").strip()
+        file_type = str(candidate.get("type") or "").strip()
         if filename and subfolder:
-            return f"{subfolder}/{filename}"
+            return f"{subfolder}/{filename}", {"filename": filename, "subfolder": subfolder, "type": file_type}
         if filename:
-            return filename
+            return filename, {"filename": filename, "subfolder": subfolder, "type": file_type}
 
         for key in ("name", "path", "video", "url", "video_url"):
             value = candidate.get(key)
             if isinstance(value, str) and value.strip():
-                return value.strip()
-        return None
+                return value.strip(), {"filename": "", "subfolder": subfolder, "type": file_type, "source_key": key}
+        return None, None
 
     for history_key, entry in history_payload.items():
         if not isinstance(entry, dict):
@@ -286,23 +330,72 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
         if "75" in outputs:
             logger.info("[COMFY REMOTE] outputs[75]=%s", outputs.get("75"))
 
+        inspected_node_ids: list[str] = []
         for node_id, node_output in outputs.items():
+            inspected_node_ids.append(str(node_id))
             if not isinstance(node_output, dict):
+                logger.info("[COMFY REMOTE] output node skipped history=%s node_id=%s reason=not_dict", history_key, node_id)
                 continue
+
+            logger.info(
+                "[COMFY REMOTE] inspect output node history=%s node_id=%s keys=%s has_videos=%s has_gifs=%s has_images=%s has_files=%s",
+                history_key,
+                node_id,
+                list(node_output.keys())[:50],
+                isinstance(node_output.get("videos"), list),
+                isinstance(node_output.get("gifs"), list),
+                isinstance(node_output.get("images"), list),
+                isinstance(node_output.get("files"), list),
+            )
 
             for list_key in ("videos", "files", "gifs", "images"):
                 items = node_output.get(list_key)
                 if isinstance(items, list):
+                    logger.info(
+                        "[COMFY REMOTE] inspect output list history=%s node_id=%s list_key=%s items=%s",
+                        history_key,
+                        node_id,
+                        list_key,
+                        len(items),
+                    )
                     for item in items:
-                        file_ref = _extract_file_ref(item)
+                        file_ref, file_meta = _extract_file_ref(item)
                         if file_ref:
-                            logger.info("[COMFY REMOTE] matched output node_id=%s list_key=%s file_ref=%s", node_id, list_key, file_ref)
+                            if isinstance(item, dict) and str(item.get("filename") or "").strip().lower().endswith(".mp4"):
+                                logger.info(
+                                    "[COMFY REMOTE] selected mp4 history=%s node_id=%s list_key=%s filename=%s subfolder=%s type=%s",
+                                    history_key,
+                                    node_id,
+                                    list_key,
+                                    file_meta.get("filename") if file_meta else "",
+                                    file_meta.get("subfolder") if file_meta else "",
+                                    file_meta.get("type") if file_meta else "",
+                                )
+                            else:
+                                logger.info("[COMFY REMOTE] matched output node_id=%s list_key=%s file_ref=%s", node_id, list_key, file_ref)
                             return file_ref, None
 
-            file_ref = _extract_file_ref(node_output)
+            file_ref, file_meta = _extract_file_ref(node_output)
             if file_ref:
-                logger.info("[COMFY REMOTE] matched direct output node_id=%s file_ref=%s", node_id, file_ref)
+                if str((file_meta or {}).get("filename") or "").lower().endswith(".mp4"):
+                    logger.info(
+                        "[COMFY REMOTE] selected direct mp4 history=%s node_id=%s filename=%s subfolder=%s type=%s",
+                        history_key,
+                        node_id,
+                        file_meta.get("filename") if file_meta else "",
+                        file_meta.get("subfolder") if file_meta else "",
+                        file_meta.get("type") if file_meta else "",
+                    )
+                else:
+                    logger.info("[COMFY REMOTE] matched direct output node_id=%s file_ref=%s", node_id, file_ref)
                 return file_ref, None
+
+        logger.warning(
+            "[COMFY REMOTE] no video output found history=%s inspected_node_ids=%s available_output_keys=%s",
+            history_key,
+            inspected_node_ids,
+            list(outputs.keys()),
+        )
 
     return None, "video_output_missing"
 
@@ -498,12 +591,21 @@ def run_comfy_image_to_video(
     if submit_err or not prompt_id:
         return None, f"prompt_submit_failed:{submit_err or 'unknown_submit_error'}"
 
+    poll_timeout_sec = max(10, int(settings.COMFY_POLL_TIMEOUT_SEC or 600))
     history, wait_err = wait_for_comfy_result(
         prompt_id,
-        timeout_sec=max(10, int(settings.COMFY_POLL_TIMEOUT_SEC or 600)),
+        timeout_sec=poll_timeout_sec,
         poll_interval_sec=max(2, int(settings.COMFY_POLL_INTERVAL_SEC or 2)),
     )
     if wait_err or not history:
+        logger.warning(
+            "[COMFY REMOTE] history wait failed prompt_id=%s timeout_sec=%s jobId=%s err=%s history_present=%s",
+            prompt_id,
+            poll_timeout_sec,
+            prompt_id,
+            wait_err or 'unknown_wait_error',
+            bool(history),
+        )
         return None, f"history_wait_failed:{wait_err or 'unknown_wait_error'}"
 
     file_ref, extract_err = extract_video_result(history)
