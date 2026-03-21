@@ -700,95 +700,294 @@ const SCENE_IMAGE_FORMATS = ["9:16", "1:1", "16:9"];
 const DEFAULT_SCENE_IMAGE_FORMAT = "9:16";
 const USE_COMFY_MOCK = false;
 const INTRO_STYLE_PRESET_META = {
-  cinematic: {
-    value: "cinematic",
-    label: "Cinematic",
-    shortDescription: "Премиальный film-poster кадр с серьёзным драматичным светом.",
-    uiHint: "Poster-grade",
-    accent: "#f6d365",
-    secondary: "#5ee7df",
-    background: "radial-gradient(circle at 24% 18%, rgba(246,211,101,0.76), rgba(94,231,223,0.24) 34%, rgba(10,16,28,1) 80%)",
-    promptRules: [
-      "ощущение opening shot / movie poster, clean composition и premium serious mood",
-      "драматичный направленный свет, выразительный контраст, аккуратная иерархия кадра",
-      "thumbnail energy сдержанная и дорогая, без дешёвого clickbait",
-    ],
-    forbidden: ["cheap clickbait look", "fake UI / arrows / circles", "collage или мусорная перегрузка"],
-  },
-  youtube: {
-    value: "youtube",
-    label: "YouTube",
-    shortDescription: "Читаемый thumbnail-first кадр с сильным focal point и ясной иерархией.",
-    uiHint: "Readable thumbnail",
+  youtube_shock: {
+    value: "youtube_shock",
+    key: "youtube_shock",
+    label: "YouTube Shock",
+    shortDescription: "High-urgency thumbnail hook with bold contrast and one obvious hero moment.",
+    compositionBias: "subject-dominant hero framing with aggressive readability",
+    palette: "warm yellow, red-orange, charcoal",
+    mood: "urgent, explosive, clickable",
+    textTreatment: "bold compact headline support, high contrast, minimal words",
+    graphicAccentsPreference: "glow edges, impact streaks, restrained arrows only if needed",
+    overlays: "tight glow plates and punchy light sweeps",
+    promptFragment: "premium high-energy thumbnail with immediate stop-scroll impact and one dominant hero subject",
+    uiHint: "Shock hook",
     accent: "#ffcf5c",
     secondary: "#ff6b3d",
     background: "radial-gradient(circle at 24% 20%, rgba(255,207,92,0.88), rgba(255,107,61,0.38) 35%, rgba(9,15,32,1) 78%)",
     promptRules: [
-      "ясный главный объект, сильная subject hierarchy и читаемость в маленьком размере",
-      "больше thumbnail energy и punch, но всё ещё clean / premium",
-      "акцент на одном визуальном обещании кадра, без перегруза",
+      "immediate thumbnail readability and one dominant focal point",
+      "high-energy premium hook without spammy clickbait",
+      "subject stays clear while accents stay secondary",
     ],
-    forbidden: ["red arrows / fake UI / badges", "reaction-meme trash", "too many competing focal points"],
+    forbidden: ["cheap meme trash", "fake subscriber UI", "too many competing focal points"],
   },
-  dark_neon: {
-    value: "dark_neon",
-    label: "Dark Neon",
-    shortDescription: "Тёмная cinematic сцена с контролируемыми cyan/magenta/violet акцентами.",
+  reaction_result: {
+    value: "reaction_result",
+    key: "reaction_result",
+    label: "Reaction Result",
+    shortDescription: "Outcome-first composition pairing a readable reaction with the revealed result.",
+    compositionBias: "split emphasis between hero reaction and revealed outcome",
+    palette: "gold, coral, deep navy",
+    mood: "surprised, satisfying, payoff-driven",
+    textTreatment: "short payoff phrase, supportive not dominant",
+    graphicAccentsPreference: "light callout accents and controlled glow",
+    overlays: "soft result halos and subtle directional emphasis",
+    promptFragment: "clear premium reaction + result readability",
+    uiHint: "Payoff frame",
+    accent: "#ffb86c",
+    secondary: "#ff6f91",
+    background: "radial-gradient(circle at 22% 18%, rgba(255,184,108,0.78), rgba(255,111,145,0.28) 35%, rgba(11,18,32,1) 80%)",
+    promptRules: ["result is instantly understandable", "reaction and outcome stay tightly linked", "premium payoff energy without clutter"],
+    forbidden: ["meme-face distortion", "busy comparison spam", "badge overload"],
+  },
+  breaking_alert: {
+    value: "breaking_alert",
+    key: "breaking_alert",
+    label: "Breaking Alert",
+    shortDescription: "News-flash urgency with crisp hierarchy and alert-style lighting accents.",
+    compositionBias: "headline-supporting alert composition with urgent subject focus",
+    palette: "red, amber, dark steel",
+    mood: "urgent, alarming, immediate",
+    textTreatment: "compact alert headline plate with strong contrast",
+    graphicAccentsPreference: "signal bars and restrained warning lines",
+    overlays: "broadcast streaks and emergency-light bloom",
+    promptFragment: "breaking-news urgency with premium alert polish",
+    uiHint: "Alert mode",
+    accent: "#ff5a5f",
+    secondary: "#ffd166",
+    background: "radial-gradient(circle at 24% 18%, rgba(255,90,95,0.74), rgba(255,209,102,0.24) 34%, rgba(10,12,22,1) 80%)",
+    promptRules: ["premium breaking alert tone", "urgent but clean hierarchy", "thumbnail readability first"],
+    forbidden: ["tabloid chaos", "ticker spam", "graphics hiding the subject"],
+  },
+  tutorial_clickable: {
+    value: "tutorial_clickable",
+    key: "tutorial_clickable",
+    label: "Tutorial Clickable",
+    shortDescription: "Clean instructional thumbnail built around clarity and one teachable focal point.",
+    compositionBias: "demonstration-first layout with readable subject/object steps",
+    palette: "cyan, blue, white, graphite",
+    mood: "clear, confident, helpful",
+    textTreatment: "short informative text with clean spacing and no shouting",
+    graphicAccentsPreference: "simple pointers, guide frames, minimal cues",
+    overlays: "soft UI emphasis bars and controlled highlights",
+    promptFragment: "clean premium tutorial thumbnail with obvious instructional focus",
+    uiHint: "How-to clarity",
+    accent: "#5dd6ff",
+    secondary: "#7a8cff",
+    background: "radial-gradient(circle at 24% 20%, rgba(93,214,255,0.72), rgba(122,140,255,0.28) 35%, rgba(8,13,28,1) 78%)",
+    promptRules: ["clarity and teachability first", "guidance accents stay minimal", "approachable premium look"],
+    forbidden: ["arrow overload", "fake UI spam", "confusing multi-step collage"],
+  },
+  big_object_focus: {
+    value: "big_object_focus",
+    key: "big_object_focus",
+    label: "Big Object Focus",
+    shortDescription: "Hero-object composition where scale and readability of the main item dominate.",
+    compositionBias: "large object hero framing with supportive text and accents",
+    palette: "electric blue, orange spark, dark slate",
+    mood: "impressive, punchy, object-centric",
+    textTreatment: "minimal bold support near edges, never over the object core",
+    graphicAccentsPreference: "scale cues, rim glow, impact flares",
+    overlays: "light bloom and object-edge emphasis",
+    promptFragment: "iconic oversized hero object with clear silhouette",
+    uiHint: "Object hero",
+    accent: "#55c7ff",
+    secondary: "#ff9f43",
+    background: "radial-gradient(circle at 24% 18%, rgba(85,199,255,0.7), rgba(255,159,67,0.26) 35%, rgba(9,15,28,1) 78%)",
+    promptRules: ["main object feels iconic and large", "lighting celebrates scale", "design stays secondary to the object"],
+    forbidden: ["cluttered silhouette", "decorative text over the main item", "busy collage"],
+  },
+  cyber_neon: {
+    value: "cyber_neon",
+    key: "cyber_neon",
+    label: "Cyber Neon",
+    shortDescription: "Dark futuristic scene with premium cyan-magenta neon and clean subject separation.",
+    compositionBias: "moody cyber subject framing with illuminated edge contrast",
+    palette: "cyan, magenta, violet, ink black",
+    mood: "charged, futuristic, immersive",
+    textTreatment: "sleek luminous type support with restrained density",
+    graphicAccentsPreference: "neon rims, holographic lines, signal streaks",
+    overlays: "selective glow fog and cyber light trails",
+    promptFragment: "premium cyber-neon thumbnail with controlled glow and depth",
     uiHint: "Cyber glow",
     accent: "#6ef2ff",
     secondary: "#b86dff",
     background: "radial-gradient(circle at 25% 18%, rgba(110,242,255,0.5), rgba(184,109,255,0.28) 36%, rgba(4,8,20,1) 80%)",
-    promptRules: [
-      "dark scene + controlled neon accents, cinematic cyber glow",
-      "контрастный mood, аккуратный rim light и читаемый focal point",
-      "палитра неоновая, но сдержанная и дорогая, не кислотный мусор",
-    ],
-    forbidden: ["acid rainbow overload", "unreadable overglow", "chaotic cheap cyberpunk clutter"],
+    promptRules: ["controlled neon accents", "subject readability survives the glow", "immersive but premium"],
+    forbidden: ["acid rainbow overload", "unreadable overglow", "chaotic cheap cyber clutter"],
   },
-  thriller: {
-    value: "thriller",
-    label: "Thriller",
-    shortDescription: "Напряжённый low-key кадр с тревогой, опасностью и мрачным драматизмом.",
-    uiHint: "Suspense mood",
-    accent: "#ff6b6b",
-    secondary: "#ffd166",
-    background: "radial-gradient(circle at 22% 18%, rgba(255,107,107,0.55), rgba(255,209,102,0.18) 34%, rgba(8,8,12,1) 80%)",
-    promptRules: [
-      "suspense-first composition, low-key lighting и тревожная атмосфера",
-      "кадр про напряжение и ожидание, а не про gore или horror-camp",
-      "тени глубже, свет выборочный, настроение кинематографично-мрачное",
-    ],
-    forbidden: ["cheap horror camp", "blood / gore overload", "slasher poster clichés"],
+  ai_tech_explainer: {
+    value: "ai_tech_explainer",
+    key: "ai_tech_explainer",
+    label: "AI Tech Explainer",
+    shortDescription: "Smart editorial tech look blending innovation cues with clear explanatory hierarchy.",
+    compositionBias: "explanatory hero focus with tech-context support",
+    palette: "teal, icy blue, white, deep navy",
+    mood: "intelligent, innovative, trustworthy",
+    textTreatment: "clean modern text support, medium weight, no forced shouting",
+    graphicAccentsPreference: "data halos, schematic lines, subtle interface cues",
+    overlays: "soft grid light and analytical glow panels",
+    promptFragment: "premium AI-tech explainer thumbnail with smart clarity",
+    uiHint: "Explainer",
+    accent: "#7cf7e6",
+    secondary: "#70a1ff",
+    background: "radial-gradient(circle at 24% 20%, rgba(124,247,230,0.58), rgba(112,161,255,0.28) 34%, rgba(7,12,24,1) 80%)",
+    promptRules: ["innovation + explanation at a glance", "tasteful tech signals only", "trustworthy modern polish"],
+    forbidden: ["cheesy robot clichés", "fake dashboards hiding the core subject", "chart overload"],
   },
-  fashion: {
-    value: "fashion",
-    label: "Fashion",
-    shortDescription: "Premium editorial cover с polished posing и luxury finish.",
-    uiHint: "Editorial polish",
-    accent: "#ffd7f0",
-    secondary: "#8ae5ff",
-    background: "radial-gradient(circle at 24% 20%, rgba(255,215,240,0.78), rgba(138,229,255,0.28) 36%, rgba(14,15,28,1) 80%)",
-    promptRules: [
-      "ощущение luxury editorial cover / campaign still",
-      "чистая stylish композиция, уверенная posing, polished premium surface",
-      "look дорогой и curated, без mass-market banner energy",
-    ],
-    forbidden: ["cheap ecommerce banner feel", "sales-ad clutter", "mass-market promo styling"],
+  futuristic_ui: {
+    value: "futuristic_ui",
+    key: "futuristic_ui",
+    label: "Futuristic UI",
+    shortDescription: "Interface-inspired future aesthetic with strong geometry and premium HUD restraint.",
+    compositionBias: "style-forward geometry supporting a central hero focus",
+    palette: "cyan, indigo, silver, obsidian",
+    mood: "precise, advanced, sleek",
+    textTreatment: "thin-to-medium sci-fi supportive text, tightly controlled",
+    graphicAccentsPreference: "HUD frames, scans, circular guides, glass panels",
+    overlays: "clean holographic overlays and interface glints",
+    promptFragment: "sleek futuristic interface mood with premium HUD restraint",
+    uiHint: "HUD polish",
+    accent: "#7af0ff",
+    secondary: "#8f7cff",
+    background: "radial-gradient(circle at 24% 18%, rgba(122,240,255,0.54), rgba(143,124,255,0.24) 34%, rgba(6,10,22,1) 80%)",
+    promptRules: ["interface geometry as design language, not clutter", "strong central readability", "advanced premium feel"],
+    forbidden: ["dense dashboard clutter", "micro-detail overload", "full-screen UI takeover"],
   },
-  glitch: {
-    value: "glitch",
-    label: "Glitch",
-    shortDescription: "Контролируемая digital distortion aesthetic без потери главного focal point.",
-    uiHint: "Controlled distortion",
+  glitch_signal: {
+    value: "glitch_signal",
+    key: "glitch_signal",
+    label: "Glitch Signal",
+    shortDescription: "Controlled signal corruption aesthetic with deliberate disruption and readable focal anchor.",
+    compositionBias: "focal anchor first, glitch treatment second",
+    palette: "mint green, hot magenta, deep navy",
+    mood: "unstable, digital, tense",
+    textTreatment: "short crisp text support with occasional digital texture",
+    graphicAccentsPreference: "scanlines, signal tears, channel splits",
+    overlays: "selective glitch bands and digital breakup",
+    promptFragment: "controlled glitch-signal thumbnail where distortion stays intentional",
+    uiHint: "Signal break",
     accent: "#8eff8c",
     secondary: "#ff6ef2",
     background: "radial-gradient(circle at 24% 20%, rgba(142,255,140,0.58), rgba(255,110,242,0.28) 32%, rgba(4,10,18,1) 78%)",
-    promptRules: [
-      "stylized disruption и digital texture как осознанный приём, не шум",
-      "главный subject остаётся читаемым, композиция не разваливается",
-      "модерновый synthetic mood, но без unreadable mess",
-    ],
+    promptRules: ["intentional digital disruption", "hero remains readable", "sharp contemporary finish"],
     forbidden: ["full-frame unreadable corruption", "broken-image sludge", "destroyed focal hierarchy"],
+  },
+  dark_system: {
+    value: "dark_system",
+    key: "dark_system",
+    label: "Dark System",
+    shortDescription: "Cold shadow-heavy system aesthetic with disciplined contrast and ominous structure.",
+    compositionBias: "low-key structure with disciplined focal isolation",
+    palette: "graphite, steel blue, muted red",
+    mood: "controlled, severe, ominous",
+    textTreatment: "stark minimal support with industrial contrast",
+    graphicAccentsPreference: "system bars, hard-edge glows, sparse diagnostics",
+    overlays: "shadow gradients and subtle machine-light strips",
+    promptFragment: "dark system-grade thumbnail with disciplined contrast and cold atmosphere",
+    uiHint: "System dark",
+    accent: "#8da2c9",
+    secondary: "#ff6b6b",
+    background: "radial-gradient(circle at 24% 18%, rgba(141,162,201,0.42), rgba(255,107,107,0.18) 34%, rgba(8,9,15,1) 80%)",
+    promptRules: ["cold disciplined darkness", "focal isolation via structure", "ominous but premium"],
+    forbidden: ["muddy low contrast", "chaotic red-alert clutter", "messy cyber noise"],
+  },
+  cinematic_dark: {
+    value: "cinematic_dark",
+    key: "cinematic_dark",
+    label: "Cinematic Dark",
+    shortDescription: "Premium film-poster darkness with dramatic light shaping and story-driven weight.",
+    compositionBias: "cinematic subject hierarchy with dramatic negative space",
+    palette: "gold ember, teal shadow, black",
+    mood: "serious, expensive, dramatic",
+    textTreatment: "elegant bold title support, restrained and premium",
+    graphicAccentsPreference: "light shafts, haze, subtle lens bloom",
+    overlays: "film-grade vignettes and dramatic glow pockets",
+    promptFragment: "premium dark cinematic poster frame with dramatic light",
+    uiHint: "Poster-grade",
+    accent: "#f6d365",
+    secondary: "#5ee7df",
+    background: "radial-gradient(circle at 24% 18%, rgba(246,211,101,0.76), rgba(94,231,223,0.24) 34%, rgba(10,16,28,1) 80%)",
+    promptRules: ["opening-film still / premium poster", "dramatic light and negative space", "story-driven expensive mood"],
+    forbidden: ["cheap clickbait look", "fake UI / arrows / circles", "tabloid clutter"],
+  },
+  mystery_horror: {
+    value: "mystery_horror",
+    key: "mystery_horror",
+    label: "Mystery Horror",
+    shortDescription: "Suspenseful eerie frame driven by unknown threat, darkness, and controlled dread.",
+    compositionBias: "threat-aware focal composition with obscured mystery zones",
+    palette: "crimson, sickly amber, midnight black",
+    mood: "eerie, tense, unsettling",
+    textTreatment: "minimal ominous support, never comedic or campy",
+    graphicAccentsPreference: "mist, scratches, selective warning glows",
+    overlays: "fog, shadow bloom, distressed light leaks",
+    promptFragment: "eerie mystery-horror thumbnail with controlled dread",
+    uiHint: "Dread mood",
+    accent: "#ff6b6b",
+    secondary: "#ffd166",
+    background: "radial-gradient(circle at 22% 18%, rgba(255,107,107,0.55), rgba(255,209,102,0.18) 34%, rgba(8,8,12,1) 80%)",
+    promptRules: ["suspense and unknown threat", "selective highlights + shadow", "premium grounded horror"],
+    forbidden: ["gore overload", "slasher poster clichés", "cheap horror camp"],
+  },
+  epic_fantasy: {
+    value: "epic_fantasy",
+    key: "epic_fantasy",
+    label: "Epic Fantasy",
+    shortDescription: "Mythic adventure framing with grand scale, luminous atmosphere, and heroic focus.",
+    compositionBias: "heroic central subject with sweeping world support",
+    palette: "royal blue, gold, emerald, dusk purple",
+    mood: "mythic, aspirational, grand",
+    textTreatment: "ornate-but-readable support, premium fantasy restraint",
+    graphicAccentsPreference: "magic particles, aura rims, sweeping light arcs",
+    overlays: "atmospheric mist, enchanted glow, cinematic embers",
+    promptFragment: "epic fantasy thumbnail with mythic scale and heroic readability",
+    uiHint: "Mythic hero",
+    accent: "#ffd166",
+    secondary: "#7bed9f",
+    background: "radial-gradient(circle at 24% 18%, rgba(255,209,102,0.72), rgba(123,237,159,0.22) 34%, rgba(10,14,32,1) 80%)",
+    promptRules: ["grand mythic world", "iconic adventurous silhouette", "luminous atmosphere without losing clarity"],
+    forbidden: ["cheap game-ad clutter", "muddy fantasy chaos", "noisy spell overload"],
+  },
+  emotional_story: {
+    value: "emotional_story",
+    key: "emotional_story",
+    label: "Emotional Story",
+    shortDescription: "Human-centered thumbnail driven by feeling, intimacy, and sincere visual storytelling.",
+    compositionBias: "face-and-feeling dominant composition with soft support",
+    palette: "rose, warm amber, muted blue-gray",
+    mood: "empathetic, sincere, intimate",
+    textTreatment: "short emotional support phrase, gentle but clear",
+    graphicAccentsPreference: "soft flares, depth haze, subtle highlights",
+    overlays: "warm bloom and emotional atmosphere layers",
+    promptFragment: "emotionally resonant thumbnail with intimate storytelling",
+    uiHint: "Human feeling",
+    accent: "#ff9aa2",
+    secondary: "#ffd6a5",
+    background: "radial-gradient(circle at 24% 20%, rgba(255,154,162,0.66), rgba(255,214,165,0.26) 36%, rgba(14,16,28,1) 80%)",
+    promptRules: ["emotion first in faces and posture", "intimate not melodramatic", "softness supports clarity"],
+    forbidden: ["soap-opera excess", "text overload", "manipulative clutter"],
+  },
+  minimal_premium: {
+    value: "minimal_premium",
+    key: "minimal_premium",
+    label: "Minimal Premium",
+    shortDescription: "Refined luxury thumbnail with restrained composition, space, and premium finish.",
+    compositionBias: "style-led minimal hierarchy with elegant negative space",
+    palette: "ivory, soft gold, charcoal, muted taupe",
+    mood: "quiet, refined, premium",
+    textTreatment: "short elegant support, small footprint, no aggressive styling",
+    graphicAccentsPreference: "micro glows, fine lines, subtle gradients",
+    overlays: "soft vignette and polished light wash",
+    promptFragment: "minimal premium thumbnail with refined restraint and luxury polish",
+    uiHint: "Minimal luxe",
+    accent: "#f4d7a1",
+    secondary: "#dfe7fd",
+    background: "radial-gradient(circle at 24% 18%, rgba(244,215,161,0.62), rgba(223,231,253,0.24) 34%, rgba(18,16,18,1) 80%)",
+    promptRules: ["restraint and elegant spacing", "minimal accents", "luxurious highly curated feel"],
+    forbidden: ["loud clickbait graphics", "overcrowded text", "decorative noise"],
   },
 };
 
@@ -832,7 +1031,7 @@ function getSceneImageSize(format) {
 }
 
 function normalizeIntroStylePreset(stylePreset) {
-  return INTRO_STYLE_PRESETS.includes(stylePreset) ? stylePreset : "cinematic";
+  return INTRO_STYLE_PRESETS.includes(stylePreset) ? stylePreset : "cinematic_dark";
 }
 
 function parseLocaleFloat(value) {
@@ -848,9 +1047,25 @@ function normalizeIntroDurationSec(value) {
   return Math.max(0.5, Math.min(8, Math.round(raw * 10) / 10));
 }
 
-function getIntroStyleMeta(stylePreset = "cinematic") {
+function getIntroStyleMeta(stylePreset = "cinematic_dark") {
   const normalized = normalizeIntroStylePreset(stylePreset);
-  return INTRO_STYLE_PRESET_META[normalized] || INTRO_STYLE_PRESET_META.cinematic;
+  return INTRO_STYLE_PRESET_META[normalized] || INTRO_STYLE_PRESET_META.cinematic_dark;
+}
+
+function resolveIntroCompositionPlan({ refsByRole = {}, heroParticipants = [], supportingParticipants = [], importantProps = [] } = {}) {
+  const castRoles = INTRO_CAST_ROLES.filter((role) => Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0);
+  const hasPropRefs = Array.isArray(refsByRole?.props) && refsByRole.props.length > 0;
+  const roleSignals = [...heroParticipants, ...supportingParticipants].filter((role, index, arr) => INTRO_CAST_ROLES.includes(role) && arr.indexOf(role) === index);
+  const propSignals = (Array.isArray(importantProps) ? importantProps : []).map((item) => String(item || "").trim()).filter(Boolean);
+  const hasSubjects = castRoles.length > 0 || hasPropRefs || roleSignals.length > 0 || propSignals.length > 0;
+  return {
+    mode: hasSubjects ? "subject_led" : "style_led",
+    label: hasSubjects ? "Subject-led composition" : "Style-led composition",
+    focusTargets: [...castRoles, ...(hasPropRefs ? ["props"] : [])],
+    summary: hasSubjects
+      ? "Subjects stay dominant, readable, and visually primary."
+      : "Preset mood and atmosphere drive the composition because no strong subjects were detected.",
+  };
 }
 
 function resolveSceneTransitionType(scene) {
@@ -1101,7 +1316,7 @@ function resolveIntroFramePreviewUrl(introFrame) {
   if (previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
     return buildIntroFramePreviewDataUrl({
       title: String(introFrame?.title || "").trim(),
-      stylePreset: introFrame?.stylePreset || "cinematic",
+      stylePreset: introFrame?.stylePreset || "cinematic_dark",
       contextSummary: String(introFrame?.contextSummary || "").trim(),
       previewFormat: introFrame?.previewFormat,
     });
@@ -1125,7 +1340,7 @@ function buildIntroFrameComparablePayload(introFrame) {
     nodeId: String(introFrame?.nodeId || ""),
     title: String(introFrame?.title || "").trim(),
     autoTitle: !!introFrame?.autoTitle,
-    stylePreset: normalizeIntroStylePreset(introFrame?.stylePreset || "cinematic"),
+    stylePreset: normalizeIntroStylePreset(introFrame?.stylePreset || "cinematic_dark"),
     durationSec: normalizeIntroDurationSec(introFrame?.durationSec),
     previewFormat: normalizeIntroFramePreviewFormat(introFrame?.previewFormat),
     previewKind,
@@ -1258,7 +1473,7 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       nodeType: "introFrame",
       title: String(introNode?.data?.title || "").trim(),
       autoTitle: !!introNode?.data?.autoTitle,
-      stylePreset: normalizeIntroStylePreset(introNode?.data?.stylePreset || "cinematic"),
+      stylePreset: normalizeIntroStylePreset(introNode?.data?.stylePreset || "cinematic_dark"),
       durationSec: normalizeIntroDurationSec(introNode?.data?.durationSec),
       previewFormat: normalizeIntroFramePreviewFormat(introNode?.data?.previewFormat),
       imageUrl: String(introNode?.data?.imageUrl || "").trim(),
@@ -1602,10 +1817,11 @@ function buildIntroWorldContext({ refsByRole = {}, sceneCount = 0, storyContext 
   return parts.join(" • ");
 }
 
-function buildIntroStyleContext({ stylePreset = "", refsByRole = {} } = {}) {
-  const normalizedStylePreset = normalizeIntroStylePreset(stylePreset || "cinematic");
+function buildIntroStyleContext({ stylePreset = "", refsByRole = {}, heroParticipants = [], supportingParticipants = [], importantProps = [] } = {}) {
+  const normalizedStylePreset = normalizeIntroStylePreset(stylePreset || "cinematic_dark");
   const hasStyleRefs = (refsByRole?.style || []).length > 0;
-  return `${normalizedStylePreset}${hasStyleRefs ? " + explicit style reference anchors" : " baseline"}`;
+  const compositionPlan = resolveIntroCompositionPlan({ refsByRole, heroParticipants, supportingParticipants, importantProps });
+  return `${normalizedStylePreset}${hasStyleRefs ? " + explicit style reference anchors" : " baseline"} • ${compositionPlan.label}`;
 }
 
 function normalizeIntroRoleProfileMap(...sources) {
@@ -1836,11 +2052,14 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     sceneCount,
     storyContext: summaryParts.join(" • "),
   });
+  const importantProps = buildIntroImportantProps(connectedRefsByRole);
   const styleContext = buildIntroStyleContext({
     stylePreset: plannerInput?.stylePreset || comfyNode?.data?.stylePreset || comfyBrainNode?.data?.stylePreset || "",
     refsByRole: connectedRefsByRole,
+    heroParticipants,
+    supportingParticipants,
+    importantProps,
   });
-  const importantProps = buildIntroImportantProps(connectedRefsByRole);
   if (roleAwareCastSummary) summaryParts.push(`cast: ${roleAwareCastSummary}`);
   return {
     sourceNodeIds: storySources.map((node) => String(node?.id || "")).filter(Boolean),
@@ -1892,7 +2111,7 @@ function buildIntroFrameStoryContextText(context = {}) {
   ].filter(Boolean).join(" • ");
 }
 
-function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", contextSummary = "", previewFormat = INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE } = {}) {
+function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic_dark", contextSummary = "", previewFormat = INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE } = {}) {
   const formatMeta = getIntroFramePreviewFormatMeta(previewFormat);
   const safeTitle = truncateIntroText(title || "Intro frame", formatMeta.titleMaxChars) || "Intro frame";
   const safeContext = truncateIntroText(contextSummary || "Story preview", formatMeta.contextMaxChars) || "Story preview";
@@ -3317,7 +3536,7 @@ function IntroFrameNode({ id, data }) {
   );
   const hasBackendGeneratedAsset = previewKind === INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED && !!previewUrl;
   const autoTitle = !!data?.autoTitle;
-  const styleMeta = getIntroStyleMeta(data?.stylePreset || "cinematic");
+  const styleMeta = getIntroStyleMeta(data?.stylePreset || "cinematic_dark");
   const previewFormat = normalizeIntroFramePreviewFormat(data?.previewFormat);
   const previewFormatMeta = getIntroFramePreviewFormatMeta(previewFormat);
   const durationSec = normalizeIntroDurationSec(data?.durationSec);
@@ -3363,7 +3582,7 @@ function IntroFrameNode({ id, data }) {
     : status === "generating" || status === "preview_generating"
       ? "собираем preview..."
       : "черновик";
-  const selectedStylePreset = normalizeIntroStylePreset(data?.stylePreset || "cinematic");
+  const selectedStylePreset = normalizeIntroStylePreset(data?.stylePreset || "cinematic_dark");
   const selectedStyleMeta = getIntroStyleMeta(selectedStylePreset);
   const isGenerating = status === "generating" || status === "preview_generating";
   const debug = data?.debug && typeof data.debug === "object" ? data.debug : {};
@@ -8467,7 +8686,7 @@ onClipSec: (nodeId, value) => {
                 const payload = {
                   title: nextTitle,
                   autoTitle: !!currentNode?.data?.autoTitle,
-                  stylePreset: normalizeIntroStylePreset(currentNode?.data?.stylePreset || "cinematic"),
+                  stylePreset: normalizeIntroStylePreset(currentNode?.data?.stylePreset || "cinematic_dark"),
                   previewFormat: normalizeIntroFramePreviewFormat(currentNode?.data?.previewFormat),
                   durationSec: normalizeIntroDurationSec(currentNode?.data?.durationSec),
                   storyContext,
@@ -8931,7 +9150,7 @@ const hydrate = useCallback((source = "unknown") => {
           if (n.type === "introFrame") {
             data.title = String(data.title || "");
             data.autoTitle = !!data.autoTitle;
-            data.stylePreset = normalizeIntroStylePreset(data.stylePreset || "cinematic");
+            data.stylePreset = normalizeIntroStylePreset(data.stylePreset || "cinematic_dark");
             data.durationSec = normalizeIntroDurationSec(data.durationSec);
             data.previewFormat = normalizeIntroFramePreviewFormat(data.previewFormat);
             data.imageUrl = String(data.imageUrl || "");
@@ -9223,7 +9442,7 @@ const hydrate = useCallback((source = "unknown") => {
         id,
         type: "introFrame",
         position: { x: centerX + jitterX, y: centerY + jitterY },
-        data: { title: "", autoTitle: true, manualTitle: false, stylePreset: "cinematic", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
+        data: { title: "", autoTitle: true, manualTitle: false, stylePreset: "cinematic_dark", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
       };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };

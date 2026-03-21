@@ -132,7 +132,7 @@ class AssembleIntroIn(BaseModel):
     nodeId: str | None = None
     title: str | None = None
     autoTitle: bool | None = True
-    stylePreset: str | None = "cinematic"
+    stylePreset: str | None = "cinematic_dark"
     durationSec: int | float | None = 2.5
     imageUrl: str | None = None
 
@@ -140,7 +140,7 @@ class AssembleIntroIn(BaseModel):
 class IntroGenerateIn(BaseModel):
     title: str | None = None
     autoTitle: bool | None = True
-    stylePreset: str | None = "cinematic"
+    stylePreset: str | None = "cinematic_dark"
     previewFormat: str | None = "16:9"
     durationSec: int | float | None = 2.5
     storyContext: str | None = None
@@ -770,130 +770,404 @@ def _save_bytes_as_asset(raw: bytes, ext: str = "png") -> str:
 
 
 INTRO_FRAME_STYLE_PRESETS: dict[str, dict[str, Any]] = {
-    "cinematic": {
-        "label": "Cinematic",
-        "shortDescription": "Premium film-poster frame with serious composition and dramatic light.",
-        "uiHint": "Poster-grade",
-        "accent": "#f6d365",
-        "secondary": "#5ee7df",
-        "promptRules": [
-            "build the frame like a premium movie poster or a decisive opening-film still",
-            "use clean subject hierarchy, intentional negative space, and elegant camera blocking",
-            "prefer dramatic motivated lighting, rich contrast, and restrained premium color grading",
-            "keep the mood serious, elevated, and cinematic rather than loud or gimmicky",
-            "the image should feel expensive, polished, and story-driven",
-        ],
-        "negativeRules": [
-            "no cheap clickbait thumbnail styling",
-            "no fake UI, arrows, badges, emoji, or red-circled annotations",
-            "no cluttered collage layout or tabloid energy",
-        ],
-    },
-    "youtube": {
-        "label": "YouTube",
-        "shortDescription": "Readable high-energy thumbnail composition with a clear focal point.",
-        "uiHint": "Readable thumbnail",
+    "youtube_shock": {
+        "key": "youtube_shock",
+        "label": "YouTube Shock",
+        "shortDescription": "High-urgency thumbnail hook with bold contrast and one obvious hero moment.",
+        "compositionBias": "subject-dominant hero framing with aggressive readability",
+        "palette": "warm yellow, red-orange, charcoal",
+        "mood": "urgent, explosive, clickable",
+        "textTreatment": "bold compact headline support, high contrast, minimal words",
+        "graphicAccentsPreference": "glow edges, impact streaks, restrained arrows only if needed",
+        "overlays": "tight glow plates and punchy light sweeps",
+        "promptFragment": "premium high-energy thumbnail with immediate stop-scroll impact and one dominant hero subject",
         "accent": "#ffcf5c",
         "secondary": "#ff6b3d",
         "promptRules": [
             "optimize for immediate thumbnail readability and one dominant focal point",
-            "use clear subject hierarchy, strong silhouette separation, and bold but clean composition",
-            "increase thumbnail energy and clarity without losing realism or polish",
-            "keep the frame legible at small sizes with obvious visual priority",
-            "allow stronger expression and punchier contrast while staying premium",
+            "use bold contrast, strong silhouette separation, and a premium high-energy hook",
+            "keep the frame punchy and urgent without degrading into spammy clickbait",
         ],
         "negativeRules": [
-            "no cheap clickbait trash",
-            "no fake UI, subscriber counters, circles, red arrows, reaction-face meme language, or spammy overlays",
-            "no overcrowded layout with too many competing focal points",
+            "no cheap meme trash or fake subscriber UI",
+            "no overcrowded collage with too many focal points",
         ],
     },
-    "dark_neon": {
-        "label": "Dark Neon",
-        "shortDescription": "Dark cinematic scene with controlled cyan-magenta-violet neon energy.",
-        "uiHint": "Cyber glow",
+    "reaction_result": {
+        "key": "reaction_result",
+        "label": "Reaction Result",
+        "shortDescription": "Outcome-first composition pairing a readable subject reaction with the revealed result.",
+        "compositionBias": "split emphasis between hero reaction and revealed outcome",
+        "palette": "gold, coral, deep navy",
+        "mood": "surprised, satisfying, payoff-driven",
+        "textTreatment": "short payoff phrase, supportive not dominant",
+        "graphicAccentsPreference": "light callout accents, comparison framing, controlled glow",
+        "overlays": "soft result halos and subtle directional emphasis",
+        "promptFragment": "clear before-versus-after energy or revealed outcome with premium reaction readability",
+        "accent": "#ffb86c",
+        "secondary": "#ff6f91",
+        "promptRules": [
+            "make the emotional payoff or revealed result instantly understandable",
+            "keep reaction and result tightly linked inside one clean visual hierarchy",
+            "preserve realism and polish while making the outcome feel rewarding",
+        ],
+        "negativeRules": [
+            "no exaggerated meme-face distortion",
+            "no cluttered comparison graphics or noisy badges",
+        ],
+    },
+    "breaking_alert": {
+        "key": "breaking_alert",
+        "label": "Breaking Alert",
+        "shortDescription": "News-flash urgency with crisp hierarchy and alert-style lighting accents.",
+        "compositionBias": "headline-supporting alert composition with urgent subject focus",
+        "palette": "red, amber, dark steel",
+        "mood": "urgent, alarming, immediate",
+        "textTreatment": "compact alert headline plate with strong contrast",
+        "graphicAccentsPreference": "signal bars, alert glows, restrained warning lines",
+        "overlays": "broadcast streaks and emergency-light bloom",
+        "promptFragment": "breaking-news visual urgency with premium alert polish and focal clarity",
+        "accent": "#ff5a5f",
+        "secondary": "#ffd166",
+        "promptRules": [
+            "treat the frame like a premium breaking alert with immediate urgency",
+            "use directional light, alert color contrast, and clean hierarchy",
+            "keep the scene tense and readable at thumbnail size",
+        ],
+        "negativeRules": [
+            "no fake ticker spam or tabloid chaos",
+            "no unreadable emergency graphics covering the subject",
+        ],
+    },
+    "tutorial_clickable": {
+        "key": "tutorial_clickable",
+        "label": "Tutorial Clickable",
+        "shortDescription": "Clean instructional thumbnail built around clarity, guidance, and one teachable focal point.",
+        "compositionBias": "demonstration-first layout with readable subject/object steps",
+        "palette": "cyan, blue, white, graphite",
+        "mood": "clear, confident, helpful",
+        "textTreatment": "short informative text with clean spacing and no shouting",
+        "graphicAccentsPreference": "simple pointers, guide frames, minimal progress cues",
+        "overlays": "soft UI-style emphasis bars and controlled highlights",
+        "promptFragment": "clean premium tutorial thumbnail with obvious instructional focus and strong clarity",
+        "accent": "#5dd6ff",
+        "secondary": "#7a8cff",
+        "promptRules": [
+            "prioritize clarity, teachability, and one obvious action or takeaway",
+            "support the focal object with clean guidance accents rather than noise",
+            "keep the frame premium and approachable, not gimmicky",
+        ],
+        "negativeRules": [
+            "no overloaded arrows or fake software UI spam",
+            "no excessive text blocks or confusing multi-step collage",
+        ],
+    },
+    "big_object_focus": {
+        "key": "big_object_focus",
+        "label": "Big Object Focus",
+        "shortDescription": "Hero-object composition where scale, shape, and readability of the main item dominate.",
+        "compositionBias": "large object hero framing with supportive text and accents",
+        "palette": "electric blue, orange spark, dark slate",
+        "mood": "impressive, punchy, object-centric",
+        "textTreatment": "minimal bold support near edges, never over the object core",
+        "graphicAccentsPreference": "scale cues, rim glow, impact flares",
+        "overlays": "light bloom and object-edge emphasis",
+        "promptFragment": "oversized hero object thumbnail where the item feels iconic, clear, and instantly legible",
+        "accent": "#55c7ff",
+        "secondary": "#ff9f43",
+        "promptRules": [
+            "make the main object feel iconic, large, and easy to parse in one glance",
+            "use lighting and framing to celebrate scale without hiding important details",
+            "keep surrounding design secondary to the object hero",
+        ],
+        "negativeRules": [
+            "no clutter that weakens the object silhouette",
+            "no decorative text covering the main item",
+        ],
+    },
+    "cyber_neon": {
+        "key": "cyber_neon",
+        "label": "Cyber Neon",
+        "shortDescription": "Dark futuristic scene with premium cyan-magenta neon and clean subject separation.",
+        "compositionBias": "moody cyber subject framing with illuminated edge contrast",
+        "palette": "cyan, magenta, violet, ink black",
+        "mood": "charged, futuristic, immersive",
+        "textTreatment": "sleek luminous type support with restrained density",
+        "graphicAccentsPreference": "neon rims, holographic lines, signal streaks",
+        "overlays": "selective glow fog and cyber light trails",
+        "promptFragment": "premium cyber-neon thumbnail with controlled glow, depth, and preserved focal clarity",
         "accent": "#6ef2ff",
         "secondary": "#b86dff",
         "promptRules": [
-            "build a dark moody scene with restrained neon accents in cyan, magenta, teal, or violet",
-            "maintain strong contrast with cinematic glow and selective rim lighting",
-            "preserve a clean focal point inside the darkness and avoid flattening the scene",
-            "make the atmosphere feel premium, futuristic, and immersive",
-            "keep the palette controlled and intentional rather than chaotic",
+            "build a dark moody cyber scene with restrained neon accents",
+            "preserve subject readability under the glow treatment",
+            "keep the futuristic energy premium, immersive, and controlled",
         ],
         "negativeRules": [
-            "no acid-color overload or rainbow noise",
-            "no unreadable overglow that destroys subject clarity",
-            "no cheap cyberpunk cliché clutter",
+            "no acid rainbow overload",
+            "no glow haze that destroys the focal point",
         ],
     },
-    "thriller": {
-        "label": "Thriller",
-        "shortDescription": "Low-key suspense frame with danger, tension, and moody dramatic shadows.",
-        "uiHint": "Suspense mood",
-        "accent": "#ff6b6b",
-        "secondary": "#ffd166",
+    "ai_tech_explainer": {
+        "key": "ai_tech_explainer",
+        "label": "AI Tech Explainer",
+        "shortDescription": "Smart editorial tech look blending innovation cues with clear explanatory hierarchy.",
+        "compositionBias": "explanatory hero focus with tech-context support",
+        "palette": "teal, icy blue, white, deep navy",
+        "mood": "intelligent, innovative, trustworthy",
+        "textTreatment": "clean modern text support, medium weight, no forced shouting",
+        "graphicAccentsPreference": "data halos, schematic lines, subtle interface cues",
+        "overlays": "soft grid light and analytical glow panels",
+        "promptFragment": "premium AI-tech explainer thumbnail with smart clarity and modern innovation cues",
+        "accent": "#7cf7e6",
+        "secondary": "#70a1ff",
         "promptRules": [
-            "emphasize tension, unease, and suspense in a grounded thriller tone",
-            "use low-key lighting, selective highlights, and darker shadow zones",
-            "compose for anticipation, threat, or ominous discovery rather than action spectacle",
-            "keep the atmosphere anxious, dramatic, and cinematic",
-            "prioritize controlled realism with emotional pressure in the frame",
+            "communicate innovation and explanation at a glance",
+            "use tasteful tech signals that support understanding rather than clutter",
+            "keep the image polished, modern, and trustworthy",
         ],
         "negativeRules": [
-            "no horror-camp exaggeration",
-            "no gore, blood spray, monsters, or slasher imagery unless explicitly requested",
-            "no cheesy jump-scare poster clichés",
+            "no cheesy robot clichés or overloaded charts",
+            "no fake dashboards covering the core subject",
         ],
     },
-    "fashion": {
-        "label": "Fashion",
-        "shortDescription": "Premium editorial cover look with polished posing and refined luxury finish.",
-        "uiHint": "Editorial polish",
-        "accent": "#ffd7f0",
-        "secondary": "#8ae5ff",
+    "futuristic_ui": {
+        "key": "futuristic_ui",
+        "label": "Futuristic UI",
+        "shortDescription": "Interface-inspired future aesthetic with strong geometry and premium HUD restraint.",
+        "compositionBias": "style-forward geometry supporting a central hero focus",
+        "palette": "cyan, indigo, silver, obsidian",
+        "mood": "precise, advanced, sleek",
+        "textTreatment": "thin-to-medium sci-fi supportive text, tightly controlled",
+        "graphicAccentsPreference": "HUD frames, scans, circular guides, glass panels",
+        "overlays": "clean holographic overlays and interface glints",
+        "promptFragment": "sleek futuristic interface mood with premium HUD restraint and strong central readability",
+        "accent": "#7af0ff",
+        "secondary": "#8f7cff",
         "promptRules": [
-            "treat the image like a luxury editorial cover or premium campaign frame",
-            "use elegant subject posing, sophisticated framing, and polished styling",
-            "favor refined light shaping, premium texture detail, and clean visual rhythm",
-            "make the overall impression expensive, composed, and aspirational",
-            "keep the frame sleek and curated with confident visual restraint",
+            "use interface-inspired geometry as a design language, not clutter",
+            "keep central hierarchy strong and readable while adding futuristic polish",
+            "make the frame feel advanced, premium, and intentional",
         ],
         "negativeRules": [
-            "no mass-market promo banner feeling",
-            "no cheap ecommerce layout or sales-ad energy",
-            "no clutter that breaks the editorial premium look",
+            "no dense dashboard clutter or unreadable micro-elements",
+            "no full-screen fake UI takeover",
         ],
     },
-    "glitch": {
-        "label": "Glitch",
-        "shortDescription": "Controlled digital disruption with modern synthetic tension and clean focal priority.",
-        "uiHint": "Controlled distortion",
+    "glitch_signal": {
+        "key": "glitch_signal",
+        "label": "Glitch Signal",
+        "shortDescription": "Controlled signal corruption aesthetic with deliberate disruption and readable focal anchor.",
+        "compositionBias": "focal anchor first, glitch treatment second",
+        "palette": "mint green, hot magenta, deep navy",
+        "mood": "unstable, digital, tense",
+        "textTreatment": "short crisp text support with occasional digital texture",
+        "graphicAccentsPreference": "scanlines, signal tears, channel splits",
+        "overlays": "selective glitch bands and digital breakup",
+        "promptFragment": "controlled glitch-signal thumbnail where distortion feels intentional and the hero remains readable",
         "accent": "#8eff8c",
         "secondary": "#ff6ef2",
         "promptRules": [
-            "use stylized digital distortion as a controlled design language rather than random damage",
-            "preserve the main focal point and silhouette readability under the glitch treatment",
-            "mix synthetic tension, signal breakup, and modern digital texture in a curated way",
-            "keep the image intentional, sharp, and contemporary",
-            "apply glitch accents selectively so the scene remains premium and readable",
+            "apply digital disruption selectively as an intentional style language",
+            "protect the main subject silhouette and readability under the glitch treatment",
+            "keep the result sharp, premium, and contemporary",
         ],
         "negativeRules": [
+            "no full-frame corruption or broken-image sludge",
             "no unreadable visual mess",
-            "no full-frame corruption that destroys composition",
-            "no low-quality broken-image artifacts or compression sludge",
+        ],
+    },
+    "dark_system": {
+        "key": "dark_system",
+        "label": "Dark System",
+        "shortDescription": "Cold shadow-heavy system aesthetic with disciplined contrast and ominous structure.",
+        "compositionBias": "low-key structure with disciplined focal isolation",
+        "palette": "graphite, steel blue, muted red",
+        "mood": "controlled, severe, ominous",
+        "textTreatment": "stark minimal support with industrial contrast",
+        "graphicAccentsPreference": "system bars, hard-edge glows, sparse diagnostics",
+        "overlays": "shadow gradients and subtle machine-light strips",
+        "promptFragment": "dark system-grade thumbnail with disciplined contrast, cold atmosphere, and focal precision",
+        "accent": "#8da2c9",
+        "secondary": "#ff6b6b",
+        "promptRules": [
+            "lean into cold disciplined darkness and a precise system feel",
+            "use contrast and structure to isolate the focal area",
+            "keep the frame ominous but clean and premium",
+        ],
+        "negativeRules": [
+            "no muddy low-contrast darkness",
+            "no chaotic cyber clutter or noisy red alerts everywhere",
+        ],
+    },
+    "cinematic_dark": {
+        "key": "cinematic_dark",
+        "label": "Cinematic Dark",
+        "shortDescription": "Premium film-poster darkness with dramatic light shaping and story-driven weight.",
+        "compositionBias": "cinematic subject hierarchy with dramatic negative space",
+        "palette": "gold ember, teal shadow, black",
+        "mood": "serious, expensive, dramatic",
+        "textTreatment": "elegant bold title support, restrained and premium",
+        "graphicAccentsPreference": "light shafts, haze, subtle lens bloom",
+        "overlays": "film-grade vignettes and dramatic glow pockets",
+        "promptFragment": "premium dark cinematic poster frame with dramatic light and intentional hierarchy",
+        "accent": "#f6d365",
+        "secondary": "#5ee7df",
+        "promptRules": [
+            "build the frame like a premium movie poster or opening-film still",
+            "use dramatic motivated lighting, elegant blocking, and intentional negative space",
+            "keep the mood elevated, story-driven, and expensive",
+        ],
+        "negativeRules": [
+            "no cheap clickbait thumbnail styling",
+            "no fake UI, arrows, badges, or tabloid clutter",
+        ],
+    },
+    "mystery_horror": {
+        "key": "mystery_horror",
+        "label": "Mystery Horror",
+        "shortDescription": "Suspenseful eerie frame driven by unknown threat, darkness, and controlled dread.",
+        "compositionBias": "threat-aware focal composition with obscured mystery zones",
+        "palette": "crimson, sickly amber, midnight black",
+        "mood": "eerie, tense, unsettling",
+        "textTreatment": "minimal ominous support, never comedic or campy",
+        "graphicAccentsPreference": "mist, scratches, selective warning glows",
+        "overlays": "fog, shadow bloom, distressed light leaks",
+        "promptFragment": "eerie mystery-horror thumbnail with controlled dread, atmosphere, and readable threat focus",
+        "accent": "#ff6b6b",
+        "secondary": "#ffd166",
+        "promptRules": [
+            "emphasize suspense, dread, and ominous discovery rather than gore",
+            "use shadow-heavy composition and selective highlights to hide just enough",
+            "keep the horror premium, grounded, and atmospheric",
+        ],
+        "negativeRules": [
+            "no gore, camp, or slasher-poster clichés",
+            "no comedy-horror exaggeration",
+        ],
+    },
+    "epic_fantasy": {
+        "key": "epic_fantasy",
+        "label": "Epic Fantasy",
+        "shortDescription": "Mythic adventure framing with grand scale, luminous atmosphere, and heroic focus.",
+        "compositionBias": "heroic central subject with sweeping world support",
+        "palette": "royal blue, gold, emerald, dusk purple",
+        "mood": "mythic, aspirational, grand",
+        "textTreatment": "ornate-but-readable support, premium fantasy restraint",
+        "graphicAccentsPreference": "magic particles, aura rims, sweeping light arcs",
+        "overlays": "atmospheric mist, enchanted glow, cinematic embers",
+        "promptFragment": "epic fantasy thumbnail with mythic scale, luminous atmosphere, and heroic readability",
+        "accent": "#ffd166",
+        "secondary": "#7bed9f",
+        "promptRules": [
+            "make the world feel grand, mythic, and emotionally elevated",
+            "give the hero or object an iconic adventurous silhouette",
+            "use luminous atmosphere without sacrificing readability",
+        ],
+        "negativeRules": [
+            "no cheap game-ad clutter or noisy spell effects",
+            "no muddy fantasy chaos that hides the hero",
+        ],
+    },
+    "emotional_story": {
+        "key": "emotional_story",
+        "label": "Emotional Story",
+        "shortDescription": "Human-centered thumbnail driven by feeling, intimacy, and sincere visual storytelling.",
+        "compositionBias": "face-and-feeling dominant composition with soft support",
+        "palette": "rose, warm amber, muted blue-gray",
+        "mood": "empathetic, sincere, intimate",
+        "textTreatment": "short emotional support phrase, gentle but clear",
+        "graphicAccentsPreference": "soft flares, depth haze, subtle highlights",
+        "overlays": "warm bloom and emotional atmosphere layers",
+        "promptFragment": "emotionally resonant thumbnail with intimate storytelling and strong human readability",
+        "accent": "#ff9aa2",
+        "secondary": "#ffd6a5",
+        "promptRules": [
+            "prioritize emotional readability in faces, posture, and moment selection",
+            "keep the scene intimate and sincere rather than melodramatic",
+            "use softness and contrast to support story feeling without losing clarity",
+        ],
+        "negativeRules": [
+            "no soap-opera excess or manipulative clutter",
+            "no text overload that overwhelms the emotion",
+        ],
+    },
+    "minimal_premium": {
+        "key": "minimal_premium",
+        "label": "Minimal Premium",
+        "shortDescription": "Refined luxury thumbnail with restrained composition, space, and premium finish.",
+        "compositionBias": "style-led minimal hierarchy with elegant negative space",
+        "palette": "ivory, soft gold, charcoal, muted taupe",
+        "mood": "quiet, refined, premium",
+        "textTreatment": "short elegant support, small footprint, no aggressive styling",
+        "graphicAccentsPreference": "micro glows, fine lines, subtle gradients",
+        "overlays": "soft vignette and polished light wash",
+        "promptFragment": "minimal premium thumbnail with refined restraint, elegant spacing, and luxury polish",
+        "accent": "#f4d7a1",
+        "secondary": "#dfe7fd",
+        "promptRules": [
+            "embrace restraint, elegant spacing, and premium finish",
+            "use minimal accents and strong composition discipline",
+            "make the frame feel luxurious, modern, and highly curated",
+        ],
+        "negativeRules": [
+            "no loud clickbait graphics or clutter",
+            "no overcrowded text or unnecessary decorative noise",
         ],
     },
 }
 
 
 def _normalize_intro_style_preset(style_preset: str | None) -> str:
-    normalized = str(style_preset or "cinematic").strip().lower()
-    return normalized if normalized in INTRO_FRAME_STYLE_PRESETS else "cinematic"
+    normalized = str(style_preset or "cinematic_dark").strip().lower()
+    return normalized if normalized in INTRO_FRAME_STYLE_PRESETS else "cinematic_dark"
 
 
 def _get_intro_style_meta(style_preset: str | None) -> dict[str, Any]:
     return INTRO_FRAME_STYLE_PRESETS[_normalize_intro_style_preset(style_preset)]
+
+
+def _resolve_intro_composition_plan(
+    connected_refs_by_role: dict[str, list[str]] | None,
+    hero_participants: list[str] | None = None,
+    supporting_participants: list[str] | None = None,
+    important_props: list[str] | None = None,
+) -> dict[str, Any]:
+    refs = connected_refs_by_role if isinstance(connected_refs_by_role, dict) else {}
+    cast_roles = [role for role in COMFY_CAST_ROLES if len(refs.get(role) or []) > 0]
+    prop_roles = ["props"] if len(refs.get("props") or []) > 0 else []
+    hero_role_signals = [role for role in (hero_participants or []) if role in COMFY_CAST_ROLES and role not in cast_roles]
+    support_role_signals = [role for role in (supporting_participants or []) if role in COMFY_CAST_ROLES and role not in cast_roles and role not in hero_role_signals]
+    prop_signal_labels = [str(item or "").strip() for item in (important_props or []) if str(item or "").strip()]
+    subject_roles = cast_roles + [role for role in hero_role_signals + support_role_signals if role not in cast_roles]
+    has_subjects = bool(subject_roles or prop_roles or prop_signal_labels)
+    mode = "subject_led" if has_subjects else "style_led"
+    focus_targets = subject_roles + prop_roles
+    prompt_lines = [
+        f"Composition mode: {'subject-led composition' if mode == 'subject_led' else 'style-led composition'}.",
+    ]
+    if mode == "subject_led":
+        prompt_lines.extend([
+            "If characters and/or objects are present, they must remain the main heroes of the thumbnail.",
+            "Allocate roughly 50-60% of the visual attention to the visible subjects and leave the remaining 40-50% for text, glow, arrows, accents, and supporting design.",
+            "Subjects must remain clearly visible with high readability and focal clarity.",
+            "Do not cover a face, figure, or the main object unless absolutely necessary for readability.",
+            "Text and decorative accents should support the subject heroes, not overpower them.",
+        ])
+    else:
+        prompt_lines.extend([
+            "If no strong characters or objects are present, rely on style-driven composition.",
+            "Build a neutral-but-clickable frame using the selected preset's mood, palette, light, text treatment, and atmosphere.",
+            "Let the style system carry the frame while preserving one clear focal hierarchy.",
+        ])
+    return {
+        "mode": mode,
+        "focusTargets": focus_targets,
+        "subjectRoles": subject_roles,
+        "propSignals": prop_signal_labels,
+        "promptLines": prompt_lines,
+        "weights": {"subject": "50-60%", "support": "40-50%"} if mode == "subject_led" else {"subject": "style-dependent", "support": "style-dependent"},
+    }
 
 
 def _normalize_intro_preview_format(preview_format: str | None) -> str:
@@ -1247,7 +1521,7 @@ def _wrap_intro_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Image
 
 
 def _fit_intro_title(draw: ImageDraw.ImageDraw, title: str, box_width: int, box_height: int, preview_format: str) -> tuple[ImageFont.ImageFont, list[str], int]:
-    normalized_title = str(title or "").strip() or "INTRO FRAME"
+    normalized_title = str(title or "").strip() or "Intro frame"
     normalized_title_word_count = len([word for word in re.split(r"\s+", normalized_title) if word])
     max_lines = 3 if preview_format == "9:16" else 2
     width_factor = 0.205 if preview_format == "16:9" else 0.195 if preview_format == "1:1" else 0.18
@@ -1590,7 +1864,7 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     style_preset = _normalize_intro_style_preset(payload.stylePreset)
     preview_format = _normalize_intro_preview_format(payload.previewFormat)
     style_meta = _get_intro_style_meta(style_preset)
-    title = str(payload.title or "").strip() or "INTRO FRAME"
+    title = str(payload.title or "").strip() or "Intro frame"
     title_context = str(payload.titleContext or "").strip()
     story_context = str(payload.storyContext or "").strip()
     source_node_types = [str(item or "").strip() for item in (payload.sourceNodeTypes or []) if str(item or "").strip()]
@@ -1634,6 +1908,12 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         if role in COMFY_CAST_ROLES and role not in hero_participants_resolved:
             hero_participants_resolved.append(role)
     intro_connected_role_counts = {role: len(connected_refs_by_role.get(role) or []) for role in connected_roles}
+    composition_plan = _resolve_intro_composition_plan(
+        connected_refs_by_role,
+        hero_participants=hero_participants,
+        supporting_participants=supporting_participants,
+        important_props=important_props,
+    )
     intro_cast_contract_preview = _intro_cast_contract_preview(
         active_roles=intro_active_cast_roles,
         must_appear=intro_must_appear,
@@ -1673,11 +1953,17 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "Create one premium opening-frame still image for a clip intro preview.",
         f"Target aspect ratio: {preview_format}. Composition rule: {format_rule}.",
         f"Style preset: {style_meta['label']}. Visual intent: {style_meta['shortDescription']}",
+        f"Style preset composition bias: {style_meta['compositionBias']}.",
+        f"Style palette / mood: {style_meta['palette']} / {style_meta['mood']}.",
+        f"Text treatment: {style_meta['textTreatment']}. Graphic accents: {style_meta['graphicAccentsPreference']}. Overlays: {style_meta['overlays']}.",
+        f"Prompt fragment: {style_meta['promptFragment']}.",
         f"Title concept for story guidance only: {title}.",
         "Keep the image as one clean hook frame, not a collage, poster mockup, or UI layout.",
         "Attached reference images are the exact cast package and exact world anchors.",
         "Use the attached references as strict identity anchors, not loose inspiration.",
         "Do not render readable text inside the image; backend will add the final readable title overlay.",
+        "Preserve the original title casing from the user; do not force uppercase treatment.",
+        "Do not overload the thumbnail with too much text.",
         "STRICT INTRO CONTRACT:",
         f"- active cast package: {_intro_role_package_summary(intro_active_cast_roles, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
         f"- must appear: {_intro_role_package_summary(intro_must_appear, gender_locks=role_gender_locks, species_locks=animal_species_locks)}",
@@ -1705,6 +1991,13 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "- do not turn the cast package into a generic crowd scene",
         "ROLE SEPARATION LOCK:",
     ]
+    prompt_lines.extend([
+        "COMPOSITION SYSTEM:",
+        *composition_plan["promptLines"],
+        "Subject + object should feel like the main heroes of the thumbnail whenever present.",
+        "Text should support, not overpower, the composition.",
+        "If no strong subjects are present, rely on style-driven composition.",
+    ])
     exact_role_separation_lines = []
     for role in intro_active_cast_roles:
         if connected_ref_counts.get(role, 0) > 0:
@@ -1853,6 +2146,9 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "previewFormat": preview_format,
         "sceneCount": scene_count,
         "durationSec": round(duration_sec, 1),
+        "compositionMode": composition_plan["mode"],
+        "compositionFocusTargets": composition_plan["focusTargets"],
+        "compositionWeights": composition_plan["weights"],
         "sourceNodeTypes": source_node_types,
         "connectedRoles": connected_roles,
         "connectedRoleCounts": intro_connected_role_counts,
@@ -1865,6 +2161,13 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "styleContext": style_context or None,
         "styleLabel": style_meta["label"],
         "styleDescription": style_meta["shortDescription"],
+        "styleCompositionBias": style_meta["compositionBias"],
+        "stylePalette": style_meta["palette"],
+        "styleMood": style_meta["mood"],
+        "styleTextTreatment": style_meta["textTreatment"],
+        "styleGraphicAccentsPreference": style_meta["graphicAccentsPreference"],
+        "styleOverlays": style_meta["overlays"],
+        "stylePromptFragment": style_meta["promptFragment"],
         "styleRules": style_meta["promptRules"],
         "forbidden": style_meta["negativeRules"],
         "introActiveCastRoles": intro_active_cast_roles,
@@ -2214,7 +2517,7 @@ def _summarize_gemini_image_response(resp: dict) -> dict:
 def clip_intro_generate(payload: IntroGenerateIn):
     style_preset = _normalize_intro_style_preset(payload.stylePreset)
     preview_format = _normalize_intro_preview_format(payload.previewFormat)
-    title = str(payload.title or "").strip() or "INTRO FRAME"
+    title = str(payload.title or "").strip() or "Intro frame"
     width, height = _resolve_intro_preview_dimensions(preview_format)
     connected_refs_by_role = _normalize_intro_connected_refs_by_role(getattr(payload, "connectedRefsByRole", None))
     raw_connected_ref_counts = {role: len(connected_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}
@@ -7578,7 +7881,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                         "introNodeId": str(getattr(intro, "nodeId", "") or ""),
                         "title": str(getattr(intro, "title", "") or ""),
                         "autoTitle": bool(getattr(intro, "autoTitle", True)),
-                        "stylePreset": str(getattr(intro, "stylePreset", "cinematic") or "cinematic"),
+                        "stylePreset": str(getattr(intro, "stylePreset", "cinematic_dark") or "cinematic_dark"),
                         "durationSec": intro_duration,
                         "width": width,
                         "height": height,
