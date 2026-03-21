@@ -1,6 +1,9 @@
 import React from "react";
 import { Handle, Position, NodeShell, getModeDisplayMeta, getStyleDisplayMeta, handleStyle } from "./comfyNodeShared";
 
+const COMFY_STORYBOARD_MAIN_HANDLE = "comfy_scene_video_out";
+const COMFY_STORYBOARD_INTRO_HANDLE = "comfy_storyboard_intro_out";
+
 export default function ComfyStoryboardNode({ id, data }) {
   const scenes = Array.isArray(data?.mockScenes) ? data.mockScenes : [];
   const modeMeta = getModeDisplayMeta(data?.mode || "clip");
@@ -58,7 +61,8 @@ export default function ComfyStoryboardNode({ id, data }) {
 
   return (<>
     <Handle type="target" position={Position.Left} id="comfy_plan" className="clipSB_handle" style={handleStyle("comfy_plan")} />
-    <Handle type="source" position={Position.Right} id="comfy_scene_video_out" className="clipSB_handle" style={handleStyle("comfy_video", { top: 56 })} />
+    <Handle type="source" position={Position.Right} id={COMFY_STORYBOARD_MAIN_HANDLE} className="clipSB_handle" style={handleStyle("comfy_video", { top: 56 })} />
+    <Handle type="source" position={Position.Right} id={COMFY_STORYBOARD_INTRO_HANDLE} className="clipSB_handle" style={handleStyle("intro_context", { top: 96 })} />
     <NodeShell title="COMFY STORYBOARD" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧩</span>} className={`clipSB_nodeComfyStoryboard ${storyboardStateClass}`.trim()}>
       <div className="clipSB_assemblyStats" style={{ marginTop: 4 }}>
         <div className="clipSB_assemblyRow"><span>Сцен</span><strong>{totalScenes}</strong></div>
