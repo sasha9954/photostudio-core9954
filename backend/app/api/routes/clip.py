@@ -1091,16 +1091,75 @@ def _append_unique_prompt_lines(target: list[str], *sections: list[str]) -> None
 
 _HOOK_STOPWORDS = {
     "a", "an", "and", "at", "for", "from", "in", "into", "of", "on", "or", "the", "to", "with",
+    "about", "after", "before", "how", "why", "what", "when", "where", "your",
     "а", "в", "во", "для", "за", "и", "из", "к", "ко", "на", "над", "не", "но", "о", "об", "от", "по", "под", "при", "с", "со", "у",
+    "как", "почему", "что", "это", "этот", "эта", "эти", "там", "тут",
 }
-_STYLE_HOOK_ENDINGS = {
-    "breaking_alert": "?",
-    "shock_reveal": "?",
-    "mystery_horror": "?",
-    "tutorial_clean": "?",
-    "ai_product": "?",
+_GENERIC_HOOK_PATTERNS = [
+    "ЧТО ТУТ ПРОИСХОДИТ?",
+    "ТЫ ЭТО ВИДИШЬ?",
+    "ЭТО РЕАЛЬНО?",
+    "Я НЕ ОЖИДАЛ ЭТОГО",
+    "ПОСМОТРИ ЧТО ТУТ",
+    "ЧТО-ТО НЕ ТАК...",
+    "ЭТО МЕНЯЕТ ВСЁ",
+]
+_HOOK_PATTERNS_BY_STYLE = {
+    "mystery_horror": [
+        "ЧТО-ТО НЕ ТАК...",
+        "ОНА ЭТО УВИДЕЛА...",
+        "ЧТО ОНА НАШЛА?",
+        "ТАМ КТО-ТО ЕСТЬ?",
+    ],
+    "tutorial_clickable": [
+        "КАК ЭТО РАБОТАЕТ?",
+        "ВОТ В ЧЁМ СЕКРЕТ",
+        "ЧТО ВАЖНО ЗНАТЬ?",
+        "ПОСМОТРИ КАК ЭТО",
+    ],
+    "ai_tech_explainer": [
+        "ЧТО УМЕЕТ AI?",
+        "КАК ЭТО РАБОТАЕТ?",
+        "ВОТ ЧТО ИЗМЕНИЛОСЬ",
+        "ПОЧЕМУ ЭТО ВАЖНО?",
+    ],
+    "youtube_shock": [
+        "Я НЕ ОЖИДАЛ ЭТОГО",
+        "ТЫ ЭТО ВИДИШЬ?",
+        "ЭТО РЕАЛЬНО?",
+        "ПОСМОТРИ ЧТО ТУТ",
+    ],
+    "breaking_alert": [
+        "ЭТО МЕНЯЕТ ВСЁ",
+        "ЧТО СЛУЧИЛОСЬ?",
+        "СРОЧНО: СМОТРИ СЮДА",
+        "ЭТО УЖЕ ПРОИСХОДИТ",
+    ],
+}
+_HOOK_SEMANTIC_HINTS = {
+    "person_seen": {
+        "tokens": {"она", "он", "they", "she", "he", "girl", "woman", "man", "девушка", "женщина", "мужчина"},
+        "patterns": ["ОНА ЭТО УВИДЕЛА...", "ЧТО ОН УВИДЕЛ?", "ПОСМОТРИ НА ЕГО РЕАКЦИЮ"],
+    },
+    "discovery": {
+        "tokens": {"find", "found", "founder", "нашла", "нашел", "нашёл", "нашли", "discover", "discovered", "secret", "секрет", "тайна"},
+        "patterns": ["ЧТО ОНА НАШЛА?", "ВОТ ЧТО НАШЛИ", "ТУТ ЕСТЬ СЕКРЕТ"],
+    },
+    "warning": {
+        "tokens": {"warning", "danger", "alert", "breaking", "news", "risk", "опасно", "опасность", "тревога", "срочно", "warning:"},
+        "patterns": ["ЧТО-ТО НЕ ТАК...", "СРОЧНО: СМОТРИ СЮДА", "ЭТО УЖЕ ПРОИСХОДИТ"],
+    },
+    "tech": {
+        "tokens": {"ai", "tool", "tools", "app", "workflow", "prompt", "model", "tech", "нейросеть", "ии", "технология"},
+        "patterns": ["ЧТО УМЕЕТ AI?", "КАК ЭТО РАБОТАЕТ?", "ВОТ ЧТО ИЗМЕНИЛОСЬ"],
+    },
+    "result": {
+        "tokens": {"result", "results", "after", "before", "outcome", "итог", "результат", "после", "до"},
+        "patterns": ["ВОТ ЧТО ВЫШЛО", "ЭТО МЕНЯЕТ ВСЁ", "ПОСМОТРИ НА РЕЗУЛЬТАТ"],
+    },
 }
 _STRONG_HOOK_MARKERS = ("?", "!", ":")
+_HOOK_TEMPLATE_TOKEN_LIMIT = 5
 
 
 def _is_strong_hook_title(title: str) -> bool:
@@ -1118,37 +1177,72 @@ def _is_strong_hook_title(title: str) -> bool:
     if alpha_chars and sum(1 for char in alpha_chars if char.isupper()) / len(alpha_chars) >= 0.75 and len(words) <= 5:
         return True
     impactful_words = sum(1 for word in words if len(re.sub(r"[^\wА-Яа-яЁё]", "", word, flags=re.UNICODE)) >= 4)
-    return len(words) <= 4 and impactful_words >= 2
+    if len(words) <= 4 and impactful_words >= 2 and (normalized == normalized.upper() or normalized == normalized.title()):
+        return True
+    return False
+
+
+def _clean_hook_token(token: str) -> str:
+    return token.strip(" \t\n\r\"'“”‘’.,!?:;()[]{}")
+
+
+def _extract_hook_tokens(title: str) -> tuple[list[str], list[str], list[str]]:
+    raw_tokens = [_clean_hook_token(token) for token in re.split(r"\s+", title) if _clean_hook_token(token)]
+    meaningful_tokens = [token for token in raw_tokens if token and token.lower() not in _HOOK_STOPWORDS]
+    semantic_tokens = [re.sub(r"[^\wА-Яа-яЁё-]", "", token, flags=re.UNICODE).lower() for token in meaningful_tokens]
+    semantic_tokens = [token for token in semantic_tokens if token]
+    return raw_tokens, meaningful_tokens, semantic_tokens
+
+
+def _choose_hook_pattern(style_key: str, semantic_tokens: list[str]) -> str:
+    for hint in _HOOK_SEMANTIC_HINTS.values():
+        if any(token in hint["tokens"] for token in semantic_tokens):
+            for pattern in hint["patterns"]:
+                if pattern:
+                    return pattern
+    style_patterns = _HOOK_PATTERNS_BY_STYLE.get(style_key) or []
+    if style_patterns:
+        return style_patterns[0]
+    return _GENERIC_HOOK_PATTERNS[0]
+
+
+def _build_hook_title_payload(originalTitle: str | None, styleKey: str | None = None) -> dict[str, Any]:
+    title = re.sub(r"\s+", " ", str(originalTitle or "").strip())
+    if not title:
+        return {"title": "Intro frame", "transformed": False, "patternUsed": None}
+    if _is_strong_hook_title(title):
+        return {"title": title, "transformed": False, "patternUsed": None}
+
+    style_key = _normalize_intro_style_preset(styleKey)
+    raw_tokens, meaningful_tokens, semantic_tokens = _extract_hook_tokens(title)
+    core_tokens = meaningful_tokens or raw_tokens
+    if not core_tokens:
+        return {"title": title, "transformed": False, "patternUsed": None}
+
+    short_meaningful = [token for token in meaningful_tokens if len(token) >= 3][:3]
+    if 2 <= len(core_tokens) <= _HOOK_TEMPLATE_TOKEN_LIMIT and len(title) <= 48 and short_meaningful:
+        tightened = " ".join(core_tokens[: min(len(core_tokens), _HOOK_TEMPLATE_TOKEN_LIMIT)]).strip().rstrip(" .,!?:;…")
+        if tightened and len(tightened.split()) >= 2 and tightened != title:
+            return {"title": tightened, "transformed": True, "patternUsed": "semantic_trim"}
+
+    anchor = ""
+    for token in short_meaningful:
+        normalized = re.sub(r"[^\wА-Яа-яЁё-]", "", token, flags=re.UNICODE)
+        if len(normalized) >= 3:
+            anchor = normalized.upper()
+            break
+    pattern = _choose_hook_pattern(style_key, semantic_tokens)
+    candidate = pattern
+    if anchor and style_key in {"tutorial_clickable", "ai_tech_explainer"} and len(pattern.split()) <= 4:
+        candidate = f"{pattern[:-1]} {anchor}?" if pattern.endswith("?") else f"{pattern} {anchor}"
+    candidate = re.sub(r"\s+", " ", candidate).strip()[:64].rstrip()
+    if not candidate:
+        return {"title": title, "transformed": False, "patternUsed": None}
+    return {"title": candidate, "transformed": candidate != title, "patternUsed": pattern if candidate != title else None}
 
 
 def buildHookTitle(originalTitle: str | None, styleKey: str | None = None) -> str:
-    title = re.sub(r"\s+", " ", str(originalTitle or "").strip())
-    if not title:
-        return "Intro frame"
-    if _is_strong_hook_title(title):
-        return title
-
-    style_key = _normalize_intro_style_preset(styleKey)
-    raw_tokens = [token.strip(" \t\n\r\"'“”‘’.,!?:;()[]{}") for token in re.split(r"\s+", title) if token.strip()]
-    meaningful_tokens = [token for token in raw_tokens if token and token.lower() not in _HOOK_STOPWORDS]
-    core_tokens = meaningful_tokens or raw_tokens
-    if not core_tokens:
-        return title
-
-    limited_tokens = core_tokens[: min(4, max(2, len(core_tokens)))]
-    candidate = " ".join(limited_tokens).strip()
-    if len(limited_tokens) >= 4:
-        candidate = " ".join(limited_tokens[:3]).strip()
-    if len(limited_tokens) <= 2 and len(raw_tokens) > len(limited_tokens):
-        candidate = " ".join(raw_tokens[: min(3, len(raw_tokens))]).strip()
-    candidate = candidate.rstrip(" .,!?:;…")
-    if not candidate:
-        return title
-
-    ending = _STYLE_HOOK_ENDINGS.get(style_key, "?")
-    if ending.strip() and not candidate.endswith(("?", "!", "...", "…")):
-        candidate = f"{candidate}{ending}".strip()
-    return candidate[:64].strip()
+    return _build_hook_title_payload(originalTitle, styleKey).get("title") or "Intro frame"
 
 
 def splitTitleIntoLines(title: str | None) -> list[str]:
@@ -1927,8 +2021,10 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     preview_format = _normalize_intro_preview_format(payload.previewFormat)
     style_meta = _get_intro_style_meta(style_preset)
     original_title = str(payload.title or "").strip() or "Intro frame"
-    title = buildHookTitle(original_title, style_preset)
-    title_transformed = title != original_title
+    hook_title_payload = _build_hook_title_payload(original_title, style_preset)
+    title = str(hook_title_payload.get("title") or original_title or "Intro frame")
+    title_transformed = bool(hook_title_payload.get("transformed"))
+    hook_pattern_used = hook_title_payload.get("patternUsed")
     title_context = str(payload.titleContext or "").strip()
     story_context = str(payload.storyContext or "").strip()
     source_node_types = [str(item or "").strip() for item in (payload.sourceNodeTypes or []) if str(item or "").strip()]
@@ -2076,6 +2172,16 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "- IMPORTANT: preserve original letter case from user input and DO NOT auto-uppercase.",
         f"- Suggested line layout: {' / '.join(text_line_layout) if text_line_layout else title}.",
     ]
+    text_placement_intelligence_rule_lines = [
+        "TEXT PLACEMENT INTELLIGENCE:",
+        "- Place title text in the cleanest readable area of the frame.",
+        "- If faces are centered, place text above or to the side.",
+        "- If the top area is busy, prefer a side zone with cleaner negative space.",
+        "- Avoid placing text over eyes, faces, hands, or the core of the main object.",
+        "- Prefer sky, blurred background, soft wall, fog, water, or other lower-detail zones for text placement.",
+        "- Keep the text block compact and visually stable.",
+        "- The title should feel intentionally designed into the composition, not stamped on top of it.",
+    ]
     contrast_rule_lines = [
         "VISUAL CONTRAST RULES:",
         "- Brighten subjects slightly.",
@@ -2083,6 +2189,22 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "- Increase vibrance moderately, not oversaturated.",
         "- Maintain clean separation between subject and background.",
         "- Goal: subjects must pop instantly.",
+    ]
+    frame_adjustment_rule_lines = [
+        "FRAME ADJUSTMENT RULES:",
+        "- Crop or zoom the framing if needed to emphasize the main subjects.",
+        "- Avoid wide empty areas that weaken clickability.",
+        "- Favor closer framing on faces, reactions, or the main object when it improves impact.",
+        "- Keep enough negative space for the title, but do not waste the frame.",
+        "- The thumbnail should feel focused, intentional, and high-impact at small size.",
+    ]
+    emotion_boost_rule_lines = [
+        "EMOTION BOOST RULES:",
+        "- Slightly exaggerate facial expressions when it improves clickability.",
+        "- Increase emotional clarity in eyes, eyebrows, and mouth.",
+        "- Avoid blank or neutral expressions if the scene is meant to feel intriguing.",
+        "- Keep expressions believable, premium, and not meme-like.",
+        "- If a face is present, emotional readability should be one of the strongest hooks.",
     ]
     focus_rule_lines = [
         "FOCUS RULES:",
@@ -2265,7 +2387,10 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         composition_lines,
         hook_rule_lines,
         text_rule_lines,
+        text_placement_intelligence_rule_lines,
         contrast_rule_lines,
+        frame_adjustment_rule_lines,
+        emotion_boost_rule_lines,
         focus_rule_lines,
         context_lines,
         prompt_lines,
@@ -2283,8 +2408,12 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "sceneCount": scene_count,
         "durationSec": round(duration_sec, 1),
         "compositionMode": composition_plan["mode"],
-        "hookUsed": True,
+        "hookUsed": title_transformed,
         "titleTransformed": title_transformed,
+        "hookPatternUsed": hook_pattern_used,
+        "textPlacementMode": "auto_prompted",
+        "frameAdjustmentEnabled": True,
+        "emotionBoostEnabled": True,
         "subjectWeight": composition_plan["weights"].get("subject"),
         "textLinesCount": len(text_line_layout) if text_line_layout else 1,
         "splitTitleLines": text_line_layout,
