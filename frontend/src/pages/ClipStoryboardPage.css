@@ -1,11 +1,61 @@
 /* Page layout */
 .clipSB_root {
+  --bg-app: #0f1318;
+  --bg-canvas: #121820;
+  --bg-node: #1a232b;
+  --border-node: #2a3742;
+  --text-main: #e8eef5;
+  --text-soft: #9fb0bf;
+
+  --family-narrative: #b86a3f;
+  --family-narrative-soft: rgba(184, 106, 63, 0.16);
+  --family-narrative-header: rgba(184, 106, 63, 0.22);
+  --family-narrative-glow: rgba(184, 106, 63, 0.18);
+  --family-narrative-active: rgba(205, 136, 94, 0.56);
+
+  --family-brain: #4db6ff;
+  --family-brain-soft: rgba(77, 182, 255, 0.16);
+  --family-brain-header: rgba(77, 182, 255, 0.2);
+  --family-brain-glow: rgba(77, 182, 255, 0.18);
+  --family-brain-active: rgba(122, 203, 255, 0.58);
+
+  --family-storyboard: #7f95b3;
+  --family-storyboard-soft: rgba(127, 149, 179, 0.16);
+  --family-storyboard-header: rgba(127, 149, 179, 0.2);
+  --family-storyboard-glow: rgba(127, 149, 179, 0.17);
+  --family-storyboard-active: rgba(158, 181, 211, 0.52);
+
+  --family-audio: #39c6a6;
+  --family-audio-soft: rgba(57, 198, 166, 0.16);
+  --family-audio-header: rgba(57, 198, 166, 0.22);
+  --family-audio-glow: rgba(57, 198, 166, 0.18);
+  --family-audio-active: rgba(95, 214, 188, 0.58);
+
+  --family-music: #8b5cf6;
+  --family-music-soft: rgba(139, 92, 246, 0.16);
+  --family-music-header: rgba(139, 92, 246, 0.22);
+  --family-music-glow: rgba(139, 92, 246, 0.18);
+  --family-music-active: rgba(167, 129, 250, 0.58);
+
+  --family-generation: #28d7c5;
+  --family-generation-soft: rgba(40, 215, 197, 0.16);
+  --family-generation-header: rgba(40, 215, 197, 0.2);
+  --family-generation-glow: rgba(40, 215, 197, 0.18);
+  --family-generation-active: rgba(100, 229, 215, 0.56);
+
+  --family-assembly: #d8b15a;
+  --family-assembly-soft: rgba(216, 177, 90, 0.16);
+  --family-assembly-header: rgba(216, 177, 90, 0.22);
+  --family-assembly-glow: rgba(216, 177, 90, 0.18);
+  --family-assembly-active: rgba(228, 198, 121, 0.58);
+
   position: relative;
   width: 100%;
   height: calc(100vh - 86px);
   min-height: calc(100vh - 86px);
   box-sizing: border-box;
   padding: 18px;
+  background: var(--bg-app);
 }
 
 .clipSB_canvas {
@@ -16,10 +66,11 @@
   min-height: 640px;
   border-radius: 18px;
   overflow: hidden;
-  background: radial-gradient(1200px 800px at 30% 10%, rgba(120, 80, 255, 0.28), transparent 60%),
-    radial-gradient(1200px 800px at 70% 40%, rgba(30, 160, 255, 0.18), transparent 55%),
-    rgba(8, 10, 16, 0.72);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  background: radial-gradient(1200px 800px at 28% 8%, rgba(184, 106, 63, 0.14), transparent 58%),
+    radial-gradient(1200px 800px at 72% 18%, rgba(77, 182, 255, 0.12), transparent 54%),
+    radial-gradient(1200px 800px at 60% 70%, rgba(40, 215, 197, 0.08), transparent 52%),
+    var(--bg-canvas);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 /* Force ReactFlow to fill */
@@ -68,16 +119,50 @@
 
 /* Node base */
 .clipSB_node {
+  --node-accent: var(--family-brain);
+  --node-accent-soft: var(--family-brain-soft);
+  --node-accent-header: var(--family-brain-header);
+  --node-accent-glow: var(--family-brain-glow);
+  --node-accent-active: var(--family-brain-active);
+
+  position: relative;
   width: 300px;
   border-radius: 16px;
-  background: rgba(8, 10, 16, 0.80);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.01), rgba(255, 255, 255, 0)) , var(--bg-node);
+  box-shadow: inset 0 0 0 1px var(--border-node), 0 14px 34px rgba(0, 0, 0, 0.22);
   backdrop-filter: blur(12px);
-  color: rgba(255, 255, 255, 0.88);
+  color: var(--text-main);
   overflow: visible;
+  transition: box-shadow 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.clipSB_node::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--node-accent) 18%, transparent), var(--node-accent), color-mix(in srgb, var(--node-accent) 18%, transparent));
+  opacity: 0.92;
+}
+
+.clipSB_node::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(180deg, var(--node-accent-header), transparent 72px);
+  opacity: 0.9;
+}
+
+.clipSB_node:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--node-accent) 46%, var(--border-node)), 0 0 0 1px rgba(255, 255, 255, 0.02), 0 18px 38px rgba(0, 0, 0, 0.24), 0 0 24px var(--node-accent-glow);
 }
 
 .clipSB_nodeHeader {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -90,14 +175,16 @@
   border-radius: 10px;
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, 0.06);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  background: var(--node-accent-soft);
+  color: var(--text-main);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--node-accent) 28%, transparent);
 }
 
 .clipSB_nodeTitle {
   font-weight: 800;
   letter-spacing: 0.06em;
   font-size: 13px;
+  color: var(--text-main);
 }
 
 .clipSB_nodeBody {
@@ -106,25 +193,15 @@
   z-index: 1;
 }
 
-
-/* Node color accents (dark neon, per type) */
-.clipSB_node {
-  --node-accent: rgba(120, 190, 255, 0.55);
-}
-
-.clipSB_node::before {
-  content: "";
-  display: block;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--node-accent), transparent);
-  opacity: 0.85;
-}
-
-.clipSB_nodeAudio { --node-accent: rgba(255, 95, 125, 0.7); box-shadow: inset 0 0 0 1px rgba(255, 95, 125, 0.22), 0 0 18px rgba(255, 95, 125, 0.16); }
-.clipSB_nodeText { --node-accent: rgba(139, 184, 255, 0.7); box-shadow: inset 0 0 0 1px rgba(139, 184, 255, 0.2), 0 0 18px rgba(139, 184, 255, 0.14); }
-.clipSB_nodeBrain { --node-accent: rgba(196, 128, 255, 0.76); box-shadow: inset 0 0 0 1px rgba(196, 128, 255, 0.24), 0 0 22px rgba(196, 128, 255, 0.18); }
-.clipSB_nodeStoryboard { --node-accent: rgba(77, 216, 255, 0.74); box-shadow: inset 0 0 0 1px rgba(77, 216, 255, 0.22), 0 0 20px rgba(77, 216, 255, 0.15); }
-.clipSB_nodeAssembly { --node-accent: rgba(106, 168, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(106, 168, 255, 0.24), 0 0 20px rgba(106, 168, 255, 0.16); }
+.clipSB_nodeAudio { --node-accent: var(--family-audio); --node-accent-soft: var(--family-audio-soft); --node-accent-header: var(--family-audio-header); --node-accent-glow: var(--family-audio-glow); --node-accent-active: var(--family-audio-active); }
+.clipSB_nodeText { --node-accent: var(--family-narrative); --node-accent-soft: var(--family-narrative-soft); --node-accent-header: var(--family-narrative-header); --node-accent-glow: var(--family-narrative-glow); --node-accent-active: var(--family-narrative-active); }
+.clipSB_nodeBrain,
+.clipSB_nodeComfyBrain { --node-accent: var(--family-brain); --node-accent-soft: var(--family-brain-soft); --node-accent-header: var(--family-brain-header); --node-accent-glow: var(--family-brain-glow); --node-accent-active: var(--family-brain-active); }
+.clipSB_nodeStoryboard,
+.clipSB_nodeComfyStoryboard { --node-accent: var(--family-storyboard); --node-accent-soft: var(--family-storyboard-soft); --node-accent-header: var(--family-storyboard-header); --node-accent-glow: var(--family-storyboard-glow); --node-accent-active: var(--family-storyboard-active); }
+.clipSB_nodeAssembly { --node-accent: var(--family-assembly); --node-accent-soft: var(--family-assembly-soft); --node-accent-header: var(--family-assembly-header); --node-accent-glow: var(--family-assembly-glow); --node-accent-active: var(--family-assembly-active); }
+.clipSB_nodeComfyVideo,
+.clipSB_nodeIntroFrame { --node-accent: var(--family-generation); --node-accent-soft: var(--family-generation-soft); --node-accent-header: var(--family-generation-header); --node-accent-glow: var(--family-generation-glow); --node-accent-active: var(--family-generation-active); }
 .clipSB_nodeIntroFrame {
   width: auto;
   min-width: 840px;
@@ -184,11 +261,6 @@
   gap: 4px;
 }
 
-.clipSB_nodeAudio .clipSB_nodeIcon { background: rgba(255, 95, 125, 0.16); }
-.clipSB_nodeText .clipSB_nodeIcon { background: rgba(139, 184, 255, 0.16); }
-.clipSB_nodeBrain .clipSB_nodeIcon { background: rgba(196, 128, 255, 0.18); }
-.clipSB_nodeStoryboard .clipSB_nodeIcon { background: rgba(77, 216, 255, 0.16); }
-.clipSB_nodeAssembly .clipSB_nodeIcon { background: rgba(106, 168, 255, 0.16); }
 .clipSB_nodeRef--ref_character .clipSB_nodeIcon { background: rgba(52, 213, 215, 0.16); }
 .clipSB_nodeRef--ref_location .clipSB_nodeIcon { background: rgba(179, 123, 255, 0.16); }
 .clipSB_nodeRef--ref_style .clipSB_nodeIcon { background: rgba(255, 194, 91, 0.16); }
@@ -642,13 +714,13 @@
 
 .clipSB_handle:hover {
   filter: brightness(1.08);
-  box-shadow: 0 0 0 1px rgba(120, 255, 220, 0.28), 0 0 8px rgba(120, 255, 220, 0.38);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 0 8px rgba(255, 255, 255, 0.12);
 }
 
 .clipSB_handle.connecting,
 .clipSB_handle.valid {
   filter: brightness(1.12);
-  box-shadow: 0 0 0 1px rgba(120, 255, 220, 0.32), 0 0 10px rgba(120, 255, 220, 0.42);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18), 0 0 10px rgba(255, 255, 255, 0.16);
 }
 
 /* Make node selection look nice */
@@ -659,7 +731,7 @@
 }
 
 .react-flow__node.selected .clipSB_node {
-  box-shadow: inset 0 0 0 1px rgba(120, 255, 220, 0.35), 0 0 0 1px rgba(120, 255, 220, 0.15);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--node-accent-active) 72%, var(--border-node)), 0 0 0 1px var(--node-accent-active), 0 20px 40px rgba(0, 0, 0, 0.26), 0 0 28px var(--node-accent-glow);
 }
 
 /* Edges */
@@ -1555,24 +1627,21 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_nodeComfyBrain {
-  --node-accent: rgba(77, 216, 255, 0.78);
   background:
-    radial-gradient(circle at top right, rgba(77, 216, 255, .12), transparent 38%),
-    radial-gradient(circle at bottom left, rgba(88, 116, 255, .10), transparent 34%),
-    rgba(8, 10, 18, 0.90);
-  box-shadow: inset 0 0 0 1px rgba(77,216,255,.24), 0 0 22px rgba(77,216,255,.18);
+    radial-gradient(circle at top right, color-mix(in srgb, var(--node-accent) 14%, transparent), transparent 42%),
+    radial-gradient(circle at bottom left, color-mix(in srgb, var(--node-accent) 10%, transparent), transparent 38%),
+    var(--bg-node);
 }
-.clipSB_nodeComfyBrainPlannerLegacy { --node-accent: rgba(77, 216, 255, 0.78); }
+.clipSB_nodeComfyBrainPlannerLegacy { --node-accent: var(--family-brain); --node-accent-soft: var(--family-brain-soft); --node-accent-header: var(--family-brain-header); --node-accent-glow: var(--family-brain-glow); --node-accent-active: var(--family-brain-active); }
 .clipSB_nodeComfyBrainPlannerGemini {
-  --node-accent: rgba(167, 139, 250, 0.92);
-  background:
-    radial-gradient(circle at top right, rgba(129, 140, 248, .16), transparent 42%),
-    radial-gradient(circle at bottom left, rgba(244, 114, 182, .14), transparent 38%),
-    rgba(10, 10, 20, .92);
-  box-shadow: inset 0 0 0 1px rgba(167,139,250,.34), 0 0 26px rgba(167,139,250,.24);
+  --node-accent: var(--family-music);
+  --node-accent-soft: var(--family-music-soft);
+  --node-accent-header: var(--family-music-header);
+  --node-accent-glow: var(--family-music-glow);
+  --node-accent-active: var(--family-music-active);
 }
-.clipSB_nodeComfyStoryboard { --node-accent: rgba(106, 168, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(106,168,255,.24), 0 0 22px rgba(106,168,255,.18); }
-.clipSB_nodeComfyVideo { --node-accent: rgba(125, 249, 255, 0.78); box-shadow: inset 0 0 0 1px rgba(125,249,255,.24), 0 0 22px rgba(125,249,255,.18); }
+.clipSB_nodeComfyStoryboard,
+.clipSB_nodeComfyVideo { background: var(--bg-node); }
 
 @keyframes clipSBComfyBrainPulse {
   0%, 100% { box-shadow: inset 0 0 0 1px rgba(77,216,255,.32), 0 0 16px rgba(77,216,255,.22); }
@@ -1585,13 +1654,12 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_nodeComfyBrainStateParsing {
-  --node-accent: rgba(77, 216, 255, 0.95);
+  --node-accent: var(--family-brain);
   animation: clipSBComfyBrainPulse 1.5s ease-in-out infinite;
 }
 
 .clipSB_nodeComfyBrainStateReady {
-  --node-accent: rgba(147, 221, 111, 0.82);
-  box-shadow: inset 0 0 0 1px rgba(147,221,111,.28), 0 0 22px rgba(147,221,111,.2);
+  box-shadow: inset 0 0 0 1px rgba(147,221,111,.28), 0 0 22px rgba(147,221,111,.16);
 }
 
 .clipSB_nodeComfyBrainStateError {
@@ -1600,18 +1668,17 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_nodeComfyStoryboardStateUpdating {
-  --node-accent: rgba(106, 168, 255, 0.95);
+  --node-accent: var(--family-storyboard);
   animation: clipSBComfyStoryboardPulse 1.5s ease-in-out infinite;
 }
 
 .clipSB_nodeComfyStoryboardStateReady {
-  --node-accent: rgba(147, 221, 111, 0.82);
-  box-shadow: inset 0 0 0 1px rgba(147,221,111,.28), 0 0 22px rgba(147,221,111,.2);
+  box-shadow: inset 0 0 0 1px rgba(147,221,111,.28), 0 0 22px rgba(147,221,111,.16);
 }
 
 .clipSB_nodeComfyStoryboardStateStale {
-  --node-accent: rgba(255, 188, 84, 0.9);
-  box-shadow: inset 0 0 0 1px rgba(255,188,84,.3), 0 0 22px rgba(255,188,84,.18);
+  --node-accent: var(--family-assembly);
+  box-shadow: inset 0 0 0 1px rgba(216,177,90,.32), 0 0 22px rgba(216,177,90,.16);
 }
 
 .clipSB_nodeComfyStoryboardStateError {
@@ -1623,7 +1690,7 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_nodeRefAnimal { --node-accent: rgba(255, 183, 77, 0.78); box-shadow: inset 0 0 0 1px rgba(255,183,77,.24), 0 0 18px rgba(255,183,77,.18); }
 .clipSB_nodeRefGroup { --node-accent: rgba(240, 98, 146, 0.78); box-shadow: inset 0 0 0 1px rgba(240,98,146,.24), 0 0 18px rgba(240,98,146,.18); }
 
-.clipSB_badge { display:inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 11px; background: rgba(255,255,255,.08); margin-bottom: 8px; }
+.clipSB_badge { display:inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 11px; color: var(--text-main); background: color-mix(in srgb, var(--node-accent) 18%, rgba(255,255,255,.04)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--node-accent) 24%, transparent); margin-bottom: 8px; }
 .clipSB_grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .clipSB_brainLabel { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: rgba(255,255,255,.62); margin: 0; text-transform: uppercase; }
 .clipSB_comfyPlannerModeRow { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 2px; }

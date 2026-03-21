@@ -23,7 +23,7 @@ export function getModeDisplayMeta(mode = "clip") { return MODE_DISPLAY_META[Str
 export function getStyleDisplayMeta(stylePreset = "realism") { return STYLE_DISPLAY_META[String(stylePreset || "realism").toLowerCase()] || STYLE_DISPLAY_META.realism; }
 
 const PORT_COLORS = {
-  audio: "#ff5f7d", text: "#6fa8ff", ref_character_1: "#16d4de", ref_character_2: "#00bdd6", ref_character_3: "#1fc8ff", ref_animal: "#ffb347", ref_group: "#ff5f97", ref_location: "#a56fff", ref_style: "#ffcb52", ref_props: "#8ddf48", ref_items: "#8ddf48", comfy_plan: "#38d4ff", comfy_video: "#5ef2ff", intro_context: "#ff9d5c",
+  audio: "var(--family-audio)", text: "var(--family-narrative)", ref_character_1: "#16d4de", ref_character_2: "#00bdd6", ref_character_3: "#1fc8ff", ref_animal: "#c98b56", ref_group: "#b35f8e", ref_location: "#7f95b3", ref_style: "#b86a3f", ref_props: "#86b26d", ref_items: "#86b26d", comfy_plan: "var(--family-brain)", comfy_video: "var(--family-generation)", intro_context: "var(--family-narrative)",
 };
 
 const HANDLE_BASE_STYLE = {
@@ -36,7 +36,7 @@ const HANDLE_BASE_STYLE = {
 
 export function handleStyle(kind, extra = {}) {
   const color = PORT_COLORS[kind] || "#8c8c8c";
-  return { ...HANDLE_BASE_STYLE, background: color, boxShadow: `0 0 0 1px rgba(0,0,0,0.72), 0 0 0 2px ${color}26`, ...extra };
+  return { ...HANDLE_BASE_STYLE, background: color, boxShadow: `0 0 0 1px rgba(0,0,0,0.72), 0 0 0 2px color-mix(in srgb, ${color} 18%, transparent)`, ...extra };
 }
 
 export function NodeShell({ title, icon, children, className = "", onClose }) {
