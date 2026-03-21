@@ -1738,31 +1738,39 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
     style_meta = _get_intro_style_meta(style_preset)
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     accent = _hex_to_rgba(style_meta.get("accent", "#f6d365"), 255)
-    _draw_intro_vertical_fade(overlay, top_alpha=32, bottom_alpha=64)
+    apply_vertical_fade = str(os.getenv("INTRO_PREVIEW_VERTICAL_FADE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    show_style_watermark = str(os.getenv("INTRO_PREVIEW_STYLE_WATERMARK", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if apply_vertical_fade:
+        _draw_intro_vertical_fade(overlay, top_alpha=32, bottom_alpha=64)
     draw = ImageDraw.Draw(overlay)
     margin_x = int(width * (0.065 if normalized_preview_format == "16:9" else 0.078))
     brand_font = _get_intro_font(max(12, int(width * 0.013)), bold=True)
     footer_font = _get_intro_font(max(11, int(width * 0.0105)), bold=False)
-    watermark_font = _get_intro_font(max(10, int(width * 0.009)), bold=False)
     brand_x = margin_x
     brand_y = max(16, int(height * 0.045))
     footer_text = "ava-studio product 2026"
     footer_y = height - int(height * 0.04) - getattr(footer_font, "size", 12)
-    watermark_text = style_meta.get("label") or "ava-studio"
-    watermark_bbox = draw.textbbox((0, 0), watermark_text, font=watermark_font)
-    watermark_w = (watermark_bbox[2] - watermark_bbox[0]) if watermark_bbox else int(width * 0.08)
-    watermark_h = (watermark_bbox[3] - watermark_bbox[1]) if watermark_bbox else getattr(watermark_font, "size", 10)
-    watermark_x = max(16, width - margin_x - watermark_w)
-    watermark_y = max(brand_y, footer_y - watermark_h - max(12, int(height * 0.018)))
+    watermark_text = (style_meta.get("label") or "ava-studio") if show_style_watermark else ""
+    watermark_font_size = 0
+    if watermark_text:
+        watermark_font = _get_intro_font(max(10, int(width * 0.009)), bold=False)
+        watermark_bbox = draw.textbbox((0, 0), watermark_text, font=watermark_font)
+        watermark_w = (watermark_bbox[2] - watermark_bbox[0]) if watermark_bbox else int(width * 0.08)
+        watermark_h = (watermark_bbox[3] - watermark_bbox[1]) if watermark_bbox else getattr(watermark_font, "size", 10)
+        watermark_x = max(16, width - margin_x - watermark_w)
+        watermark_y = max(brand_y, footer_y - watermark_h - max(12, int(height * 0.018)))
+        watermark_font_size = int(getattr(watermark_font, "size", 0) or 0)
 
     _draw_text_tracking(draw, (brand_x, brand_y), "ava-studio", brand_font, (255, 255, 255, 178), tracking=max(0, int(width * 0.0009)))
     _draw_text_tracking(draw, (margin_x, footer_y), footer_text, footer_font, (232, 236, 255, 150), tracking=max(0, int(width * 0.0007)))
-    draw.text((watermark_x, watermark_y), watermark_text, font=watermark_font, fill=(accent[0], accent[1], accent[2], 72))
+    if watermark_text:
+        draw.text((watermark_x, watermark_y), watermark_text, font=watermark_font, fill=(accent[0], accent[1], accent[2], 72))
 
     overlay_debug = {
         "title": title,
         "previewFormat": normalized_preview_format,
         "mainTitleRenderedBy": "gemini",
+        "verticalFadeApplied": apply_vertical_fade,
         "brandingOverlayApplied": True,
         "footerOverlayApplied": True,
         "watermarkOverlayApplied": bool(str(watermark_text or "").strip()),
@@ -1771,7 +1779,7 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
         "watermarkText": watermark_text,
         "brandingFontSize": int(getattr(brand_font, "size", 0) or 0),
         "footerFontSize": int(getattr(footer_font, "size", 0) or 0),
-        "watermarkFontSize": int(getattr(watermark_font, "size", 0) or 0),
+        "watermarkFontSize": watermark_font_size,
     }
     print(
         "[INTRO FRAME OVERLAY] "
@@ -1780,6 +1788,7 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
                 "title": title,
                 "previewFormat": normalized_preview_format,
                 "overlay.mainTitleRenderedBy": overlay_debug["mainTitleRenderedBy"],
+                "overlay.verticalFadeApplied": overlay_debug["verticalFadeApplied"],
                 "overlay.brandingOverlayApplied": overlay_debug["brandingOverlayApplied"],
                 "overlay.footerOverlayApplied": overlay_debug["footerOverlayApplied"],
                 "overlay.watermarkOverlayApplied": overlay_debug["watermarkOverlayApplied"],
