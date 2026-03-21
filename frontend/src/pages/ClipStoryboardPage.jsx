@@ -1458,15 +1458,18 @@ function hasIntroFramePreview(introFrame) {
 function buildIntroFrameComparablePayload(introFrame) {
   if (!introFrame || !hasIntroFramePreview(introFrame)) return null;
   const previewKind = getEffectiveIntroFramePreviewKind(introFrame);
+  const manualTitleRaw = String(introFrame?.userTitleRaw ?? introFrame?.title ?? "");
   return {
     nodeId: String(introFrame?.nodeId || ""),
-    title: String(introFrame?.title || "").trim(),
+    title: manualTitleRaw.trim(),
+    manualTitleRaw,
     autoTitle: !!introFrame?.autoTitle,
     stylePreset: normalizeIntroStylePreset(introFrame?.stylePreset || "cinematic_dark"),
     durationSec: normalizeIntroDurationSec(introFrame?.durationSec),
     previewFormat: normalizeIntroFramePreviewFormat(introFrame?.previewFormat),
     previewKind,
     generatedAt: String(introFrame?.generatedAt || "").trim() || null,
+    previewTitleUsed: String(introFrame?.previewTitleUsed || "").trim() || null,
     imageUrl: (
       previewKind === INTRO_FRAME_PREVIEW_KINDS.UPLOADED
       || previewKind === INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED
@@ -1593,7 +1596,8 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
     ? {
       nodeId: String(introNode?.id || ""),
       nodeType: "introFrame",
-      title: String(introNode?.data?.title || "").trim(),
+      title: String(introNode?.data?.userTitleRaw ?? introNode?.data?.title ?? "").trim(),
+      manualTitleRaw: String(introNode?.data?.userTitleRaw ?? introNode?.data?.title ?? ""),
       autoTitle: !!introNode?.data?.autoTitle,
       stylePreset: normalizeIntroStylePreset(introNode?.data?.stylePreset || "cinematic_dark"),
       durationSec: normalizeIntroDurationSec(introNode?.data?.durationSec),
@@ -1601,6 +1605,7 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       imageUrl: String(introNode?.data?.imageUrl || "").trim(),
       previewKind: getEffectiveIntroFramePreviewKind(introNode?.data),
       generatedAt: String(introNode?.data?.generatedAt || "").trim(),
+      previewTitleUsed: String(introNode?.data?.previewTitleUsed || "").trim(),
       status: String(introNode?.data?.status || "idle"),
       contextSummary: String(introNode?.data?.contextSummary || "").trim(),
       altTitles: Array.isArray(introNode?.data?.altTitles) ? introNode.data.altTitles : [],
@@ -3607,6 +3612,9 @@ function IntroFrameNode({ id, data }) {
                     />
                     <div className={`clipSB_introTitleHint clipSB_small${hasRecommendedOverflow ? " clipSB_introTitleHintWarning" : ""}`}>
                       Рекомендуется до {INTRO_TITLE_RECOMMENDED_CHARS} символов. Лучше 2–5 слов.
+                    </div>
+                    <div className="clipSB_introTitleHint clipSB_small">
+                      Этот ввод — основной источник заголовка для Intro Frame preview/generation.
                     </div>
                     <div className="clipSB_introTitleHint clipSB_small">
                       Служебный hook для генерации сокращается предсказуемо до {INTRO_HOOK_TITLE_MAX_CHARS} символов и не перезаписывает ваш текст.
@@ -8547,6 +8555,8 @@ onClipSec: (nodeId, value) => {
                   nextData.autoTitle = !!value;
                   const freshContext = collectIntroFrameContext({ nodeId, nodes: prev, edges: edgesRef.current || [] });
                   nextData.derivedTitle = buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes });
+                  nextData.generatedHookTitle = "";
+                  nextData.previewTitleUsed = "";
                   if (!value && !String(nextData.userTitleRaw ?? nextData.title ?? "").trim()) {
                     nextData.manualTitle = false;
                   }
@@ -8561,6 +8571,7 @@ onClipSec: (nodeId, value) => {
                   nextData.userTitleRaw = String(value || "");
                   nextData.manualTitle = !!String(value || "").trim();
                   nextData.generatedHookTitle = "";
+                  nextData.previewTitleUsed = "";
                   if (nextData.manualTitle) nextData.autoTitle = false;
                 } else {
                   nextData[key] = value;
@@ -8590,7 +8601,7 @@ onClipSec: (nodeId, value) => {
                 }
               },
               onClearImage: (nodeId) => setNodes((prev) => prev.map((x) => (x.id === nodeId
-                ? { ...x, data: { ...x.data, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", error: "", debug: {} } }
+                ? { ...x, data: { ...x.data, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", error: "", debug: {}, generatedHookTitle: "", previewTitleUsed: "" } }
                 : x))),
               onGenerate: async (nodeId) => {
                 const currentNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
@@ -8612,6 +8623,7 @@ onClipSec: (nodeId, value) => {
                 const storyContext = buildIntroFrameStoryContextText(freshContext);
                 const payload = {
                   title: nextTitle,
+                  manualTitleRaw,
                   autoTitle: !!currentNode?.data?.autoTitle,
                   stylePreset: normalizeIntroStylePreset(currentNode?.data?.stylePreset || "cinematic_dark"),
                   previewFormat: normalizeIntroFramePreviewFormat(currentNode?.data?.previewFormat),
@@ -8642,6 +8654,7 @@ onClipSec: (nodeId, value) => {
                       userTitleRaw: manualTitleRaw,
                       derivedTitle: currentDerivedTitle,
                       manualTitle: preserveManualTitle,
+                      previewTitleUsed: payload.title,
                       contextSummary: freshContext.summary,
                       contextSceneCount: freshContext.sceneCount,
                       sourceNodeIds: freshContext.sourceNodeIds,
@@ -8654,6 +8667,8 @@ onClipSec: (nodeId, value) => {
 
                 try {
                   console.log("[INTRO FRAME PAYLOAD] /api/clip/intro/generate", {
+                    manualTitleRaw: payload.manualTitleRaw,
+                    hookSourceTitle: payload.title,
                     title: payload.title,
                     previewFormat: payload.previewFormat,
                     stylePreset: payload.stylePreset,
@@ -8686,6 +8701,7 @@ onClipSec: (nodeId, value) => {
                         title: manualTitleRaw,
                         userTitleRaw: manualTitleRaw,
                         derivedTitle: currentDerivedTitle,
+                        previewTitleUsed: String(out?.debug?.previewTitleUsed || payload.title || ""),
                         generatedHookTitle: String(out?.title || nextTitle || ""),
                         imageUrl: String(out.imageUrl || ""),
                         previewKind: INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED,
@@ -9084,6 +9100,7 @@ const hydrate = useCallback((source = "unknown") => {
             data.userTitleRaw = String(data.userTitleRaw ?? data.title ?? "");
             data.derivedTitle = String(data.derivedTitle || "");
             data.generatedHookTitle = String(data.generatedHookTitle || "");
+            data.previewTitleUsed = String(data.previewTitleUsed || "");
             data.autoTitle = !!data.autoTitle;
             data.manualTitle = !!String(data.userTitleRaw || "").trim() && (!!data.manualTitle || !data.autoTitle);
             data.stylePreset = normalizeIntroStylePreset(data.stylePreset || "cinematic_dark");
@@ -9378,7 +9395,7 @@ const hydrate = useCallback((source = "unknown") => {
         id,
         type: "introFrame",
         position: { x: centerX + jitterX, y: centerY + jitterY },
-        data: { title: "", userTitleRaw: "", derivedTitle: "", generatedHookTitle: "", autoTitle: true, manualTitle: false, stylePreset: "cinematic_dark", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
+        data: { title: "", userTitleRaw: "", derivedTitle: "", generatedHookTitle: "", previewTitleUsed: "", autoTitle: true, manualTitle: false, stylePreset: "cinematic_dark", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
       };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };

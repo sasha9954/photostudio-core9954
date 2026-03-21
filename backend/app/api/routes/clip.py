@@ -138,6 +138,7 @@ class AssembleIntroIn(BaseModel):
 
 class IntroGenerateIn(BaseModel):
     title: str | None = None
+    manualTitleRaw: str | None = None
     autoTitle: bool | None = True
     stylePreset: str | None = "cinematic_dark"
     previewFormat: str | None = "16:9"
@@ -1193,6 +1194,10 @@ def _extract_hook_tokens(title: str) -> tuple[list[str], list[str], list[str]]:
     return raw_tokens, meaningful_tokens, semantic_tokens
 
 
+def _normalize_intro_title_input(value: str | None) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
 def _choose_hook_pattern(style_key: str, semantic_tokens: list[str]) -> str:
     for hint in _HOOK_SEMANTIC_HINTS.values():
         if any(token in hint["tokens"] for token in semantic_tokens):
@@ -1206,7 +1211,7 @@ def _choose_hook_pattern(style_key: str, semantic_tokens: list[str]) -> str:
 
 
 def _build_hook_title_payload(originalTitle: str | None, styleKey: str | None = None) -> dict[str, Any]:
-    title = re.sub(r"\s+", " ", str(originalTitle or "").strip())
+    title = _normalize_intro_title_input(originalTitle)
     if not title:
         return {"title": "Intro frame", "transformed": False, "patternUsed": None}
     if _is_strong_hook_title(title):
@@ -1214,18 +1219,18 @@ def _build_hook_title_payload(originalTitle: str | None, styleKey: str | None = 
 
     style_key = _normalize_intro_style_preset(styleKey)
     raw_tokens, meaningful_tokens, semantic_tokens = _extract_hook_tokens(title)
-    core_tokens = meaningful_tokens or raw_tokens
-    if not core_tokens:
+    if not raw_tokens:
         return {"title": title, "transformed": False, "patternUsed": None}
 
     short_meaningful = [token for token in meaningful_tokens if len(token) >= 3][:3]
-    if 2 <= len(core_tokens) <= _HOOK_TEMPLATE_TOKEN_LIMIT and len(title) <= 48 and short_meaningful:
-        tightened = " ".join(core_tokens[: min(len(core_tokens), _HOOK_TEMPLATE_TOKEN_LIMIT)]).strip().rstrip(" .,!?:;…")
+    if len(raw_tokens) <= _HOOK_TEMPLATE_TOKEN_LIMIT and len(title) <= 48:
+        tightened = " ".join(raw_tokens[: min(len(raw_tokens), _HOOK_TEMPLATE_TOKEN_LIMIT)]).strip()
+        tightened = re.sub(r"\s+", " ", tightened).strip()
         if tightened and len(tightened.split()) >= 2 and tightened != title:
             return {"title": tightened, "transformed": True, "patternUsed": "semantic_trim"}
 
     anchor = ""
-    for token in short_meaningful:
+    for token in short_meaningful or raw_tokens:
         normalized = re.sub(r"[^\wА-Яа-яЁё-]", "", token, flags=re.UNICODE)
         if len(normalized) >= 3:
             anchor = normalized.upper()
@@ -1245,7 +1250,7 @@ def buildHookTitle(originalTitle: str | None, styleKey: str | None = None) -> st
 
 
 def splitTitleIntoLines(title: str | None) -> list[str]:
-    normalized = re.sub(r"\s+", " ", str(title or "").strip())
+    normalized = _normalize_intro_title_input(title)
     if not normalized:
         return []
     tokens = [token for token in normalized.split(" ") if token]
@@ -1810,7 +1815,8 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     style_preset = _normalize_intro_style_preset(payload.stylePreset)
     preview_format = _normalize_intro_preview_format(payload.previewFormat)
     style_meta = _get_intro_style_meta(style_preset)
-    original_title = str(payload.title or "").strip() or "Intro frame"
+    manual_title_raw = _normalize_intro_title_input(getattr(payload, "manualTitleRaw", None))
+    original_title = _normalize_intro_title_input(payload.title) or manual_title_raw or "Intro frame"
     hook_title_payload = _build_hook_title_payload(original_title, style_preset)
     title = str(hook_title_payload.get("title") or original_title or "Intro frame")
     title_transformed = bool(hook_title_payload.get("transformed"))
@@ -2193,7 +2199,9 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     debug = {
         "rawConnectedRefsByRoleCounts": {role: len(connected_refs_by_role.get(role) or []) for role in connected_refs_by_role},
         "title": title,
+        "manualTitleRaw": manual_title_raw or original_title,
         "originalTitle": original_title,
+        "previewTitleUsed": original_title,
         "stylePreset": style_preset,
         "styleKey": style_preset,
         "previewFormat": preview_format,
@@ -2580,7 +2588,8 @@ def _summarize_gemini_image_response(resp: dict) -> dict:
 def clip_intro_generate(payload: IntroGenerateIn):
     style_preset = _normalize_intro_style_preset(payload.stylePreset)
     preview_format = _normalize_intro_preview_format(payload.previewFormat)
-    title = buildHookTitle(str(payload.title or "").strip() or "Intro frame", style_preset)
+    prompt, debug = _build_intro_frame_prompt(payload)
+    title = str(debug.get("title") or buildHookTitle(_normalize_intro_title_input(payload.title) or "Intro frame", style_preset))
     width, height = _resolve_intro_preview_dimensions(preview_format)
     connected_refs_by_role = _normalize_intro_connected_refs_by_role(getattr(payload, "connectedRefsByRole", None))
     raw_connected_ref_counts = {role: len(connected_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}
@@ -2621,7 +2630,6 @@ def clip_intro_generate(payload: IntroGenerateIn):
             },
         )
 
-    prompt, debug = _build_intro_frame_prompt(payload)
     model = settings.GEMINI_IMAGE_MODEL or "gemini-2.5-flash-image-preview"
     body = {
         "contents": [{
@@ -2698,6 +2706,8 @@ def clip_intro_generate(payload: IntroGenerateIn):
             "[INTRO FRAME GEMINI] request",
             json.dumps(
                 {
+                    "manualTitleRaw": debug.get("manualTitleRaw") or "",
+                    "previewTitleUsed": debug.get("previewTitleUsed") or "",
                     "title": title,
                     "stylePreset": style_preset,
                     "previewFormat": preview_format,
