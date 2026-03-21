@@ -1328,6 +1328,9 @@ const INTRO_FRAME_PREVIEW_FORMAT_OPTIONS = [
   { value: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, label: "16:9" },
 ];
 
+const INTRO_TITLE_RECOMMENDED_CHARS = 40;
+const INTRO_HOOK_TITLE_MAX_CHARS = 64;
+
 function normalizeIntroFramePreviewKind(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === INTRO_FRAME_PREVIEW_KINDS.UPLOADED) return INTRO_FRAME_PREVIEW_KINDS.UPLOADED;
@@ -1434,9 +1437,7 @@ function resolveIntroFramePreviewUrl(introFrame) {
   const imageUrl = String(introFrame?.imageUrl || "").trim();
   if (previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
     return buildIntroFramePreviewDataUrl({
-      title: String(introFrame?.title || "").trim(),
       stylePreset: introFrame?.stylePreset || "cinematic_dark",
-      contextSummary: String(introFrame?.contextSummary || "").trim(),
       previewFormat: introFrame?.previewFormat,
     });
   }
@@ -1447,7 +1448,9 @@ function hasIntroFramePreview(introFrame) {
   if (!introFrame) return false;
   const previewKind = getEffectiveIntroFramePreviewKind(introFrame);
   if (previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
-    return !!String(introFrame?.title || "").trim() || !!String(introFrame?.generatedAt || "").trim();
+    return !!String(introFrame?.userTitleRaw ?? introFrame?.title ?? "").trim()
+      || !!String(introFrame?.derivedTitle || "").trim()
+      || !!String(introFrame?.generatedAt || "").trim();
   }
   return !!String(introFrame?.imageUrl || "").trim();
 }
@@ -1752,128 +1755,6 @@ function truncateIntroText(value, maxLength = 84) {
   if (!text) return "";
   if (text.length <= maxLength) return text;
   return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
-}
-
-function splitIntroPreviewWord(word = "", maxChars = 12) {
-  const clean = String(word || "").trim();
-  if (!clean) return [];
-  if (clean.length <= maxChars) return [clean];
-  const parts = [];
-  let rest = clean;
-  while (rest.length > maxChars) {
-    const take = Math.max(4, maxChars - 1);
-    parts.push(`${rest.slice(0, take)}-`);
-    rest = rest.slice(take);
-  }
-  if (rest) parts.push(rest);
-  return parts;
-}
-
-function wrapIntroPreviewTitle({ ctx, text, maxWidth, maxLines }) {
-  const rawWords = String(text || "").split(/\s+/).filter(Boolean);
-  if (!rawWords.length) return [];
-  const words = rawWords.flatMap((word) => splitIntroPreviewWord(word, 14));
-  const lines = [];
-  let current = "";
-  for (let idx = 0; idx < words.length; idx += 1) {
-    const candidate = current ? `${current} ${words[idx]}` : words[idx];
-    if (current && ctx.measureText(candidate).width > maxWidth) {
-      lines.push(current);
-      current = words[idx];
-      if (lines.length >= maxLines - 1) break;
-      continue;
-    }
-    current = candidate;
-  }
-  if (current && lines.length < maxLines) lines.push(current);
-  const renderedWordCount = lines.join(" ").replace(/…/g, "").split(/\s+/).filter(Boolean).length;
-  if (renderedWordCount < words.length && lines.length) {
-    lines[lines.length - 1] = `${lines[lines.length - 1].replace(/[.,!?;:\-–—\s]+$/g, "")}…`;
-  }
-  return lines.slice(0, maxLines);
-}
-
-function fitIntroPreviewTitleLayout({ title = "", previewFormatMeta }) {
-  const safeTitle = truncateIntroText(title || "Intro frame", previewFormatMeta.titleMaxChars) || "Intro frame";
-  if (typeof document === "undefined") {
-    return {
-      lines: [safeTitle],
-      fontSize: previewFormatMeta.titleFontPx,
-      lineHeight: previewFormatMeta.titleLineHeight,
-      plateMaxWidth: previewFormatMeta.width * 0.78,
-      platePaddingX: 18,
-      platePaddingY: 16,
-      maxPlateHeight: Math.round(previewFormatMeta.height * 0.3),
-    };
-  }
-
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    return {
-      lines: [safeTitle],
-      fontSize: previewFormatMeta.titleFontPx,
-      lineHeight: previewFormatMeta.titleLineHeight,
-      plateMaxWidth: previewFormatMeta.width * 0.78,
-      platePaddingX: 18,
-      platePaddingY: 16,
-      maxPlateHeight: Math.round(previewFormatMeta.height * 0.3),
-    };
-  }
-
-  const isLandscape = previewFormatMeta.aspectRatio > 1.2;
-  const isPortrait = previewFormatMeta.aspectRatio < 0.9;
-  const maxLines = isPortrait ? 4 : 3;
-  const widthRatio = isLandscape ? 0.62 : (isPortrait ? 0.84 : 0.78);
-  const boxWidth = Math.round(previewFormatMeta.width * widthRatio);
-  const maxPlateHeight = Math.round(previewFormatMeta.height * (isPortrait ? 0.34 : 0.26));
-  const paddingX = isLandscape ? 18 : 16;
-  const paddingY = isPortrait ? 16 : 14;
-  const maxFont = previewFormatMeta.titleFontPx;
-  const minFont = isPortrait ? 18 : 16;
-
-  for (let fontSize = maxFont; fontSize >= minFont; fontSize -= 0.5) {
-    const lineHeight = Math.round(fontSize * (isPortrait ? 1.05 : 1.08));
-    ctx.font = `900 ${fontSize}px Arial`;
-    const lines = wrapIntroPreviewTitle({
-      ctx,
-      text: safeTitle,
-      maxWidth: boxWidth - paddingX * 2,
-      maxLines,
-    });
-    if (!lines.length) continue;
-    const longestLine = Math.max(...lines.map((line) => ctx.measureText(line).width));
-    const contentHeight = lines.length * lineHeight;
-    const plateHeight = contentHeight + paddingY * 2;
-    if (longestLine <= (boxWidth - paddingX * 2) && plateHeight <= maxPlateHeight) {
-      return {
-        lines,
-        fontSize,
-        lineHeight,
-        plateMaxWidth: boxWidth,
-        platePaddingX: paddingX,
-        platePaddingY: paddingY,
-        maxPlateHeight,
-      };
-    }
-  }
-
-  const fallbackFontSize = minFont;
-  ctx.font = `900 ${fallbackFontSize}px Arial`;
-  return {
-    lines: wrapIntroPreviewTitle({
-      ctx,
-      text: safeTitle,
-      maxWidth: boxWidth - paddingX * 2,
-      maxLines,
-    }) || [safeTitle],
-    fontSize: fallbackFontSize,
-    lineHeight: Math.round(fallbackFontSize * (isPortrait ? 1.05 : 1.08)),
-    plateMaxWidth: boxWidth,
-    platePaddingX: paddingX,
-    platePaddingY: paddingY,
-    maxPlateHeight,
-  };
 }
 
 function buildIntroFrameAutoTitle({ textValue = "", scenes = [] } = {}) {
@@ -2230,14 +2111,11 @@ function buildIntroFrameStoryContextText(context = {}) {
   ].filter(Boolean).join(" • ");
 }
 
-function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic_dark", contextSummary = "", previewFormat = INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE } = {}) {
+function buildIntroFramePreviewDataUrl({ stylePreset = "cinematic_dark", previewFormat = INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE } = {}) {
   const formatMeta = getIntroFramePreviewFormatMeta(previewFormat);
-  const safeTitle = truncateIntroText(title || "Intro frame", formatMeta.titleMaxChars) || "Intro frame";
-  const safeContext = truncateIntroText(contextSummary || "Story preview", formatMeta.contextMaxChars) || "Story preview";
   const meta = getIntroStyleMeta(stylePreset);
   const width = formatMeta.width;
   const height = formatMeta.height;
-  const titleLayout = fitIntroPreviewTitleLayout({ title: safeTitle, previewFormatMeta: formatMeta });
   if (typeof document !== "undefined") {
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -2263,52 +2141,11 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic_da
       ctx.fillStyle = meta.accent;
       ctx.font = `700 ${Math.max(18, Math.round(width * 0.036))}px Arial`;
       ctx.fillText(meta.label.toUpperCase(), formatMeta.paddingX, formatMeta.paddingTop);
-
-      const drawWrapped = (text, x, y, maxWidth, lineHeight, maxLines, font, color) => {
-        ctx.font = font;
-        ctx.fillStyle = color;
-        const words = String(text || "").split(/\s+/).filter(Boolean);
-        let line = "";
-        let linesDrawn = 0;
-        for (let i = 0; i < words.length; i += 1) {
-          const testLine = line ? `${line} ${words[i]}` : words[i];
-          if (ctx.measureText(testLine).width > maxWidth && line) {
-            ctx.fillText(line, x, y + linesDrawn * lineHeight);
-            linesDrawn += 1;
-            line = words[i];
-            if (linesDrawn >= maxLines - 1) break;
-          } else {
-            line = testLine;
-          }
-        }
-        if (linesDrawn < maxLines && line) {
-          const remaining = linesDrawn >= maxLines - 1 ? truncateIntroText(line, 22) : line;
-          ctx.fillText(remaining, x, y + linesDrawn * lineHeight);
-        }
-      };
-
-      drawWrapped(
-        titleLayout.lines.join(" "),
-        formatMeta.paddingX,
-        formatMeta.paddingTop + Math.max(68, Math.round(height * 0.12)),
-        titleLayout.plateMaxWidth,
-        titleLayout.lineHeight,
-        titleLayout.lines.length,
-        `900 ${titleLayout.fontSize}px Arial`,
-        "#ffffff"
-      );
-      ctx.fillStyle = meta.accent;
+      ctx.fillStyle = `${meta.accent}cc`;
       ctx.fillRect(formatMeta.paddingX, formatMeta.accentY, formatMeta.accentWidth, Math.max(4, Math.round(height * 0.011)));
-      drawWrapped(
-        safeContext,
-        formatMeta.paddingX,
-        formatMeta.contextY,
-        width - formatMeta.paddingX * 2,
-        formatMeta.contextLineHeight,
-        formatMeta.contextMaxLines,
-        `400 ${formatMeta.contextFontPx}px Arial`,
-        "rgba(255,255,255,0.82)"
-      );
+      ctx.font = `500 ${Math.max(12, Math.round(width * 0.018))}px Arial`;
+      ctx.fillStyle = "rgba(255,255,255,0.72)";
+      ctx.fillText("AVA STUDIO", formatMeta.paddingX, height - Math.max(18, Math.round(height * 0.06)));
       return canvas.toDataURL("image/jpeg", 0.72);
     }
   }
@@ -2330,16 +2167,7 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic_da
       <circle cx="${Math.round(width * 0.82)}" cy="${Math.round(height * 0.2)}" r="${Math.round(Math.min(width, height) * 0.28)}" fill="${meta.secondary}" opacity="0.18"/>
       <rect x="${formatMeta.paddingX}" y="${formatMeta.accentY}" width="${formatMeta.accentWidth}" height="${Math.max(4, Math.round(height * 0.011))}" rx="2" fill="url(#accent)" opacity="0.92"/>
       <text x="${formatMeta.paddingX}" y="${formatMeta.paddingTop}" fill="${meta.accent}" font-size="${Math.max(18, Math.round(width * 0.036))}" font-family="Arial, Helvetica, sans-serif" font-weight="700" letter-spacing="4">${meta.label.toUpperCase()}</text>
-      <foreignObject x="${formatMeta.paddingX}" y="${formatMeta.paddingTop + Math.max(28, Math.round(height * 0.06))}" width="${width - formatMeta.paddingX * 2}" height="${formatMeta.titleBoxHeight}">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="max-width:${titleLayout.plateMaxWidth}px;max-height:${titleLayout.maxPlateHeight}px;padding:${titleLayout.platePaddingY}px ${titleLayout.platePaddingX}px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;font-size:${titleLayout.fontSize}px;line-height:${(titleLayout.lineHeight / titleLayout.fontSize).toFixed(2)};font-weight:900;color:white;letter-spacing:0.018em;overflow:hidden;display:grid;align-content:center;word-break:break-word;overflow-wrap:anywhere;background:linear-gradient(180deg, rgba(4,6,12,0.74) 0%, rgba(4,6,12,0.92) 100%);border:1px solid ${meta.accent}55;border-radius:18px;">
-          ${titleLayout.lines.map((line) => `<div>${line}</div>`).join("")}
-        </div>
-      </foreignObject>
-      <foreignObject x="${formatMeta.paddingX}" y="${formatMeta.contextY}" width="${width - formatMeta.paddingX * 2}" height="${formatMeta.contextBoxHeight}">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:${formatMeta.contextFontPx}px;line-height:${(formatMeta.contextLineHeight / formatMeta.contextFontPx).toFixed(2)};color:rgba(255,255,255,0.82);overflow:hidden;display:-webkit-box;-webkit-line-clamp:${formatMeta.contextMaxLines};-webkit-box-orient:vertical;word-break:break-word;">
-          ${safeContext}
-        </div>
-      </foreignObject>
+      <text x="${formatMeta.paddingX}" y="${height - Math.max(18, Math.round(height * 0.06))}" fill="rgba(255,255,255,0.72)" font-size="${Math.max(12, Math.round(width * 0.018))}" font-family="Arial, Helvetica, sans-serif" font-weight="500" letter-spacing="1.5">AVA STUDIO</text>
     </svg>
   `.trim();
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
@@ -3692,10 +3520,13 @@ function IntroFrameNode({ id, data }) {
   }, [data, durationDraft, durationSec, id]);
   const status = String(data?.status || "idle");
   const errorMessage = String(data?.error || "").trim();
-  const previewTitle = String(data?.title || "Intro frame").trim() || "Intro frame";
+  const rawTitle = String(data?.userTitleRaw ?? data?.title ?? "");
+  const derivedTitle = String(data?.derivedTitle || "").trim();
+  const generatedHookTitle = String(data?.generatedHookTitle || "").trim();
+  const previewTitle = rawTitle.trim() || generatedHookTitle || derivedTitle || "Intro frame";
   const previewContext = String(data?.contextSummary || "Story preview").trim() || "Story preview";
-  const previewContextShort = truncateIntroText(previewContext, 148);
-  const contextClamp = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT ? 2 : 1;
+  const titleLength = rawTitle.length;
+  const hasRecommendedOverflow = titleLength > INTRO_TITLE_RECOMMENDED_CHARS;
   const statusLabel = status === "ready"
     ? "preview готов"
     : status === "generating" || status === "preview_generating"
@@ -3719,12 +3550,13 @@ function IntroFrameNode({ id, data }) {
     : {};
   const attachedInlineRoles = Array.isArray(debug?.attachedInlineReferenceRoles) ? debug.attachedInlineReferenceRoles : [];
   const overlayDebug = debug?.overlay && typeof debug.overlay === "object" ? debug.overlay : {};
-  const previewTitleLayout = useMemo(
-    () => fitIntroPreviewTitleLayout({ title: previewTitle, previewFormatMeta }),
-    [previewFormatMeta, previewTitle]
-  );
   const detailRows = [
     ["Style key", selectedStylePreset],
+    rawTitle.trim() ? ["User title", rawTitle] : null,
+    derivedTitle ? ["Auto title", derivedTitle] : null,
+    generatedHookTitle ? ["Hook title for generation", generatedHookTitle] : null,
+    ["Title guide", `Рекомендуется до ${INTRO_TITLE_RECOMMENDED_CHARS} символов • служебный hook до ${INTRO_HOOK_TITLE_MAX_CHARS} символов`],
+    previewContext && previewContext !== "Story preview" ? ["Story context", previewContext] : null,
     compositionMode ? ["Composition", compositionMode] : null,
     compositionFocusTargets.length ? ["Focus targets", compositionFocusTargets.join(", ")] : null,
     (compositionWeights?.subject || compositionWeights?.support)
@@ -3736,14 +3568,6 @@ function IntroFrameNode({ id, data }) {
     attachedInlineRoles.length ? ["Inline refs", attachedInlineRoles.join(", ")] : null,
     Object.keys(attachedReferenceParts).length ? ["Attached parts", Object.entries(attachedReferenceParts).map(([role, count]) => `${role}:${count}`).join(" • ")] : null,
     overlayDebug?.titleRendered ? ["Overlay", `font ${overlayDebug?.fontSize || 0}px • ${Array.isArray(overlayDebug?.lines) ? overlayDebug.lines.length : 0} lines`] : null,
-  ].filter(Boolean);
-  const debugSummaryParts = [
-    `style ${selectedStylePreset}`,
-    compositionMode ? `composition ${compositionMode}` : "",
-    compositionFocusTargets.length ? `focus ${compositionFocusTargets.join(", ")}` : "",
-    (compositionWeights?.subject || compositionWeights?.support)
-      ? `weights ${[compositionWeights?.subject, compositionWeights?.support].filter(Boolean).join(" / ")}`
-      : "",
   ].filter(Boolean);
 
   return (
@@ -3762,20 +3586,41 @@ function IntroFrameNode({ id, data }) {
             <div className="clipSB_introFrameGrid">
               <div className="clipSB_introFrameControls">
                 <div className="clipSB_assemblyStats" style={{ marginBottom: 0 }}>
-                  <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
                   <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
                   <div className="clipSB_assemblyRow"><span>Длительность</span><strong>{durationSec.toFixed(1)} сек</strong></div>
                   <div className="clipSB_assemblyRow"><span>Статус</span><strong>{statusLabel}</strong></div>
+                  <div className="clipSB_assemblyRow"><span>Preview</span><strong>{previewFormatMeta.label}</strong></div>
                 </div>
 
-                  <label>
-                    <div className="clipSB_hint" style={{ marginBottom: 6 }}>Title</div>
+                  <label className="clipSB_introTitleField">
+                    <div className="clipSB_introTitleLabelRow">
+                      <div className="clipSB_hint">Title</div>
+                      <div className={`clipSB_introTitleCounter clipSB_small${hasRecommendedOverflow ? " clipSB_introTitleCounterWarning" : ""}`}>
+                        {titleLength} / {INTRO_TITLE_RECOMMENDED_CHARS}
+                      </div>
+                    </div>
                     <input
                       className="clipSB_input"
-                      value={String(data?.title || "")}
+                      value={rawTitle}
                       onChange={(e) => data?.onField?.(id, "title", e.target.value)}
                       placeholder="Введите заголовок или используйте auto title"
                     />
+                    <div className={`clipSB_introTitleHint clipSB_small${hasRecommendedOverflow ? " clipSB_introTitleHintWarning" : ""}`}>
+                      Рекомендуется до {INTRO_TITLE_RECOMMENDED_CHARS} символов. Лучше 2–5 слов.
+                    </div>
+                    <div className="clipSB_introTitleHint clipSB_small">
+                      Служебный hook для генерации сокращается предсказуемо до {INTRO_HOOK_TITLE_MAX_CHARS} символов и не перезаписывает ваш текст.
+                    </div>
+                    {derivedTitle ? (
+                      <div className="clipSB_introDerivedTitle clipSB_small">
+                        <strong>{rawTitle.trim() ? "Auto title:" : "Заголовок для генерации:"}</strong> {derivedTitle}
+                      </div>
+                    ) : null}
+                    {generatedHookTitle && generatedHookTitle !== derivedTitle && generatedHookTitle !== rawTitle.trim() ? (
+                      <div className="clipSB_introDerivedTitle clipSB_small">
+                        <strong>Hook title:</strong> {generatedHookTitle}
+                      </div>
+                    ) : null}
                   </label>
 
                   <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -3837,29 +3682,6 @@ function IntroFrameNode({ id, data }) {
                       />
                     </label>
                   </div>
-
-                  <div
-                    className="clipSB_introInfoBar clipSB_small"
-                    title={previewContext}
-                  >
-                    Story context: {previewContextShort || "не подключён"}
-                  </div>
-                  {debugSummaryParts.length ? (
-                    <div
-                      className="clipSB_small"
-                      title={debugSummaryParts.join(" • ")}
-                      style={{
-                        padding: "8px 10px",
-                        borderRadius: 12,
-                        border: `1px solid ${selectedStyleMeta.accent}26`,
-                        background: "rgba(10,14,28,0.48)",
-                        color: "rgba(223,230,255,0.82)",
-                        lineHeight: 1.35,
-                      }}
-                    >
-                      Debug: {debugSummaryParts.join(" • ")}
-                    </div>
-                  ) : null}
 
                   {errorMessage ? (
                     <div className="clipSB_introError clipSB_small">
@@ -3977,59 +3799,7 @@ function IntroFrameNode({ id, data }) {
                       </div>
 
                       <div style={{ marginTop: "auto", display: "grid", gap: 10, minWidth: 0, overflow: "hidden" }}>
-                        <div
-                          style={{
-                            alignSelf: "start",
-                            width: "100%",
-                            maxWidth: previewTitleLayout.maxWidth
-                              ? `${previewTitleLayout.maxWidth}px`
-                              : (previewTitleLayout.plateMaxWidth
-                                ? `${previewTitleLayout.plateMaxWidth}px`
-                                : (previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "72%" : "100%")),
-                            maxHeight: `${(previewTitleLayout.maxHeight ?? previewTitleLayout.maxPlateHeight)}px`,
-                            padding: `${previewTitleLayout.platePaddingY}px ${previewTitleLayout.platePaddingX}px`,
-                            borderRadius: 18,
-                            background: "linear-gradient(180deg, rgba(4,6,12,0.74) 0%, rgba(4,6,12,0.92) 100%)",
-                            border: `1px solid ${styleMeta.accent}55`,
-                            boxShadow: `0 10px 30px ${styleMeta.accent}30, inset 0 1px 0 rgba(255,255,255,0.08)`,
-                            overflow: "hidden",
-                          }}
-                        >
-                          <div
-                            className="clipSB_previewTitle"
-                            style={{
-                              fontSize: `${previewTitleLayout.fontSize}px`,
-                              lineHeight: `${previewTitleLayout.lineHeight}px`,
-                              maxHeight: `${(previewTitleLayout.maxHeight ?? previewTitleLayout.maxPlateHeight) - (previewTitleLayout.platePaddingY * 2)}px`,
-                            }}
-                          >
-                            {(Array.isArray(previewTitleLayout.lines) && previewTitleLayout.lines.length
-                              ? previewTitleLayout.lines
-                              : [previewTitle]
-                            ).map((line, index) => (
-                              <span key={`${line}-${index}`} style={{ display: "block" }}>
-                                {line}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
                         <div style={{ width: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "72%" : "100%", height: 4, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
-                        <div
-                          className="clipSB_small"
-                          style={{
-                            color: "rgba(245,247,255,0.84)",
-                            overflow: "hidden",
-                            display: "-webkit-box",
-                            WebkitBoxOrient: "vertical",
-                            WebkitLineClamp: contextClamp,
-                            lineHeight: 1.4,
-                            minWidth: 0,
-                            wordBreak: "break-word",
-                            maxWidth: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "76%" : "100%",
-                          }}
-                        >
-                          {previewContext}
-                        </div>
                         <div className="clipSB_small" style={{ color: "rgba(232,236,255,0.76)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
                           ava-studio product 2026
                         </div>
@@ -8757,17 +8527,15 @@ onClipSec: (nodeId, value) => {
             nodes: effectiveNodes,
             edges: effectiveEdges,
           });
-          const hasManualTitle = !!String(base.data?.title || "").trim() && (!!base.data?.manualTitle || !base.data?.autoTitle);
-          const resolvedTitle = hasManualTitle
-            ? String(base.data?.title || "")
-            : (base.data?.autoTitle
-              ? buildIntroFrameAutoTitle({ textValue: introContext.titleText, scenes: introContext.scenes })
-              : String(base.data?.title || ""));
+          const userTitleRaw = String(base.data?.userTitleRaw ?? base.data?.title ?? "");
+          const derivedTitle = buildIntroFrameAutoTitle({ textValue: introContext.titleText, scenes: introContext.scenes });
           return {
             ...base,
             data: {
               ...base.data,
-              title: resolvedTitle,
+              title: userTitleRaw,
+              userTitleRaw,
+              derivedTitle,
               contextSummary: introContext.summary,
               contextSceneCount: introContext.sceneCount,
               sourceNodeIds: introContext.sourceNodeIds,
@@ -8777,11 +8545,10 @@ onClipSec: (nodeId, value) => {
                 const nextData = { ...x.data };
                 if (key === "autoTitle") {
                   nextData.autoTitle = !!value;
-                  if (!!value) {
-                    const freshContext = collectIntroFrameContext({ nodeId, nodes: prev, edges: edgesRef.current || [] });
-                    nextData.title = buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes });
+                  const freshContext = collectIntroFrameContext({ nodeId, nodes: prev, edges: edgesRef.current || [] });
+                  nextData.derivedTitle = buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes });
+                  if (!value && !String(nextData.userTitleRaw ?? nextData.title ?? "").trim()) {
                     nextData.manualTitle = false;
-                    nextData.altTitles = [nextData.title].filter(Boolean);
                   }
                 } else if (key === "stylePreset") {
                   nextData.stylePreset = normalizeIntroStylePreset(value);
@@ -8791,7 +8558,9 @@ onClipSec: (nodeId, value) => {
                   nextData.durationSec = normalizeIntroDurationSec(value);
                 } else if (key === "title") {
                   nextData.title = String(value || "");
+                  nextData.userTitleRaw = String(value || "");
                   nextData.manualTitle = !!String(value || "").trim();
+                  nextData.generatedHookTitle = "";
                   if (nextData.manualTitle) nextData.autoTitle = false;
                 } else {
                   nextData[key] = value;
@@ -8830,12 +8599,15 @@ onClipSec: (nodeId, value) => {
                   nodes: nodesRef.current || [],
                   edges: edgesRef.current || [],
                 });
-                const manualTitle = String(currentNode?.data?.title || "").trim();
+                const manualTitleRaw = String(currentNode?.data?.userTitleRaw ?? currentNode?.data?.title ?? "");
+                const manualTitle = manualTitleRaw.trim();
+                const currentDerivedTitle = String(currentNode?.data?.derivedTitle || "").trim()
+                  || buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes });
                 const preserveManualTitle = !!manualTitle && (!!currentNode?.data?.manualTitle || !currentNode?.data?.autoTitle);
                 const nextTitle = preserveManualTitle
                   ? manualTitle
                   : (currentNode?.data?.autoTitle
-                    ? buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes })
+                    ? currentDerivedTitle
                     : manualTitle || freshContext.autoTitle);
                 const storyContext = buildIntroFrameStoryContextText(freshContext);
                 const payload = {
@@ -8866,7 +8638,9 @@ onClipSec: (nodeId, value) => {
                     ...x,
                     data: {
                       ...x.data,
-                      title: nextTitle,
+                      title: manualTitleRaw,
+                      userTitleRaw: manualTitleRaw,
+                      derivedTitle: currentDerivedTitle,
                       manualTitle: preserveManualTitle,
                       contextSummary: freshContext.summary,
                       contextSceneCount: freshContext.sceneCount,
@@ -8909,12 +8683,15 @@ onClipSec: (nodeId, value) => {
                       ...x,
                       data: {
                         ...x.data,
-                        title: preserveManualTitle ? nextTitle : String(out?.title || nextTitle || ""),
+                        title: manualTitleRaw,
+                        userTitleRaw: manualTitleRaw,
+                        derivedTitle: currentDerivedTitle,
+                        generatedHookTitle: String(out?.title || nextTitle || ""),
                         imageUrl: String(out.imageUrl || ""),
                         previewKind: INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED,
                         status: "ready",
                         generatedAt: String(out.generatedAt || new Date().toISOString()),
-                        altTitles: [preserveManualTitle ? nextTitle : "", String(out?.title || nextTitle || "")].filter(Boolean),
+                        altTitles: [manualTitle, currentDerivedTitle, String(out?.title || nextTitle || "")].filter(Boolean),
                         error: "",
                         debug: out?.debug && typeof out.debug === "object" ? out.debug : {},
                       },
@@ -9304,7 +9081,11 @@ const hydrate = useCallback((source = "unknown") => {
 
           if (n.type === "introFrame") {
             data.title = String(data.title || "");
+            data.userTitleRaw = String(data.userTitleRaw ?? data.title ?? "");
+            data.derivedTitle = String(data.derivedTitle || "");
+            data.generatedHookTitle = String(data.generatedHookTitle || "");
             data.autoTitle = !!data.autoTitle;
+            data.manualTitle = !!String(data.userTitleRaw || "").trim() && (!!data.manualTitle || !data.autoTitle);
             data.stylePreset = normalizeIntroStylePreset(data.stylePreset || "cinematic_dark");
             data.durationSec = normalizeIntroDurationSec(data.durationSec);
             data.previewFormat = normalizeIntroFramePreviewFormat(data.previewFormat);
@@ -9597,7 +9378,7 @@ const hydrate = useCallback((source = "unknown") => {
         id,
         type: "introFrame",
         position: { x: centerX + jitterX, y: centerY + jitterY },
-        data: { title: "", autoTitle: true, manualTitle: false, stylePreset: "cinematic_dark", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
+        data: { title: "", userTitleRaw: "", derivedTitle: "", generatedHookTitle: "", autoTitle: true, manualTitle: false, stylePreset: "cinematic_dark", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
       };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };

@@ -2229,6 +2229,41 @@ body.ps_clip_fullscreen .mainCol {
   box-shadow: none;
 }
 
+.clipSB_introTitleField {
+  display: grid;
+  gap: 6px;
+}
+
+.clipSB_introTitleLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.clipSB_introTitleCounter {
+  color: rgba(207, 216, 255, 0.78);
+}
+
+.clipSB_introTitleCounterWarning,
+.clipSB_introTitleHintWarning {
+  color: #ffd6a1;
+}
+
+.clipSB_introTitleHint {
+  color: rgba(207, 216, 255, 0.74);
+  line-height: 1.4;
+}
+
+.clipSB_introDerivedTitle {
+  color: rgba(235, 240, 255, 0.88);
+  line-height: 1.45;
+  padding: 9px 11px;
+  border-radius: 12px;
+  border: 1px solid rgba(159, 176, 255, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .clipSB_introFramePreviewCol {
   min-width: 0;
   display: grid;
