@@ -250,6 +250,7 @@
 .clipSB_nodeAudio { --node-accent: var(--family-audio); --node-accent-soft: var(--family-audio-soft); --node-accent-header: var(--family-audio-header); --node-accent-glow: var(--family-audio-glow); --node-accent-active: var(--family-audio-active); }
 .clipSB_nodeText { --node-accent: var(--family-text); --node-accent-soft: var(--family-text-soft); --node-accent-header: var(--family-text-header); --node-accent-glow: var(--family-text-glow); --node-accent-active: var(--family-text-active); }
 .clipSB_nodeLink { --node-accent: var(--family-link); --node-accent-soft: var(--family-link-soft); --node-accent-header: var(--family-link-header); --node-accent-glow: var(--family-link-glow); --node-accent-active: var(--family-link-active); }
+.clipSB_nodeVideoRef { --node-accent: var(--family-video-ref); --node-accent-soft: var(--family-video-ref-soft); --node-accent-header: var(--family-video-ref-header); --node-accent-glow: var(--family-video-ref-glow); --node-accent-active: var(--family-video-ref-active); }
 .clipSB_nodeBrain,
 .clipSB_nodeComfyBrain { --node-accent: var(--family-brain); --node-accent-soft: var(--family-brain-soft); --node-accent-header: var(--family-brain-header); --node-accent-glow: var(--family-brain-glow); --node-accent-active: var(--family-brain-active); }
 .clipSB_nodeStoryboard,
@@ -897,6 +898,252 @@
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 11px;
   color: rgba(220, 225, 255, 0.78);
+}
+
+.clipSB_videoRefCard {
+  display: grid;
+  gap: 12px;
+  margin-top: 2px;
+  padding: 12px;
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(109, 175, 214, 0.1), rgba(255, 255, 255, 0.03)),
+    rgba(7, 12, 20, 0.76);
+  box-shadow:
+    inset 0 0 0 1px rgba(128, 182, 224, 0.16),
+    0 16px 28px rgba(5, 10, 18, 0.28);
+}
+
+.clipSB_videoRefCard.isReady {
+  box-shadow:
+    inset 0 0 0 1px rgba(128, 194, 236, 0.24),
+    0 0 28px rgba(87, 167, 216, 0.16),
+    0 16px 28px rgba(5, 10, 18, 0.28);
+}
+
+.clipSB_videoRefCard.isError {
+  background:
+    linear-gradient(180deg, rgba(255, 120, 120, 0.12), rgba(255, 255, 255, 0.03)),
+    rgba(18, 10, 14, 0.78);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 132, 132, 0.22),
+    0 16px 28px rgba(5, 10, 18, 0.28);
+}
+
+.clipSB_videoRefPoster {
+  position: relative;
+  min-height: 132px;
+  border-radius: 14px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, rgba(124, 196, 235, 0.18), transparent 58%),
+    linear-gradient(180deg, rgba(10, 16, 28, 0.92), rgba(7, 11, 19, 0.94));
+  box-shadow:
+    inset 0 0 0 1px rgba(143, 196, 235, 0.14),
+    0 12px 24px rgba(2, 6, 14, 0.34);
+}
+
+.clipSB_videoRefPoster.hasImage::after {
+  content: "";
+  position: absolute;
+  inset: auto 12px 12px auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  background: rgba(7, 12, 22, 0.62);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), 0 10px 18px rgba(0,0,0,0.22);
+  backdrop-filter: blur(10px);
+}
+
+.clipSB_videoRefPoster.hasImage::before {
+  content: "▶";
+  position: absolute;
+  right: 25px;
+  bottom: 22px;
+  z-index: 1;
+  font-size: 14px;
+  color: rgba(238, 246, 255, 0.92);
+}
+
+.clipSB_videoRefPosterImg {
+  width: 100%;
+  height: 132px;
+  object-fit: cover;
+  display: block;
+}
+
+.clipSB_videoRefPosterPlaceholder {
+  height: 132px;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  color: rgba(227, 239, 250, 0.9);
+}
+
+.clipSB_videoRefPosterIcon {
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  font-size: 18px;
+  background: rgba(113, 184, 228, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(153, 210, 242, 0.2);
+}
+
+.clipSB_videoRefPosterLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: rgba(195, 220, 239, 0.74);
+}
+
+.clipSB_videoRefContent {
+  display: grid;
+  gap: 6px;
+}
+
+.clipSB_videoRefEyebrow {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(182, 214, 239, 0.64);
+}
+
+.clipSB_videoRefTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(246, 250, 255, 0.97);
+}
+
+.clipSB_videoRefBody {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(220, 233, 246, 0.8);
+}
+
+.clipSB_videoRefMetaGrid {
+  margin-top: 4px;
+  display: grid;
+  gap: 7px;
+}
+
+.clipSB_videoRefMetaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  font-size: 12px;
+  color: rgba(187, 213, 234, 0.7);
+}
+
+.clipSB_videoRefMetaRow strong {
+  min-width: 0;
+  max-width: 64%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(244, 249, 255, 0.94);
+}
+
+.clipSB_videoRefActions {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 8px;
+}
+
+.clipSB_videoRefPrimaryBtn {
+  background:
+    linear-gradient(135deg, rgba(95, 161, 205, 0.24), rgba(93, 145, 214, 0.16)),
+    rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 0 0 1px rgba(146, 201, 235, 0.22),
+    0 12px 24px rgba(9, 18, 30, 0.34);
+}
+
+.clipSB_videoRefPrimaryBtn:hover:not(:disabled) {
+  background:
+    linear-gradient(135deg, rgba(102, 177, 226, 0.28), rgba(97, 155, 228, 0.2)),
+    rgba(255, 255, 255, 0.07);
+}
+
+.clipSB_videoRefFootnote {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(214, 230, 244, 0.8);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.clipSB_videoRefFootnote code {
+  color: rgba(242, 248, 255, 0.92);
+}
+
+.clipSB_videoRefClear {
+  margin-top: 10px;
+  border: none;
+  background: transparent;
+  color: rgba(179, 206, 229, 0.74);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.clipSB_videoRefClear:hover {
+  color: rgba(226, 237, 249, 0.92);
+}
+
+.clipSB_videoRefModal {
+  position: fixed;
+  inset: 0;
+  z-index: 2600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(4, 8, 14, 0.72);
+  backdrop-filter: blur(16px);
+}
+
+.clipSB_videoRefModalDialog {
+  width: min(840px, calc(100vw - 48px));
+  border-radius: 18px;
+  overflow: hidden;
+  background: rgba(12, 18, 28, 0.96);
+  box-shadow:
+    inset 0 0 0 1px rgba(151, 204, 236, 0.14),
+    0 24px 60px rgba(0, 0, 0, 0.38);
+}
+
+.clipSB_videoRefModalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, rgba(88, 154, 204, 0.16), rgba(255,255,255,0.02));
+}
+
+.clipSB_videoRefModalTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 700;
+  color: rgba(243, 249, 255, 0.96);
+}
+
+.clipSB_videoRefModalPlayer {
+  width: 100%;
+  max-height: min(72vh, 720px);
+  display: block;
+  background: #05080d;
 }
 
 /* Handles */
