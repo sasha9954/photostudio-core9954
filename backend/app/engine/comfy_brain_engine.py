@@ -10,6 +10,15 @@ from typing import Any
 
 from app.core.config import settings
 from app.engine.audio_first_planner import build_audio_first_planner_output, build_project_planning_input
+from app.engine.gemini_planner_contract import (
+    GeminiPlannerValidationReport,
+    GeminiPlanningStatus,
+    build_gemini_planner_input as build_audio_first_gemini_planner_input,
+    build_gemini_planner_request_text as build_audio_first_gemini_planner_request_text,
+    map_gemini_plan_to_canonical_audio_first_output,
+    parse_gemini_planner_output,
+    validate_gemini_planner_output as validate_audio_first_gemini_planner_output,
+)
 from app.engine.clip_scene_planner import _load_audio_analysis, plan_comfy_clip
 from app.engine.comfy_reference_profile import (
     _load_image_inline_part,
@@ -2606,95 +2615,99 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "timelineSource": story_context.get("timelineSource") or normalized.get("timelineSource"),
         "storyMissionSummary": story_context.get("storyMissionSummary") or normalized.get("storyMissionSummary"),
     }
+    project_input = build_project_planning_input(normalized)
     reference_profiles = build_reference_profiles(normalized.get("refsByRole") or {})
     world_lock = _build_world_lock(normalized, reference_profiles)
     entity_locks = _build_entity_locks(normalized, reference_profiles)
-    planner_input = _build_gemini_planner_payload(normalized, world_lock, entity_locks)
-    planner_request_text = build_gemini_planner_request_text(planner_input)
+    optional_audio_cues = _build_optional_audio_cues(normalized)
+    planner_input = build_audio_first_gemini_planner_input(
+        normalized,
+        project_input,
+        story_context=story_context,
+        world_lock=world_lock,
+        entity_locks=entity_locks,
+        optional_audio_cues=optional_audio_cues,
+    )
+    planner_request_text = build_audio_first_gemini_planner_request_text(planner_input)
     multimodal_parts, media_debug = _build_gemini_only_multimodal_parts(normalized, planner_request_text)
+
+    def _build_contract_failure_result(errors: list[str], warnings: list[str], sanitized_error: str, *, http_status: int | None = None, raw_parsed: dict[str, Any] | None = None, raw_debug_summary: str | None = None) -> dict[str, Any]:
+        validation_report = GeminiPlannerValidationReport(
+            valid=False,
+            blocked=project_input.input_mode.value == "text_to_audio_first" and not bool(project_input.master_audio_url),
+            errors=list(dict.fromkeys([str(item).strip() for item in errors if str(item).strip()])),
+            warnings=list(dict.fromkeys([str(item).strip() for item in warnings if str(item).strip()])),
+        )
+        contract_result = map_gemini_plan_to_canonical_audio_first_output(
+            planner_input,
+            None,
+            validation_report,
+            raw_payload=raw_parsed or {},
+            raw_debug_summary=raw_debug_summary,
+        )
+        canonical_dump = contract_result.canonical_output.model_dump(mode="json")
+        return {
+            "ok": False,
+            "planMeta": {
+                "mode": normalized.get("mode"),
+                "plannerMode": "gemini_only",
+                "output": normalized.get("output"),
+                "stylePreset": normalized.get("stylePreset"),
+                "audioStoryMode": normalized.get("audioStoryMode"),
+                "audioStoryModeRequested": normalized.get("audioStoryModeRequested"),
+                "audioStoryModeGuardReason": normalized.get("audioStoryModeGuardReason"),
+                "storyControlMode": normalized.get("storyControlMode"),
+                "storyMissionSummary": normalized.get("storyMissionSummary"),
+                "timelineSource": normalized.get("timelineSource") or "gemini_contract_failure",
+                "narrativeSource": narrative_source,
+                "storySource": story_source,
+                "worldLock": world_lock,
+                "entityLocks": entity_locks,
+                "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
+            },
+            "globalContinuity": world_lock,
+            "scenes": [],
+            "warnings": validation_report.warnings,
+            "errors": validation_report.errors,
+            "canonicalPlanning": canonical_dump,
+            "debug": {
+                "plannerMode": "gemini_only",
+                "planner_source": "gemini",
+                "storySource": story_context.get("storySource"),
+                "narrativeSource": story_context.get("narrativeSource"),
+                "weakSemanticContext": story_context.get("weakSemanticContext"),
+                "semanticContextReason": story_context.get("semanticContextReason"),
+                "audioStoryModeRequested": story_context.get("audioStoryModeRequested"),
+                "audioStoryModeGuardReason": story_context.get("audioStoryModeGuardReason"),
+                "hasAudio": story_context.get("hasAudio"),
+                "hasText": story_context.get("hasText"),
+                "hasRefs": story_context.get("hasRefs"),
+                "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
+                "worldLock": world_lock,
+                "entityLocks": entity_locks,
+                "httpStatus": http_status,
+                "sanitizedError": sanitized_error,
+                "plannerValidationErrors": validation_report.errors,
+                "plannerValidationWarnings": validation_report.warnings,
+                "rawGeminiPayload": raw_parsed or {},
+                "rawGeminiDebugSummary": raw_debug_summary,
+                **media_debug,
+            },
+        }
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
         missing_key_error = "gemini_api_key_missing"
-        return {
-            "ok": False,
-            "planMeta": {"plannerMode": "gemini_only"},
-            "globalContinuity": world_lock,
-            "scenes": [],
-            "warnings": [],
-            "errors": [missing_key_error, *story_context.get("errors", [])],
-            "debug": {
-                "plannerMode": "gemini_only",
-                "sanitizedError": _humanize_storyboard_error(missing_key_error),
-                "storySource": story_context.get("storySource"),
-                "narrativeSource": story_context.get("narrativeSource"),
-                "weakSemanticContext": story_context.get("weakSemanticContext"),
-                "semanticContextReason": story_context.get("semanticContextReason"),
-                "audioStoryModeRequested": story_context.get("audioStoryModeRequested"),
-                "audioStoryModeGuardReason": story_context.get("audioStoryModeGuardReason"),
-                "hasAudio": story_context.get("hasAudio"),
-                "hasText": story_context.get("hasText"),
-                "hasRefs": story_context.get("hasRefs"),
-                "worldLock": world_lock,
-                "entityLocks": entity_locks,
-                "plannerInput": planner_input,
-                **media_debug,
-                "rawEntityTypesByRole": {
-                    role: lock.get("rawEntityType")
-                    for role, lock in entity_locks.items()
-                    if isinstance(lock, dict)
-                },
-                "normalizedEntityTypesByRole": {
-                    role: lock.get("normalizedEntityType") or lock.get("entityType")
-                    for role, lock in entity_locks.items()
-                    if isinstance(lock, dict)
-                },
-            },
-        }
+        return _build_contract_failure_result([missing_key_error, *story_context.get("errors", [])], story_context.get("warnings") or [], _humanize_storyboard_error(missing_key_error))
 
     if story_context.get("errors"):
         primary_story_error = str((story_context.get("errors") or [""])[0] or "").strip()
-        return {
-            "ok": False,
-            "planMeta": {
-                "plannerMode": "gemini_only",
-                "storyMissionSummary": normalized.get("storyMissionSummary"),
-                "timelineSource": normalized.get("timelineSource"),
-                "narrativeSource": normalized.get("narrativeSource"),
-            },
-            "globalContinuity": world_lock,
-            "scenes": [],
-            "warnings": story_context.get("warnings") or [],
-            "errors": story_context.get("errors") or [],
-            "debug": {
-                "plannerMode": "gemini_only",
-                "requestedModel": (settings.GEMINI_TEXT_MODEL or PRIMARY_GEMINI_PLANNER_MODEL or FALLBACK_GEMINI_MODEL).strip(),
-                "fallbackFrom": None,
-                "fallbackTo": None,
-                "effectiveModel": None,
-                "parseFailedReason": primary_story_error,
-                "sanitizedError": _humanize_storyboard_error(primary_story_error),
-                "storySource": story_context.get("storySource"),
-                "narrativeSource": story_context.get("narrativeSource"),
-                "weakSemanticContext": story_context.get("weakSemanticContext"),
-                "semanticContextReason": story_context.get("semanticContextReason"),
-                "audioStoryModeRequested": story_context.get("audioStoryModeRequested"),
-                "audioStoryModeGuardReason": story_context.get("audioStoryModeGuardReason"),
-                "hasAudio": story_context.get("hasAudio"),
-                "hasText": story_context.get("hasText"),
-                "hasRefs": story_context.get("hasRefs"),
-                "errorText": "",
-                "worldLock": world_lock,
-                "entityLocks": entity_locks,
-                "plannerInput": planner_input,
-                **media_debug,
-            },
-        }
+        return _build_contract_failure_result(story_context.get("errors") or [], story_context.get("warnings") or [], _humanize_storyboard_error(primary_story_error))
 
     requested_model = (settings.GEMINI_TEXT_MODEL or PRIMARY_GEMINI_PLANNER_MODEL or FALLBACK_GEMINI_MODEL).strip()
     body = {
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3},
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT_CLIP_PLANNER}]},
+        "systemInstruction": {"parts": [{"text": planner_request_text}]},
         "contents": [{"role": "user", "parts": multimodal_parts}],
     }
     parsed, diagnostics = _call_gemini_plan_with_model_fallback(api_key, requested_model, body)
@@ -2705,7 +2718,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": f"{SYSTEM_PROMPT_CLIP_PLANNER}\n\n{planner_request_text}"}, *multimodal_parts[1:]],
+                    "parts": [{"text": planner_request_text}, *multimodal_parts[1:]],
                 }
             ],
         }
@@ -2728,34 +2741,46 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     if not system_instruction_used:
         warnings.append("system_instruction_fallback_to_inline_prompt")
 
-    parsed_world_lock = parsed.get("worldLock") if isinstance(parsed.get("worldLock"), dict) else {}
-    merged_world_lock = {**world_lock, **parsed_world_lock}
-    parsed_entity_locks = parsed.get("entityLocks") if isinstance(parsed.get("entityLocks"), dict) else {}
-    merged_entity_locks = {**entity_locks, **parsed_entity_locks}
-
-    validation_warnings, validation_errors = validate_gemini_planner_response(parsed if isinstance(parsed, dict) else {}, planner_input)
-    warnings.extend(validation_warnings)
-    errors.extend(validation_errors)
-    normalized_response = normalize_gemini_planner_response(parsed if isinstance(parsed, dict) else {}, planner_input)
-    warnings.extend(normalized_response.get("warnings") if isinstance(normalized_response.get("warnings"), list) else [])
+    parse_result = parse_gemini_planner_output(parsed if isinstance(parsed, dict) else {})
+    warnings.extend(parse_result.warnings)
+    errors.extend(parse_result.errors)
+    validation_report = validate_audio_first_gemini_planner_output(planner_input, parse_result.parsed)
+    warnings.extend(validation_report.warnings)
+    errors.extend(validation_report.errors)
     warnings = list(dict.fromkeys([str(item).strip() for item in warnings if str(item).strip()]))
     errors = list(dict.fromkeys([str(item).strip() for item in errors if str(item).strip()]))
+    validation_report = GeminiPlannerValidationReport(
+        valid=len(errors) == 0 and validation_report.valid,
+        blocked=validation_report.blocked,
+        errors=errors,
+        warnings=warnings,
+    )
 
-    raw_scenes = normalized_response.get("scenes") if isinstance(normalized_response.get("scenes"), list) else []
-    scenes = _normalize_gemini_scenes(raw_scenes, normalized.get("refsByRole"))
-    scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
-    scenes, speech_split_debug, speech_split_warnings = _split_oversized_speech_scenes(scenes, normalized)
-    warnings.extend(speech_split_warnings)
-    timing_debug["sceneCountAfterSpeechSplit"] = len(scenes)
-    segmentation_debug = {**_build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug), **speech_split_debug}
-    director_debug = _build_director_debug(scenes)
-    if float(director_debug.get("humanAnchorCoverage") or 0.0) < 0.3:
-        warnings.append("director_human_anchor_coverage_below_target")
-    preview_raw = parsed.get("preview") if isinstance(parsed.get("preview"), dict) else {}
-    preview = {
-        **_build_preview_from_scenes(scenes, merged_world_lock),
-        **preview_raw,
+    contract_result = map_gemini_plan_to_canonical_audio_first_output(
+        planner_input,
+        parse_result.parsed,
+        validation_report,
+        raw_payload=parse_result.raw_payload or (parsed if isinstance(parsed, dict) else {}),
+        raw_debug_summary=(parse_result.parsed.debug_summary if parse_result.parsed else None),
+    )
+    canonical_dump = contract_result.canonical_output.model_dump(mode="json")
+    scenes = contract_result.compatibility_scenes
+    timing_debug = {
+        "sceneCount": len(scenes),
+        "sceneCountAfterSpeechSplit": len(scenes),
+        "audioDurationSec": normalized.get("audioDurationSec"),
+        "timelineDurationSec": max([float(scene.get("endSec") or 0.0) for scene in scenes], default=0.0),
+        "sceneDurationTotalSec": round(sum(max(0.0, float(scene.get("durationSec") or 0.0)) for scene in scenes), 3),
+        "normalizationApplied": False,
+        "normalizationReason": None,
     }
+    segmentation_debug = {
+        "segmentationMode": "gemini_audio_first_contract",
+        "segmentationReason": "gemini_scene_and_shot_planning",
+        "sceneCount": len(scenes),
+    }
+    director_debug = _build_director_debug(scenes)
+    preview = _build_preview_from_scenes(scenes, world_lock)
     if not preview.get("sourceSceneId") and scenes:
         preview["sourceSceneId"] = str((scenes[0] or {}).get("sceneId") or "")
 
@@ -2767,10 +2792,10 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "audioStoryMode": normalized.get("audioStoryMode"),
         "audioStoryModeRequested": normalized.get("audioStoryModeRequested"),
         "audioStoryModeGuardReason": normalized.get("audioStoryModeGuardReason"),
-        "genre": normalized_response.get("genre") or normalized.get("genre"),
+        "genre": normalized.get("genre") or planner_input.genre,
         "storyControlMode": normalized.get("storyControlMode"),
         "storyMissionSummary": normalized.get("storyMissionSummary"),
-        "timelineSource": normalized.get("timelineSource") or "gemini_semantic_scene_planning",
+        "timelineSource": normalized.get("timelineSource") or "gemini_audio_first_contract",
         "narrativeSource": narrative_source,
         "storySource": story_source,
         "weakSemanticContext": bool(story_context.get("weakSemanticContext")),
@@ -2778,13 +2803,13 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "audioDurationSec": timing_debug.get("audioDurationSec"),
         "timelineDurationSec": timing_debug.get("timelineDurationSec"),
         "sceneDurationTotalSec": timing_debug.get("sceneDurationTotalSec"),
-        "worldLock": merged_world_lock,
-        "entityLocks": merged_entity_locks,
+        "worldLock": world_lock,
+        "entityLocks": entity_locks,
         "preview": preview,
-        "plannerInput": planner_input,
-        "systemPromptVersion": SYSTEM_PROMPT_CLIP_PLANNER_VERSION,
-        "validationWarnings": validation_warnings,
-        "normalizationApplied": bool(normalized_response.get("normalizationApplied")),
+        "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
+        "systemPromptVersion": "gemini_audio_first_planner_v1",
+        "validationWarnings": validation_report.warnings,
+        "validationErrors": validation_report.errors,
         "summary": {
             "sceneCount": len(scenes),
             "cameraContinuityScore": director_debug.get("cameraContinuityScore"),
@@ -2793,15 +2818,17 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         },
     }
     return {
-        "ok": len(errors) == 0,
+        "ok": len(validation_report.errors) == 0 and (parse_result.parsed.planning_status == GeminiPlanningStatus.ok if parse_result.parsed else False),
         "planMeta": plan_meta,
-        "globalContinuity": merged_world_lock,
+        "globalContinuity": world_lock,
         "scenes": scenes,
-        "warnings": warnings,
-        "errors": errors,
+        "warnings": validation_report.warnings,
+        "errors": validation_report.errors,
+        "canonicalPlanning": canonical_dump,
         "debug": {
             **(parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {}),
             "plannerMode": "gemini_only",
+            "planner_source": "gemini",
             "requestedModel": diagnostics.get("requestedModel") or requested_model,
             "fallbackFrom": diagnostics.get("fallbackFrom"),
             "fallbackTo": diagnostics.get("fallbackTo"),
@@ -2809,8 +2836,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "httpStatus": diagnostics.get("httpStatus"),
             "rawPreview": diagnostics.get("rawPreview") or "",
             "errorText": diagnostics.get("errorText") or "",
-            "parseFailedReason": "; ".join(errors) if errors else "",
-            "sanitizedError": diagnostics.get("sanitizedError") or _humanize_storyboard_error((errors[0] if errors else "")),
+            "parseFailedReason": "; ".join(validation_report.errors) if validation_report.errors else "",
+            "sanitizedError": diagnostics.get("sanitizedError") or _humanize_storyboard_error((validation_report.errors[0] if validation_report.errors else "")),
             "storySource": story_context.get("storySource"),
             "narrativeSource": story_context.get("narrativeSource"),
             "weakSemanticContext": bool(story_context.get("weakSemanticContext")),
@@ -2820,34 +2847,14 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "hasAudio": story_context.get("hasAudio"),
             "hasText": story_context.get("hasText"),
             "hasRefs": story_context.get("hasRefs"),
-            "systemPromptVersion": SYSTEM_PROMPT_CLIP_PLANNER_VERSION,
+            "systemPromptVersion": "gemini_audio_first_planner_v1",
             "systemInstructionUsed": system_instruction_used,
-            "plannerInput": planner_input,
-            "validationWarnings": validation_warnings,
-            "normalizationApplied": bool(normalized_response.get("normalizationApplied")),
-            "normalizedPlannerResponse": normalized_response,
-            "worldLock": merged_world_lock,
-            "worldLockSummary": {
-                "environmentType": merged_world_lock.get("environmentType"),
-                "environmentSubtype": merged_world_lock.get("environmentSubtype"),
-                "timeOfDay": merged_world_lock.get("timeOfDay"),
-                "lighting": merged_world_lock.get("lighting"),
-                "atmosphere": merged_world_lock.get("atmosphere"),
-                "palette": merged_world_lock.get("palette"),
-            },
-            "entityLocks": merged_entity_locks,
-            "entityLockSummary": {
-                role: {
-                    "entityType": lock.get("entityType"),
-                    "rawEntityType": lock.get("rawEntityType"),
-                    "normalizedEntityType": lock.get("normalizedEntityType"),
-                    "label": lock.get("label"),
-                    "canonicalDetails": lock.get("canonicalDetails"),
-                    "forbiddenChanges": lock.get("forbiddenChanges"),
-                }
-                for role, lock in merged_entity_locks.items()
-                if isinstance(lock, dict)
-            },
+            "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
+            "plannerValidationWarnings": validation_report.warnings,
+            "plannerValidationErrors": validation_report.errors,
+            "parsedGeminiContract": parse_result.raw_payload or {},
+            "worldLock": world_lock,
+            "entityLocks": entity_locks,
             "preview": preview,
             "timing": timing_debug,
             "segmentation": segmentation_debug,
@@ -2857,31 +2864,27 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             **media_debug,
             "rawEntityTypesByRole": {
                 role: lock.get("rawEntityType")
-                for role, lock in merged_entity_locks.items()
+                for role, lock in entity_locks.items()
                 if isinstance(lock, dict)
             },
             "normalizedEntityTypesByRole": {
                 role: lock.get("normalizedEntityType") or lock.get("entityType")
-                for role, lock in merged_entity_locks.items()
+                for role, lock in entity_locks.items()
                 if isinstance(lock, dict)
             },
-            "sceneDynamicScores": {
-                str(scene.get("sceneId") or ""): {
-                    "sceneDynamicScore": scene.get("sceneDynamicScore"),
-                    "weakScene": scene.get("weakScene"),
-                }
-                for scene in scenes
-            },
-            "previewScore": preview.get("previewScore"),
         },
     }
 
 
 def _build_audio_first_foundation_response(normalized: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
-    project_input = build_project_planning_input(normalized)
-    canonical_output = build_audio_first_planner_output(project_input, result)
-    canonical_dump = canonical_output.model_dump(mode="json")
-    result["canonicalPlanning"] = canonical_dump
+    existing_canonical = result.get("canonicalPlanning") if isinstance(result.get("canonicalPlanning"), dict) else None
+    if existing_canonical is not None:
+        canonical_dump = existing_canonical
+    else:
+        project_input = build_project_planning_input(normalized)
+        canonical_output = build_audio_first_planner_output(project_input, result)
+        canonical_dump = canonical_output.model_dump(mode="json")
+        result["canonicalPlanning"] = canonical_dump
     plan_meta = result.get("planMeta") if isinstance(result.get("planMeta"), dict) else {}
     plan_meta["projectMode"] = canonical_dump.get("project_mode")
     plan_meta["inputMode"] = canonical_dump.get("input_mode")
