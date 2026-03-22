@@ -9,6 +9,7 @@ import urllib.request
 from typing import Any
 
 from app.core.config import settings
+from app.engine.audio_first_planner import build_audio_first_planner_output, build_project_planning_input
 from app.engine.clip_scene_planner import _load_audio_analysis, plan_comfy_clip
 from app.engine.comfy_reference_profile import (
     _load_image_inline_part,
@@ -367,19 +368,27 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "stylePreset": str(data.get("stylePreset") or "realism").strip().lower(),
         "genre": _normalize_genre(data.get("genre")),
         "freezeStyle": bool(data.get("freezeStyle")),
-        "text": str(data.get("text") or "").strip(),
+        "text": str(data.get("text") or data.get("storyText") or "").strip(),
+        "storyText": str(data.get("storyText") or data.get("text") or "").strip(),
+        "inputMode": str(data.get("inputMode") or "").strip().lower() or None,
+        "projectMode": str(data.get("projectMode") or "narration_first").strip().lower() or "narration_first",
         "lyricsText": str(data.get("lyricsText") or "").strip(),
         "transcriptText": str(data.get("transcriptText") or "").strip(),
         "spokenTextHint": str(data.get("spokenTextHint") or "").strip(),
         "audioSemanticHints": data.get("audioSemanticHints") if isinstance(data.get("audioSemanticHints"), (list, dict, str)) else "",
         "audioSemanticSummary": str(data.get("audioSemanticSummary") or "").strip(),
-        "audioUrl": str(data.get("audioUrl") or "").strip(),
+        "audioUrl": str(data.get("audioUrl") or data.get("masterAudioUrl") or "").strip(),
+        "masterAudioUrl": str(data.get("masterAudioUrl") or data.get("audioUrl") or "").strip(),
         "audioDurationSec": _to_float(data.get("audioDurationSec")),
+        "globalMusicTrackUrl": str(data.get("globalMusicTrackUrl") or data.get("musicTrackUrl") or data.get("sunoUrl") or "").strip(),
+        "musicTrackUrl": str(data.get("musicTrackUrl") or data.get("globalMusicTrackUrl") or data.get("sunoUrl") or "").strip(),
         "refsByRole": _clean_refs_by_role(data.get("refsByRole")),
         "storyControlMode": str(data.get("storyControlMode") or "").strip(),
         "storyMissionSummary": str(data.get("storyMissionSummary") or "").strip(),
         "timelineSource": str(data.get("timelineSource") or "").strip(),
         "narrativeSource": str(data.get("narrativeSource") or "").strip(),
+        "plannerRules": data.get("plannerRules") if isinstance(data.get("plannerRules"), dict) else {},
+        "plannerOverrides": data.get("plannerOverrides") if isinstance(data.get("plannerOverrides"), dict) else {},
         "sceneCandidates": data.get("sceneCandidates") if isinstance(data.get("sceneCandidates"), list) else (data.get("scenes") if isinstance(data.get("scenes"), list) else []),
     }
 
@@ -2868,10 +2877,90 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_audio_first_foundation_response(normalized: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    project_input = build_project_planning_input(normalized)
+    canonical_output = build_audio_first_planner_output(project_input, result)
+    canonical_dump = canonical_output.model_dump(mode="json")
+    result["canonicalPlanning"] = canonical_dump
+    plan_meta = result.get("planMeta") if isinstance(result.get("planMeta"), dict) else {}
+    plan_meta["projectMode"] = canonical_dump.get("project_mode")
+    plan_meta["inputMode"] = canonical_dump.get("input_mode")
+    plan_meta["planningBlocked"] = bool((canonical_dump.get("validation") or {}).get("blocked"))
+    plan_meta["planningBlockedReason"] = (canonical_dump.get("planning_context") or {}).get("planning_blocked_reason")
+    plan_meta["audioFirstCanon"] = {
+        "brain": "gemini",
+        "timingSource": "master_audio",
+        "elevenLabsUsage": "full_master_narration_only",
+        "globalMusicTrackLayer": bool(normalized.get("globalMusicTrackUrl")),
+        "auxiliaryAudioAnalyzerRole": "debug_fallback_only",
+    }
+    result["planMeta"] = plan_meta
+    result.setdefault("warnings", [])
+    result.setdefault("errors", [])
+    result["warnings"] = list(dict.fromkeys([*result.get("warnings", []), *((canonical_dump.get("validation") or {}).get("warnings") or [])]))
+    result["errors"] = list(dict.fromkeys([*result.get("errors", []), *((canonical_dump.get("validation") or {}).get("errors") or [])]))
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    debug["audioFirstPlanning"] = canonical_dump.get("debug") or {}
+    result["debug"] = debug
+    scenes = result.get("scenes") if isinstance(result.get("scenes"), list) else []
+    canonical_scenes = canonical_dump.get("scenes") if isinstance(canonical_dump.get("scenes"), list) else []
+    canonical_by_scene = {str(scene.get("scene_id") or ""): scene for scene in canonical_scenes if isinstance(scene, dict)}
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            continue
+        scene_key = str(scene.get("sceneId") or scene.get("id") or "")
+        canonical_scene = canonical_by_scene.get(scene_key)
+        if not canonical_scene:
+            continue
+        shots = canonical_scene.get("shots") if isinstance(canonical_scene.get("shots"), list) else []
+        shot = shots[0] if shots and isinstance(shots[0], dict) else {}
+        scene["projectMode"] = canonical_dump.get("project_mode")
+        scene["inputMode"] = canonical_dump.get("input_mode")
+        scene["audioSegmentType"] = canonical_scene.get("audio_segment_type") or shot.get("audio_segment_type")
+        scene["narrationMode"] = canonical_scene.get("narration_mode") or shot.get("narration_mode")
+        scene["renderMode"] = shot.get("render_mode") or scene.get("renderMode")
+        scene["renderReason"] = shot.get("render_reason")
+        scene["hasVocalRhythm"] = bool(shot.get("has_vocal_rhythm"))
+        scene["motionInterpretation"] = shot.get("motion_interpretation")
+        scene["lipsyncPolicy"] = shot.get("lipsync_policy")
+        scene["startFrameSource"] = shot.get("start_frame_source")
+        scene["parentShotId"] = shot.get("parent_shot_id")
+        scene["needsTwoFrames"] = bool(shot.get("needs_two_frames"))
+        scene["validationErrors"] = shot.get("validation_errors") or []
+        scene["validationWarnings"] = shot.get("validation_warnings") or []
+    return result
+
+
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
+    project_input = build_project_planning_input(normalized)
+    canonical_probe = build_audio_first_planner_output(project_input, {"scenes": []})
+    if canonical_probe.validation.blocked:
+        return _build_audio_first_foundation_response(
+            normalized,
+            {
+                "ok": False,
+                "planMeta": {
+                    "mode": normalized.get("mode"),
+                    "plannerMode": normalized.get("plannerMode"),
+                    "output": normalized.get("output"),
+                    "stylePreset": normalized.get("stylePreset"),
+                    "audioStoryMode": normalized.get("audioStoryMode"),
+                    "timelineSource": normalized.get("timelineSource") or "master_audio_required",
+                    "narrativeSource": normalized.get("narrativeSource") or "text_waiting_for_audio",
+                },
+                "globalContinuity": {},
+                "scenes": [],
+                "warnings": canonical_probe.validation.warnings,
+                "errors": canonical_probe.validation.errors,
+                "debug": {
+                    "plannerMode": normalized.get("plannerMode"),
+                    "blockingReason": canonical_probe.planning_context.planning_blocked_reason,
+                },
+            },
+        )
     if normalized.get("plannerMode") == "gemini_only":
-        return _run_comfy_plan_gemini_only(normalized)
+        return _build_audio_first_foundation_response(normalized, _run_comfy_plan_gemini_only(normalized))
     if normalized.get("mode") == "clip":
         logger.info(
             "[COMFY PLAN][clip] plannerMode=%s audioStoryMode=%s text=%s lyricsText=%s transcriptText=%s spokenHint=%s semanticHints=%s semanticSummary=%s audio=%s",
@@ -2900,7 +2989,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             (clip_meta or {}).get("usedSemanticFallback"),
             (clip_meta or {}).get("semanticHintCount"),
         )
-        return clip_result
+        return _build_audio_first_foundation_response(normalized, clip_result)
 
     reference_profiles = build_reference_profiles(normalized.get("refsByRole") or {})
     normalized["referenceProfiles"] = reference_profiles

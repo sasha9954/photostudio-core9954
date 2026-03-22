@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 ALLOWED_AUDIO_STORY_MODES = {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}
 ALLOWED_PLANNER_MODES = {"legacy", "gemini_only"}
 ALLOWED_COMFY_GENRES = {"horror", "romance", "comedy", "drama", "action", "thriller", "noir", "dreamy", "melancholy", "fashion", "surreal", "performance", "experimental"}
+ALLOWED_PROJECT_MODES = {"narration_first", "music_first", "hybrid"}
+ALLOWED_INPUT_MODES = {"audio_first", "text_to_audio_first"}
 
 
 class RefItemIn(BaseModel):
@@ -41,8 +43,14 @@ class ClipComfyPlanIn(BaseModel):
     genre: str = ""
     freezeStyle: bool = False
     text: str = ""
+    storyText: str = ""
+    inputMode: str | None = None
+    projectMode: str = "narration_first"
     audioUrl: str = ""
+    masterAudioUrl: str = ""
     audioDurationSec: float | None = None
+    globalMusicTrackUrl: str = ""
+    musicTrackUrl: str = ""
     refsByRole: dict[str, list[RefItemIn]] = Field(default_factory=dict)
     storyControlMode: str = ""
     storyMissionSummary: str = ""
@@ -54,6 +62,8 @@ class ClipComfyPlanIn(BaseModel):
     spokenTextHint: str = ""
     audioSemanticHints: list[str] | dict[str, Any] | str | None = None
     audioSemanticSummary: str = ""
+    plannerRules: dict[str, Any] = Field(default_factory=dict)
+    plannerOverrides: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("audioStoryMode", mode="before")
     @classmethod
@@ -72,6 +82,20 @@ class ClipComfyPlanIn(BaseModel):
     def validate_genre(cls, value: Any) -> str:
         raw = str(value or "").strip()
         return raw if raw.lower() in ALLOWED_COMFY_GENRES else ""
+
+    @field_validator("projectMode", mode="before")
+    @classmethod
+    def validate_project_mode(cls, value: Any) -> str:
+        normalized = str(value or "narration_first").strip().lower()
+        return normalized if normalized in ALLOWED_PROJECT_MODES else "narration_first"
+
+    @field_validator("inputMode", mode="before")
+    @classmethod
+    def validate_input_mode(cls, value: Any) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        normalized = str(value).strip().lower()
+        return normalized if normalized in ALLOWED_INPUT_MODES else None
 
 
 class ClipComfyConnectRefsIn(BaseModel):
