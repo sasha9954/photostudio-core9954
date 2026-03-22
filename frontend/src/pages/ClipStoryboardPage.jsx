@@ -4485,9 +4485,6 @@ useEffect(() => {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
   const [edges, setEdges] = useEdgesState(defaultEdges);
-  const onEdgesChange = useCallback((changes) => {
-    setEdges((currentEdges) => enforceSingleNarrativeSourceEdge(applyEdgeChanges(changes, currentEdges)));
-  }, [setEdges]);
 
   useEffect(() => {
     nodesCountRef.current = nodes.length;
@@ -9223,12 +9220,29 @@ return base;
     ]
   );
 
-  useEffect(() => {
-    if (!didHydrateRef.current) return;
-    setNodes((prev) => bindHandlers(prev, { nodesNow: prev, edgesNow: edgesRef.current || [], traceReason: "edges:refresh-node-bindings" }));
-  }, [bindHandlers, edges, setNodes]);
-
   const bindHandlersRef = useRef(bindHandlers);
+
+  const refreshNodeBindingsForEdges = useCallback((nextEdges, traceReason = "edges:sync") => {
+    const safeEdges = Array.isArray(nextEdges) ? nextEdges : [];
+    edgesRef.current = safeEdges;
+    setNodes((prev) => {
+      const reboundNodes = bindHandlersRef.current(prev, {
+        nodesNow: prev,
+        edgesNow: safeEdges,
+        traceReason,
+      });
+      nodesRef.current = reboundNodes;
+      return reboundNodes;
+    });
+  }, [setNodes]);
+
+  const onEdgesChange = useCallback((changes) => {
+    setEdges((currentEdges) => {
+      const nextEdges = enforceSingleNarrativeSourceEdge(applyEdgeChanges(changes, currentEdges));
+      refreshNodeBindingsForEdges(nextEdges, "edges:change");
+      return nextEdges;
+    });
+  }, [refreshNodeBindingsForEdges, setEdges]);
 
   useEffect(() => {
     const changed = bindHandlersRef.current !== bindHandlers;
@@ -9240,6 +9254,11 @@ return base;
     }
     bindHandlersRef.current = bindHandlers;
   }, [bindHandlers]);
+
+  useEffect(() => {
+    if (!didHydrateRef.current) return;
+    refreshNodeBindingsForEdges(edgesRef.current || [], "edges:refresh-node-bindings");
+  }, [edges, refreshNodeBindingsForEdges]);
 
   // TEMP DIAGNOSTIC: disabled bindHandlers reconciliation effect to verify reload node disappearance loop.
   // useEffect(() => {
@@ -10052,9 +10071,11 @@ const hydrate = useCallback((source = "unknown") => {
   const onConnect = useCallback(
     (params) => {
       setEdges((eds) => {
-        const src = nodes.find((n) => n.id === params.source);
-        const dst = nodes.find((n) => n.id === params.target);
+        const nodesNow = nodesRef.current || [];
+        const src = nodesNow.find((n) => n.id === params.source);
+        const dst = nodesNow.find((n) => n.id === params.target);
         if (!src || !dst) return eds;
+        let nextEdges = eds;
 
         if (dst.type === "brainNode") {
           const h = params.targetHandle || "";
@@ -10068,7 +10089,9 @@ const hydrate = useCallback((source = "unknown") => {
           if (!ok) return eds;
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === h));
           const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: h, sourceType: src.type, targetType: dst.type });
-          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+          return nextEdges;
         }
 
         if (dst.type === 'comfyBrain') {
@@ -10082,7 +10105,9 @@ const hydrate = useCallback((source = "unknown") => {
           if (!ok) return eds;
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === h));
           const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
-          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+          return nextEdges;
         }
 
         if (dst.type === "comfyNarrative") {
@@ -10095,14 +10120,18 @@ const hydrate = useCallback((source = "unknown") => {
           if (!ok) return eds;
           const cleaned = removeNarrativeIncomingSourceEdges(eds, dst.id);
           const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
-          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect:narrative");
+          return nextEdges;
         }
 
         if (src.type === "brainNode" && (params.sourceHandle || "") === "plan") {
           if (dst.type === "storyboardNode" && (params.targetHandle || "") === "plan_in") {
             const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === "plan_in"));
             const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
-            return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+            nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+            refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+            return nextEdges;
           }
           return eds;
         }
@@ -10111,7 +10140,9 @@ const hydrate = useCallback((source = "unknown") => {
           if (dst.type !== 'comfyStoryboard' || (params.targetHandle || '') !== 'comfy_plan') return eds;
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === 'comfy_plan'));
           const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
-          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+          return nextEdges;
         }
 
         if (dst.type === "introFrame") {
@@ -10129,19 +10160,25 @@ const hydrate = useCallback((source = "unknown") => {
             );
           if (!allowStoryContext) return eds;
           const presentation = getEdgePresentation({ sourceHandle, targetHandle, sourceType: src.type, targetType: dst.type });
-          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, eds);
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, eds);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+          return nextEdges;
         }
 
         if (src.type === 'comfyStoryboard' && (params.sourceHandle || '') === COMFY_STORYBOARD_MAIN_HANDLE) {
           if (dst.type === 'assemblyNode' && (params.targetHandle || '') === 'assembly_in') {
             const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_in");
             const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
-            return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+            nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+            refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+            return nextEdges;
           }
           if (dst.type !== 'comfyVideoPreview' || (params.targetHandle || '') !== COMFY_STORYBOARD_MAIN_HANDLE) return eds;
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === COMFY_STORYBOARD_MAIN_HANDLE));
           const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
-          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+          return nextEdges;
         }
 
         if (src.type === 'comfyStoryboard' || src.type === 'comfyBrain' || src.type === 'comfyVideoPreview' || dst.type === 'comfyStoryboard' || dst.type === 'comfyBrain' || dst.type === 'comfyVideoPreview') {
@@ -10152,35 +10189,46 @@ const hydrate = useCallback((source = "unknown") => {
           if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_intro") return eds;
           const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_intro");
           const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
-          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+          return nextEdges;
         }
 
         if (src.type === "storyboardNode" && (params.sourceHandle || "") === "plan_out") {
           if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_in") return eds;
           const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_in");
           const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
-          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+          return nextEdges;
         }
 
         const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
-        return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, eds);
+        nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, eds);
+        refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+        return nextEdges;
       });
     },
-    [setEdges, nodes]
+    [refreshNodeBindingsForEdges, setEdges]
   );
 
   const onEdgeClick = useCallback((evt, edge) => {
     evt?.stopPropagation?.();
     if (!edge?.id) return;
-    setEdges((eds) => eds.filter((e) => e.id !== edge.id));
-  }, [setEdges]);
+    setEdges((eds) => {
+      const nextEdges = eds.filter((e) => e.id !== edge.id);
+      refreshNodeBindingsForEdges(nextEdges, "edges:remove");
+      return nextEdges;
+    });
+  }, [refreshNodeBindingsForEdges, setEdges]);
 
   useEffect(() => {
     const cleaned = enforceSingleNarrativeSourceEdge(edges);
     if (cleaned !== edges) {
+      refreshNodeBindingsForEdges(cleaned, "edges:enforce-single-source");
       setEdges(cleaned);
     }
-  }, [edges, setEdges]);
+  }, [edges, refreshNodeBindingsForEdges, setEdges]);
 
   useEffect(() => {
     const onKey = (e) => {

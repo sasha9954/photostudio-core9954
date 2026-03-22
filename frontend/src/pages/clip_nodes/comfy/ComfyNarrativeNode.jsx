@@ -130,69 +130,73 @@ export default function ComfyNarrativeNode({ id, data }) {
           </div>
         </section>
 
-        <div className="clipSB_narrativeGrid">
-          <label className="clipSB_narrativeField">
-            <div className="clipSB_brainLabel">Тип видео</div>
-            <select className="clipSB_select" value={data?.contentType || "story"} onChange={(e) => data?.onFieldChange?.(id, { contentType: e.target.value })}>
-              {NARRATIVE_CONTENT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
-            </select>
-          </label>
+        <div className="clipSB_narrativeLayout">
+          <section className="clipSB_narrativeControlColumn">
+            <div className="clipSB_narrativeGrid">
+              <label className="clipSB_narrativeField">
+                <div className="clipSB_brainLabel">Тип видео</div>
+                <select className="clipSB_select" value={data?.contentType || "story"} onChange={(e) => data?.onFieldChange?.(id, { contentType: e.target.value })}>
+                  {NARRATIVE_CONTENT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
+                </select>
+              </label>
 
-          <label className="clipSB_narrativeField">
-            <div className="clipSB_brainLabel">Как обработать</div>
-            <select className="clipSB_select" value={data?.narrativeMode || "cinematic_expand"} onChange={(e) => data?.onFieldChange?.(id, { narrativeMode: e.target.value })}>
-              {NARRATIVE_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
-            </select>
-          </label>
+              <label className="clipSB_narrativeField">
+                <div className="clipSB_brainLabel">Как обработать</div>
+                <select className="clipSB_select" value={data?.narrativeMode || "cinematic_expand"} onChange={(e) => data?.onFieldChange?.(id, { narrativeMode: e.target.value })}>
+                  {NARRATIVE_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
+                </select>
+              </label>
 
-          <label className="clipSB_narrativeField">
-            <div className="clipSB_brainLabel">Стиль</div>
-            <select className="clipSB_select" value={data?.styleProfile || "realistic"} onChange={(e) => data?.onFieldChange?.(id, { styleProfile: e.target.value })}>
-              {NARRATIVE_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
-            </select>
-          </label>
-        </div>
+              <label className="clipSB_narrativeField">
+                <div className="clipSB_brainLabel">Стиль</div>
+                <select className="clipSB_select" value={data?.styleProfile || "realistic"} onChange={(e) => data?.onFieldChange?.(id, { styleProfile: e.target.value })}>
+                  {NARRATIVE_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
+                </select>
+              </label>
+            </div>
 
-        <label className="clipSB_narrativeField">
-          <div className="clipSB_brainLabel">Что изменить / добавить</div>
-          <textarea
-            className="clipSB_textarea clipSB_narrativeTextarea clipSB_narrativeTextarea--compact"
-            value={data?.directorNote || ""}
-            onChange={(e) => data?.onFieldChange?.(id, { directorNote: e.target.value })}
-            placeholder="Например: добавь экшена, сделай мрачнее, усиль конфликт"
-            rows={3}
-          />
-        </label>
+            <label className="clipSB_narrativeField">
+              <div className="clipSB_brainLabel">Что изменить / добавить</div>
+              <textarea
+                className="clipSB_textarea clipSB_narrativeTextarea clipSB_narrativeTextarea--compact"
+                value={data?.directorNote || ""}
+                onChange={(e) => data?.onFieldChange?.(id, { directorNote: e.target.value })}
+                placeholder="Например: добавь экшена, сделай мрачнее, усиль конфликт"
+                rows={3}
+              />
+            </label>
 
-        {sourceInput}
+            {sourceInput}
 
-        <div className="clipSB_narrativeActions">
-          <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => data?.onGenerate?.(id)} disabled={!hasConnectedSource}>
-            СОЗДАТЬ СЦЕНАРИЙ
-          </button>
-        </div>
-
-        <section className="clipSB_narrativeResultSection">
-          <div className="clipSB_narrativeTabs">
-            {NARRATIVE_RESULT_TABS.map((tab) => (
-              <button
-                key={tab.value}
-                type="button"
-                className={`clipSB_narrativeTab ${activeResultTab === tab.value ? "isActive" : ""}`.trim()}
-                onClick={() => data?.onFieldChange?.(id, { activeResultTab: tab.value })}
-              >
-                {tab.labelRu}
+            <div className="clipSB_narrativeActions">
+              <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => data?.onGenerate?.(id)} disabled={!hasConnectedSource}>
+                СОЗДАТЬ СЦЕНАРИЙ
               </button>
-            ))}
-          </div>
+            </div>
+          </section>
 
-          <div className="clipSB_narrativeResultBody">
-            {activeResultTab === "scenario" ? <pre>{outputs.scenario || "Пока нет сценария. Подключите источник и нажмите кнопку."}</pre> : null}
-            {activeResultTab === "voice" ? <pre>{outputs.voiceScript || "Здесь появится текст для диктора и диалоги."}</pre> : null}
-            {activeResultTab === "brain" ? renderBrainPackage(outputs.brainPackage) : null}
-            {activeResultTab === "music" ? <pre>{outputs.bgMusicPrompt || "Здесь появится prompt только для фоновой музыки."}</pre> : null}
-          </div>
-        </section>
+          <section className="clipSB_narrativeResultSection">
+            <div className="clipSB_narrativeTabs">
+              {NARRATIVE_RESULT_TABS.map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  className={`clipSB_narrativeTab ${activeResultTab === tab.value ? "isActive" : ""}`.trim()}
+                  onClick={() => data?.onFieldChange?.(id, { activeResultTab: tab.value })}
+                >
+                  {tab.labelRu}
+                </button>
+              ))}
+            </div>
+
+            <div className="clipSB_narrativeResultBody">
+              {activeResultTab === "scenario" ? <pre>{outputs.scenario || "Пока нет сценария. Подключите источник и нажмите кнопку."}</pre> : null}
+              {activeResultTab === "voice" ? <pre>{outputs.voiceScript || "Здесь появится текст для диктора и диалоги."}</pre> : null}
+              {activeResultTab === "brain" ? renderBrainPackage(outputs.brainPackage) : null}
+              {activeResultTab === "music" ? <pre>{outputs.bgMusicPrompt || "Здесь появится prompt только для фоновой музыки."}</pre> : null}
+            </div>
+          </section>
+        </div>
       </NodeShell>
     </>
   );
