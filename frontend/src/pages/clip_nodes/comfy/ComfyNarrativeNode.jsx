@@ -175,7 +175,7 @@ export default function ComfyNarrativeNode({ id, data }) {
             {sourceInput}
 
             <div className="clipSB_narrativeActions">
-              <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => data?.onGenerate?.(id)} disabled={!hasConnectedSource}>
+              <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => (data?.onGenerateScenario || data?.onGenerate)?.(id)} disabled={!hasConnectedSource}>
                 СОЗДАТЬ СЦЕНАРИЙ
               </button>
             </div>

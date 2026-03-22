@@ -8908,6 +8908,57 @@ onClipSec: (nodeId, value) => {
             ...(base.data || {}),
             connectedInputs,
           });
+          const buildNarrativeGenerationState = ({ narrativeNodeId, nodesNow, edgesNow, traceReason = "narrative:generate" }) => {
+            const safeNodes = Array.isArray(nodesNow) ? nodesNow : [];
+            const safeEdges = Array.isArray(edgesNow) ? edgesNow : [];
+            const nextNodes = safeNodes.map((x) => {
+              if (x.id !== narrativeNodeId) return x;
+              const narrativeConnectedInputs = getNarrativeConnectedInputsSnapshot({
+                node: x,
+                nodesById: new Map(safeNodes.map((nodeItem) => [nodeItem.id, nodeItem])),
+                edges: safeEdges,
+              });
+              const nextData = {
+                ...x.data,
+                connectedInputs: narrativeConnectedInputs,
+              };
+              const nextResolvedSource = resolveNarrativeSource(nextData);
+              if (nextResolvedSource?.origin !== "connected" || !String(nextResolvedSource?.value || "").trim()) {
+                return {
+                  ...x,
+                  data: {
+                    ...nextData,
+                    sourceOrigin: nextResolvedSource.origin,
+                    resolvedSource: nextResolvedSource,
+                    error: "NO_SOURCE",
+                    outputs: getDefaultNarrativeNodeData().outputs,
+                  },
+                };
+              }
+              const outputs = buildNarrativeOutputs({
+                ...nextData,
+                sourceOrigin: nextResolvedSource.origin,
+                resolvedSource: nextResolvedSource,
+              });
+              return {
+                ...x,
+                data: {
+                  ...nextData,
+                  sourceOrigin: nextResolvedSource.origin,
+                  resolvedSource: nextResolvedSource,
+                  error: null,
+                  outputs,
+                },
+              };
+            });
+            const reboundNodes = bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: safeEdges, traceReason });
+            const reboundNodesById = new Map(reboundNodes.map((nodeItem) => [nodeItem.id, nodeItem]));
+            const plannerBrainNodeId = safeEdges
+              .filter((edgeItem) => edgeItem.source === narrativeNodeId && String(edgeItem.sourceHandle || "") === "brain_package_out")
+              .map((edgeItem) => reboundNodesById.get(edgeItem.target))
+              .find((targetNode) => targetNode?.type === "comfyBrain" && String(targetNode?.id || "").trim())?.id || "";
+            return { reboundNodes, plannerBrainNodeId };
+          };
           return {
             ...base,
             data: {
@@ -8936,49 +8987,30 @@ onClipSec: (nodeId, value) => {
                 });
               },
               onGenerate: (nodeId) => {
-                setNodes((prev) => {
-                  const nextNodes = prev.map((x) => {
-                    if (x.id !== nodeId) return x;
-                    const narrativeConnectedInputs = getNarrativeConnectedInputsSnapshot({
-                      node: x,
-                      nodesById: new Map(prev.map((nodeItem) => [nodeItem.id, nodeItem])),
-                      edges: edgesRef.current || [],
-                    });
-                    const nextData = {
-                      ...x.data,
-                      connectedInputs: narrativeConnectedInputs,
-                    };
-                    const nextResolvedSource = resolveNarrativeSource(nextData);
-                    if (nextResolvedSource?.origin !== "connected" || !String(nextResolvedSource?.value || "").trim()) {
-                      return {
-                        ...x,
-                        data: {
-                          ...nextData,
-                          sourceOrigin: nextResolvedSource.origin,
-                          resolvedSource: nextResolvedSource,
-                          error: "NO_SOURCE",
-                          outputs: getDefaultNarrativeNodeData().outputs,
-                        },
-                      };
-                    }
-                    const outputs = buildNarrativeOutputs({
-                      ...nextData,
-                      sourceOrigin: nextResolvedSource.origin,
-                      resolvedSource: nextResolvedSource,
-                    });
-                    return {
-                      ...x,
-                      data: {
-                        ...nextData,
-                        sourceOrigin: nextResolvedSource.origin,
-                        resolvedSource: nextResolvedSource,
-                        error: null,
-                        outputs,
-                      },
-                    };
-                  });
-                  return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "narrative:generate" });
+                setNodes((prev) => buildNarrativeGenerationState({
+                  narrativeNodeId: nodeId,
+                  nodesNow: prev,
+                  edgesNow: edgesRef.current || [],
+                  traceReason: "narrative:generate",
+                }).reboundNodes);
+              },
+              onGenerateScenario: async (nodeId) => {
+                const currentEdges = edgesRef.current || [];
+                const currentNodes = nodesRef.current || [];
+                const { reboundNodes, plannerBrainNodeId } = buildNarrativeGenerationState({
+                  narrativeNodeId: nodeId,
+                  nodesNow: currentNodes,
+                  edgesNow: currentEdges,
+                  traceReason: "narrative:generate:planner-submit",
                 });
+                nodesRef.current = reboundNodes;
+                setNodes(reboundNodes);
+                if (!plannerBrainNodeId) {
+                  notify({ type: "warning", title: "Connect COMFY BRAIN", message: "Сценарий обновлён локально, но planner не запущен: подключите выход «Для мозга» к COMFY BRAIN." });
+                  return;
+                }
+                const plannerNode = reboundNodes.find((nodeItem) => nodeItem.id === plannerBrainNodeId && nodeItem.type === "comfyBrain");
+                await plannerNode?.data?.onParse?.(plannerBrainNodeId);
               },
             },
           };
