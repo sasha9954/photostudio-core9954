@@ -51,8 +51,10 @@ import { buildNarrativeOutputs, getDefaultNarrativeNodeData, resolveNarrativeSou
 const PORT_COLORS = {
   audio: "var(--family-audio)",
   text: "var(--family-text)",
+  link: "var(--family-link)",
   text_in: "var(--family-text)",
   audio_in: "var(--family-audio)",
+  link_in: "var(--family-link)",
   video_ref_in: "var(--family-storyboard)",
   scenario_out: "var(--family-narrative)",
   voice_script_out: "var(--family-audio)",
@@ -156,6 +158,50 @@ function handleStyle(kind, extra = {}) {
   };
 }
 
+function normalizeLinkUrl(value = "") {
+  return String(value || "").trim();
+}
+
+function parseLinkUrl(value = "") {
+  const normalized = normalizeLinkUrl(value);
+  if (!normalized) {
+    return { isValid: false, normalized: "", domain: "", preview: "", href: "" };
+  }
+
+  try {
+    const url = new URL(normalized);
+    const protocol = String(url.protocol || "").toLowerCase();
+    if (!["http:", "https:"].includes(protocol)) {
+      return { isValid: false, normalized, domain: "", preview: "", href: "" };
+    }
+    const domain = String(url.hostname || "").replace(/^www\./i, "");
+    const path = `${url.pathname || ""}${url.search || ""}`.replace(/\/$/, "") || "/";
+    const preview = `${domain}${path === "/" ? "" : path}`;
+    return {
+      isValid: true,
+      normalized: url.toString(),
+      domain,
+      preview,
+      href: url.toString(),
+    };
+  } catch {
+    return { isValid: false, normalized, domain: "", preview: "", href: "" };
+  }
+}
+
+function buildLinkNodePayload(value = "") {
+  const parsed = parseLinkUrl(value);
+  if (!parsed.isValid) return null;
+  return {
+    type: "link",
+    value: parsed.normalized,
+    preview: parsed.domain || parsed.preview || parsed.normalized,
+    sourceLabel: "Ссылка",
+    domain: parsed.domain,
+    href: parsed.href,
+  };
+}
+
 function isBrainInput(handleId) {
   return handleId === "audio" || handleId === "text" || handleId === "ref_character" || handleId === "ref_location" || handleId === "ref_style" || handleId === "ref_items";
 }
@@ -165,7 +211,7 @@ function isComfyBrainInput(handleId) {
 }
 
 function isNarrativeInput(handleId) {
-  return ["text_in", "audio_in", "video_ref_in"].includes(String(handleId || ""));
+  return ["text_in", "audio_in", "link_in", "video_ref_in"].includes(String(handleId || ""));
 }
 
 
@@ -205,6 +251,8 @@ const EDGE_STYLE_BY_KIND = {
   text: { color: PORT_COLORS.text, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   text_in: { color: PORT_COLORS.text_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   audio_in: { color: PORT_COLORS.audio_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  link: { color: PORT_COLORS.link, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  link_in: { color: PORT_COLORS.link_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   video_ref_in: { color: PORT_COLORS.video_ref_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   scenario_out: { color: PORT_COLORS.scenario_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   voice_script_out: { color: PORT_COLORS.voice_script_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
@@ -2022,6 +2070,18 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
+  if (targetHandle === "link_in" && sourceNode.type === "linkNode" && sourceHandle === "link") {
+    const payload = buildLinkNodePayload(sourceNode?.data?.urlValue || sourceNode?.data?.outputPayload?.value || "");
+    if (!payload) return null;
+    return {
+      value: payload.value,
+      preview: payload.preview || payload.value,
+      sourceLabel: payload.sourceLabel || "Внешняя ссылка",
+      type: payload.type,
+      domain: payload.domain || "",
+    };
+  }
+
   if (targetHandle === "video_ref_in" && sourceNode.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE) {
     const scenes = Array.isArray(sourceNode?.data?.mockScenes) ? sourceNode.data.mockScenes : [];
     const videoUrls = scenes
@@ -2045,11 +2105,12 @@ function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(
     return {
       text_in: null,
       audio_in: null,
+      link_in: null,
       video_ref_in: null,
     };
   }
 
-  return ["text_in", "audio_in", "video_ref_in"].reduce((acc, handleId) => {
+  return ["text_in", "audio_in", "link_in", "video_ref_in"].reduce((acc, handleId) => {
     const edge = getLatestIncomingEdgeForHandle({ targetNodeId: node.id, targetHandle: handleId, edges });
     const sourceNode = edge ? (nodesById.get(edge.source) || null) : null;
     const extracted = extractNarrativeConnectedValue({
@@ -3184,6 +3245,88 @@ function TextNode({ id, data }) {
         </div>
         <div className="clipSB_hint" style={{ marginTop: 10 }}>
           выход: текст → BRAIN
+        </div>
+      </NodeShell>
+    </>
+  );
+}
+
+function LinkNode({ id, data }) {
+  const draftUrl = String(data?.draftUrl ?? data?.urlValue ?? "");
+  const savedPayload = buildLinkNodePayload(data?.urlValue || "");
+  const liveParsed = parseLinkUrl(draftUrl);
+  const hasSavedValue = !!savedPayload?.value;
+  const isDraftDirty = normalizeLinkUrl(draftUrl) !== normalizeLinkUrl(data?.urlValue || "");
+  const status = data?.urlStatus || (hasSavedValue ? "ready" : "empty");
+  const isInvalid = status === "invalid";
+  const statusTitle = isInvalid
+    ? "Некорректная ссылка"
+    : hasSavedValue
+      ? "Ссылка готова"
+      : "Вставьте ссылку";
+  const statusBody = isInvalid
+    ? (data?.urlError || "Используйте полный http/https URL.")
+    : hasSavedValue
+      ? "Ссылка добавлена и готова к передаче дальше."
+      : "Добавьте web-источник и нажмите «Применить», чтобы активировать output.";
+
+  return (
+    <>
+      <Handle type="source" position={Position.Right} id="link" className="clipSB_handle" style={handleStyle("link")} />
+      <NodeShell title="ССЫЛКА" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🔗</span>} className="clipSB_nodeLink">
+        <div className="clipSB_linkField">
+          <input
+            className={`clipSB_input clipSB_linkInput ${isInvalid ? "isInvalid" : ""}`.trim()}
+            type="url"
+            inputMode="url"
+            placeholder="https://example.com/article"
+            value={draftUrl}
+            onChange={(e) => data?.onDraftChange?.(id, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                data?.onApplyUrl?.(id);
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="clipSB_btn clipSB_linkApply"
+            onClick={() => data?.onApplyUrl?.(id)}
+            disabled={!draftUrl.trim()}
+          >
+            Применить URL
+          </button>
+        </div>
+
+        <div className={`clipSB_linkStatus ${hasSavedValue ? "isReady" : ""} ${isInvalid ? "isInvalid" : ""}`.trim()}>
+          <div className="clipSB_linkStatusEyebrow">WEB SOURCE</div>
+          <div className="clipSB_linkStatusTitle">{statusTitle}</div>
+          <div className="clipSB_linkStatusBody">{statusBody}</div>
+
+          {hasSavedValue ? (
+            <div className="clipSB_linkMetaList">
+              <div className="clipSB_linkMetaRow">
+                <span>Домен</span>
+                <strong title={savedPayload?.domain || savedPayload?.value}>{savedPayload?.domain || "—"}</strong>
+              </div>
+              <div className="clipSB_linkMetaRow">
+                <span>Preview</span>
+                <strong title={savedPayload?.value}>{savedPayload?.preview || savedPayload?.value}</strong>
+              </div>
+            </div>
+          ) : null}
+
+          {!hasSavedValue && !isInvalid && liveParsed?.isValid ? (
+            <div className="clipSB_linkDraftPreview" title={liveParsed.preview || liveParsed.normalized}>
+              Будет сохранено: {liveParsed.preview || liveParsed.normalized}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="clipSB_small">
+          Внешний URL-источник для narrative / brain. После применения нода отдаёт payload типа link.
+          {isDraftDirty && !isInvalid ? " Есть несохранённые изменения." : ""}
         </div>
       </NodeShell>
     </>
@@ -7699,6 +7842,73 @@ Aspect ratio: ${imageFormat}`,
             },
           };
         }
+        if (n.type === "linkNode") {
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              onDraftChange: (nodeId, value) => {
+                setNodes((prev) => prev.map((x) => {
+                  if (x.id !== nodeId) return x;
+                  return {
+                    ...x,
+                    data: {
+                      ...x.data,
+                      draftUrl: value,
+                      urlStatus: normalizeLinkUrl(value)
+                        ? (x.data?.urlStatus === "invalid" ? "draft" : (x.data?.urlStatus || "draft"))
+                        : "empty",
+                      urlError: "",
+                    },
+                  };
+                }));
+              },
+              onApplyUrl: (nodeId) => {
+                setNodes((prev) => prev.map((x) => {
+                  if (x.id !== nodeId) return x;
+                  const draftUrl = normalizeLinkUrl(x?.data?.draftUrl ?? x?.data?.urlValue ?? "");
+                  if (!draftUrl) {
+                    return {
+                      ...x,
+                      data: {
+                        ...x.data,
+                        draftUrl: "",
+                        urlValue: "",
+                        urlStatus: "empty",
+                        urlError: "",
+                        outputPayload: null,
+                      },
+                    };
+                  }
+                  const payload = buildLinkNodePayload(draftUrl);
+                  if (!payload) {
+                    return {
+                      ...x,
+                      data: {
+                        ...x.data,
+                        draftUrl,
+                        urlStatus: "invalid",
+                        urlError: "Некорректная ссылка. Используйте полный http/https URL.",
+                        outputPayload: null,
+                      },
+                    };
+                  }
+                  return {
+                    ...x,
+                    data: {
+                      ...x.data,
+                      draftUrl: payload.value,
+                      urlValue: payload.value,
+                      urlStatus: "ready",
+                      urlError: "",
+                      outputPayload: payload,
+                    },
+                  };
+                }));
+              },
+            },
+          };
+        }
         if (n.type === "brainNode") {
           return {
             ...base,
@@ -9480,6 +9690,22 @@ const hydrate = useCallback((source = "unknown") => {
             data.audioDurationSec = normalizedAudioDuration > 0 ? normalizedAudioDuration : null;
           }
 
+          if (n.type === "linkNode") {
+            const normalizedSavedUrl = normalizeLinkUrl(data.urlValue || data.value || "");
+            const normalizedDraftUrl = normalizeLinkUrl(data.draftUrl ?? normalizedSavedUrl);
+            const payload = buildLinkNodePayload(normalizedSavedUrl);
+            data.draftUrl = normalizedDraftUrl;
+            data.urlValue = payload?.value || "";
+            data.urlStatus = payload
+              ? "ready"
+              : (normalizedDraftUrl ? (String(data.urlStatus || "") === "invalid" ? "invalid" : "draft") : "empty");
+            data.urlError = data.urlStatus === "invalid"
+              ? String(data.urlError || "Некорректная ссылка. Используйте полный http/https URL.")
+              : "";
+            data.outputPayload = payload;
+            delete data.value;
+          }
+
           if (n.type === "refNode") {
             const normalized = normalizeRefNodeData(data, data?.kind || "");
             normalized.uploading = false;
@@ -9737,6 +9963,8 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "audioNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { audioUrl: "", audioName: "", uploading: false, audioDurationSec: null } };
     } else if (type === "text") {
       node = { id, type: "textNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { textValue: "" } };
+    } else if (type === "link") {
+      node = { id, type: "linkNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { draftUrl: "", urlValue: "", urlStatus: "empty", urlError: "", outputPayload: null } };
     } else if (type === "brain") {
       node = { id, type: "brainNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: "clip", scenarioKey: "clip", shootKey: "cinema", styleKey: "realism", freezeStyle: false, clipSec: 30 } };
     } else if (type === "ref_character") {
@@ -10051,6 +10279,7 @@ const hydrate = useCallback((source = "unknown") => {
     () => ({
       audioNode: AudioNode,
       textNode: TextNode,
+      linkNode: LinkNode,
       brainNode: BrainNode,
       refNode: RefNode,
       storyboardNode: StoryboardPlanNode,
@@ -10116,6 +10345,7 @@ const hydrate = useCallback((source = "unknown") => {
           const ok =
             (h === "text_in" && src.type === "textNode" && sourceHandle === "text") ||
             (h === "audio_in" && src.type === "audioNode" && sourceHandle === "audio") ||
+            (h === "link_in" && src.type === "linkNode" && sourceHandle === "link") ||
             (h === "video_ref_in" && src.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE);
           if (!ok) return eds;
           const cleaned = removeNarrativeIncomingSourceEdges(eds, dst.id);
@@ -11287,6 +11517,7 @@ const hydrate = useCallback((source = "unknown") => {
               <div className="clipSB_drawerGroupTitle">БАЗОВЫЕ НОДЫ</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("audio")}>🎧 Аудио</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("text")}>📄 Текст</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("link")}>🔗 Ссылка</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("brain")}>🧠 Мозг</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">ОБЫЧНЫЕ REFS</div>

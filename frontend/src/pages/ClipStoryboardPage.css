@@ -37,6 +37,12 @@
   --family-audio-glow: rgba(57, 198, 166, 0.18);
   --family-audio-active: rgba(95, 214, 188, 0.58);
 
+  --family-link: #6f7cff;
+  --family-link-soft: rgba(111, 124, 255, 0.16);
+  --family-link-header: rgba(111, 124, 255, 0.22);
+  --family-link-glow: rgba(111, 124, 255, 0.26);
+  --family-link-active: rgba(143, 155, 255, 0.58);
+
   --family-music: #8b5cf6;
   --family-music-soft: rgba(139, 92, 246, 0.16);
   --family-music-header: rgba(139, 92, 246, 0.22);
@@ -237,6 +243,7 @@
 
 .clipSB_nodeAudio { --node-accent: var(--family-audio); --node-accent-soft: var(--family-audio-soft); --node-accent-header: var(--family-audio-header); --node-accent-glow: var(--family-audio-glow); --node-accent-active: var(--family-audio-active); }
 .clipSB_nodeText { --node-accent: var(--family-text); --node-accent-soft: var(--family-text-soft); --node-accent-header: var(--family-text-header); --node-accent-glow: var(--family-text-glow); --node-accent-active: var(--family-text-active); }
+.clipSB_nodeLink { --node-accent: var(--family-link); --node-accent-soft: var(--family-link-soft); --node-accent-header: var(--family-link-header); --node-accent-glow: var(--family-link-glow); --node-accent-active: var(--family-link-active); }
 .clipSB_nodeBrain,
 .clipSB_nodeComfyBrain { --node-accent: var(--family-brain); --node-accent-soft: var(--family-brain-soft); --node-accent-header: var(--family-brain-header); --node-accent-glow: var(--family-brain-glow); --node-accent-active: var(--family-brain-active); }
 .clipSB_nodeStoryboard,
@@ -755,6 +762,135 @@
   box-shadow:
     inset 0 0 0 1px rgba(120, 180, 255, 0.20),
     0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.clipSB_linkField {
+  display: grid;
+  gap: 10px;
+}
+
+.clipSB_linkInput {
+  min-height: 46px;
+  padding-right: 14px;
+  border: 1px solid rgba(101, 118, 255, 0.18);
+  background:
+    linear-gradient(180deg, rgba(111, 124, 255, 0.08), rgba(9, 11, 20, 0.04)),
+    rgba(8, 10, 18, 0.7);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 10px 22px rgba(0, 0, 0, 0.24);
+}
+
+.clipSB_linkInput:focus {
+  border-color: rgba(143, 155, 255, 0.5);
+  box-shadow:
+    inset 0 0 0 1px rgba(143, 155, 255, 0.26),
+    0 0 0 1px rgba(111, 124, 255, 0.16),
+    0 16px 28px rgba(9, 12, 24, 0.36);
+}
+
+.clipSB_linkInput.isInvalid {
+  border-color: rgba(255, 126, 126, 0.34);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 126, 126, 0.18),
+    0 10px 22px rgba(0, 0, 0, 0.24);
+}
+
+.clipSB_linkApply {
+  background:
+    linear-gradient(135deg, rgba(111, 124, 255, 0.18), rgba(140, 102, 255, 0.18)),
+    rgba(255, 255, 255, 0.05);
+  box-shadow:
+    inset 0 0 0 1px rgba(143, 155, 255, 0.22),
+    0 12px 24px rgba(14, 18, 34, 0.3);
+}
+
+.clipSB_linkApply:hover:not(:disabled) {
+  background:
+    linear-gradient(135deg, rgba(111, 124, 255, 0.24), rgba(140, 102, 255, 0.24)),
+    rgba(255, 255, 255, 0.07);
+}
+
+.clipSB_linkStatus {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(111, 124, 255, 0.08), rgba(255, 255, 255, 0.03)),
+    rgba(255, 255, 255, 0.03);
+  box-shadow:
+    inset 0 0 0 1px rgba(124, 136, 255, 0.14),
+    0 14px 24px rgba(8, 10, 18, 0.24);
+}
+
+.clipSB_linkStatus.isReady {
+  box-shadow:
+    inset 0 0 0 1px rgba(143, 155, 255, 0.24),
+    0 0 24px rgba(111, 124, 255, 0.14),
+    0 14px 24px rgba(8, 10, 18, 0.24);
+}
+
+.clipSB_linkStatus.isInvalid {
+  background:
+    linear-gradient(180deg, rgba(255, 122, 122, 0.1), rgba(255, 255, 255, 0.03)),
+    rgba(255, 255, 255, 0.03);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 126, 126, 0.22),
+    0 14px 24px rgba(8, 10, 18, 0.24);
+}
+
+.clipSB_linkStatusEyebrow {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(188, 196, 255, 0.66);
+}
+
+.clipSB_linkStatusTitle {
+  margin-top: 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: rgba(247, 249, 255, 0.96);
+}
+
+.clipSB_linkStatusBody {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(228, 232, 255, 0.76);
+}
+
+.clipSB_linkMetaList {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.clipSB_linkMetaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  font-size: 12px;
+  color: rgba(208, 214, 255, 0.68);
+}
+
+.clipSB_linkMetaRow strong,
+.clipSB_linkDraftPreview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(250, 251, 255, 0.92);
+}
+
+.clipSB_linkDraftPreview {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  color: rgba(220, 225, 255, 0.78);
 }
 
 /* Handles */

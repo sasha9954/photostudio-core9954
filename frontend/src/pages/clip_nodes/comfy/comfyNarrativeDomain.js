@@ -1,6 +1,7 @@
 export const NARRATIVE_SOURCE_OPTIONS = [
   { value: "TEXT", labelRu: "Текст" },
   { value: "AUDIO", labelRu: "Аудио" },
+  { value: "LINK", labelRu: "Ссылка" },
   { value: "VIDEO_REF", labelRu: "Видео (референс)" },
 ];
 
@@ -42,6 +43,7 @@ export const NARRATIVE_RESULT_TABS = [
 export const NARRATIVE_INPUT_HANDLES = [
   { id: "text_in", labelRu: "Текст", mode: "TEXT" },
   { id: "audio_in", labelRu: "Аудио", mode: "AUDIO" },
+  { id: "link_in", labelRu: "Ссылка", mode: "LINK" },
   { id: "video_ref_in", labelRu: "Видео (реф)", mode: "VIDEO_REF" },
 ];
 
@@ -65,6 +67,7 @@ export function getDefaultNarrativeNodeData() {
     connectedInputs: {
       text_in: null,
       audio_in: null,
+      link_in: null,
       video_ref_in: null,
     },
     resolvedSource: {

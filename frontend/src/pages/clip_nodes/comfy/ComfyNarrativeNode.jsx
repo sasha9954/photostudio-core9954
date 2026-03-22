@@ -55,13 +55,15 @@ export default function ComfyNarrativeNode({ id, data }) {
       ? "Подключён внешний текстовый источник"
       : activeSourceMode === "AUDIO"
         ? "Подключён внешний аудио-источник"
+        : activeSourceMode === "LINK"
+          ? "Подключён внешний web/source URL"
         : "Подключён внешний видео-референс"
-    : "Подключите один источник: текст, аудио или видео-референс.";
+    : "Подключите один источник: текст, аудио, ссылка или видео-референс.";
 
   const sourceInput = hasConnectedSource ? (
     <div className="clipSB_narrativeSourceStatus isConnected">
-      <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
-      <div className="clipSB_narrativeSourceStatusHint">Источник выбран автоматически по входящему соединению ноды.</div>
+        <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
+        <div className="clipSB_narrativeSourceStatusHint">Источник выбран автоматически по входящему соединению ноды.</div>
       {resolvedSource?.preview ? (
         <div className="clipSB_narrativeSourceStatusPreview" title={resolvedSource.preview}>
           {resolvedSource.preview}
@@ -71,13 +73,14 @@ export default function ComfyNarrativeNode({ id, data }) {
   ) : (
     <div className="clipSB_narrativeField clipSB_narrativeField--disabled" aria-disabled="true">
       <div className="clipSB_brainLabel">Основа сценария</div>
-      <div className="clipSB_narrativeEmptyBlock">
-        <div>Подключите источник:</div>
-        <div>— Текст</div>
-        <div>— Аудио</div>
-        <div>— Видео</div>
-      </div>
-      <div className="clipSB_narrativeEmptyHint">Нода ждёт ровно один активный вход: text_in, audio_in или video_ref_in.</div>
+        <div className="clipSB_narrativeEmptyBlock">
+          <div>Подключите источник:</div>
+          <div>— Текст</div>
+          <div>— Аудио</div>
+          <div>— Ссылка</div>
+          <div>— Видео</div>
+        </div>
+      <div className="clipSB_narrativeEmptyHint">Нода ждёт ровно один активный вход: text_in, audio_in, link_in или video_ref_in.</div>
     </div>
   );
 
