@@ -26,6 +26,7 @@ import {
   RefAnimalNode,
   RefGroupNode,
 } from "./clip_nodes/comfy";
+import VideoRefNode from "./clip_nodes/VideoRefNode";
 import {
   normalizeRenderProfile,
   normalizeAudioStoryMode,
@@ -52,6 +53,7 @@ const PORT_COLORS = {
   audio: "var(--family-audio)",
   text: "var(--family-text)",
   link: "var(--family-link)",
+  video_ref: "var(--family-video-ref)",
   text_in: "var(--family-text)",
   audio_in: "var(--family-audio)",
   link_in: "var(--family-link)",
@@ -251,6 +253,18 @@ function getNarrativeSourceRefreshSignature({ sourceNode = null, targetHandle = 
       status: String(sourceNode?.data?.urlStatus || ""),
     })}`;
   }
+  if (targetHandle === "video_ref_in" && sourceNode.type === "videoRefNode") {
+    const payload = getVideoRefNodeSavedPayload(sourceNode?.data);
+    return `video_ref_local:${JSON.stringify({
+      value: payload?.value || "",
+      fileName: payload?.fileName || "",
+      assetUrl: payload?.assetUrl || payload?.url || "",
+      preview: payload?.preview || "",
+      duration: payload?.meta?.duration || null,
+      mime: payload?.meta?.mime || "",
+      size: payload?.meta?.size || 0,
+    })}`;
+  }
   if (targetHandle === "video_ref_in" && sourceNode.type === "comfyStoryboard") {
     const scenes = Array.isArray(sourceNode?.data?.mockScenes) ? sourceNode.data.mockScenes : [];
     return `video_ref:${JSON.stringify(scenes.map((scene) => ({
@@ -280,6 +294,84 @@ function getAssetFileName(value = "") {
   const withoutQuery = normalized.split(/[?#]/)[0] || "";
   const parts = withoutQuery.split("/").filter(Boolean);
   return parts.length ? decodeURIComponent(parts[parts.length - 1]) : "";
+}
+
+function buildVideoRefNodePayload({
+  fileName = "",
+  assetUrl = "",
+  durationSec = null,
+  mime = "",
+  size = 0,
+  posterUrl = "",
+  width = 0,
+  height = 0,
+} = {}) {
+  const safeFileName = String(fileName || "").trim();
+  const safeAssetUrl = String(assetUrl || "").trim();
+  const safeMime = String(mime || "").trim();
+  const safePoster = String(posterUrl || "").trim();
+  const safeSize = Number(size || 0);
+  const safeDuration = Number(durationSec || 0);
+  if (!safeFileName && !safeAssetUrl) return null;
+  return {
+    type: "video_ref",
+    value: safeAssetUrl || safeFileName,
+    preview: safeFileName || safeAssetUrl || "Видео (референс)",
+    sourceLabel: "Видео (референс)",
+    fileName: safeFileName,
+    assetUrl: safeAssetUrl,
+    url: safeAssetUrl,
+    posterUrl: safePoster,
+    meta: {
+      kind: "video_ref",
+      duration: Number.isFinite(safeDuration) && safeDuration > 0 ? safeDuration : null,
+      mime: safeMime,
+      size: Number.isFinite(safeSize) && safeSize > 0 ? safeSize : 0,
+      width: Number(width || 0) || 0,
+      height: Number(height || 0) || 0,
+    },
+  };
+}
+
+function getVideoRefNodeSavedPayload(data = null) {
+  if (!data || typeof data !== "object") return null;
+  const candidate = data.savedPayload && typeof data.savedPayload === "object"
+    ? data.savedPayload
+    : (data.outputPayload && typeof data.outputPayload === "object" ? data.outputPayload : null);
+  const assetUrl = String(candidate?.assetUrl || candidate?.url || data?.assetUrl || data?.url || "").trim();
+  const fileName = String(candidate?.fileName || data?.fileName || "").trim();
+  const built = buildVideoRefNodePayload({
+    fileName,
+    assetUrl,
+    durationSec: candidate?.meta?.duration ?? data?.durationSec ?? data?.meta?.duration ?? null,
+    mime: candidate?.meta?.mime || data?.mime || data?.meta?.mime || "",
+    size: candidate?.meta?.size ?? data?.size ?? data?.meta?.size ?? 0,
+    posterUrl: candidate?.posterUrl || data?.posterUrl || data?.previewImage || "",
+    width: candidate?.meta?.width ?? data?.width ?? data?.meta?.width ?? 0,
+    height: candidate?.meta?.height ?? data?.height ?? data?.meta?.height ?? 0,
+  });
+  if (!built && !candidate) return null;
+  return {
+    ...(built || {}),
+    ...(candidate || {}),
+    value: candidate?.value || built?.value || assetUrl || fileName,
+    preview: candidate?.preview || built?.preview || fileName || assetUrl,
+    sourceLabel: candidate?.sourceLabel || built?.sourceLabel || "Видео (референс)",
+    fileName: candidate?.fileName || built?.fileName || fileName,
+    assetUrl: candidate?.assetUrl || built?.assetUrl || assetUrl,
+    url: candidate?.url || built?.url || assetUrl,
+    posterUrl: candidate?.posterUrl || built?.posterUrl || data?.posterUrl || data?.previewImage || "",
+    meta: {
+      ...(built?.meta || {}),
+      ...(candidate?.meta && typeof candidate.meta === "object" ? candidate.meta : {}),
+      kind: "video_ref",
+      duration: candidate?.meta?.duration ?? built?.meta?.duration ?? data?.durationSec ?? data?.meta?.duration ?? null,
+      mime: candidate?.meta?.mime || built?.meta?.mime || data?.mime || data?.meta?.mime || "",
+      size: candidate?.meta?.size ?? built?.meta?.size ?? data?.size ?? data?.meta?.size ?? 0,
+      width: candidate?.meta?.width ?? built?.meta?.width ?? data?.width ?? data?.meta?.width ?? 0,
+      height: candidate?.meta?.height ?? built?.meta?.height ?? data?.height ?? data?.meta?.height ?? 0,
+    },
+  };
 }
 
 
@@ -2156,6 +2248,25 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
         href: payload.href || payload.url || payload.value || "",
         domain: payload.domain || "",
         kind: payload?.meta?.kind || "link",
+      },
+    };
+  }
+
+  if (targetHandle === "video_ref_in" && sourceNode.type === "videoRefNode" && sourceHandle === "video_ref") {
+    const payload = getVideoRefNodeSavedPayload(sourceNode?.data);
+    if (!payload) return null;
+    return {
+      value: payload.value || payload.assetUrl || payload.url || payload.fileName || "",
+      preview: payload.preview || payload.fileName || payload.assetUrl || "",
+      sourceLabel: payload.sourceLabel || "Видео (референс)",
+      url: payload.url || payload.assetUrl || "",
+      assetUrl: payload.assetUrl || payload.url || "",
+      fileName: payload.fileName || getAssetFileName(payload.assetUrl || payload.url || payload.value || ""),
+      posterUrl: payload.posterUrl || "",
+      type: payload.type || "video_ref",
+      meta: {
+        ...(payload.meta && typeof payload.meta === "object" ? payload.meta : {}),
+        kind: "video_ref",
       },
     };
   }
@@ -9837,6 +9948,24 @@ const hydrate = useCallback((source = "unknown") => {
             delete data.value;
           }
 
+          if (n.type === "videoRefNode") {
+            const payload = getVideoRefNodeSavedPayload(data);
+            data.fileName = String(payload?.fileName || data.fileName || "");
+            data.assetUrl = String(payload?.assetUrl || data.assetUrl || data.url || "");
+            data.url = String(payload?.url || data.url || data.assetUrl || "");
+            data.durationSec = payload?.meta?.duration ?? data.durationSec ?? null;
+            data.mime = String(payload?.meta?.mime || data.mime || "");
+            data.size = payload?.meta?.size ?? data.size ?? 0;
+            data.posterUrl = String(payload?.posterUrl || data.posterUrl || data.previewImage || "");
+            data.previewImage = String(data.posterUrl || data.previewImage || "");
+            data.width = payload?.meta?.width ?? data.width ?? 0;
+            data.height = payload?.meta?.height ?? data.height ?? 0;
+            data.uploadError = String(data.uploadError || "");
+            data.uploading = false;
+            data.savedPayload = payload;
+            data.outputPayload = payload;
+          }
+
           if (n.type === "refNode") {
             const normalized = normalizeRefNodeData(data, data?.kind || "");
             normalized.uploading = false;
@@ -10096,6 +10225,8 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "textNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { textValue: "" } };
     } else if (type === "link") {
       node = { id, type: "linkNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { draftUrl: "", urlValue: "", urlStatus: "empty", urlError: "", savedPayload: null, outputPayload: null } };
+    } else if (type === "videoRef") {
+      node = { id, type: "videoRefNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { fileName: "", assetUrl: "", url: "", durationSec: null, mime: "", size: 0, posterUrl: "", previewImage: "", width: 0, height: 0, uploading: false, uploadError: "", savedPayload: null, outputPayload: null } };
     } else if (type === "brain") {
       node = { id, type: "brainNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: "clip", scenarioKey: "clip", shootKey: "cinema", styleKey: "realism", freezeStyle: false, clipSec: 30 } };
     } else if (type === "ref_character") {
@@ -10411,6 +10542,7 @@ const hydrate = useCallback((source = "unknown") => {
       audioNode: AudioNode,
       textNode: TextNode,
       linkNode: LinkNode,
+      videoRefNode: VideoRefNode,
       brainNode: BrainNode,
       refNode: RefNode,
       storyboardNode: StoryboardPlanNode,
@@ -10477,6 +10609,7 @@ const hydrate = useCallback((source = "unknown") => {
             (h === "text_in" && src.type === "textNode" && sourceHandle === "text") ||
             (h === "audio_in" && src.type === "audioNode" && sourceHandle === "audio") ||
             (h === "link_in" && src.type === "linkNode" && sourceHandle === "link") ||
+            (h === "video_ref_in" && src.type === "videoRefNode" && sourceHandle === "video_ref") ||
             (h === "video_ref_in" && src.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE);
           if (!ok) return eds;
           const cleaned = removeNarrativeIncomingSourceEdges(eds, dst.id);
@@ -11649,6 +11782,7 @@ const hydrate = useCallback((source = "unknown") => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("audio")}>🎧 Аудио</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("text")}>📄 Текст</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("link")}>🔗 Ссылка</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("videoRef")}>🎬 Видео</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("brain")}>🧠 Мозг</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">ОБЫЧНЫЕ REFS</div>
