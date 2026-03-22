@@ -3421,12 +3421,26 @@ function stripFunctionsDeep(value) {
   return value;
 }
 
+function sanitizeNarrativeTesterNodeData(nodeType, rawData = {}) {
+  const data = rawData && typeof rawData === "object" ? { ...rawData } : {};
+  const testerType = String(data.testerType || nodeType || "").trim() || String(nodeType || "").trim();
+  return testerType ? { testerType } : {};
+}
+
 function serializeNodesForStorage(nodes) {
   return nodes.map((n) => {
     const normalizedData = isComfyRefLikeNodeType(n.type)
       ? normalizeComfyRefNodeData(n.type, n.data || {}, n?.data?.kind || "")
       : (n.data || {});
     const data = stripFunctionsDeep(normalizedData) || {};
+    if (isNarrativeTesterNodeType(n.type)) {
+      return {
+        id: n.id,
+        type: n.type,
+        position: n.position,
+        data: sanitizeNarrativeTesterNodeData(n.type, data),
+      };
+    }
     if (n.type === "brainNode") {
       delete data.isParsing;
       delete data.activeParseToken;
@@ -10296,6 +10310,15 @@ const hydrate = useCallback((source = "unknown") => {
               testerPayloadValue: data?.testerPayload,
               nodeId: n.id,
             });
+          }
+
+          if (isNarrativeTesterNodeType(n.type)) {
+            return {
+              id: n.id,
+              type: n.type,
+              position: n.position,
+              data: sanitizeNarrativeTesterNodeData(n.type, data),
+            };
           }
 
           return {
