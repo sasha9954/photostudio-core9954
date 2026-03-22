@@ -147,28 +147,39 @@ export default function ComfyNarrativeNode({ id, data }) {
 
         <section className="clipSB_narrativeSection">
           <div className="clipSB_brainLabel">Источник</div>
-          <div className={`clipSB_narrativeSegmented ${lockedByExternalSource ? "isLocked" : ""}`.trim()}>
-            {NARRATIVE_SOURCE_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={`clipSB_narrativeChip ${activeSourceMode === option.value ? "isActive" : ""} ${lockedByExternalSource ? "isReadonly" : ""}`.trim()}
-                onClick={() => handleSourceModeChange(option.value)}
-                disabled={lockedByExternalSource}
-                aria-pressed={activeSourceMode === option.value}
-                aria-disabled={lockedByExternalSource}
-                title={lockedByExternalSource ? "Источник определяется подключённым внешним входом" : undefined}
-              >
-                {option.labelRu}
-                {lockedByExternalSource && activeSourceMode === option.value ? (
-                  <span className="clipSB_narrativeChipMeta">подключён</span>
-                ) : null}
-              </button>
-            ))}
-          </div>
           {lockedByExternalSource ? (
-            <div className="clipSB_selectHint">Источник зафиксирован внешним подключением.</div>
-          ) : null}
+            <div className="clipSB_narrativeSourceIndicator" aria-label="Источник определяется внешним подключением">
+              <div className="clipSB_narrativeSourceIndicatorHeader">
+                <span className="clipSB_narrativeSourceIndicatorTitle">{resolvedSource?.label || "Источник"}</span>
+                <span className="clipSB_narrativeChipMeta">подключён извне</span>
+              </div>
+              <div className="clipSB_narrativeSourceIndicatorChips">
+                {NARRATIVE_SOURCE_OPTIONS.map((option) => (
+                  <div
+                    key={option.value}
+                    className={`clipSB_narrativeChipDisplay ${activeSourceMode === option.value ? "isActive" : ""}`.trim()}
+                    aria-current={activeSourceMode === option.value ? "true" : undefined}
+                  >
+                    {option.labelRu}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="clipSB_narrativeSegmented">
+              {NARRATIVE_SOURCE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`clipSB_narrativeChip ${activeSourceMode === option.value ? "isActive" : ""}`.trim()}
+                  onClick={() => handleSourceModeChange(option.value)}
+                  aria-pressed={activeSourceMode === option.value}
+                >
+                  {option.labelRu}
+                </button>
+              ))}
+            </div>
+          )}
         </section>
 
         <div className="clipSB_narrativeGrid">
