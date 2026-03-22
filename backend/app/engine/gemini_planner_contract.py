@@ -127,6 +127,14 @@ class GeminiPlannerParseResult(BaseModel):
     ok: bool
     parsed: GeminiPlannerOutput | None = None
     raw_payload: dict[str, Any] | None = None
+    raw_text: str | None = None
+    parse_mode: str = "invalid"
+    contract_schema_valid: bool = False
+    contract_validation_errors: list[str] = Field(default_factory=list)
+    contract_validation_warnings: list[str] = Field(default_factory=list)
+    raw_gemini_contract_version: str | None = None
+    parser_notes: list[str] = Field(default_factory=list)
+    parser_debug_summary: str | None = None
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -292,8 +300,8 @@ def build_gemini_planner_input(
     )
 
 
-def build_gemini_planner_request_text(planner_input: GeminiPlannerInputPackage) -> str:
-    output_contract = {
+def _build_gemini_planner_output_contract_dict(planner_input: GeminiPlannerInputPackage) -> dict[str, Any]:
+    return {
         "contract_version": planner_input.contract_version,
         "project_mode": "narration_first|music_first|hybrid",
         "input_mode": "audio_first|text_to_audio_first",
@@ -335,6 +343,9 @@ def build_gemini_planner_request_text(planner_input: GeminiPlannerInputPackage) 
             }
         ],
     }
+
+
+def build_gemini_planner_system_rules(planner_input: GeminiPlannerInputPackage) -> str:
     return (
         "You are the central Audio-first Gemini planner for COMFY clip planning.\n"
         "Return exactly one JSON object and no markdown.\n"
@@ -342,40 +353,111 @@ def build_gemini_planner_request_text(planner_input: GeminiPlannerInputPackage) 
         "Do scene analysis, timing segmentation, render-mode selection, and shot planning yourself.\n"
         "Audio-first means master audio is the timing source of truth.\n"
         "If input_mode is text_to_audio_first and master_audio_url is missing, return planning_status='blocked' and no invented timing.\n"
-        "Narration must not use lip_sync. Local phrase text must not imply lip_sync. i2v_as and f_l_as are audio-sensitive motion, not speech articulation.\n"
-        "Populate every timing field consistently and keep shot timing inside its scene timing.\n"
-        "Expected output contract follows, then planner_input JSON.\n"
-        f"OUTPUT_CONTRACT={json.dumps(output_contract, ensure_ascii=False)}\n"
-        f"PLANNER_INPUT={planner_input.model_dump_json(indent=2, exclude_none=True)}"
+        "Narration must not use lip_sync. Local phrase text must not imply lip_sync.\n"
+        "lip_sync is only for music-driven vocal + rhythm scenes with framing that supports visible articulation.\n"
+        "i2v_as and f_l_as are audio-sensitive motion, not speech articulation.\n"
+        "Populate every timing field consistently and keep shot timing inside its scene timing."
+    )
+
+
+def build_gemini_planner_output_contract(planner_input: GeminiPlannerInputPackage) -> str:
+    output_contract = _build_gemini_planner_output_contract_dict(planner_input)
+    return (
+        "Expected output contract.\n"
+        "Return one top-level JSON object with these fields and enum domains.\n"
+        f"{json.dumps(output_contract, ensure_ascii=False, indent=2)}"
+    )
+
+
+def build_gemini_planner_runtime_payload(planner_input: GeminiPlannerInputPackage) -> str:
+    return planner_input.model_dump_json(indent=2, exclude_none=True)
+
+
+def build_gemini_planner_request_text(planner_input: GeminiPlannerInputPackage) -> str:
+    system_rules = build_gemini_planner_system_rules(planner_input)
+    output_contract = build_gemini_planner_output_contract(planner_input)
+    runtime_payload = build_gemini_planner_runtime_payload(planner_input)
+    return (
+        "=== GEMINI PLANNER SYSTEM RULES ===\n"
+        f"{system_rules}\n\n"
+        "=== GEMINI PLANNER OUTPUT CONTRACT ===\n"
+        f"{output_contract}\n\n"
+        "=== GEMINI PLANNER RUNTIME PAYLOAD ===\n"
+        f"{runtime_payload}"
     )
 
 
 def parse_gemini_planner_output(raw_output: str | dict[str, Any] | GeminiPlannerOutput) -> GeminiPlannerParseResult:
     if isinstance(raw_output, GeminiPlannerOutput):
-        return GeminiPlannerParseResult(ok=True, parsed=raw_output, raw_payload=raw_output.model_dump(mode="json"))
+        payload = raw_output.model_dump(mode="json")
+        return GeminiPlannerParseResult(
+            ok=True,
+            parsed=raw_output,
+            raw_payload=payload,
+            raw_text=raw_output.model_dump_json(indent=2),
+            parse_mode="strict",
+            contract_schema_valid=True,
+            raw_gemini_contract_version=_clean_str(payload.get("contract_version")) or None,
+            parser_debug_summary="strict_json:model_instance",
+        )
 
     payload: dict[str, Any] | None = None
+    parse_mode = "strict"
+    parser_notes: list[str] = []
+    raw_text: str | None = None
     if isinstance(raw_output, dict):
         payload = raw_output
     else:
         raw_text = str(raw_output or "").strip()
         if not raw_text:
-            return GeminiPlannerParseResult(ok=False, errors=["gemini_contract_empty_output"])
+            return GeminiPlannerParseResult(
+                ok=False,
+                raw_text=raw_text,
+                parse_mode="invalid",
+                errors=["gemini_contract_empty_output"],
+                contract_validation_errors=["gemini_contract_empty_output"],
+                parser_debug_summary="invalid:empty_output",
+            )
         try:
             payload = json.loads(raw_text)
         except Exception:
+            parse_mode = "rescued_json"
             start = raw_text.find("{")
             end = raw_text.rfind("}")
             if start >= 0 and end > start:
                 try:
                     payload = json.loads(raw_text[start:end + 1])
+                    parser_notes.append("parser_rescued_json_substring")
                 except Exception:
                     payload = None
+                    parser_notes.append("parser_rescue_substring_json_decode_failed")
+            else:
+                parser_notes.append("parser_rescue_brace_window_not_found")
     if not isinstance(payload, dict):
-        return GeminiPlannerParseResult(ok=False, errors=["gemini_contract_invalid_json"])
+        return GeminiPlannerParseResult(
+            ok=False,
+            raw_text=raw_text,
+            parse_mode="invalid",
+            errors=["gemini_contract_invalid_json"],
+            warnings=parser_notes,
+            contract_validation_errors=["gemini_contract_invalid_json"],
+            parser_notes=parser_notes,
+            parser_debug_summary="invalid:json_parse_failed",
+        )
     if isinstance(payload.get("errors"), list) and not any(key in payload for key in ["contract_version", "project_mode", "input_mode", "planning_status", "scenes"]):
         upstream_errors = [str(item).strip() for item in payload.get("errors") if str(item).strip()]
-        return GeminiPlannerParseResult(ok=False, raw_payload=payload, errors=upstream_errors or ["gemini_contract_upstream_error"])
+        return GeminiPlannerParseResult(
+            ok=False,
+            raw_payload=payload,
+            raw_text=raw_text,
+            parse_mode="invalid",
+            errors=upstream_errors or ["gemini_contract_upstream_error"],
+            warnings=parser_notes,
+            contract_validation_errors=upstream_errors or ["gemini_contract_upstream_error"],
+            raw_gemini_contract_version=_clean_str(payload.get("contract_version")) or None,
+            parser_notes=parser_notes,
+            parser_debug_summary="invalid:upstream_error_payload",
+        )
 
     try:
         parsed = GeminiPlannerOutput.model_validate(payload)
@@ -385,9 +467,34 @@ def parse_gemini_planner_output(raw_output: str | dict[str, Any] | GeminiPlanner
             path = ".".join(str(part) for part in err.get("loc") or [])
             msg = str(err.get("msg") or "validation error")
             errors.append(f"gemini_contract_schema_error:{path}:{msg}")
-        return GeminiPlannerParseResult(ok=False, raw_payload=payload, errors=errors)
+        return GeminiPlannerParseResult(
+            ok=False,
+            raw_payload=payload,
+            raw_text=raw_text,
+            parse_mode="invalid",
+            errors=errors,
+            warnings=parser_notes,
+            contract_schema_valid=False,
+            contract_validation_errors=errors,
+            raw_gemini_contract_version=_clean_str(payload.get("contract_version")) or None,
+            parser_notes=parser_notes,
+            parser_debug_summary=f"invalid:schema_errors:{len(errors)}",
+        )
 
-    return GeminiPlannerParseResult(ok=True, parsed=parsed, raw_payload=payload)
+    parser_debug_summary = "strict_json:contract_valid" if parse_mode == "strict" else "rescued_json:contract_valid"
+    return GeminiPlannerParseResult(
+        ok=True,
+        parsed=parsed,
+        raw_payload=payload,
+        raw_text=raw_text,
+        parse_mode=parse_mode,
+        contract_schema_valid=True,
+        contract_validation_warnings=parser_notes if parse_mode == "rescued_json" else [],
+        raw_gemini_contract_version=_clean_str(payload.get("contract_version")) or None,
+        parser_notes=parser_notes,
+        warnings=parser_notes,
+        parser_debug_summary=parser_debug_summary,
+    )
 
 
 def _convert_audio_segment_type(value: GeminiPlannerAudioSegmentType) -> AudioSegmentType:
@@ -431,6 +538,8 @@ def validate_gemini_planner_output(
         warnings.append("gemini_project_mode_mismatch_with_request")
     if parsed_output.input_mode != planner_input.input_mode:
         warnings.append("gemini_input_mode_mismatch_with_request")
+    if parsed_output.planning_status == GeminiPlanningStatus.ok and not parsed_output.scenes:
+        errors.append("ok_planning_status_requires_non_empty_scenes")
 
     if planner_input.input_mode == InputMode.text_to_audio_first and not planner_input.master_audio_url:
         blocked = True
@@ -460,17 +569,43 @@ def validate_gemini_planner_output(
                 errors.append(f"{shot_label}:shot_timing_outside_scene_window")
             if abs(round(shot.end_sec - shot.start_sec, 3) - round(shot.duration_sec, 3)) > 0.05:
                 errors.append(f"{shot_label}:shot_duration_inconsistent")
+            if shot.duration_sec <= 0:
+                errors.append(f"{shot_label}:shot_duration_must_be_positive")
             if shot.render_mode == RenderMode.lip_sync and shot.has_vocal_rhythm is not True:
                 errors.append(f"{shot_label}:lip_sync_requires_has_vocal_rhythm_true")
             if shot.render_mode == RenderMode.lip_sync and shot.audio_segment_type == GeminiPlannerAudioSegmentType.narration:
                 errors.append(f"{shot_label}:narration_segment_cannot_use_lip_sync")
             if shot.local_phrase_text and shot.render_mode == RenderMode.lip_sync:
                 errors.append(f"{shot_label}:local_phrase_does_not_imply_lip_sync")
+            if shot.local_phrase_text and shot.lipsync_policy.allowed is True:
+                errors.append(f"{shot_label}:local_phrase_does_not_allow_lipsync_policy")
+            if (
+                planner_input.project_mode == ProjectMode.narration_first
+                and shot.audio_segment_type == GeminiPlannerAudioSegmentType.music_vocal
+                and not planner_input.global_music_track_url
+                and scene.audio_segment_type != GeminiPlannerAudioSegmentType.music_vocal
+            ):
+                warnings.append(f"{shot_label}:music_vocal_without_music_context_in_narration_first")
+            if (
+                shot.render_mode == RenderMode.lip_sync
+                and _clean_str(shot.framing).lower() in {"wide", "long", "long_shot", "wide_shot", "distant", "extreme_wide"}
+            ):
+                warnings.append(f"{shot_label}:lip_sync_framing_may_be_too_wide")
+            if (
+                scene.audio_segment_type == GeminiPlannerAudioSegmentType.narration
+                and shot.audio_segment_type == GeminiPlannerAudioSegmentType.music_vocal
+            ):
+                warnings.append(f"{shot_label}:shot_audio_segment_conflicts_with_scene_audio_segment")
             if shot.render_mode == RenderMode.continuation:
                 if not shot.parent_shot_id:
                     warnings.append(f"{shot_label}:continuation_missing_parent_shot_id")
                 if shot.start_frame_source is None:
                     warnings.append(f"{shot_label}:continuation_missing_start_frame_source")
+                if shot.start_frame_source not in {
+                    GeminiPlannerShotFrameSource.previous_last_frame,
+                    GeminiPlannerShotFrameSource.provided_frame,
+                }:
+                    warnings.append(f"{shot_label}:continuation_start_frame_source_should_reference_previous_or_provided_frame")
             if shot.render_mode in {RenderMode.f_l, RenderMode.f_l_as} and shot.needs_two_frames is not True:
                 warnings.append(f"{shot_label}:f_l_modes_should_enable_needs_two_frames")
             if shot.render_mode == RenderMode.lip_sync and shot.lipsync_policy.allowed is not True:
@@ -585,6 +720,11 @@ def _build_compatibility_scene(scene: PlannedScene) -> dict[str, Any]:
     }
 
 
+def _collect_messages_for_path(messages: list[str], path: str) -> list[str]:
+    prefix = f"{path}:"
+    return [message for message in messages if str(message).startswith(prefix)]
+
+
 def map_gemini_plan_to_canonical_audio_first_output(
     planner_input: GeminiPlannerInputPackage,
     parsed_output: GeminiPlannerOutput | None,
@@ -592,6 +732,7 @@ def map_gemini_plan_to_canonical_audio_first_output(
     *,
     raw_payload: dict[str, Any] | None = None,
     raw_debug_summary: str | None = None,
+    parse_result: GeminiPlannerParseResult | None = None,
 ) -> GeminiContractExecutionResult:
     project_input = ProjectPlanningInput(
         input_mode=planner_input.input_mode,
@@ -628,10 +769,22 @@ def map_gemini_plan_to_canonical_audio_first_output(
             render_tasks=[],
             debug={
                 "planner_source": "gemini",
+                "canonical_source_of_truth": True,
+                "compatibility_projection": False,
                 "planning_status": parsed_output.planning_status.value if parsed_output else GeminiPlanningStatus.invalid.value,
                 "planner_validation_errors": validation.errors,
                 "planner_validation_warnings": validation.warnings,
-                "raw_gemini_contract_version": parsed_output.contract_version if parsed_output else planner_input.contract_version,
+                "contract_parse_mode": parse_result.parse_mode if parse_result else "invalid",
+                "contract_schema_valid": parse_result.contract_schema_valid if parse_result else False,
+                "contract_validation_errors": parse_result.contract_validation_errors if parse_result else validation.errors,
+                "contract_validation_warnings": parse_result.contract_validation_warnings if parse_result else validation.warnings,
+                "raw_gemini_contract_version": (
+                    parse_result.raw_gemini_contract_version
+                    if parse_result and parse_result.raw_gemini_contract_version
+                    else (parsed_output.contract_version if parsed_output else planner_input.contract_version)
+                ),
+                "parser_debug_summary": parse_result.parser_debug_summary if parse_result else "invalid:missing_parse_result",
+                "parser_notes": parse_result.parser_notes if parse_result else [],
                 "raw_gemini_debug_summary": raw_debug_summary or (parsed_output.debug_summary if parsed_output else None),
                 "raw_gemini_payload": raw_payload or {},
             },
@@ -676,28 +829,9 @@ def map_gemini_plan_to_canonical_audio_first_output(
                 parent_shot_id=shot.parent_shot_id,
                 needs_two_frames=shot.needs_two_frames,
                 narration_mode=scene.narration_mode,
-                validation_errors=[],
-                validation_warnings=[],
+                validation_errors=_collect_messages_for_path(validation_report.errors, shot.shot_id),
+                validation_warnings=_collect_messages_for_path(validation_report.warnings, shot.shot_id),
             )
-            shot_errors: list[str] = []
-            shot_warnings: list[str] = []
-            shot_label = shot.shot_id
-            if shot.render_mode == RenderMode.lip_sync and not shot.has_vocal_rhythm:
-                shot_errors.append(f"{shot_label}:lip_sync_requires_has_vocal_rhythm_true")
-            if shot.render_mode == RenderMode.lip_sync and audio_segment_type == AudioSegmentType.narration:
-                shot_errors.append(f"{shot_label}:narration_segment_cannot_use_lip_sync")
-            if shot.local_phrase_text and shot.render_mode == RenderMode.lip_sync:
-                shot_errors.append(f"{shot_label}:local_phrase_does_not_imply_lip_sync")
-            if shot.render_mode == RenderMode.continuation and not shot.parent_shot_id:
-                shot_warnings.append(f"{shot_label}:continuation_missing_parent_shot_id")
-            if shot.render_mode == RenderMode.continuation and not shot.start_frame_source:
-                shot_warnings.append(f"{shot_label}:continuation_missing_start_frame_source")
-            if shot.render_mode in {RenderMode.f_l, RenderMode.f_l_as} and not shot.needs_two_frames:
-                shot_warnings.append(f"{shot_label}:f_l_modes_should_enable_needs_two_frames")
-            if shot.render_mode == RenderMode.lip_sync and shot.lipsync_policy.allowed is not True:
-                shot_errors.append(f"{shot_label}:lipsync_policy_disallows_selected_render_mode")
-            planned_shot.validation_errors = shot_errors
-            planned_shot.validation_warnings = shot_warnings
             planned_shot.render_task = _build_render_task(planned_shot)
             render_tasks.append(planned_shot.render_task)
             planned_shots.append(planned_shot)
@@ -726,12 +860,24 @@ def map_gemini_plan_to_canonical_audio_first_output(
         render_tasks=render_tasks,
         debug={
             "planner_source": "gemini",
+            "canonical_source_of_truth": True,
+            "compatibility_projection": False,
             "planning_status": parsed_output.planning_status.value,
             "project_mode": parsed_output.project_mode.value,
             "input_mode": parsed_output.input_mode.value,
             "planner_validation_errors": validation.errors,
             "planner_validation_warnings": validation.warnings,
-            "raw_gemini_contract_version": parsed_output.contract_version,
+            "contract_parse_mode": parse_result.parse_mode if parse_result else "invalid",
+            "contract_schema_valid": parse_result.contract_schema_valid if parse_result else False,
+            "contract_validation_errors": parse_result.contract_validation_errors if parse_result else validation.errors,
+            "contract_validation_warnings": parse_result.contract_validation_warnings if parse_result else validation.warnings,
+            "raw_gemini_contract_version": (
+                parse_result.raw_gemini_contract_version
+                if parse_result and parse_result.raw_gemini_contract_version
+                else parsed_output.contract_version
+            ),
+            "parser_debug_summary": parse_result.parser_debug_summary if parse_result else "invalid:missing_parse_result",
+            "parser_notes": parse_result.parser_notes if parse_result else [],
             "raw_gemini_debug_summary": raw_debug_summary or parsed_output.debug_summary,
             "raw_gemini_payload": raw_payload or parsed_output.model_dump(mode="json"),
             "planner_input": planner_input.model_dump(mode="json", exclude_none=True),
