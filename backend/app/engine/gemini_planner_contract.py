@@ -115,6 +115,9 @@ class GeminiPlannerOutput(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     contract_version: str
+    schema_version: str | None = None
+    planner_contract_name: str | None = None
+    planner_source: str | None = None
     project_mode: ProjectMode
     input_mode: InputMode
     planning_status: GeminiPlanningStatus
@@ -133,6 +136,7 @@ class GeminiPlannerParseResult(BaseModel):
     contract_validation_errors: list[str] = Field(default_factory=list)
     contract_validation_warnings: list[str] = Field(default_factory=list)
     raw_gemini_contract_version: str | None = None
+    raw_gemini_schema_version: str | None = None
     parser_notes: list[str] = Field(default_factory=list)
     parser_debug_summary: str | None = None
     errors: list[str] = Field(default_factory=list)
@@ -150,6 +154,8 @@ class GeminiPlannerInputPackage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     contract_version: str = "gemini_audio_first_planner_v1"
+    schema_version: str = "gemini_audio_first_planner_schema_v1"
+    planner_contract_name: str = "audio_first_gemini_planner_contract"
     planner_source: str = "gemini"
     mode: str = "clip"
     planner_mode: str = "gemini_only"
@@ -229,6 +235,10 @@ PRODUCTION_CANON_RULES = {
     },
 }
 
+GEMINI_PLANNER_CONTRACT_VERSION = "gemini_audio_first_planner_v1"
+GEMINI_PLANNER_SCHEMA_VERSION = "gemini_audio_first_planner_schema_v1"
+GEMINI_PLANNER_CONTRACT_NAME = "audio_first_gemini_planner_contract"
+
 
 def _clean_str(value: Any) -> str:
     return str(value or "").strip()
@@ -273,6 +283,9 @@ def build_gemini_planner_input(
         "planner_overrides": project_input.planner_overrides,
     }
     return GeminiPlannerInputPackage(
+        contract_version=GEMINI_PLANNER_CONTRACT_VERSION,
+        schema_version=GEMINI_PLANNER_SCHEMA_VERSION,
+        planner_contract_name=GEMINI_PLANNER_CONTRACT_NAME,
         mode=_clean_str(normalized.get("mode") or "clip") or "clip",
         planner_mode=_clean_str(normalized.get("plannerMode") or "gemini_only") or "gemini_only",
         input_mode=project_input.input_mode,
@@ -303,6 +316,9 @@ def build_gemini_planner_input(
 def _build_gemini_planner_output_contract_dict(planner_input: GeminiPlannerInputPackage) -> dict[str, Any]:
     return {
         "contract_version": planner_input.contract_version,
+        "schema_version": planner_input.schema_version,
+        "planner_contract_name": planner_input.planner_contract_name,
+        "planner_source": planner_input.planner_source,
         "project_mode": "narration_first|music_first|hybrid",
         "input_mode": "audio_first|text_to_audio_first",
         "planning_status": "ok|blocked|invalid",
@@ -350,6 +366,8 @@ def build_gemini_planner_system_rules(planner_input: GeminiPlannerInputPackage) 
         "You are the central Audio-first Gemini planner for COMFY clip planning.\n"
         "Return exactly one JSON object and no markdown.\n"
         "Use the structured production canon in planner_input.production_canon as hard rules, not suggestions.\n"
+        f"Planner source is '{planner_input.planner_source}'. Contract name is '{planner_input.planner_contract_name}'.\n"
+        f"Contract version must be '{planner_input.contract_version}' and schema_version must be '{planner_input.schema_version}'.\n"
         "Do scene analysis, timing segmentation, render-mode selection, and shot planning yourself.\n"
         "Audio-first means master audio is the timing source of truth.\n"
         "If input_mode is text_to_audio_first and master_audio_url is missing, return planning_status='blocked' and no invented timing.\n"
@@ -370,7 +388,14 @@ def build_gemini_planner_output_contract(planner_input: GeminiPlannerInputPackag
 
 
 def build_gemini_planner_runtime_payload(planner_input: GeminiPlannerInputPackage) -> str:
-    return planner_input.model_dump_json(indent=2, exclude_none=True)
+    runtime_payload = {
+        "planner_source": planner_input.planner_source,
+        "planner_contract_name": planner_input.planner_contract_name,
+        "contract_version": planner_input.contract_version,
+        "schema_version": planner_input.schema_version,
+        "planner_input": planner_input.model_dump(mode="json", exclude_none=True),
+    }
+    return json.dumps(runtime_payload, ensure_ascii=False, indent=2)
 
 
 def build_gemini_planner_request_text(planner_input: GeminiPlannerInputPackage) -> str:
@@ -398,6 +423,7 @@ def parse_gemini_planner_output(raw_output: str | dict[str, Any] | GeminiPlanner
             parse_mode="strict",
             contract_schema_valid=True,
             raw_gemini_contract_version=_clean_str(payload.get("contract_version")) or None,
+            raw_gemini_schema_version=_clean_str(payload.get("schema_version")) or None,
             parser_debug_summary="strict_json:model_instance",
         )
 
@@ -455,6 +481,7 @@ def parse_gemini_planner_output(raw_output: str | dict[str, Any] | GeminiPlanner
             warnings=parser_notes,
             contract_validation_errors=upstream_errors or ["gemini_contract_upstream_error"],
             raw_gemini_contract_version=_clean_str(payload.get("contract_version")) or None,
+            raw_gemini_schema_version=_clean_str(payload.get("schema_version")) or None,
             parser_notes=parser_notes,
             parser_debug_summary="invalid:upstream_error_payload",
         )
@@ -477,6 +504,7 @@ def parse_gemini_planner_output(raw_output: str | dict[str, Any] | GeminiPlanner
             contract_schema_valid=False,
             contract_validation_errors=errors,
             raw_gemini_contract_version=_clean_str(payload.get("contract_version")) or None,
+            raw_gemini_schema_version=_clean_str(payload.get("schema_version")) or None,
             parser_notes=parser_notes,
             parser_debug_summary=f"invalid:schema_errors:{len(errors)}",
         )
@@ -491,10 +519,118 @@ def parse_gemini_planner_output(raw_output: str | dict[str, Any] | GeminiPlanner
         contract_schema_valid=True,
         contract_validation_warnings=parser_notes if parse_mode == "rescued_json" else [],
         raw_gemini_contract_version=_clean_str(payload.get("contract_version")) or None,
+        raw_gemini_schema_version=_clean_str(payload.get("schema_version")) or None,
         parser_notes=parser_notes,
         warnings=parser_notes,
         parser_debug_summary=parser_debug_summary,
     )
+
+
+def _build_contract_debug_info(
+    planner_input: GeminiPlannerInputPackage,
+    parsed_output: GeminiPlannerOutput | None,
+    validation_errors: list[str],
+    validation_warnings: list[str],
+    parse_result: GeminiPlannerParseResult | None,
+    *,
+    raw_payload: dict[str, Any] | None = None,
+    raw_debug_summary: str | None = None,
+) -> dict[str, Any]:
+    raw_contract_version = (
+        parse_result.raw_gemini_contract_version
+        if parse_result and parse_result.raw_gemini_contract_version
+        else (parsed_output.contract_version if parsed_output else planner_input.contract_version)
+    )
+    raw_schema_version = (
+        parse_result.raw_gemini_schema_version
+        if parse_result and parse_result.raw_gemini_schema_version
+        else (parsed_output.schema_version if parsed_output and parsed_output.schema_version else planner_input.schema_version)
+    )
+    raw_contract_name = (
+        parsed_output.planner_contract_name
+        if parsed_output and parsed_output.planner_contract_name
+        else planner_input.planner_contract_name
+    )
+    raw_planner_source = (
+        parsed_output.planner_source
+        if parsed_output and parsed_output.planner_source
+        else planner_input.planner_source
+    )
+    return {
+        "planner_source": planner_input.planner_source,
+        "plannerSource": planner_input.planner_source,
+        "planner_contract_name": planner_input.planner_contract_name,
+        "plannerContractName": planner_input.planner_contract_name,
+        "contract_version": planner_input.contract_version,
+        "contractVersion": planner_input.contract_version,
+        "schema_version": planner_input.schema_version,
+        "schemaVersion": planner_input.schema_version,
+        "contract_parse_mode": parse_result.parse_mode if parse_result else "invalid",
+        "parse_mode": parse_result.parse_mode if parse_result else "invalid",
+        "parseMode": parse_result.parse_mode if parse_result else "invalid",
+        "contract_schema_valid": parse_result.contract_schema_valid if parse_result else False,
+        "contractSchemaValid": parse_result.contract_schema_valid if parse_result else False,
+        "parser_notes": parse_result.parser_notes if parse_result else [],
+        "parserNotes": parse_result.parser_notes if parse_result else [],
+        "parser_debug_summary": parse_result.parser_debug_summary if parse_result else "invalid:missing_parse_result",
+        "parserDebugSummary": parse_result.parser_debug_summary if parse_result else "invalid:missing_parse_result",
+        "validation_errors": list(validation_errors),
+        "validationErrors": list(validation_errors),
+        "validation_warnings": list(validation_warnings),
+        "validationWarnings": list(validation_warnings),
+        "contract_validation_errors": parse_result.contract_validation_errors if parse_result else list(validation_errors),
+        "contractValidationErrors": parse_result.contract_validation_errors if parse_result else list(validation_errors),
+        "contract_validation_warnings": parse_result.contract_validation_warnings if parse_result else list(validation_warnings),
+        "contractValidationWarnings": parse_result.contract_validation_warnings if parse_result else list(validation_warnings),
+        "raw_gemini_contract_version": raw_contract_version,
+        "rawGeminiContractVersion": raw_contract_version,
+        "raw_gemini_schema_version": raw_schema_version,
+        "rawGeminiSchemaVersion": raw_schema_version,
+        "raw_gemini_contract_name": raw_contract_name,
+        "rawGeminiContractName": raw_contract_name,
+        "raw_gemini_planner_source": raw_planner_source,
+        "rawGeminiPlannerSource": raw_planner_source,
+        "raw_gemini_debug_summary": raw_debug_summary or (parsed_output.debug_summary if parsed_output else None),
+        "rawGeminiDebugSummary": raw_debug_summary or (parsed_output.debug_summary if parsed_output else None),
+        "raw_gemini_payload": raw_payload or (parsed_output.model_dump(mode="json") if parsed_output else {}),
+        "rawGeminiPayload": raw_payload or (parsed_output.model_dump(mode="json") if parsed_output else {}),
+        "canonical_source_of_truth": True,
+        "canonicalSourceOfTruth": True,
+        "returns_compatibility_projection": True,
+        "returnsCompatibilityProjection": True,
+        "canonical_is_projection": False,
+        "canonicalIsProjection": False,
+        "compatibility_projection": False,
+        "compatibilityProjection": False,
+    }
+
+
+def _parse_validation_message(message: Any) -> dict[str, str]:
+    raw = str(message or "").strip()
+    if not raw:
+        return {"level": "", "path": "", "message": ""}
+    parts = raw.split(":")
+    if len(parts) >= 3 and parts[0].startswith("gemini_contract_"):
+        return {"level": parts[0], "path": parts[1], "message": ":".join(parts[2:]).strip()}
+    if len(parts) >= 2:
+        return {"level": "", "path": parts[0].strip(), "message": ":".join(parts[1:]).strip()}
+    return {"level": "", "path": "", "message": raw}
+
+
+def _path_matches_message(target_path: str, message_path: str) -> bool:
+    normalized_target = _clean_str(target_path)
+    normalized_message = _clean_str(message_path)
+    if not normalized_target or not normalized_message:
+        return False
+    if normalized_message == normalized_target:
+        return True
+    if normalized_message.startswith(f"{normalized_target}.") or normalized_message.startswith(f"{normalized_target}:"):
+        return True
+    if normalized_target.startswith("scene_") and "__shot_" in normalized_message:
+        scene_prefix, _, remainder = normalized_message.partition("__shot_")
+        if scene_prefix == normalized_target and remainder:
+            return True
+    return False
 
 
 def _convert_audio_segment_type(value: GeminiPlannerAudioSegmentType) -> AudioSegmentType:
@@ -721,8 +857,12 @@ def _build_compatibility_scene(scene: PlannedScene) -> dict[str, Any]:
 
 
 def _collect_messages_for_path(messages: list[str], path: str) -> list[str]:
-    prefix = f"{path}:"
-    return [message for message in messages if str(message).startswith(prefix)]
+    matches: list[str] = []
+    for message in messages:
+        parsed_message = _parse_validation_message(message)
+        if _path_matches_message(path, parsed_message.get("path") or ""):
+            matches.append(str(message))
+    return matches
 
 
 def map_gemini_plan_to_canonical_audio_first_output(
@@ -768,25 +908,18 @@ def map_gemini_plan_to_canonical_audio_first_output(
             scenes=[],
             render_tasks=[],
             debug={
-                "planner_source": "gemini",
-                "canonical_source_of_truth": True,
-                "compatibility_projection": False,
+                **_build_contract_debug_info(
+                    planner_input,
+                    parsed_output,
+                    validation.errors,
+                    validation.warnings,
+                    parse_result,
+                    raw_payload=raw_payload,
+                    raw_debug_summary=raw_debug_summary,
+                ),
                 "planning_status": parsed_output.planning_status.value if parsed_output else GeminiPlanningStatus.invalid.value,
                 "planner_validation_errors": validation.errors,
                 "planner_validation_warnings": validation.warnings,
-                "contract_parse_mode": parse_result.parse_mode if parse_result else "invalid",
-                "contract_schema_valid": parse_result.contract_schema_valid if parse_result else False,
-                "contract_validation_errors": parse_result.contract_validation_errors if parse_result else validation.errors,
-                "contract_validation_warnings": parse_result.contract_validation_warnings if parse_result else validation.warnings,
-                "raw_gemini_contract_version": (
-                    parse_result.raw_gemini_contract_version
-                    if parse_result and parse_result.raw_gemini_contract_version
-                    else (parsed_output.contract_version if parsed_output else planner_input.contract_version)
-                ),
-                "parser_debug_summary": parse_result.parser_debug_summary if parse_result else "invalid:missing_parse_result",
-                "parser_notes": parse_result.parser_notes if parse_result else [],
-                "raw_gemini_debug_summary": raw_debug_summary or (parsed_output.debug_summary if parsed_output else None),
-                "raw_gemini_payload": raw_payload or {},
             },
         )
         return GeminiContractExecutionResult(
@@ -859,27 +992,20 @@ def map_gemini_plan_to_canonical_audio_first_output(
         scenes=planned_scenes,
         render_tasks=render_tasks,
         debug={
-            "planner_source": "gemini",
-            "canonical_source_of_truth": True,
-            "compatibility_projection": False,
+            **_build_contract_debug_info(
+                planner_input,
+                parsed_output,
+                validation.errors,
+                validation.warnings,
+                parse_result,
+                raw_payload=raw_payload,
+                raw_debug_summary=raw_debug_summary,
+            ),
             "planning_status": parsed_output.planning_status.value,
             "project_mode": parsed_output.project_mode.value,
             "input_mode": parsed_output.input_mode.value,
             "planner_validation_errors": validation.errors,
             "planner_validation_warnings": validation.warnings,
-            "contract_parse_mode": parse_result.parse_mode if parse_result else "invalid",
-            "contract_schema_valid": parse_result.contract_schema_valid if parse_result else False,
-            "contract_validation_errors": parse_result.contract_validation_errors if parse_result else validation.errors,
-            "contract_validation_warnings": parse_result.contract_validation_warnings if parse_result else validation.warnings,
-            "raw_gemini_contract_version": (
-                parse_result.raw_gemini_contract_version
-                if parse_result and parse_result.raw_gemini_contract_version
-                else parsed_output.contract_version
-            ),
-            "parser_debug_summary": parse_result.parser_debug_summary if parse_result else "invalid:missing_parse_result",
-            "parser_notes": parse_result.parser_notes if parse_result else [],
-            "raw_gemini_debug_summary": raw_debug_summary or parsed_output.debug_summary,
-            "raw_gemini_payload": raw_payload or parsed_output.model_dump(mode="json"),
             "planner_input": planner_input.model_dump(mode="json", exclude_none=True),
         },
     )
