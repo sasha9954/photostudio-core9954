@@ -9338,10 +9338,14 @@ onClipSec: (nodeId, value) => {
                   hasText: !!freshDerived.meaningfulText,
                 });
 
-                const payload = {
+                const plannerMode = String(freshDerived.plannerMode || "").trim().toLowerCase() === "gemini_only" ? "gemini_only" : "legacy";
+                const inputMode = freshDerived.meaningfulAudio
+                  ? "audio_first"
+                  : (freshDerived.meaningfulText ? "text_to_audio_first" : "");
+                const rawPayload = {
                   mode: freshDerived.modeValue,
-                  plannerMode: String(freshDerived.plannerMode || "legacy"),
-                  inputMode: freshDerived.meaningfulAudio ? "audio" : (freshDerived.meaningfulText ? "text" : "empty"),
+                  plannerMode,
+                  inputMode,
                   projectMode: "narration_first",
                   output: freshDerived.outputValue,
                   format: resolvePreferredSceneFormat(activeNode?.data?.format),
@@ -9364,23 +9368,38 @@ onClipSec: (nodeId, value) => {
                   timelineSource: freshDerived.timelineSource,
                   narrativeSource: freshDerived.narrativeSource,
                 };
+                const payload = Object.fromEntries(Object.entries(rawPayload).filter(([key, value]) => {
+                  if (value === undefined || value === null) return false;
+                  if (typeof value === "string") {
+                    const trimmed = value.trim();
+                    if (!trimmed && !["text", "audioUrl", "masterAudioUrl"].includes(key)) return false;
+                    return true;
+                  }
+                  return true;
+                }));
                 const hasPlannerPayload = !!payload && typeof payload === "object" && !Array.isArray(payload);
-                const hasPlannerSource = !!String(payload?.audioUrl || payload?.masterAudioUrl || payload?.text || "").trim();
-                if (!hasPlannerPayload || !String(payload?.plannerMode || "").trim() || !String(payload?.output || "").trim() || !String(payload?.projectMode || "").trim() || !hasPlannerSource) {
+                const hasPlannerSource = !!String(payload?.audioUrl || payload?.masterAudioUrl || payload?.text || payload?.lyricsText || payload?.transcriptText || "").trim();
+                const hasValidPlannerMode = String(payload?.plannerMode || "").trim() === "gemini_only";
+                const hasValidInputMode = ["audio_first", "text_to_audio_first"].includes(String(payload?.inputMode || "").trim());
+                if (!hasPlannerPayload || !hasValidPlannerMode || !hasValidInputMode || !String(payload?.output || "").trim() || !String(payload?.projectMode || "").trim() || !hasPlannerSource) {
                   console.warn("[CLIP PLANNER] payload invalid, request aborted", {
                     nodeId,
                     hasPlannerPayload,
                     hasPlannerSource,
+                    hasValidPlannerMode,
+                    hasValidInputMode,
                     plannerMode: payload?.plannerMode || "",
                     inputMode: payload?.inputMode || "",
                     projectMode: payload?.projectMode || "",
                     masterAudioUrl: payload?.masterAudioUrl || "",
-                    textLength: String(payload?.text || "").trim().length,
+                    textLength: String(payload?.text || payload?.lyricsText || payload?.transcriptText || "").trim().length,
                   });
-                  notify({ type: "warning", title: "Planner payload invalid", message: "Planner payload не собран: проверьте AUDIO/TEXT и связанные ноды." });
+                  notify({ type: "warning", title: "Planner payload invalid", message: "Planner payload не отправлен: включите Gemini planner и проверьте AUDIO/TEXT источники." });
                   setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, parseStatus: "error", brainCritical: ["Planner payload invalid"], brainWarnings: [] } } : x)));
                   return;
                 }
+                console.log("[CLIP PLANNER] inputMode=", payload.inputMode);
+                console.log("[CLIP PLANNER] projectMode=", payload.projectMode);
                 console.log("[COMFY DEBUG FRONT] derived refsByRole", freshDerived?.refsByRole);
                 console.log("[COMFY DEBUG FRONT] derived refs counts", summarizeRefsByRole(freshDerived?.refsByRole));
                 console.log("[COMFY DEBUG FRONT] derived refs active roles", summarizeRefsByRole(freshDerived?.refsByRole)?.activeRoles || []);
