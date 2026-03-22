@@ -29,7 +29,7 @@ function renderBrainPackage(brainPackage) {
       <div><strong>Тип контента:</strong> {brainPackage.contentTypeLabel}</div>
       <div><strong>Стиль:</strong> {brainPackage.styleLabel}</div>
       <div><strong>Главный источник:</strong> {brainPackage.sourceLabel}</div>
-      <div><strong>Происхождение:</strong> {brainPackage.sourceOrigin === "connected" ? "Подключённый источник" : "Ручной ввод"}</div>
+      <div><strong>Происхождение:</strong> {brainPackage.sourceOrigin === "connected" ? "Подключённый источник" : "Источник не подключён"}</div>
       <div><strong>Превью источника:</strong> {brainPackage.sourcePreview || "—"}</div>
       <div><strong>Сущности:</strong> {entities.join(", ") || "—"}</div>
       <div>
@@ -45,117 +45,40 @@ function renderBrainPackage(brainPackage) {
 }
 
 export default function ComfyNarrativeNode({ id, data }) {
-  const sourceMode = data?.sourceMode || "TEXT";
   const activeResultTab = data?.activeResultTab || "scenario";
   const outputs = data?.outputs || {};
   const resolvedSource = data?.resolvedSource || {};
-  const lockedByExternalSource = resolvedSource?.origin === "connected";
-  const activeSourceMode = resolvedSource?.mode || sourceMode;
-  const isConnectedSource = lockedByExternalSource;
+  const activeSourceMode = resolvedSource?.mode || null;
+  const hasConnectedSource = resolvedSource?.origin === "connected" && !!String(resolvedSource?.value || "").trim();
+  const sourceStatusText = hasConnectedSource
+    ? activeSourceMode === "TEXT"
+      ? "Подключён внешний текстовый источник"
+      : activeSourceMode === "AUDIO"
+        ? "Подключён внешний аудио-источник"
+        : "Подключён внешний видео-референс"
+    : "Подключите один источник: текст, аудио или видео-референс.";
 
-  const handleSourceModeChange = (nextSourceMode) => {
-    if (lockedByExternalSource) return;
-    data?.onFieldChange?.(id, { sourceMode: nextSourceMode });
-  };
-  const sourceStatusText = activeSourceMode === "TEXT"
-    ? (isConnectedSource ? "Подключён внешний текстовый источник" : "Используется ручной ввод")
-    : activeSourceMode === "AUDIO"
-      ? (isConnectedSource ? "Подключён внешний аудио-источник" : "Используется ручной ввод")
-      : (isConnectedSource ? "Подключён внешний видео-референс" : "Используется ручной ввод");
-
-  const sourceInput = activeSourceMode === "TEXT"
-    ? (
-      <div className="clipSB_narrativeField">
-        <div className="clipSB_brainLabel">Описание / история</div>
-        <textarea
-          className="clipSB_textarea clipSB_narrativeTextarea"
-          value={data?.textInput || ""}
-          onChange={(e) => data?.onFieldChange?.(id, { textInput: e.target.value })}
-          placeholder="Опишите историю, идею ролика или полный текст основы"
-          rows={7}
-        />
-      </div>
-    )
-    : activeSourceMode === "AUDIO"
-      ? (
-        <div className="clipSB_narrativeField">
-          <div className="clipSB_brainLabel">Аудио</div>
-          <textarea
-            className="clipSB_textarea clipSB_narrativeTextarea"
-            value={data?.audioInput || ""}
-            onChange={(e) => data?.onFieldChange?.(id, { audioInput: e.target.value })}
-            placeholder="Пока placeholder: заметка об аудио, тексте речи или описании трека"
-            rows={4}
-          />
-          <div className="clipSB_selectHint">Здесь пока простой placeholder без загрузки файла.</div>
-        </div>
-      )
-      : (
-        <div className="clipSB_narrativeField">
-          <div className="clipSB_brainLabel">Ссылка на видео</div>
-          <input
-            className="clipSB_input"
-            value={data?.videoUrlInput || ""}
-            onChange={(e) => data?.onFieldChange?.(id, { videoUrlInput: e.target.value })}
-            placeholder="https://..."
-          />
-        </div>
-      );
-
-  const connectedSourceStatus = (
+  const sourceInput = hasConnectedSource ? (
     <div className="clipSB_narrativeSourceStatus isConnected">
       <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
-      <div className="clipSB_narrativeSourceStatusHint">Этот источник выбран автоматически и сейчас является главным.</div>
-      <div className="clipSB_narrativeSourceStatusHint">Ручное переключение недоступно, пока подключён внешний вход.</div>
+      <div className="clipSB_narrativeSourceStatusHint">Источник выбран автоматически по входящему соединению ноды.</div>
       {resolvedSource?.preview ? (
         <div className="clipSB_narrativeSourceStatusPreview" title={resolvedSource.preview}>
           {resolvedSource.preview}
         </div>
       ) : null}
     </div>
-  );
-
-  const manualSourceSelector = (
-    <div className="clipSB_narrativeSegmented">
-      {NARRATIVE_SOURCE_OPTIONS.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          className={`clipSB_narrativeChip ${activeSourceMode === option.value ? "isActive" : ""}`.trim()}
-          onClick={() => handleSourceModeChange(option.value)}
-          aria-pressed={activeSourceMode === option.value}
-        >
-          {option.labelRu}
-        </button>
-      ))}
-    </div>
-  );
-
-  const connectedSourceDisplay = (
-    <div
-      className="clipSB_narrativeSourceDisplay"
-      aria-label="Источник определяется внешним подключением"
-      role="status"
-    >
-      <div className="clipSB_narrativeSourceDisplayHeader">
-        <span className="clipSB_narrativeSourceDisplayTitle">{resolvedSource?.label || "Источник"}</span>
-        <span className="clipSB_narrativeChipMeta">подключён извне</span>
-      </div>
-      <div className="clipSB_narrativeSourceDisplayChips" aria-hidden="true">
-        {NARRATIVE_SOURCE_OPTIONS.map((option) => {
-          const isActive = activeSourceMode === option.value;
-
-          return (
-            <span
-              key={option.value}
-              className={`clipSB_narrativeChipDisplay ${isActive ? "isActive" : ""}`.trim()}
-            >
-              <span>{option.labelRu}</span>
-              {isActive ? <span className="clipSB_narrativeChipDisplayBadge">активный источник</span> : null}
-            </span>
-          );
-        })}
-      </div>
+  ) : (
+    <div className="clipSB_narrativeField clipSB_narrativeField--disabled" aria-disabled="true">
+      <div className="clipSB_brainLabel">Основа сценария</div>
+      <textarea
+        className="clipSB_textarea clipSB_narrativeTextarea"
+        value=""
+        disabled
+        placeholder="Подключите один внешний источник к Narrative node, чтобы получить основу сценария."
+        rows={7}
+      />
+      <div className="clipSB_narrativeEmptyHint">Нода ждёт ровно один активный вход: text_in, audio_in или video_ref_in.</div>
     </div>
   );
 
@@ -191,7 +114,21 @@ export default function ComfyNarrativeNode({ id, data }) {
 
         <section className="clipSB_narrativeSection">
           <div className="clipSB_brainLabel">Источник</div>
-          {lockedByExternalSource ? connectedSourceDisplay : manualSourceSelector}
+          <div className="clipSB_narrativeIndicators" aria-label="Доступные источники narrative node" role="status">
+            {NARRATIVE_SOURCE_OPTIONS.map((option) => {
+              const isActive = activeSourceMode === option.value && hasConnectedSource;
+              return (
+                <span
+                  key={option.value}
+                  className={`clipSB_narrativeIndicator ${isActive ? "isActive" : ""}`.trim()}
+                  aria-current={isActive ? "true" : "false"}
+                >
+                  <span>{option.labelRu}</span>
+                  {isActive ? <span className="clipSB_narrativeIndicatorBadge">активный источник</span> : null}
+                </span>
+              );
+            })}
+          </div>
         </section>
 
         <div className="clipSB_narrativeGrid">
@@ -228,21 +165,10 @@ export default function ComfyNarrativeNode({ id, data }) {
           />
         </label>
 
-        {lockedByExternalSource ? connectedSourceStatus : sourceInput}
-
-        {!lockedByExternalSource ? (
-          <div className="clipSB_narrativeSourceStatus">
-            <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
-            {resolvedSource?.preview ? (
-              <div className="clipSB_narrativeSourceStatusPreview" title={resolvedSource.preview}>
-                {resolvedSource.preview}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+        {sourceInput}
 
         <div className="clipSB_narrativeActions">
-          <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => data?.onGenerate?.(id)}>
+          <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => data?.onGenerate?.(id)} disabled={!hasConnectedSource}>
             СОЗДАТЬ СЦЕНАРИЙ
           </button>
         </div>
@@ -262,7 +188,7 @@ export default function ComfyNarrativeNode({ id, data }) {
           </div>
 
           <div className="clipSB_narrativeResultBody">
-            {activeResultTab === "scenario" ? <pre>{outputs.scenario || "Пока нет сценария. Заполните поля и нажмите кнопку."}</pre> : null}
+            {activeResultTab === "scenario" ? <pre>{outputs.scenario || "Пока нет сценария. Подключите источник и нажмите кнопку."}</pre> : null}
             {activeResultTab === "voice" ? <pre>{outputs.voiceScript || "Здесь появится текст для диктора и диалоги."}</pre> : null}
             {activeResultTab === "brain" ? renderBrainPackage(outputs.brainPackage) : null}
             {activeResultTab === "music" ? <pre>{outputs.bgMusicPrompt || "Здесь появится prompt только для фоновой музыки."}</pre> : null}

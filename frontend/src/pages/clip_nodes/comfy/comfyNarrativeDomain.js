@@ -57,8 +57,7 @@ const splitEntities = (text) => normalizeText(text)
 
 export function getDefaultNarrativeNodeData() {
   return {
-    sourceMode: "TEXT",
-    sourceOrigin: "internal",
+    sourceOrigin: "disconnected",
     contentType: "story",
     narrativeMode: "cinematic_expand",
     styleProfile: "realistic",
@@ -72,11 +71,11 @@ export function getDefaultNarrativeNodeData() {
       video_ref_in: null,
     },
     resolvedSource: {
-      mode: "TEXT",
-      origin: "internal",
+      mode: null,
+      origin: "disconnected",
       value: "",
-      label: "Текст",
-      sourceLabel: "Ручной ввод",
+      label: "Источник не подключён",
+      sourceLabel: "Ожидается внешний источник",
       preview: "",
     },
     activeResultTab: "scenario",
@@ -90,44 +89,37 @@ export function getDefaultNarrativeNodeData() {
 }
 
 export function resolveNarrativeSource(state = {}) {
-  const sourceMode = NARRATIVE_SOURCE_OPTIONS.some((item) => item.value === state.sourceMode) ? state.sourceMode : "TEXT";
   const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
   const connectedOption = NARRATIVE_INPUT_HANDLES.find((item) => normalizeText(connectedInputs?.[item.id]?.value));
-  const resolvedMode = connectedOption?.mode || sourceMode;
-  const connectedSource = connectedOption
-    ? connectedInputs[connectedOption.id]
-    : resolvedMode === "TEXT"
-      ? connectedInputs.text_in
-      : resolvedMode === "AUDIO"
-        ? connectedInputs.audio_in
-        : connectedInputs.video_ref_in;
 
-  const internalValue = resolvedMode === "TEXT"
-    ? normalizeText(state.textInput)
-    : resolvedMode === "AUDIO"
-      ? normalizeText(state.audioInput)
-      : normalizeText(state.videoUrlInput);
+  if (!connectedOption) {
+    return {
+      mode: null,
+      origin: "disconnected",
+      value: "",
+      label: "Источник не подключён",
+      sourceLabel: "Ожидается внешний источник",
+      preview: "",
+    };
+  }
 
+  const connectedSource = connectedInputs[connectedOption.id] || null;
   const connectedValue = normalizeText(connectedSource?.value);
-  const origin = connectedValue ? "connected" : "internal";
-  const modeLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, resolvedMode, "Текст");
-  const fallbackSourceLabel = origin === "connected"
-    ? `Подключённый источник (${modeLabel.toLowerCase()})`
-    : "Ручной ввод";
+  const modeLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, connectedOption.mode, "Текст");
 
   return {
-    mode: resolvedMode,
-    origin,
-    value: connectedValue || internalValue,
+    mode: connectedOption.mode,
+    origin: connectedValue ? "connected" : "disconnected",
+    value: connectedValue,
     label: modeLabel,
-    sourceLabel: normalizeText(connectedSource?.sourceLabel) || fallbackSourceLabel,
-    preview: normalizeText(connectedSource?.preview) || (connectedValue || internalValue),
+    sourceLabel: normalizeText(connectedSource?.sourceLabel) || `Подключённый источник (${modeLabel.toLowerCase()})`,
+    preview: normalizeText(connectedSource?.preview) || connectedValue,
   };
 }
 
 export function buildNarrativeOutputs(state = {}) {
   const resolvedSource = resolveNarrativeSource(state);
-  const sourceMode = resolvedSource.mode;
+  const sourceMode = resolvedSource.mode || "TEXT";
   const contentType = NARRATIVE_CONTENT_TYPE_OPTIONS.some((item) => item.value === state.contentType) ? state.contentType : "story";
   const narrativeMode = NARRATIVE_MODE_OPTIONS.some((item) => item.value === state.narrativeMode) ? state.narrativeMode : "cinematic_expand";
   const styleProfile = NARRATIVE_STYLE_OPTIONS.some((item) => item.value === state.styleProfile) ? state.styleProfile : "realistic";

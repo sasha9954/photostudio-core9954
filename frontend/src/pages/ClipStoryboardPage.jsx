@@ -167,6 +167,35 @@ function isNarrativeInput(handleId) {
   return ["text_in", "audio_in", "video_ref_in"].includes(String(handleId || ""));
 }
 
+
+function removeNarrativeIncomingSourceEdges(edges = [], narrativeNodeId = "") {
+  if (!narrativeNodeId) return Array.isArray(edges) ? edges : [];
+  return (Array.isArray(edges) ? edges : []).filter((edge) => !(edge?.target === narrativeNodeId && isNarrativeInput(edge?.targetHandle)));
+}
+
+function enforceSingleNarrativeSourceEdge(edges = []) {
+  const list = Array.isArray(edges) ? edges : [];
+  const latestByNode = new Map();
+
+  [...list].forEach((edge, index) => {
+    if (!edge?.target || !isNarrativeInput(edge?.targetHandle)) return;
+    latestByNode.set(edge.target, index);
+  });
+
+  if (!latestByNode.size) return list;
+
+  let changed = false;
+  const next = list.filter((edge, index) => {
+    if (!edge?.target || !isNarrativeInput(edge?.targetHandle)) return true;
+    const keepIndex = latestByNode.get(edge.target);
+    const keep = keepIndex === index;
+    if (!keep) changed = true;
+    return keep;
+  });
+
+  return changed ? next : list;
+}
+
 const EDGE_STYLE_BY_KIND = {
   audio: { color: PORT_COLORS.audio, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   text: { color: PORT_COLORS.text, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
@@ -8181,9 +8210,6 @@ onClipSec: (nodeId, value) => {
                       ...(x.data || {}),
                       connectedInputs: narrativeConnectedInputs,
                     });
-                    if (nextResolvedSource?.origin === "connected") {
-                      delete nextPatch.sourceMode;
-                    }
                     return { ...x, data: { ...x.data, ...nextPatch } };
                   });
                   return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "narrative:field-change" });
@@ -8203,6 +8229,16 @@ onClipSec: (nodeId, value) => {
                       connectedInputs: narrativeConnectedInputs,
                     };
                     const nextResolvedSource = resolveNarrativeSource(nextData);
+                    if (nextResolvedSource?.origin !== "connected" || !String(nextResolvedSource?.value || "").trim()) {
+                      return {
+                        ...x,
+                        data: {
+                          ...nextData,
+                          sourceOrigin: nextResolvedSource.origin,
+                          resolvedSource: nextResolvedSource,
+                        },
+                      };
+                    }
                     const outputs = buildNarrativeOutputs({
                       ...nextData,
                       sourceOrigin: nextResolvedSource.origin,
@@ -10047,7 +10083,7 @@ const hydrate = useCallback((source = "unknown") => {
             (h === "audio_in" && src.type === "audioNode" && sourceHandle === "audio") ||
             (h === "video_ref_in" && src.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE);
           if (!ok) return eds;
-          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === h));
+          const cleaned = removeNarrativeIncomingSourceEdges(eds, dst.id);
           const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
           return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
@@ -10128,6 +10164,13 @@ const hydrate = useCallback((source = "unknown") => {
     if (!edge?.id) return;
     setEdges((eds) => eds.filter((e) => e.id !== edge.id));
   }, [setEdges]);
+
+  useEffect(() => {
+    const cleaned = enforceSingleNarrativeSourceEdge(edges);
+    if (cleaned !== edges) {
+      setEdges(cleaned);
+    }
+  }, [edges, setEdges]);
 
   useEffect(() => {
     const onKey = (e) => {
