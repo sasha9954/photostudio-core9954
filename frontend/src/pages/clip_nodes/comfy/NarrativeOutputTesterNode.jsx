@@ -260,9 +260,13 @@ function TesterBrainBody({ config, payload, isConnected, data }) {
 }
 
 function NarrativeOutputTesterNode({ id, data }) {
-  const config = data?.testerConfig || NARRATIVE_TESTER_CONFIG[data?.testerType] || NARRATIVE_TESTER_CONFIG.scenarioOutputTesterNode;
+  const baseConfig = NARRATIVE_TESTER_CONFIG[data?.testerType] || NARRATIVE_TESTER_CONFIG.scenarioOutputTesterNode;
+  const config = data?.testerType === "brainPackageTesterNode"
+    ? { ...baseConfig, payloadKind: "brain" }
+    : baseConfig;
   const isConnected = !!data?.isConnected;
   const hasPayload = !!data?.hasPayload;
+  const payloadType = hasPayload && data?.payload != null ? typeof data.payload : "empty";
 
   return (
     <>
@@ -286,6 +290,11 @@ function NarrativeOutputTesterNode({ id, data }) {
             {isConnected ? config.waitingLabel : "Не подключено"}
           </span>
           <span className="clipSB_testerMetric">accept: {config.acceptHandle}</span>
+        </div>
+        <div className="clipSB_testerMetaRow">
+          <span className="clipSB_testerMetric">testerType: {String(data?.testerType || "unknown")}</span>
+          <span className="clipSB_testerMetric">payloadKind: {String(config.payloadKind || "unknown")}</span>
+          <span className="clipSB_testerMetric">typeof payload: {payloadType}</span>
         </div>
         {config.payloadKind === "brain"
           ? <TesterBrainBody config={config} payload={hasPayload ? data?.payload : null} isConnected={isConnected} data={data} />

@@ -307,6 +307,7 @@ const NARRATIVE_TESTER_NODE_CONFIG = {
   brainPackageTesterNode: {
     title: "ТЕСТЕР МОЗГА",
     acceptHandle: "brain_package_out",
+    payloadKind: "brain",
     payloadKey: "brainPackage",
   },
   musicPromptTesterNode: {
