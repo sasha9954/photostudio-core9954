@@ -8169,7 +8169,23 @@ onClipSec: (nodeId, value) => {
               resolvedSource,
               onFieldChange: (nodeId, patch) => {
                 setNodes((prev) => {
-                  const nextNodes = prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, ...(patch || {}) } } : x));
+                  const nextNodes = prev.map((x) => {
+                    if (x.id !== nodeId) return x;
+                    const nextPatch = { ...(patch || {}) };
+                    const narrativeConnectedInputs = getNarrativeConnectedInputsSnapshot({
+                      node: x,
+                      nodesById: new Map(prev.map((nodeItem) => [nodeItem.id, nodeItem])),
+                      edges: edgesRef.current || [],
+                    });
+                    const nextResolvedSource = resolveNarrativeSource({
+                      ...(x.data || {}),
+                      connectedInputs: narrativeConnectedInputs,
+                    });
+                    if (nextResolvedSource?.origin === "connected") {
+                      delete nextPatch.sourceMode;
+                    }
+                    return { ...x, data: { ...x.data, ...nextPatch } };
+                  });
                   return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "narrative:field-change" });
                 });
               },

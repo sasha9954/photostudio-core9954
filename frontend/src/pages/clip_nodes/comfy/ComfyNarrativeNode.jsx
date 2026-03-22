@@ -49,9 +49,14 @@ export default function ComfyNarrativeNode({ id, data }) {
   const activeResultTab = data?.activeResultTab || "scenario";
   const outputs = data?.outputs || {};
   const resolvedSource = data?.resolvedSource || {};
+  const lockedByExternalSource = resolvedSource?.origin === "connected";
   const activeSourceMode = resolvedSource?.mode || sourceMode;
-  const isConnectedSource = resolvedSource?.origin === "connected";
-  const hasLockedExternalSource = isConnectedSource;
+  const isConnectedSource = lockedByExternalSource;
+
+  const handleSourceModeChange = (nextSourceMode) => {
+    if (lockedByExternalSource) return;
+    data?.onFieldChange?.(id, { sourceMode: nextSourceMode });
+  };
   const sourceStatusText = activeSourceMode === "TEXT"
     ? (isConnectedSource ? "Подключён внешний текстовый источник" : "Используется ручной ввод")
     : activeSourceMode === "AUDIO"
@@ -142,25 +147,26 @@ export default function ComfyNarrativeNode({ id, data }) {
 
         <section className="clipSB_narrativeSection">
           <div className="clipSB_brainLabel">Источник</div>
-          <div className={`clipSB_narrativeSegmented ${hasLockedExternalSource ? "isLocked" : ""}`.trim()}>
+          <div className={`clipSB_narrativeSegmented ${lockedByExternalSource ? "isLocked" : ""}`.trim()}>
             {NARRATIVE_SOURCE_OPTIONS.map((option) => (
               <button
                 key={option.value}
                 type="button"
-                className={`clipSB_narrativeChip ${activeSourceMode === option.value ? "isActive" : ""} ${hasLockedExternalSource ? "isReadonly" : ""}`.trim()}
-                onClick={hasLockedExternalSource ? undefined : () => data?.onFieldChange?.(id, { sourceMode: option.value })}
-                disabled={hasLockedExternalSource}
+                className={`clipSB_narrativeChip ${activeSourceMode === option.value ? "isActive" : ""} ${lockedByExternalSource ? "isReadonly" : ""}`.trim()}
+                onClick={() => handleSourceModeChange(option.value)}
+                disabled={lockedByExternalSource}
                 aria-pressed={activeSourceMode === option.value}
-                title={hasLockedExternalSource ? "Источник определяется подключённым внешним входом" : undefined}
+                aria-disabled={lockedByExternalSource}
+                title={lockedByExternalSource ? "Источник определяется подключённым внешним входом" : undefined}
               >
                 {option.labelRu}
-                {hasLockedExternalSource && activeSourceMode === option.value ? (
+                {lockedByExternalSource && activeSourceMode === option.value ? (
                   <span className="clipSB_narrativeChipMeta">подключён</span>
                 ) : null}
               </button>
             ))}
           </div>
-          {hasLockedExternalSource ? (
+          {lockedByExternalSource ? (
             <div className="clipSB_selectHint">Источник зафиксирован внешним подключением.</div>
           ) : null}
         </section>
@@ -199,9 +205,9 @@ export default function ComfyNarrativeNode({ id, data }) {
           />
         </label>
 
-        {hasLockedExternalSource ? connectedSourceStatus : sourceInput}
+        {lockedByExternalSource ? connectedSourceStatus : sourceInput}
 
-        {!hasLockedExternalSource ? (
+        {!lockedByExternalSource ? (
           <div className="clipSB_narrativeSourceStatus">
             <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
             {resolvedSource?.preview ? (
