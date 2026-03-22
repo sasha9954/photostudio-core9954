@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 import BrainPackageView, { getBrainPackageEntities, getBrainPackageSceneLogic, isBrainPackageObject } from "./BrainPackageView";
 
@@ -87,13 +87,72 @@ function TesterTextBody({ config, payload, isConnected }) {
   );
 }
 
+function resolveBrainTesterPayload(payload) {
+  if (isBrainPackageObject(payload)) {
+    return { brain: payload, textFallback: "", fallbackLabel: "" };
+  }
+
+  if (typeof payload === "string") {
+    const trimmed = payload.trim();
+    if (!trimmed) {
+      return { brain: null, textFallback: "", fallbackLabel: "" };
+    }
+
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (isBrainPackageObject(parsed)) {
+          return { brain: parsed, textFallback: "", fallbackLabel: "" };
+        }
+      } catch {
+        // ignore parse failure and keep text fallback below
+      }
+    }
+
+    if (trimmed === "[object Object]") {
+      return {
+        brain: null,
+        textFallback: "Payload был приведён к строке '[object Object]' до brain tester render path.",
+        fallbackLabel: "Нужен object payload",
+      };
+    }
+
+    return { brain: null, textFallback: trimmed, fallbackLabel: "Text fallback" };
+  }
+
+  return { brain: null, textFallback: "", fallbackLabel: "" };
+}
+
 function TesterBrainBody({ config, payload, isConnected }) {
-  const brain = isBrainPackageObject(payload) ? payload : null;
+  const { brain, textFallback, fallbackLabel } = useMemo(() => resolveBrainTesterPayload(payload), [payload]);
   const [showRawJson, setShowRawJson] = useState(false);
   const rawJson = useMemo(() => (brain ? JSON.stringify(brain, null, 2) : ""), [brain]);
 
+  useEffect(() => {
+    console.log("[BRAIN TESTER payload]", {
+      payload,
+      type: typeof payload,
+      isArray: Array.isArray(payload),
+      isObject: !!payload && typeof payload === "object" && !Array.isArray(payload),
+    });
+  }, [payload]);
+
   if (!brain) {
-    return <TesterEmptyState config={config} isConnected={isConnected} />;
+    if (!textFallback) {
+      return <TesterEmptyState config={config} isConnected={isConnected} />;
+    }
+
+    return (
+      <>
+        <div className="clipSB_testerMetaRow">
+          <span className="clipSB_testerStatusBadge isReady">{config.statusLabel}</span>
+          <span className="clipSB_testerMetric">{fallbackLabel || "Text fallback"}</span>
+        </div>
+        <div className="clipSB_testerPayload clipSB_testerPayload--text">
+          <pre>{textFallback}</pre>
+        </div>
+      </>
+    );
   }
 
   const entities = getBrainPackageEntities(brain);

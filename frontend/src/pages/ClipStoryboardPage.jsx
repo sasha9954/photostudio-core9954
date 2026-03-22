@@ -337,10 +337,13 @@ function extractNarrativeTesterPayload({ testerType = "", sourceNode = null, sou
   if (!config || !sourceNode || sourceNode.type !== "comfyNarrative") return null;
   if (String(sourceHandle || "") !== config.acceptHandle) return null;
   const outputs = sourceNode?.data?.outputs && typeof sourceNode.data.outputs === "object" ? sourceNode.data.outputs : {};
-  const payload = outputs?.[config.payloadKey];
-  if (config.payloadKey === "brainPackage") {
-    return payload && typeof payload === "object" ? payload : null;
+
+  if (config.payloadKey === "brainPackage" || String(sourceHandle || "") === "brain_package_out") {
+    const brainPackage = outputs?.brainPackage;
+    return brainPackage && typeof brainPackage === "object" && !Array.isArray(brainPackage) ? brainPackage : null;
   }
+
+  const payload = outputs?.[config.payloadKey];
   const normalized = String(payload || "").trim();
   return normalized || null;
 }
