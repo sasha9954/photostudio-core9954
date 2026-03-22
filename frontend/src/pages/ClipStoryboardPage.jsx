@@ -195,11 +195,71 @@ function buildLinkNodePayload(value = "") {
   return {
     type: "link",
     value: parsed.normalized,
-    preview: parsed.domain || parsed.preview || parsed.normalized,
+    preview: parsed.preview || parsed.domain || parsed.normalized,
     sourceLabel: "Ссылка",
+    url: parsed.href,
     domain: parsed.domain,
     href: parsed.href,
+    meta: {
+      domain: parsed.domain,
+      kind: "link",
+    },
   };
+}
+
+function getLinkNodeSavedPayload(data = null) {
+  if (!data || typeof data !== "object") return null;
+  const candidate = data.savedPayload && typeof data.savedPayload === "object"
+    ? data.savedPayload
+    : (data.outputPayload && typeof data.outputPayload === "object" ? data.outputPayload : null);
+  if (!candidate) return null;
+  const candidateUrl = candidate.value || candidate.url || candidate.href || "";
+  const rebuilt = buildLinkNodePayload(candidateUrl);
+  return {
+    ...(rebuilt || {}),
+    ...candidate,
+    value: candidate.value || candidate.url || candidate.href || rebuilt?.value || "",
+    preview: candidate.preview || rebuilt?.preview || candidate.domain || candidate.value || candidate.url || candidate.href || "",
+    sourceLabel: candidate.sourceLabel || rebuilt?.sourceLabel || "Ссылка",
+    url: candidate.url || candidate.href || candidate.value || rebuilt?.url || "",
+    href: candidate.href || candidate.url || candidate.value || rebuilt?.href || "",
+    domain: candidate.domain || rebuilt?.domain || "",
+    meta: {
+      ...(rebuilt?.meta || {}),
+      ...(candidate.meta && typeof candidate.meta === "object" ? candidate.meta : {}),
+      domain: candidate.domain || rebuilt?.domain || "",
+      kind: "link",
+    },
+  };
+}
+
+function getNarrativeSourceRefreshSignature({ sourceNode = null, targetHandle = "" } = {}) {
+  if (!sourceNode) return "";
+  if (targetHandle === "text_in" && sourceNode.type === "textNode") {
+    return `text:${String(sourceNode?.data?.textValue || sourceNode?.data?.text || "").trim()}`;
+  }
+  if (targetHandle === "audio_in" && sourceNode.type === "audioNode") {
+    return `audio:${String(sourceNode?.data?.audioUrl || "").trim()}|${String(sourceNode?.data?.audioName || "").trim()}`;
+  }
+  if (targetHandle === "link_in" && sourceNode.type === "linkNode") {
+    const payload = getLinkNodeSavedPayload(sourceNode?.data) || buildLinkNodePayload(sourceNode?.data?.urlValue || sourceNode?.data?.draftUrl || "");
+    return `link:${JSON.stringify({
+      value: payload?.value || "",
+      preview: payload?.preview || "",
+      url: payload?.url || payload?.href || "",
+      domain: payload?.domain || "",
+      status: String(sourceNode?.data?.urlStatus || ""),
+    })}`;
+  }
+  if (targetHandle === "video_ref_in" && sourceNode.type === "comfyStoryboard") {
+    const scenes = Array.isArray(sourceNode?.data?.mockScenes) ? sourceNode.data.mockScenes : [];
+    return `video_ref:${JSON.stringify(scenes.map((scene) => ({
+      sceneId: String(scene?.sceneId || ""),
+      videoUrl: String(scene?.videoUrl || scene?.assetUrl || "").trim(),
+      imageUrl: String(scene?.imageUrl || "").trim(),
+    })))}`;
+  }
+  return "";
 }
 
 function isBrainInput(handleId) {
@@ -2079,23 +2139,23 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
   }
 
   if (targetHandle === "link_in" && sourceNode.type === "linkNode" && sourceHandle === "link") {
-    const savedPayload = sourceNode?.data?.outputPayload && typeof sourceNode.data.outputPayload === "object"
-      ? sourceNode.data.outputPayload
-      : null;
+    const savedPayload = getLinkNodeSavedPayload(sourceNode?.data);
     const payload = savedPayload || buildLinkNodePayload(sourceNode?.data?.urlValue || sourceNode?.data?.draftUrl || "");
+    console.log("[LINK->NARRATIVE payload]", { sourceNode, extracted: payload, edge: { sourceHandle, targetHandle } });
     if (!payload) return null;
     return {
-      value: payload.value || payload.href || payload.preview || "",
-      preview: payload.preview || payload.domain || payload.value || "",
-      sourceLabel: payload.sourceLabel || "Внешняя ссылка",
-      url: payload.value || payload.href || "",
-      assetUrl: payload.href || payload.value || "",
+      value: payload.value || payload.url || payload.href || payload.preview || "",
+      preview: payload.preview || payload.domain || payload.value || payload.url || "",
+      sourceLabel: payload.sourceLabel || "Ссылка",
+      url: payload.url || payload.href || payload.value || "",
+      assetUrl: payload.href || payload.url || payload.value || "",
       fileName: payload.domain || getAssetFileName(payload.value || payload.href || ""),
       type: payload.type,
       domain: payload.domain || "",
       meta: {
-        href: payload.href || payload.value || "",
+        href: payload.href || payload.url || payload.value || "",
         domain: payload.domain || "",
+        kind: payload?.meta?.kind || "link",
       },
     };
   }
@@ -2111,6 +2171,15 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     const fallbackPreview = readyVideoCount
       ? `${readyVideoCount} видео из COMFY STORYBOARD`
       : `${scenes.length || 0} сцен в COMFY STORYBOARD`;
+    console.log("[VIDEO_REF->NARRATIVE payload]", {
+      sourceNode,
+      extracted: {
+        videoUrls,
+        readyVideoCount,
+        fallbackPreview,
+      },
+      edge: { sourceHandle, targetHandle },
+    });
     if (!firstVideoUrl && !scenes.length) return null;
     return {
       value: firstVideoUrl || fallbackPreview,
@@ -3282,7 +3351,7 @@ function TextNode({ id, data }) {
 
 function LinkNode({ id, data }) {
   const draftUrl = String(data?.draftUrl ?? data?.urlValue ?? "");
-  const savedPayload = buildLinkNodePayload(data?.urlValue || "");
+  const savedPayload = getLinkNodeSavedPayload(data) || buildLinkNodePayload(data?.urlValue || "");
   const liveParsed = parseLinkUrl(draftUrl);
   const hasSavedValue = !!savedPayload?.value;
   const isDraftDirty = normalizeLinkUrl(draftUrl) !== normalizeLinkUrl(data?.urlValue || "");
@@ -7905,6 +7974,7 @@ Aspect ratio: ${imageFormat}`,
                         urlValue: "",
                         urlStatus: "empty",
                         urlError: "",
+                        savedPayload: null,
                         outputPayload: null,
                       },
                     };
@@ -7918,6 +7988,7 @@ Aspect ratio: ${imageFormat}`,
                         draftUrl,
                         urlStatus: "invalid",
                         urlError: "Некорректная ссылка. Используйте полный http/https URL.",
+                        savedPayload: null,
                         outputPayload: null,
                       },
                     };
@@ -7930,6 +8001,7 @@ Aspect ratio: ${imageFormat}`,
                       urlValue: payload.value,
                       urlStatus: "ready",
                       urlError: "",
+                      savedPayload: payload,
                       outputPayload: payload,
                     },
                   };
@@ -9460,6 +9532,7 @@ return base;
   );
 
   const bindHandlersRef = useRef(bindHandlers);
+  const narrativeSourceRefreshSignatureRef = useRef("");
 
   const refreshNodeBindingsForEdges = useCallback((nextEdges, traceReason = "edges:sync") => {
     const safeEdges = Array.isArray(nextEdges) ? nextEdges : [];
@@ -9498,6 +9571,34 @@ return base;
     if (!didHydrateRef.current) return;
     refreshNodeBindingsForEdges(edgesRef.current || [], "edges:refresh-node-bindings");
   }, [edges, refreshNodeBindingsForEdges]);
+
+  useEffect(() => {
+    if (!didHydrateRef.current) return;
+    const nodesById = new Map((Array.isArray(nodes) ? nodes : []).map((nodeItem) => [nodeItem.id, nodeItem]));
+    const nextSignature = (Array.isArray(edges) ? edges : [])
+      .filter((edge) => {
+        if (!edge?.target || !isNarrativeInput(edge?.targetHandle)) return false;
+        const sourceNode = nodesById.get(edge.source) || null;
+        return !!sourceNode;
+      })
+      .map((edge) => {
+        const sourceNode = nodesById.get(edge.source) || null;
+        return [
+          String(edge.target || ""),
+          String(edge.targetHandle || ""),
+          String(edge.source || ""),
+          String(edge.sourceHandle || ""),
+          getNarrativeSourceRefreshSignature({
+            sourceNode,
+            targetHandle: String(edge.targetHandle || ""),
+          }),
+        ].join("|");
+      })
+      .join("::");
+    if (nextSignature === narrativeSourceRefreshSignatureRef.current) return;
+    narrativeSourceRefreshSignatureRef.current = nextSignature;
+    refreshNodeBindingsForEdges(edgesRef.current || [], "narrative:source-payload-change");
+  }, [edges, nodes, refreshNodeBindingsForEdges]);
 
   // TEMP DIAGNOSTIC: disabled bindHandlers reconciliation effect to verify reload node disappearance loop.
   // useEffect(() => {
@@ -9731,6 +9832,7 @@ const hydrate = useCallback((source = "unknown") => {
             data.urlError = data.urlStatus === "invalid"
               ? String(data.urlError || "Некорректная ссылка. Используйте полный http/https URL.")
               : "";
+            data.savedPayload = payload;
             data.outputPayload = payload;
             delete data.value;
           }
@@ -9993,7 +10095,7 @@ const hydrate = useCallback((source = "unknown") => {
     } else if (type === "text") {
       node = { id, type: "textNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { textValue: "" } };
     } else if (type === "link") {
-      node = { id, type: "linkNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { draftUrl: "", urlValue: "", urlStatus: "empty", urlError: "", outputPayload: null } };
+      node = { id, type: "linkNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { draftUrl: "", urlValue: "", urlStatus: "empty", urlError: "", savedPayload: null, outputPayload: null } };
     } else if (type === "brain") {
       node = { id, type: "brainNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: "clip", scenarioKey: "clip", shootKey: "cinema", styleKey: "realism", freezeStyle: false, clipSec: 30 } };
     } else if (type === "ref_character") {
