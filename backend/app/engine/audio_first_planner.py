@@ -52,6 +52,9 @@ class AudioLayerRef(BaseModel):
 class LipSyncPolicy(BaseModel):
     allowed: bool = False
     reason: str = "lip_sync_not_evaluated"
+    requires_music_track: bool = True
+    requires_vocal: bool = True
+    requires_close_framing: bool = True
     requires_vocal_present: bool = True
     requires_musical_rhythm: bool = True
     requires_framing_support: bool = True
@@ -100,7 +103,8 @@ class LtxRenderTask(BaseModel):
     audio_source_ref: str | None = None
     start_frame_source: str | None = None
     end_frame_source: str | None = None
-    motion_bucket: str | None = None
+    motion_bucket: int | None = None
+    motion_interpretation: str | None = None
     constraints: dict[str, Any] = Field(default_factory=dict)
     debug: dict[str, Any] = Field(default_factory=dict)
 
@@ -118,6 +122,7 @@ class PlannedShot(BaseModel):
     audio_segment_type: AudioSegmentType
     has_vocal_rhythm: bool = False
     motion_interpretation: str
+    project_mode: ProjectMode
     audio_driver: str | None = None
     lipsync_policy: LipSyncPolicy
     start_frame_source: str | None = None
@@ -234,6 +239,9 @@ def build_audio_planning_context(project_input: ProjectPlanningInput) -> AudioPl
         lip_sync_policy=LipSyncPolicy(
             allowed=False,
             reason="lip_sync_allowed_only_for_music_vocal_rhythm_with_supported_framing",
+            requires_music_track=True,
+            requires_vocal=True,
+            requires_close_framing=True,
         ),
         planning_blocked_reason=blocked_reason,
     )
@@ -264,7 +272,9 @@ def _infer_audio_segment_type(scene: dict[str, Any], project_input: ProjectPlann
         return AudioSegmentType.narration
     if audio_type in {"instrumental", "music_only", "bg", "music"}:
         return AudioSegmentType.music
-    if has_vocals and (context.global_music_track_present or project_input.project_mode == ProjectMode.music_first or audio_type in {"song", "song_with_vocals", "vocals"}):
+    if audio_type in {"song", "song_with_vocals", "vocals", "music_vocal"}:
+        return AudioSegmentType.music_vocal
+    if has_vocals and context.global_music_track_present:
         return AudioSegmentType.music_vocal
     if context.global_music_track_present:
         return AudioSegmentType.music
@@ -317,26 +327,33 @@ def _is_continuation(scene: dict[str, Any]) -> bool:
 
 def _compute_lipsync_policy(
     scene: dict[str, Any],
-    project_input: ProjectPlanningInput,
     context: AudioPlanningContext,
     audio_segment_type: AudioSegmentType,
 ) -> tuple[LipSyncPolicy, bool]:
     has_vocal_present = bool(scene.get("hasVocals") is True or scene.get("isLipSync") is True or scene.get("lipSync") is True)
     suitable_framing = _shot_supports_lipsync(scene)
     has_vocal_rhythm = audio_segment_type == AudioSegmentType.music_vocal and has_vocal_present and context.global_music_track_present
+    base_kwargs = {
+        "requires_music_track": True,
+        "requires_vocal": True,
+        "requires_close_framing": True,
+        "requires_vocal_present": True,
+        "requires_musical_rhythm": True,
+        "requires_framing_support": True,
+    }
     if audio_segment_type == AudioSegmentType.narration:
-        return LipSyncPolicy(allowed=False, reason="narration_segments_must_not_use_lip_sync"), has_vocal_rhythm
+        return LipSyncPolicy(allowed=False, reason="narration_segments_must_not_use_lip_sync", **base_kwargs), has_vocal_rhythm
     if audio_segment_type == AudioSegmentType.local_phrase:
-        return LipSyncPolicy(allowed=False, reason="local_scene_phrase_does_not_enable_lip_sync_automatically"), has_vocal_rhythm
+        return LipSyncPolicy(allowed=False, reason="local_scene_phrase_does_not_enable_lip_sync_automatically", **base_kwargs), has_vocal_rhythm
     if not has_vocal_present:
-        return LipSyncPolicy(allowed=False, reason="vocal_presence_required_for_lip_sync"), has_vocal_rhythm
-    if not context.global_music_track_present and project_input.project_mode != ProjectMode.music_first:
-        return LipSyncPolicy(allowed=False, reason="musical_rhythmic_support_required_for_lip_sync"), has_vocal_rhythm
-    if not suitable_framing:
-        return LipSyncPolicy(allowed=False, reason="shot_framing_not_suitable_for_lip_sync"), has_vocal_rhythm
+        return LipSyncPolicy(allowed=False, reason="vocal_presence_required_for_lip_sync", **base_kwargs), has_vocal_rhythm
+    if not context.global_music_track_present:
+        return LipSyncPolicy(allowed=False, reason="global_music_track_required_for_lip_sync", **base_kwargs), has_vocal_rhythm
     if audio_segment_type != AudioSegmentType.music_vocal:
-        return LipSyncPolicy(allowed=False, reason="lip_sync_only_allowed_for_music_driven_vocal_scenes"), has_vocal_rhythm
-    return LipSyncPolicy(allowed=True, reason="music_vocal_rhythm_and_supported_framing_confirmed"), True
+        return LipSyncPolicy(allowed=False, reason="lip_sync_only_allowed_for_music_vocal_segments", **base_kwargs), has_vocal_rhythm
+    if not suitable_framing:
+        return LipSyncPolicy(allowed=False, reason="shot_framing_not_suitable_for_lip_sync", **base_kwargs), has_vocal_rhythm
+    return LipSyncPolicy(allowed=True, reason="music_vocal_rhythm_and_supported_framing_confirmed", **base_kwargs), True
 
 
 def _select_render_mode(
@@ -378,7 +395,7 @@ def _motion_interpretation(render_mode: RenderMode, audio_segment_type: AudioSeg
 def _audio_driver(audio_segment_type: AudioSegmentType, context: AudioPlanningContext) -> str | None:
     if audio_segment_type == AudioSegmentType.local_phrase:
         return "local_scene_phrase"
-    if audio_segment_type == AudioSegmentType.music_vocal:
+    if audio_segment_type == AudioSegmentType.music_vocal and context.global_music_track_present:
         return "global_music_track"
     if audio_segment_type == AudioSegmentType.music and context.global_music_track_present:
         return "global_music_track"
@@ -398,7 +415,8 @@ def _build_render_task(
         audio_source_ref=shot.audio_driver,
         start_frame_source=shot.start_frame_source,
         end_frame_source="generated_end_frame" if shot.needs_two_frames else None,
-        motion_bucket=shot.motion_interpretation,
+        motion_bucket=None,
+        motion_interpretation=shot.motion_interpretation,
         constraints={
             "narration_mode": shot.narration_mode.value,
             "audio_segment_type": shot.audio_segment_type.value,
@@ -407,6 +425,8 @@ def _build_render_task(
         },
         debug={
             "render_reason": shot.render_reason,
+            "motion_interpretation": shot.motion_interpretation,
+            "project_mode": shot.project_mode.value,
             "legacy_transition_type": _clean_str(scene.get("transitionType")) or None,
             "legacy_scene_type": _clean_str(scene.get("sceneType")) or None,
         },
@@ -424,13 +444,15 @@ def validate_planned_shot(shot: PlannedShot, project_input: ProjectPlanningInput
         errors.append("local_scene_phrase_cannot_auto_enable_lip_sync")
     if shot.render_mode in {RenderMode.i2v_as, RenderMode.f_l_as}:
         warnings.append("audio_sensitive_modes_are_motion_not_speech_articulation")
-    if project_input.project_mode == ProjectMode.narration_first and shot.audio_segment_type == AudioSegmentType.narration and shot.render_mode == RenderMode.lip_sync:
-        errors.append("narration_first_projects_must_not_prefer_lip_sync_for_narration")
+    if project_input.input_mode == InputMode.text_to_audio_first and not project_input.master_audio_url:
+        errors.append("planning_blocked_until_master_audio_exists")
     if shot.render_mode == RenderMode.continuation:
         if not shot.parent_shot_id:
-            errors.append("continuation_requires_parent_shot_id")
+            warnings.append("continuation_missing_parent_shot_id")
         if not shot.start_frame_source:
             errors.append("continuation_requires_start_frame_source")
+    if shot.render_mode in {RenderMode.f_l, RenderMode.f_l_as} and shot.needs_two_frames is not True:
+        warnings.append("f_l_modes_should_enable_needs_two_frames")
     return PlannerValidation(valid=len(errors) == 0, errors=list(dict.fromkeys(errors)), warnings=list(dict.fromkeys(warnings)))
 
 
@@ -466,7 +488,7 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
         duration_sec = max(0.0, _to_float(scene.get("durationSec"), end_sec - start_sec) or (end_sec - start_sec))
         audio_segment_type = _infer_audio_segment_type(scene, project_input, context)
         narration_mode = _infer_narration_mode(scene, audio_segment_type)
-        lipsync_policy, has_vocal_rhythm = _compute_lipsync_policy(scene, project_input, context, audio_segment_type)
+        lipsync_policy, has_vocal_rhythm = _compute_lipsync_policy(scene, context, audio_segment_type)
         render_mode, render_reason = _select_render_mode(scene, project_input, audio_segment_type, has_vocal_rhythm, lipsync_policy)
         shot_id = f"{scene_id}__shot_001"
         continuation = render_mode == RenderMode.continuation
@@ -484,6 +506,7 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             audio_segment_type=audio_segment_type,
             has_vocal_rhythm=has_vocal_rhythm,
             motion_interpretation=_motion_interpretation(render_mode, audio_segment_type),
+            project_mode=project_input.project_mode,
             audio_driver=_audio_driver(audio_segment_type, context),
             lipsync_policy=lipsync_policy,
             start_frame_source=start_frame_source,
