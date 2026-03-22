@@ -22,6 +22,10 @@ export function getBrainPackageEntities(brainPackage = null) {
   return normalizeList(brainPackage?.entities);
 }
 
+function getBrainPackageListKey(prefix, value, index) {
+  return `${prefix}-${String(value || "empty")}-${index}`;
+}
+
 function BrainField({ label, value }) {
   const text = normalizeText(value) || "—";
   return (
@@ -58,8 +62,8 @@ export default function BrainPackageView({ brainPackage, variant = "tester", foo
         <span>entities</span>
         {entities.length ? (
           <div className="clipSB_brainPackageBadges" role="list" aria-label="Brain package entities">
-            {entities.map((entity) => (
-              <span key={entity} className="clipSB_brainPackageBadge" role="listitem">{entity}</span>
+            {entities.map((entity, index) => (
+              <span key={getBrainPackageListKey("entity", entity, index)} className="clipSB_brainPackageBadge" role="listitem">{entity}</span>
             ))}
           </div>
         ) : (
@@ -71,7 +75,7 @@ export default function BrainPackageView({ brainPackage, variant = "tester", foo
         <span>sceneLogic</span>
         {sceneLogic.length ? (
           <ol className="clipSB_brainPackageList">
-            {sceneLogic.map((item) => <li key={item}>{item}</li>)}
+            {sceneLogic.map((item, index) => <li key={getBrainPackageListKey("scene-logic", item, index)}>{item}</li>)}
           </ol>
         ) : (
           <strong>—</strong>

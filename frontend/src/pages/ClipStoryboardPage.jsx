@@ -3429,45 +3429,87 @@ function sanitizeNarrativeTesterNodeData(nodeType, rawData = {}) {
 }
 
 function serializeNodesForStorage(nodes) {
-  return nodes.map((n) => {
-    const normalizedData = isComfyRefLikeNodeType(n.type)
-      ? normalizeComfyRefNodeData(n.type, n.data || {}, n?.data?.kind || "")
-      : (n.data || {});
-    const data = stripFunctionsDeep(normalizedData) || {};
-    if (isNarrativeTesterNodeType(n.type)) {
-      return {
-        id: n.id,
-        type: n.type,
-        position: n.position,
-        data: sanitizeNarrativeTesterNodeData(n.type, data),
-      };
+  const safeNodes = Array.isArray(nodes) ? nodes : [];
+  console.info("[CLIP SERIALIZE] start", { nodesCount: safeNodes.length });
+  const serializedNodes = safeNodes.reduce((acc, n, index) => {
+    if (!n || typeof n !== "object") {
+      console.warn("[CLIP SERIALIZE] skip invalid node", {
+        reason: "node_not_object",
+        index,
+        node: n,
+      });
+      return acc;
     }
-    if (n.type === "brainNode") {
-      delete data.isParsing;
-      delete data.activeParseToken;
+
+    const nodeId = String(n.id || "").trim();
+    const nodeType = String(n.type || "").trim();
+    if (!nodeId || !nodeType) {
+      console.warn("[CLIP SERIALIZE] skip invalid node", {
+        reason: "missing_id_or_type",
+        index,
+        nodeId,
+        nodeType,
+      });
+      return acc;
     }
-    if (n.type === "introFrame") {
-      data.previewKind = getEffectiveIntroFramePreviewKind(data);
-      if (data.previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
-        delete data.imageUrl;
-      }
-      delete data.contextSummary;
-      delete data.contextSceneCount;
-      delete data.sourceNodeIds;
-      delete data.sourceNodeTypes;
-      delete data.titleContextNodeId;
-      delete data.onField;
-      delete data.onGenerate;
-      delete data.onPickImage;
-      delete data.onClearImage;
+
+    const normalizedData = isComfyRefLikeNodeType(nodeType)
+      ? normalizeComfyRefNodeData(nodeType, n.data || {}, n?.data?.kind || "")
+      : (n.data && typeof n.data === "object" ? n.data : {});
+    let data = stripFunctionsDeep(normalizedData);
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      console.warn("[CLIP SERIALIZE] skip invalid node", {
+        reason: "invalid_node_data",
+        nodeId,
+        nodeType,
+        dataType: typeof data,
+        isArray: Array.isArray(data),
+      });
+      data = {};
     }
-    return {
-      id: n.id,
-      type: n.type,
-      position: n.position,
+
+    const serialNode = {
+      id: nodeId,
+      type: nodeType,
+      position: n.position && typeof n.position === "object"
+        ? {
+          x: Number.isFinite(Number(n.position.x)) ? Number(n.position.x) : 0,
+          y: Number.isFinite(Number(n.position.y)) ? Number(n.position.y) : 0,
+        }
+        : { x: 0, y: 0 },
       data,
     };
-  });
+
+    if (isNarrativeTesterNodeType(nodeType)) {
+      serialNode.data = sanitizeNarrativeTesterNodeData(nodeType, data);
+      acc.push(serialNode);
+      return acc;
+    }
+    if (nodeType === "brainNode") {
+      delete serialNode.data.isParsing;
+      delete serialNode.data.activeParseToken;
+    }
+    if (nodeType === "introFrame") {
+      serialNode.data.previewKind = getEffectiveIntroFramePreviewKind(serialNode.data);
+      if (serialNode.data.previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
+        delete serialNode.data.imageUrl;
+      }
+      delete serialNode.data.contextSummary;
+      delete serialNode.data.contextSceneCount;
+      delete serialNode.data.sourceNodeIds;
+      delete serialNode.data.sourceNodeTypes;
+      delete serialNode.data.titleContextNodeId;
+      delete serialNode.data.onField;
+      delete serialNode.data.onGenerate;
+      delete serialNode.data.onPickImage;
+      delete serialNode.data.onClearImage;
+    }
+
+    acc.push(serialNode);
+    return acc;
+  }, []);
+  console.info(`[CLIP SERIALIZE] normalized nodes count=${serializedNodes.length}`);
+  return serializedNodes;
 }
 
 function notify(detail) {
@@ -9288,9 +9330,19 @@ onClipSec: (nodeId, value) => {
                     return;
                   }
 
+                console.info("[CLIP PLANNER] build payload start", {
+                  nodeId,
+                  mode: freshDerived.modeValue,
+                  plannerMode: String(freshDerived.plannerMode || "legacy"),
+                  hasAudio: !!freshDerived.meaningfulAudio,
+                  hasText: !!freshDerived.meaningfulText,
+                });
+
                 const payload = {
                   mode: freshDerived.modeValue,
                   plannerMode: String(freshDerived.plannerMode || "legacy"),
+                  inputMode: freshDerived.meaningfulAudio ? "audio" : (freshDerived.meaningfulText ? "text" : "empty"),
+                  projectMode: "narration_first",
                   output: freshDerived.outputValue,
                   format: resolvePreferredSceneFormat(activeNode?.data?.format),
                   stylePreset: freshDerived.stylePreset,
@@ -9303,6 +9355,7 @@ onClipSec: (nodeId, value) => {
                   audioSemanticHints: freshDerived.audioSemanticHints || "",
                   audioSemanticSummary: String(freshDerived.audioSemanticSummary || "").trim(),
                   audioUrl: freshDerived.meaningfulAudio || "",
+                  masterAudioUrl: freshDerived.meaningfulAudio || "",
                   audioDurationSec: freshDerived.meaningfulAudioDurationSec,
                   refsByRole: freshDerived.refsByRole,
                   storyControlMode: freshDerived.storyControlMode,
@@ -9311,6 +9364,23 @@ onClipSec: (nodeId, value) => {
                   timelineSource: freshDerived.timelineSource,
                   narrativeSource: freshDerived.narrativeSource,
                 };
+                const hasPlannerPayload = !!payload && typeof payload === "object" && !Array.isArray(payload);
+                const hasPlannerSource = !!String(payload?.audioUrl || payload?.masterAudioUrl || payload?.text || "").trim();
+                if (!hasPlannerPayload || !String(payload?.plannerMode || "").trim() || !String(payload?.output || "").trim() || !String(payload?.projectMode || "").trim() || !hasPlannerSource) {
+                  console.warn("[CLIP PLANNER] payload invalid, request aborted", {
+                    nodeId,
+                    hasPlannerPayload,
+                    hasPlannerSource,
+                    plannerMode: payload?.plannerMode || "",
+                    inputMode: payload?.inputMode || "",
+                    projectMode: payload?.projectMode || "",
+                    masterAudioUrl: payload?.masterAudioUrl || "",
+                    textLength: String(payload?.text || "").trim().length,
+                  });
+                  notify({ type: "warning", title: "Planner payload invalid", message: "Planner payload не собран: проверьте AUDIO/TEXT и связанные ноды." });
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, parseStatus: "error", brainCritical: ["Planner payload invalid"], brainWarnings: [] } } : x)));
+                  return;
+                }
                 console.log("[COMFY DEBUG FRONT] derived refsByRole", freshDerived?.refsByRole);
                 console.log("[COMFY DEBUG FRONT] derived refs counts", summarizeRefsByRole(freshDerived?.refsByRole));
                 console.log("[COMFY DEBUG FRONT] derived refs active roles", summarizeRefsByRole(freshDerived?.refsByRole)?.activeRoles || []);
@@ -9373,6 +9443,17 @@ onClipSec: (nodeId, value) => {
                       const scenes = buildMockComfyScenes(plannerMeta);
                       response = { ok: true, planMeta: plannerMeta, globalContinuity: scenes[0]?.plannerMeta?.globalContinuity || "", scenes, warnings: plannerMeta.warnings, errors: [], debug: {} };
                     } else {
+                      console.info("[CLIP PLANNER] send payload", {
+                        nodeId,
+                        plannerMode: payload.plannerMode,
+                        inputMode: payload.inputMode,
+                        projectMode: payload.projectMode,
+                        masterAudioUrl: payload.masterAudioUrl,
+                        narrativeSource: payload.narrativeSource,
+                        timelineSource: payload.timelineSource,
+                        audioStoryMode: payload.audioStoryMode,
+                      });
+                      console.log("[SEND TO BACKEND] payload", payload);
                       response = await fetchJson(`/api/clip/comfy/plan`, { method: "POST", body: payload });
                     }
                     console.log("[COMFY DEBUG FRONT] /clip/comfy/plan response plannerInput refsByRole", response?.planMeta?.plannerInput?.refsByRole);
@@ -10724,18 +10805,6 @@ const hydrate = useCallback((source = "unknown") => {
 
     // strip handlers from data
     const serialNodes = serializeNodesForStorage(nodes);
-    serialNodes
-      .filter((nodeItem) => nodeItem?.type === "brainPackageTesterNode")
-      .forEach((nodeItem) => {
-        console.log("[BRAIN TESTER FLOW]", {
-          step: "persist:serializeNodesForStorage",
-          value: nodeItem?.data?.payload,
-          type: typeof nodeItem?.data?.payload,
-          isArray: Array.isArray(nodeItem?.data?.payload),
-          isObject: !!nodeItem?.data?.payload && typeof nodeItem.data.payload === "object" && !Array.isArray(nodeItem.data.payload),
-          nodeId: nodeItem?.id || null,
-        });
-      });
     const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
     if (CLIP_TRACE_COMFY_REFS) {
       const tracedNodes = serialNodes
