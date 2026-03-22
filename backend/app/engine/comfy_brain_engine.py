@@ -14,7 +14,9 @@ from app.engine.gemini_planner_contract import (
     GeminiPlannerValidationReport,
     GeminiPlanningStatus,
     build_gemini_planner_input as build_audio_first_gemini_planner_input,
-    build_gemini_planner_request_text as build_audio_first_gemini_planner_request_text,
+    build_gemini_planner_output_contract as build_audio_first_gemini_planner_output_contract,
+    build_gemini_planner_runtime_payload as build_audio_first_gemini_planner_runtime_payload,
+    build_gemini_planner_system_rules as build_audio_first_gemini_planner_system_rules,
     map_gemini_plan_to_canonical_audio_first_output,
     parse_gemini_planner_output,
     validate_gemini_planner_output as validate_audio_first_gemini_planner_output,
@@ -2628,8 +2630,16 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         entity_locks=entity_locks,
         optional_audio_cues=optional_audio_cues,
     )
-    planner_request_text = build_audio_first_gemini_planner_request_text(planner_input)
-    multimodal_parts, media_debug = _build_gemini_only_multimodal_parts(normalized, planner_request_text)
+    planner_system_rules = build_audio_first_gemini_planner_system_rules(planner_input)
+    planner_output_contract = build_audio_first_gemini_planner_output_contract(planner_input)
+    planner_runtime_payload = build_audio_first_gemini_planner_runtime_payload(planner_input)
+    planner_system_instruction = (
+        "=== GEMINI PLANNER SYSTEM RULES ===\n"
+        f"{planner_system_rules}\n\n"
+        "=== GEMINI PLANNER OUTPUT CONTRACT ===\n"
+        f"{planner_output_contract}"
+    )
+    multimodal_parts, media_debug = _build_gemini_only_multimodal_parts(normalized, planner_runtime_payload)
 
     def _build_contract_failure_result(
         errors: list[str],
@@ -2673,7 +2683,9 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "storySource": story_source,
                 "plannerSource": "gemini",
                 "canonicalSourceOfTruth": True,
+                "returnsCompatibilityProjection": True,
                 "compatibilityProjection": True,
+                "canonicalIsProjection": False,
                 "worldLock": world_lock,
                 "entityLocks": entity_locks,
                 "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
@@ -2686,6 +2698,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "debug": {
                 "plannerMode": "gemini_only",
                 "planner_source": "gemini",
+                "plannerSource": "gemini",
                 "storySource": story_context.get("storySource"),
                 "narrativeSource": story_context.get("narrativeSource"),
                 "weakSemanticContext": story_context.get("weakSemanticContext"),
@@ -2695,6 +2708,19 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "hasAudio": story_context.get("hasAudio"),
                 "hasText": story_context.get("hasText"),
                 "hasRefs": story_context.get("hasRefs"),
+                "plannerContractName": planner_input.planner_contract_name,
+                "planner_contract_name": planner_input.planner_contract_name,
+                "contractVersion": planner_input.contract_version,
+                "contract_version": planner_input.contract_version,
+                "schemaVersion": planner_input.schema_version,
+                "schema_version": planner_input.schema_version,
+                "parseMode": parse_result.parse_mode if parse_result else "invalid",
+                "parse_mode": parse_result.parse_mode if parse_result else "invalid",
+                "contractSchemaValid": parse_result.contract_schema_valid if parse_result else False,
+                "contract_schema_valid": parse_result.contract_schema_valid if parse_result else False,
+                "canonicalSourceOfTruth": True,
+                "returnsCompatibilityProjection": True,
+                "canonicalIsProjection": False,
                 "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
                 "worldLock": world_lock,
                 "entityLocks": entity_locks,
@@ -2702,15 +2728,22 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "sanitizedError": sanitized_error,
                 "failureSummary": sanitized_error,
                 "contractParseMode": parse_result.parse_mode if parse_result else "invalid",
-                "contractSchemaValid": parse_result.contract_schema_valid if parse_result else False,
                 "contractValidationErrors": parse_result.contract_validation_errors if parse_result else validation_report.errors,
                 "contractValidationWarnings": parse_result.contract_validation_warnings if parse_result else validation_report.warnings,
                 "rawGeminiContractVersion": parse_result.raw_gemini_contract_version if parse_result else None,
+                "rawGeminiSchemaVersion": parse_result.raw_gemini_schema_version if parse_result else None,
                 "parserDebugSummary": parse_result.parser_debug_summary if parse_result else "invalid:failure_before_parse",
+                "parserNotes": parse_result.parser_notes if parse_result else [],
                 "plannerValidationErrors": validation_report.errors,
                 "plannerValidationWarnings": validation_report.warnings,
+                "validation_errors": validation_report.errors,
+                "validation_warnings": validation_report.warnings,
                 "rawGeminiPayload": raw_parsed or {},
                 "rawGeminiDebugSummary": raw_debug_summary,
+                "plannerRequestLayers": {
+                    "systemInstruction": planner_system_instruction,
+                    "runtimePayload": planner_runtime_payload,
+                },
                 **media_debug,
             },
         }
@@ -2727,7 +2760,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     requested_model = (settings.GEMINI_TEXT_MODEL or PRIMARY_GEMINI_PLANNER_MODEL or FALLBACK_GEMINI_MODEL).strip()
     body = {
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3},
-        "systemInstruction": {"parts": [{"text": planner_request_text}]},
+        "systemInstruction": {"parts": [{"text": planner_system_instruction}]},
         "contents": [{"role": "user", "parts": multimodal_parts}],
     }
     parsed, diagnostics = _call_gemini_plan_with_model_fallback(api_key, requested_model, body)
@@ -2738,7 +2771,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": planner_request_text}, *multimodal_parts[1:]],
+                    "parts": [{"text": f"{planner_system_instruction}\n\n=== GEMINI PLANNER RUNTIME PAYLOAD ===\n{planner_runtime_payload}"}, *multimodal_parts[1:]],
                 }
             ],
         }
@@ -2821,7 +2854,9 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "storySource": story_source,
         "plannerSource": "gemini",
         "canonicalSourceOfTruth": True,
+        "returnsCompatibilityProjection": True,
         "compatibilityProjection": True,
+        "canonicalIsProjection": False,
         "weakSemanticContext": bool(story_context.get("weakSemanticContext")),
         "semanticContextReason": story_context.get("semanticContextReason") or "",
         "audioDurationSec": timing_debug.get("audioDurationSec"),
@@ -2832,6 +2867,10 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "preview": preview,
         "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
         "systemPromptVersion": "gemini_audio_first_planner_v1",
+        "plannerContractName": planner_input.planner_contract_name,
+        "contractVersion": planner_input.contract_version,
+        "schemaVersion": planner_input.schema_version,
+        "plannerSourceContract": planner_input.planner_source,
         "validationWarnings": validation_report.warnings,
         "validationErrors": validation_report.errors,
         "summary": {
@@ -2853,6 +2892,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             **(parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {}),
             "plannerMode": "gemini_only",
             "planner_source": "gemini",
+            "plannerSource": "gemini",
             "requestedModel": diagnostics.get("requestedModel") or requested_model,
             "fallbackFrom": diagnostics.get("fallbackFrom"),
             "fallbackTo": diagnostics.get("fallbackTo"),
@@ -2873,16 +2913,38 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "hasRefs": story_context.get("hasRefs"),
             "systemPromptVersion": "gemini_audio_first_planner_v1",
             "systemInstructionUsed": system_instruction_used,
+            "plannerContractName": planner_input.planner_contract_name,
+            "planner_contract_name": planner_input.planner_contract_name,
+            "contractVersion": planner_input.contract_version,
+            "contract_version": planner_input.contract_version,
+            "schemaVersion": planner_input.schema_version,
+            "schema_version": planner_input.schema_version,
             "contractParseMode": parse_result.parse_mode,
+            "parseMode": parse_result.parse_mode,
+            "parse_mode": parse_result.parse_mode,
             "contractSchemaValid": parse_result.contract_schema_valid,
+            "contract_schema_valid": parse_result.contract_schema_valid,
             "contractValidationErrors": parse_result.contract_validation_errors,
             "contractValidationWarnings": parse_result.contract_validation_warnings,
             "rawGeminiContractVersion": parse_result.raw_gemini_contract_version,
+            "rawGeminiSchemaVersion": parse_result.raw_gemini_schema_version,
             "parserDebugSummary": parse_result.parser_debug_summary,
+            "parserNotes": parse_result.parser_notes,
+            "parser_notes": parse_result.parser_notes,
             "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
             "plannerValidationWarnings": validation_report.warnings,
             "plannerValidationErrors": validation_report.errors,
+            "validation_errors": validation_report.errors,
+            "validation_warnings": validation_report.warnings,
+            "canonicalSourceOfTruth": True,
+            "returnsCompatibilityProjection": True,
+            "canonicalIsProjection": False,
             "parsedGeminiContract": parse_result.raw_payload or {},
+            "plannerRequestLayers": {
+                "systemInstruction": planner_system_instruction,
+                "outputContract": planner_output_contract,
+                "runtimePayload": planner_runtime_payload,
+            },
             "worldLock": world_lock,
             "entityLocks": entity_locks,
             "preview": preview,
