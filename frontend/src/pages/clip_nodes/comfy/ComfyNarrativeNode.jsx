@@ -115,6 +115,50 @@ export default function ComfyNarrativeNode({ id, data }) {
     </div>
   );
 
+  const manualSourceSelector = (
+    <div className="clipSB_narrativeSegmented">
+      {NARRATIVE_SOURCE_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={`clipSB_narrativeChip ${activeSourceMode === option.value ? "isActive" : ""}`.trim()}
+          onClick={() => handleSourceModeChange(option.value)}
+          aria-pressed={activeSourceMode === option.value}
+        >
+          {option.labelRu}
+        </button>
+      ))}
+    </div>
+  );
+
+  const connectedSourceDisplay = (
+    <div
+      className="clipSB_narrativeSourceDisplay"
+      aria-label="Источник определяется внешним подключением"
+      role="status"
+    >
+      <div className="clipSB_narrativeSourceDisplayHeader">
+        <span className="clipSB_narrativeSourceDisplayTitle">{resolvedSource?.label || "Источник"}</span>
+        <span className="clipSB_narrativeChipMeta">подключён извне</span>
+      </div>
+      <div className="clipSB_narrativeSourceDisplayChips" aria-hidden="true">
+        {NARRATIVE_SOURCE_OPTIONS.map((option) => {
+          const isActive = activeSourceMode === option.value;
+
+          return (
+            <span
+              key={option.value}
+              className={`clipSB_narrativeChipDisplay ${isActive ? "isActive" : ""}`.trim()}
+            >
+              <span>{option.labelRu}</span>
+              {isActive ? <span className="clipSB_narrativeChipDisplayBadge">активный источник</span> : null}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   return (
     <>
       {NARRATIVE_INPUT_HANDLES.map((item, index) => (
@@ -147,39 +191,7 @@ export default function ComfyNarrativeNode({ id, data }) {
 
         <section className="clipSB_narrativeSection">
           <div className="clipSB_brainLabel">Источник</div>
-          {lockedByExternalSource ? (
-            <div className="clipSB_narrativeSourceIndicator" aria-label="Источник определяется внешним подключением">
-              <div className="clipSB_narrativeSourceIndicatorHeader">
-                <span className="clipSB_narrativeSourceIndicatorTitle">{resolvedSource?.label || "Источник"}</span>
-                <span className="clipSB_narrativeChipMeta">подключён извне</span>
-              </div>
-              <div className="clipSB_narrativeSourceIndicatorChips">
-                {NARRATIVE_SOURCE_OPTIONS.map((option) => (
-                  <div
-                    key={option.value}
-                    className={`clipSB_narrativeChipDisplay ${activeSourceMode === option.value ? "isActive" : ""}`.trim()}
-                    aria-current={activeSourceMode === option.value ? "true" : undefined}
-                  >
-                    {option.labelRu}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="clipSB_narrativeSegmented">
-              {NARRATIVE_SOURCE_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`clipSB_narrativeChip ${activeSourceMode === option.value ? "isActive" : ""}`.trim()}
-                  onClick={() => handleSourceModeChange(option.value)}
-                  aria-pressed={activeSourceMode === option.value}
-                >
-                  {option.labelRu}
-                </button>
-              ))}
-            </div>
-          )}
+          {lockedByExternalSource ? connectedSourceDisplay : manualSourceSelector}
         </section>
 
         <div className="clipSB_narrativeGrid">
