@@ -1,5 +1,6 @@
 import React from "react";
 import { COMFY_BRAIN_GENRE_OPTIONS, normalizeComfyGenre } from "./comfyBrainDomain";
+import BrainPackageView, { isBrainPackageObject } from "./BrainPackageView";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 
 const COMFY_BRAIN_FORMAT_OPTIONS = ["9:16", "16:9", "1:1"];
@@ -27,14 +28,53 @@ export default function ComfyBrainNode({ id, data }) {
   const plannerModeClass = plannerMode === "gemini_only" ? "clipSB_nodeComfyBrainPlannerGemini" : "clipSB_nodeComfyBrainPlannerLegacy";
   const visibleMode = ["clip", "kino"].includes(String(mode || "").toLowerCase()) ? mode : "clip";
   const visibleOutput = output === "comfy image" ? output : "comfy image";
+  const narrativeBrainPackage = isBrainPackageObject(data?.narrativeBrainPackage) ? data.narrativeBrainPackage : null;
+  const hasNarrativeBrainPackage = !!narrativeBrainPackage && !!data?.narrativeBrainPackageConnected;
+  const sourceStatusLabel = hasNarrativeBrainPackage
+    ? "Получен brain package из narrative.brain_package_out"
+    : "Подключите brain_package_out из ноды СЦЕНАРИЙ";
 
   return (<>
-    {["audio","text","ref_character_1","ref_character_2","ref_character_3","ref_animal","ref_group","ref_location","ref_style","ref_props"].map((h, i) => (
-      <Handle key={h} type="target" position={Position.Left} id={h} className="clipSB_handle" style={handleStyle(h === "ref_props" ? "ref_items" : h, { top: 36 + i * 18 })} />
+    {["brain_package","audio","text","ref_character_1","ref_character_2","ref_character_3","ref_animal","ref_group","ref_location","ref_style","ref_props"].map((h, i) => (
+      <Handle key={h} type="target" position={Position.Left} id={h} className="clipSB_handle" style={handleStyle(h === "ref_props" ? "ref_items" : h === "brain_package" ? "brain_package_out" : h, { top: 28 + i * 18 })} />
     ))}
     <Handle type="source" position={Position.Right} id="comfy_plan" className="clipSB_handle" style={handleStyle("comfy_plan")} />
-    <NodeShell title="COMFY BRAIN" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧠</span>} className={`clipSB_nodeComfyBrain ${brainStateClass} ${plannerModeClass}`.trim()}>
+    <NodeShell title="МОЗГ" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧠</span>} className={`clipSB_nodeComfyBrain ${brainStateClass} ${plannerModeClass}`.trim()}>
       <div className="clipSB_comfyBrainPanel">
+        <section className="clipSB_comfyBrainSection clipSB_comfyBrainInputStage">
+          <div className="clipSB_comfyBrainHeadingRow">
+            <div>
+              <div className="clipSB_brainLabel">BRAIN INPUT</div>
+              <div className="clipSB_comfyBrainSubhead">COMFY BRAIN / planning entry point</div>
+            </div>
+            <span className={`clipSB_comfyBrainInputBadge ${hasNarrativeBrainPackage ? "isReady" : ""}`.trim()}>
+              {hasNarrativeBrainPackage ? "Пакет готов" : "Ожидается пакет"}
+            </span>
+          </div>
+          <div className={`clipSB_comfyBrainSourceStatus ${hasNarrativeBrainPackage ? "isConnected" : ""}`.trim()}>
+            <div className="clipSB_comfyBrainSourceStatusTitle">{sourceStatusLabel}</div>
+            <div className="clipSB_comfyBrainSourceStatusHint">
+              {hasNarrativeBrainPackage
+                ? "Пакет уже пришёл в production brain node и может быть использован как следующая planning stage основа."
+                : "Нода принимает строго типизированный вход narrative.brain_package_out и показывает подготовленную основу для storyboard / planner."}
+            </div>
+          </div>
+          {hasNarrativeBrainPackage ? (
+            <BrainPackageView
+              brainPackage={narrativeBrainPackage}
+              variant="production"
+              footer={(
+                <div className="clipSB_comfyBrainPlanningReady">
+                  <span className="clipSB_comfyBrainPlanningDot" aria-hidden>●</span>
+                  Готово к planning stage: source status подтверждён, narrative package структурирован и доступен без переподключения.
+                </div>
+              )}
+            />
+          ) : (
+            <div className="clipSB_comfyBrainEmptyState">Подключите <code>brain_package_out</code> из ноды <b>СЦЕНАРИЙ</b>, чтобы увидеть подготовленную основу для planner / storyboard.</div>
+          )}
+        </section>
+
         <section className="clipSB_comfyBrainSection">
           <div className="clipSB_brainLabel">PLANNER</div>
           <div className="clipSB_comfyPlannerSwitch" role="tablist" aria-label="Planner mode switch">

@@ -2290,6 +2290,96 @@ body.ps_clip_fullscreen .mainCol {
   gap: 14px;
 }
 
+.clipSB_comfyBrainInputStage {
+  padding: 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(77, 182, 255, 0.10), rgba(77, 182, 255, 0.04));
+  box-shadow: inset 0 0 0 1px rgba(125, 198, 255, 0.18), 0 16px 30px rgba(0,0,0,.16);
+}
+
+.clipSB_comfyBrainHeadingRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.clipSB_comfyBrainSubhead {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(255,255,255,.72);
+}
+
+.clipSB_comfyBrainInputBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: rgba(210, 235, 255, 0.88);
+  background: rgba(77, 182, 255, 0.10);
+  box-shadow: inset 0 0 0 1px rgba(125, 198, 255, 0.18);
+}
+
+.clipSB_comfyBrainInputBadge.isReady {
+  color: #f4fbff;
+  background: linear-gradient(135deg, rgba(77, 182, 255, 0.24), rgba(80, 210, 255, 0.18));
+  box-shadow: inset 0 0 0 1px rgba(125, 198, 255, 0.34), 0 0 22px rgba(77, 182, 255, 0.16);
+}
+
+.clipSB_comfyBrainSourceStatus {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255,255,255,.03);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+}
+
+.clipSB_comfyBrainSourceStatus.isConnected {
+  background: linear-gradient(180deg, rgba(77, 182, 255, 0.14), rgba(77, 182, 255, 0.08));
+  box-shadow: inset 0 0 0 1px rgba(125, 198, 255, 0.22);
+}
+
+.clipSB_comfyBrainSourceStatusTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255,255,255,.94);
+}
+
+.clipSB_comfyBrainSourceStatusHint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255,255,255,.74);
+}
+
+.clipSB_comfyBrainEmptyState {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(8, 18, 28, 0.56);
+  box-shadow: inset 0 0 0 1px rgba(125, 198, 255, 0.14);
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255,255,255,.78);
+}
+
+.clipSB_comfyBrainPlanningReady {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(217, 244, 255, 0.88);
+}
+
+.clipSB_comfyBrainPlanningDot {
+  color: #62d7ff;
+  text-shadow: 0 0 12px rgba(98, 215, 255, 0.42);
+}
+
 .clipSB_comfyBrainSection {
   display: grid;
   gap: 8px;
@@ -3122,32 +3212,26 @@ body.ps_clip_fullscreen .mainCol {
   background: color-mix(in srgb, var(--family-tester) 92%, rgba(255,255,255,0.32));
 }
 
-.clipSB_testerKvGrid {
-  display: grid;
-  gap: 10px;
+.clipSB_testerJsonToggleWrap {
+  margin-top: 12px;
 }
 
-.clipSB_testerKvItem {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
+.clipSB_testerJsonToggle {
+  width: 100%;
+  border: 0;
   border-radius: 12px;
-  background: rgba(255,255,255,0.03);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+  padding: 11px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 243, 216, 0.94);
+  background: linear-gradient(135deg, rgba(255, 191, 47, 0.16), rgba(255, 132, 0, 0.12));
+  box-shadow: inset 0 0 0 1px rgba(255, 210, 96, 0.22);
+  cursor: pointer;
 }
 
-.clipSB_testerKvItem span {
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: rgba(255, 222, 150, 0.72);
-}
-
-.clipSB_testerKvItem strong {
-  font-size: 13px;
-  line-height: 1.45;
-  color: rgba(255,255,255,0.9);
-  font-weight: 600;
+.clipSB_testerJsonToggle:hover {
+  background: linear-gradient(135deg, rgba(255, 191, 47, 0.24), rgba(255, 132, 0, 0.18));
 }
 
 .clipSB_testerRawJson {
@@ -3155,24 +3239,96 @@ body.ps_clip_fullscreen .mainCol {
   border-radius: 12px;
   background: rgba(255,255,255,0.03);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+  overflow: hidden;
 }
 
-.clipSB_testerRawJson summary {
-  cursor: pointer;
-  list-style: none;
-  padding: 12px;
+.clipSB_testerRawJsonHeader {
+  padding: 10px 12px 0;
   font-size: 12px;
   font-weight: 700;
   color: rgba(255, 232, 176, 0.88);
 }
 
-.clipSB_testerRawJson summary::-webkit-details-marker {
-  display: none;
+.clipSB_testerRawJson pre {
+  margin: 0;
+  padding: 12px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
-.clipSB_testerRawJson pre {
-  padding: 0 12px 12px;
+.clipSB_brainPackageView {
+  display: grid;
+  gap: 10px;
+}
+
+.clipSB_brainPackageGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.clipSB_brainPackageField {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+}
+
+.clipSB_brainPackageField span {
+  font-size: 11px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: rgba(198, 228, 255, 0.72);
+}
+
+.clipSB_brainPackageView--tester .clipSB_brainPackageField span {
+  color: rgba(255, 222, 150, 0.72);
+}
+
+.clipSB_brainPackageField strong,
+.clipSB_brainPackageField li {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255,255,255,0.9);
+  font-weight: 600;
+}
+
+.clipSB_brainPackageBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.clipSB_brainPackageBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
   font-size: 12px;
+  color: rgba(255,255,255,0.92);
+  background: rgba(77, 182, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(125, 198, 255, 0.18);
+}
+
+.clipSB_brainPackageView--tester .clipSB_brainPackageBadge {
+  background: rgba(255, 191, 47, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 210, 96, 0.2);
+}
+
+.clipSB_brainPackageList {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.clipSB_brainPackageFooter {
+  margin-top: 2px;
 }
 
 .clipSB_narrativeSubtitle {
@@ -3499,7 +3655,8 @@ body.ps_clip_fullscreen .mainCol {
     grid-template-columns: 1fr;
   }
 
-  .clipSB_narrativeGrid {
+  .clipSB_narrativeGrid,
+  .clipSB_brainPackageGrid {
     grid-template-columns: 1fr;
   }
 }

@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useMemo, useState } from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
+import BrainPackageView, { getBrainPackageEntities, getBrainPackageSceneLogic, isBrainPackageObject } from "./BrainPackageView";
 
 export const NARRATIVE_TESTER_HANDLE_TOP = 96;
 
@@ -57,14 +58,6 @@ export const NARRATIVE_TESTER_CONFIG = {
   },
 };
 
-function formatBrainValue(value) {
-  if (Array.isArray(value)) {
-    return value.length ? value.join(", ") : "—";
-  }
-  const normalized = String(value || "").trim();
-  return normalized || "—";
-}
-
 function TesterEmptyState({ config, isConnected }) {
   return (
     <div className={`clipSB_testerEmpty ${isConnected ? "isConnected" : ""}`.trim()}>
@@ -95,32 +88,50 @@ function TesterTextBody({ config, payload, isConnected }) {
 }
 
 function TesterBrainBody({ config, payload, isConnected }) {
-  const brain = payload && typeof payload === "object" ? payload : null;
+  const brain = isBrainPackageObject(payload) ? payload : null;
+  const [showRawJson, setShowRawJson] = useState(false);
+  const rawJson = useMemo(() => (brain ? JSON.stringify(brain, null, 2) : ""), [brain]);
+
   if (!brain) {
     return <TesterEmptyState config={config} isConnected={isConnected} />;
   }
+
+  const entities = getBrainPackageEntities(brain);
+  const sceneLogic = getBrainPackageSceneLogic(brain);
+  const usefulFieldCount = [
+    brain.contentTypeLabel,
+    brain.styleLabel,
+    brain.sourceLabel,
+    brain.sourcePreview,
+    entities.length,
+    sceneLogic.length,
+    brain.audioStrategy,
+    brain.directorNote,
+  ].filter(Boolean).length;
 
   return (
     <>
       <div className="clipSB_testerMetaRow">
         <span className="clipSB_testerStatusBadge isReady">{config.statusLabel}</span>
-        <span className="clipSB_testerMetric">{Object.keys(brain).length} полей</span>
+        <span className="clipSB_testerMetric">{usefulFieldCount} ключевых полей</span>
       </div>
       <div className="clipSB_testerPayload clipSB_testerPayload--brain">
-        <div className="clipSB_testerKvGrid">
-          <div className="clipSB_testerKvItem"><span>contentTypeLabel</span><strong>{formatBrainValue(brain.contentTypeLabel)}</strong></div>
-          <div className="clipSB_testerKvItem"><span>styleLabel</span><strong>{formatBrainValue(brain.styleLabel)}</strong></div>
-          <div className="clipSB_testerKvItem"><span>sourceLabel</span><strong>{formatBrainValue(brain.sourceLabel)}</strong></div>
-          <div className="clipSB_testerKvItem"><span>sourcePreview</span><strong>{formatBrainValue(brain.sourcePreview)}</strong></div>
-          <div className="clipSB_testerKvItem"><span>entities</span><strong>{formatBrainValue(brain.entities)}</strong></div>
-          <div className="clipSB_testerKvItem"><span>sceneLogic</span><strong>{formatBrainValue(brain.sceneLogic)}</strong></div>
-          <div className="clipSB_testerKvItem"><span>audioStrategy</span><strong>{formatBrainValue(brain.audioStrategy)}</strong></div>
-          <div className="clipSB_testerKvItem"><span>directorNote</span><strong>{formatBrainValue(brain.directorNote)}</strong></div>
+        <BrainPackageView brainPackage={brain} variant="tester" />
+        <div className="clipSB_testerJsonToggleWrap">
+          <button
+            type="button"
+            className="clipSB_testerJsonToggle"
+            onClick={() => setShowRawJson((current) => !current)}
+          >
+            {showRawJson ? "Скрыть JSON" : "Показать JSON"}
+          </button>
         </div>
-        <details className="clipSB_testerRawJson">
-          <summary>Raw JSON</summary>
-          <pre>{JSON.stringify(brain, null, 2)}</pre>
-        </details>
+        {showRawJson ? (
+          <div className="clipSB_testerRawJson" aria-label="Raw JSON brain package">
+            <div className="clipSB_testerRawJsonHeader">Raw JSON</div>
+            <pre>{rawJson}</pre>
+          </div>
+        ) : null}
       </div>
     </>
   );

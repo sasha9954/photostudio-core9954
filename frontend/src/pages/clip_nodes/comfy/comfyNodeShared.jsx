@@ -34,6 +34,7 @@ const PORT_COLORS = {
   scenario_out: "var(--family-narrative)",
   voice_script_out: "var(--family-audio)",
   brain_package_out: "var(--family-brain)",
+  brain_package: "var(--family-brain)",
   bg_music_prompt_out: "var(--family-music)",
   ref_character_1: "var(--family-ref-character)",
   ref_character_2: "var(--family-ref-character)",

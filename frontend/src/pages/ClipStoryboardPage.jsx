@@ -65,6 +65,7 @@ const PORT_COLORS = {
   scenario_out: "var(--family-narrative)",
   voice_script_out: "var(--family-audio)",
   brain_package_out: "var(--family-brain)",
+  brain_package: "var(--family-brain)",
   bg_music_prompt_out: "var(--family-music)",
   ref_character: "var(--family-ref-character)",
   ref_character_1: "var(--family-ref-character)",
@@ -285,7 +286,7 @@ function isBrainInput(handleId) {
 }
 
 function isComfyBrainInput(handleId) {
-  return ["audio", "text", ...Object.keys(COMFY_BRAIN_REF_HANDLE_CONFIG)].includes(handleId);
+  return ["brain_package", "audio", "text", ...Object.keys(COMFY_BRAIN_REF_HANDLE_CONFIG)].includes(handleId);
 }
 
 function isNarrativeInput(handleId) {
@@ -342,6 +343,13 @@ function extractNarrativeTesterPayload({ testerType = "", sourceNode = null, sou
   }
   const normalized = String(payload || "").trim();
   return normalized || null;
+}
+
+function extractNarrativeBrainPackageForComfyBrain({ sourceNode = null, sourceHandle = "" } = {}) {
+  if (!sourceNode || sourceNode.type !== "comfyNarrative" || String(sourceHandle || "") !== "brain_package_out") return null;
+  const outputs = sourceNode?.data?.outputs && typeof sourceNode.data.outputs === "object" ? sourceNode.data.outputs : {};
+  const brainPackage = outputs?.brainPackage;
+  return brainPackage && typeof brainPackage === "object" ? brainPackage : null;
 }
 
 function getAssetFileName(value = "") {
@@ -473,6 +481,7 @@ const EDGE_STYLE_BY_KIND = {
   scenario_out: { color: PORT_COLORS.scenario_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   voice_script_out: { color: PORT_COLORS.voice_script_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   brain_package_out: { color: PORT_COLORS.brain_package_out, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  brain_package: { color: PORT_COLORS.brain_package, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   bg_music_prompt_out: { color: PORT_COLORS.bg_music_prompt_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   ref_character: { color: PORT_COLORS.ref_character, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   ref_character_1: { color: PORT_COLORS.ref_character_1, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
@@ -9102,6 +9111,15 @@ onClipSec: (nodeId, value) => {
                 ? (refConnectionStates?.[role]?.error || "ошибка анализа")
                 : (refConnectionStates?.[role]?.warningLabel || "добавьте реф"),
             }));
+          const narrativeBrainPackageEdge = [...effectiveEdges]
+            .reverse()
+            .find((edge) => edge?.target === n.id && String(edge?.targetHandle || "") === "brain_package") || null;
+          const narrativeBrainSourceNode = narrativeBrainPackageEdge ? (effectiveNodes.find((nodeItem) => nodeItem.id === narrativeBrainPackageEdge.source) || null) : null;
+          const narrativeBrainPackage = extractNarrativeBrainPackageForComfyBrain({
+            sourceNode: narrativeBrainSourceNode,
+            sourceHandle: String(narrativeBrainPackageEdge?.sourceHandle || ""),
+          });
+
           const hiddenReferenceProfiles = Object.fromEntries(
             roleOrder
               .filter((role) => refConnectionStates?.[role]?.status === "ready" && refConnectionStates?.[role]?.hiddenProfile)
@@ -9158,6 +9176,9 @@ onClipSec: (nodeId, value) => {
               connectedRefsSummary,
               connectedRefsWarnings,
               hiddenReferenceProfiles,
+              narrativeBrainPackageConnected: !!narrativeBrainPackageEdge && narrativeBrainSourceNode?.type === "comfyNarrative" && String(narrativeBrainPackageEdge?.sourceHandle || "") === "brain_package_out",
+              narrativeBrainPackageSourceNodeId: narrativeBrainSourceNode?.id || "",
+              narrativeBrainPackage,
               plannerMeta: {
                 ...(base.data?.plannerMeta || {}),
                 format: resolvePreferredSceneFormat(base.data?.plannerMeta?.format, base.data?.format),
@@ -10846,6 +10867,7 @@ const hydrate = useCallback((source = "unknown") => {
           const sourceHandle = params.sourceHandle || '';
           const refCfg = COMFY_BRAIN_REF_HANDLE_CONFIG[h];
           const ok =
+            (h === 'brain_package' && src.type === 'comfyNarrative' && sourceHandle === 'brain_package_out') ||
             (h === 'audio' && src.type === 'audioNode' && sourceHandle === 'audio') ||
             (h === 'text' && src.type === 'textNode' && sourceHandle === 'text') ||
             (!!refCfg && src.type === refCfg.sourceType && sourceHandle === refCfg.sourceHandle);
@@ -10853,7 +10875,7 @@ const hydrate = useCallback((source = "unknown") => {
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === h));
           const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
           nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
+          refreshNodeBindingsForEdges(nextEdges, h === 'brain_package' ? "edges:connect:narrative-brain-package" : "edges:connect");
           return nextEdges;
         }
 
