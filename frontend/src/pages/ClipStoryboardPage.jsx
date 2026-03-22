@@ -214,6 +214,14 @@ function isNarrativeInput(handleId) {
   return ["text_in", "audio_in", "link_in", "video_ref_in"].includes(String(handleId || ""));
 }
 
+function getAssetFileName(value = "") {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  const withoutQuery = normalized.split(/[?#]/)[0] || "";
+  const parts = withoutQuery.split("/").filter(Boolean);
+  return parts.length ? decodeURIComponent(parts[parts.length - 1]) : "";
+}
+
 
 function removeNarrativeIncomingSourceEdges(edges = [], narrativeNodeId = "") {
   if (!narrativeNodeId) return Array.isArray(edges) ? edges : [];
@@ -2071,29 +2079,50 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
   }
 
   if (targetHandle === "link_in" && sourceNode.type === "linkNode" && sourceHandle === "link") {
-    const payload = buildLinkNodePayload(sourceNode?.data?.urlValue || sourceNode?.data?.outputPayload?.value || "");
+    const savedPayload = sourceNode?.data?.outputPayload && typeof sourceNode.data.outputPayload === "object"
+      ? sourceNode.data.outputPayload
+      : null;
+    const payload = savedPayload || buildLinkNodePayload(sourceNode?.data?.urlValue || sourceNode?.data?.draftUrl || "");
     if (!payload) return null;
     return {
-      value: payload.value,
-      preview: payload.preview || payload.value,
+      value: payload.value || payload.href || payload.preview || "",
+      preview: payload.preview || payload.domain || payload.value || "",
       sourceLabel: payload.sourceLabel || "Внешняя ссылка",
+      url: payload.value || payload.href || "",
+      assetUrl: payload.href || payload.value || "",
+      fileName: payload.domain || getAssetFileName(payload.value || payload.href || ""),
       type: payload.type,
       domain: payload.domain || "",
+      meta: {
+        href: payload.href || payload.value || "",
+        domain: payload.domain || "",
+      },
     };
   }
 
   if (targetHandle === "video_ref_in" && sourceNode.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE) {
     const scenes = Array.isArray(sourceNode?.data?.mockScenes) ? sourceNode.data.mockScenes : [];
     const videoUrls = scenes
-      .map((scene) => String(scene?.videoUrl || "").trim())
+      .map((scene) => String(scene?.videoUrl || scene?.assetUrl || "").trim())
       .filter(Boolean)
       .slice(0, 5);
-    const fallbackPreview = `${scenes.length || 0} сцен в COMFY STORYBOARD`;
-    if (!videoUrls.length && !scenes.length) return null;
+    const firstVideoUrl = videoUrls[0] || "";
+    const readyVideoCount = videoUrls.length;
+    const fallbackPreview = readyVideoCount
+      ? `${readyVideoCount} видео из COMFY STORYBOARD`
+      : `${scenes.length || 0} сцен в COMFY STORYBOARD`;
+    if (!firstVideoUrl && !scenes.length) return null;
     return {
-      value: videoUrls.join("\n") || fallbackPreview,
-      preview: videoUrls[0] || fallbackPreview,
+      value: firstVideoUrl || fallbackPreview,
+      preview: firstVideoUrl || fallbackPreview,
       sourceLabel: "Внешний видео-референс",
+      url: firstVideoUrl,
+      assetUrl: firstVideoUrl,
+      fileName: getAssetFileName(firstVideoUrl),
+      meta: {
+        sceneCount: scenes.length || 0,
+        readyVideoCount,
+      },
     };
   }
 

@@ -51,6 +51,23 @@ const lookupLabel = (options, value, fallback) => options.find((option) => optio
 
 const normalizeText = (value) => String(value || "").trim();
 
+function getConnectedInputRawSignal(input) {
+  if (!input || typeof input !== "object") return "";
+  return input.value
+    || input.preview
+    || input.url
+    || input.assetUrl
+    || input.fileName
+    || input.sourceLabel
+    || input?.meta?.label
+    || input?.meta?.preview
+    || "";
+}
+
+function getConnectedInputSignal(input) {
+  return normalizeText(getConnectedInputRawSignal(input));
+}
+
 const splitEntities = (text) => normalizeText(text)
   .split(/[,.!?:;\n]+/)
   .map((item) => item.trim())
@@ -91,7 +108,7 @@ export function getDefaultNarrativeNodeData() {
 
 export function resolveNarrativeSource(state = {}) {
   const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
-  const connectedOption = NARRATIVE_INPUT_HANDLES.find((item) => normalizeText(connectedInputs?.[item.id]?.value));
+  const connectedOption = NARRATIVE_INPUT_HANDLES.find((item) => getConnectedInputSignal(connectedInputs?.[item.id]));
 
   if (!connectedOption) {
     return {
@@ -105,16 +122,22 @@ export function resolveNarrativeSource(state = {}) {
   }
 
   const connectedSource = connectedInputs[connectedOption.id] || null;
-  const connectedValue = normalizeText(connectedSource?.value);
+  const connectedValue = getConnectedInputSignal(connectedSource);
   const modeLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, connectedOption.mode, "Текст");
+  const connectedPreview = normalizeText(connectedSource?.preview)
+    || normalizeText(connectedSource?.fileName)
+    || connectedValue;
+  const connectedSourceLabel = normalizeText(connectedSource?.sourceLabel)
+    || normalizeText(connectedSource?.fileName)
+    || `Подключённый источник (${modeLabel.toLowerCase()})`;
 
   return {
     mode: connectedOption.mode,
     origin: connectedValue ? "connected" : "disconnected",
     value: connectedValue,
     label: modeLabel,
-    sourceLabel: normalizeText(connectedSource?.sourceLabel) || `Подключённый источник (${modeLabel.toLowerCase()})`,
-    preview: normalizeText(connectedSource?.preview) || connectedValue,
+    sourceLabel: connectedSourceLabel,
+    preview: connectedPreview,
   };
 }
 
