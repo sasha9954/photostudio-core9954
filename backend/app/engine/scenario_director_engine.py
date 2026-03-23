@@ -325,6 +325,48 @@ def _build_brain_package(storyboard_out: ScenarioDirectorStoryboardOut, payload:
     }
 
 
+def _apply_scene_count_limit(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    if len(storyboard_out.scenes) > 20:
+        storyboard_out.scenes = storyboard_out.scenes[:20]
+    return storyboard_out
+
+
+def _normalize_scene_timeline(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    previous_end = 0.0
+    for scene in storyboard_out.scenes:
+        original_end = _safe_float(scene.time_end, scene.time_start)
+        original_duration = _safe_float(scene.duration, max(0.0, original_end - scene.time_start))
+        scene.time_start = max(_safe_float(scene.time_start, previous_end), previous_end)
+        if original_end < scene.time_start:
+            original_end = round(scene.time_start + max(0.0, original_duration), 3)
+        scene.time_end = max(original_end, scene.time_start)
+        scene.duration = round(max(0.0, scene.time_end - scene.time_start), 3)
+        previous_end = scene.time_end
+    return storyboard_out
+
+
+def _limit_lip_sync_usage(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    lip_sync_seen = 0
+    for scene in storyboard_out.scenes:
+        if scene.ltx_mode != "lip_sync":
+            continue
+        lip_sync_seen += 1
+        if lip_sync_seen <= 3:
+            continue
+        scene.ltx_mode = "i2v_as"
+        original_reason = str(scene.ltx_reason or "").strip()
+        replacement_reason = "Normalized from lip_sync to i2v_as because Scenario Director allows at most 3 lip_sync scenes per output."
+        scene.ltx_reason = f"{original_reason}; {replacement_reason}" if original_reason else replacement_reason
+    return storyboard_out
+
+
+def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    storyboard_out = _apply_scene_count_limit(storyboard_out)
+    storyboard_out = _normalize_scene_timeline(storyboard_out)
+    storyboard_out = _limit_lip_sync_usage(storyboard_out)
+    return storyboard_out
+
+
 def _build_request_text(payload: dict[str, Any]) -> str:
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     context_refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
@@ -453,6 +495,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             details={"validationErrors": exc.errors(), "rawPreview": raw_text[:1000]},
         ) from exc
 
+    storyboard_out = _harden_storyboard_out(storyboard_out)
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
     return {
@@ -467,6 +510,6 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "plannerSource": "gemini",
             "modelUsed": model_used,
             "attemptedModels": attempted_models,
-            "rawGeminiText": raw_text,
+            "rawGeminiTextPreview": raw_text[:2000],
         },
     }

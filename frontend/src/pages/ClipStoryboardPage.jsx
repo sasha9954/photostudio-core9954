@@ -153,6 +153,17 @@ const CLIP_TRACE_COMFY_REFS = false;
 const CLIP_TRACE_BRAIN_REFRESH = false;
 const CLIP_TRACE_GRAPH_HYDRATE = false;
 const CLIP_TRACE_ASSEMBLY_SOURCE = false;
+const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
+
+function isAbortLikeError(error) {
+  return error?.name === "AbortError" || String(error?.message || "").trim() === "AbortError";
+}
+
+function buildScenarioDirectorTimeoutError() {
+  const error = new Error(`Scenario Director request timed out after ${Math.round(SCENARIO_DIRECTOR_TIMEOUT_MS / 1000)} seconds.`);
+  error.name = "TimeoutError";
+  return error;
+}
 
 function portColor(key) {
   return PORT_COLORS[key] || "#8c8c8c";
@@ -8060,8 +8071,14 @@ Aspect ratio: ${imageFormat}`,
 
   const lastAssemblyPayloadSignatureRef = useRef("");
   const assemblyAbortControllerRef = useRef(null);
+  const narrativeAbortControllersRef = useRef(new Map());
   const assemblyPollTimerRef = useRef(null);
   const assemblyPollingActiveRef = useRef(false);
+
+  useEffect(() => () => {
+    narrativeAbortControllersRef.current.forEach((controller) => controller?.abort());
+    narrativeAbortControllersRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!assemblyPayloadSignature) return;
@@ -9468,6 +9485,15 @@ onClipSec: (nodeId, value) => {
               onGenerateScenario: async (nodeId) => {
                 const currentEdges = edgesRef.current || [];
                 const currentNodes = nodesRef.current || [];
+                const activeNode = currentNodes.find((nodeItem) => nodeItem.id === nodeId);
+                if (activeNode?.data?.isGenerating === true) {
+                  return;
+                }
+
+                narrativeAbortControllersRef.current.get(nodeId)?.abort();
+                const controller = new AbortController();
+                narrativeAbortControllersRef.current.set(nodeId, controller);
+
                 const { reboundNodes, requestPayload } = buildNarrativeGenerationState({
                   narrativeNodeId: nodeId,
                   nodesNow: currentNodes,
@@ -9478,14 +9504,48 @@ onClipSec: (nodeId, value) => {
                 setNodes(reboundNodes);
 
                 if (!requestPayload) {
+                  narrativeAbortControllersRef.current.delete(nodeId);
                   notify({ type: "warning", title: "Source required", message: "Подключите один active source-of-truth перед генерацией сценария." });
                   return;
                 }
 
                 try {
-                  const response = await fetchJson('/api/clip/comfy/scenario-director/generate', { method: 'POST', body: requestPayload });
-                  const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
-                  const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, activeNode?.data || {});
+                  let response = null;
+                  for (let attempt = 0; attempt < 2; attempt += 1) {
+                    try {
+                      response = await new Promise((resolve, reject) => {
+                        const timeoutId = window.setTimeout(() => {
+                          controller.abort();
+                          reject(buildScenarioDirectorTimeoutError());
+                        }, SCENARIO_DIRECTOR_TIMEOUT_MS);
+                        controller.signal.addEventListener("abort", () => {
+                          window.clearTimeout(timeoutId);
+                        }, { once: true });
+
+                        Promise.resolve(fetchJson('/api/clip/comfy/scenario-director/generate', {
+                          method: 'POST',
+                          body: requestPayload,
+                          signal: controller.signal,
+                        }))
+                          .then((result) => {
+                            window.clearTimeout(timeoutId);
+                            resolve(result);
+                          })
+                          .catch((requestError) => {
+                            window.clearTimeout(timeoutId);
+                            reject(requestError);
+                          });
+                      });
+                      break;
+                    } catch (requestError) {
+                      if (isAbortLikeError(requestError) || requestError?.name === "TimeoutError" || attempt === 1) {
+                        throw requestError;
+                      }
+                    }
+                  }
+
+                  const refreshedNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
+                  const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, refreshedNode?.data || {});
                   if (!normalizedOutputs?.storyboardOut || !normalizedOutputs?.directorOutput) {
                     throw new Error('Scenario Director backend returned an incomplete contract.');
                   }
@@ -9509,6 +9569,7 @@ onClipSec: (nodeId, value) => {
                     return rebound;
                   });
                 } catch (error) {
+                  const aborted = isAbortLikeError(error);
                   const message = String(error?.message || 'Scenario Director request failed').trim();
                   setNodes((prev) => {
                     const nextNodes = prev.map((x) => {
@@ -9517,7 +9578,7 @@ onClipSec: (nodeId, value) => {
                         ...x,
                         data: {
                           ...x.data,
-                          error: message,
+                          error: aborted ? null : message,
                           isGenerating: false,
                         },
                       };
@@ -9526,7 +9587,13 @@ onClipSec: (nodeId, value) => {
                     nodesRef.current = rebound;
                     return rebound;
                   });
-                  notify({ type: 'error', title: 'Scenario Director error', message });
+                  if (!aborted) {
+                    notify({ type: 'error', title: 'Scenario Director error', message });
+                  }
+                } finally {
+                  if (narrativeAbortControllersRef.current.get(nodeId) === controller) {
+                    narrativeAbortControllersRef.current.delete(nodeId);
+                  }
                 }
               },
               onConfirmScenario: async (nodeId) => {
