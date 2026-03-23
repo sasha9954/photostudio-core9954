@@ -171,7 +171,9 @@ class GeminiPlannerInputPackage(BaseModel):
     global_music_track_url: str | None = None
     refs_by_role: dict[str, list[dict[str, str]]] = Field(default_factory=dict)
     role_type_by_role: dict[str, str] = Field(default_factory=dict)
+    role_selection_source_by_role: dict[str, str] = Field(default_factory=dict)
     role_mode: str = "auto"
+    role_mode_reason: str | None = None
     style_preset: str | None = None
     genre: str | None = None
     story_control_mode: str | None = None
@@ -306,7 +308,9 @@ def build_gemini_planner_input(
         global_music_track_url=project_input.global_music_track_url,
         refs_by_role=_normalize_refs_by_role(normalized.get("refsByRole") or project_input.refs),
         role_type_by_role=normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+        role_selection_source_by_role=normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {},
         role_mode=_clean_str(normalized.get("roleMode") or "auto") or "auto",
+        role_mode_reason=_clean_str(normalized.get("roleModeReason")) or None,
         style_preset=_clean_str(normalized.get("stylePreset")) or None,
         genre=_clean_str(normalized.get("genre")) or None,
         story_control_mode=_clean_str(normalized.get("storyControlMode")) or None,
@@ -385,9 +389,14 @@ def build_gemini_planner_system_rules(planner_input: GeminiPlannerInputPackage) 
         "Populate every timing field consistently and keep shot timing inside its scene timing.\n"
         "CHARACTER ROLE LOGIC:\n"
         "- planner_input.role_mode is either 'auto' or 'locked'. planner_input.role_type_by_role contains the active role mapping.\n"
+        "- planner_input.role_selection_source_by_role tells you whether each role was explicitly chosen by the user, inferred, or defaulted.\n"
         "- If role_mode='locked': hero is the main narrative subject, antagonist is the source of conflict/tension/opposition, and support assists/reacts/accompanies.\n"
         "- If role_mode='locked': build scenes around the hero perspective, introduce interaction between hero and antagonist, and maintain role consistency across scenes.\n"
-        "- If role_mode='locked' and an antagonist exists, at least one scene must show conflict, tension, or opposition, and the antagonist must influence story progression.\n"
+        "- If role_mode='locked' and a hero exists, audience perspective should primarily follow hero stakes, and you must not replace hero with antagonist as the main narrative subject.\n"
+        "- If role_mode='locked' and a hero exists, hero must appear in the majority of scenes unless the user story explicitly requires temporary hero absence.\n"
+        "- If role_mode='locked' and an antagonist exists, you must not silently drop antagonist from the story.\n"
+        "- If role_mode='locked' and an antagonist exists, at least one scene must contain direct or indirect opposition, pressure, control, threat, pursuit, confrontation, or narrative interference caused by the antagonist.\n"
+        "- If role_mode='locked' and support exists, support should appear in context, reaction, or interaction scenes when relevant.\n"
         "- If role_mode='auto': you may assign roles dynamically, but do not invent extreme conflict without justification.\n"
         "ROLE CONSISTENCY RULE:\n"
         "- Never swap roles across scenes.\n"

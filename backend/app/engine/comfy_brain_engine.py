@@ -150,6 +150,7 @@ def _clean_refs_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, list[d
                 role_type = str(item.get("roleType") or "").strip().lower()
                 if role_type:
                     clean_item["roleType"] = role_type
+                    clean_item["roleTypeSource"] = "user_explicit"
                 clean.append(clean_item)
         out[role] = clean
     return out
@@ -369,13 +370,44 @@ def _build_role_type_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, s
     return role_types
 
 
-def _derive_role_mode(role_type_by_role: dict[str, str] | None) -> str:
+def _build_role_selection_source_by_role(
+    refs_by_role: dict[str, Any] | None,
+    role_type_by_role: dict[str, str] | None,
+) -> dict[str, str]:
+    refs = refs_by_role if isinstance(refs_by_role, dict) else {}
     role_types = role_type_by_role if isinstance(role_type_by_role, dict) else {}
+    selection_source_by_role: dict[str, str] = {}
     for role, default_role_type in COMFY_CHARACTER_ROLE_DEFAULTS.items():
+        items = refs.get(role)
+        if not isinstance(items, list) or not items:
+            continue
+        if any(str((item or {}).get("roleTypeSource") or "").strip().lower() == "user_explicit" for item in items if isinstance(item, dict)):
+            selection_source_by_role[role] = "user_explicit"
+            continue
         resolved_role_type = str(role_types.get(role) or "").strip().lower()
         if resolved_role_type and resolved_role_type != default_role_type:
-            return "locked"
-    return "auto"
+            selection_source_by_role[role] = "inferred"
+            continue
+        selection_source_by_role[role] = "default_fallback"
+    return selection_source_by_role
+
+
+def _derive_role_mode(
+    role_type_by_role: dict[str, str] | None,
+    role_selection_source_by_role: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    role_types = role_type_by_role if isinstance(role_type_by_role, dict) else {}
+    selection_sources = role_selection_source_by_role if isinstance(role_selection_source_by_role, dict) else {}
+    active_roles = {
+        role
+        for role in COMFY_CHARACTER_ROLE_DEFAULTS
+        if str(role_types.get(role) or "").strip() or str(selection_sources.get(role) or "").strip()
+    }
+    if any(str(selection_sources.get(role) or "").strip().lower() == "user_explicit" for role in active_roles):
+        return "locked", "user_explicit_roles_present"
+    if any(str(selection_sources.get(role) or "").strip().lower() == "inferred" for role in active_roles):
+        return "auto", "inferred_roles_auto_mode"
+    return "auto", "defaults_only_auto_mode"
 
 
 def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -396,7 +428,8 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     audio_story_mode, audio_story_mode_guard_reason = _resolve_clip_gemini_audio_story_mode(data, requested_audio_story_mode)
     refs_by_role = _clean_refs_by_role(data.get("refsByRole"))
     role_type_by_role = _build_role_type_by_role(refs_by_role)
-    role_mode = _derive_role_mode(role_type_by_role)
+    role_selection_source_by_role = _build_role_selection_source_by_role(refs_by_role, role_type_by_role)
+    role_mode, role_mode_reason = _derive_role_mode(role_type_by_role, role_selection_source_by_role)
 
     return {
         "mode": mode,
@@ -424,7 +457,9 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "musicTrackUrl": str(data.get("musicTrackUrl") or data.get("globalMusicTrackUrl") or data.get("sunoUrl") or "").strip(),
         "refsByRole": refs_by_role,
         "roleTypeByRole": role_type_by_role,
+        "roleSelectionSourceByRole": role_selection_source_by_role,
         "roleMode": role_mode,
+        "roleModeReason": role_mode_reason,
         "storyControlMode": str(data.get("storyControlMode") or "").strip(),
         "storyMissionSummary": str(data.get("storyMissionSummary") or "").strip(),
         "timelineSource": str(data.get("timelineSource") or "").strip(),
@@ -1064,7 +1099,9 @@ def build_gemini_planner_input(
             "textRole": "fallback_only" if normalized.get("audioStoryMode") == "speech_narrative" and story.get("storySource") == "audio" else ("primary" if story.get("storySource") == "text" else "support"),
         },
         "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+        "roleSelectionSourceByRole": normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {},
         "roleMode": str(normalized.get("roleMode") or "auto").strip() or "auto",
+        "roleModeReason": str(normalized.get("roleModeReason") or "").strip(),
         "hardRules": hard_rules,
         "compactWorldLock": _compact_world_lock(world_lock or {}),
         "compactEntityLocksSummary": _compact_entity_locks_summary(entity_locks or {}),
@@ -1721,9 +1758,14 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
     role_logic_rules = (
         "CHARACTER ROLE LOGIC:\n"
         f"- roleMode={role_mode}. roleTypeByRole is provided in INPUT.roleTypeByRole.\n"
+        "- roleSelectionSourceByRole is provided in INPUT.roleSelectionSourceByRole so you can distinguish explicit user role choices from fallback/default assignments.\n"
         "- If roleMode='locked': hero is the main narrative subject, antagonist is the source of conflict, tension, or opposition, and support assists, reacts, or accompanies.\n"
         "- If roleMode='locked': build scenes around hero perspective, introduce interaction between hero and antagonist, and maintain role consistency across scenes.\n"
-        "- If roleMode='locked' and an antagonist exists, at least one scene must show conflict, tension, or opposition, and the antagonist must influence story progression.\n"
+        "- If roleMode='locked' and a hero exists, the audience perspective should primarily follow hero stakes, and the planner must not replace hero with antagonist as the main narrative subject.\n"
+        "- If roleMode='locked' and a hero exists, hero must appear in the majority of scenes unless the user story explicitly requires a temporary hero absence.\n"
+        "- If roleMode='locked' and an antagonist exists, the planner must not silently drop antagonist from the whole story.\n"
+        "- If roleMode='locked' and an antagonist exists, at least one scene must show direct or indirect opposition, pressure, control, threat, pursuit, confrontation, or narrative interference caused by the antagonist.\n"
+        "- If roleMode='locked' and support exists, support should appear in context, reaction, or interaction scenes when relevant.\n"
         "- If roleMode='auto': you may assign roles dynamically, but do not invent extreme conflict without justification.\n"
         "ROLE CONSISTENCY RULE:\n"
         "- Planner must not swap roles.\n"
@@ -1777,7 +1819,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "Do not invent dominant unexplained foreground props. Do not introduce oversized machines, devices, or artifacts unless the narration meaning or explicit refs require them. If no prop is required, keep the frame clean and semantically grounded.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
-        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected, plus audioStoryMode, roleMode, roleTypeByRole, roleUsageByScene, textSource, transcriptAvailable, spokenMeaningPrimary, charactersAllowed, sceneSemanticSource per scene, peopleAutoAddedCount, oversizedSpeechScenesDetected, oversizedSpeechScenesSplitCount, speechSplitReasons, promptLanguageStatus, ruPromptMissing, enPromptPresent, and objectHallucinationRisk when available.\n"
+        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected, plus audioStoryMode, roleMode, roleModeReason, roleTypeByRole, roleSelectionSourceByRole, roleUsageByScene, roleValidationWarnings, roleValidationStatus, textSource, transcriptAvailable, spokenMeaningPrimary, charactersAllowed, sceneSemanticSource per scene, peopleAutoAddedCount, oversizedSpeechScenesDetected, oversizedSpeechScenesSplitCount, speechSplitReasons, promptLanguageStatus, ruPromptMissing, enPromptPresent, and objectHallucinationRisk when available.\n"
         f"INPUT={json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -1982,6 +2024,102 @@ def _text_suggests_transformation(text: str) -> bool:
         "swallowed by",
     ]
     return any(token in (text or "") for token in tokens)
+
+
+def _scene_supports_tension(scene: dict[str, Any]) -> bool:
+    tension_level, _ = _map_tension_to_number(scene.get("tensionLevel"))
+    if tension_level is not None and tension_level >= 6:
+        return True
+    scene_blob = _scene_text_blob(scene)
+    tension_tokens = [
+        "conflict",
+        "opposition",
+        "pressure",
+        "threat",
+        "threaten",
+        "pursuit",
+        "pursue",
+        "confront",
+        "confrontation",
+        "interference",
+        "control",
+        "chase",
+        "danger",
+        "hunt",
+    ]
+    return any(token in scene_blob for token in tension_tokens)
+
+
+def _estimate_scene_role_function(
+    scene: dict[str, Any],
+    *,
+    primary_role_type: str,
+    has_hero: bool,
+    has_antagonist: bool,
+    has_support: bool,
+) -> str:
+    if has_antagonist and _scene_supports_tension(scene):
+        return "tension"
+    if has_hero and has_support:
+        return "interaction"
+    if primary_role_type == "hero" or has_hero:
+        return "hero_focus"
+    if has_support:
+        return "support_context"
+    return "unknown"
+
+
+def _build_role_distribution_warnings(
+    role_usage_by_scene: list[dict[str, Any]],
+    *,
+    role_mode: str,
+    role_type_by_role: dict[str, str] | None = None,
+) -> list[str]:
+    if str(role_mode or "").strip().lower() != "locked" or not role_usage_by_scene:
+        return []
+    role_types = role_type_by_role if isinstance(role_type_by_role, dict) else {}
+    warnings: list[str] = []
+    total_scenes = len(role_usage_by_scene)
+    hero_roles = [role for role, role_type in role_types.items() if str(role_type or "").strip().lower() == "hero"]
+    antagonist_roles = [role for role, role_type in role_types.items() if str(role_type or "").strip().lower() == "antagonist"]
+    support_roles = [role for role, role_type in role_types.items() if str(role_type or "").strip().lower() == "support"]
+
+    hero_scene_count = sum(1 for item in role_usage_by_scene if bool(item.get("hasHero")))
+    if hero_roles and hero_scene_count <= total_scenes / 2:
+        warnings.append("locked_hero_not_in_majority")
+
+    antagonist_tension_scene_count = sum(
+        1
+        for item in role_usage_by_scene
+        if bool(item.get("hasAntagonist")) and str(item.get("sceneRoleFunctionEstimate") or "") == "tension"
+    )
+    if antagonist_roles and antagonist_tension_scene_count == 0:
+        warnings.append("locked_antagonist_missing_from_tension_scenes")
+
+    support_scene_count = sum(1 for item in role_usage_by_scene if bool(item.get("hasSupport")))
+    if support_roles and support_scene_count == 0:
+        warnings.append("locked_support_unused")
+
+    return list(dict.fromkeys(warnings))
+
+
+def _validate_role_distribution(
+    scenes: list[dict[str, Any]],
+    *,
+    role_mode: str,
+    role_type_by_role: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    role_usage_by_scene = _build_role_usage_by_scene(scenes, role_type_by_role)
+    warnings = _build_role_distribution_warnings(
+        role_usage_by_scene,
+        role_mode=role_mode,
+        role_type_by_role=role_type_by_role,
+    )
+    return {
+        "roleUsageByScene": role_usage_by_scene,
+        "roleValidationWarnings": warnings,
+        "roleValidationStatus": "warning" if warnings else "ok",
+    }
 
 
 def validate_gemini_planner_response(parsed: dict[str, Any], request_input: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -2727,7 +2865,9 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "stylePreset": normalized.get("stylePreset"),
                 "audioStoryMode": normalized.get("audioStoryMode"),
                 "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+                "roleSelectionSourceByRole": normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {},
                 "roleMode": normalized.get("roleMode") or "auto",
+                "roleModeReason": normalized.get("roleModeReason") or "",
                 "audioStoryModeRequested": normalized.get("audioStoryModeRequested"),
                 "audioStoryModeGuardReason": normalized.get("audioStoryModeGuardReason"),
                 "storyControlMode": normalized.get("storyControlMode"),
@@ -2743,6 +2883,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "worldLock": world_lock,
                 "entityLocks": entity_locks,
                 "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
+                "roleValidationWarnings": [],
+                "roleValidationStatus": "ok",
             },
             "globalContinuity": world_lock,
             "scenes": [],
@@ -2779,7 +2921,11 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "worldLock": world_lock,
                 "entityLocks": entity_locks,
                 "roleMode": normalized.get("roleMode") or "auto",
+                "roleModeReason": normalized.get("roleModeReason") or "",
                 "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+                "roleSelectionSourceByRole": normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {},
+                "roleValidationWarnings": [],
+                "roleValidationStatus": "ok",
                 "httpStatus": http_status,
                 "sanitizedError": sanitized_error,
                 "failureSummary": sanitized_error,
@@ -2876,7 +3022,14 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     canonical_dump = contract_result.canonical_output.model_dump(mode="json")
     scenes = contract_result.compatibility_scenes
     role_type_by_role = normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {}
-    role_usage_by_scene = _build_role_usage_by_scene(scenes, role_type_by_role)
+    role_validation = _validate_role_distribution(
+        scenes,
+        role_mode=normalized.get("roleMode") or "auto",
+        role_type_by_role=role_type_by_role,
+    )
+    role_usage_by_scene = role_validation.get("roleUsageByScene") if isinstance(role_validation.get("roleUsageByScene"), list) else []
+    role_validation_warnings = role_validation.get("roleValidationWarnings") if isinstance(role_validation.get("roleValidationWarnings"), list) else []
+    role_validation_status = str(role_validation.get("roleValidationStatus") or "ok")
     timing_debug = {
         "sceneCount": len(scenes),
         "sceneCountAfterSpeechSplit": len(scenes),
@@ -2925,7 +3078,9 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "preview": preview,
         "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
         "roleTypeByRole": role_type_by_role,
+        "roleSelectionSourceByRole": normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {},
         "roleMode": normalized.get("roleMode") or "auto",
+        "roleModeReason": normalized.get("roleModeReason") or "",
         "systemPromptVersion": "gemini_audio_first_planner_v1",
         "plannerContractName": planner_input.planner_contract_name,
         "contractVersion": planner_input.contract_version,
@@ -2933,6 +3088,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "plannerSourceContract": planner_input.planner_source,
         "validationWarnings": validation_report.warnings,
         "validationErrors": validation_report.errors,
+        "roleValidationWarnings": role_validation_warnings,
+        "roleValidationStatus": role_validation_status,
         "summary": {
             "sceneCount": len(scenes),
             "cameraContinuityScore": director_debug.get("cameraContinuityScore"),
@@ -2945,7 +3102,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "planMeta": plan_meta,
         "globalContinuity": world_lock,
         "scenes": scenes,
-        "warnings": validation_report.warnings,
+        "warnings": list(dict.fromkeys([*validation_report.warnings, *role_validation_warnings])),
         "errors": validation_report.errors,
         "canonicalPlanning": canonical_dump,
         "debug": {
@@ -3012,8 +3169,12 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "segmentation": segmentation_debug,
             **director_debug,
             "roleMode": normalized.get("roleMode") or "auto",
+            "roleModeReason": normalized.get("roleModeReason") or "",
             "roleTypeByRole": role_type_by_role,
+            "roleSelectionSourceByRole": normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {},
             "roleUsageByScene": role_usage_by_scene,
+            "roleValidationWarnings": role_validation_warnings,
+            "roleValidationStatus": role_validation_status,
             "referenceProfilesSummary": summarize_profiles(reference_profiles),
             "activeRolesByScene": {str(scene.get("sceneId") or ""): list(scene.get("activeRefs") or []) for scene in scenes},
             **media_debug,
@@ -3321,18 +3482,31 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         "timelineDurationSec": timing_debug.get("timelineDurationSec"),
         "sceneDurationTotalSec": timing_debug.get("sceneDurationTotalSec"),
         "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+        "roleSelectionSourceByRole": normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {},
         "roleMode": normalized.get("roleMode") or "auto",
+        "roleModeReason": normalized.get("roleModeReason") or "",
     })
 
     scene_refs_debug = _build_scene_refs_debug(scenes, normalized.get("refsByRole") or {})
-    role_usage_by_scene = _build_role_usage_by_scene(scenes, normalized.get("roleTypeByRole"))
+    role_validation = _validate_role_distribution(
+        scenes,
+        role_mode=normalized.get("roleMode") or "auto",
+        role_type_by_role=normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+    )
+    role_usage_by_scene = role_validation.get("roleUsageByScene") if isinstance(role_validation.get("roleUsageByScene"), list) else []
+    role_validation_warnings = role_validation.get("roleValidationWarnings") if isinstance(role_validation.get("roleValidationWarnings"), list) else []
+    role_validation_status = str(role_validation.get("roleValidationStatus") or "ok")
 
     result = {
         "ok": len(all_errors) == 0,
         "planMeta": plan_meta,
         "globalContinuity": parsed.get("globalContinuity") if isinstance(parsed.get("globalContinuity"), (dict, str)) else {},
         "scenes": scenes,
-        "warnings": (parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []) + warnings,
+        "warnings": list(dict.fromkeys([
+            *((parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else [])),
+            *warnings,
+            *role_validation_warnings,
+        ])),
         "errors": all_errors,
         "debug": {
             **(parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {}),
@@ -3368,8 +3542,12 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "referenceProfilesSummary": summarize_profiles(reference_profiles),
             "rolesGloballyAvailable": [role for role in COMFY_REF_ROLES if len((normalized.get("refsByRole") or {}).get(role) or []) > 0],
             "roleMode": normalized.get("roleMode") or "auto",
+            "roleModeReason": normalized.get("roleModeReason") or "",
             "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+            "roleSelectionSourceByRole": normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {},
             "roleUsageByScene": role_usage_by_scene,
+            "roleValidationWarnings": role_validation_warnings,
+            "roleValidationStatus": role_validation_status,
             "sceneRoleSelection": scene_refs_debug,
             "activeRolesByScene": {item.get("sceneId"): item.get("activeRoles") for item in scene_refs_debug},
         },
@@ -3448,20 +3626,42 @@ def _build_role_usage_by_scene(
         ]
         active_roles = [
             str(role or "").strip()
-            for role in (scene.get("activeRefs") if isinstance(scene.get("activeRefs"), list) else [])
+            for role in (
+                scene.get("activeRefs")
+                if isinstance(scene.get("activeRefs"), list)
+                else (scene.get("activeRoles") if isinstance(scene.get("activeRoles"), list) else [])
+            )
             if str(role or "").strip()
         ]
+        combined_roles: list[str] = []
+        for role in [primary_role, *secondary_roles, *active_roles]:
+            if role and role not in combined_roles:
+                combined_roles.append(role)
         scene_role_types = {
             role: role_types.get(role, "unknown")
-            for role in [primary_role, *secondary_roles, *active_roles]
+            for role in combined_roles
             if role
         }
+        primary_role_type = scene_role_types.get(primary_role, "unknown") if primary_role else "unknown"
+        has_hero = any(str(role_type or "").strip().lower() == "hero" for role_type in scene_role_types.values())
+        has_antagonist = any(str(role_type or "").strip().lower() == "antagonist" for role_type in scene_role_types.values())
+        has_support = any(str(role_type or "").strip().lower() == "support" for role_type in scene_role_types.values())
         out.append({
             "sceneId": str(scene.get("sceneId") or ""),
             "primaryRole": primary_role,
-            "primaryRoleType": scene_role_types.get(primary_role, "unknown") if primary_role else "unknown",
+            "primaryRoleType": primary_role_type,
             "secondaryRoles": secondary_roles,
             "activeRoles": active_roles,
+            "hasHero": has_hero,
+            "hasAntagonist": has_antagonist,
+            "hasSupport": has_support,
+            "sceneRoleFunctionEstimate": _estimate_scene_role_function(
+                scene,
+                primary_role_type=primary_role_type,
+                has_hero=has_hero,
+                has_antagonist=has_antagonist,
+                has_support=has_support,
+            ),
             "roleTypeByRole": scene_role_types,
         })
     return out
