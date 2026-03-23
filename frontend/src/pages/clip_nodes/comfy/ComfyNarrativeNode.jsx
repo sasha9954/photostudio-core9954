@@ -377,12 +377,12 @@ export default function ComfyNarrativeNode({ id, data }) {
               {hasPendingResult ? (
                 <>
                   <span className="clipSB_narrativeStatusBadge isPending">Ожидает подтверждения</span>
-                  <span className="clipSB_narrativeStatusText">Проверьте результат и подтвердите передачу в Storyboard.</span>
+                  <span className="clipSB_narrativeStatusText">Проверьте результат и подтвердите сценарий.</span>
                 </>
               ) : hasConfirmedResult ? (
                 <>
                   <span className="clipSB_narrativeStatusBadge isConfirmed">Подтверждено</span>
-                  <span className="clipSB_narrativeStatusText">Director output подтверждён. При необходимости отправьте storyboard_out в Storyboard.</span>
+                  <span className="clipSB_narrativeStatusText">Сценарий подтверждён. Перейдите в Storyboard для генерации сцен.</span>
                 </>
               ) : (
                 <span className="clipSB_narrativeStatusText">Сначала создайте сценарий.</span>
@@ -396,13 +396,12 @@ export default function ComfyNarrativeNode({ id, data }) {
             {hasDirectorResult ? (
               <div className="clipSB_narrativeConfirmActions">
                 <div className="clipSB_narrativeConfirmHint">
-                  {hasPendingResult ? "После проверки зафиксируйте director output или сразу передайте storyboard_out в Storyboard." : "Результат уже подтверждён. Storyboard остаётся основным consumer storyboard_out."}
+                  {hasPendingResult
+                    ? "Проверьте вкладки с результатом и подтвердите сценарий."
+                    : "Сценарий подтверждён. Перейдите в Storyboard для генерации сцен."}
                 </div>
                 <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => data?.onConfirmScenario?.(id)} disabled={!hasPendingResult}>
                   {hasPendingResult ? "ПОДТВЕРДИТЬ" : "ПОДТВЕРЖДЕНО"}
-                </button>
-                <button className="clipSB_btn" type="button" onClick={() => data?.onSendToStoryboard?.(id)}>
-                  В СТОРИБОРД
                 </button>
               </div>
             ) : null}
