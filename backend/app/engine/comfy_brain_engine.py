@@ -2156,12 +2156,15 @@ def _decide_locked_role_refinement(
 ) -> tuple[bool, str]:
     normalized_role_mode = str(role_mode or "").strip().lower() or "auto"
     warnings = [str(item).strip() for item in (role_validation_warnings or []) if str(item).strip()]
+    warning_set = set(warnings)
     scene_count = _count_storyboard_scenes(storyboard)
     role_types = role_type_by_role if isinstance(role_type_by_role, dict) else {}
-    locked_roles_present = any(
-        str(role_type or "").strip().lower() in {"hero", "support", "antagonist"}
+    normalized_role_types = {
+        str(role_type or "").strip().lower()
         for role_type in role_types.values()
-    )
+        if str(role_type or "").strip()
+    }
+    locked_roles_present = bool(normalized_role_types & {"hero", "support", "antagonist"})
 
     if normalized_role_mode != "locked":
         return False, "skipped_auto_mode"
@@ -2171,6 +2174,8 @@ def _decide_locked_role_refinement(
         return False, "skipped_no_locked_roles"
     if not warnings:
         return False, "not_needed"
+    if "antagonist" in normalized_role_types and "locked_antagonist_missing_from_tension_scenes" in warning_set:
+        return True, "critical_antagonist_missing"
     if str(role_validation_status or "").strip().lower() == "ok":
         return False, "not_needed"
 
@@ -2236,6 +2241,37 @@ def _build_locked_role_refinement_prompt(
         "If an antagonist exists, include the antagonist in at least one tension, conflict, opposition, pressure, threat, pursuit, or confrontation scene.\n"
         "If support exists, use support meaningfully when present and relevant.\n"
         "Repair role distribution with minimal structural changes.\n"
+        "ROLE BEHAVIOR RULES:\n"
+        "Hero:\n"
+        "- Must be the primary narrative driver in most scenes\n"
+        "- Scenes with hero must revolve around hero actions, decisions, or perspective\n"
+        "- Hero presence alone is NOT enough — hero must influence events\n"
+        "Antagonist:\n"
+        "- Must act as a source of conflict, pressure, threat, control, or opposition\n"
+        "- Must actively affect or oppose the hero (directly or indirectly)\n"
+        "- Passive or background presence is NOT enough\n"
+        "- At least one scene must clearly express conflict, tension, pursuit, threat, or control from antagonist\n"
+        "Support:\n"
+        "- Must assist, react to, or interact with the hero\n"
+        "- Should not exist as background-only presence\n"
+        "- Should contribute to progression or emotional context\n"
+        "ROLE DOMINANCE (SOFT RULE):\n"
+        "- Each scene should have a dominant role (who drives the scene)\n"
+        "- Avoid scenes where all characters are passive\n"
+        "- Prefer clear narrative ownership per scene\n"
+        "SCENE QUALITY RULES:\n"
+        "- Maintain narrative progression (setup → tension → development → outcome or cliffhanger)\n"
+        "- Do NOT just insert characters — integrate them into the action\n"
+        "- Do NOT create empty scenes just to satisfy role presence\n"
+        "- Prefer minimal changes but ensure meaningful role usage\n"
+        "STRICT CONSTRAINTS:\n"
+        "- Do NOT change identity of roles (hero must remain hero, etc.)\n"
+        "- Do NOT swap hero and antagonist\n"
+        "- Do NOT rewrite entire storyboard unless absolutely required\n"
+        "- Preserve timing, order, and structure when possible\n"
+        "OUTPUT:\n"
+        "- Return JSON only\n"
+        "- Keep the same schema\n"
         "Original locked-role setup, current storyboard, and warnings:\n"
         f"{json.dumps(prompt_payload, ensure_ascii=False, indent=2)}"
     )
@@ -2250,6 +2286,37 @@ def _score_role_validation_status(status: str) -> int:
     return 2
 
 
+def _classify_refined_storyboard_improvement(
+    *,
+    status_before: str,
+    warnings_before: list[str] | None,
+    status_after: str,
+    warnings_after: list[str] | None,
+    scenes_before: list[dict[str, Any]] | None = None,
+    scenes_after: list[dict[str, Any]] | None = None,
+) -> str:
+    before = [str(item).strip() for item in (warnings_before or []) if str(item).strip()]
+    after = [str(item).strip() for item in (warnings_after or []) if str(item).strip()]
+    before_score = _score_role_validation_status(status_before)
+    after_score = _score_role_validation_status(status_after)
+    normalized_scenes_before = scenes_before or []
+    normalized_scenes_after = scenes_after or []
+
+    if not normalized_scenes_after:
+        return "rejected"
+    if normalized_scenes_before == normalized_scenes_after:
+        return "no_change"
+    if after_score > before_score:
+        return "rejected"
+    if len(after) < len(before):
+        return "warnings_reduced"
+    if len(after) > len(before):
+        return "rejected"
+    if after_score < before_score:
+        return "status_improved"
+    return "structure_preserved"
+
+
 def _is_refined_storyboard_better(
     *,
     status_before: str,
@@ -2259,24 +2326,14 @@ def _is_refined_storyboard_better(
     scenes_before: list[dict[str, Any]] | None = None,
     scenes_after: list[dict[str, Any]] | None = None,
 ) -> bool:
-    before = [str(item).strip() for item in (warnings_before or []) if str(item).strip()]
-    after = [str(item).strip() for item in (warnings_after or []) if str(item).strip()]
-    before_score = _score_role_validation_status(status_before)
-    after_score = _score_role_validation_status(status_after)
-    if after_score > before_score:
-        return False
-    if len(after) < len(before):
-        return True
-    if len(after) > len(before):
-        return False
-    if after_score < before_score:
-        return True
-
-    before_scene_count = len(scenes_before or [])
-    after_scene_count = len(scenes_after or [])
-    if before_scene_count > 0 and after_scene_count <= 0:
-        return False
-    return True
+    return _classify_refined_storyboard_improvement(
+        status_before=status_before,
+        warnings_before=warnings_before,
+        status_after=status_after,
+        warnings_after=warnings_after,
+        scenes_before=scenes_before,
+        scenes_after=scenes_after,
+    ) in {"warnings_reduced", "status_improved", "structure_preserved"}
 
 
 def validate_gemini_planner_response(parsed: dict[str, Any], request_input: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -3197,6 +3254,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     role_refinement_warnings_after = list(role_validation_warnings)
     role_refinement_model_used = ""
     role_refinement_raw_preview = ""
+    role_refinement_improvement_type = "no_change"
     refined_role_warnings: list[str] = []
     should_refine_roles, role_refinement_decision = _decide_locked_role_refinement(
         role_mode=normalized.get("roleMode") or "auto",
@@ -3252,6 +3310,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         refined_role_warnings = list(dict.fromkeys([str(item).strip() for item in refined_role_warnings if str(item).strip()]))
         refined_role_errors = list(dict.fromkeys([str(item).strip() for item in refined_role_errors if str(item).strip()]))
         if refined_role_errors:
+            role_refinement_improvement_type = "rejected"
             role_refinement_note = "Locked-role refinement failed validation; original storyboard_v1 was kept."
             warnings.extend([f"locked_role_refinement_failed:{item}" for item in refined_role_errors])
         else:
@@ -3283,14 +3342,15 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             refined_role_validation_status = str(refined_role_validation.get("roleValidationStatus") or "ok")
             role_refinement_status_after = refined_role_validation_status
             role_refinement_warnings_after = list(refined_role_validation_warnings)
-            if _is_refined_storyboard_better(
+            role_refinement_improvement_type = _classify_refined_storyboard_improvement(
                 status_before=role_refinement_status_before,
                 warnings_before=role_refinement_warnings_before,
                 status_after=refined_role_validation_status,
                 warnings_after=refined_role_validation_warnings,
                 scenes_before=scenes,
                 scenes_after=refined_scenes,
-            ):
+            )
+            if role_refinement_improvement_type in {"warnings_reduced", "status_improved", "structure_preserved"}:
                 role_refinement_succeeded = True
                 parsed = refined_parsed_raw if isinstance(refined_parsed_raw, dict) else parsed
                 diagnostics = {
@@ -3299,6 +3359,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                         "httpStatus": refined_diagnostics.get("httpStatus"),
                         "rawPreview": refined_diagnostics.get("rawPreview") or "",
                         "warnings": refined_role_warnings,
+                        "roleRefinementImprovementType": role_refinement_improvement_type,
                     },
                 }
                 parse_result = refined_parse_result
@@ -3315,6 +3376,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 role_validation_status = refined_role_validation_status
                 role_refinement_note = "Locked-role refinement was applied and improved or preserved validation without making it worse."
             else:
+                if role_refinement_improvement_type not in {"no_change", "rejected"}:
+                    role_refinement_improvement_type = "rejected"
                 role_refinement_note = "Locked-role refinement returned a weaker or non-improving storyboard; original storyboard_v1 was kept."
                 role_refinement_warnings_after = list(refined_role_validation_warnings)
                 role_refinement_status_after = refined_role_validation_status
@@ -3395,6 +3458,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "roleRefinementStatusAfter": role_refinement_status_after,
         "roleRefinementModelUsed": role_refinement_model_used,
         "roleRefinementRawPreview": role_refinement_raw_preview,
+        "roleRefinementImprovementType": role_refinement_improvement_type,
         "roleRefinementNote": role_refinement_note,
         "summary": {
             "sceneCount": len(scenes),
@@ -3490,6 +3554,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "roleRefinementStatusAfter": role_refinement_status_after,
             "roleRefinementModelUsed": role_refinement_model_used,
             "roleRefinementRawPreview": role_refinement_raw_preview,
+            "roleRefinementImprovementType": role_refinement_improvement_type,
             "roleRefinementNote": role_refinement_note,
             "referenceProfilesSummary": summarize_profiles(reference_profiles),
             "activeRolesByScene": {str(scene.get("sceneId") or ""): list(scene.get("activeRefs") or []) for scene in scenes},
