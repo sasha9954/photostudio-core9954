@@ -590,39 +590,77 @@ def _scene_text_bundle(scene: ScenarioDirectorScene) -> str:
     ).strip()
 
 
+def _count_scene_signal_hits(bundle: str, markers: tuple[str, ...]) -> int:
+    return sum(1 for marker in markers if marker in bundle)
+
+
 def _scene_specificity_score(scene: ScenarioDirectorScene) -> int:
     score = 0
     bundle = _scene_text_bundle(scene).lower()
-    if len(bundle) >= 90:
+    object_markers = (
+        "alarm key", "hatch", "beam", "door", "window", "mirror", "monitor", "console", "switch", "helmet",
+        "hand", "face", "dust", "light", "shadow", "blood", "machine", "siren", "corridor", "stair",
+    )
+    action_markers = (
+        "freezes", "opens", "shuts", "turns", "presses", "reaches", "stares", "flinches", "steps", "grips",
+        "pulls", "reveals", "cuts out", "pulses", "cracks", "ignites", "crosses", "locks", "unlocks",
+    )
+    camera_markers = (
+        "close-up", "locked frontal", "wide", "overhead", "profile", "insert", "tracking", "dolly", "push-in",
+        "static", "macro", "two-shot", "over-the-shoulder", "silhouette",
+    )
+    sensory_markers = (
+        "red", "blue", "neon", "steam", "dust", "beam", "glow", "hum", "siren", "pulse", "echo", "flicker",
+    )
+    if len(bundle) >= 70:
         score += 1
-    if len(scene.frame_description.split()) >= 7:
+    if len(scene.frame_description.split()) >= 4:
         score += 1
-    if len(scene.action_in_frame.split()) >= 4:
+    if len(scene.action_in_frame.split()) >= 2:
         score += 1
-    if len(scene.camera.split()) >= 3:
+    if len(scene.camera.split()) >= 2:
         score += 1
     if scene.location or scene.props:
         score += 1
-    if any(token in bundle for token in ("close-up", "overhead", "hallway", "door", "machine", "blood", "reflection", "neon", "corridor", "stair", "hand", "face", "window", "light", "shadow")):
+    if _count_scene_signal_hits(bundle, object_markers) >= 1:
+        score += 1
+    if _count_scene_signal_hits(bundle, action_markers) >= 1:
+        score += 1
+    if _count_scene_signal_hits(bundle, camera_markers) >= 1:
+        score += 1
+    if _count_scene_signal_hits(bundle, sensory_markers) >= 1:
         score += 1
     return score
 
 
-def _is_scene_weak(scene: ScenarioDirectorScene) -> bool:
+def _scene_weak_assessment(scene: ScenarioDirectorScene) -> tuple[bool, str]:
     bundle = _scene_text_bundle(scene).lower()
-    if len(bundle) < 80:
-        return True
+    specificity = _scene_specificity_score(scene)
+    directing_fields = sum(
+        1
+        for field in (scene.frame_description, scene.action_in_frame, scene.camera)
+        if str(field or "").strip()
+    )
     if any(pattern in bundle for pattern in WEAK_SCENE_PATTERNS):
-        return True
-    if len(scene.frame_description.split()) < 6:
-        return True
-    if len(scene.action_in_frame.split()) < 3:
-        return True
-    if len(scene.camera.split()) < 2:
-        return True
-    if _scene_specificity_score(scene) < 3:
-        return True
-    return False
+        return True, "generic"
+    if directing_fields == 0:
+        return True, "missing_directing"
+    if specificity >= 4:
+        return False, "short_but_specific" if len(bundle) < 80 else "specific"
+    if len(bundle) < 28 and specificity < 2:
+        return True, "too_thin"
+    if directing_fields < 2 and specificity < 3:
+        return True, "missing_directing"
+    if len(bundle) < 55 and specificity < 3:
+        return True, "vague"
+    if specificity < 2:
+        return True, "vague"
+    return False, "specific"
+
+
+def _is_scene_weak(scene: ScenarioDirectorScene) -> bool:
+    weak, _ = _scene_weak_assessment(scene)
+    return weak
 
 
 def _infer_scene_purpose(scene: ScenarioDirectorScene) -> str:
@@ -664,17 +702,20 @@ def _filter_or_repair_weak_scenes(storyboard_out: ScenarioDirectorStoryboardOut)
     allow_repair_only = len(storyboard_out.scenes) <= 3
     for scene in storyboard_out.scenes:
         scene = _repair_missing_scene_goal(scene)
-        if not _is_scene_weak(scene):
+        weak, reason = _scene_weak_assessment(scene)
+        if not weak:
+            if reason == "short_but_specific":
+                logger.debug("[SCENARIO_DIRECTOR] weak scene kept short_but_specific scene_id=%s", scene.scene_id)
             kept.append(scene)
             continue
         weak_count += 1
-        logger.debug("[SCENARIO_DIRECTOR] weak scene detected scene_id=%s", scene.scene_id)
+        logger.debug("[SCENARIO_DIRECTOR] weak scene detected scene_id=%s reason=%s", scene.scene_id, reason)
         if allow_repair_only or len(storyboard_out.scenes) - weak_count < 1:
             if not scene.scene_goal or scene.scene_goal.lower() in GENERIC_SCENE_GOALS:
                 scene.scene_goal = _infer_scene_purpose(scene)
             kept.append(scene)
             continue
-        if _scene_specificity_score(scene) >= 3:
+        if _scene_specificity_score(scene) >= 4:
             kept.append(scene)
     if not kept:
         raise ScenarioDirectorError(
@@ -742,6 +783,27 @@ def _detect_expected_character_roles(payload: dict[str, Any]) -> list[str]:
     return expected[:2]
 
 
+def _character_lock_candidate_score(scene: ScenarioDirectorScene, *, scene_index: int, total_scenes: int, companion_roles: set[str]) -> int:
+    bundle = _scene_text_bundle(scene).lower()
+    purpose = _infer_scene_purpose(scene)
+    score = 0
+    if purpose in {"reveal", "confrontation", "escalation", "destabilization"}:
+        score += 3
+    if any(token in bundle for token in ("reveal", "confront", "exchange", "reaction", "watches", "faces", "shared", "between", "answer", "responds", "alarm", "tension")):
+        score += 2
+    if any(actor in companion_roles for actor in scene.actors):
+        score += 2
+    if any(token in bundle for token in ("close-up", "isolated", "alone", "empty hallway", "environment only", "abstract", "held image", "lingers on")):
+        score -= 3
+    if scene_index == 0 and purpose == "hook":
+        score -= 2
+    if scene_index == total_scenes - 1 and purpose == "final image / ending hold":
+        score -= 2
+    if len(scene.actors) <= 1 and any(token in bundle for token in ("close-up", "macro", "portrait", "hand", "face")):
+        score -= 2
+    return score
+
+
 def _enforce_character_lock(payload: dict[str, Any], storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
     expected_roles = _detect_expected_character_roles(payload)
     if len(expected_roles) < 2 or not storyboard_out.scenes:
@@ -751,25 +813,35 @@ def _enforce_character_lock(payload: dict[str, Any], storyboard_out: ScenarioDir
     missing_roles = [role for role in expected_roles if role not in present_roles]
     if not missing_roles:
         return storyboard_out
-    repaired_roles: list[str] = []
-    anchor_indexes = [0, max(0, len(storyboard_out.scenes) // 2), len(storyboard_out.scenes) - 1]
+    total_scenes = len(storyboard_out.scenes)
     for role in missing_roles:
-        for index in anchor_indexes:
+        companion_roles = role_set - {role}
+        candidates: list[tuple[int, int]] = []
+        for index, scene in enumerate(storyboard_out.scenes):
+            score = _character_lock_candidate_score(scene, scene_index=index, total_scenes=total_scenes, companion_roles=companion_roles)
+            if score >= 3:
+                candidates.append((score, index))
+        if not candidates:
+            logger.debug("[SCENARIO_DIRECTOR] character lock skipped no_candidate role=%s", role)
+            continue
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        repaired_indexes: list[str] = []
+        max_repairs = 1 if total_scenes <= 4 else 2
+        for _, index in candidates[:max_repairs]:
             scene = storyboard_out.scenes[index]
             if role not in scene.actors:
                 scene.actors.append(role)
-            if role == "character_2" and "character_1" in scene.actors:
-                if not scene.scene_goal or scene.scene_goal.lower() in GENERIC_SCENE_GOALS:
-                    scene.scene_goal = "confrontation"
-                if "watches" not in scene.action_in_frame.lower() and "faces" not in scene.action_in_frame.lower():
-                    base = scene.action_in_frame.rstrip('.')
-                    scene.action_in_frame = (
-                        f"{base} while {role} answers the tension in the space" if base else f"{role} enters the conflict and answers the tension in the space"
-                    )
-            repaired_roles.append(role)
-            break
-    if repaired_roles:
-        logger.debug("[SCENARIO_DIRECTOR] character lock repaired roles=%s", ",".join(sorted(set(repaired_roles))))
+            if not scene.scene_goal or scene.scene_goal.lower() in GENERIC_SCENE_GOALS:
+                purpose = _infer_scene_purpose(scene)
+                if purpose in {"reveal", "confrontation", "escalation", "destabilization"}:
+                    scene.scene_goal = purpose
+                elif any(actor in companion_roles for actor in scene.actors):
+                    scene.scene_goal = "interaction"
+            repaired_indexes.append(scene.scene_id)
+        if repaired_indexes:
+            logger.debug("[SCENARIO_DIRECTOR] character lock repaired role=%s scenes=%s", role, ",".join(repaired_indexes))
+        else:
+            logger.debug("[SCENARIO_DIRECTOR] character lock skipped no_candidate role=%s", role)
     return storyboard_out
 
 
@@ -778,72 +850,138 @@ def _has_overly_uniform_timing(storyboard_out: ScenarioDirectorStoryboardOut) ->
         return False
     durations = [max(0.1, _safe_float(scene.duration, scene.time_end - scene.time_start)) for scene in storyboard_out.scenes]
     spread = max(durations) - min(durations)
-    repeated_fives = sum(1 for value in durations if abs(value - 5.0) <= 0.2)
-    hook_short = durations[0] <= 3.2
-    payoff_hold = max(durations[-2:]) >= 6.5
-    return spread <= 1.0 or repeated_fives >= max(3, len(durations) - 1) or not (hook_short and payoff_hold)
+    average = sum(durations) / len(durations)
+    max_deviation = max(abs(value - average) for value in durations)
+    repeated_fives = sum(1 for value in durations if abs(value - 5.0) <= 0.15)
+    half_second_buckets = {round(value * 2) / 2 for value in durations}
+    return (spread <= 0.45 and max_deviation <= 0.3) or (len(half_second_buckets) <= 2 and spread <= 0.6) or (repeated_fives >= max(3, len(durations) - 1) and spread <= 0.8)
 
 
 def _apply_timing_variation(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
     if not _has_overly_uniform_timing(storyboard_out):
+        logger.debug("[SCENARIO_DIRECTOR] timing variation skipped already_good")
         return storyboard_out
     scene_count = len(storyboard_out.scenes)
     if scene_count < 2:
+        logger.debug("[SCENARIO_DIRECTOR] timing variation skipped already_good")
         return storyboard_out
-    durations = [max(1.5, _safe_float(scene.duration, scene.time_end - scene.time_start)) for scene in storyboard_out.scenes]
-    original_total = round(sum(durations), 3)
-    durations[0] = max(1.8, round(durations[0] - 1.0, 3))
-    durations[-1] = round(durations[-1] + 0.8, 3)
-    if scene_count >= 4:
-        durations[-2] = round(durations[-2] + 0.4, 3)
-        durations[1] = max(2.5, round(durations[1] - 0.2, 3))
-    adjusted_total = sum(durations)
-    diff = round(original_total - adjusted_total, 3)
-    middle_index = min(max(1, scene_count // 2), scene_count - 2)
-    durations[middle_index] = max(2.0, round(durations[middle_index] + diff, 3))
+    durations = [max(1.2, _safe_float(scene.duration, scene.time_end - scene.time_start)) for scene in storyboard_out.scenes]
+    deltas = [0.0] * scene_count
+    purposes = [_infer_scene_purpose(scene) for scene in storyboard_out.scenes]
+    if durations[0] >= 2.2 and purposes[0] not in {"emotional climax", "final image / ending hold"}:
+        deltas[0] -= min(0.35, durations[0] - 1.8)
+    if purposes[-1] in {"reveal", "emotional climax", "peak image", "final image / ending hold"} or durations[-1] <= max(durations[:-1]):
+        deltas[-1] += 0.35
+    if scene_count >= 4 and purposes[-2] in {"reveal", "emotional climax", "confrontation", "escalation"}:
+        deltas[-2] += 0.2
+    positive_total = round(sum(value for value in deltas if value > 0), 3)
+    negative_total = round(-sum(value for value in deltas if value < 0), 3)
+    remaining = round(positive_total - negative_total, 3)
+    compensation_indexes = [
+        index
+        for index in range(1, max(1, scene_count - 1))
+        if durations[index] > 1.8 and purposes[index] not in {"emotional climax", "final image / ending hold"}
+    ]
+    if remaining > 0 and compensation_indexes:
+        per_scene = min(0.2, round(remaining / len(compensation_indexes), 3))
+        for index in compensation_indexes:
+            available = max(0.0, durations[index] - 1.4)
+            reduction = min(per_scene, available)
+            deltas[index] -= reduction
+            remaining = round(remaining - reduction, 3)
+            if remaining <= 0.02:
+                break
+    elif remaining < 0 and compensation_indexes:
+        deltas[compensation_indexes[len(compensation_indexes) // 2]] += abs(remaining)
+    adjusted = [round(max(1.2, duration + delta), 3) for duration, delta in zip(durations, deltas)]
+    total_diff = round(sum(durations) - sum(adjusted), 3)
+    if abs(total_diff) > 0.01:
+        rebalance_index = compensation_indexes[0] if compensation_indexes else min(max(1, scene_count // 2), scene_count - 1)
+        adjusted[rebalance_index] = round(max(1.2, adjusted[rebalance_index] + total_diff), 3)
+    if max(abs(adjusted[index] - durations[index]) for index in range(scene_count)) < 0.15:
+        logger.debug("[SCENARIO_DIRECTOR] timing variation skipped already_good")
+        return storyboard_out
     cursor = 0.0
-    for scene, duration in zip(storyboard_out.scenes, durations):
+    for scene, duration in zip(storyboard_out.scenes, adjusted):
         scene.time_start = round(cursor, 3)
-        scene.duration = round(max(1.2, duration), 3)
+        scene.duration = duration
         scene.time_end = round(scene.time_start + scene.duration, 3)
         cursor = scene.time_end
-    logger.debug("[SCENARIO_DIRECTOR] timing variation applied")
+    delta_total = round(sum(abs(adjusted[index] - durations[index]) for index in range(scene_count)), 3)
+    logger.debug("[SCENARIO_DIRECTOR] timing variation applied delta_total=%s", delta_total)
     return storyboard_out
+
+
+def _scene_has_transition_evidence(scene: ScenarioDirectorScene) -> bool:
+    bundle = _scene_text_bundle(scene).lower()
+    return any(
+        token in bundle
+        for token in (
+            "door opens", "opens one inch", "entering a new", "new chamber", "new room", "crosses the threshold",
+            "reveal", "reveals", "unveils", "transformation", "before", "after", "state shift", "activation",
+            "activates", "ignites", "powers on", "hatch opens", "crosses into", "discovers",
+        )
+    )
+
+
+def _scene_has_audio_reactive_evidence(scene: ScenarioDirectorScene) -> bool:
+    bundle = _scene_text_bundle(scene).lower()
+    return any(
+        token in bundle
+        for token in (
+            "pulses", "pulse", "breathing machinery", "machinery", "hum", "audio-reactive", "lights flicker",
+            "rhythmic", "throb", "alarm", "siren", "vibration", "subtle response",
+        )
+    )
+
+
+def _recover_ltx_mode(scene: ScenarioDirectorScene) -> str:
+    if _scene_has_transition_evidence(scene):
+        return "f_l_as" if _scene_has_audio_reactive_evidence(scene) else "f_l"
+    if _scene_has_audio_reactive_evidence(scene):
+        return "i2v_as"
+    return "i2v"
 
 
 def _rebalance_ltx_modes(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
     if not storyboard_out.scenes:
         return storyboard_out
-    continuation_count = 0
-    changed = False
+    continuation_total = sum(
+        1 for scene in storyboard_out.scenes if scene.ltx_mode == "continuation" or scene.continuation_from_previous or scene.start_frame_source == "previous_frame"
+    )
+    continuation_limit = max(2, len(storyboard_out.scenes) // 2)
+    continuation_seen = 0
     for index, scene in enumerate(storyboard_out.scenes):
-        bundle = _scene_text_bundle(scene).lower()
-        target_mode = scene.ltx_mode
-        if target_mode == "lip_sync" and not _is_music_vocal_mode(scene.narration_mode):
+        original_mode = scene.ltx_mode
+        target_mode = original_mode
+        correction_reason = ""
+        if original_mode == "lip_sync" and not _is_music_vocal_mode(scene.narration_mode):
             target_mode = "i2v_as"
-        elif any(token in bundle for token in ("door opens", "reveal", "transformation", "enters", "entering", "new room", "state change")):
-            target_mode = "f_l_as" if any(token in bundle for token in ("hit", "pulse", "beat", "throb", "alarm")) else "f_l"
-        elif any(token in bundle for token in ("pulsing", "breathing", "machinery", "dread", "hum", "audio-reactive", "lights flicker")):
-            target_mode = "i2v_as"
-        elif scene.continuation_from_previous or scene.start_frame_source == "previous_frame":
-            continuation_count += 1
-            target_mode = "continuation"
-        else:
-            target_mode = "i2v"
-        if target_mode == "continuation" and continuation_count > max(1, len(storyboard_out.scenes) // 3):
-            target_mode = "i2v_as" if "pulse" in bundle or "hum" in bundle else "i2v"
-        if target_mode != scene.ltx_mode:
+            correction_reason = "visible articulation is unsupported by narration mode"
+        elif original_mode == "continuation":
+            continuation_seen += 1
+            if index == 0:
+                target_mode = _recover_ltx_mode(scene)
+                correction_reason = "continuation cannot be the first scene"
+            elif continuation_total > continuation_limit and continuation_seen > continuation_limit:
+                target_mode = _recover_ltx_mode(scene)
+                correction_reason = "continuation was overused"
+        elif index == 0 and scene.start_frame_source == "previous_frame":
+            target_mode = _recover_ltx_mode(scene)
+            correction_reason = "first scene cannot inherit a previous frame"
+        elif original_mode in {"f_l", "f_l_as"} and not scene.needs_two_frames and not _scene_has_transition_evidence(scene):
+            target_mode = "i2v_as" if original_mode == "f_l_as" and _scene_has_audio_reactive_evidence(scene) else "i2v"
+            correction_reason = "two-frame transition evidence is missing"
+        elif original_mode == "i2v_as" and not _scene_has_audio_reactive_evidence(scene) and _scene_has_transition_evidence(scene) and scene.needs_two_frames:
+            target_mode = "f_l_as"
+            correction_reason = "transition evidence is stronger than ambient pulse"
+        if target_mode != original_mode:
             scene.ltx_mode = target_mode
-            changed = True
-        reason_by_mode = {
-            "i2v": "Single anchor frame with controlled motion to preserve the scene's main image.",
-            "i2v_as": "Audio-sensitive motion supports environmental pulse, breath, or tension without visible speech sync.",
-            "f_l": "A clear before-to-after visual change needs two frames for the reveal or state shift.",
-            "f_l_as": "A two-frame reveal is timed to an audio accent or impact beat.",
-            "continuation": "The shot inherits the previous frame endpoint to keep visual continuity intact.",
-            "lip_sync": "Visible vocal articulation is required and the narration mode supports it.",
-        }
-        scene.ltx_reason = _normalize_ltx_reason(reason_by_mode.get(scene.ltx_mode, ""), scene.ltx_mode, narration_mode=scene.narration_mode)
+            scene.ltx_reason = _normalize_ltx_reason(f"Normalized to {target_mode}: {correction_reason}.", target_mode, narration_mode=scene.narration_mode)
+            logger.debug("[SCENARIO_DIRECTOR] ltx normalize corrected scene_id=%s from=%s to=%s", scene.scene_id, original_mode, target_mode)
+        else:
+            scene.ltx_reason = _normalize_ltx_reason(scene.ltx_reason, scene.ltx_mode, narration_mode=scene.narration_mode)
+            logger.debug("[SCENARIO_DIRECTOR] ltx normalize kept original scene_id=%s mode=%s", scene.scene_id, scene.ltx_mode)
         scene.needs_two_frames = scene.ltx_mode in {"f_l", "f_l_as"}
         if scene.ltx_mode == "continuation" and index > 0:
             scene.continuation_from_previous = True
@@ -852,8 +990,6 @@ def _rebalance_ltx_modes(storyboard_out: ScenarioDirectorStoryboardOut) -> Scena
             scene.continuation_from_previous = False
             if scene.start_frame_source == "previous_frame":
                 scene.start_frame_source = "new"
-    if changed:
-        logger.debug("[SCENARIO_DIRECTOR] ltx rebalance applied")
     return storyboard_out
 
 
@@ -862,16 +998,31 @@ def _assert_storyboard_quality(storyboard_out: ScenarioDirectorStoryboardOut) ->
     if not scenes:
         logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
         raise ScenarioDirectorError("scenario_director_empty_after_filter", "Scenario Director returned no usable scenes.", status_code=502)
-    if not any(str(scene.frame_description or "").strip() for scene in scenes):
+    frame_count = sum(1 for scene in scenes if str(scene.frame_description or "").strip())
+    action_count = sum(1 for scene in scenes if str(scene.action_in_frame or "").strip())
+    camera_count = sum(1 for scene in scenes if str(scene.camera or "").strip())
+    if frame_count == 0:
         logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
         raise ScenarioDirectorError("scenario_director_low_quality", "Scenario Director returned scenes without frame_description.", status_code=502)
-    if not any(str(scene.action_in_frame or "").strip() for scene in scenes):
+    if action_count == 0:
         logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
         raise ScenarioDirectorError("scenario_director_low_quality", "Scenario Director returned scenes without action_in_frame.", status_code=502)
-    if not any(str(scene.camera or "").strip() for scene in scenes):
+    if camera_count == 0:
         logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
         raise ScenarioDirectorError("scenario_director_low_quality", "Scenario Director returned scenes without camera direction.", status_code=502)
-    if all(_is_scene_weak(scene) for scene in scenes):
+    strong_scene_count = 0
+    generic_scene_count = 0
+    directing_scene_count = 0
+    for scene in scenes:
+        weak, reason = _scene_weak_assessment(scene)
+        directing_fields = sum(1 for field in (scene.frame_description, scene.action_in_frame, scene.camera) if str(field or "").strip())
+        if directing_fields >= 2:
+            directing_scene_count += 1
+        if not weak or _scene_specificity_score(scene) >= 4:
+            strong_scene_count += 1
+        if reason == "generic":
+            generic_scene_count += 1
+    if directing_scene_count == 0 or strong_scene_count == 0 or generic_scene_count == len(scenes):
         logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
         raise ScenarioDirectorError("scenario_director_low_quality", "Scenario Director returned only weak filler scenes.", status_code=502)
 
