@@ -552,6 +552,88 @@ def _is_back_view_scene_prompt(prompt: str | None) -> bool:
     return any(marker in normalized_prompt for marker in back_view_markers)
 
 
+def _infer_selected_view_hint(*values: Any) -> str:
+    normalized = " ".join(str(value or "").strip().lower() for value in values if str(value or "").strip())
+    if not normalized:
+        return "any"
+    if any(token in normalized for token in ["profile", "side view", "side shot", "side angle"]):
+        return "side/profile"
+    if any(token in normalized for token in ["back view", "from behind", "rear shot", "rear view", "walking away", "back shot"]):
+        return "back"
+    if any(token in normalized for token in ["close-up", "close up", "macro", "detail", "face detail", "facial detail", "portrait"]):
+        return "detail"
+    if "front view" in normalized or "frontal" in normalized:
+        return "front"
+    if any(token in normalized for token in ["wide", "establishing", "over-shoulder", "over shoulder"]):
+        return "any"
+    return "front"
+
+
+def _infer_reference_view_label(url: str, index: int = 0) -> str:
+    normalized = str(url or "").strip().lower()
+    if not normalized:
+        return "unknown"
+    markers = [
+        ("front", ["front", "frontal", "face", "straight"]),
+        ("side/profile", ["side", "profile", "3-4", "three-quarter", "three quarter"]),
+        ("back", ["back", "rear", "behind", "from-behind", "from_behind"]),
+        ("detail", ["detail", "closeup", "close-up", "close_up", "macro"]),
+    ]
+    for label, tokens in markers:
+        if any(token in normalized for token in tokens):
+            return label
+    fallback_by_index = {0: "front", 1: "side/profile", 2: "back", 3: "detail"}
+    return fallback_by_index.get(index, "unknown")
+
+
+def _order_role_refs_for_multi_view(_role: str, urls: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    clean_urls = [str(url or "").strip() for url in (urls or []) if str(url or "").strip()]
+    annotated: list[dict[str, Any]] = []
+    order = {"front": 0, "side/profile": 1, "back": 2, "detail": 3, "unknown": 4}
+    for idx, url in enumerate(clean_urls):
+        annotated.append({
+            "url": url,
+            "view": _infer_reference_view_label(url, idx),
+            "originalIndex": idx,
+        })
+    annotated.sort(key=lambda item: (order.get(str(item.get("view") or "unknown"), 4), int(item.get("originalIndex") or 0)))
+    return [str(item.get("url") or "") for item in annotated], annotated
+
+
+def _build_multi_view_role_context(
+    refs_by_role: dict[str, list[str]] | None,
+    active_roles: list[str] | None,
+    selected_view_hint: str,
+) -> tuple[dict[str, list[str]], dict[str, int], dict[str, dict[str, Any]], list[str]]:
+    raw_refs = refs_by_role if isinstance(refs_by_role, dict) else {}
+    roles = [str(role or "").strip() for role in (active_roles or []) if str(role or "").strip() in COMFY_REF_ROLES]
+    ordered_refs: dict[str, list[str]] = {role: list(raw_refs.get(role) or []) for role in COMFY_REF_ROLES}
+    multi_view_count_by_role: dict[str, int] = {}
+    reference_profile: dict[str, dict[str, Any]] = {}
+    structured_lines: list[str] = []
+
+    for role in roles:
+        ordered_urls, annotations = _order_role_refs_for_multi_view(role, raw_refs.get(role) or [])
+        ordered_refs[role] = ordered_urls
+        if not ordered_urls:
+            continue
+        role_views = [str(item.get("view") or "unknown") for item in annotations]
+        multi_view_count_by_role[role] = len(ordered_urls)
+        reference_profile[role] = {
+            "views": role_views,
+            "identity_locked": True,
+            "selected_view_hint": selected_view_hint,
+        }
+        structured_lines.append(f"{role} reference set:")
+        structured_lines.extend([
+            f"- image_{idx + 1}: {view}"
+            for idx, view in enumerate(role_views)
+        ])
+        structured_lines.append("Use these as a unified identity reference set.")
+
+    return ordered_refs, multi_view_count_by_role, reference_profile, structured_lines
+
+
 def _is_face_too_small_for_lipsync(prompt: str | None) -> bool:
     normalized_prompt = str(prompt or "").strip().lower()
     if not normalized_prompt:
@@ -6582,6 +6664,9 @@ def _build_comfy_image_prompt_assembly(
     scene_id: str,
     scene_contract: dict[str, Any] | None = None,
     reference_profiles: dict[str, Any] | None = None,
+    selected_view_hint: str = "any",
+    multi_view_reference_profile: dict[str, Any] | None = None,
+    multi_view_context_lines: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     cast_roles = ["character_1", "character_2", "character_3", "group", "animal"]
     cast_entities = [role for role in cast_roles if refs_by_role.get(role)]
@@ -6590,6 +6675,8 @@ def _build_comfy_image_prompt_assembly(
     props_entities = [role for role in ["props"] if refs_by_role.get(role)]
     contract = scene_contract if isinstance(scene_contract, dict) else {}
     profiles = reference_profiles if isinstance(reference_profiles, dict) else {}
+    multi_view_profile = multi_view_reference_profile if isinstance(multi_view_reference_profile, dict) else {}
+    multi_view_lines = [str(line or "").strip() for line in (multi_view_context_lines or []) if str(line or "").strip()]
 
     def _normalized_gender_presentation(raw: Any) -> str:
         value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
@@ -6715,6 +6802,7 @@ def _build_comfy_image_prompt_assembly(
         f"- hero entity: {contract.get('heroEntityId') or 'none'}",
         f"- active roles: {', '.join(active_roles) or 'none'}",
         "- preserve face/hair/body/outfit/accessories and forbidden identity changes from references",
+        "- multiple images for the same role DO NOT represent different people",
     ] + (visual_profile_lines or ["- no detailed visualProfile extracted"]))
 
     anatomy_lock_block = "\n".join([
@@ -6722,6 +6810,32 @@ def _build_comfy_image_prompt_assembly(
         "- preserve gender-consistent anatomy across all visible body parts",
         "- no mixed-sex anatomy",
     ] + (anatomy_contract_lines or ["- no explicit genderPresentation lock extracted from active human profiles"]))
+
+    multi_view_lock_block = "\n".join([
+        "REFERENCE USAGE — MULTI-VIEW CHARACTER LOCK:",
+        "Each character role (e.g. character_1) may contain multiple reference images representing the SAME entity from different angles (front, side, back, profile, motion, detail).",
+        "Treat ALL images of the same role as ONE unified identity set.",
+        "When generating a scene:",
+        "- Select the most appropriate reference image based on the camera angle required by the scene (front / side / back / profile / over-shoulder / wide).",
+        "- If the exact angle is not available, infer it ONLY from the provided references.",
+        "- NEVER invent new identity details.",
+        "Identity must remain STRICTLY consistent across all views:",
+        "- face structure",
+        "- hairstyle and color",
+        "- body proportions",
+        "- clothing design",
+        "- accessories",
+        "FORBIDDEN:",
+        "- changing hairstyle",
+        "- changing clothing",
+        "- modifying facial structure",
+        "- adding/removing accessories",
+        "- generating a different version of the same character",
+        "Only camera angle may change — identity must remain identical.",
+        "All outputs must feel like the SAME person filmed from different angles.",
+        "Multiple images for the same role DO NOT represent different people.",
+        f"Soft selectedViewHint: {selected_view_hint or 'any'}.",
+    ] + (multi_view_lines or ["- no explicit multi-view context for active roles"]))
 
     scene_meaning_lines = [
         "SCENE LAYER (PRIORITY 2):",
@@ -6791,6 +6905,7 @@ def _build_comfy_image_prompt_assembly(
         priority_contract_block,
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
         anatomy_lock_block,
+        multi_view_lock_block,
         forbidden_changes_block,
         "CHARACTER ANCHOR:\n" + f"- {effective_character_anchor or 'coherent single-character identity across all scenes'}",
     ])
@@ -6841,6 +6956,8 @@ def _build_comfy_image_prompt_assembly(
         "identityLockBlockPreview": identity_lock_block,
         "priorityContractBlockPreview": priority_contract_block,
         "anatomyLockBlockPreview": anatomy_lock_block,
+        "multiViewLockBlockPreview": multi_view_lock_block,
+        "multiViewReferenceProfile": multi_view_profile,
         "forbiddenChangesBlockPreview": forbidden_changes_block,
         "antiCollageBlockPreview": anti_collage_block,
         "lightWorldBlockPreview": physics_blocks["lightWorldBlock"],
@@ -6998,6 +7115,8 @@ def clip_image(payload: ClipImageIn):
         or (isinstance(scene_ref_directives, dict) and isinstance(scene_ref_directives.get("props"), dict) and bool(scene_ref_directives.get("props")))
     )
 
+    selected_view_hint = _infer_selected_view_hint(scene_delta, scene_text, prompt)
+
     scene_cast_roles = [role for role in scene_active_roles if role in COMFY_CAST_ROLES]
     world_anchor_roles: list[str] = []
     for role in ["location", "style"]:
@@ -7040,6 +7159,12 @@ def clip_image(payload: ClipImageIn):
                 })
             next_refs_by_role[role] = role_urls if allowed else []
         comfy_refs_by_role = next_refs_by_role
+
+    comfy_refs_by_role, multi_view_count_by_role, multi_view_reference_profile, multi_view_context_lines = _build_multi_view_role_context(
+        comfy_refs_by_role,
+        scene_active_roles,
+        selected_view_hint,
+    )
 
     comfy_counts = {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles}
     connected_active_roles = sorted([
@@ -7164,6 +7289,9 @@ def clip_image(payload: ClipImageIn):
         "rawRefsByRole": {role: len((getattr(refs_obj, "refsByRole", {}) or {}).get(role) or []) for role in comfy_roles},
         "filteredRefsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
         "referenceProfilesSummary": reference_profiles_summary,
+        "multiViewCountByRole": multi_view_count_by_role,
+        "selectedViewHint": selected_view_hint,
+        "multiViewReferenceProfile": multi_view_reference_profile,
         "promptDebug": {
             "sceneId": scene_id,
             "sceneGoal": scene_goal_input or None,
@@ -7304,6 +7432,13 @@ def clip_image(payload: ClipImageIn):
         )
 
         parts = [{"text": system_prompt}]
+        if multi_view_context_lines:
+            parts.append({
+                "text": "MULTI-VIEW REFERENCE CONTEXT:\n" + "\n".join([
+                    f"Selected camera view hint: {selected_view_hint}.",
+                    *multi_view_context_lines,
+                ])
+            })
 
         role_attach_order: list[str] = []
         attached_counts_by_role: dict[str, int] = {role: 0 for role in comfy_roles}
@@ -7451,6 +7586,9 @@ def clip_image(payload: ClipImageIn):
             scene_id=scene_id,
             scene_contract=scene_contract,
             reference_profiles=reference_profiles,
+            selected_view_hint=selected_view_hint,
+            multi_view_reference_profile=multi_view_reference_profile,
+            multi_view_context_lines=multi_view_context_lines,
         )
         assembled_prompt = comfy_assembled_prompt
         refs_debug["comfyAssemblyDebug"] = comfy_assembly_debug
@@ -7552,6 +7690,9 @@ def clip_image(payload: ClipImageIn):
             "environmentAnchor": environment_anchor,
             "weatherAnchor": weather_anchor,
             "surfaceAnchor": surface_anchor,
+            "selectedViewHint": selected_view_hint,
+            "multiViewCountByRole": multi_view_count_by_role,
+            "referenceProfile": multi_view_reference_profile,
         }
         parts.append({"text": "Scene payload:\n" + json.dumps(scene_payload, ensure_ascii=False)})
 
@@ -7590,6 +7731,8 @@ def clip_image(payload: ClipImageIn):
                 "props": len(props_images),
             },
             "activeRoles": scene_active_roles,
+            "multiViewCountByRole": multi_view_count_by_role,
+            "selectedViewHint": selected_view_hint,
         }
         refs_debug["attachOrder"] = role_attach_order
         refs_debug["attachedCountsByRole"] = attached_counts_by_role
