@@ -6,6 +6,7 @@ from requests import RequestException
 import tempfile
 import subprocess
 import math
+import logging
 import base64
 import json
 import re
@@ -31,6 +32,7 @@ from app.engine.audio_analyzer import analyze_audio
 from app.engine.prompt_layers import build_clip_video_motion_prompt, build_physics_first_image_blocks
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
 COMFY_ACTIVE_DIRECTIVES = {"hero", "supporting", "environment_required", "required"}
@@ -566,7 +568,21 @@ def _infer_selected_view_hint(*values: Any) -> str:
         return "front"
     if any(token in normalized for token in ["wide", "establishing", "over-shoulder", "over shoulder"]):
         return "any"
-    return "front"
+    return "any"
+
+
+def _selected_view_requirement_line(selected_view_hint: str) -> str:
+    normalized = str(selected_view_hint or "any").strip().lower() or "any"
+    mapping = {
+        "back": "Selected camera view: BACK VIEW — character must be seen from behind.",
+        "side/profile": "Selected camera view: SIDE/PROFILE VIEW — character must be shown in profile.",
+        "detail": "Selected camera view: DETAIL VIEW — face or specified detail must dominate the frame.",
+        "front": "Selected camera view: FRONT VIEW — frontal identity must be clearly visible.",
+    }
+    return mapping.get(
+        normalized,
+        "Selected camera view: ANY — use a flexible view only when no matching reference angle exists or scene composition strictly requires it.",
+    )
 
 
 def _infer_reference_view_label(url: str, index: int = 0) -> str:
@@ -6803,6 +6819,11 @@ def _build_comfy_image_prompt_assembly(
         f"- active roles: {', '.join(active_roles) or 'none'}",
         "- preserve face/hair/body/outfit/accessories and forbidden identity changes from references",
         "- multiple images for the same role DO NOT represent different people",
+        "REFERENCE PRIORITY RULE:",
+        "- reference images ALWAYS override text description",
+        "- if text conflicts with references: IGNORE the text and FOLLOW the reference images",
+        "- text may control: action, pose, emotion, camera",
+        "- text must NOT redefine: identity, face, hair, clothing, body proportions, accessories",
     ] + (visual_profile_lines or ["- no detailed visualProfile extracted"]))
 
     anatomy_lock_block = "\n".join([
@@ -6815,10 +6836,26 @@ def _build_comfy_image_prompt_assembly(
         "REFERENCE USAGE — MULTI-VIEW CHARACTER LOCK:",
         "Each character role (e.g. character_1) may contain multiple reference images representing the SAME entity from different angles (front, side, back, profile, motion, detail).",
         "Treat ALL images of the same role as ONE unified identity set.",
+        "VIEW SELECTION PRIORITY (STRICT):",
+        "- The camera direction MUST match selectedViewHint when a matching reference exists.",
+        "- if selectedViewHint = back, character MUST be shown from behind.",
+        "- if selectedViewHint = side/profile, character MUST be shown in profile.",
+        "- if selectedViewHint = detail, face or specific detail MUST dominate the frame.",
+        "- if selectedViewHint = front, frontal identity must be clearly visible.",
+        "- The model is NOT allowed to ignore selectedViewHint if matching references exist.",
+        "- fallback to any ONLY when no matching reference exists AND scene composition strictly requires it.",
+        "- View consistency is mandatory when matching reference angles are available.",
         "When generating a scene:",
         "- Select the most appropriate reference image based on the camera angle required by the scene (front / side / back / profile / over-shoulder / wide).",
         "- If the exact angle is not available, infer it ONLY from the provided references.",
         "- NEVER invent new identity details.",
+        "MULTI-VIEW CONSISTENCY RULE:",
+        "- all views (front / side / back / detail) represent the SAME entity",
+        "- reuse identity across angles",
+        "- do NOT reinterpret character per view",
+        "- do NOT generate alternative versions",
+        "- changing angle must NOT change face, hair, outfit, or body",
+        "- only camera perspective changes",
         "Identity must remain STRICTLY consistent across all views:",
         "- face structure",
         "- hairstyle and color",
@@ -6834,7 +6871,8 @@ def _build_comfy_image_prompt_assembly(
         "Only camera angle may change — identity must remain identical.",
         "All outputs must feel like the SAME person filmed from different angles.",
         "Multiple images for the same role DO NOT represent different people.",
-        f"Soft selectedViewHint: {selected_view_hint or 'any'}.",
+        f"SelectedViewHint (STRICT): {selected_view_hint or 'any'}.",
+        f"{_selected_view_requirement_line(selected_view_hint)}",
     ] + (multi_view_lines or ["- no explicit multi-view context for active roles"]))
 
     scene_meaning_lines = [
@@ -6848,6 +6886,29 @@ def _build_comfy_image_prompt_assembly(
     if scene_narrative_step_value:
         scene_meaning_lines.append(f"- scene progression cue: {scene_narrative_step_value}")
     scene_meaning_block = "\n".join(scene_meaning_lines)
+
+    camera_view_consistency_block = "\n".join([
+        "CAMERA → VIEW CONSISTENCY:",
+        "- camera direction MUST align with the selected reference view",
+        "- rear tracking shot -> use back view",
+        "- profile close-up -> use side/profile",
+        "- over-shoulder -> use back or side",
+        "- frontal portrait -> use front",
+        "- camera description MUST NOT conflict with reference usage",
+        "- if conflict happens: PRIORITIZE reference view and ADJUST camera interpretation",
+        f"- active selectedViewHint: {selected_view_hint or 'any'}",
+        f"- {_selected_view_requirement_line(selected_view_hint)}",
+    ])
+
+    view_continuity_block = "\n".join([
+        "VIEW CONTINUITY RULE:",
+        "- across scenes, camera angle transitions must be natural",
+        "- allowed: front -> side -> back",
+        "- allowed: wide -> close-up -> detail",
+        "- forbidden: identity shift between angles",
+        "- forbidden: random face changes between shots",
+        "- character must remain visually identical across all scene transitions",
+    ])
 
     continuity_block = "\n".join([
         "CONTINUITY:",
@@ -6906,6 +6967,8 @@ def _build_comfy_image_prompt_assembly(
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
         anatomy_lock_block,
         multi_view_lock_block,
+        camera_view_consistency_block,
+        view_continuity_block,
         forbidden_changes_block,
         "CHARACTER ANCHOR:\n" + f"- {effective_character_anchor or 'coherent single-character identity across all scenes'}",
     ])
@@ -7165,6 +7228,13 @@ def clip_image(payload: ClipImageIn):
         scene_active_roles,
         selected_view_hint,
     )
+    attached_view_labels_by_role = {
+        role: list(((multi_view_reference_profile.get(role) or {}).get("views") or []))
+        for role in comfy_roles
+        if multi_view_reference_profile.get(role)
+    }
+    for role, views in attached_view_labels_by_role.items():
+        logger.debug("[MULTI_VIEW] role=%s views=%s selected=%s", role, views, selected_view_hint)
 
     comfy_counts = {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles}
     connected_active_roles = sorted([
@@ -7292,6 +7362,7 @@ def clip_image(payload: ClipImageIn):
         "multiViewCountByRole": multi_view_count_by_role,
         "selectedViewHint": selected_view_hint,
         "multiViewReferenceProfile": multi_view_reference_profile,
+        "attachedViewLabelsByRole": attached_view_labels_by_role,
         "promptDebug": {
             "sceneId": scene_id,
             "sceneGoal": scene_goal_input or None,
@@ -7436,6 +7507,7 @@ def clip_image(payload: ClipImageIn):
             parts.append({
                 "text": "MULTI-VIEW REFERENCE CONTEXT:\n" + "\n".join([
                     f"Selected camera view hint: {selected_view_hint}.",
+                    _selected_view_requirement_line(selected_view_hint),
                     *multi_view_context_lines,
                 ])
             })
