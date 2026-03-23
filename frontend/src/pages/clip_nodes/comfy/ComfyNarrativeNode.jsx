@@ -179,6 +179,7 @@ export default function ComfyNarrativeNode({ id, data }) {
   const hasConnectedSource = resolvedSource?.origin === "connected" && !!String(resolvedSource?.value || "").trim();
   const hasPendingResult = !!pendingOutputs?.directorOutput;
   const hasConfirmedResult = !!outputs?.directorOutput;
+  const hasDirectorResult = !!directorOutput;
   const sourceStatusText = hasConnectedSource
     ? activeSourceMode === "AUDIO"
       ? "Подключён внешний аудио-источник"
@@ -269,23 +270,23 @@ export default function ComfyNarrativeNode({ id, data }) {
 
         <div className="clipSB_narrativeLayout">
           <section className="clipSB_narrativeControlColumn">
-            <div className="clipSB_narrativeGrid">
-              <label className="clipSB_narrativeField">
-                <div className="clipSB_brainLabel">Тип видео</div>
+            <div className="clipSB_narrativeGrid clipSB_narrativeGrid--compact">
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Тип видео</div>
                 <select className="clipSB_select clipSB_narrativeSelect" value={data?.contentType || "story"} onChange={(e) => data?.onFieldChange?.(id, { contentType: e.target.value })}>
                   {NARRATIVE_CONTENT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
                 </select>
               </label>
 
-              <label className="clipSB_narrativeField">
-                <div className="clipSB_brainLabel">Как обработать</div>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Как обработать</div>
                 <select className="clipSB_select clipSB_narrativeSelect" value={data?.narrativeMode || "cinematic_expand"} onChange={(e) => data?.onFieldChange?.(id, { narrativeMode: e.target.value })}>
                   {NARRATIVE_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
                 </select>
               </label>
 
-              <label className="clipSB_narrativeField">
-                <div className="clipSB_brainLabel">Стиль обработки</div>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Стиль обработки</div>
                 <select className="clipSB_select clipSB_narrativeSelect" value={data?.styleProfile || "realistic"} onChange={(e) => data?.onFieldChange?.(id, { styleProfile: e.target.value })}>
                   {NARRATIVE_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
                 </select>
@@ -376,15 +377,15 @@ export default function ComfyNarrativeNode({ id, data }) {
               {hasPendingResult ? (
                 <>
                   <span className="clipSB_narrativeStatusBadge isPending">Ожидает подтверждения</span>
-                  <span className="clipSB_narrativeStatusText">Результат просмотрен локально и не передаётся дальше, пока вы не нажмёте «ПОДТВЕРДИТЬ» или «В СТОРИБОРД».</span>
+                  <span className="clipSB_narrativeStatusText">Проверьте результат и подтвердите передачу в Storyboard.</span>
                 </>
               ) : hasConfirmedResult ? (
                 <>
                   <span className="clipSB_narrativeStatusBadge isConfirmed">Подтверждено</span>
-                  <span className="clipSB_narrativeStatusText">Director output уже открыт для следующего слоя.</span>
+                  <span className="clipSB_narrativeStatusText">Director output подтверждён. При необходимости отправьте storyboard_out в Storyboard.</span>
                 </>
               ) : (
-                <span className="clipSB_narrativeStatusText">Сначала создайте сценарий, затем просмотрите вкладки и подтвердите передачу результата дальше.</span>
+                <span className="clipSB_narrativeStatusText">Сначала создайте сценарий.</span>
               )}
             </div>
 
@@ -392,10 +393,13 @@ export default function ComfyNarrativeNode({ id, data }) {
               {resultBody}
             </div>
 
-            {hasPendingResult ? (
+            {hasDirectorResult ? (
               <div className="clipSB_narrativeConfirmActions">
-                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => data?.onConfirmScenario?.(id)}>
-                  ПОДТВЕРДИТЬ
+                <div className="clipSB_narrativeConfirmHint">
+                  {hasPendingResult ? "После проверки зафиксируйте director output или сразу передайте storyboard_out в Storyboard." : "Результат уже подтверждён. Storyboard остаётся основным consumer storyboard_out."}
+                </div>
+                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => data?.onConfirmScenario?.(id)} disabled={!hasPendingResult}>
+                  {hasPendingResult ? "ПОДТВЕРДИТЬ" : "ПОДТВЕРЖДЕНО"}
                 </button>
                 <button className="clipSB_btn" type="button" onClick={() => data?.onSendToStoryboard?.(id)}>
                   В СТОРИБОРД
