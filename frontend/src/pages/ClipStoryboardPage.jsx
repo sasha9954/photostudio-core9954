@@ -9041,11 +9041,13 @@ onClipSec: (nodeId, value) => {
                     sourceOrigin: nextResolvedSource.origin,
                     resolvedSource: nextResolvedSource,
                     error: "NO_SOURCE",
+                    pendingOutputs: null,
+                    pendingGeneratedAt: "",
                     outputs: getDefaultNarrativeNodeData().outputs,
                   },
                 };
               }
-              const outputs = buildNarrativeOutputs({
+              const pendingOutputs = buildNarrativeOutputs({
                 ...nextData,
                 sourceOrigin: nextResolvedSource.origin,
                 resolvedSource: nextResolvedSource,
@@ -9057,7 +9059,36 @@ onClipSec: (nodeId, value) => {
                   sourceOrigin: nextResolvedSource.origin,
                   resolvedSource: nextResolvedSource,
                   error: null,
-                  outputs,
+                  activeResultTab: "history",
+                  pendingOutputs,
+                  pendingGeneratedAt: new Date().toISOString(),
+                },
+              };
+            });
+            const reboundNodes = bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: safeEdges, traceReason });
+            const reboundNodesById = new Map(reboundNodes.map((nodeItem) => [nodeItem.id, nodeItem]));
+            const plannerBrainNodeId = safeEdges
+              .filter((edgeItem) => edgeItem.source === narrativeNodeId && String(edgeItem.sourceHandle || "") === "brain_package_out")
+              .map((edgeItem) => reboundNodesById.get(edgeItem.target))
+              .find((targetNode) => targetNode?.type === "comfyBrain" && String(targetNode?.id || "").trim())?.id || "";
+            return { reboundNodes, plannerBrainNodeId };
+          };
+          const confirmNarrativeOutputs = ({ narrativeNodeId, nodesNow, edgesNow, traceReason = "narrative:confirm" }) => {
+            const safeNodes = Array.isArray(nodesNow) ? nodesNow : [];
+            const safeEdges = Array.isArray(edgesNow) ? edgesNow : [];
+            const confirmedAt = new Date().toISOString();
+            const nextNodes = safeNodes.map((x) => {
+              if (x.id !== narrativeNodeId) return x;
+              const pendingOutputs = x?.data?.pendingOutputs || null;
+              if (!pendingOutputs) return x;
+              return {
+                ...x,
+                data: {
+                  ...x.data,
+                  outputs: pendingOutputs,
+                  pendingOutputs: null,
+                  confirmedAt,
+                  error: null,
                 },
               };
             });
@@ -9107,16 +9138,40 @@ onClipSec: (nodeId, value) => {
               onGenerateScenario: async (nodeId) => {
                 const currentEdges = edgesRef.current || [];
                 const currentNodes = nodesRef.current || [];
-                const { reboundNodes, plannerBrainNodeId } = buildNarrativeGenerationState({
+                const { reboundNodes } = buildNarrativeGenerationState({
                   narrativeNodeId: nodeId,
                   nodesNow: currentNodes,
                   edgesNow: currentEdges,
-                  traceReason: "narrative:generate:planner-submit",
+                  traceReason: "narrative:generate:pending-confirm",
+                });
+                nodesRef.current = reboundNodes;
+                setNodes(reboundNodes);
+              },
+              onConfirmScenario: async (nodeId) => {
+                const currentEdges = edgesRef.current || [];
+                const currentNodes = nodesRef.current || [];
+                const { reboundNodes } = confirmNarrativeOutputs({
+                  narrativeNodeId: nodeId,
+                  nodesNow: currentNodes,
+                  edgesNow: currentEdges,
+                  traceReason: "narrative:confirm",
+                });
+                nodesRef.current = reboundNodes;
+                setNodes(reboundNodes);
+              },
+              onSendToStoryboard: async (nodeId) => {
+                const currentEdges = edgesRef.current || [];
+                const currentNodes = nodesRef.current || [];
+                const { reboundNodes, plannerBrainNodeId } = confirmNarrativeOutputs({
+                  narrativeNodeId: nodeId,
+                  nodesNow: currentNodes,
+                  edgesNow: currentEdges,
+                  traceReason: "narrative:confirm-and-storyboard",
                 });
                 nodesRef.current = reboundNodes;
                 setNodes(reboundNodes);
                 if (!plannerBrainNodeId) {
-                  notify({ type: "warning", title: "Connect COMFY BRAIN", message: "Сценарий обновлён локально, но planner не запущен: подключите выход «Для мозга» к COMFY BRAIN." });
+                  notify({ type: "warning", title: "Connect COMFY BRAIN", message: "Результат подтверждён, но storyboard не запущен: подключите выход «Для мозга» к COMFY BRAIN." });
                   return;
                 }
                 const plannerNode = reboundNodes.find((nodeItem) => nodeItem.id === plannerBrainNodeId && nodeItem.type === "comfyBrain");

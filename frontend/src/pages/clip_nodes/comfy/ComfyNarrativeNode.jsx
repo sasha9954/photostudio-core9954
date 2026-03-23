@@ -50,25 +50,177 @@ function renderBrainPackage(brainPackage) {
   );
 }
 
+function renderKvRows(rows = []) {
+  return (
+    <div className="clipSB_narrativeReadable">
+      {rows.map((row) => (
+        <div key={row.label}>
+          <strong>{row.label}:</strong> {row.value || "—"}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderHistoryTab(directorOutput) {
+  const history = directorOutput?.history;
+  if (!history) return <div className="clipSB_small">История появится после генерации director output.</div>;
+
+  return (
+    <div className="clipSB_narrativeReadable">
+      <div className="clipSB_narrativeCard">
+        <div className="clipSB_narrativeCardTitle">Краткий summary</div>
+        <div>{history.summary || "—"}</div>
+      </div>
+
+      <div className="clipSB_narrativeCard">
+        <div className="clipSB_narrativeCardTitle">Полный сценарий</div>
+        <pre>{history.fullScenario || "—"}</pre>
+      </div>
+
+      <div className="clipSB_narrativeCard">
+        <div className="clipSB_narrativeCardTitle">Роли персонажей</div>
+        <div className="clipSB_narrativeList">
+          {(history.characterRoles || []).map((item) => (
+            <div key={`${item.name}:${item.role}`} className="clipSB_narrativeListItem">
+              <strong>{item.name}</strong>
+              <span>{item.role}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="clipSB_narrativeCard">
+        <div className="clipSB_narrativeCardTitle">Tone & style direction</div>
+        <div>{history.toneStyleDirection || "—"}</div>
+      </div>
+
+      <div className="clipSB_narrativeCard">
+        <div className="clipSB_narrativeCardTitle">Director summary</div>
+        <pre>{history.directorSummary || "—"}</pre>
+      </div>
+    </div>
+  );
+}
+
+function renderScenesTab(directorOutput) {
+  const scenes = Array.isArray(directorOutput?.scenes) ? directorOutput.scenes : [];
+  if (!scenes.length) return <div className="clipSB_small">Сцены появятся после генерации director output.</div>;
+
+  return (
+    <div className="clipSB_narrativeStack">
+      {scenes.map((scene) => (
+        <div key={scene.sceneId} className="clipSB_narrativeCard">
+          <div className="clipSB_narrativeCardHeader">
+            <div className="clipSB_narrativeCardTitle">{scene.sceneId}</div>
+            <div className="clipSB_narrativeCardMeta">{scene.duration}</div>
+          </div>
+          {renderKvRows([
+            { label: "time_start", value: scene.timeStart },
+            { label: "time_end", value: scene.timeEnd },
+            { label: "duration", value: scene.duration },
+            { label: "Кто участвует", value: (scene.participants || []).join(", ") },
+            { label: "Локация", value: scene.location },
+            { label: "Props", value: (scene.props || []).join(", ") },
+            { label: "Что происходит", value: scene.action },
+            { label: "Эмоция", value: scene.emotion },
+            { label: "Scene goal", value: scene.sceneGoal },
+          ])}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderVideoTab(directorOutput) {
+  const videoRows = Array.isArray(directorOutput?.video) ? directorOutput.video : [];
+  if (!videoRows.length) return <div className="clipSB_small">Видео-описание появится после генерации director output.</div>;
+
+  return (
+    <div className="clipSB_narrativeStack">
+      {videoRows.map((scene) => (
+        <div key={scene.sceneId} className="clipSB_narrativeCard">
+          <div className="clipSB_narrativeCardTitle">{scene.sceneId}</div>
+          {renderKvRows([
+            { label: "Frame description", value: scene.frameDescription },
+            { label: "Action in frame", value: scene.actionInFrame },
+            { label: "Camera idea", value: scene.cameraIdea },
+            { label: "Image prompt", value: scene.imagePrompt },
+            { label: "Video prompt", value: scene.videoPrompt },
+            { label: "LTX mode", value: scene.ltxMode },
+            { label: "Why this mode", value: scene.whyThisMode },
+            { label: "Start frame source", value: scene.startFrameSource },
+            { label: "Needs two frames", value: scene.needsTwoFrames ? "Да" : "Нет" },
+            { label: "Continuation", value: scene.continuation },
+          ])}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderSoundTab(directorOutput) {
+  const soundRows = Array.isArray(directorOutput?.sound) ? directorOutput.sound : [];
+  if (!soundRows.length) return <div className="clipSB_small">Звук появится после генерации director output.</div>;
+
+  return (
+    <div className="clipSB_narrativeStack">
+      {soundRows.map((scene) => (
+        <div key={scene.sceneId} className="clipSB_narrativeCard">
+          <div className="clipSB_narrativeCardTitle">{scene.sceneId}</div>
+          {renderKvRows([
+            { label: "Narration mode", value: scene.narrationMode },
+            { label: "Local phrase", value: scene.localPhrase },
+            { label: "SFX", value: scene.sfx },
+            { label: "Sound notes", value: scene.soundNotes },
+            { label: "Pause / duck / silence notes", value: scene.pauseDuckSilenceNotes },
+          ])}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderMusicTab(directorOutput) {
+  const music = directorOutput?.music;
+  if (!music) return <div className="clipSB_small">Музыка появится после генерации director output.</div>;
+  return renderKvRows([
+    { label: "Global music prompt", value: music.globalMusicPrompt },
+    { label: "Mood", value: music.mood },
+    { label: "Style", value: music.style },
+    { label: "Pacing hints", value: music.pacingHints },
+  ]);
+}
+
+function renderJsonTab(directorOutput) {
+  if (!directorOutput?.storyboardJson) return <div className="clipSB_small">JSON появится после генерации director output.</div>;
+  return <pre>{JSON.stringify(directorOutput.storyboardJson, null, 2)}</pre>;
+}
+
 export default function ComfyNarrativeNode({ id, data }) {
-  const activeResultTab = data?.activeResultTab || "scenario";
+  const activeResultTab = data?.activeResultTab || "history";
   const outputs = data?.outputs || {};
+  const pendingOutputs = data?.pendingOutputs || null;
+  const resultOutputs = pendingOutputs || outputs;
+  const directorOutput = resultOutputs?.directorOutput || null;
   const resolvedSource = data?.resolvedSource || {};
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
   const activeSourceMode = resolvedSource?.mode || null;
   const hasConnectedSource = resolvedSource?.origin === "connected" && !!String(resolvedSource?.value || "").trim();
+  const hasPendingResult = !!pendingOutputs?.directorOutput;
+  const hasConfirmedResult = !!outputs?.directorOutput;
   const sourceStatusText = hasConnectedSource
     ? activeSourceMode === "AUDIO"
-        ? "Подключён внешний аудио-источник"
-        : activeSourceMode === "VIDEO_LINK"
-          ? "Подключена внешняя ссылка на видео"
-          : "Подключён внешний видеофайл"
+      ? "Подключён внешний аудио-источник"
+      : activeSourceMode === "VIDEO_LINK"
+        ? "Подключена внешняя ссылка на видео"
+        : "Подключён внешний видеофайл"
     : "Подключите один source-of-truth: аудио, видеофайл или ссылку на видео.";
 
   const sourceInput = hasConnectedSource ? (
     <div className="clipSB_narrativeSourceStatus isConnected">
-        <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
-        <div className="clipSB_narrativeSourceStatusHint">Источник выбран автоматически по входящему соединению ноды.</div>
+      <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
+      <div className="clipSB_narrativeSourceStatusHint">Источник выбран автоматически по входящему соединению ноды.</div>
       {resolvedSource?.preview ? (
         <div className="clipSB_narrativeSourceStatusPreview" title={resolvedSource.preview}>
           {resolvedSource.preview}
@@ -78,15 +230,24 @@ export default function ComfyNarrativeNode({ id, data }) {
   ) : (
     <div className="clipSB_narrativeField clipSB_narrativeField--disabled" aria-disabled="true">
       <div className="clipSB_brainLabel">Source of truth</div>
-        <div className="clipSB_narrativeEmptyBlock">
-          <div>Подключите источник:</div>
-          <div>— Аудио</div>
-          <div>— Видео файл</div>
-          <div>— Ссылка на видео</div>
-        </div>
+      <div className="clipSB_narrativeEmptyBlock">
+        <div>Подключите источник:</div>
+        <div>— Аудио</div>
+        <div>— Видео файл</div>
+        <div>— Ссылка на видео</div>
+      </div>
       <div className="clipSB_narrativeEmptyHint">Нода ждёт ровно один активный вход: audio_in, video_file_in или video_link_in.</div>
     </div>
   );
+
+  let resultBody = <div className="clipSB_small">Пока нет director output. Подключите источник и нажмите кнопку.</div>;
+  if (activeResultTab === "history") resultBody = renderHistoryTab(directorOutput);
+  if (activeResultTab === "scenes") resultBody = renderScenesTab(directorOutput);
+  if (activeResultTab === "video") resultBody = renderVideoTab(directorOutput);
+  if (activeResultTab === "sound") resultBody = renderSoundTab(directorOutput);
+  if (activeResultTab === "brain") resultBody = renderBrainPackage(resultOutputs?.brainPackage);
+  if (activeResultTab === "music") resultBody = renderMusicTab(directorOutput);
+  if (activeResultTab === "json") resultBody = renderJsonTab(directorOutput);
 
   return (
     <>
@@ -223,7 +384,7 @@ export default function ComfyNarrativeNode({ id, data }) {
 
             <div className="clipSB_narrativeActions">
               <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => (data?.onGenerateScenario || data?.onGenerate)?.(id)} disabled={!hasConnectedSource}>
-                RUN SCENARIO DIRECTOR
+                СОЗДАТЬ СЦЕНАРИЙ
               </button>
             </div>
           </section>
@@ -242,12 +403,36 @@ export default function ComfyNarrativeNode({ id, data }) {
               ))}
             </div>
 
-            <div className="clipSB_narrativeResultBody">
-              {activeResultTab === "scenario" ? <pre>{outputs.scenario || "Пока нет сценария. Подключите источник и нажмите кнопку."}</pre> : null}
-              {activeResultTab === "voice" ? <pre>{outputs.voiceScript || "Здесь появится текст для диктора и диалоги."}</pre> : null}
-              {activeResultTab === "brain" ? renderBrainPackage(outputs.brainPackage) : null}
-              {activeResultTab === "music" ? <pre>{outputs.bgMusicPrompt || "Здесь появится prompt только для фоновой музыки."}</pre> : null}
+            <div className="clipSB_narrativeResultStatus">
+              {hasPendingResult ? (
+                <>
+                  <span className="clipSB_narrativeStatusBadge isPending">Ожидает подтверждения</span>
+                  <span className="clipSB_narrativeStatusText">Результат просмотрен локально и не передаётся дальше, пока вы не нажмёте «ПОДТВЕРДИТЬ» или «В СТОРИБОРД».</span>
+                </>
+              ) : hasConfirmedResult ? (
+                <>
+                  <span className="clipSB_narrativeStatusBadge isConfirmed">Подтверждено</span>
+                  <span className="clipSB_narrativeStatusText">Director output уже открыт для следующего слоя.</span>
+                </>
+              ) : (
+                <span className="clipSB_narrativeStatusText">Сначала создайте сценарий, затем просмотрите вкладки и подтвердите передачу результата дальше.</span>
+              )}
             </div>
+
+            <div className="clipSB_narrativeResultBody">
+              {resultBody}
+            </div>
+
+            {hasPendingResult ? (
+              <div className="clipSB_narrativeConfirmActions">
+                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => data?.onConfirmScenario?.(id)}>
+                  ПОДТВЕРДИТЬ
+                </button>
+                <button className="clipSB_btn" type="button" onClick={() => data?.onSendToStoryboard?.(id)}>
+                  В СТОРИБОРД
+                </button>
+              </div>
+            ) : null}
           </section>
         </div>
       </NodeShell>
