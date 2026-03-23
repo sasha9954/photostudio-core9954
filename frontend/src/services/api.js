@@ -20,10 +20,11 @@ function formatApiError(res, data){
 }
 
 export const API_BASE = `http://${window.location.hostname}:8000`;
-export async function fetchJson(path,{method="GET",headers={},body}={}){
+export async function fetchJson(path,{method="GET",headers={},body,signal}={}){
   const res = await fetch(`${API_BASE}${path}`,{
     credentials: "include",
     method,
+    signal,
     headers: {"Content-Type":"application/json",...headers},
     body: body?JSON.stringify(body):undefined
   });
