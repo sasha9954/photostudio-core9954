@@ -558,16 +558,85 @@ def _infer_selected_view_hint(*values: Any) -> str:
     normalized = " ".join(str(value or "").strip().lower() for value in values if str(value or "").strip())
     if not normalized:
         return "any"
-    if any(token in normalized for token in ["profile", "side view", "side shot", "side angle"]):
-        return "side/profile"
-    if any(token in normalized for token in ["back view", "from behind", "rear shot", "rear view", "walking away", "back shot"]):
-        return "back"
-    if any(token in normalized for token in ["close-up", "close up", "macro", "detail", "face detail", "facial detail", "portrait"]):
-        return "detail"
-    if "front view" in normalized or "frontal" in normalized:
-        return "front"
-    if any(token in normalized for token in ["wide", "establishing", "over-shoulder", "over shoulder"]):
+
+    any_markers = [
+        "wide",
+        "establishing",
+        "over-shoulder",
+        "over shoulder",
+        "over-the-shoulder",
+        "occluded face",
+        "hidden face",
+        "face partly hidden",
+    ]
+    back_markers = [
+        "back view",
+        "from behind",
+        "rear shot",
+        "rear view",
+        "walking away",
+        "back shot",
+        "rear",
+        "rear-facing",
+        "back-facing",
+        "from the back",
+        "seen from the back",
+        "silhouette from behind",
+        "back silhouette",
+        "back profile",
+        "rear tracking",
+        "rear follow shot",
+    ]
+    side_markers = [
+        "profile",
+        "side view",
+        "side shot",
+        "side angle",
+        "three-quarter profile",
+        "3/4 profile",
+        "quarter profile",
+        "profile silhouette",
+        "side portrait",
+        "side-facing",
+        "seen in profile",
+    ]
+    detail_markers = [
+        "close-up",
+        "close up",
+        "macro",
+        "detail",
+        "face detail",
+        "facial detail",
+        "portrait",
+        "eye detail",
+        "hand detail",
+        "close facial crop",
+        "extreme close-up",
+        "extreme close up",
+        "tight close-up",
+        "tight close up",
+    ]
+    front_markers = [
+        "front view",
+        "frontal",
+        "head-on",
+        "straight-on",
+        "straight on",
+        "direct frontal",
+        "front-facing",
+        "facing camera",
+    ]
+
+    if any(token in normalized for token in any_markers):
         return "any"
+    if any(token in normalized for token in back_markers):
+        return "back"
+    if any(token in normalized for token in side_markers):
+        return "side/profile"
+    if any(token in normalized for token in detail_markers):
+        return "detail"
+    if any(token in normalized for token in front_markers):
+        return "front"
     return "any"
 
 
@@ -602,43 +671,117 @@ def _infer_reference_view_label(url: str, index: int = 0) -> str:
     return fallback_by_index.get(index, "unknown")
 
 
-def _order_role_refs_for_multi_view(_role: str, urls: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+def _selected_view_fallback_order(selected_view_hint: str) -> list[str]:
+    normalized = str(selected_view_hint or "any").strip().lower() or "any"
+    mapping = {
+        "front": ["front", "side/profile", "detail", "back", "unknown"],
+        "side/profile": ["side/profile", "front", "back", "detail", "unknown"],
+        "back": ["back", "side/profile", "front", "detail", "unknown"],
+        "detail": ["detail", "front", "side/profile", "back", "unknown"],
+        "any": ["front", "side/profile", "back", "detail", "unknown"],
+    }
+    return list(mapping.get(normalized, mapping["any"]))
+
+
+def _resolve_selected_primary_view(available_views: list[str], selected_view_hint: str) -> tuple[str, str]:
+    useful_views = [str(view or "unknown") for view in available_views if str(view or "unknown") in {"front", "side/profile", "back", "detail"}]
+    if not useful_views:
+        return "unknown", "unknown"
+
+    normalized = str(selected_view_hint or "any").strip().lower() or "any"
+    if normalized == "any":
+        fallback_order = _selected_view_fallback_order("any")
+        for view in fallback_order:
+            if view in useful_views:
+                return view, "any"
+        return useful_views[0], "any"
+
+    if normalized in useful_views:
+        return normalized, "exact"
+
+    fallback_order = _selected_view_fallback_order(normalized)
+    for view in fallback_order:
+        if view in useful_views:
+            return view, "fallback"
+    return useful_views[0], "fallback"
+
+
+def _prioritize_role_refs_for_selected_view(
+    _role: str,
+    annotations: list[dict[str, Any]],
+    selected_view_hint: str,
+) -> tuple[list[dict[str, Any]], str, str]:
+    clean_annotations = [item for item in (annotations or []) if isinstance(item, dict)]
+    if not clean_annotations:
+        return [], "unknown", "unknown"
+
+    available_views = [str(item.get("view") or "unknown") for item in clean_annotations]
+    primary_view, match_mode = _resolve_selected_primary_view(available_views, selected_view_hint)
+    view_order = _selected_view_fallback_order(selected_view_hint)
+    order_map = {view: idx for idx, view in enumerate(view_order)}
+
+    prioritized = sorted(
+        clean_annotations,
+        key=lambda item: (
+            order_map.get(str(item.get("view") or "unknown"), len(view_order)),
+            int(item.get("originalIndex") or 0),
+        ),
+    )
+    return prioritized, primary_view, match_mode
+
+
+def _order_role_refs_for_multi_view(_role: str, urls: list[str], selected_view_hint: str = "any") -> tuple[list[str], list[dict[str, Any]], str, str]:
     clean_urls = [str(url or "").strip() for url in (urls or []) if str(url or "").strip()]
     annotated: list[dict[str, Any]] = []
-    order = {"front": 0, "side/profile": 1, "back": 2, "detail": 3, "unknown": 4}
+    default_order = {"front": 0, "side/profile": 1, "back": 2, "detail": 3, "unknown": 4}
     for idx, url in enumerate(clean_urls):
         annotated.append({
             "url": url,
             "view": _infer_reference_view_label(url, idx),
             "originalIndex": idx,
         })
-    annotated.sort(key=lambda item: (order.get(str(item.get("view") or "unknown"), 4), int(item.get("originalIndex") or 0)))
-    return [str(item.get("url") or "") for item in annotated], annotated
+
+    normalized = str(selected_view_hint or "any").strip().lower() or "any"
+    if normalized == "any":
+        annotated.sort(key=lambda item: (default_order.get(str(item.get("view") or "unknown"), 4), int(item.get("originalIndex") or 0)))
+        primary_view, match_mode = _resolve_selected_primary_view(
+            [str(item.get("view") or "unknown") for item in annotated],
+            normalized,
+        )
+    else:
+        annotated, primary_view, match_mode = _prioritize_role_refs_for_selected_view(_role, annotated, normalized)
+    return [str(item.get("url") or "") for item in annotated], annotated, primary_view, match_mode
 
 
 def _build_multi_view_role_context(
     refs_by_role: dict[str, list[str]] | None,
     active_roles: list[str] | None,
     selected_view_hint: str,
-) -> tuple[dict[str, list[str]], dict[str, int], dict[str, dict[str, Any]], list[str]]:
+) -> tuple[dict[str, list[str]], dict[str, int], dict[str, dict[str, Any]], list[str], dict[str, str], dict[str, str]]:
     raw_refs = refs_by_role if isinstance(refs_by_role, dict) else {}
     roles = [str(role or "").strip() for role in (active_roles or []) if str(role or "").strip() in COMFY_REF_ROLES]
     ordered_refs: dict[str, list[str]] = {role: list(raw_refs.get(role) or []) for role in COMFY_REF_ROLES}
     multi_view_count_by_role: dict[str, int] = {}
     reference_profile: dict[str, dict[str, Any]] = {}
     structured_lines: list[str] = []
+    selected_primary_view_by_role: dict[str, str] = {}
+    selected_view_match_mode_by_role: dict[str, str] = {}
 
     for role in roles:
-        ordered_urls, annotations = _order_role_refs_for_multi_view(role, raw_refs.get(role) or [])
+        ordered_urls, annotations, primary_view, match_mode = _order_role_refs_for_multi_view(role, raw_refs.get(role) or [], selected_view_hint)
         ordered_refs[role] = ordered_urls
         if not ordered_urls:
             continue
         role_views = [str(item.get("view") or "unknown") for item in annotations]
         multi_view_count_by_role[role] = len(ordered_urls)
+        selected_primary_view_by_role[role] = primary_view
+        selected_view_match_mode_by_role[role] = match_mode
         reference_profile[role] = {
             "views": role_views,
             "identity_locked": True,
             "selected_view_hint": selected_view_hint,
+            "selected_primary_view": primary_view,
+            "selected_view_match_mode": match_mode,
         }
         structured_lines.append(f"{role} reference set:")
         structured_lines.extend([
@@ -647,7 +790,14 @@ def _build_multi_view_role_context(
         ])
         structured_lines.append("Use these as a unified identity reference set.")
 
-    return ordered_refs, multi_view_count_by_role, reference_profile, structured_lines
+    return (
+        ordered_refs,
+        multi_view_count_by_role,
+        reference_profile,
+        structured_lines,
+        selected_primary_view_by_role,
+        selected_view_match_mode_by_role,
+    )
 
 
 def _is_face_too_small_for_lipsync(prompt: str | None) -> bool:
@@ -7223,7 +7373,14 @@ def clip_image(payload: ClipImageIn):
             next_refs_by_role[role] = role_urls if allowed else []
         comfy_refs_by_role = next_refs_by_role
 
-    comfy_refs_by_role, multi_view_count_by_role, multi_view_reference_profile, multi_view_context_lines = _build_multi_view_role_context(
+    (
+        comfy_refs_by_role,
+        multi_view_count_by_role,
+        multi_view_reference_profile,
+        multi_view_context_lines,
+        selected_primary_view_by_role,
+        selected_view_match_mode_by_role,
+    ) = _build_multi_view_role_context(
         comfy_refs_by_role,
         scene_active_roles,
         selected_view_hint,
@@ -7234,7 +7391,14 @@ def clip_image(payload: ClipImageIn):
         if multi_view_reference_profile.get(role)
     }
     for role, views in attached_view_labels_by_role.items():
-        logger.debug("[MULTI_VIEW] role=%s views=%s selected=%s", role, views, selected_view_hint)
+        logger.debug(
+            "[MULTI_VIEW] role=%s views=%s selected=%s primary=%s match=%s",
+            role,
+            views,
+            selected_view_hint,
+            selected_primary_view_by_role.get(role, "unknown"),
+            selected_view_match_mode_by_role.get(role, "unknown"),
+        )
 
     comfy_counts = {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles}
     connected_active_roles = sorted([
@@ -7363,6 +7527,8 @@ def clip_image(payload: ClipImageIn):
         "selectedViewHint": selected_view_hint,
         "multiViewReferenceProfile": multi_view_reference_profile,
         "attachedViewLabelsByRole": attached_view_labels_by_role,
+        "selectedPrimaryViewByRole": selected_primary_view_by_role,
+        "selectedViewMatchModeByRole": selected_view_match_mode_by_role,
         "promptDebug": {
             "sceneId": scene_id,
             "sceneGoal": scene_goal_input or None,
