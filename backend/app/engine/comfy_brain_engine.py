@@ -27,6 +27,7 @@ from app.engine.comfy_reference_profile import (
     _read_local_static_asset,
     _resolve_reference_url,
     build_reference_profiles,
+    resolve_reference_role_type,
     summarize_profiles,
 )
 from app.engine.gemini_rest import post_generate_content
@@ -60,6 +61,7 @@ MAX_GEMINI_AUDIO_INLINE_BYTES = 20 * 1024 * 1024
 GEMINI_ONLY_TRANSITION_TYPES = {"start", "continuation", "enter_transition", "justified_cut", "match_cut", "perspective_shift"}
 GEMINI_ONLY_HUMAN_ANCHOR_TYPES = {"character", "POV", "human_trace", "none"}
 GEMINI_ONLY_VISUAL_MODE_DEFAULT = "cinematic_real_world"
+COMFY_CHARACTER_ROLE_DEFAULTS = {"character_1": "hero", "character_2": "support", "character_3": "support"}
 SYSTEM_PROMPT_CLIP_PLANNER_VERSION = "clip_planner_v1"
 SYSTEM_PROMPT_CLIP_PLANNER = """You are a strict cinematic storyboard planner for COMFY CLIP.
 You are a planner only, not an image generator.
@@ -144,7 +146,11 @@ def _clean_refs_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, list[d
                 url = str(item.get("url") or "").strip()
                 if not url:
                     continue
-                clean.append({"url": url, "name": str(item.get("name") or "").strip()})
+                clean_item = {"url": url, "name": str(item.get("name") or "").strip()}
+                role_type = str(item.get("roleType") or "").strip().lower()
+                if role_type:
+                    clean_item["roleType"] = role_type
+                clean.append(clean_item)
         out[role] = clean
     return out
 
@@ -352,6 +358,26 @@ def _is_gemini_first_clip_mode(payload: dict[str, Any]) -> bool:
     )
 
 
+def _build_role_type_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, str]:
+    refs = refs_by_role if isinstance(refs_by_role, dict) else {}
+    role_types: dict[str, str] = {}
+    for role in COMFY_CHARACTER_ROLE_DEFAULTS:
+        items = refs.get(role)
+        if not isinstance(items, list) or len(items) == 0:
+            continue
+        role_types[role] = resolve_reference_role_type(role, items)
+    return role_types
+
+
+def _derive_role_mode(role_type_by_role: dict[str, str] | None) -> str:
+    role_types = role_type_by_role if isinstance(role_type_by_role, dict) else {}
+    for role, default_role_type in COMFY_CHARACTER_ROLE_DEFAULTS.items():
+        resolved_role_type = str(role_types.get(role) or "").strip().lower()
+        if resolved_role_type and resolved_role_type != default_role_type:
+            return "locked"
+    return "auto"
+
+
 def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
     mode = str(data.get("mode") or "clip").strip().lower()
@@ -368,6 +394,9 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     if requested_audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}:
         requested_audio_story_mode = "lyrics_music"
     audio_story_mode, audio_story_mode_guard_reason = _resolve_clip_gemini_audio_story_mode(data, requested_audio_story_mode)
+    refs_by_role = _clean_refs_by_role(data.get("refsByRole"))
+    role_type_by_role = _build_role_type_by_role(refs_by_role)
+    role_mode = _derive_role_mode(role_type_by_role)
 
     return {
         "mode": mode,
@@ -393,7 +422,9 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "audioDurationSec": _to_float(data.get("audioDurationSec")),
         "globalMusicTrackUrl": str(data.get("globalMusicTrackUrl") or data.get("musicTrackUrl") or data.get("sunoUrl") or "").strip(),
         "musicTrackUrl": str(data.get("musicTrackUrl") or data.get("globalMusicTrackUrl") or data.get("sunoUrl") or "").strip(),
-        "refsByRole": _clean_refs_by_role(data.get("refsByRole")),
+        "refsByRole": refs_by_role,
+        "roleTypeByRole": role_type_by_role,
+        "roleMode": role_mode,
         "storyControlMode": str(data.get("storyControlMode") or "").strip(),
         "storyMissionSummary": str(data.get("storyMissionSummary") or "").strip(),
         "timelineSource": str(data.get("timelineSource") or "").strip(),
@@ -1032,6 +1063,8 @@ def build_gemini_planner_input(
             "timelineSource": str(story.get("timelineSource") or normalized.get("timelineSource") or "").strip(),
             "textRole": "fallback_only" if normalized.get("audioStoryMode") == "speech_narrative" and story.get("storySource") == "audio" else ("primary" if story.get("storySource") == "text" else "support"),
         },
+        "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+        "roleMode": str(normalized.get("roleMode") or "auto").strip() or "auto",
         "hardRules": hard_rules,
         "compactWorldLock": _compact_world_lock(world_lock or {}),
         "compactEntityLocksSummary": _compact_entity_locks_summary(entity_locks or {}),
@@ -1652,6 +1685,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
     audio_story_mode = str(payload.get("audioStoryMode") or "lyrics_music").strip().lower()
     if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text", "speech_narrative"}:
         audio_story_mode = "lyrics_music"
+    role_mode = str(payload.get("roleMode") or "auto").strip().lower() or "auto"
 
     # DEBUG VALIDATION CHECKLIST (manual):
     # 1) lyrics_music -> same song with lyrics should produce story beats that follow lyrical meaning.
@@ -1684,6 +1718,23 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- music_plus_text: ignore lyrics meaning; boundaries follow musical phrasing + meaningful TEXT chunks, synced to transition points.\n"
         "- speech_narrative: boundaries must follow spoken pauses, sentence endings, topic shifts, and meaningful semantic beats. Do not segment by equal chunks. Do not use music rhythm unless spoken structure is absent.\n"
     )
+    role_logic_rules = (
+        "CHARACTER ROLE LOGIC:\n"
+        f"- roleMode={role_mode}. roleTypeByRole is provided in INPUT.roleTypeByRole.\n"
+        "- If roleMode='locked': hero is the main narrative subject, antagonist is the source of conflict, tension, or opposition, and support assists, reacts, or accompanies.\n"
+        "- If roleMode='locked': build scenes around hero perspective, introduce interaction between hero and antagonist, and maintain role consistency across scenes.\n"
+        "- If roleMode='locked' and an antagonist exists, at least one scene must show conflict, tension, or opposition, and the antagonist must influence story progression.\n"
+        "- If roleMode='auto': you may assign roles dynamically, but do not invent extreme conflict without justification.\n"
+        "ROLE CONSISTENCY RULE:\n"
+        "- Planner must not swap roles.\n"
+        "- Hero must remain hero in all scenes.\n"
+        "- Antagonist must not become hero.\n"
+        "- Support must not override hero as the main subject.\n"
+        "SCENE ROLE DISTRIBUTION:\n"
+        "- Hero appears in the majority of scenes.\n"
+        "- Antagonist appears in key tension scenes.\n"
+        "- Support appears in context or interaction scenes.\n"
+    )
 
     return (
         "You are COMFY storyboard planner. Return strict JSON only.\n"
@@ -1692,6 +1743,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         f"{audio_story_rules}\n"
         f"{segmentation_rules}\n"
         f"{audio_mode_segmentation}\n"
+        f"{role_logic_rules}\n"
         "AUDIO is primary source for rhythm, emotional contour, dramatic shifts and timing.\n"
         "If INPUT.audioDurationSec is provided and > 0, scene timeline MUST stay inside [0, audioDurationSec].\n"
         "TEXT is optional support that clarifies intent.\n"
@@ -1725,7 +1777,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "Do not invent dominant unexplained foreground props. Do not introduce oversized machines, devices, or artifacts unless the narration meaning or explicit refs require them. If no prop is required, keep the frame clean and semantically grounded.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
-        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected, plus audioStoryMode, textSource, transcriptAvailable, spokenMeaningPrimary, charactersAllowed, sceneSemanticSource per scene, peopleAutoAddedCount, oversizedSpeechScenesDetected, oversizedSpeechScenesSplitCount, speechSplitReasons, promptLanguageStatus, ruPromptMissing, enPromptPresent, and objectHallucinationRisk when available.\n"
+        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected, plus audioStoryMode, roleMode, roleTypeByRole, roleUsageByScene, textSource, transcriptAvailable, spokenMeaningPrimary, charactersAllowed, sceneSemanticSource per scene, peopleAutoAddedCount, oversizedSpeechScenesDetected, oversizedSpeechScenesSplitCount, speechSplitReasons, promptLanguageStatus, ruPromptMissing, enPromptPresent, and objectHallucinationRisk when available.\n"
         f"INPUT={json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -2674,6 +2726,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "output": normalized.get("output"),
                 "stylePreset": normalized.get("stylePreset"),
                 "audioStoryMode": normalized.get("audioStoryMode"),
+                "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+                "roleMode": normalized.get("roleMode") or "auto",
                 "audioStoryModeRequested": normalized.get("audioStoryModeRequested"),
                 "audioStoryModeGuardReason": normalized.get("audioStoryModeGuardReason"),
                 "storyControlMode": normalized.get("storyControlMode"),
@@ -2724,6 +2778,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
                 "worldLock": world_lock,
                 "entityLocks": entity_locks,
+                "roleMode": normalized.get("roleMode") or "auto",
+                "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
                 "httpStatus": http_status,
                 "sanitizedError": sanitized_error,
                 "failureSummary": sanitized_error,
@@ -2819,6 +2875,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     )
     canonical_dump = contract_result.canonical_output.model_dump(mode="json")
     scenes = contract_result.compatibility_scenes
+    role_type_by_role = normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {}
+    role_usage_by_scene = _build_role_usage_by_scene(scenes, role_type_by_role)
     timing_debug = {
         "sceneCount": len(scenes),
         "sceneCountAfterSpeechSplit": len(scenes),
@@ -2866,6 +2924,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "entityLocks": entity_locks,
         "preview": preview,
         "plannerInput": planner_input.model_dump(mode="json", exclude_none=True),
+        "roleTypeByRole": role_type_by_role,
+        "roleMode": normalized.get("roleMode") or "auto",
         "systemPromptVersion": "gemini_audio_first_planner_v1",
         "plannerContractName": planner_input.planner_contract_name,
         "contractVersion": planner_input.contract_version,
@@ -2951,6 +3011,9 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "timing": timing_debug,
             "segmentation": segmentation_debug,
             **director_debug,
+            "roleMode": normalized.get("roleMode") or "auto",
+            "roleTypeByRole": role_type_by_role,
+            "roleUsageByScene": role_usage_by_scene,
             "referenceProfilesSummary": summarize_profiles(reference_profiles),
             "activeRolesByScene": {str(scene.get("sceneId") or ""): list(scene.get("activeRefs") or []) for scene in scenes},
             **media_debug,
@@ -3257,9 +3320,12 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         "audioDurationSec": timing_debug.get("audioDurationSec"),
         "timelineDurationSec": timing_debug.get("timelineDurationSec"),
         "sceneDurationTotalSec": timing_debug.get("sceneDurationTotalSec"),
+        "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+        "roleMode": normalized.get("roleMode") or "auto",
     })
 
     scene_refs_debug = _build_scene_refs_debug(scenes, normalized.get("refsByRole") or {})
+    role_usage_by_scene = _build_role_usage_by_scene(scenes, normalized.get("roleTypeByRole"))
 
     result = {
         "ok": len(all_errors) == 0,
@@ -3301,6 +3367,9 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "availableRefsByRoleSummary": {role: len((normalized.get("refsByRole") or {}).get(role) or []) for role in COMFY_REF_ROLES},
             "referenceProfilesSummary": summarize_profiles(reference_profiles),
             "rolesGloballyAvailable": [role for role in COMFY_REF_ROLES if len((normalized.get("refsByRole") or {}).get(role) or []) > 0],
+            "roleMode": normalized.get("roleMode") or "auto",
+            "roleTypeByRole": normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+            "roleUsageByScene": role_usage_by_scene,
             "sceneRoleSelection": scene_refs_debug,
             "activeRolesByScene": {item.get("sceneId"): item.get("activeRoles") for item in scene_refs_debug},
         },
@@ -3360,6 +3429,40 @@ def _build_scene_refs_debug(scenes: list[dict[str, Any]], refs_by_role: dict[str
             "environmentLock": bool(scene.get("environmentLock")),
             "styleLock": bool(scene.get("styleLock")),
             "selectionReason": str(scene.get("roleSelectionReason") or "").strip() or "derived_from_refs_used_and_directives",
+        })
+    return out
+
+
+def _build_role_usage_by_scene(
+    scenes: list[dict[str, Any]],
+    role_type_by_role: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    role_types = role_type_by_role if isinstance(role_type_by_role, dict) else {}
+    out: list[dict[str, Any]] = []
+    for scene in scenes:
+        primary_role = str(scene.get("primaryRole") or "").strip()
+        secondary_roles = [
+            str(role or "").strip()
+            for role in (scene.get("secondaryRoles") if isinstance(scene.get("secondaryRoles"), list) else [])
+            if str(role or "").strip()
+        ]
+        active_roles = [
+            str(role or "").strip()
+            for role in (scene.get("activeRefs") if isinstance(scene.get("activeRefs"), list) else [])
+            if str(role or "").strip()
+        ]
+        scene_role_types = {
+            role: role_types.get(role, "unknown")
+            for role in [primary_role, *secondary_roles, *active_roles]
+            if role
+        }
+        out.append({
+            "sceneId": str(scene.get("sceneId") or ""),
+            "primaryRole": primary_role,
+            "primaryRoleType": scene_role_types.get(primary_role, "unknown") if primary_role else "unknown",
+            "secondaryRoles": secondary_roles,
+            "activeRoles": active_roles,
+            "roleTypeByRole": scene_role_types,
         })
     return out
 

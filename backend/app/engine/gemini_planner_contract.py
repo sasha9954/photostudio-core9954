@@ -170,6 +170,8 @@ class GeminiPlannerInputPackage(BaseModel):
     timeline_source: str | None = None
     global_music_track_url: str | None = None
     refs_by_role: dict[str, list[dict[str, str]]] = Field(default_factory=dict)
+    role_type_by_role: dict[str, str] = Field(default_factory=dict)
+    role_mode: str = "auto"
     style_preset: str | None = None
     genre: str | None = None
     story_control_mode: str | None = None
@@ -262,7 +264,11 @@ def _normalize_refs_by_role(value: Any) -> dict[str, list[dict[str, str]]]:
             url = _clean_str(item.get("url"))
             if not url:
                 continue
-            cleaned_items.append({"url": url, "name": _clean_str(item.get("name"))})
+            cleaned_item = {"url": url, "name": _clean_str(item.get("name"))}
+            role_type = _clean_str(item.get("roleType")).lower()
+            if role_type:
+                cleaned_item["roleType"] = role_type
+            cleaned_items.append(cleaned_item)
         if cleaned_items:
             normalized[_clean_str(role)] = cleaned_items
     return normalized
@@ -299,6 +305,8 @@ def build_gemini_planner_input(
         timeline_source=_clean_str(normalized.get("timelineSource")) or None,
         global_music_track_url=project_input.global_music_track_url,
         refs_by_role=_normalize_refs_by_role(normalized.get("refsByRole") or project_input.refs),
+        role_type_by_role=normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {},
+        role_mode=_clean_str(normalized.get("roleMode") or "auto") or "auto",
         style_preset=_clean_str(normalized.get("stylePreset")) or None,
         genre=_clean_str(normalized.get("genre")) or None,
         story_control_mode=_clean_str(normalized.get("storyControlMode")) or None,
@@ -374,7 +382,22 @@ def build_gemini_planner_system_rules(planner_input: GeminiPlannerInputPackage) 
         "Narration must not use lip_sync. Local phrase text must not imply lip_sync.\n"
         "lip_sync is only for music-driven vocal + rhythm scenes with framing that supports visible articulation.\n"
         "i2v_as and f_l_as are audio-sensitive motion, not speech articulation.\n"
-        "Populate every timing field consistently and keep shot timing inside its scene timing."
+        "Populate every timing field consistently and keep shot timing inside its scene timing.\n"
+        "CHARACTER ROLE LOGIC:\n"
+        "- planner_input.role_mode is either 'auto' or 'locked'. planner_input.role_type_by_role contains the active role mapping.\n"
+        "- If role_mode='locked': hero is the main narrative subject, antagonist is the source of conflict/tension/opposition, and support assists/reacts/accompanies.\n"
+        "- If role_mode='locked': build scenes around the hero perspective, introduce interaction between hero and antagonist, and maintain role consistency across scenes.\n"
+        "- If role_mode='locked' and an antagonist exists, at least one scene must show conflict, tension, or opposition, and the antagonist must influence story progression.\n"
+        "- If role_mode='auto': you may assign roles dynamically, but do not invent extreme conflict without justification.\n"
+        "ROLE CONSISTENCY RULE:\n"
+        "- Never swap roles across scenes.\n"
+        "- Hero must remain hero in all scenes.\n"
+        "- Antagonist must not become hero.\n"
+        "- Support must not override hero as the main subject.\n"
+        "SCENE ROLE DISTRIBUTION:\n"
+        "- Hero should appear in the majority of scenes.\n"
+        "- Antagonist should appear in key tension scenes.\n"
+        "- Support should appear in context or interaction scenes."
     )
 
 

@@ -23,6 +23,7 @@ ALLOWED_INPUT_MODES = {"audio_first", "text_to_audio_first"}
 class RefItemIn(BaseModel):
     url: str = ""
     name: str = ""
+    roleType: str = ""
 
 
 
