@@ -33,13 +33,13 @@ export const NARRATIVE_TESTER_CONFIG = {
   },
   brainPackageTesterNode: {
     type: "brainPackageTesterNode",
-    title: "ТЕСТЕР МОЗГА",
+    title: "ТЕСТЕР LEGACY PLANNER",
     icon: "🔬",
     acceptHandle: "brain_package_out",
-    statusLabel: "Brain package получен",
-    waitingLabel: "Brain package подключён",
+    statusLabel: "Legacy planner payload получен",
+    waitingLabel: "Legacy planner payload подключён",
     emptyTitle: "Подключите выход narrative.brain_package_out",
-    emptyHint: "Этот тестер показывает структурированный пакет для мозговой ноды и raw JSON.",
+    emptyHint: "Этот тестер показывает legacy planner payload и raw JSON без участия Scenario Director UI.",
     payloadKind: "brain",
     payloadKey: "brainPackage",
   },
@@ -134,14 +134,14 @@ function resolveBrainTesterPayload(payload) {
         return {
           brain: null,
           debugMeta,
-          errorMessage: "Brain tester получил JSON-строку, но внутри не brain package object.",
+          errorMessage: "Legacy planner tester получил JSON-строку, но внутри нет ожидаемого planner payload.",
           errorStage: "json_string_non_brain_object",
         };
       } catch {
         return {
           brain: null,
           debugMeta,
-          errorMessage: "Brain tester получил строку, похожую на JSON, но JSON.parse не удался.",
+          errorMessage: "Legacy planner tester получил строку, похожую на JSON, но JSON.parse не удался.",
           errorStage: "json_parse_failed",
         };
       }
@@ -159,7 +159,7 @@ function resolveBrainTesterPayload(payload) {
     return {
       brain: null,
       debugMeta,
-      errorMessage: "Brain tester получил строковый payload вместо object payload.",
+      errorMessage: "Legacy planner tester получил строковый payload вместо object payload.",
       errorStage: "plain_string_payload",
     };
   }
@@ -171,7 +171,7 @@ function resolveBrainTesterPayload(payload) {
   return {
     brain: null,
     debugMeta,
-    errorMessage: "Brain tester получил payload неподдерживаемого типа до structured renderer.",
+    errorMessage: "Legacy planner tester получил payload неподдерживаемого типа до structured renderer.",
     errorStage: "unsupported_payload_type",
   };
 }
@@ -249,7 +249,7 @@ function TesterBrainBody({ config, payload, isConnected, data }) {
           </button>
         </div>
         {showRawJson ? (
-          <div className="clipSB_testerRawJson" aria-label="Raw JSON brain package">
+          <div className="clipSB_testerRawJson" aria-label="Raw JSON legacy planner payload">
             <div className="clipSB_testerRawJsonHeader">Raw JSON</div>
             <pre>{rawJson}</pre>
           </div>

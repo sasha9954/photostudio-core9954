@@ -2905,7 +2905,7 @@ body.ps_clip_fullscreen .mainCol {
   display: grid;
   grid-template-columns: minmax(300px, 1fr) 220px;
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .clipSB_introFrameControls {
@@ -3497,7 +3497,7 @@ body.ps_clip_fullscreen .mainCol {
   display: grid;
   grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
   margin-top: 12px;
   min-height: 252px;
 }
@@ -3720,6 +3720,7 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_narrativeResultSection {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
@@ -3732,9 +3733,10 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_narrativeResultBody {
-  height: 320px;
+  flex: 1;
+  height: auto;
   min-height: 320px;
-  max-height: 320px;
+  max-height: none;
   padding: 12px;
   border-radius: 14px;
   background: rgba(0,0,0,0.22);
