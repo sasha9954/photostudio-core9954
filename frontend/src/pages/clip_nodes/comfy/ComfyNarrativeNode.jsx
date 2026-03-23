@@ -19,37 +19,9 @@ const OUTPUT_HANDLES = [
   { id: "storyboard_out", labelRu: "Storyboard" },
   { id: "scenario_out", labelRu: "Сценарий" },
   { id: "voice_script_out", labelRu: "Озвучка" },
-  { id: "brain_package_out", labelRu: "Для мозга" },
+  { id: "brain_package_out", labelRu: "Legacy planner" },
   { id: "bg_music_prompt_out", labelRu: "Музыка" },
 ];
-
-function renderBrainPackage(brainPackage) {
-  if (!brainPackage) {
-    return <div className="clipSB_small">Нажмите «СОЗДАТЬ СЦЕНАРИЙ», чтобы собрать пакет для мозга.</div>;
-  }
-
-  const entities = Array.isArray(brainPackage.entities) ? brainPackage.entities : [];
-  const sceneLogic = Array.isArray(brainPackage.sceneLogic) ? brainPackage.sceneLogic : [];
-
-  return (
-    <div className="clipSB_narrativeReadable">
-      <div><strong>Тип контента:</strong> {brainPackage.contentTypeLabel}</div>
-      <div><strong>Стиль:</strong> {brainPackage.styleLabel}</div>
-      <div><strong>Главный источник:</strong> {brainPackage.sourceLabel}</div>
-      <div><strong>Происхождение:</strong> {brainPackage.sourceOrigin === "connected" ? "Подключённый источник" : "Источник не подключён"}</div>
-      <div><strong>Превью источника:</strong> {brainPackage.sourcePreview || "—"}</div>
-      <div><strong>Сущности:</strong> {entities.join(", ") || "—"}</div>
-      <div>
-        <strong>Логика сцен:</strong>
-        <ol>
-          {sceneLogic.map((item) => <li key={item}>{item}</li>)}
-        </ol>
-      </div>
-      <div><strong>Аудио стратегия:</strong> {brainPackage.audioStrategy}</div>
-      <div><strong>Режиссёрская задача:</strong> {brainPackage.directorNote}</div>
-    </div>
-  );
-}
 
 function renderKvRows(rows = []) {
   return (
@@ -193,9 +165,9 @@ function renderMusicTab(directorOutput) {
   ]);
 }
 
-function renderJsonTab(directorOutput) {
-  if (!directorOutput?.storyboardJson) return <div className="clipSB_small">JSON появится после генерации director output.</div>;
-  return <pre>{JSON.stringify(directorOutput.storyboardJson, null, 2)}</pre>;
+function renderJsonTab(storyboardOut) {
+  if (!storyboardOut) return <div className="clipSB_small">JSON появится после генерации storyboard_out.</div>;
+  return <pre>{JSON.stringify(storyboardOut, null, 2)}</pre>;
 }
 
 export default function ComfyNarrativeNode({ id, data }) {
@@ -247,9 +219,8 @@ export default function ComfyNarrativeNode({ id, data }) {
   if (activeResultTab === "scenes") resultBody = renderScenesTab(directorOutput);
   if (activeResultTab === "video") resultBody = renderVideoTab(directorOutput);
   if (activeResultTab === "sound") resultBody = renderSoundTab(directorOutput);
-  if (activeResultTab === "brain") resultBody = renderBrainPackage(resultOutputs?.brainPackage);
   if (activeResultTab === "music") resultBody = renderMusicTab(directorOutput);
-  if (activeResultTab === "json") resultBody = renderJsonTab({ ...(directorOutput || {}), storyboardJson: storyboardOut || directorOutput?.storyboardJson || null });
+  if (activeResultTab === "json") resultBody = renderJsonTab(storyboardOut);
 
   return (
     <>
@@ -279,7 +250,7 @@ export default function ComfyNarrativeNode({ id, data }) {
         onClose={() => data?.onRemoveNode?.(id)}
         className="clipSB_nodeNarrative"
       >
-        <div className="clipSB_narrativeSubtitle">Главный director / planning узел для истории, контекста и сцен</div>
+        <div className="clipSB_narrativeSubtitle">Главный director / planning узел</div>
 
         <section className="clipSB_narrativeSection">
           <div className="clipSB_brainLabel">Активный source-of-truth</div>

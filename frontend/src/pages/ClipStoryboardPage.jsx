@@ -335,7 +335,7 @@ const NARRATIVE_TESTER_NODE_CONFIG = {
     payloadKey: "voiceScript",
   },
   brainPackageTesterNode: {
-    title: "ТЕСТЕР МОЗГА",
+    title: "ТЕСТЕР LEGACY PLANNER",
     acceptHandle: "brain_package_out",
     payloadKind: "brain",
     payloadKey: "brainPackage",
@@ -9264,12 +9264,12 @@ onClipSec: (nodeId, value) => {
                   && String(edgeItem.sourceHandle || "") === "storyboard_out"
                   && reboundNodes.some((nodeItem) => nodeItem.id === edgeItem.target && nodeItem.type === "storyboardNode")
                 );
-                if (hasStoryboardConsumer && !plannerBrainNodeId) {
+                if (hasStoryboardConsumer) {
                   notify({ type: "success", title: "Storyboard ready", message: "storyboard_out подтверждён и уже передан в Storyboard node." });
                   return;
                 }
                 if (!plannerBrainNodeId) {
-                  notify({ type: "warning", title: "Connect Storyboard or COMFY BRAIN", message: "Результат подтверждён, но ни storyboard_out → Storyboard, ни «Для мозга» → COMFY BRAIN не подключены." });
+                  notify({ type: "warning", title: "Connect Storyboard", message: "Результат подтверждён, но storyboard_out пока не подключён к Storyboard node." });
                   return;
                 }
                 const plannerNode = reboundNodes.find((nodeItem) => nodeItem.id === plannerBrainNodeId && nodeItem.type === "comfyBrain");
@@ -12567,7 +12567,7 @@ const hydrate = useCallback((source = "unknown") => {
               <div className="clipSB_drawerGroupTitle">DEBUG / TEST / SERVICE</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioOutputTester")}>🧪 ТЕСТЕР СЦЕНАРИЯ</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("voiceOutputTester")}>📡 ТЕСТЕР ОЗВУЧКИ</button>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("brainPackageTester")}>🔬 ТЕСТЕР МОЗГА</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("brainPackageTester")}>🔬 ТЕСТЕР LEGACY PLANNER</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("musicPromptTester")}>⚡ ТЕСТЕР МУЗЫКИ</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyStoryboard")}>🧩 COMFY STORYBOARD</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyVideoPreview")}>🎬 COMFY VIDEO PREVIEW</button>
