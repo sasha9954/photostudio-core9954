@@ -16,6 +16,8 @@ from app.engine.gemini_rest import post_generate_content
 
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
 HUMAN_ROLES = {"character_1", "character_2", "character_3", "group"}
+ROLE_TYPE_DEFAULTS = {"character_1": "hero", "character_2": "support", "character_3": "support"}
+ROLE_TYPE_VALUES = {"hero", "support", "antagonist", "unknown"}
 MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024
 ANIMAL_SPECIES_TERMS = {
     "dog": ["dog", "dogs", "canine", "puppy", "hound", "собака", "пес", "пёс", "щенок"],
@@ -253,6 +255,24 @@ def _extract_json_text_from_vision_response(resp: dict[str, Any]) -> str:
         if text.lower().startswith("json"):
             text = text[4:].strip()
     return text
+
+
+def _normalize_role_type(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in ROLE_TYPE_VALUES:
+        return normalized
+    return "unknown"
+
+
+def resolve_reference_role_type(role: str, items: list[Any] | None = None) -> str:
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            explicit = _normalize_role_type(item.get("roleType") or item.get("semanticRole") or item.get("characterRole"))
+            if explicit != "unknown":
+                return explicit
+    return ROLE_TYPE_DEFAULTS.get(str(role or "").strip(), "unknown")
 
 
 def _guess_entity_type(role: str) -> str:
@@ -514,6 +534,7 @@ def build_reference_profiles(refs_by_role: dict[str, Any] | None) -> dict[str, A
         if not clean_items:
             continue
         entity_type = _guess_entity_type(role)
+        role_type = resolve_reference_role_type(role, clean_items)
 
         visual_profile_fallback = {
             "sourceImageCount": len(clean_items),
@@ -532,6 +553,7 @@ def build_reference_profiles(refs_by_role: dict[str, Any] | None) -> dict[str, A
             "expectedEntityType": entity_type,
             "detectedEntityType": visual_probe.get("detectedEntityType") if isinstance(visual_probe, dict) else None,
             "entityId": role,
+            "roleType": role_type,
             "identityLock": role in HUMAN_ROLES or role in {"animal", "props"},
             "environmentLock": role == "location",
             "styleLock": role == "style",
@@ -558,6 +580,7 @@ def summarize_profiles(profiles: dict[str, Any]) -> dict[str, Any]:
         out[role] = {
             "entityType": profile.get("entityType"),
             "expectedEntityType": profile.get("expectedEntityType"),
+            "roleType": profile.get("roleType") or "unknown",
             "detectedEntityType": profile.get("detectedEntityType"),
             "identityLock": bool(profile.get("identityLock")),
             "invariants": profile.get("invariants") or [],
