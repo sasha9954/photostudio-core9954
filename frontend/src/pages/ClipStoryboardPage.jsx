@@ -60,6 +60,8 @@ const PORT_COLORS = {
   video_ref: "var(--family-video-ref)",
   text_in: "var(--family-text)",
   audio_in: "var(--family-audio)",
+  video_file_in: "var(--family-video-ref)",
+  video_link_in: "var(--family-link)",
   link_in: "var(--family-link)",
   video_ref_in: "var(--family-video-ref)",
   scenario_out: "var(--family-narrative)",
@@ -242,13 +244,10 @@ function getLinkNodeSavedPayload(data = null) {
 
 function getNarrativeSourceRefreshSignature({ sourceNode = null, targetHandle = "" } = {}) {
   if (!sourceNode) return "";
-  if (targetHandle === "text_in" && sourceNode.type === "textNode") {
-    return `text:${String(sourceNode?.data?.textValue || sourceNode?.data?.text || "").trim()}`;
-  }
   if (targetHandle === "audio_in" && sourceNode.type === "audioNode") {
     return `audio:${String(sourceNode?.data?.audioUrl || "").trim()}|${String(sourceNode?.data?.audioName || "").trim()}`;
   }
-  if (targetHandle === "link_in" && sourceNode.type === "linkNode") {
+  if (targetHandle === "video_link_in" && sourceNode.type === "linkNode") {
     const payload = getLinkNodeSavedPayload(sourceNode?.data) || buildLinkNodePayload(sourceNode?.data?.urlValue || sourceNode?.data?.draftUrl || "");
     return `link:${JSON.stringify({
       value: payload?.value || "",
@@ -258,7 +257,7 @@ function getNarrativeSourceRefreshSignature({ sourceNode = null, targetHandle = 
       status: String(sourceNode?.data?.urlStatus || ""),
     })}`;
   }
-  if (targetHandle === "video_ref_in" && sourceNode.type === "videoRefNode") {
+  if (targetHandle === "video_file_in" && sourceNode.type === "videoRefNode") {
     const payload = getVideoRefNodeSavedPayload(sourceNode?.data);
     return `video_ref_local:${JSON.stringify({
       value: payload?.value || "",
@@ -270,13 +269,29 @@ function getNarrativeSourceRefreshSignature({ sourceNode = null, targetHandle = 
       size: payload?.meta?.size || 0,
     })}`;
   }
-  if (targetHandle === "video_ref_in" && sourceNode.type === "comfyStoryboard") {
+  if (targetHandle === "video_file_in" && sourceNode.type === "comfyStoryboard") {
     const scenes = Array.isArray(sourceNode?.data?.mockScenes) ? sourceNode.data.mockScenes : [];
     return `video_ref:${JSON.stringify(scenes.map((scene) => ({
       sceneId: String(scene?.sceneId || ""),
       videoUrl: String(scene?.videoUrl || scene?.assetUrl || "").trim(),
       imageUrl: String(scene?.imageUrl || "").trim(),
     })))}`;
+  }
+  if (["ref_character_1", "ref_location", "ref_style", "ref_props"].includes(targetHandle) && sourceNode.type === "refNode") {
+    const normalized = normalizeRefData(sourceNode?.data || {}, sourceNode?.data?.kind || "");
+    return `ref_node:${targetHandle}:${JSON.stringify({
+      kind: String(sourceNode?.data?.kind || ""),
+      refs: normalized.refs,
+      status: String(sourceNode?.data?.refStatus || ""),
+    })}`;
+  }
+  if (["ref_character_2", "ref_character_3"].includes(targetHandle) && ["refCharacter2", "refCharacter3"].includes(sourceNode.type)) {
+    return `ref_lite:${targetHandle}:${JSON.stringify({
+      refs: Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [],
+      status: String(sourceNode?.data?.refStatus || ""),
+      name: String(sourceNode?.data?.name || ""),
+      notes: String(sourceNode?.data?.notes || ""),
+    })}`;
   }
   return "";
 }
@@ -290,7 +305,21 @@ function isComfyBrainInput(handleId) {
 }
 
 function isNarrativeInput(handleId) {
-  return ["text_in", "audio_in", "link_in", "video_ref_in"].includes(String(handleId || ""));
+  return [
+    "audio_in",
+    "video_file_in",
+    "video_link_in",
+    "ref_character_1",
+    "ref_character_2",
+    "ref_character_3",
+    "ref_props",
+    "ref_location",
+    "ref_style",
+  ].includes(String(handleId || ""));
+}
+
+function isNarrativeSourceInput(handleId) {
+  return ["audio_in", "video_file_in", "video_link_in"].includes(String(handleId || ""));
 }
 
 const NARRATIVE_TESTER_NODE_CONFIG = {
@@ -455,7 +484,7 @@ function getVideoRefNodeSavedPayload(data = null) {
 
 function removeNarrativeIncomingSourceEdges(edges = [], narrativeNodeId = "") {
   if (!narrativeNodeId) return Array.isArray(edges) ? edges : [];
-  return (Array.isArray(edges) ? edges : []).filter((edge) => !(edge?.target === narrativeNodeId && isNarrativeInput(edge?.targetHandle)));
+  return (Array.isArray(edges) ? edges : []).filter((edge) => !(edge?.target === narrativeNodeId && isNarrativeSourceInput(edge?.targetHandle)));
 }
 
 function enforceSingleNarrativeSourceEdge(edges = []) {
@@ -463,7 +492,7 @@ function enforceSingleNarrativeSourceEdge(edges = []) {
   const latestByNode = new Map();
 
   [...list].forEach((edge, index) => {
-    if (!edge?.target || !isNarrativeInput(edge?.targetHandle)) return;
+    if (!edge?.target || !isNarrativeSourceInput(edge?.targetHandle)) return;
     latestByNode.set(edge.target, index);
   });
 
@@ -471,7 +500,7 @@ function enforceSingleNarrativeSourceEdge(edges = []) {
 
   let changed = false;
   const next = list.filter((edge, index) => {
-    if (!edge?.target || !isNarrativeInput(edge?.targetHandle)) return true;
+    if (!edge?.target || !isNarrativeSourceInput(edge?.targetHandle)) return true;
     const keepIndex = latestByNode.get(edge.target);
     const keep = keepIndex === index;
     if (!keep) {
@@ -489,6 +518,8 @@ const EDGE_STYLE_BY_KIND = {
   text: { color: PORT_COLORS.text, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   text_in: { color: PORT_COLORS.text_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   audio_in: { color: PORT_COLORS.audio_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  video_file_in: { color: PORT_COLORS.video_file_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  video_link_in: { color: PORT_COLORS.video_link_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   link: { color: PORT_COLORS.link, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   link_in: { color: PORT_COLORS.link_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   video_ref_in: { color: PORT_COLORS.video_ref_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
@@ -2370,16 +2401,6 @@ function getLatestIncomingEdgeForHandle({ targetNodeId = "", targetHandle = "", 
 function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", targetHandle = "" } = {}) {
   if (!sourceNode) return null;
 
-  if (targetHandle === "text_in" && sourceNode.type === "textNode" && sourceHandle === "text") {
-    const textValue = String(sourceNode?.data?.textValue || sourceNode?.data?.text || "").trim();
-    if (!textValue) return null;
-    return {
-      value: textValue,
-      preview: textValue,
-      sourceLabel: "Внешний текстовый источник",
-    };
-  }
-
   if (targetHandle === "audio_in" && sourceNode.type === "audioNode" && sourceHandle === "audio") {
     const audioUrl = String(sourceNode?.data?.audioUrl || "").trim();
     if (!audioUrl) return null;
@@ -2391,7 +2412,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
-  if (targetHandle === "link_in" && sourceNode.type === "linkNode" && sourceHandle === "link") {
+  if (targetHandle === "video_link_in" && sourceNode.type === "linkNode" && sourceHandle === "link") {
     const savedPayload = getLinkNodeSavedPayload(sourceNode?.data);
     const payload = savedPayload || buildLinkNodePayload(sourceNode?.data?.urlValue || sourceNode?.data?.draftUrl || "");
     console.log("[LINK->NARRATIVE payload]", { sourceNode, extracted: payload, edge: { sourceHandle, targetHandle } });
@@ -2413,7 +2434,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
-  if (targetHandle === "video_ref_in" && sourceNode.type === "videoRefNode" && sourceHandle === "video_ref") {
+  if (targetHandle === "video_file_in" && sourceNode.type === "videoRefNode" && sourceHandle === "video_ref") {
     const payload = getVideoRefNodeSavedPayload(sourceNode?.data);
     if (!payload) return null;
     return {
@@ -2432,7 +2453,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
-  if (targetHandle === "video_ref_in" && sourceNode.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE) {
+  if (targetHandle === "video_file_in" && sourceNode.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE) {
     const scenes = Array.isArray(sourceNode?.data?.mockScenes) ? sourceNode.data.mockScenes : [];
     const videoUrls = scenes
       .map((scene) => String(scene?.videoUrl || scene?.assetUrl || "").trim())
@@ -2467,20 +2488,109 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
+  if (targetHandle === "ref_character_1" && sourceNode.type === "refNode" && sourceHandle === "ref_character") {
+    const normalized = normalizeRefData(sourceNode?.data || {}, "ref_character");
+    if (!normalized.refs.length) return null;
+    return {
+      value: normalized.refs[0]?.url || "",
+      preview: normalized.refs[0]?.name || `Character 1 • ${normalized.refs.length} refs`,
+      sourceLabel: "Character 1",
+      refs: normalized.refs.map((item) => item.url),
+      count: normalized.refs.length,
+      meta: { kind: "ref_character", count: normalized.refs.length },
+    };
+  }
+
+  if (targetHandle === "ref_character_2" && sourceNode.type === "refCharacter2" && sourceHandle === "ref_character_2") {
+    const refs = (Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [])
+      .map((item) => String(item?.url || "").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    if (!refs.length) return null;
+    return {
+      value: refs[0] || "",
+      preview: String(sourceNode?.data?.name || "").trim() || `Character 2 • ${refs.length} refs`,
+      sourceLabel: "Character 2",
+      refs,
+      count: refs.length,
+      meta: { kind: "ref_character_2", count: refs.length },
+    };
+  }
+
+  if (targetHandle === "ref_character_3" && sourceNode.type === "refCharacter3" && sourceHandle === "ref_character_3") {
+    const refs = (Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [])
+      .map((item) => String(item?.url || "").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    if (!refs.length) return null;
+    return {
+      value: refs[0] || "",
+      preview: String(sourceNode?.data?.name || "").trim() || `Character 3 • ${refs.length} refs`,
+      sourceLabel: "Character 3",
+      refs,
+      count: refs.length,
+      meta: { kind: "ref_character_3", count: refs.length },
+    };
+  }
+
+  if (targetHandle === "ref_props" && sourceNode.type === "refNode" && sourceHandle === "ref_items") {
+    const normalized = normalizeRefData(sourceNode?.data || {}, "ref_items");
+    if (!normalized.refs.length) return null;
+    return {
+      value: normalized.refs[0]?.url || "",
+      preview: normalized.refs[0]?.name || `Props • ${normalized.refs.length} refs`,
+      sourceLabel: "Props",
+      refs: normalized.refs.map((item) => item.url),
+      count: normalized.refs.length,
+      meta: { kind: "ref_props", count: normalized.refs.length },
+    };
+  }
+
+  if (targetHandle === "ref_location" && sourceNode.type === "refNode" && sourceHandle === "ref_location") {
+    const normalized = normalizeRefData(sourceNode?.data || {}, "ref_location");
+    if (!normalized.refs.length) return null;
+    return {
+      value: normalized.refs[0]?.url || "",
+      preview: normalized.refs[0]?.name || "Location connected",
+      sourceLabel: "Location",
+      refs: normalized.refs.map((item) => item.url),
+      count: normalized.refs.length,
+      meta: { kind: "ref_location", count: normalized.refs.length },
+    };
+  }
+
+  if (targetHandle === "ref_style" && sourceNode.type === "refNode" && sourceHandle === "ref_style") {
+    const normalized = normalizeRefData(sourceNode?.data || {}, "ref_style");
+    if (!normalized.refs.length) return null;
+    return {
+      value: normalized.refs[0]?.url || "",
+      preview: normalized.refs[0]?.name || "Style connected",
+      sourceLabel: "Style",
+      refs: normalized.refs.map((item) => item.url),
+      count: normalized.refs.length,
+      meta: { kind: "ref_style", count: normalized.refs.length },
+    };
+  }
+
   return null;
 }
 
 function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(), edges = [] } = {}) {
   if (!node?.id) {
     return {
-      text_in: null,
       audio_in: null,
-      link_in: null,
-      video_ref_in: null,
+      video_file_in: null,
+      video_link_in: null,
+      ref_character_1: null,
+      ref_character_2: null,
+      ref_character_3: null,
+      ref_props: null,
+      ref_location: null,
+      ref_style: null,
     };
   }
 
-  return ["text_in", "audio_in", "link_in", "video_ref_in"].reduce((acc, handleId) => {
+  return ["audio_in", "video_file_in", "video_link_in", "ref_character_1", "ref_character_2", "ref_character_3", "ref_props", "ref_location", "ref_style"].reduce((acc, handleId) => {
     const edge = getLatestIncomingEdgeForHandle({ targetNodeId: node.id, targetHandle: handleId, edges });
     const sourceNode = edge ? (nodesById.get(edge.source) || null) : null;
     const extracted = extractNarrativeConnectedValue({
@@ -11081,13 +11191,20 @@ const hydrate = useCallback((source = "unknown") => {
           const h = params.targetHandle || "";
           const sourceHandle = params.sourceHandle || "";
           const ok =
-            (h === "text_in" && src.type === "textNode" && sourceHandle === "text") ||
             (h === "audio_in" && src.type === "audioNode" && sourceHandle === "audio") ||
-            (h === "link_in" && src.type === "linkNode" && sourceHandle === "link") ||
-            (h === "video_ref_in" && src.type === "videoRefNode" && sourceHandle === "video_ref") ||
-            (h === "video_ref_in" && src.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE);
+            (h === "video_link_in" && src.type === "linkNode" && sourceHandle === "link") ||
+            (h === "video_file_in" && src.type === "videoRefNode" && sourceHandle === "video_ref") ||
+            (h === "video_file_in" && src.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE) ||
+            (h === "ref_character_1" && src.type === "refNode" && sourceHandle === "ref_character") ||
+            (h === "ref_character_2" && src.type === "refCharacter2" && sourceHandle === "ref_character_2") ||
+            (h === "ref_character_3" && src.type === "refCharacter3" && sourceHandle === "ref_character_3") ||
+            (h === "ref_props" && src.type === "refNode" && sourceHandle === "ref_items") ||
+            (h === "ref_location" && src.type === "refNode" && sourceHandle === "ref_location") ||
+            (h === "ref_style" && src.type === "refNode" && sourceHandle === "ref_style");
           if (!ok) return eds;
-          const cleaned = removeNarrativeIncomingSourceEdges(eds, dst.id);
+          const cleaned = isNarrativeSourceInput(h)
+            ? removeNarrativeIncomingSourceEdges(eds, dst.id)
+            : eds.filter((e) => !(e.target === dst.id && String(e.targetHandle || "") === h));
           const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
           nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
           refreshNodeBindingsForEdges(nextEdges, "edges:connect:narrative");

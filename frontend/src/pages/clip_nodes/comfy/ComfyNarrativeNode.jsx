@@ -2,15 +2,18 @@ import React from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 import {
   NARRATIVE_INPUT_HANDLES,
+  NARRATIVE_SOURCE_INPUT_HANDLES,
   NARRATIVE_SOURCE_OPTIONS,
+  NARRATIVE_CONTEXT_INPUT_HANDLES,
   NARRATIVE_CONTENT_TYPE_OPTIONS,
   NARRATIVE_MODE_OPTIONS,
   NARRATIVE_STYLE_OPTIONS,
   NARRATIVE_RESULT_TABS,
+  summarizeNarrativeConnectedContext,
 } from "./comfyNarrativeDomain";
 
-const NARRATIVE_HANDLE_TOP = 106;
-const NARRATIVE_HANDLE_STEP = 38;
+const NARRATIVE_HANDLE_TOP = 104;
+const NARRATIVE_HANDLE_STEP = 24;
 
 const OUTPUT_HANDLES = [
   { id: "scenario_out", labelRu: "Сценарий" },
@@ -51,17 +54,16 @@ export default function ComfyNarrativeNode({ id, data }) {
   const activeResultTab = data?.activeResultTab || "scenario";
   const outputs = data?.outputs || {};
   const resolvedSource = data?.resolvedSource || {};
+  const connectedContext = summarizeNarrativeConnectedContext(data || {});
   const activeSourceMode = resolvedSource?.mode || null;
   const hasConnectedSource = resolvedSource?.origin === "connected" && !!String(resolvedSource?.value || "").trim();
   const sourceStatusText = hasConnectedSource
-    ? activeSourceMode === "TEXT"
-      ? "Подключён внешний текстовый источник"
-      : activeSourceMode === "AUDIO"
+    ? activeSourceMode === "AUDIO"
         ? "Подключён внешний аудио-источник"
-        : activeSourceMode === "LINK"
-          ? "Подключён внешний web / URL источник"
-        : "Подключён внешний видео-референс"
-    : "Подключите один источник: текст, аудио, ссылка или видео-референс.";
+        : activeSourceMode === "VIDEO_LINK"
+          ? "Подключена внешняя ссылка на видео"
+          : "Подключён внешний видеофайл"
+    : "Подключите один source-of-truth: аудио, видеофайл или ссылку на видео.";
 
   const sourceInput = hasConnectedSource ? (
     <div className="clipSB_narrativeSourceStatus isConnected">
@@ -75,15 +77,14 @@ export default function ComfyNarrativeNode({ id, data }) {
     </div>
   ) : (
     <div className="clipSB_narrativeField clipSB_narrativeField--disabled" aria-disabled="true">
-      <div className="clipSB_brainLabel">Основа сценария</div>
+      <div className="clipSB_brainLabel">Source of truth</div>
         <div className="clipSB_narrativeEmptyBlock">
           <div>Подключите источник:</div>
-          <div>— Текст</div>
           <div>— Аудио</div>
-          <div>— Ссылка</div>
-          <div>— Видео</div>
+          <div>— Видео файл</div>
+          <div>— Ссылка на видео</div>
         </div>
-      <div className="clipSB_narrativeEmptyHint">Нода ждёт ровно один активный вход: text_in, audio_in, link_in или video_ref_in.</div>
+      <div className="clipSB_narrativeEmptyHint">Нода ждёт ровно один активный вход: audio_in, video_file_in или video_link_in.</div>
     </div>
   );
 
@@ -110,15 +111,15 @@ export default function ComfyNarrativeNode({ id, data }) {
         />
       ))}
       <NodeShell
-        title="СЦЕНАРИЙ"
+        title="SCENARIO DIRECTOR"
         icon={<span aria-hidden>📚</span>}
         onClose={() => data?.onRemoveNode?.(id)}
         className="clipSB_nodeNarrative"
       >
-        <div className="clipSB_narrativeSubtitle">Создание истории и логики сцен</div>
+        <div className="clipSB_narrativeSubtitle">Главный director / planning узел для истории, контекста и сцен</div>
 
         <section className="clipSB_narrativeSection">
-          <div className="clipSB_brainLabel">Источник</div>
+          <div className="clipSB_brainLabel">Активный source-of-truth</div>
           <div className="clipSB_narrativeIndicators" aria-label="Доступные источники narrative node" role="status">
             {NARRATIVE_SOURCE_OPTIONS.map((option) => {
               const isActive = activeSourceMode === option.value && hasConnectedSource;
@@ -154,7 +155,7 @@ export default function ComfyNarrativeNode({ id, data }) {
               </label>
 
               <label className="clipSB_narrativeField">
-                <div className="clipSB_brainLabel">Стиль</div>
+                <div className="clipSB_brainLabel">Стиль обработки</div>
                 <select className="clipSB_select" value={data?.styleProfile || "realistic"} onChange={(e) => data?.onFieldChange?.(id, { styleProfile: e.target.value })}>
                   {NARRATIVE_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
                 </select>
@@ -162,7 +163,7 @@ export default function ComfyNarrativeNode({ id, data }) {
             </div>
 
             <label className="clipSB_narrativeField">
-              <div className="clipSB_brainLabel">Что изменить / добавить</div>
+              <div className="clipSB_brainLabel">Режиссёрская задача / что изменить / добавить</div>
               <textarea
                 className="clipSB_textarea clipSB_narrativeTextarea clipSB_narrativeTextarea--compact"
                 value={data?.directorNote || ""}
@@ -174,9 +175,55 @@ export default function ComfyNarrativeNode({ id, data }) {
 
             {sourceInput}
 
+            <section className="clipSB_narrativeSection">
+              <div className="clipSB_brainLabel">Connected context</div>
+              <div className="clipSB_narrativeContextCard">
+                <div className="clipSB_narrativeContextRow">
+                  <span className="clipSB_narrativeContextLabel">Активный источник</span>
+                  <span className={`clipSB_narrativeContextValue${connectedContext.hasActiveSource ? " isReady" : ""}`.trim()}>
+                    {connectedContext.activeSourceLabel}
+                  </span>
+                </div>
+
+                <div className="clipSB_narrativeContextChips">
+                  {NARRATIVE_SOURCE_INPUT_HANDLES.map((item) => {
+                    const isConnected = !!connectedContext.sourceByHandle?.[item.id];
+                    return (
+                      <span key={item.id} className={`clipSB_narrativeContextChip${isConnected ? " isReady" : ""}`.trim()}>
+                        {item.labelRu}: {isConnected ? "подключён" : "нет"}
+                      </span>
+                    );
+                  })}
+                </div>
+
+                <div className="clipSB_narrativeContextGrid">
+                  <div className="clipSB_narrativeContextStat">
+                    <span>Characters</span>
+                    <strong>{connectedContext.characterCount}</strong>
+                  </div>
+                  <div className="clipSB_narrativeContextStat">
+                    <span>Props</span>
+                    <strong>{connectedContext.hasProps ? "есть" : "нет"}</strong>
+                  </div>
+                  <div className="clipSB_narrativeContextStat">
+                    <span>Location</span>
+                    <strong>{connectedContext.hasLocation ? "есть" : "нет"}</strong>
+                  </div>
+                  <div className="clipSB_narrativeContextStat">
+                    <span>Style</span>
+                    <strong>{connectedContext.hasStyle ? "есть" : "нет"}</strong>
+                  </div>
+                </div>
+
+                <div className="clipSB_narrativeContextHint">
+                  Поддерживаемые context inputs: {NARRATIVE_CONTEXT_INPUT_HANDLES.map((item) => item.role || item.id).join(", ")}.
+                </div>
+              </div>
+            </section>
+
             <div className="clipSB_narrativeActions">
               <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => (data?.onGenerateScenario || data?.onGenerate)?.(id)} disabled={!hasConnectedSource}>
-                СОЗДАТЬ СЦЕНАРИЙ
+                RUN SCENARIO DIRECTOR
               </button>
             </div>
           </section>

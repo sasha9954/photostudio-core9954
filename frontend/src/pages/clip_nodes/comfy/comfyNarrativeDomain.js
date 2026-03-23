@@ -1,8 +1,7 @@
 export const NARRATIVE_SOURCE_OPTIONS = [
-  { value: "TEXT", labelRu: "Текст" },
   { value: "AUDIO", labelRu: "Аудио" },
-  { value: "LINK", labelRu: "Ссылка" },
-  { value: "VIDEO_REF", labelRu: "Видео (референс)" },
+  { value: "VIDEO_FILE", labelRu: "Видео файл" },
+  { value: "VIDEO_LINK", labelRu: "Ссылка на видео" },
 ];
 
 export const NARRATIVE_CONTENT_TYPE_OPTIONS = [
@@ -41,11 +40,19 @@ export const NARRATIVE_RESULT_TABS = [
 ];
 
 export const NARRATIVE_INPUT_HANDLES = [
-  { id: "text_in", labelRu: "Текст", mode: "TEXT" },
-  { id: "audio_in", labelRu: "Аудио", mode: "AUDIO" },
-  { id: "link_in", labelRu: "Ссылка", mode: "LINK" },
-  { id: "video_ref_in", labelRu: "Видео (реф)", mode: "VIDEO_REF" },
+  { id: "audio_in", labelRu: "Аудио", mode: "AUDIO", kind: "story_source" },
+  { id: "video_file_in", labelRu: "Видео файл", mode: "VIDEO_FILE", kind: "story_source" },
+  { id: "video_link_in", labelRu: "Ссылка на видео", mode: "VIDEO_LINK", kind: "story_source" },
+  { id: "ref_character_1", labelRu: "Character 1", mode: "CONTEXT", kind: "context", role: "character_1" },
+  { id: "ref_character_2", labelRu: "Character 2", mode: "CONTEXT", kind: "context", role: "character_2" },
+  { id: "ref_character_3", labelRu: "Character 3", mode: "CONTEXT", kind: "context", role: "character_3" },
+  { id: "ref_props", labelRu: "Props", mode: "CONTEXT", kind: "context", role: "props" },
+  { id: "ref_location", labelRu: "Location", mode: "CONTEXT", kind: "context", role: "location" },
+  { id: "ref_style", labelRu: "Style", mode: "CONTEXT", kind: "context", role: "style" },
 ];
+
+export const NARRATIVE_SOURCE_INPUT_HANDLES = NARRATIVE_INPUT_HANDLES.filter((item) => item.kind === "story_source");
+export const NARRATIVE_CONTEXT_INPUT_HANDLES = NARRATIVE_INPUT_HANDLES.filter((item) => item.kind === "context");
 
 const lookupLabel = (options, value, fallback) => options.find((option) => option.value === value)?.labelRu || fallback;
 
@@ -68,11 +75,41 @@ function getConnectedInputSignal(input) {
   return normalizeText(getConnectedInputRawSignal(input));
 }
 
+function getConnectedInputCount(input) {
+  const safeCount = Number(input?.count || input?.meta?.count || 0);
+  if (Number.isFinite(safeCount) && safeCount > 0) return safeCount;
+  if (Array.isArray(input?.refs)) return input.refs.filter(Boolean).length;
+  return getConnectedInputSignal(input) ? 1 : 0;
+}
+
 const splitEntities = (text) => normalizeText(text)
   .split(/[,.!?:;\n]+/)
   .map((item) => item.trim())
   .filter(Boolean)
   .slice(0, 6);
+
+export function summarizeNarrativeConnectedContext(state = {}) {
+  const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
+  const resolvedSource = resolveNarrativeSource(state);
+  const characterHandles = ["ref_character_1", "ref_character_2", "ref_character_3"];
+  const characterCount = characterHandles.reduce((total, handleId) => total + (getConnectedInputCount(connectedInputs?.[handleId]) > 0 ? 1 : 0), 0);
+  const sourceByHandle = {
+    audio_in: getConnectedInputCount(connectedInputs?.audio_in) > 0,
+    video_file_in: getConnectedInputCount(connectedInputs?.video_file_in) > 0,
+    video_link_in: getConnectedInputCount(connectedInputs?.video_link_in) > 0,
+  };
+
+  return {
+    activeSourceMode: resolvedSource?.mode || null,
+    activeSourceLabel: resolvedSource?.label || "Источник не подключён",
+    hasActiveSource: resolvedSource?.origin === "connected" && !!normalizeText(resolvedSource?.value),
+    sourceByHandle,
+    characterCount,
+    hasProps: getConnectedInputCount(connectedInputs?.ref_props) > 0,
+    hasLocation: getConnectedInputCount(connectedInputs?.ref_location) > 0,
+    hasStyle: getConnectedInputCount(connectedInputs?.ref_style) > 0,
+  };
+}
 
 export function getDefaultNarrativeNodeData() {
   return {
@@ -82,10 +119,15 @@ export function getDefaultNarrativeNodeData() {
     styleProfile: "realistic",
     directorNote: "",
     connectedInputs: {
-      text_in: null,
       audio_in: null,
-      link_in: null,
-      video_ref_in: null,
+      video_file_in: null,
+      video_link_in: null,
+      ref_character_1: null,
+      ref_character_2: null,
+      ref_character_3: null,
+      ref_props: null,
+      ref_location: null,
+      ref_style: null,
     },
     resolvedSource: {
       mode: null,
@@ -108,7 +150,7 @@ export function getDefaultNarrativeNodeData() {
 
 export function resolveNarrativeSource(state = {}) {
   const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
-  const connectedOption = NARRATIVE_INPUT_HANDLES.find((item) => getConnectedInputSignal(connectedInputs?.[item.id]));
+  const connectedOption = NARRATIVE_SOURCE_INPUT_HANDLES.find((item) => getConnectedInputSignal(connectedInputs?.[item.id]));
 
   if (!connectedOption) {
     return {
@@ -123,7 +165,7 @@ export function resolveNarrativeSource(state = {}) {
 
   const connectedSource = connectedInputs[connectedOption.id] || null;
   const connectedValue = getConnectedInputSignal(connectedSource);
-  const modeLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, connectedOption.mode, "Текст");
+  const modeLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, connectedOption.mode, "Аудио");
   const connectedPreview = normalizeText(connectedSource?.preview)
     || normalizeText(connectedSource?.fileName)
     || connectedValue;
@@ -143,10 +185,11 @@ export function resolveNarrativeSource(state = {}) {
 
 export function buildNarrativeOutputs(state = {}) {
   const resolvedSource = resolveNarrativeSource(state);
-  const sourceMode = resolvedSource.mode || "TEXT";
+  const sourceMode = resolvedSource.mode || "AUDIO";
   const contentType = NARRATIVE_CONTENT_TYPE_OPTIONS.some((item) => item.value === state.contentType) ? state.contentType : "story";
   const narrativeMode = NARRATIVE_MODE_OPTIONS.some((item) => item.value === state.narrativeMode) ? state.narrativeMode : "cinematic_expand";
   const styleProfile = NARRATIVE_STYLE_OPTIONS.some((item) => item.value === state.styleProfile) ? state.styleProfile : "realistic";
+  const connectedContext = summarizeNarrativeConnectedContext({ ...state, resolvedSource });
 
   const directorNote = normalizeText(state.directorNote) || "Без дополнительных правок";
   const sourcePayload = normalizeText(resolvedSource.value);
@@ -160,21 +203,27 @@ export function buildNarrativeOutputs(state = {}) {
     };
   }
 
-  const sourceLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, sourceMode, "Текст");
+  const sourceLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, sourceMode, "Аудио");
   const contentTypeLabel = lookupLabel(NARRATIVE_CONTENT_TYPE_OPTIONS, contentType, "История");
   const narrativeModeLabel = lookupLabel(NARRATIVE_MODE_OPTIONS, narrativeMode, "Расширить кинематографично");
   const styleLabel = lookupLabel(NARRATIVE_STYLE_OPTIONS, styleProfile, "Реалистичный");
-  const entities = splitEntities(sourceMode === "TEXT" ? sourcePayload : `${sourcePayload}. ${directorNote}`);
+  const entities = splitEntities(`${sourcePayload}. ${directorNote}`);
   const readableEntities = entities.length ? entities : ["Главный герой", "Ключевой объект", "Среда действия"];
   const sourceOriginLabel = resolvedSource.origin === "connected" ? "Подключённый источник" : "Источник не подключён";
-  const sourcePreview = normalizeText(resolvedSource.preview) || sourcePayload;
+  const connectedContextLabel = [
+    `Персонажей подключено: ${connectedContext.characterCount}`,
+    `props: ${connectedContext.hasProps ? "да" : "нет"}`,
+    `location: ${connectedContext.hasLocation ? "да" : "нет"}`,
+    `style: ${connectedContext.hasStyle ? "да" : "нет"}`,
+  ].join(", ");
 
   const shortDescription = `${contentTypeLabel} в стиле «${styleLabel}». Основа: ${sourceLabel.toLowerCase()}.`;
   const fullScenario = [
     `Кратко: ${shortDescription}`,
-    `Режим обработки: ${narrativeModeLabel}.`,
+    `Director controls: ${narrativeModeLabel}.`,
     `Режиссёрская задача: ${directorNote}.`,
     `Источник сейчас: ${sourceOriginLabel}.`,
+    `Connected context: ${connectedContextLabel}.`,
     `Исходный материал: ${sourcePayload}`,
     "",
     "Рабочая драматургия:",
@@ -187,9 +236,9 @@ export function buildNarrativeOutputs(state = {}) {
   const adaptationSummary = [
     `Адаптация под задачу: ${directorNote}.`,
     `Тип видео: ${contentTypeLabel}.`,
-    `Стиль подачи: ${styleLabel}.`,
-    `Главный источник: ${sourceLabel}.`,
-    `Происхождение источника: ${sourceOriginLabel}.`,
+    `Стиль обработки: ${styleLabel}.`,
+    `Активный source-of-truth: ${sourceLabel}.`,
+    `Connected context: ${connectedContextLabel}.`,
   ].join("\n");
 
   const scenario = [
@@ -222,7 +271,8 @@ export function buildNarrativeOutputs(state = {}) {
     sourceMode,
     sourceOrigin: resolvedSource.origin,
     sourceLabel,
-    sourcePreview,
+    sourcePreview: normalizeText(resolvedSource.preview) || sourcePayload,
+    connectedContext,
     entities: readableEntities,
     sceneLogic: [
       "Вход в мир истории и настрой атмосферы.",
