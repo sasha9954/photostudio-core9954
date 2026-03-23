@@ -174,6 +174,8 @@ class GeminiPlannerInputPackage(BaseModel):
     role_selection_source_by_role: dict[str, str] = Field(default_factory=dict)
     role_mode: str = "auto"
     role_mode_reason: str | None = None
+    role_dominance_mode: str = "off"
+    role_dominance_mode_reason: str | None = None
     style_preset: str | None = None
     genre: str | None = None
     story_control_mode: str | None = None
@@ -311,6 +313,8 @@ def build_gemini_planner_input(
         role_selection_source_by_role=normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {},
         role_mode=_clean_str(normalized.get("roleMode") or "auto") or "auto",
         role_mode_reason=_clean_str(normalized.get("roleModeReason")) or None,
+        role_dominance_mode=_clean_str(normalized.get("roleDominanceMode") or "off") or "off",
+        role_dominance_mode_reason=_clean_str(normalized.get("roleDominanceModeReason")) or None,
         style_preset=_clean_str(normalized.get("stylePreset")) or None,
         genre=_clean_str(normalized.get("genre")) or None,
         story_control_mode=_clean_str(normalized.get("storyControlMode")) or None,
@@ -406,7 +410,13 @@ def build_gemini_planner_system_rules(planner_input: GeminiPlannerInputPackage) 
         "SCENE ROLE DISTRIBUTION:\n"
         "- Hero should appear in the majority of scenes.\n"
         "- Antagonist should appear in key tension scenes.\n"
-        "- Support should appear in context or interaction scenes."
+        "- Support should appear in context or interaction scenes.\n"
+        "ROLE DOMINANCE CONTROL:\n"
+        "- planner_input.role_dominance_mode is one of 'off', 'soft', or 'strict'.\n"
+        "- If role_dominance_mode='off': Gemini may decide scene dominance freely.\n"
+        "- If role_dominance_mode='soft': prefer hero as primary narrative driver, antagonist as source of pressure/conflict, support as secondary reacting or assisting presence, but do not enforce rigidly when scene logic clearly needs variation.\n"
+        "- If role_dominance_mode='strict': each scene should have a dominant role. Hero should dominate most scenes unless story explicitly requires temporary absence. Antagonist should dominate key tension/opposition scenes. Support should dominate only when the scene is specifically about assistance, reaction, witness perspective, or emotional support.\n"
+        "- If role_dominance_mode='strict': avoid scenes where all roles are equally passive, avoid scenes where hero is present but not narratively central, avoid antagonist being decorative, and respect locked role hierarchy across scene progression."
     )
 
 
