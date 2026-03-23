@@ -47,7 +47,7 @@ import {
   PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
-import { buildNarrativeOutputs, getDefaultNarrativeNodeData, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
+import { buildScenarioDirectorRequestPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 
 
 // -------------------------
@@ -9349,6 +9349,7 @@ onClipSec: (nodeId, value) => {
           const buildNarrativeGenerationState = ({ narrativeNodeId, nodesNow, edgesNow, traceReason = "narrative:generate" }) => {
             const safeNodes = Array.isArray(nodesNow) ? nodesNow : [];
             const safeEdges = Array.isArray(edgesNow) ? edgesNow : [];
+            let requestPayload = null;
             const nextNodes = safeNodes.map((x) => {
               if (x.id !== narrativeNodeId) return x;
               const narrativeConnectedInputs = getNarrativeConnectedInputsSnapshot({
@@ -9369,13 +9370,13 @@ onClipSec: (nodeId, value) => {
                     sourceOrigin: nextResolvedSource.origin,
                     resolvedSource: nextResolvedSource,
                     error: "NO_SOURCE",
+                    isGenerating: false,
                     pendingOutputs: null,
                     pendingGeneratedAt: "",
-                    outputs: getDefaultNarrativeNodeData().outputs,
                   },
                 };
               }
-              const pendingOutputs = buildNarrativeOutputs({
+              requestPayload = buildScenarioDirectorRequestPayload({
                 ...nextData,
                 sourceOrigin: nextResolvedSource.origin,
                 resolvedSource: nextResolvedSource,
@@ -9387,9 +9388,10 @@ onClipSec: (nodeId, value) => {
                   sourceOrigin: nextResolvedSource.origin,
                   resolvedSource: nextResolvedSource,
                   error: null,
+                  isGenerating: true,
                   activeResultTab: "history",
-                  pendingOutputs,
-                  pendingGeneratedAt: new Date().toISOString(),
+                  pendingOutputs: null,
+                  pendingGeneratedAt: "",
                 },
               };
             });
@@ -9399,7 +9401,7 @@ onClipSec: (nodeId, value) => {
               .filter((edgeItem) => edgeItem.source === narrativeNodeId && String(edgeItem.sourceHandle || "") === "brain_package_out")
               .map((edgeItem) => reboundNodesById.get(edgeItem.target))
               .find((targetNode) => targetNode?.type === "comfyBrain" && String(targetNode?.id || "").trim())?.id || "";
-            return { reboundNodes, plannerBrainNodeId };
+            return { reboundNodes, plannerBrainNodeId, requestPayload };
           };
           const confirmNarrativeOutputs = ({ narrativeNodeId, nodesNow, edgesNow, traceReason = "narrative:confirm" }) => {
             const safeNodes = Array.isArray(nodesNow) ? nodesNow : [];
@@ -9466,7 +9468,7 @@ onClipSec: (nodeId, value) => {
               onGenerateScenario: async (nodeId) => {
                 const currentEdges = edgesRef.current || [];
                 const currentNodes = nodesRef.current || [];
-                const { reboundNodes } = buildNarrativeGenerationState({
+                const { reboundNodes, requestPayload } = buildNarrativeGenerationState({
                   narrativeNodeId: nodeId,
                   nodesNow: currentNodes,
                   edgesNow: currentEdges,
@@ -9474,6 +9476,58 @@ onClipSec: (nodeId, value) => {
                 });
                 nodesRef.current = reboundNodes;
                 setNodes(reboundNodes);
+
+                if (!requestPayload) {
+                  notify({ type: "warning", title: "Source required", message: "Подключите один active source-of-truth перед генерацией сценария." });
+                  return;
+                }
+
+                try {
+                  const response = await fetchJson('/api/clip/comfy/scenario-director/generate', { method: 'POST', body: requestPayload });
+                  const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
+                  const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, activeNode?.data || {});
+                  if (!normalizedOutputs?.storyboardOut || !normalizedOutputs?.directorOutput) {
+                    throw new Error('Scenario Director backend returned an incomplete contract.');
+                  }
+                  setNodes((prev) => {
+                    const nextNodes = prev.map((x) => {
+                      if (x.id !== nodeId) return x;
+                      return {
+                        ...x,
+                        data: {
+                          ...x.data,
+                          error: null,
+                          isGenerating: false,
+                          activeResultTab: 'history',
+                          pendingOutputs: normalizedOutputs,
+                          pendingGeneratedAt: new Date().toISOString(),
+                        },
+                      };
+                    });
+                    const rebound = bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: 'narrative:generate:backend-success' });
+                    nodesRef.current = rebound;
+                    return rebound;
+                  });
+                } catch (error) {
+                  const message = String(error?.message || 'Scenario Director request failed').trim();
+                  setNodes((prev) => {
+                    const nextNodes = prev.map((x) => {
+                      if (x.id !== nodeId) return x;
+                      return {
+                        ...x,
+                        data: {
+                          ...x.data,
+                          error: message,
+                          isGenerating: false,
+                        },
+                      };
+                    });
+                    const rebound = bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: 'narrative:generate:backend-error' });
+                    nodesRef.current = rebound;
+                    return rebound;
+                  });
+                  notify({ type: 'error', title: 'Scenario Director error', message });
+                }
               },
               onConfirmScenario: async (nodeId) => {
                 const currentEdges = edgesRef.current || [];

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.engine.comfy_brain_engine import run_comfy_plan, run_comfy_prompt_sync
 from app.engine.comfy_reference_profile import build_reference_profiles
+from app.engine.scenario_director_engine import ScenarioDirectorError, run_scenario_director
 
 import json
 import logging
@@ -105,6 +106,45 @@ class ClipComfyConnectRefsIn(BaseModel):
 class ClipComfyAnalyzeRefIn(BaseModel):
     role: str = ""
     refs: list[RefItemIn] = Field(default_factory=list)
+
+
+class ScenarioDirectorReferenceIn(BaseModel):
+    label: str = ""
+    source_label: str = ""
+    preview: str = ""
+    value: str = ""
+    refs: list[str] = Field(default_factory=list)
+    count: int = 0
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScenarioDirectorSourceIn(BaseModel):
+    source_mode: str = "audio"
+    source_value: str = ""
+    source_preview: str = ""
+    source_label: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("source_mode", mode="before")
+    @classmethod
+    def validate_source_mode(cls, value: Any) -> str:
+        normalized = str(value or "audio").strip().lower()
+        return normalized if normalized in {"audio", "video_file", "video_link"} else "audio"
+
+
+class ScenarioDirectorControlsIn(BaseModel):
+    contentType: str = "story"
+    narrativeMode: str = "cinematic_expand"
+    styleProfile: str = "realistic"
+    directorNote: str = ""
+
+
+class ScenarioDirectorGenerateIn(BaseModel):
+    source: ScenarioDirectorSourceIn
+    context_refs: dict[str, ScenarioDirectorReferenceIn] = Field(default_factory=dict)
+    director_controls: ScenarioDirectorControlsIn = Field(default_factory=ScenarioDirectorControlsIn)
+    connected_context_summary: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
@@ -375,6 +415,18 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
         bool(req.get("audioSemanticSummary")),
     )
     return run_comfy_plan(req)
+
+
+@router.post("/clip/comfy/scenario-director/generate")
+async def clip_comfy_scenario_director_generate(payload: ScenarioDirectorGenerateIn) -> dict[str, Any]:
+    req = payload.model_dump(mode="json")
+    try:
+        return run_scenario_director(req)
+    except ScenarioDirectorError as exc:
+        detail: dict[str, Any] = {"code": exc.code, "message": exc.message}
+        if exc.details:
+            detail["details"] = exc.details
+        raise HTTPException(status_code=exc.status_code, detail=detail) from exc
 
 
 @router.post("/clip/comfy/prompt-sync")

@@ -180,6 +180,11 @@ export default function ComfyNarrativeNode({ id, data }) {
   const hasPendingResult = !!pendingOutputs?.directorOutput;
   const hasConfirmedResult = !!outputs?.directorOutput;
   const hasDirectorResult = !!directorOutput;
+  const isGenerating = data?.isGenerating === true;
+  const rawError = String(data?.error || "").trim();
+  const errorMessage = rawError === "NO_SOURCE"
+    ? "Подключите один active source-of-truth: audio, video_file или video_link."
+    : rawError;
   const sourceStatusText = hasConnectedSource
     ? activeSourceMode === "AUDIO"
       ? "Подключён внешний аудио-источник"
@@ -353,8 +358,8 @@ export default function ComfyNarrativeNode({ id, data }) {
             </section>
 
             <div className="clipSB_narrativeActions">
-              <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => (data?.onGenerateScenario || data?.onGenerate)?.(id)} disabled={!hasConnectedSource}>
-                СОЗДАТЬ СЦЕНАРИЙ
+              <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => (data?.onGenerateScenario || data?.onGenerate)?.(id)} disabled={!hasConnectedSource || isGenerating}>
+                {isGenerating ? "ГЕНЕРИРУЕМ..." : "СОЗДАТЬ СЦЕНАРИЙ"}
               </button>
             </div>
           </section>
@@ -374,7 +379,12 @@ export default function ComfyNarrativeNode({ id, data }) {
             </div>
 
             <div className="clipSB_narrativeResultStatus">
-              {hasPendingResult ? (
+              {isGenerating ? (
+                <>
+                  <span className="clipSB_narrativeStatusBadge isPending">Генерация</span>
+                  <span className="clipSB_narrativeStatusText">Scenario Director ждёт ответ Gemini backend. Повторный клик временно заблокирован.</span>
+                </>
+              ) : hasPendingResult ? (
                 <>
                   <span className="clipSB_narrativeStatusBadge isPending">Ожидает подтверждения</span>
                   <span className="clipSB_narrativeStatusText">Проверьте результат и подтвердите сценарий.</span>
@@ -388,6 +398,8 @@ export default function ComfyNarrativeNode({ id, data }) {
                 <span className="clipSB_narrativeStatusText">Сначала создайте сценарий.</span>
               )}
             </div>
+
+            {errorMessage ? <div className="clipSB_narrativeEmptyHint" role="alert">{errorMessage}</div> : null}
 
             <div className="clipSB_narrativeResultBody">
               {resultBody}

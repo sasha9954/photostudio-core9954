@@ -77,6 +77,29 @@ function getConnectedInputSignal(input) {
   return normalizeText(getConnectedInputRawSignal(input));
 }
 
+function normalizeNarrativeSourceMode(mode) {
+  const clean = String(mode || "").trim().toUpperCase();
+  if (clean === "VIDEO_FILE") return "video_file";
+  if (clean === "VIDEO_LINK") return "video_link";
+  return "audio";
+}
+
+function buildReferencePayload(input, fallbackLabel) {
+  if (!input || typeof input !== "object") return null;
+  const refs = Array.isArray(input.refs) ? input.refs.map((item) => normalizeText(item)).filter(Boolean) : [];
+  const value = normalizeText(input.value) || refs[0] || "";
+  if (!value && !refs.length && !normalizeText(input.preview)) return null;
+  return {
+    label: fallbackLabel,
+    source_label: normalizeText(input.sourceLabel) || fallbackLabel,
+    preview: normalizeText(input.preview) || normalizeText(input.fileName) || value,
+    value,
+    refs,
+    count: Math.max(Number(input.count) || 0, refs.length || (value ? 1 : 0)),
+    meta: input?.meta && typeof input.meta === "object" ? input.meta : {},
+  };
+}
+
 function toStoryboardNumericSec(value, fallback = 0) {
   const direct = Number(value);
   if (Number.isFinite(direct)) return direct;
@@ -187,6 +210,7 @@ export function getDefaultNarrativeNodeData() {
       preview: "",
     },
     error: null,
+    isGenerating: false,
     activeResultTab: "history",
     pendingOutputs: null,
     pendingGeneratedAt: "",
@@ -234,6 +258,166 @@ export function resolveNarrativeSource(state = {}) {
     label: modeLabel,
     sourceLabel: connectedSourceLabel,
     preview: connectedPreview,
+  };
+}
+
+export function buildScenarioDirectorRequestPayload(state = {}) {
+  const resolvedSource = resolveNarrativeSource(state);
+  const sourceValue = normalizeText(resolvedSource.value);
+  if (!sourceValue) return null;
+
+  const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
+  const connectedContextSummary = summarizeNarrativeConnectedContext({ ...state, resolvedSource });
+  const contextRefs = {
+    character_1: buildReferencePayload(connectedInputs?.ref_character_1, "Character 1"),
+    character_2: buildReferencePayload(connectedInputs?.ref_character_2, "Character 2"),
+    character_3: buildReferencePayload(connectedInputs?.ref_character_3, "Character 3"),
+    props: buildReferencePayload(connectedInputs?.ref_props, "Props"),
+    location: buildReferencePayload(connectedInputs?.ref_location, "Location"),
+    style: buildReferencePayload(connectedInputs?.ref_style, "Style"),
+  };
+
+  return {
+    source: {
+      source_mode: normalizeNarrativeSourceMode(resolvedSource.mode),
+      source_value: sourceValue,
+      source_preview: normalizeText(resolvedSource.preview) || sourceValue,
+      source_label: normalizeText(resolvedSource.sourceLabel) || normalizeText(resolvedSource.label) || "Source of truth",
+      metadata: {
+        origin: normalizeText(resolvedSource.origin) || "connected",
+        label: normalizeText(resolvedSource.label),
+        connectedHandle: Object.entries(connectedInputs).find(([, value]) => value && normalizeText(value.value) === sourceValue)?.[0] || "",
+        activeSourceMode: connectedContextSummary.activeSourceMode || null,
+      },
+    },
+    context_refs: Object.fromEntries(Object.entries(contextRefs).filter(([, value]) => !!value)),
+    director_controls: {
+      contentType: normalizeText(state.contentType) || "story",
+      narrativeMode: normalizeText(state.narrativeMode) || "cinematic_expand",
+      styleProfile: normalizeText(state.styleProfile) || "realistic",
+      directorNote: normalizeText(state.directorNote),
+    },
+    connected_context_summary: connectedContextSummary,
+    metadata: {
+      sourcePreview: normalizeText(resolvedSource.preview) || sourceValue,
+      sourceLabel: normalizeText(resolvedSource.sourceLabel) || normalizeText(resolvedSource.label),
+      fileOrLinkMeta: connectedInputs?.video_file_in?.meta || connectedInputs?.video_link_in?.meta || connectedInputs?.audio_in?.meta || {},
+    },
+  };
+}
+
+function formatActorLabel(actor, roleLabels) {
+  const clean = normalizeText(actor);
+  return roleLabels[clean] || clean;
+}
+
+export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {}) {
+  if (!storyboardOut || typeof storyboardOut !== "object") return null;
+  const scenes = Array.isArray(storyboardOut.scenes) ? storyboardOut.scenes : [];
+  const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
+  const roleLabels = {
+    character_1: normalizeText(connectedInputs?.ref_character_1?.preview) || "Character 1",
+    character_2: normalizeText(connectedInputs?.ref_character_2?.preview) || "Character 2",
+    character_3: normalizeText(connectedInputs?.ref_character_3?.preview) || "Character 3",
+  };
+  const history = {
+    summary: normalizeText(storyboardOut.story_summary),
+    fullScenario: normalizeText(storyboardOut.full_scenario),
+    characterRoles: Object.entries(roleLabels)
+      .filter(([, label]) => !!normalizeText(label))
+      .map(([role, label], index) => ({
+        name: label,
+        role: index === 0
+          ? "Главный герой / главный носитель действия"
+          : index === 1
+            ? "Партнёр по сцене / вторичный акцент"
+            : role,
+      })),
+    toneStyleDirection: normalizeText(state.styleProfile) || "realistic",
+    directorSummary: normalizeText(storyboardOut.director_summary),
+  };
+  const normalizedScenes = scenes.map((scene, index) => {
+    const ltxMode = normalizeText(scene.ltx_mode) || "i2v";
+    return {
+      sceneId: normalizeText(scene.scene_id) || `S${index + 1}`,
+      title: normalizeText(scene.scene_id) || `S${index + 1}`,
+      timeStart: toStoryboardNumericSec(scene.time_start, index * 5),
+      timeEnd: toStoryboardNumericSec(scene.time_end, (index + 1) * 5),
+      duration: toStoryboardNumericSec(scene.duration, 5),
+      participants: (Array.isArray(scene.actors) ? scene.actors : []).map((actor) => formatActorLabel(actor, roleLabels)),
+      location: normalizeText(scene.location),
+      props: Array.isArray(scene.props) ? scene.props.map((item) => normalizeText(item)).filter(Boolean) : [],
+      action: normalizeText(scene.action_in_frame),
+      emotion: normalizeText(scene.emotion),
+      sceneGoal: normalizeText(scene.scene_goal),
+      frameDescription: normalizeText(scene.frame_description),
+      actionInFrame: normalizeText(scene.action_in_frame),
+      cameraIdea: normalizeText(scene.camera),
+      imagePrompt: normalizeText(scene.image_prompt),
+      videoPrompt: normalizeText(scene.video_prompt),
+      ltxMode,
+      whyThisMode: normalizeText(scene.ltx_reason),
+      startFrameSource: normalizeText(scene.start_frame_source) || "new",
+      needsTwoFrames: Boolean(scene.needs_two_frames),
+      continuation: Boolean(scene.continuation_from_previous),
+      narrationMode: normalizeText(scene.narration_mode) || "full",
+      localPhrase: scene.local_phrase ? normalizeText(scene.local_phrase) : null,
+      sfx: normalizeText(scene.sfx),
+      soundNotes: normalizeText(scene.sfx),
+      pauseDuckSilenceNotes: "",
+      musicMixHint: normalizeText(scene.music_mix_hint) || "off",
+    };
+  });
+  return {
+    history,
+    scenes: normalizedScenes,
+    video: normalizedScenes.map((scene) => ({
+      sceneId: scene.sceneId,
+      frameDescription: scene.frameDescription,
+      actionInFrame: scene.actionInFrame,
+      cameraIdea: scene.cameraIdea,
+      imagePrompt: scene.imagePrompt,
+      videoPrompt: scene.videoPrompt,
+      ltxMode: scene.ltxMode,
+      whyThisMode: scene.whyThisMode,
+      startFrameSource: scene.startFrameSource,
+      needsTwoFrames: scene.needsTwoFrames,
+      continuation: scene.continuation,
+    })),
+    sound: normalizedScenes.map((scene) => ({
+      sceneId: scene.sceneId,
+      narrationMode: scene.narrationMode,
+      localPhrase: scene.localPhrase,
+      sfx: scene.sfx,
+      soundNotes: scene.soundNotes,
+      pauseDuckSilenceNotes: scene.pauseDuckSilenceNotes,
+    })),
+    music: {
+      globalMusicPrompt: normalizeText(storyboardOut.music_prompt),
+      mood: normalizeText(state.styleProfile) || "realistic",
+      style: `${normalizeText(state.contentType) || "story"} / ${normalizeText(state.styleProfile) || "realistic"}`,
+      pacingHints: "Use the approved storyboard_out pacing when Storyboard executes the scenes.",
+    },
+  };
+}
+
+export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) {
+  const storyboardOut = response?.storyboardOut && typeof response.storyboardOut === "object"
+    ? response.storyboardOut
+    : response?.storyboard_out && typeof response.storyboard_out === "object"
+      ? response.storyboard_out
+      : null;
+  if (!storyboardOut) return null;
+  const directorOutput = response?.directorOutput && typeof response.directorOutput === "object"
+    ? response.directorOutput
+    : mapStoryboardOutToDirectorOutput(storyboardOut, state);
+  return {
+    storyboardOut,
+    scenario: normalizeText(response?.scenario) || normalizeText(storyboardOut.full_scenario),
+    voiceScript: normalizeText(response?.voiceScript) || normalizeText(storyboardOut.voice_script),
+    brainPackage: response?.brainPackage && typeof response.brainPackage === "object" ? response.brainPackage : null,
+    bgMusicPrompt: normalizeText(response?.bgMusicPrompt) || normalizeText(storyboardOut.music_prompt),
+    directorOutput,
   };
 }
 
