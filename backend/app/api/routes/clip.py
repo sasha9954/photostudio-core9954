@@ -26,7 +26,7 @@ from app.core.config import settings
 from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url
 from app.engine.video_engine import _download_image_from_source
 from app.engine.gemini_rest import post_generate_content
-from app.engine.comfy_reference_profile import build_reference_profiles, summarize_profiles
+from app.engine.comfy_reference_profile import build_reference_profiles, resolve_reference_role_type, summarize_profiles
 from app.engine.comfy_remote import run_comfy_image_to_video
 from app.engine.audio_analyzer import analyze_audio
 from app.engine.prompt_layers import build_clip_video_motion_prompt, build_physics_first_image_blocks
@@ -562,9 +562,6 @@ def _infer_selected_view_hint(*values: Any) -> str:
     any_markers = [
         "wide",
         "establishing",
-        "over-shoulder",
-        "over shoulder",
-        "over-the-shoulder",
         "occluded face",
         "hidden face",
         "face partly hidden",
@@ -586,6 +583,7 @@ def _infer_selected_view_hint(*values: Any) -> str:
         "back profile",
         "rear tracking",
         "rear follow shot",
+        "over the shoulder",
     ]
     side_markers = [
         "profile",
@@ -599,6 +597,9 @@ def _infer_selected_view_hint(*values: Any) -> str:
         "side portrait",
         "side-facing",
         "seen in profile",
+        "over-shoulder",
+        "over shoulder",
+        "over-the-shoulder",
     ]
     detail_markers = [
         "close-up",
@@ -753,10 +754,23 @@ def _order_role_refs_for_multi_view(_role: str, urls: list[str], selected_view_h
     return [str(item.get("url") or "") for item in annotated], annotated, primary_view, match_mode
 
 
+def _build_role_type_by_role(
+    active_roles: list[str] | None,
+    reference_profiles: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    profiles = reference_profiles if isinstance(reference_profiles, dict) else {}
+    role_types: dict[str, str] = {}
+    for role in [str(role or "").strip() for role in (active_roles or []) if str(role or "").strip() in COMFY_REF_ROLES]:
+        profile = profiles.get(role) if isinstance(profiles.get(role), dict) else {}
+        role_types[role] = resolve_reference_role_type(role, [{"roleType": profile.get("roleType")}])
+    return role_types
+
+
 def _build_multi_view_role_context(
     refs_by_role: dict[str, list[str]] | None,
     active_roles: list[str] | None,
     selected_view_hint: str,
+    role_type_by_role: dict[str, str] | None = None,
 ) -> tuple[dict[str, list[str]], dict[str, int], dict[str, dict[str, Any]], list[str], dict[str, str], dict[str, str]]:
     raw_refs = refs_by_role if isinstance(refs_by_role, dict) else {}
     roles = [str(role or "").strip() for role in (active_roles or []) if str(role or "").strip() in COMFY_REF_ROLES]
@@ -766,6 +780,7 @@ def _build_multi_view_role_context(
     structured_lines: list[str] = []
     selected_primary_view_by_role: dict[str, str] = {}
     selected_view_match_mode_by_role: dict[str, str] = {}
+    semantic_role_types = role_type_by_role if isinstance(role_type_by_role, dict) else {}
 
     for role in roles:
         ordered_urls, annotations, primary_view, match_mode = _order_role_refs_for_multi_view(role, raw_refs.get(role) or [], selected_view_hint)
@@ -779,6 +794,7 @@ def _build_multi_view_role_context(
         reference_profile[role] = {
             "views": role_views,
             "identity_locked": True,
+            "roleType": semantic_role_types.get(role, "unknown"),
             "selected_view_hint": selected_view_hint,
             "selected_primary_view": primary_view,
             "selected_view_match_mode": match_mode,
@@ -6869,6 +6885,7 @@ def _build_comfy_image_prompt_assembly(
     anatomy_contract_lines: list[str] = []
     forbidden_changes: list[str] = []
     active_roles = [str(r or "").strip() for r in (contract.get("activeRoles") or []) if str(r or "").strip() in COMFY_REF_ROLES]
+    role_type_by_role = _build_role_type_by_role(active_roles, profiles)
     for role in active_roles:
         profile = profiles.get(role) if isinstance(profiles.get(role), dict) else {}
         inv = profile.get("invariants") if isinstance(profile.get("invariants"), list) else []
@@ -6922,6 +6939,45 @@ def _build_comfy_image_prompt_assembly(
         "- sex-consistent anatomy must stay locked to the established character gender presentation across every visible body part",
         "- previous generated scene image is continuity reference, not identity override",
         "- camera/pose/composition may change; identity cannot change",
+    ])
+
+    character_role_priority_lines = [
+        "CHARACTER ROLE PRIORITY:",
+        "- hero: primary visual focus, drives scene",
+        "- support: secondary presence, reacts or assists",
+        "- antagonist: opposing force, creates tension",
+        "Rules:",
+        "- hero must be the most visually readable subject",
+        "- support characters must not override hero presence",
+        "- antagonist must be visually distinct but NOT replace hero identity",
+    ]
+    if role_type_by_role:
+        character_role_priority_lines.append(
+            "- active role types: " + ", ".join(f"{role}={role_type_by_role.get(role, 'unknown')}" for role in active_roles)
+        )
+    character_role_priority_block = "\n".join(character_role_priority_lines)
+
+    role_visual_hierarchy_lines = [
+        "ROLE VISUAL HIERARCHY:",
+        "- hero must be clearly visible",
+        "- hero must not be occluded by other characters",
+        "- hero must not be visually downgraded",
+        "- support can be partially visible",
+        "- support can be secondary in framing",
+        "- antagonist may dominate mood",
+        "- antagonist must NOT replace hero identity",
+    ]
+    if contract.get("heroEntityId"):
+        role_visual_hierarchy_lines.append(f"- scene hero entity: {contract.get('heroEntityId')}")
+    if contract.get("supportEntityIds"):
+        role_visual_hierarchy_lines.append("- scene support entities: " + ", ".join(contract.get("supportEntityIds") or []))
+    role_visual_hierarchy_block = "\n".join(role_visual_hierarchy_lines)
+
+    role_camera_guidance_block = "\n".join([
+        "ROLE → CAMERA GUIDANCE:",
+        "- hero → primary framing (center, focus, dominant subject)",
+        "- support → secondary framing (side, background, partial)",
+        "- antagonist → tension framing (shadow, silhouette, contrast)",
     ])
 
     forbidden_changes_block = "\n".join([
@@ -7114,6 +7170,9 @@ def _build_comfy_image_prompt_assembly(
         physics_blocks["negativeConstraintsBlock"],
         _comfy_text_rendering_block(allow_designed_text=allow_designed_text),
         priority_contract_block,
+        character_role_priority_block,
+        role_visual_hierarchy_block,
+        role_camera_guidance_block,
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
         anatomy_lock_block,
         multi_view_lock_block,
@@ -7168,6 +7227,9 @@ def _build_comfy_image_prompt_assembly(
         "rolesActive": connected_summary["activeRoles"],
         "identityLockBlockPreview": identity_lock_block,
         "priorityContractBlockPreview": priority_contract_block,
+        "characterRolePriorityBlockPreview": character_role_priority_block,
+        "roleVisualHierarchyBlockPreview": role_visual_hierarchy_block,
+        "roleCameraGuidanceBlockPreview": role_camera_guidance_block,
         "anatomyLockBlockPreview": anatomy_lock_block,
         "multiViewLockBlockPreview": multi_view_lock_block,
         "multiViewReferenceProfile": multi_view_profile,
@@ -7384,6 +7446,7 @@ def clip_image(payload: ClipImageIn):
         comfy_refs_by_role,
         scene_active_roles,
         selected_view_hint,
+        _build_role_type_by_role(scene_active_roles, reference_profiles),
     )
     attached_view_labels_by_role = {
         role: list(((multi_view_reference_profile.get(role) or {}).get("views") or []))
@@ -7478,6 +7541,8 @@ def clip_image(payload: ClipImageIn):
             prop_anchor_label = _infer_prop_anchor_label(props_images, api_key_for_anchor, anchor_model)
             prop_anchor_source = "inferred" if prop_anchor_label else "fallback"
 
+    role_type_by_role = _build_role_type_by_role(scene_active_roles, reference_profiles)
+
     refs_debug = {
         "characterRefCount": len(character_refs),
         "characterImagesAttached": len(character_images),
@@ -7523,6 +7588,7 @@ def clip_image(payload: ClipImageIn):
         "rawRefsByRole": {role: len((getattr(refs_obj, "refsByRole", {}) or {}).get(role) or []) for role in comfy_roles},
         "filteredRefsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
         "referenceProfilesSummary": reference_profiles_summary,
+        "roleTypeByRole": role_type_by_role,
         "multiViewCountByRole": multi_view_count_by_role,
         "selectedViewHint": selected_view_hint,
         "multiViewReferenceProfile": multi_view_reference_profile,
