@@ -6,7 +6,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.engine.comfy_brain_engine import run_comfy_plan, run_comfy_prompt_sync
 from app.engine.comfy_reference_profile import build_reference_profiles
-from app.engine.scenario_director_engine import ScenarioDirectorError, run_scenario_director
+from app.engine.scenario_director_engine import (
+    ScenarioDirectorError,
+    run_scenario_director,
+    run_scenario_director_master,
+    run_scenario_director_scenes,
+)
 
 import json
 import logging
@@ -144,12 +149,16 @@ class ScenarioDirectorControlsIn(BaseModel):
 
 
 class ScenarioDirectorGenerateIn(BaseModel):
+    mode: str | None = "oneshot"
     source: ScenarioDirectorSourceIn
     context_refs: dict[str, ScenarioDirectorReferenceIn] = Field(default_factory=dict)
     director_controls: ScenarioDirectorControlsIn = Field(default_factory=ScenarioDirectorControlsIn)
     connected_context_summary: dict[str, Any] = Field(default_factory=dict)
     roleTypeByRole: dict[str, str] = Field(default_factory=dict)
     audioDurationSec: float | None = None
+    master_output: dict[str, Any] = Field(default_factory=dict)
+    timeWindow: dict[str, Any] = Field(default_factory=dict)
+    expectedScenes: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -427,6 +436,11 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
 async def clip_comfy_scenario_director_generate(payload: ScenarioDirectorGenerateIn) -> dict[str, Any]:
     req = payload.model_dump(mode="json")
     try:
+        mode = str(req.get("mode") or "oneshot").strip().lower()
+        if mode == "master":
+            return run_scenario_director_master(req)
+        if mode == "scenes":
+            return run_scenario_director_scenes(req)
         return run_scenario_director(req)
     except ScenarioDirectorError as exc:
         detail: dict[str, Any] = {"code": exc.code, "message": exc.message}
