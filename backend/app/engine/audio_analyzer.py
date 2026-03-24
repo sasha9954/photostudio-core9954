@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Dict
+import re
+from typing import Any, Dict, List
 
 import librosa
 import numpy as np
@@ -440,4 +441,108 @@ def derive_audio_semantic_profile(analysis: Dict[str, object] | None) -> Dict[st
             "bpm": _safe_float(bpm),
             "duration": _safe_float(duration),
         },
+    }
+
+
+def analyze_audio_semantics_fallback(transcript_text: str = "", *, hint: str = "semantic_unavailable") -> dict[str, Any]:
+    transcript = str(transcript_text or "").strip()
+    has_transcript = bool(transcript)
+    return {
+        "ok": has_transcript,
+        "transcript": transcript,
+        "semanticSummary": "Transcript available but semantic extraction fallback mode is active." if has_transcript else "",
+        "narrativeCore": "",
+        "worldContext": "",
+        "entities": [],
+        "impliedEvents": [],
+        "tone": "",
+        "confidence": 0.2 if has_transcript else 0.0,
+        "hint": hint,
+    }
+
+
+def analyze_audio_semantics(audio_path: str | None = None, *, transcript_text: str = "") -> dict[str, Any]:
+    transcript = str(transcript_text or "").strip()
+    if not transcript:
+        return analyze_audio_semantics_fallback(transcript, hint="no_asr_transcript")
+
+    text_lower = transcript.lower()
+    entities: list[str] = []
+    implied_events: list[str] = []
+    tone_signals: list[str] = []
+
+    entity_rules = [
+        (("iran", "иран"), "Iran"),
+        (("bunker", "бункер"), "Bunkers"),
+        (("missile", "missiles", "ракет"), "Missiles"),
+        (("base", "facility", "объект", "база"), "Military facility"),
+        (("operation", "операц"), "Operations"),
+        (("corridor", "туннел", "коридор"), "Underground corridors"),
+    ]
+    event_rules = [
+        (("military", "военн"), "Military context"),
+        (("underground", "подзем"), "Underground facilities"),
+        (("launch", "strike", "удар", "пуск"), "Launch/strike references"),
+        (("warning", "alarm", "тревог"), "Alert state"),
+        (("explosion", "blast", "взрыв"), "Explosive event"),
+    ]
+    tone_rules = [
+        (("urgent", "critical", "сроч", "немед"), "urgent"),
+        (("danger", "threat", "опас", "угроз"), "threatening"),
+        (("secret", "classified", "секрет"), "secretive"),
+        (("calm", "steady", "спокой"), "calm"),
+    ]
+
+    for needles, label in entity_rules:
+        if any(needle in text_lower for needle in needles):
+            entities.append(label)
+    for needles, label in event_rules:
+        if any(needle in text_lower for needle in needles):
+            implied_events.append(label)
+    for needles, label in tone_rules:
+        if any(needle in text_lower for needle in needles):
+            tone_signals.append(label)
+
+    dedup_entities = list(dict.fromkeys([item for item in entities if item]))
+    dedup_events = list(dict.fromkeys([item for item in implied_events if item]))
+    dedup_tone = list(dict.fromkeys([item for item in tone_signals if item]))
+
+    narrative_sentences = [s.strip() for s in re.split(r"[.!?\n]+", transcript) if s.strip()]
+    narrative_core = narrative_sentences[0][:320] if narrative_sentences else transcript[:320]
+    world_context = ""
+    if dedup_entities:
+        world_context = f"Audio references: {', '.join(dedup_entities)}."
+    elif dedup_events:
+        world_context = f"Implied world events: {', '.join(dedup_events)}."
+
+    summary_bits: list[str] = []
+    summary_bits.append(narrative_core[:220] if narrative_core else transcript[:220])
+    if dedup_entities:
+        summary_bits.append(f"Entities: {', '.join(dedup_entities)}")
+    if dedup_events:
+        summary_bits.append(f"Events: {', '.join(dedup_events)}")
+    semantic_summary = ". ".join([bit for bit in summary_bits if bit]).strip()
+
+    confidence = 0.45
+    if dedup_entities:
+        confidence += 0.2
+    if dedup_events:
+        confidence += 0.15
+    if len(transcript) >= 80:
+        confidence += 0.1
+    if dedup_tone:
+        confidence += 0.05
+
+    return {
+        "ok": True,
+        "transcript": transcript,
+        "semanticSummary": semantic_summary[:1200],
+        "narrativeCore": narrative_core[:600],
+        "worldContext": world_context[:600],
+        "entities": dedup_entities[:12],
+        "impliedEvents": dedup_events[:12],
+        "tone": ", ".join(dedup_tone[:4]),
+        "confidence": float(max(0.0, min(1.0, round(confidence, 3)))),
+        "hint": "transcript_semantic_ok",
+        "audioPathProvided": bool(str(audio_path or "").strip()),
     }

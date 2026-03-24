@@ -146,6 +146,11 @@ class ScenarioDirectorControlsIn(BaseModel):
     styleProfile: str = "realistic"
     directorNote: str = ""
     preferAudioOverText: bool = True
+    enable_asr: bool = True
+    use_multimodal_audio: bool = False
+    timelineSource: str = "audio"
+    segmentationMode: str = "phrase-first"
+    useAudioPhraseBoundaries: bool = True
 
 
 class ScenarioDirectorGenerateIn(BaseModel):
