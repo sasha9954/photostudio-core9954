@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 from app.core.config import settings
 from app.core.static_paths import ASSETS_DIR, BACKEND_DIR
-from app.engine.audio_analyzer import analyze_audio, derive_audio_semantic_profile
+from app.engine.audio_analyzer import (
+    analyze_audio,
+    analyze_audio_semantics,
+    analyze_audio_semantics_fallback,
+    derive_audio_semantic_profile,
+)
 from app.engine.gemini_rest import post_generate_content
 
 ALLOWED_SOURCE_MODES = {"audio", "video_file", "video_link"}
@@ -1126,6 +1131,43 @@ def _analyze_audio_for_scenario_director(audio_context: dict[str, Any]) -> dict[
             os.unlink(temp_path)
 
 
+def _analyze_audio_semantics_for_scenario_director(payload: dict[str, Any], audio_context: dict[str, Any]) -> dict[str, Any]:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    source_metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+    transcript_candidates = [
+        metadata.get("audioTranscript"),
+        metadata.get("transcript"),
+        source_metadata.get("audioTranscript"),
+        source_metadata.get("transcript"),
+    ]
+    transcript = ""
+    for candidate in transcript_candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            transcript = candidate.strip()
+            break
+
+    audio_url = str(audio_context.get("audioUrl") or "").strip() or None
+    if not transcript:
+        semantics = analyze_audio_semantics_fallback("", hint="no_asr_transcript")
+    else:
+        semantics = analyze_audio_semantics(audio_url, transcript_text=transcript)
+
+    normalized = semantics if isinstance(semantics, dict) else {}
+    return {
+        "ok": _coerce_bool(normalized.get("ok"), bool(transcript)),
+        "transcript": str(normalized.get("transcript") or transcript or "").strip(),
+        "semanticSummary": str(normalized.get("semanticSummary") or "").strip(),
+        "narrativeCore": str(normalized.get("narrativeCore") or "").strip(),
+        "worldContext": str(normalized.get("worldContext") or "").strip(),
+        "entities": [str(item).strip() for item in (normalized.get("entities") or []) if str(item).strip()],
+        "impliedEvents": [str(item).strip() for item in (normalized.get("impliedEvents") or []) if str(item).strip()],
+        "tone": str(normalized.get("tone") or "").strip(),
+        "confidence": _safe_float(normalized.get("confidence"), 0.0),
+        "hint": str(normalized.get("hint") or ("transcript_semantic_ok" if transcript else "no_asr_transcript")).strip(),
+    }
+
+
 def _build_audio_timeline_guidance(audio_analysis: dict[str, Any], audio_context: dict[str, Any]) -> dict[str, Any]:
     phrase_candidates = [
         {"timeSec": _safe_float((phrase or {}).get("end"), 0.0), "reason": "phrase_end", "weight": 10}
@@ -2081,6 +2123,7 @@ def _build_request_text(
     audio_context: dict[str, Any] | None = None,
     audio_analysis: dict[str, Any] | None = None,
     audio_guidance: dict[str, Any] | None = None,
+    audio_semantics: dict[str, Any] | None = None,
     strict_json_retry: bool = False,
 ) -> str:
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
@@ -2093,6 +2136,7 @@ def _build_request_text(
         _safe_float(normalized_audio.get("audioDurationSec"), 0.0), "analysis_not_requested"
     )
     runtime_guidance = audio_guidance if isinstance(audio_guidance, dict) else {}
+    runtime_semantics = audio_semantics if isinstance(audio_semantics, dict) else {}
     audio_duration_sec = _safe_float(
         runtime_analysis.get("audioDurationSec"),
         _safe_float(normalized_audio.get("audioDurationSec"), 0.0),
@@ -2119,6 +2163,11 @@ def _build_request_text(
         "- Never replace a clear audio topic with generic romance or unrelated locations.\n"
         "- Never use audio as mood-only when audio already provides world/content facts.\n"
         "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate.\n"
+        "AUDIO CONTENT TRUTH RULE:\n"
+        "- If audioSemantics.ok=true and audioSemantics.semanticSummary/worldContext/narrativeCore are present, they define the story subject, world facts, and implied events.\n"
+        "- Director note may only reinterpret emotional/relationship dynamics inside that audio-defined world.\n"
+        "- Director note must NOT replace audioSemantics topic/world.\n"
+        "- audio timing signals define boundaries; audio semantics define meaning.\n"
         "FORBIDDEN:\n"
         "- director note as main subject when audio has stronger subject matter.\n"
         "- unrelated meet-cute/bar/date story when audio defines another world.\n"
@@ -2280,7 +2329,7 @@ def _build_request_text(
         '    "howDirectorNoteWasIntegrated": ""\n'
         "  }\n"
         "}\n\n"
-        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
+        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'audioSemantics': {'ok': runtime_semantics.get('ok'), 'transcript': str(runtime_semantics.get('transcript') or '')[:2000], 'semanticSummary': str(runtime_semantics.get('semanticSummary') or '')[:1200], 'narrativeCore': str(runtime_semantics.get('narrativeCore') or '')[:600], 'worldContext': str(runtime_semantics.get('worldContext') or '')[:600], 'entities': [str(item).strip() for item in (runtime_semantics.get('entities') or []) if str(item).strip()][:20], 'impliedEvents': [str(item).strip() for item in (runtime_semantics.get('impliedEvents') or []) if str(item).strip()][:20], 'tone': str(runtime_semantics.get('tone') or '')[:200], 'confidence': runtime_semantics.get('confidence'), 'hint': str(runtime_semantics.get('hint') or '')[:120]}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
     )
     if strict_json_retry:
         request_text += JSON_ONLY_RETRY_SUFFIX
@@ -2397,6 +2446,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             audio_errors.extend(audio_analysis.get("errors") or [])
     elif str(audio_context.get("sourceMode") or "").upper() == "AUDIO":
         audio_hints.append("audio_mode_without_audio_url")
+    audio_semantics = _analyze_audio_semantics_for_scenario_director(payload, audio_context)
 
     can_use_phrase_first = bool(
         str(audio_context.get("sourceMode") or "").upper() == "AUDIO"
@@ -2409,7 +2459,13 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         )
     )
     audio_guidance = _build_phrase_first_segmentation_guidance(audio_analysis, audio_context) if can_use_phrase_first else {}
-    request_text = _build_request_text(payload, audio_context=audio_context, audio_analysis=audio_analysis, audio_guidance=audio_guidance)
+    request_text = _build_request_text(
+        payload,
+        audio_context=audio_context,
+        audio_analysis=audio_analysis,
+        audio_guidance=audio_guidance,
+        audio_semantics=audio_semantics,
+    )
     body = {
         "systemInstruction": {
             "parts": [
@@ -2453,7 +2509,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         retried_for_json = True
         retry_body = {
             **body,
-            "contents": [{"role": "user", "parts": [{"text": _build_request_text(payload, audio_context=audio_context, audio_analysis=audio_analysis, audio_guidance=audio_guidance, strict_json_retry=True)}]}],
+            "contents": [{"role": "user", "parts": [{"text": _build_request_text(payload, audio_context=audio_context, audio_analysis=audio_analysis, audio_guidance=audio_guidance, audio_semantics=audio_semantics, strict_json_retry=True)}]}],
         }
         retry_response, retry_model_used, retry_attempts = _send_director_request(api_key, retry_body)
         attempted_models.extend(model for model in retry_attempts if model not in attempted_models)
@@ -2575,6 +2631,15 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     planner_narrative_strategy = structured_planner_diagnostics.get("narrativeStrategy") if isinstance(structured_planner_diagnostics.get("narrativeStrategy"), dict) else {}
     planner_diagnostics = structured_planner_diagnostics.get("diagnostics") if isinstance(structured_planner_diagnostics.get("diagnostics"), dict) else {}
     planner_audio_understanding = structured_planner_diagnostics.get("audioUnderstanding") if isinstance(structured_planner_diagnostics.get("audioUnderstanding"), dict) else {}
+    audio_semantics_ok = _coerce_bool(audio_semantics.get("ok"), False)
+    audio_transcript_available = bool(str(audio_semantics.get("transcript") or "").strip())
+    audio_semantic_summary = str(audio_semantics.get("semanticSummary") or "").strip()
+    audio_world_context = str(audio_semantics.get("worldContext") or "").strip()
+    audio_narrative_core = str(audio_semantics.get("narrativeCore") or "").strip()
+    audio_entities = [str(item).strip() for item in (audio_semantics.get("entities") or []) if str(item).strip()]
+    audio_implied_events = [str(item).strip() for item in (audio_semantics.get("impliedEvents") or []) if str(item).strip()]
+    audio_semantic_summary_available = bool(audio_semantic_summary)
+    audio_content_truth_available = bool(audio_semantic_summary or audio_world_context or audio_entities)
     planner_scene_evidence = []
     for scene in storyboard_out.scenes:
         planner_scene_evidence.append(
@@ -2598,6 +2663,8 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             fake_audio_first_risks.append("usedAudioOnlyAsMood_true")
         if not _coerce_bool(planner_diagnostics.get("usedAudioAsContentSource"), False):
             fake_audio_first_risks.append("usedAudioAsContentSource_false")
+        if audio_semantics_ok and audio_content_truth_available and not _coerce_bool(planner_diagnostics.get("usedAudioAsContentSource"), False):
+            fake_audio_first_risks.append("audio_content_truth_ignored")
         if not str(planner_audio_understanding.get("whatFromAudioDefinesWorld") or "").strip():
             fake_audio_first_risks.append("whatFromAudioDefinesWorld_missing")
         if any(
@@ -2678,6 +2745,15 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "sceneBoundaryStrategy": "phrase_pause_energy_section" if can_use_phrase_first else ("audio_duration_fallback" if str(audio_context.get("sourceMode") or "").upper() == "AUDIO" else "text_default"),
             "audioAnalysisSource": audio_analysis.get("source"),
             "audioAnalysisHint": audio_analysis.get("hint"),
+            "audioSemanticsOk": audio_semantics_ok,
+            "audioTranscriptAvailable": audio_transcript_available,
+            "audioSemanticSummaryAvailable": audio_semantic_summary_available,
+            "audioNarrativeCore": audio_narrative_core[:600],
+            "audioWorldContext": audio_world_context[:600],
+            "audioEntities": audio_entities[:20],
+            "audioImpliedEvents": audio_implied_events[:20],
+            "audioSemanticsConfidence": _safe_float(audio_semantics.get("confidence"), 0.0),
+            "audioContentTruthAvailable": audio_content_truth_available,
             "structuredPlannerDiagnostics": structured_planner_diagnostics,
             "sceneAudioEvidence": planner_scene_evidence,
             "fakeAudioFirstRiskSignals": fake_audio_first_risks,
