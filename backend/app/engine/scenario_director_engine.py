@@ -111,6 +111,11 @@ class ScenarioDirectorScene(BaseModel):
     local_phrase: str | None = None
     sfx: str = ""
     music_mix_hint: str = "off"
+    what_from_audio_this_scene_uses: str = ""
+    director_note_layer: str = ""
+    boundary_reason: str = "fallback"
+    audio_anchor_evidence: str = ""
+    confidence: float = 0.5
 
     @field_validator("scene_id", mode="before")
     @classmethod
@@ -150,11 +155,110 @@ class ScenarioDirectorScene(BaseModel):
         self.local_phrase = str(self.local_phrase).strip() if self.local_phrase is not None and str(self.local_phrase).strip() else None
         self.sfx = _stringify_sfx(self.sfx)
         self.music_mix_hint = str(self.music_mix_hint or "off").strip() or "off"
+        self.what_from_audio_this_scene_uses = str(self.what_from_audio_this_scene_uses or "").strip()
+        self.director_note_layer = str(self.director_note_layer or "").strip()
+        boundary_reason = str(self.boundary_reason or "fallback").strip().lower() or "fallback"
+        self.boundary_reason = boundary_reason if boundary_reason in {"phrase", "pause", "semantic", "energy", "fallback"} else "fallback"
+        self.audio_anchor_evidence = str(self.audio_anchor_evidence or "").strip()
+        self.confidence = _safe_float(self.confidence, 0.5)
+        if self.confidence < 0:
+            self.confidence = 0.0
+        elif self.confidence > 1:
+            self.confidence = 1.0
         self.ltx_reason = _normalize_ltx_reason(
             str(self.ltx_reason or "").strip(),
             self.ltx_mode,
             narration_mode=self.narration_mode,
         )
+        return self
+
+
+class ScenarioDirectorAudioUnderstanding(BaseModel):
+    main_topic: str = ""
+    world_context: str = ""
+    implied_events: list[str] = Field(default_factory=list)
+    emotional_tone_from_audio: str = ""
+    confidence_audio_understood: float = 0.0
+    what_from_audio_defines_world: str = ""
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ScenarioDirectorAudioUnderstanding":
+        self.main_topic = str(self.main_topic or "").strip()
+        self.world_context = str(self.world_context or "").strip()
+        self.implied_events = [str(item).strip() for item in (self.implied_events or []) if str(item).strip()]
+        self.emotional_tone_from_audio = str(self.emotional_tone_from_audio or "").strip()
+        self.confidence_audio_understood = _safe_float(self.confidence_audio_understood, 0.0)
+        if self.confidence_audio_understood < 0:
+            self.confidence_audio_understood = 0.0
+        elif self.confidence_audio_understood > 1:
+            self.confidence_audio_understood = 1.0
+        self.what_from_audio_defines_world = str(self.what_from_audio_defines_world or "").strip()
+        return self
+
+
+class ScenarioDirectorConflictAnalysis(BaseModel):
+    audio_vs_director_note_conflict: bool = False
+    conflict_description: str = ""
+    resolution_strategy: str = ""
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ScenarioDirectorConflictAnalysis":
+        self.audio_vs_director_note_conflict = _coerce_bool(self.audio_vs_director_note_conflict, False)
+        self.conflict_description = str(self.conflict_description or "").strip()
+        self.resolution_strategy = str(self.resolution_strategy or "").strip()
+        return self
+
+
+class ScenarioDirectorNarrativeStrategy(BaseModel):
+    story_core_source: str = "mixed"
+    did_audio_remain_primary: bool = False
+    did_director_note_override_audio: bool = False
+    why: str = ""
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ScenarioDirectorNarrativeStrategy":
+        story_core_source = str(self.story_core_source or "mixed").strip().lower() or "mixed"
+        self.story_core_source = story_core_source if story_core_source in {"audio", "director_note", "mixed", "fallback"} else "mixed"
+        self.did_audio_remain_primary = _coerce_bool(self.did_audio_remain_primary, False)
+        self.did_director_note_override_audio = _coerce_bool(self.did_director_note_override_audio, False)
+        self.why = str(self.why or "").strip()
+        return self
+
+
+class ScenarioDirectorStoryMeta(BaseModel):
+    title: str = ""
+    summary: str = ""
+    how_director_note_was_integrated: str = ""
+    how_romance_exists_inside_audio_world: str = ""
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ScenarioDirectorStoryMeta":
+        self.title = str(self.title or "").strip()
+        self.summary = str(self.summary or "").strip()
+        self.how_director_note_was_integrated = str(self.how_director_note_was_integrated or "").strip()
+        self.how_romance_exists_inside_audio_world = str(self.how_romance_exists_inside_audio_world or "").strip()
+        return self
+
+
+class ScenarioDirectorDiagnostics(BaseModel):
+    used_audio_as_content_source: bool = False
+    used_audio_only_as_mood: bool = False
+    did_fallback_from_audio_content_truth: bool = False
+    biggest_risk: str = ""
+    what_may_be_wrong: str = ""
+    planner_mode: str = "text_fallback"
+    how_director_note_was_integrated: str = ""
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ScenarioDirectorDiagnostics":
+        self.used_audio_as_content_source = _coerce_bool(self.used_audio_as_content_source, False)
+        self.used_audio_only_as_mood = _coerce_bool(self.used_audio_only_as_mood, False)
+        self.did_fallback_from_audio_content_truth = _coerce_bool(self.did_fallback_from_audio_content_truth, False)
+        self.biggest_risk = str(self.biggest_risk or "").strip()
+        self.what_may_be_wrong = str(self.what_may_be_wrong or "").strip()
+        planner_mode = str(self.planner_mode or "text_fallback").strip().lower() or "text_fallback"
+        self.planner_mode = planner_mode if planner_mode in {"full_audio_first", "partial_audio_first", "text_fallback"} else "text_fallback"
+        self.how_director_note_was_integrated = str(self.how_director_note_was_integrated or "").strip()
         return self
 
 
@@ -164,6 +268,11 @@ class ScenarioDirectorStoryboardOut(BaseModel):
     voice_script: str = ""
     music_prompt: str = ""
     director_summary: str = ""
+    audio_understanding: ScenarioDirectorAudioUnderstanding = Field(default_factory=ScenarioDirectorAudioUnderstanding)
+    conflict_analysis: ScenarioDirectorConflictAnalysis = Field(default_factory=ScenarioDirectorConflictAnalysis)
+    narrative_strategy: ScenarioDirectorNarrativeStrategy = Field(default_factory=ScenarioDirectorNarrativeStrategy)
+    story: ScenarioDirectorStoryMeta = Field(default_factory=ScenarioDirectorStoryMeta)
+    diagnostics: ScenarioDirectorDiagnostics = Field(default_factory=ScenarioDirectorDiagnostics)
     scenes: list[ScenarioDirectorScene] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -382,6 +491,11 @@ def _normalize_legacy_scene_shape(scene: dict) -> dict:
     if normalized["start_frame_source"] == "previous_frame":
         normalized["continuation_from_previous"] = True
     normalized["sfx"] = _stringify_sfx(normalized.get("sfx"))
+    normalized.setdefault("what_from_audio_this_scene_uses", normalized.get("whatFromAudioThisSceneUses"))
+    normalized.setdefault("director_note_layer", normalized.get("directorNoteLayer"))
+    normalized.setdefault("boundary_reason", normalized.get("boundaryReason"))
+    normalized.setdefault("audio_anchor_evidence", normalized.get("audioAnchorEvidence"))
+    normalized.setdefault("confidence", normalized.get("confidence"))
 
     if applied:
         logger.debug(
@@ -457,6 +571,67 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
     if not repaired.get("director_summary"):
         repaired["director_summary"] = repaired.get("directorSummary") or repaired.get("direction_summary") or ""
         changed = changed or bool(repaired["director_summary"])
+    if not isinstance(repaired.get("audio_understanding"), dict):
+        candidate_audio_understanding = repaired.get("audioUnderstanding")
+        if isinstance(candidate_audio_understanding, dict):
+            repaired["audio_understanding"] = candidate_audio_understanding
+            changed = True
+    if isinstance(repaired.get("audio_understanding"), dict):
+        audio_understanding = dict(repaired.get("audio_understanding") or {})
+        audio_understanding.setdefault("main_topic", audio_understanding.get("mainTopic"))
+        audio_understanding.setdefault("world_context", audio_understanding.get("worldContext"))
+        audio_understanding.setdefault("implied_events", audio_understanding.get("impliedEvents"))
+        audio_understanding.setdefault("emotional_tone_from_audio", audio_understanding.get("emotionalToneFromAudio"))
+        audio_understanding.setdefault("confidence_audio_understood", audio_understanding.get("confidenceAudioUnderstood"))
+        audio_understanding.setdefault("what_from_audio_defines_world", audio_understanding.get("whatFromAudioDefinesWorld"))
+        repaired["audio_understanding"] = audio_understanding
+    if not isinstance(repaired.get("conflict_analysis"), dict):
+        candidate_conflict = repaired.get("conflictAnalysis")
+        if isinstance(candidate_conflict, dict):
+            repaired["conflict_analysis"] = candidate_conflict
+            changed = True
+    if isinstance(repaired.get("conflict_analysis"), dict):
+        conflict_analysis = dict(repaired.get("conflict_analysis") or {})
+        conflict_analysis.setdefault("audio_vs_director_note_conflict", conflict_analysis.get("audioVsDirectorNoteConflict"))
+        conflict_analysis.setdefault("conflict_description", conflict_analysis.get("conflictDescription"))
+        conflict_analysis.setdefault("resolution_strategy", conflict_analysis.get("resolutionStrategy"))
+        repaired["conflict_analysis"] = conflict_analysis
+    if not isinstance(repaired.get("narrative_strategy"), dict):
+        candidate_strategy = repaired.get("narrativeStrategy")
+        if isinstance(candidate_strategy, dict):
+            repaired["narrative_strategy"] = candidate_strategy
+            changed = True
+    if isinstance(repaired.get("narrative_strategy"), dict):
+        narrative_strategy = dict(repaired.get("narrative_strategy") or {})
+        narrative_strategy.setdefault("story_core_source", narrative_strategy.get("storyCoreSource"))
+        narrative_strategy.setdefault("did_audio_remain_primary", narrative_strategy.get("didAudioRemainPrimary"))
+        narrative_strategy.setdefault("did_director_note_override_audio", narrative_strategy.get("didDirectorNoteOverrideAudio"))
+        repaired["narrative_strategy"] = narrative_strategy
+    if not isinstance(repaired.get("story"), dict):
+        candidate_story = repaired.get("story")
+        if isinstance(candidate_story, dict):
+            repaired["story"] = candidate_story
+            changed = True
+    if not isinstance(repaired.get("diagnostics"), dict):
+        candidate_diagnostics = repaired.get("diagnostics")
+        if isinstance(candidate_diagnostics, dict):
+            repaired["diagnostics"] = candidate_diagnostics
+            changed = True
+    if isinstance(repaired.get("story"), dict):
+        story = dict(repaired.get("story") or {})
+        story.setdefault("how_director_note_was_integrated", story.get("howDirectorNoteWasIntegrated"))
+        story.setdefault("how_romance_exists_inside_audio_world", story.get("howRomanceExistsInsideAudioWorld"))
+        repaired["story"] = story
+    if isinstance(repaired.get("diagnostics"), dict):
+        diagnostics = dict(repaired.get("diagnostics") or {})
+        diagnostics.setdefault("used_audio_as_content_source", diagnostics.get("usedAudioAsContentSource"))
+        diagnostics.setdefault("used_audio_only_as_mood", diagnostics.get("usedAudioOnlyAsMood"))
+        diagnostics.setdefault("did_fallback_from_audio_content_truth", diagnostics.get("didFallbackFromAudioContentTruth"))
+        diagnostics.setdefault("biggest_risk", diagnostics.get("biggestRisk"))
+        diagnostics.setdefault("what_may_be_wrong", diagnostics.get("whatMayBeWrong"))
+        diagnostics.setdefault("planner_mode", diagnostics.get("plannerMode"))
+        diagnostics.setdefault("how_director_note_was_integrated", diagnostics.get("howDirectorNoteWasIntegrated"))
+        repaired["diagnostics"] = diagnostics
 
     if changed:
         logger.debug(
@@ -465,6 +640,87 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
             bool(str(repaired.get("story_summary") or "").strip()),
         )
     return repaired
+
+
+def _extract_structured_diagnostics(parsed_payload: dict[str, Any]) -> dict[str, Any]:
+    audio_understanding_raw = parsed_payload.get("audio_understanding") if isinstance(parsed_payload.get("audio_understanding"), dict) else {}
+    conflict_analysis_raw = parsed_payload.get("conflict_analysis") if isinstance(parsed_payload.get("conflict_analysis"), dict) else {}
+    narrative_strategy_raw = parsed_payload.get("narrative_strategy") if isinstance(parsed_payload.get("narrative_strategy"), dict) else {}
+    diagnostics_raw = parsed_payload.get("diagnostics") if isinstance(parsed_payload.get("diagnostics"), dict) else {}
+    story_raw = parsed_payload.get("story") if isinstance(parsed_payload.get("story"), dict) else {}
+    return {
+        "audioUnderstanding": {
+            "mainTopic": str(audio_understanding_raw.get("main_topic") or audio_understanding_raw.get("mainTopic") or "").strip(),
+            "worldContext": str(audio_understanding_raw.get("world_context") or audio_understanding_raw.get("worldContext") or "").strip(),
+            "impliedEvents": [
+                str(item).strip()
+                for item in (audio_understanding_raw.get("implied_events") or audio_understanding_raw.get("impliedEvents") or [])
+                if str(item).strip()
+            ],
+            "emotionalToneFromAudio": str(audio_understanding_raw.get("emotional_tone_from_audio") or audio_understanding_raw.get("emotionalToneFromAudio") or "").strip(),
+            "confidenceAudioUnderstood": _safe_float(
+                audio_understanding_raw.get("confidence_audio_understood") if audio_understanding_raw.get("confidence_audio_understood") is not None else audio_understanding_raw.get("confidenceAudioUnderstood"),
+                0.0,
+            ),
+            "whatFromAudioDefinesWorld": str(audio_understanding_raw.get("what_from_audio_defines_world") or audio_understanding_raw.get("whatFromAudioDefinesWorld") or "").strip(),
+        },
+        "conflictAnalysis": {
+            "audioVsDirectorNoteConflict": _coerce_bool(
+                conflict_analysis_raw.get("audio_vs_director_note_conflict")
+                if conflict_analysis_raw.get("audio_vs_director_note_conflict") is not None
+                else conflict_analysis_raw.get("audioVsDirectorNoteConflict"),
+                False,
+            ),
+            "conflictDescription": str(conflict_analysis_raw.get("conflict_description") or conflict_analysis_raw.get("conflictDescription") or "").strip(),
+            "resolutionStrategy": str(conflict_analysis_raw.get("resolution_strategy") or conflict_analysis_raw.get("resolutionStrategy") or "").strip(),
+        },
+        "narrativeStrategy": {
+            "storyCoreSource": str(narrative_strategy_raw.get("story_core_source") or narrative_strategy_raw.get("storyCoreSource") or "").strip().lower() or "mixed",
+            "didAudioRemainPrimary": _coerce_bool(
+                narrative_strategy_raw.get("did_audio_remain_primary")
+                if narrative_strategy_raw.get("did_audio_remain_primary") is not None
+                else narrative_strategy_raw.get("didAudioRemainPrimary"),
+                False,
+            ),
+            "didDirectorNoteOverrideAudio": _coerce_bool(
+                narrative_strategy_raw.get("did_director_note_override_audio")
+                if narrative_strategy_raw.get("did_director_note_override_audio") is not None
+                else narrative_strategy_raw.get("didDirectorNoteOverrideAudio"),
+                False,
+            ),
+            "why": str(narrative_strategy_raw.get("why") or "").strip(),
+        },
+        "story": {
+            "title": str(story_raw.get("title") or "").strip(),
+            "summary": str(story_raw.get("summary") or "").strip(),
+            "howDirectorNoteWasIntegrated": str(story_raw.get("how_director_note_was_integrated") or story_raw.get("howDirectorNoteWasIntegrated") or "").strip(),
+            "howRomanceExistsInsideAudioWorld": str(story_raw.get("how_romance_exists_inside_audio_world") or story_raw.get("howRomanceExistsInsideAudioWorld") or "").strip(),
+        },
+        "diagnostics": {
+            "usedAudioAsContentSource": _coerce_bool(
+                diagnostics_raw.get("used_audio_as_content_source")
+                if diagnostics_raw.get("used_audio_as_content_source") is not None
+                else diagnostics_raw.get("usedAudioAsContentSource"),
+                False,
+            ),
+            "usedAudioOnlyAsMood": _coerce_bool(
+                diagnostics_raw.get("used_audio_only_as_mood")
+                if diagnostics_raw.get("used_audio_only_as_mood") is not None
+                else diagnostics_raw.get("usedAudioOnlyAsMood"),
+                False,
+            ),
+            "didFallbackFromAudioContentTruth": _coerce_bool(
+                diagnostics_raw.get("did_fallback_from_audio_content_truth")
+                if diagnostics_raw.get("did_fallback_from_audio_content_truth") is not None
+                else diagnostics_raw.get("didFallbackFromAudioContentTruth"),
+                False,
+            ),
+            "biggestRisk": str(diagnostics_raw.get("biggest_risk") or diagnostics_raw.get("biggestRisk") or "").strip(),
+            "whatMayBeWrong": str(diagnostics_raw.get("what_may_be_wrong") or diagnostics_raw.get("whatMayBeWrong") or "").strip(),
+            "plannerMode": str(diagnostics_raw.get("planner_mode") or diagnostics_raw.get("plannerMode") or "").strip().lower() or "text_fallback",
+            "howDirectorNoteWasIntegrated": str(diagnostics_raw.get("how_director_note_was_integrated") or diagnostics_raw.get("howDirectorNoteWasIntegrated") or "").strip(),
+        },
+    }
 
 
 def _build_reference_role_map(payload: dict[str, Any]) -> dict[str, str]:
@@ -1667,21 +1923,42 @@ def _build_request_text(
         "Gemini is the planning brain. Do not delegate planning to heuristics.\n"
         "Return a single JSON object only. No markdown, no commentary.\n"
         "The storyboard_out must be production-usable for downstream Storyboard execution.\n"
-        "SOURCE PRIORITY (strict):\n"
-        "1) connected AUDIO (when sourceMode=AUDIO and sourceOrigin=connected)\n"
-        "2) user source-of-truth / story brief / scenario note\n"
-        "3) connected visual references\n"
-        "4) director notes\n"
-        "5) project style profile\n"
-        "6) only then free dramatization\n"
-        "AUDIO-FIRST NARRATIVE RULE:\n"
-        "- If AUDIO is connected, derive pacing, emotional contour, escalation, and narrative direction primarily from audio.\n"
-        "- Text hints (directorNote / style hints) are supporting guidance only and must not fully overwrite the audio-driven narrative.\n"
-        "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate the narrative choice.\n"
-        "- Keep text hints as framing/style polish, not as the main plot replacement.\n"
-        "- AUDIO-FIRST SEGMENTATION: do not build evenly spaced scenes when audio analysis exists.\n"
-        "- Align scene boundaries to phrase endings first, pause windows second, then section/energy transitions.\n"
-        "- Treat directorNote/text as semantic interpretation only, not primary timing source.\n"
+        "SOURCE HIERARCHY (HARD, AUDIO MODE ONLY):\n"
+        "1) AUDIO_CONTENT_TRUTH: defines story subject, world facts, implied events/context.\n"
+        "2) AUDIO_TIMELINE_TRUTH: defines timing anchors (phrases, pauses, energy transitions, sections).\n"
+        "3) DIRECTOR_NOTE_INTERPRETATION: emotional/relational lens only; never a content override.\n"
+        "4) STYLE_TREATMENT: visual treatment only; does not define world facts.\n"
+        "5) CHARACTER_REFS: who appears and role dynamics; does not replace audio world.\n"
+        "CONFLICT POLICY (HARD):\n"
+        "- If AUDIO meaning conflicts with DIRECTOR NOTE, preserve AUDIO meaning/world/events and reinterpret DIRECTOR NOTE inside that world.\n"
+        "- Never replace a clear audio topic with generic romance or unrelated locations.\n"
+        "- Never use audio as mood-only when audio already provides world/content facts.\n"
+        "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate.\n"
+        "FORBIDDEN:\n"
+        "- director note as main subject when audio has stronger subject matter.\n"
+        "- unrelated meet-cute/bar/date story when audio defines another world.\n"
+        "- inventing unrelated world/location while clear audio world exists.\n"
+        "TWO-STAGE OUTPUT LOGIC (SINGLE JSON):\n"
+        "- First fill truth analysis blocks: audioUnderstanding -> conflictAnalysis -> narrativeStrategy.\n"
+        "- Then produce story, scenes, diagnostics.\n"
+        "- Every scene MUST prove audio usage with whatFromAudioThisSceneUses + audioAnchorEvidence + boundaryReason.\n"
+        "MUST-USE SELF-CHECKS (REQUIRED IN OUTPUT):\n"
+        "- narrativeStrategy.didAudioRemainPrimary\n"
+        "- narrativeStrategy.didDirectorNoteOverrideAudio\n"
+        "- audioUnderstanding.whatFromAudioDefinesWorld\n"
+        "- story.howDirectorNoteWasIntegrated\n"
+        "- diagnostics.usedAudioAsContentSource\n"
+        "- diagnostics.usedAudioOnlyAsMood\n"
+        "PLANNER MODES:\n"
+        "- full_audio_first: audio meaning understood + usable timeline signals.\n"
+        "- partial_audio_first: audio meaning partial but still primary world/content anchor.\n"
+        "- text_fallback: only when audio truth is unavailable/unusable.\n"
+        "- If audio world/topic is clear, director note must not capture story core even in partial mode.\n"
+        "TEXT-ONLY DEGRADE:\n"
+        "- If sourceMode is not AUDIO or audio unavailable, use normal text-led planning and set diagnostics/plannerMode accordingly.\n"
+        "AUDIO-FIRST SEGMENTATION:\n"
+        "- Do not build evenly spaced scenes when audio analysis exists.\n"
+        "- Align boundaries to phrase endings first, pause windows second, then section/energy transitions.\n"
         "ANTI-DRIFT LOCKS:\n"
         "- Preserve the exact count of core characters implied by the source and refs.\n"
         "- If two connected refs imply two women, keep two women unless the user explicitly changes that.\n"
@@ -1746,6 +2023,31 @@ def _build_request_text(
         '  "voice_script": "",\n'
         '  "music_prompt": "",\n'
         '  "director_summary": "",\n'
+        '  "audioUnderstanding": {\n'
+        '    "mainTopic": "",\n'
+        '    "worldContext": "",\n'
+        '    "impliedEvents": [],\n'
+        '    "emotionalToneFromAudio": "",\n'
+        '    "confidenceAudioUnderstood": 0.0,\n'
+        '    "whatFromAudioDefinesWorld": ""\n'
+        "  },\n"
+        '  "conflictAnalysis": {\n'
+        '    "audioVsDirectorNoteConflict": false,\n'
+        '    "conflictDescription": "",\n'
+        '    "resolutionStrategy": ""\n'
+        "  },\n"
+        '  "narrativeStrategy": {\n'
+        '    "storyCoreSource": "audio",\n'
+        '    "didAudioRemainPrimary": true,\n'
+        '    "didDirectorNoteOverrideAudio": false,\n'
+        '    "why": ""\n'
+        "  },\n"
+        '  "story": {\n'
+        '    "title": "",\n'
+        '    "summary": "",\n'
+        '    "howDirectorNoteWasIntegrated": "",\n'
+        '    "howRomanceExistsInsideAudioWorld": ""\n'
+        "  },\n"
         '  "scenes": [\n'
         "    {\n"
         '      "scene_id": "S1",\n'
@@ -1770,9 +2072,23 @@ def _build_request_text(
         '      "narration_mode": "full",\n'
         '      "local_phrase": null,\n'
         '      "sfx": "",\n'
-        '      "music_mix_hint": "off"\n'
+        '      "music_mix_hint": "off",\n'
+        '      "whatFromAudioThisSceneUses": "",\n'
+        '      "directorNoteLayer": "",\n'
+        '      "boundaryReason": "phrase",\n'
+        '      "audioAnchorEvidence": "",\n'
+        '      "confidence": 0.0\n'
         "    }\n"
-        "  ]\n"
+        "  ],\n"
+        '  "diagnostics": {\n'
+        '    "usedAudioAsContentSource": true,\n'
+        '    "usedAudioOnlyAsMood": false,\n'
+        '    "didFallbackFromAudioContentTruth": false,\n'
+        '    "biggestRisk": "",\n'
+        '    "whatMayBeWrong": "",\n'
+        '    "plannerMode": "full_audio_first",\n'
+        '    "howDirectorNoteWasIntegrated": ""\n'
+        "  }\n"
         "}\n\n"
         f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
     )
@@ -1910,10 +2226,10 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
                 {
                     "text": (
                         "You are the production Scenario Director for PhotoStudio COMFY. Return strict JSON only. "
-                        "Hard contract: narration_mode must always be a non-null string in every scene (full|duck|pause, default full). "
-                        "If audioDurationSec > 0, scene timeline MUST span full audio from 0.0 to audioDurationSec. "
-                        "When sourceMode=AUDIO and sourceOrigin=connected, audio is the primary narrative driver. "
-                        "If roleTypeByRole contains explicit hero/support/antagonist, preserve it across summary and scenes."
+                        "When sourceMode=AUDIO and sourceOrigin=connected, AUDIO content truth outranks director note/style and must define world/topic/events. "
+                        "Director note is interpretation layer only and must never override clear audio meaning. "
+                        "If audioDurationSec > 0, timeline must cover full audio from 0.0 to audioDurationSec. "
+                        "Every scene must include narration_mode as non-null string (full|duck|pause) and audio usage evidence fields."
                     ),
                 }
             ]
@@ -1958,6 +2274,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         parsed_payload = _parse_storyboard_payload(raw_text)
 
     parsed_payload, normalized_contract_fields, normalization_warnings = _normalize_scenario_director_scene_defaults(parsed_payload)
+    structured_planner_diagnostics = _extract_structured_diagnostics(parsed_payload)
 
     try:
         storyboard_out = ScenarioDirectorStoryboardOut.model_validate(parsed_payload)
@@ -2065,6 +2382,38 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         fallback_reason = "audio_unusable_or_non_audio_source"
         audio_primary_driver_reason = "text_fallback_only"
+    planner_narrative_strategy = structured_planner_diagnostics.get("narrativeStrategy") if isinstance(structured_planner_diagnostics.get("narrativeStrategy"), dict) else {}
+    planner_diagnostics = structured_planner_diagnostics.get("diagnostics") if isinstance(structured_planner_diagnostics.get("diagnostics"), dict) else {}
+    planner_audio_understanding = structured_planner_diagnostics.get("audioUnderstanding") if isinstance(structured_planner_diagnostics.get("audioUnderstanding"), dict) else {}
+    planner_scene_evidence = []
+    for scene in storyboard_out.scenes:
+        planner_scene_evidence.append(
+            {
+                "sceneId": scene.scene_id,
+                "whatFromAudioThisSceneUses": scene.what_from_audio_this_scene_uses,
+                "directorNoteLayer": scene.director_note_layer,
+                "boundaryReason": scene.boundary_reason,
+                "audioAnchorEvidence": scene.audio_anchor_evidence,
+                "confidence": scene.confidence,
+            }
+        )
+    fake_audio_first_risks: list[str] = []
+    if is_audio_mode and audio_connected:
+        if not _coerce_bool(planner_narrative_strategy.get("didAudioRemainPrimary"), False):
+            fake_audio_first_risks.append("didAudioRemainPrimary_false")
+        if _coerce_bool(planner_narrative_strategy.get("didDirectorNoteOverrideAudio"), False):
+            fake_audio_first_risks.append("didDirectorNoteOverrideAudio_true")
+        if _coerce_bool(planner_diagnostics.get("usedAudioOnlyAsMood"), False):
+            fake_audio_first_risks.append("usedAudioOnlyAsMood_true")
+        if not _coerce_bool(planner_diagnostics.get("usedAudioAsContentSource"), False):
+            fake_audio_first_risks.append("usedAudioAsContentSource_false")
+        if not str(planner_audio_understanding.get("whatFromAudioDefinesWorld") or "").strip():
+            fake_audio_first_risks.append("whatFromAudioDefinesWorld_missing")
+        if any(
+            not str(item.get("whatFromAudioThisSceneUses") or "").strip() or not str(item.get("audioAnchorEvidence") or "").strip()
+            for item in planner_scene_evidence
+        ):
+            fake_audio_first_risks.append("scene_level_audio_evidence_missing")
 
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
@@ -2116,6 +2465,10 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "sceneBoundaryStrategy": "phrase_pause_energy_section" if can_use_phrase_first else ("audio_duration_fallback" if str(audio_context.get("sourceMode") or "").upper() == "AUDIO" else "text_default"),
             "audioAnalysisSource": audio_analysis.get("source"),
             "audioAnalysisHint": audio_analysis.get("hint"),
+            "structuredPlannerDiagnostics": structured_planner_diagnostics,
+            "sceneAudioEvidence": planner_scene_evidence,
+            "fakeAudioFirstRiskSignals": fake_audio_first_risks,
+            "fakeAudioFirstSuspected": bool(fake_audio_first_risks),
             "textHintPresent": text_hint_present,
             "textHintInfluence": text_hint_influence,
             "audioInfluence": audio_influence,
