@@ -23,7 +23,6 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const refs = Array.isArray(data?.refs) ? data.refs.map((item) => ({ url: String(item?.url || "").trim(), name: String(item?.name || "").trim(), type: String(item?.type || "").trim() })).filter((item) => !!item.url).slice(0, maxFiles) : [];
   const canAddMore = refs.length < maxFiles;
   const refStatus = String(data?.refStatus || (refs.length ? "draft" : "empty"));
-  const isDraft = refStatus === "draft";
   const isError = refStatus === "error";
   const shortLabel = String(data?.refShortLabel || "").trim();
   const uploadSoftError = String(data?.uploadSoftError || "").trim();
@@ -37,10 +36,9 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
 
   return (<>
     <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
-    <NodeShell title={title} onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧷</span>} className={`${className} ${isDraft ? "clipSB_nodeRefDraft" : ""} ${isError ? "clipSB_nodeRefError" : ""}`.trim()}>
+    <NodeShell title={title} onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧷</span>} className={`${className} ${refStatus === "draft" ? "clipSB_nodeRefDraft" : ""} ${isError ? "clipSB_nodeRefError" : ""}`.trim()}>
       <div className="clipSB_small" style={{ marginBottom: 8 }}>статус: {REF_STATUS_LABELS[refStatus] || refStatus}</div>
       {uploadSoftError ? <div className="clipSB_refWarningBadge">⚠ {uploadSoftError}</div> : null}
-      {isDraft ? <div className="clipSB_refWarningBadge">⚠ Нажмите «Добавить», чтобы подтвердить реф</div> : null}
       {isError ? <div className="clipSB_refErrorBadge">⚠ {String(data?.refAnalysisError || "Не удалось проанализировать реф")}</div> : null}
       {refStatus === "ready" && shortLabel ? <div className="clipSB_refReadyBadge">label: {shortLabel}</div> : null}
       {canToggleDetails ? (
@@ -69,7 +67,6 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
       <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => <div className="clipSB_refThumb" key={`${item.url}-${idx}`}><button className="clipSB_refLiteOpen" onClick={() => data?.onOpenLightbox?.(item.url)} title="Открыть фото"><img src={resolveAssetUrl(item.url)} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" /></button><button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button></div>)}{canAddMore ? <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">+</button> : null}</div>}</div>
       <div style={{ display: "flex", gap: 8 }}>
         <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading || refStatus === "loading"}>{data?.uploading ? "Загрузка…" : refs.length ? "Добавить фото" : "Загрузить фото"}</button>
-        <button className="clipSB_btn" onClick={() => data?.onConfirmAdd?.(id)} disabled={!refs.length || !!data?.uploading || refStatus === "loading"}>{refStatus === "loading" ? "Анализ..." : "Добавить"}</button>
       </div>
       <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple style={{ display: "none" }} onChange={onInputChange} />
     </NodeShell>

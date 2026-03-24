@@ -86,19 +86,26 @@ function normalizeNarrativeSourceMode(mode) {
 
 function buildReferencePayload(input, fallbackLabel) {
   if (!input || typeof input !== "object") return null;
-  const refs = Array.isArray(input.refs)
+  const normalizedRefs = Array.isArray(input.refs)
     ? input.refs
       .map((item) => {
-        if (typeof item === "string") return normalizeText(item) ? { url: normalizeText(item) } : null;
+        if (typeof item === "string") {
+          const url = normalizeText(item);
+          return url ? { url, roleType: "" } : null;
+        }
         const url = normalizeText(item?.url || item);
         if (!url) return null;
         const roleType = normalizeText(item?.roleType).toLowerCase();
-        return roleType ? { url, roleType } : { url };
+        return { url, roleType };
       })
       .filter(Boolean)
     : [];
-  const value = normalizeText(input.value) || normalizeText(refs[0]?.url) || "";
+  const refs = normalizedRefs.map((item) => item.url).filter(Boolean);
+  const roleType = normalizeText(input?.roleType || normalizedRefs.find((item) => !!item.roleType)?.roleType).toLowerCase();
+  const value = normalizeText(input.value) || normalizeText(refs[0]) || "";
   if (!value && !refs.length && !normalizeText(input.preview)) return null;
+  const meta = input?.meta && typeof input.meta === "object" ? { ...input.meta } : {};
+  if (roleType) meta.roleType = roleType;
   return {
     label: fallbackLabel,
     source_label: normalizeText(input.sourceLabel) || fallbackLabel,
@@ -106,7 +113,7 @@ function buildReferencePayload(input, fallbackLabel) {
     value,
     refs,
     count: Math.max(Number(input.count) || 0, refs.length || (value ? 1 : 0)),
-    meta: input?.meta && typeof input.meta === "object" ? input.meta : {},
+    meta,
   };
 }
 
@@ -286,6 +293,11 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     location: buildReferencePayload(connectedInputs?.ref_location, "Location"),
     style: buildReferencePayload(connectedInputs?.ref_style, "Style"),
   };
+  const roleTypeByRole = Object.fromEntries(
+    Object.entries(contextRefs)
+      .map(([role, value]) => [role, normalizeText(value?.meta?.roleType).toLowerCase()])
+      .filter(([, roleType]) => !!roleType)
+  );
 
   return {
     source: {
@@ -312,6 +324,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       sourcePreview: normalizeText(resolvedSource.preview) || sourceValue,
       sourceLabel: normalizeText(resolvedSource.sourceLabel) || normalizeText(resolvedSource.label),
       fileOrLinkMeta: connectedInputs?.video_file_in?.meta || connectedInputs?.video_link_in?.meta || connectedInputs?.audio_in?.meta || {},
+      roleTypeByRole,
     },
   };
 }
