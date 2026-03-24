@@ -27,6 +27,7 @@ import {
   RefCharacter2Node,
   RefCharacter3Node,
   RefGroupNode,
+  RefLiteNode,
   ScenarioOutputTesterNode,
   VoiceOutputTesterNode,
 } from "./clip_nodes/comfy";
@@ -4296,6 +4297,18 @@ function RefNode({ id, data }) {
   const title = data?.title || "REFERENCE";
   const icon = data?.icon || "📷";
   const kind = data?.kind || "ref";
+  if (kind === "ref_character") {
+    return (
+      <RefLiteNode
+        id={id}
+        data={data}
+        title={title}
+        className="clipSB_nodeRef clipSB_nodeRef--ref_character"
+        handleId="ref_character"
+        showRoleSelector
+      />
+    );
+  }
   const maxFiles = kind === "ref_style" ? 1 : 5;
   const refsRaw = Array.isArray(data?.refs) ? data.refs : (data?.url ? [{ url: data.url, name: data?.name || "" }] : []);
   const refs = refsRaw
@@ -4303,7 +4316,6 @@ function RefNode({ id, data }) {
     .filter((item) => !!item.url);
   const canAddMore = refs.length < maxFiles;
   const refStatus = deriveRefNodeStatus(data);
-  const isDraft = refStatus === "draft";
   const isError = refStatus === "error";
   const isReady = refStatus === "ready";
   const shortLabel = String(data?.refShortLabel || "").trim();
@@ -4334,7 +4346,7 @@ function RefNode({ id, data }) {
         title={title}
         onClose={() => data?.onRemoveNode?.(id)}
         icon={<span aria-hidden>{icon}</span>}
-        className={`clipSB_nodeRef clipSB_nodeRef--${kind} ${isDraft ? "clipSB_nodeRefDraft" : ""} ${isError ? "clipSB_nodeRefError" : ""}`.trim()}
+        className={`clipSB_nodeRef clipSB_nodeRef--${kind} ${refStatus === "draft" ? "clipSB_nodeRefDraft" : ""} ${isError ? "clipSB_nodeRefError" : ""}`.trim()}
       >
         <div className="clipSB_refGrid" style={{ marginBottom: 10 }}>
           {uploadSoftError ? <div className="clipSB_refWarningBadge">⚠ {uploadSoftError}</div> : null}
@@ -4364,7 +4376,6 @@ function RefNode({ id, data }) {
         </div>
 
         <div className="clipSB_small" style={{ marginBottom: 8 }}>статус: {REF_STATUS_LABELS[refStatus] || refStatus}</div>
-        {isDraft ? <div className="clipSB_refWarningBadge">⚠ Нажмите «Добавить», чтобы подтвердить реф</div> : null}
         {isError ? <div className="clipSB_refErrorBadge">⚠ {analysisError || "Не удалось проанализировать реф"}</div> : null}
         {isReady && shortLabel ? <div className="clipSB_refReadyBadge">label: {shortLabel}</div> : null}
         {canToggleDetails ? (
@@ -4395,9 +4406,6 @@ function RefNode({ id, data }) {
           <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading || refStatus === "loading"}>
             {data?.uploading ? "Загрузка…" : "Загрузить фото"}
           </button>
-          <button className="clipSB_btn" onClick={() => data?.onConfirmAdd?.(id)} disabled={!refs.length || !!data?.uploading || refStatus === "loading"}>
-            {refStatus === "loading" ? "Анализ..." : "Добавить"}
-          </button>
         </div>
         <input
           ref={inputRef}
@@ -4417,7 +4425,7 @@ function RefNode({ id, data }) {
         <div className="clipSB_hint" style={{ marginTop: 10 }}>
           {kind === "ref_style"
             ? "Глобальный стиль (1 фото)"
-            : "Загрузи до 5 фото, затем нажми «Добавить»"}
+            : "Загрузи до 5 фото"}
         </div>
 
         <div className="clipSB_hint" style={{ marginTop: 8 }}>
