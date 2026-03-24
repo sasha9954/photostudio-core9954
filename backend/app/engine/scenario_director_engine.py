@@ -153,6 +153,7 @@ TIMELINE_END_TOLERANCE_SEC = 0.75
 TIMELINE_INTERNAL_GAP_WARN_SEC = 1.25
 TIMELINE_TAIL_WARN_SEC = 1.0
 TIMELINE_COVERAGE_RATIO_WARN = 0.95
+MAX_INLINE_AUDIO_BYTES = 15 * 1024 * 1024
 
 
 class ScenarioDirectorError(RuntimeError):
@@ -2404,13 +2405,23 @@ def _parse_storyboard_payload(raw_text: str) -> dict[str, Any]:
 def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
     controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     director_note = str(controls.get("directorNote") or controls.get("director_note") or "").strip()
+    role_labels = _build_reference_role_map(payload)
+    available_refs = ", ".join(role_labels.values())
+    references_block = (
+        f"Available character references: {available_refs}\n" if available_refs else "Available character references: none\n"
+    )
     return (
         "You are Scenario Director. AUDIO is the primary source of truth.\n"
         "Do not invent story that contradicts spoken audio.\n"
         "Scene timing must follow speech phrases, pauses, and energy shifts.\n"
         "Every scene must be grounded in spoken content.\n"
+        "Character references are identity anchors.\n"
+        "Use provided character references when scenes imply people.\n"
+        "Do not replace core characters with invented ones.\n"
+        "Do not contradict provided references.\n"
         "Return strict JSON only.\n"
         f"Director note: {director_note if director_note else 'empty'}\n"
+        f"{references_block}"
         "Output JSON contract:\n"
         "{\n"
         '  "transcript": [\n'
@@ -2508,6 +2519,23 @@ def _build_inline_audio_part(audio_context: dict[str, Any]) -> dict[str, Any]:
             status_code=400,
             details={"audioUrl": audio_url or None},
         )
+    raw_audio_bytes = len(raw_audio)
+    logger.info(
+        "[SCENARIO DIRECTOR] inline audio raw size bytes=%s max=%s",
+        raw_audio_bytes,
+        MAX_INLINE_AUDIO_BYTES,
+    )
+    if raw_audio_bytes > MAX_INLINE_AUDIO_BYTES:
+        raise ScenarioDirectorError(
+            "audio_too_large_for_inline",
+            "Audio file is too large for inline Gemini payload.",
+            status_code=413,
+            details={
+                "audioUrl": audio_url or None,
+                "rawAudioBytes": raw_audio_bytes,
+                "maxInlineAudioBytes": MAX_INLINE_AUDIO_BYTES,
+            },
+        )
     return {"inlineData": {"mimeType": mime_type, "data": base64.b64encode(raw_audio).decode("utf-8")}}
 
 
@@ -2529,11 +2557,52 @@ def _parse_audio_first_single_call_payload(raw_text: str) -> dict[str, Any]:
             status_code=502,
             details={"missingFields": missing, "rawPreview": str(raw_text or "")[:1000]},
         )
+    if not isinstance(extracted.get("transcript"), list):
+        raise ScenarioDirectorError(
+            "gemini_contract_invalid",
+            "Gemini audio-first payload has invalid transcript type.",
+            status_code=502,
+            details={"field": "transcript", "expectedType": "list", "actualType": type(extracted.get("transcript")).__name__},
+        )
+    if not isinstance(extracted.get("audioStructure"), dict):
+        raise ScenarioDirectorError(
+            "gemini_contract_invalid",
+            "Gemini audio-first payload has invalid audioStructure type.",
+            status_code=502,
+            details={"field": "audioStructure", "expectedType": "dict", "actualType": type(extracted.get("audioStructure")).__name__},
+        )
+    if not isinstance(extracted.get("semanticTimeline"), list):
+        raise ScenarioDirectorError(
+            "gemini_contract_invalid",
+            "Gemini audio-first payload has invalid semanticTimeline type.",
+            status_code=502,
+            details={
+                "field": "semanticTimeline",
+                "expectedType": "list",
+                "actualType": type(extracted.get("semanticTimeline")).__name__,
+            },
+        )
+    scenes = extracted.get("scenes")
+    if not isinstance(scenes, list):
+        raise ScenarioDirectorError(
+            "gemini_contract_invalid",
+            "Gemini audio-first payload has invalid scenes type.",
+            status_code=502,
+            details={"field": "scenes", "expectedType": "list", "actualType": type(scenes).__name__},
+        )
+    if not scenes:
+        raise ScenarioDirectorError(
+            "gemini_contract_invalid",
+            "Gemini audio-first payload returned empty scenes.",
+            status_code=502,
+            details={"field": "scenes", "reason": "empty_list"},
+        )
     return extracted
 
 
 def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]:
     global_story = result.get("globalStory") if isinstance(result.get("globalStory"), dict) else {}
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
     transcript_rows = result.get("transcript") if isinstance(result.get("transcript"), list) else []
     semantic_timeline = result.get("semanticTimeline") if isinstance(result.get("semanticTimeline"), list) else []
     raw_scenes = result.get("scenes") if isinstance(result.get("scenes"), list) else []
@@ -2576,19 +2645,25 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
                 "local_phrase": str(timeline_hit.get("text") or "").strip() or None,
                 "sfx": "",
                 "music_mix_hint": "off",
-                "whatFromAudioThisSceneUses": str(timeline_hit.get("meaning") or scene.get("summary") or "").strip(),
-                "directorNoteLayer": "",
-                "boundaryReason": "phrase",
-                "audioAnchorEvidence": str(timeline_hit.get("transitionHint") or "").strip(),
+                "what_from_audio_this_scene_uses": str(timeline_hit.get("meaning") or scene.get("summary") or "").strip(),
+                "director_note_layer": "",
+                "boundary_reason": "phrase",
+                "audio_anchor_evidence": str(timeline_hit.get("transitionHint") or "").strip(),
                 "confidence": 0.9,
             }
         )
+    director_summary = (
+        str(debug.get("alignment") or "").strip()
+        or str(global_story.get("overallNarrative") or "").strip()
+        or "Audio-first single-call Gemini output."
+    )
+    global_narrative = str(global_story.get("overallNarrative") or "").strip()
     return {
-        "story_summary": str(global_story.get("overallNarrative") or "").strip(),
-        "full_scenario": str(global_story.get("overallNarrative") or "").strip(),
+        "story_summary": global_narrative,
+        "full_scenario": global_narrative,
         "voice_script": voice_script,
         "music_prompt": "",
-        "director_summary": "Audio-first single-call Gemini output.",
+        "director_summary": director_summary,
         "audio_understanding": {
             "main_topic": str(global_story.get("mainTopic") or "").strip(),
             "world_context": str(global_story.get("worldDescription") or "").strip(),
@@ -2618,12 +2693,12 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
             "used_audio_as_content_source": True,
             "used_audio_only_as_mood": False,
             "did_fallback_from_audio_content_truth": False,
-            "biggest_risk": "",
-            "what_may_be_wrong": "",
+            "biggest_risk": str(debug.get("boundaryLogic") or "").strip(),
+            "what_may_be_wrong": str(debug.get("signals") or "").strip(),
             "planner_mode": "full_audio_first",
             "how_director_note_was_integrated": "",
         },
-        "scenes": legacy_scenes or [{"scene_id": "S1"}],
+        "scenes": legacy_scenes,
     }
 
 
@@ -2633,6 +2708,9 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
     logger.info("[SCENARIO DIRECTOR] sending inline audio to Gemini")
     inline_audio_part = _build_inline_audio_part(audio_context)
     body = {
+        "systemInstruction": {
+            "parts": [{"text": "Return strict JSON only."}],
+        },
         "contents": [{"role": "user", "parts": [{"text": prompt}, inline_audio_part]}],
         "generationConfig": {
             "temperature": 0.2,
