@@ -362,7 +362,7 @@ export default function ScenarioStoryboardEditor({
                   <div className="clipSB_scenarioBgAudioCol clipSB_scenarioBgAudioGenerateCol">
                     <h5>Prompt / генерация</h5>
                     <textarea
-                      className="clipSB_textarea"
+                      className="clipSB_textarea clipSB_scenarioBgAudioPrompt"
                       rows={3}
                       value={String(safeAudioData?.musicPromptRu || "")}
                       onChange={(event) => onUpdateMusic?.(nodeId, { musicPromptRu: event.target.value })}

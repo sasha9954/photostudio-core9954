@@ -4250,14 +4250,21 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_scenarioBgAudioItem {
-  background: rgba(98, 176, 255, 0.12);
-  box-shadow: inset 0 0 0 1px rgba(98, 176, 255, 0.32);
+  background: rgba(255,255,255,0.03);
+  box-shadow: inset 0 0 0 1px rgba(120,190,255,0.34);
+}
+
+.clipSB_scenarioBgAudioItem:hover {
+  background: rgba(255,255,255,0.05);
+  box-shadow: inset 0 0 0 1px rgba(120,190,255,0.5);
 }
 
 .clipSB_scenarioBgAudioItem.isActive {
+  background: rgba(255,255,255,0.06);
   box-shadow:
-    inset 0 0 0 1px rgba(122, 194, 255, 0.95),
-    0 0 0 1px rgba(122, 194, 255, 0.45);
+    inset 0 0 0 1px rgba(122, 194, 255, 0.92),
+    0 0 0 1px rgba(122, 194, 255, 0.38),
+    0 0 18px rgba(92, 162, 255, 0.18);
 }
 
 .clipSB_scenarioBgAudioMeta {
@@ -4272,20 +4279,18 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_scenarioBgAudioGrid {
   display: grid;
   grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.05fr);
-  gap: 10px;
-  align-items: stretch;
+  gap: 8px;
+  align-items: start;
 }
 
 .clipSB_scenarioBgAudioCol {
   border-radius: 10px;
   background: rgba(255,255,255,0.02);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
-  padding: 12px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-height: 100%;
-  height: 100%;
+  gap: 7px;
 }
 
 .clipSB_scenarioBgAudioCol h5 {
@@ -4352,7 +4357,12 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_scenarioBgAudioGenerateCol {
-  justify-content: space-between;
+  justify-content: flex-start;
+}
+
+.clipSB_scenarioBgAudioPrompt {
+  min-height: 84px;
+  resize: vertical;
 }
 
 .clipSB_tagStatus--idle { opacity: 0.75; }
