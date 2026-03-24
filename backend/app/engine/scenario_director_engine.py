@@ -59,9 +59,68 @@ GENERIC_SCENE_GOALS = {
     "cinematic moment",
     "dramatic moment",
 }
-ABSTRACT_AUDIO_ONLY_WORDS = {"mood", "tension", "emotion", "feeling"}
-WORLD_AUDIO_KEYWORDS = {"iran", "bunker", "military", "desert", "facility"}
-WORLD_MISMATCH_LOCATION_KEYWORDS = {"cafe", "restaurant", "beach", "party"}
+ABSTRACT_AUDIO_ONLY_WORDS = {"mood", "tension", "emotion", "feeling", "vibe", "atmosphere", "energy", "tone"}
+CONCRETE_AUDIO_HINT_WORDS = {
+    "door",
+    "tunnel",
+    "bunker",
+    "missile",
+    "desert",
+    "facility",
+    "map",
+    "rock",
+    "entrance",
+    "corridor",
+    "weapon",
+    "radar",
+    "silo",
+    "base",
+    "launch",
+    "operation",
+    "checkpoint",
+    "control",
+    "shaft",
+    "vault",
+}
+WORLD_AUDIO_KEYWORDS = {
+    "iran",
+    "bunker",
+    "tunnel",
+    "missile",
+    "military",
+    "desert",
+    "facility",
+    "silo",
+    "underground",
+    "base",
+    "corridor",
+    "blast",
+    "door",
+    "war",
+    "operation",
+    "launch",
+}
+WORLD_MISMATCH_LOCATION_KEYWORDS = {
+    "cafe",
+    "restaurant",
+    "beach",
+    "party",
+    "nightclub",
+    "club",
+    "hotel",
+    "apartment",
+    "penthouse",
+    "rooftop",
+    "ballroom",
+    "wedding",
+    "classroom",
+    "office",
+    "mall",
+    "amusement",
+    "park",
+}
+HIGH_SEVERITY_RISKS = {"world_mismatch", "invalid_phrase_boundary", "invalid_pause_boundary", "invalid_energy_boundary"}
+LOW_SEVERITY_RISKS = {"weak_audio_anchor", "low_scene_confidence", "abstract_audio_usage", "missing_audio_anchor_evidence"}
 SCENE_PURPOSES = (
     "hook",
     "entry",
@@ -1899,6 +1958,35 @@ def _validate_scene_audio_grounding(scene: ScenarioDirectorScene, audio_context:
     usage_words = {word for word in re.findall(r"[a-z]+", usage_text)}
     if usage_words and usage_words.issubset(ABSTRACT_AUDIO_ONLY_WORDS):
         risks.append("abstract_audio_usage")
+    elif usage_words and usage_words.intersection(ABSTRACT_AUDIO_ONLY_WORDS):
+        context = audio_context if isinstance(audio_context, dict) else {}
+        dynamic_sources: list[str] = []
+        audio_understanding = context.get("audioUnderstanding")
+        if isinstance(audio_understanding, dict):
+            dynamic_sources.append(str(audio_understanding.get("mainTopic") or ""))
+            dynamic_sources.append(str(audio_understanding.get("worldContext") or ""))
+            implied_events = audio_understanding.get("impliedEvents")
+            if isinstance(implied_events, list):
+                dynamic_sources.extend(str(item or "") for item in implied_events)
+        dynamic_sources.extend(
+            [
+                str(context.get("mainTopic") or ""),
+                str(context.get("worldContext") or ""),
+            ]
+        )
+        implied_events = context.get("impliedEvents")
+        if isinstance(implied_events, list):
+            dynamic_sources.extend(str(item or "") for item in implied_events)
+
+        dynamic_keywords = {
+            token
+            for token in re.findall(r"[a-z]+", " ".join(dynamic_sources).lower())
+            if len(token) > 3 and token not in ABSTRACT_AUDIO_ONLY_WORDS
+        }
+        concrete_keyword_set = set(CONCRETE_AUDIO_HINT_WORDS).union(dynamic_keywords)
+        has_concrete_anchor = bool(usage_words.intersection(concrete_keyword_set))
+        if not has_concrete_anchor:
+            risks.append("abstract_audio_usage")
 
     anchor_evidence = str(scene.audio_anchor_evidence or "").strip()
     if not anchor_evidence:
@@ -1907,18 +1995,13 @@ def _validate_scene_audio_grounding(scene: ScenarioDirectorScene, audio_context:
         risks.append("weak_audio_anchor")
 
     context = audio_context if isinstance(audio_context, dict) else {}
-    has_audio_context = any(
-        isinstance(context.get(key), list) and len(context.get(key) or []) > 0
-        for key in ("phrases", "pauseWindows", "energyTransitions")
-    )
-    if has_audio_context:
-        boundary_reason = str(scene.boundary_reason or "").strip().lower()
-        if boundary_reason == "phrase" and not (context.get("phrases") or []):
-            risks.append("invalid_phrase_boundary")
-        if boundary_reason == "pause" and not (context.get("pauseWindows") or []):
-            risks.append("invalid_pause_boundary")
-        if boundary_reason == "energy" and not (context.get("energyTransitions") or []):
-            risks.append("invalid_energy_boundary")
+    boundary_reason = str(scene.boundary_reason or "").strip().lower()
+    if boundary_reason == "phrase" and not (context.get("phrases") or []):
+        risks.append("invalid_phrase_boundary")
+    if boundary_reason == "pause" and not (context.get("pauseWindows") or []):
+        risks.append("invalid_pause_boundary")
+    if boundary_reason == "energy" and not (context.get("energyTransitions") or []):
+        risks.append("invalid_energy_boundary")
 
     if _safe_float(scene.confidence, 0.5) < 0.4:
         risks.append("low_scene_confidence")
@@ -1926,11 +2009,16 @@ def _validate_scene_audio_grounding(scene: ScenarioDirectorScene, audio_context:
 
 
 def _validate_world_consistency(scene: ScenarioDirectorScene, audio_understanding: dict[str, Any]) -> list[str]:
-    world_context = str((audio_understanding or {}).get("worldContext") or "").strip().lower()
+    audio_data = audio_understanding if isinstance(audio_understanding, dict) else {}
+    world_context = str(audio_data.get("worldContext") or "").strip().lower()
+    main_topic = str(audio_data.get("mainTopic") or "").strip().lower()
+    implied_events_raw = audio_data.get("impliedEvents")
+    implied_events_text = " ".join(str(item or "") for item in implied_events_raw) if isinstance(implied_events_raw, list) else ""
+    audio_world_text = " ".join([world_context, main_topic, implied_events_text]).strip()
     scene_location = str(scene.location or "").strip().lower()
-    if not world_context or not scene_location:
+    if not audio_world_text or not scene_location:
         return []
-    if any(token in world_context for token in WORLD_AUDIO_KEYWORDS) and any(token in scene_location for token in WORLD_MISMATCH_LOCATION_KEYWORDS):
+    if any(token in audio_world_text for token in WORLD_AUDIO_KEYWORDS) and any(token in scene_location for token in WORLD_MISMATCH_LOCATION_KEYWORDS):
         return ["world_mismatch"]
     return []
 
@@ -1947,12 +2035,18 @@ def _validate_audio_first_integrity(
     audio_context = audio_analysis if isinstance(audio_analysis, dict) else {}
 
     scene_risk_map: list[dict[str, Any]] = []
-    scene_risk_total = 0
+    scene_risk_total = 0.0
     for scene in storyboard_out.scenes:
         scene_risks = _validate_scene_audio_grounding(scene, audio_context)
         scene_risks.extend(_validate_world_consistency(scene, audio_understanding))
         scene_risks = list(dict.fromkeys(scene_risks))
-        scene_risk_total += len(scene_risks)
+        for risk in scene_risks:
+            if risk in HIGH_SEVERITY_RISKS:
+                scene_risk_total += 0.12
+            elif risk in LOW_SEVERITY_RISKS:
+                scene_risk_total += 0.06
+            else:
+                scene_risk_total += 0.08
         scene_risk_map.append({"sceneId": scene.scene_id, "risks": scene_risks})
 
     global_risks: list[str] = []
@@ -1964,7 +2058,7 @@ def _validate_audio_first_integrity(
         global_risks.append("usedAudioAsContentSource_false")
     global_risks = list(dict.fromkeys(global_risks))
 
-    score = 1.0 - (0.1 * scene_risk_total) - (0.2 * len(global_risks))
+    score = 1.0 - scene_risk_total - (0.18 * len(global_risks))
     score = max(0.0, min(1.0, round(score, 3)))
     return {
         "sceneRiskMap": scene_risk_map,
