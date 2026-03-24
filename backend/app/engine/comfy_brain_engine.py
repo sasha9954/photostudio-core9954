@@ -77,9 +77,10 @@ SCENE_INTENTS = (
 )
 
 SCENE_INTENT_PHRASE_PATTERNS: list[tuple[str, tuple[str, ...], float]] = [
-    ("escape", ("trying to escape", "tries to escape", "attempts to escape", "breaks free"), 0.87),
-    ("pursuit", ("moves toward", "move toward", "closing distance", "closes in", "gives chase"), 0.86),
-    ("confrontation", ("stands against", "stand against", "faces off", "faces ", "direct standoff"), 0.85),
+    ("escape", ("trying to escape", "tries to escape", "attempts to escape", "tries to get away", "runs away", "breaks free"), 0.87),
+    ("pursuit", ("moves toward", "move toward", "moving toward", "closing distance", "closes distance", "closes in", "follows", "gives chase"), 0.86),
+    ("confrontation", ("stands against", "stand against", "faces off", "faces ", "turns to", "direct standoff"), 0.85),
+    ("threat", ("approaches slowly", "intimidates", "threatens"), 0.86),
     ("observation", ("watching", "observing silently", "watching silently", "keeps observing"), 0.84),
 ]
 
@@ -111,6 +112,8 @@ Hard constraints:
 - Optional analyzer cues may help timing, but they are helper-only and never the source of truth for final scene boundaries or scene count.
 - Anti-stagnation is required: scenes must progress and avoid static repetition.
 - Each scene must introduce at least one meaningful change: new action, threat, information, emotional state, spatial constraint, or escalation beat.
+- STRICT INTENT RULE: each scene MUST have a strong narrative intent. Avoid generic intents like "transition" unless transition evidence is explicit.
+- If multiple scenes share the same intent, vary intents to preserve progression.
 - Do not generate filler scenes that only restate the same moment with cosmetic variation.
 - Escalation is required across the sequence unless the request explicitly calls for flat stillness.
 - If a transformed character remains physically present in a scene, that active character must remain in activeRoles.
@@ -1843,12 +1846,14 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- If roleDominanceMode='strict': locked role hierarchy must be respected across scene progression.\n"
         "SCENE INTENT LOGIC:\n"
         f"- Each scene should have a clear purpose (intent). Use intents such as: {', '.join(SCENE_INTENTS)}.\n"
+        "- STRICT RULE: each scene MUST have a strong narrative intent; avoid generic intent labels without evidence.\n"
         "- Do NOT leave scenes purpose-less.\n"
+        "- If repeated intents appear in adjacent or nearby scenes, vary intents to keep progression explicit.\n"
         "- Prefer clear progression across scenes: setup -> tension -> escalation -> outcome.\n"
         "ROLE + INTENT ALIGNMENT:\n"
-        "- Hero-driven scenes often use: setup, escape, reveal, dialogue.\n"
-        "- Antagonist-driven scenes often use: threat, pursuit, confrontation.\n"
-        "- Support-driven scenes often use: support, dialogue, observation.\n"
+        "- Hero-driven scenes should preferentially use: escape, confrontation, support (plus reveal/dialogue when justified).\n"
+        "- Antagonist-driven scenes should preferentially use: threat, pursuit, control/confrontation pressure.\n"
+        "- Secondary/support-driven scenes are flexible: support, observation, interaction, or dialogue.\n"
         "STRICT MODE ADDITION:\n"
         "- If roleDominanceMode='strict': each scene MUST have a clear intent.\n"
         "- If roleDominanceMode='strict': dominant role should align with scene intent.\n"
@@ -2297,6 +2302,179 @@ def _validate_scene_intent(scene: dict[str, Any], role: str, intent: str) -> lis
     return warnings
 
 
+def _scene_character_roles(scene: dict[str, Any]) -> list[str]:
+    roles: list[str] = []
+    for key in ("activeRefs", "activeRoles", "secondaryRoles"):
+        values = scene.get(key)
+        if isinstance(values, list):
+            for value in values:
+                role = str(value or "").strip()
+                if role in {"character_1", "character_2", "character_3"} and role not in roles:
+                    roles.append(role)
+    primary_role = str(scene.get("primaryRole") or "").strip()
+    if primary_role in {"character_1", "character_2", "character_3"} and primary_role not in roles:
+        roles.append(primary_role)
+    scene_blob = _scene_text_blob(scene)
+    for role in _extract_character_roles_from_text(scene_blob):
+        if role not in roles:
+            roles.append(role)
+    return roles
+
+
+def _intent_family(intent: str) -> str:
+    normalized = str(intent or "").strip().lower()
+    if normalized in {"pursuit", "escape", "confrontation"}:
+        return "action"
+    if normalized in {"threat", "setup", "transition", "observation"}:
+        return "tension"
+    if normalized in {"support", "dialogue", "reveal"}:
+        return "interaction"
+    return "other"
+
+
+def _has_transition_or_setup_overuse(scene_intent_by_scene: list[dict[str, str]]) -> bool:
+    scene_count = len(scene_intent_by_scene)
+    if scene_count <= 0:
+        return False
+    transition_setup_count = sum(
+        1
+        for item in scene_intent_by_scene
+        if str(item.get("intent") or "").strip().lower() in {"transition", "setup"}
+    )
+    return (transition_setup_count / scene_count) > 0.4
+
+
+def _enforce_scene_intent_diversity(
+    scenes: list[dict[str, Any]],
+    scene_intent_by_scene: list[dict[str, str]],
+    scene_intent_confidence: list[dict[str, Any]],
+    scene_intent_diagnostics: list[dict[str, Any]],
+) -> list[str]:
+    if not scenes or not scene_intent_by_scene:
+        return []
+    confidence_by_scene_id = {str(item.get("sceneId") or ""): item for item in scene_intent_confidence}
+    diagnostics_by_scene_id = {str(item.get("sceneId") or ""): item for item in scene_intent_diagnostics}
+    warnings: list[str] = []
+    last_intent = ""
+    for idx, intent_item in enumerate(scene_intent_by_scene):
+        current_intent = str(intent_item.get("intent") or "").strip().lower()
+        if current_intent and current_intent == last_intent and idx < len(scenes):
+            warnings.append("scene_intent_repetition_reduced")
+            scene = scenes[idx]
+            if isinstance(scene, dict):
+                role_hint = str(diagnostics_by_scene_id.get(str(intent_item.get("sceneId") or ""), {}).get("dominantRoleType") or "").strip().lower()
+                replacement = "reveal" if current_intent != "reveal" else "observation"
+                if role_hint == "hero":
+                    replacement = "escape" if current_intent != "escape" else "support"
+                elif role_hint == "antagonist":
+                    replacement = "pursuit" if current_intent != "pursuit" else "threat"
+                elif role_hint == "support":
+                    replacement = "observation" if current_intent != "observation" else "support"
+                intent_item["intent"] = replacement
+                scene["intent"] = replacement
+                scene_id = str(intent_item.get("sceneId") or "")
+                if scene_id in confidence_by_scene_id:
+                    confidence_by_scene_id[scene_id]["intent"] = replacement
+                    confidence_by_scene_id[scene_id]["confidence"] = 0.71
+                    confidence_by_scene_id[scene_id]["source"] = "estimated"
+                    confidence_by_scene_id[scene_id]["intentSource"] = "estimated"
+                if scene_id in diagnostics_by_scene_id:
+                    diagnostics_by_scene_id[scene_id]["intent"] = replacement
+                    diagnostics_by_scene_id[scene_id]["confidence"] = 0.71
+                    diagnostics_by_scene_id[scene_id]["source"] = "estimated"
+                    diagnostics_by_scene_id[scene_id]["intentSource"] = "estimated"
+                    diagnostics_by_scene_id[scene_id]["repetitionAdjusted"] = True
+                current_intent = replacement
+        last_intent = current_intent
+    total_scenes = len(scene_intent_by_scene)
+    max_transition_setup = max(1, int(total_scenes * 0.4))
+    transition_setup_indices: list[int] = []
+    for idx, intent_item in enumerate(scene_intent_by_scene):
+        intent = str(intent_item.get("intent") or "").strip().lower()
+        if intent in {"transition", "setup"}:
+            transition_setup_indices.append(idx)
+    if len(transition_setup_indices) > max_transition_setup:
+        warnings.append("scene_intent_transition_setup_overuse")
+        for idx in transition_setup_indices[max_transition_setup:]:
+            if idx >= len(scenes):
+                continue
+            scene = scenes[idx]
+            if not isinstance(scene, dict):
+                continue
+            scene_id = str(scene_intent_by_scene[idx].get("sceneId") or "")
+            role_hint = str(diagnostics_by_scene_id.get(scene_id, {}).get("dominantRoleType") or "").strip().lower()
+            replacement = "reveal"
+            if role_hint == "hero":
+                replacement = "escape"
+            elif role_hint == "antagonist":
+                replacement = "threat"
+            elif role_hint == "support":
+                replacement = "support"
+            scene["intent"] = replacement
+            scene_intent_by_scene[idx]["intent"] = replacement
+            if scene_id in confidence_by_scene_id:
+                confidence_by_scene_id[scene_id]["intent"] = replacement
+                confidence_by_scene_id[scene_id]["confidence"] = 0.72
+                confidence_by_scene_id[scene_id]["source"] = "estimated"
+                confidence_by_scene_id[scene_id]["intentSource"] = "estimated"
+            if scene_id in diagnostics_by_scene_id:
+                diagnostics_by_scene_id[scene_id]["intent"] = replacement
+                diagnostics_by_scene_id[scene_id]["confidence"] = 0.72
+                diagnostics_by_scene_id[scene_id]["source"] = "estimated"
+                diagnostics_by_scene_id[scene_id]["intentSource"] = "estimated"
+                diagnostics_by_scene_id[scene_id]["diversityAdjusted"] = True
+    family_counts: dict[str, int] = {"action": 0, "tension": 0, "interaction": 0}
+    for item in scene_intent_by_scene:
+        family = _intent_family(str(item.get("intent") or ""))
+        if family in family_counts:
+            family_counts[family] += 1
+    missing_families = [family for family, count in family_counts.items() if count == 0]
+    if missing_families and total_scenes >= 3:
+        warnings.append("scene_intent_family_gap")
+    return warnings
+
+
+def _enforce_conflict_scene_if_needed(
+    scenes: list[dict[str, Any]],
+    scene_intent_by_scene: list[dict[str, str]],
+    scene_intent_confidence: list[dict[str, Any]],
+    scene_intent_diagnostics: list[dict[str, Any]],
+) -> bool:
+    if not scenes or len(scenes) != len(scene_intent_by_scene):
+        return False
+    distinct_characters: set[str] = set()
+    for scene in scenes:
+        if isinstance(scene, dict):
+            distinct_characters.update(_scene_character_roles(scene))
+    if len(distinct_characters) < 2:
+        return False
+    if any(str(item.get("intent") or "").strip().lower() in {"threat", "confrontation", "pursuit"} for item in scene_intent_by_scene):
+        return False
+    candidate_index = max(0, min(len(scene_intent_by_scene) - 1, len(scene_intent_by_scene) // 2))
+    scene = scenes[candidate_index] if candidate_index < len(scenes) else {}
+    if not isinstance(scene, dict):
+        return False
+    scene_id = str(scene_intent_by_scene[candidate_index].get("sceneId") or "")
+    scene["intent"] = "confrontation"
+    scene_intent_by_scene[candidate_index]["intent"] = "confrontation"
+    for confidence_item in scene_intent_confidence:
+        if str(confidence_item.get("sceneId") or "") == scene_id:
+            confidence_item["intent"] = "confrontation"
+            confidence_item["confidence"] = 0.74
+            confidence_item["source"] = "estimated"
+            confidence_item["intentSource"] = "estimated"
+            break
+    for diag_item in scene_intent_diagnostics:
+        if str(diag_item.get("sceneId") or "") == scene_id:
+            diag_item["intent"] = "confrontation"
+            diag_item["confidence"] = 0.74
+            diag_item["source"] = "estimated"
+            diag_item["intentSource"] = "estimated"
+            diag_item["conflictInjected"] = True
+            break
+    return True
+
+
 def _build_role_distribution_warnings(
     role_usage_by_scene: list[dict[str, Any]],
     *,
@@ -2382,20 +2560,22 @@ def _validate_role_distribution(
         item.update(dominance)
         scene_id = str(item.get("sceneId") or "")
         intent, confidence = _estimate_scene_intent(scene if isinstance(scene, dict) else {}, len(scene_intent_by_scene))
+        planner_intent_present = isinstance(scene, dict) and str(scene.get("intent") or "").strip().lower() in SCENE_INTENTS
         if isinstance(scene, dict) and not str(scene.get("intent") or "").strip():
             explicit_intent_missing += 1
             scene["intent"] = intent
         scene_intent_by_scene.append({"sceneId": scene_id, "intent": intent})
         confidence_value = round(confidence, 2)
-        confidence_source = "planner" if isinstance(scene, dict) and str(scene.get("intent") or "").strip().lower() in SCENE_INTENTS else "estimated"
+        confidence_source = "gemini" if planner_intent_present else "estimated"
         matched_keywords = _extract_scene_intent_keywords(scene if isinstance(scene, dict) else {}, intent)
-        scene_intent_confidence.append({"sceneId": scene_id, "intent": intent, "confidence": confidence_value, "source": confidence_source})
+        scene_intent_confidence.append({"sceneId": scene_id, "intent": intent, "confidence": confidence_value, "source": confidence_source, "intentSource": confidence_source})
         scene_intent_diagnostics.append(
             {
                 "sceneId": scene_id,
                 "intent": intent,
                 "confidence": confidence_value,
                 "source": confidence_source,
+                "intentSource": confidence_source,
                 "matchedKeywords": matched_keywords,
                 "suggestedRenderModes": [],
             }
@@ -2438,6 +2618,11 @@ def _validate_role_distribution(
         scene_intent_warnings.append("scene_intent_transition_overuse")
     if scene_count >= 3 and conflict_intent_count == 0:
         scene_intent_warnings.append("scene_intent_conflict_missing")
+    if _enforce_conflict_scene_if_needed(scenes, scene_intent_by_scene, scene_intent_confidence, scene_intent_diagnostics):
+        scene_intent_warnings.append("scene_intent_conflict_injected")
+    scene_intent_warnings.extend(_enforce_scene_intent_diversity(scenes, scene_intent_by_scene, scene_intent_confidence, scene_intent_diagnostics))
+    if _has_transition_or_setup_overuse(scene_intent_by_scene):
+        scene_intent_warnings.append("scene_intent_transition_setup_overuse")
     if any(item in {"scene_intent_transition_overuse", "scene_intent_conflict_missing"} for item in scene_intent_warnings):
         scene_intent_warnings.append("scenes lack clear narrative intent or progression")
     warnings.extend(scene_intent_warnings)
@@ -2471,6 +2656,10 @@ LOCKED_ROLE_REFINEMENT_WARNING_TRIGGERS = {
     "weak_intent_signal",
     "scene_intent_transition_overuse",
     "scene_intent_conflict_missing",
+    "scene_intent_conflict_injected",
+    "scene_intent_transition_setup_overuse",
+    "scene_intent_repetition_reduced",
+    "scene_intent_family_gap",
     "scenes lack clear narrative intent or progression",
 }
 
