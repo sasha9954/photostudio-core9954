@@ -167,6 +167,7 @@ class PlannedShot(BaseModel):
     audio_segment_type: AudioSegmentType
     has_vocal_rhythm: bool = False
     motion_interpretation: str
+    motion_profile: dict[str, str] | None = None
     project_mode: ProjectMode
     audio_driver: str | None = None
     lipsync_policy: LipSyncPolicy
@@ -262,7 +263,7 @@ def _estimate_scene_intent(scene: dict[str, Any], scene_index: int) -> tuple[str
     return "transition", 0.5
 
 
-def _extract_intent_matches(scene: dict[str, Any], intent: str) -> list[str]:
+def _intent_phrase_and_keyword_matches(scene: dict[str, Any], intent: str) -> tuple[list[str], list[str]]:
     scene_blob = " ".join(
         [
             _clean_str(scene.get("intent")),
@@ -275,14 +276,30 @@ def _extract_intent_matches(scene: dict[str, Any], intent: str) -> list[str]:
             _clean_str(scene.get("sceneGoal")),
         ]
     ).lower()
-    matches: list[str] = []
+    phrase_matches: list[str] = []
+    keyword_matches: list[str] = []
     for mapped_intent, phrases, _ in INTENT_PHRASE_PATTERNS:
         if mapped_intent == intent:
-            matches.extend([phrase for phrase in phrases if phrase in scene_blob])
+            phrase_matches.extend([phrase for phrase in phrases if phrase in scene_blob])
     for mapped_intent, keywords in INTENT_KEYWORD_MAP:
         if mapped_intent == intent:
-            matches.extend([keyword for keyword in keywords if keyword in scene_blob])
-    return list(dict.fromkeys(matches))
+            keyword_matches.extend([keyword for keyword in keywords if keyword in scene_blob])
+    return list(dict.fromkeys(phrase_matches)), list(dict.fromkeys(keyword_matches))
+
+
+def _extract_intent_matches(scene: dict[str, Any], intent: str) -> list[str]:
+    phrases, keywords = _intent_phrase_and_keyword_matches(scene, intent)
+    return list(dict.fromkeys(phrases + keywords))
+
+
+def _compute_intent_confidence(scene: dict[str, Any], intent: str, base_confidence: float) -> float:
+    phrase_matches, keyword_matches = _intent_phrase_and_keyword_matches(scene, intent)
+    confidence = max(0.0, base_confidence)
+    if phrase_matches:
+        confidence += 0.05
+    if len(keyword_matches) >= 2:
+        confidence += 0.05
+    return round(min(0.95, confidence), 2)
 
 
 def _map_intent_to_render_mode(
@@ -476,7 +493,7 @@ def _select_render_mode(
     audio_segment_type: AudioSegmentType,
     has_vocal_rhythm: bool,
     lipsync_policy: LipSyncPolicy,
-) -> tuple[RenderMode, str, list[RenderMode], float]:
+) -> tuple[RenderMode, str, list[RenderMode], float, bool]:
     wants_lipsync = bool(scene.get("isLipSync") is True or scene.get("lipSync") is True)
     scene_intent_raw = _clean_str(scene.get("intent")).lower()
     estimated_intent, _ = _estimate_scene_intent(scene, -1)
@@ -505,6 +522,17 @@ def _select_render_mode(
         else:
             selected_mode = RenderMode.i2v
             selected_reason = "base_single_frame_animation_without_forced_articulation"
+    override_applied = False
+    if (
+        intent_priority >= 0.8
+        and selected_mode not in intent_modes
+    ):
+        for preferred_mode in intent_modes:
+            if preferred_mode == RenderMode.lip_sync and (not lipsync_policy.allowed or not has_vocal_rhythm):
+                continue
+            selected_mode = preferred_mode
+            override_applied = True
+            break
     if selected_mode not in intent_modes:
         selected_reason = (
             f"{selected_reason}|intent_soft_mismatch:{scene_intent}"
@@ -512,7 +540,41 @@ def _select_render_mode(
         )
     else:
         selected_reason = f"{selected_reason}|intent_aligned:{scene_intent}"
-    return selected_mode, selected_reason, intent_modes, intent_priority
+    if override_applied:
+        selected_reason = f"{selected_reason}|intent_override_applied"
+    return selected_mode, selected_reason, intent_modes, intent_priority, override_applied
+
+
+def _map_intent_to_motion(intent: str) -> dict[str, str]:
+    mapping: dict[str, dict[str, str]] = {
+        "pursuit": {"motionStyle": "forward_movement_tracking", "cameraBehavior": "handheld_follow"},
+        "confrontation": {"motionStyle": "locked_tension", "cameraBehavior": "slow_push_in"},
+        "threat": {"motionStyle": "minimal_motion_high_tension", "cameraBehavior": "static_with_micro_shake"},
+        "observation": {"motionStyle": "slow_drift", "cameraBehavior": "wide_static"},
+        "escape": {"motionStyle": "fast_directional", "cameraBehavior": "shaky_tracking"},
+    }
+    return mapping.get(intent, {"motionStyle": "balanced_scene_motion", "cameraBehavior": "context_driven"})
+
+
+def _validate_role_intent(scene: dict[str, Any], role: str, intent: str) -> tuple[str, list[str]]:
+    clean_role = _clean_str(role).lower()
+    clean_intent = _clean_str(intent).lower()
+    if clean_role not in {"hero", "antagonist", "secondary"}:
+        return "ok", []
+    warnings: list[str] = []
+    mismatch_rules = {
+        ("hero", "threat"),
+        ("antagonist", "support"),
+    }
+    suspicious_rules = {
+        ("hero", "threat"),
+        ("antagonist", "support"),
+    }
+    if (clean_role, clean_intent) in mismatch_rules:
+        warnings.append("intent_role_mismatch")
+    if (clean_role, clean_intent) in suspicious_rules:
+        warnings.append("suspicious_role_intent_combination")
+    return ("warn" if warnings else "ok"), warnings
 
 
 def _motion_interpretation(render_mode: RenderMode, audio_segment_type: AudioSegmentType) -> str:
@@ -634,7 +696,7 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
         audio_segment_type = _infer_audio_segment_type(scene, project_input, context)
         narration_mode = _infer_narration_mode(scene, audio_segment_type)
         lipsync_policy, has_vocal_rhythm = _compute_lipsync_policy(scene, context, audio_segment_type)
-        render_mode, render_reason, suggested_modes, intent_priority = _select_render_mode(
+        render_mode, render_reason, suggested_modes, intent_priority, override_applied = _select_render_mode(
             scene,
             project_input,
             audio_segment_type,
@@ -645,6 +707,14 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
         scene_intent_raw = _clean_str(scene.get("intent")).lower()
         estimated_intent, estimated_confidence = _estimate_scene_intent(scene, idx)
         scene_intent = scene_intent_raw if scene_intent_raw in SCENE_INTENTS else estimated_intent
+        motion_profile = _map_intent_to_motion(scene_intent)
+        dominant_role_type = _clean_str(
+            scene.get("dominantRoleType")
+            or scene.get("primaryRoleType")
+            or scene.get("roleType")
+            or scene.get("role")
+        ).lower()
+        role_intent_validation, role_intent_warnings = _validate_role_intent(scene, dominant_role_type, scene_intent)
         if scene_intent == "transition":
             transition_intent_count += 1
         if scene_intent in {"confrontation", "threat"}:
@@ -664,6 +734,7 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             audio_segment_type=audio_segment_type,
             has_vocal_rhythm=has_vocal_rhythm,
             motion_interpretation=_motion_interpretation(render_mode, audio_segment_type),
+            motion_profile=motion_profile,
             project_mode=project_input.project_mode,
             audio_driver=_audio_driver(audio_segment_type, context),
             lipsync_policy=lipsync_policy,
@@ -691,11 +762,16 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             shots=[shot],
         )
         planned_scenes.append(planned_scene)
+        confidence_score = _compute_intent_confidence(
+            scene,
+            scene_intent,
+            0.95 if scene_intent_raw in SCENE_INTENTS else estimated_confidence,
+        )
         scene_intent_by_scene.append({"sceneId": scene_id, "intent": scene_intent})
         scene_intent_confidence.append({
             "sceneId": scene_id,
             "intent": scene_intent,
-            "confidence": round(0.95, 2) if scene_intent_raw in SCENE_INTENTS else round(estimated_confidence, 2),
+            "confidence": confidence_score,
             "source": "planner" if scene_intent_raw in SCENE_INTENTS else "estimated",
         })
         matched_keywords = _extract_intent_matches(scene, scene_intent)
@@ -703,26 +779,33 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             {
                 "sceneId": scene_id,
                 "intent": scene_intent,
-                "confidence": round(0.95, 2) if scene_intent_raw in SCENE_INTENTS else round(estimated_confidence, 2),
+                "confidence": confidence_score,
                 "source": "planner" if scene_intent_raw in SCENE_INTENTS else "estimated",
                 "matchedKeywords": matched_keywords,
                 "suggestedRenderModes": [mode.value for mode in suggested_modes],
                 "intentRenderPriority": intent_priority,
                 "selectedRenderMode": render_mode.value,
+                "overrideApplied": override_applied,
+                "roleIntentValidation": role_intent_validation,
+                "motionProfile": motion_profile,
             }
         )
         if render_mode not in suggested_modes:
             scene_intent_warnings.append("intent_render_mode_mismatch_soft")
+        scene_intent_warnings.extend(role_intent_warnings)
         validation.errors.extend(shot_validation.errors)
         validation.warnings.extend(shot_validation.warnings)
         previous_shot_id = shot_id
 
-    if raw_scenes and transition_intent_count > max(1, len(raw_scenes) // 2):
+    refinement_hint: str | None = None
+    if raw_scenes and (transition_intent_count / len(raw_scenes)) > 0.5:
         scene_intent_warnings.append("scene_intent_transition_overuse")
-    if len(raw_scenes) >= 3 and conflict_intent_count == 0:
+    if raw_scenes and conflict_intent_count == 0:
         scene_intent_warnings.append("scene_intent_conflict_missing")
     if any(item in {"scene_intent_transition_overuse", "scene_intent_conflict_missing"} for item in scene_intent_warnings):
         scene_intent_warnings.append("scenes lack clear narrative intent or progression")
+    if any(item in {"scene_intent_transition_overuse", "scene_intent_conflict_missing"} for item in scene_intent_warnings):
+        refinement_hint = "story lacks progression, missing tension or conflict"
 
     validation.errors = list(dict.fromkeys(validation.errors))
     validation.warnings.extend(scene_intent_warnings)
@@ -745,5 +828,6 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             "sceneIntentConfidence": scene_intent_confidence,
             "sceneIntentWarnings": list(dict.fromkeys(scene_intent_warnings)),
             "sceneIntentDiagnostics": scene_intent_diagnostics,
+            "refinementHint": refinement_hint,
         },
     )
