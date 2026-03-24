@@ -135,12 +135,17 @@ export default function ScenarioStoryboardEditor({
   const musicStatus = resolveBlockStatus({ runtimeStatus: safeAudioData?.musicStatus, assetUrl: safeAudioData?.musicUrl });
   const isBgAudioSelected = activeSelectionType === "bg_audio";
   const bgMusicSource = resolveMusicSource(safeAudioData);
+  const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
+  const usesBgMusicInMontage = hasBgMusic && Boolean(safeAudioData?.useInMontage);
   const bgMusicFileName = String(
     safeAudioData?.fileName
     || safeAudioData?.musicName
     || (bgMusicSource === "generated" && String(safeAudioData?.musicUrl || "").trim() ? "generated track" : "")
     || "",
   ).trim();
+  const bgAudioStatusLabel = hasBgMusic ? "audio: есть" : "audio: нет";
+  const bgMontageStatusLabel = hasBgMusic ? `монтаж: ${usesBgMusicInMontage ? "да" : "нет"}` : "";
+  const bgSourceStatusLabel = hasBgMusic && bgMusicSource !== "none" ? `source: ${bgMusicSource}` : "";
 
   const handleUploadBgMusicClick = () => {
     bgMusicUploadRef.current?.click();
@@ -267,8 +272,9 @@ export default function ScenarioStoryboardEditor({
               <div className="clipSB_scenarioItemText">Глобальный музыкальный слой для всего ролика.</div>
               <div className="clipSB_scenarioEditorBadgeRow">
                 <span className="clipSB_tag">bg audio</span>
-                <span className="clipSB_tag">music</span>
-                <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${musicStatus}`}>{musicStatus}</span>
+                <span className="clipSB_tag">{bgAudioStatusLabel}</span>
+                {bgMontageStatusLabel ? <span className="clipSB_tag">{bgMontageStatusLabel}</span> : null}
+                {bgSourceStatusLabel ? <span className="clipSB_tag">{bgSourceStatusLabel}</span> : null}
               </div>
               <div className="clipSB_small clipSB_scenarioBgAudioMeta">глобальный слой</div>
             </button>
@@ -342,18 +348,18 @@ export default function ScenarioStoryboardEditor({
                         onChange={handleUploadBgMusicFile}
                       />
                     </div>
-                    <label className="clipSB_checkRow">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(safeAudioData?.useInMontage)}
-                        onChange={(event) => onUpdateMusic?.(nodeId, { useInMontage: event.target.checked })}
-                      />
-                      <span>использовать в монтаже</span>
-                    </label>
+                    <button
+                      className={`clipSB_bgAudioToggle ${usesBgMusicInMontage ? "isActive" : ""}`}
+                      type="button"
+                      aria-pressed={usesBgMusicInMontage}
+                      onClick={() => onUpdateMusic?.(nodeId, { useInMontage: !Boolean(safeAudioData?.useInMontage) })}
+                    >
+                      использовать в монтаже
+                    </button>
                     <div className="clipSB_storyboardKv"><span>Статус</span><strong>{musicStatus}</strong></div>
                   </div>
 
-                  <div className="clipSB_scenarioBgAudioCol">
+                  <div className="clipSB_scenarioBgAudioCol clipSB_scenarioBgAudioGenerateCol">
                     <h5>Prompt / генерация</h5>
                     <textarea
                       className="clipSB_textarea"

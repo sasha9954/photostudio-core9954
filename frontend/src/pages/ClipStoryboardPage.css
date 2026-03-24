@@ -1631,6 +1631,7 @@ body.ps_clip_fullscreen .mainCol {
   display: grid;
   grid-template-columns: 288px minmax(0, 1fr);
   min-height: 0;
+  align-items: stretch;
 }
 
 .clipSB_scenarioBody > * {
@@ -4195,6 +4196,7 @@ body.ps_clip_fullscreen .mainCol {
   display: grid;
   gap: 10px;
   align-content: start;
+  min-height: 100%;
 }
 
 .clipSB_scenarioEditorBlock {
@@ -4271,16 +4273,19 @@ body.ps_clip_fullscreen .mainCol {
   display: grid;
   grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.05fr);
   gap: 10px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .clipSB_scenarioBgAudioCol {
   border-radius: 10px;
   background: rgba(255,255,255,0.02);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
-  padding: 10px;
-  display: grid;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  min-height: 100%;
+  height: 100%;
 }
 
 .clipSB_scenarioBgAudioCol h5 {
@@ -4291,7 +4296,7 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_scenarioBgAudioResult {
-  align-content: start;
+  justify-content: flex-start;
 }
 
 .clipSB_scenarioBgAudioMeta {
@@ -4317,11 +4322,37 @@ body.ps_clip_fullscreen .mainCol {
   text-transform: lowercase;
 }
 
-.clipSB_checkRow {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+.clipSB_bgAudioToggle {
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.04);
+  color: rgba(235, 241, 255, 0.82);
   font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+}
+
+.clipSB_bgAudioToggle:hover {
+  border-color: rgba(142, 198, 255, 0.7);
+  color: rgba(245, 251, 255, 0.96);
+}
+
+.clipSB_bgAudioToggle.isActive {
+  background: rgba(120, 190, 255, 0.2);
+  border-color: rgba(132, 200, 255, 0.95);
+  color: rgba(245, 251, 255, 1);
+  box-shadow:
+    inset 0 0 0 1px rgba(132, 200, 255, 0.7),
+    0 0 0 1px rgba(132, 200, 255, 0.25);
+}
+
+.clipSB_scenarioBgAudioGenerateCol {
+  justify-content: space-between;
 }
 
 .clipSB_tagStatus--idle { opacity: 0.75; }
