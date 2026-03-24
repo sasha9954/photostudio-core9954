@@ -59,6 +59,9 @@ GENERIC_SCENE_GOALS = {
     "cinematic moment",
     "dramatic moment",
 }
+ABSTRACT_AUDIO_ONLY_WORDS = {"mood", "tension", "emotion", "feeling"}
+WORLD_AUDIO_KEYWORDS = {"iran", "bunker", "military", "desert", "facility"}
+WORLD_MISMATCH_LOCATION_KEYWORDS = {"cafe", "restaurant", "beach", "party"}
 SCENE_PURPOSES = (
     "hook",
     "entry",
@@ -1890,6 +1893,86 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     return storyboard_out
 
 
+def _validate_scene_audio_grounding(scene: ScenarioDirectorScene, audio_context: dict[str, Any]) -> list[str]:
+    risks: list[str] = []
+    usage_text = str(scene.what_from_audio_this_scene_uses or "").strip().lower()
+    usage_words = {word for word in re.findall(r"[a-z]+", usage_text)}
+    if usage_words and usage_words.issubset(ABSTRACT_AUDIO_ONLY_WORDS):
+        risks.append("abstract_audio_usage")
+
+    anchor_evidence = str(scene.audio_anchor_evidence or "").strip()
+    if not anchor_evidence:
+        risks.append("missing_audio_anchor_evidence")
+    elif len(anchor_evidence) < 10:
+        risks.append("weak_audio_anchor")
+
+    context = audio_context if isinstance(audio_context, dict) else {}
+    has_audio_context = any(
+        isinstance(context.get(key), list) and len(context.get(key) or []) > 0
+        for key in ("phrases", "pauseWindows", "energyTransitions")
+    )
+    if has_audio_context:
+        boundary_reason = str(scene.boundary_reason or "").strip().lower()
+        if boundary_reason == "phrase" and not (context.get("phrases") or []):
+            risks.append("invalid_phrase_boundary")
+        if boundary_reason == "pause" and not (context.get("pauseWindows") or []):
+            risks.append("invalid_pause_boundary")
+        if boundary_reason == "energy" and not (context.get("energyTransitions") or []):
+            risks.append("invalid_energy_boundary")
+
+    if _safe_float(scene.confidence, 0.5) < 0.4:
+        risks.append("low_scene_confidence")
+    return list(dict.fromkeys(risks))
+
+
+def _validate_world_consistency(scene: ScenarioDirectorScene, audio_understanding: dict[str, Any]) -> list[str]:
+    world_context = str((audio_understanding or {}).get("worldContext") or "").strip().lower()
+    scene_location = str(scene.location or "").strip().lower()
+    if not world_context or not scene_location:
+        return []
+    if any(token in world_context for token in WORLD_AUDIO_KEYWORDS) and any(token in scene_location for token in WORLD_MISMATCH_LOCATION_KEYWORDS):
+        return ["world_mismatch"]
+    return []
+
+
+def _validate_audio_first_integrity(
+    storyboard_out: ScenarioDirectorStoryboardOut,
+    structured_planner_diagnostics: dict[str, Any],
+    audio_analysis: dict[str, Any],
+) -> dict[str, Any]:
+    diagnostics = structured_planner_diagnostics if isinstance(structured_planner_diagnostics, dict) else {}
+    narrative_strategy = diagnostics.get("narrativeStrategy") if isinstance(diagnostics.get("narrativeStrategy"), dict) else {}
+    planner_diagnostics = diagnostics.get("diagnostics") if isinstance(diagnostics.get("diagnostics"), dict) else {}
+    audio_understanding = diagnostics.get("audioUnderstanding") if isinstance(diagnostics.get("audioUnderstanding"), dict) else {}
+    audio_context = audio_analysis if isinstance(audio_analysis, dict) else {}
+
+    scene_risk_map: list[dict[str, Any]] = []
+    scene_risk_total = 0
+    for scene in storyboard_out.scenes:
+        scene_risks = _validate_scene_audio_grounding(scene, audio_context)
+        scene_risks.extend(_validate_world_consistency(scene, audio_understanding))
+        scene_risks = list(dict.fromkeys(scene_risks))
+        scene_risk_total += len(scene_risks)
+        scene_risk_map.append({"sceneId": scene.scene_id, "risks": scene_risks})
+
+    global_risks: list[str] = []
+    if not _coerce_bool(narrative_strategy.get("didAudioRemainPrimary"), False):
+        global_risks.append("didAudioRemainPrimary_false")
+    if _coerce_bool(planner_diagnostics.get("usedAudioOnlyAsMood"), False):
+        global_risks.append("usedAudioOnlyAsMood_true")
+    if not _coerce_bool(planner_diagnostics.get("usedAudioAsContentSource"), False):
+        global_risks.append("usedAudioAsContentSource_false")
+    global_risks = list(dict.fromkeys(global_risks))
+
+    score = 1.0 - (0.1 * scene_risk_total) - (0.2 * len(global_risks))
+    score = max(0.0, min(1.0, round(score, 3)))
+    return {
+        "sceneRiskMap": scene_risk_map,
+        "globalRisks": global_risks,
+        "score": score,
+    }
+
+
 def _build_request_text(
     payload: dict[str, Any],
     *,
@@ -1959,6 +2042,11 @@ def _build_request_text(
         "AUDIO-FIRST SEGMENTATION:\n"
         "- Do not build evenly spaced scenes when audio analysis exists.\n"
         "- Align boundaries to phrase endings first, pause windows second, then section/energy transitions.\n"
+        "ANTI-FAKE AUDIO USAGE RULES:\n"
+        "- whatFromAudioThisSceneUses MUST reference concrete elements (places, objects, events, actions).\n"
+        "- Forbidden: vague words like 'mood', 'tension', 'feeling' without concrete audio-derived detail.\n"
+        "- audioAnchorEvidence MUST reference either phrase meaning, pause, section, or a specific event described in audio.\n"
+        "- If unsure, mark boundaryReason='fallback' and reduce confidence.\n"
         "ANTI-DRIFT LOCKS:\n"
         "- Preserve the exact count of core characters implied by the source and refs.\n"
         "- If two connected refs imply two women, keep two women unless the user explicitly changes that.\n"
@@ -2398,6 +2486,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             }
         )
     fake_audio_first_risks: list[str] = []
+    audio_grounding_validation = {"sceneRiskMap": [], "globalRisks": [], "score": 1.0}
     if is_audio_mode and audio_connected:
         if not _coerce_bool(planner_narrative_strategy.get("didAudioRemainPrimary"), False):
             fake_audio_first_risks.append("didAudioRemainPrimary_false")
@@ -2414,6 +2503,28 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             for item in planner_scene_evidence
         ):
             fake_audio_first_risks.append("scene_level_audio_evidence_missing")
+        audio_grounding_validation = _validate_audio_first_integrity(
+            storyboard_out=storyboard_out,
+            structured_planner_diagnostics=structured_planner_diagnostics,
+            audio_analysis=audio_analysis if isinstance(audio_analysis, dict) else {},
+        )
+        scene_level_risks = [
+            risk
+            for row in (audio_grounding_validation.get("sceneRiskMap") or [])
+            if isinstance(row, dict)
+            for risk in (row.get("risks") or [])
+            if str(risk).strip()
+        ]
+        fake_audio_first_risks.extend(audio_grounding_validation.get("globalRisks") or [])
+        fake_audio_first_risks.extend(scene_level_risks)
+        logger.debug(
+            "[AUDIO_GROUNDING] score=%s scene_risks=%s global_risks=%s",
+            audio_grounding_validation.get("score"),
+            len(scene_level_risks),
+            len(audio_grounding_validation.get("globalRisks") or []),
+        )
+    fake_audio_first_risks = list(dict.fromkeys(fake_audio_first_risks))
+    fake_audio_first_suspected = bool(fake_audio_first_risks) or _safe_float(audio_grounding_validation.get("score"), 1.0) < 0.5
 
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
@@ -2468,7 +2579,9 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "structuredPlannerDiagnostics": structured_planner_diagnostics,
             "sceneAudioEvidence": planner_scene_evidence,
             "fakeAudioFirstRiskSignals": fake_audio_first_risks,
-            "fakeAudioFirstSuspected": bool(fake_audio_first_risks),
+            "fakeAudioFirstSuspected": fake_audio_first_suspected,
+            "audioGroundingValidation": audio_grounding_validation,
+            "audioGroundingScore": audio_grounding_validation.get("score"),
             "textHintPresent": text_hint_present,
             "textHintInfluence": text_hint_influence,
             "audioInfluence": audio_influence,
