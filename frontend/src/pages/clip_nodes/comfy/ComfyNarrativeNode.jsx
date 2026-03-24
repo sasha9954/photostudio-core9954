@@ -17,6 +17,7 @@ const NARRATIVE_HANDLE_STEP = 24;
 
 const OUTPUT_HANDLES = [
   { id: "storyboard_out", labelRu: "Storyboard" },
+  { id: "preview_out", labelRu: "Preview" },
 ];
 
 function renderKvRows(rows = []) {
