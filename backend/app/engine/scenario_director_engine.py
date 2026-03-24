@@ -2405,6 +2405,10 @@ def _parse_storyboard_payload(raw_text: str) -> dict[str, Any]:
 def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
     controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     director_note = str(controls.get("directorNote") or controls.get("director_note") or "").strip()
+    audio_duration = _safe_float(
+        payload.get("audioDurationSec") or payload.get("metadata", {}).get("audio", {}).get("durationSec"),
+        0.0,
+    )
     role_labels = _build_reference_role_map(payload)
     available_refs = ", ".join(role_labels.values())
     references_block = (
@@ -2438,6 +2442,22 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- If there is any conflict between audio content and director note, ALWAYS preserve the literal meaning of the audio.\n"
         "- The audio is the source of truth.\n"
         "- The director note is a stylistic modifier only.\n"
+        "REAL TIMELINE REQUIREMENTS:\n"
+        f"- The audio duration is {audio_duration} seconds.\n"
+        "- ALL timestamps (t0, t1) MUST be expressed in REAL seconds of the audio.\n"
+        "- DO NOT normalize time to a 0..1 scale.\n"
+        "- DO NOT compress the timeline.\n"
+        "- The full timeline of transcript and scenes MUST span the actual audio duration.\n"
+        "- The last scene MUST end close to the full duration of the audio.\n"
+        "- Each segment must correspond to real spoken timing in the audio.\n"
+        "- Scene boundaries should align with:\n"
+        "  - speech phrases\n"
+        "  - pauses\n"
+        "  - energy shifts\n"
+        "BAD:\n"
+        "- t0: 0.0 → t1: 1.0 for full audio\n"
+        "GOOD:\n"
+        "- t0: 0.0 → t1: 4.2 → t1: 9.8 → ... → ~60.0\n"
         "Return strict JSON only.\n"
         f"Director note: {director_note if director_note else 'empty'}\n"
         f"{references_block}"
@@ -2619,6 +2639,40 @@ def _parse_audio_first_single_call_payload(raw_text: str) -> dict[str, Any]:
     return extracted
 
 
+def _scale_audio_first_timeline_if_normalized(result: dict[str, Any], audio_duration_sec: float) -> dict[str, Any]:
+    if audio_duration_sec <= 0:
+        return result
+    max_t1 = 0.0
+    for section_key in ("transcript", "semanticTimeline", "scenes"):
+        section = result.get(section_key)
+        if not isinstance(section, list):
+            continue
+        for row in section:
+            if not isinstance(row, dict):
+                continue
+            max_t1 = max(max_t1, _safe_float(row.get("t1"), 0.0))
+    if max_t1 <= 0:
+        return result
+    if max_t1 >= audio_duration_sec * 0.3 and abs(max_t1 - 1.0) > 0.05:
+        return result
+    scale = audio_duration_sec / max_t1
+    for section_key in ("transcript", "semanticTimeline", "scenes"):
+        section = result.get(section_key)
+        if not isinstance(section, list):
+            continue
+        for row in section:
+            if not isinstance(row, dict):
+                continue
+            t0 = _safe_float(row.get("t0"), 0.0)
+            t1 = _safe_float(row.get("t1"), t0)
+            row["t0"] = t0 * scale
+            row["t1"] = t1 * scale
+            if section_key == "scenes":
+                row["duration"] = _safe_float(row.get("duration"), max(0.0, t1 - t0)) * scale
+    print("[SCENARIO DIRECTOR] timeline normalized → scaled to real duration")
+    return result
+
+
 def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]:
     global_story = result.get("globalStory") if isinstance(result.get("globalStory"), dict) else {}
     debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
@@ -2750,6 +2804,11 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
         )
     raw_text = _extract_gemini_text(response)
     parsed_single = _parse_audio_first_single_call_payload(raw_text)
+    audio_duration_sec = _safe_float(
+        payload.get("audioDurationSec") or payload.get("metadata", {}).get("audio", {}).get("durationSec"),
+        0.0,
+    )
+    parsed_single = _scale_audio_first_timeline_if_normalized(parsed_single, audio_duration_sec)
     logger.info("[SCENARIO DIRECTOR] received single-call json keys=%s", list(parsed_single.keys()))
     legacy_payload = _map_single_call_to_storyboard_out(parsed_single)
     logger.info("[SCENARIO DIRECTOR] mapped single-call result to legacy storyboardOut")
