@@ -62,6 +62,7 @@ GEMINI_ONLY_TRANSITION_TYPES = {"start", "continuation", "enter_transition", "ju
 GEMINI_ONLY_HUMAN_ANCHOR_TYPES = {"character", "POV", "human_trace", "none"}
 GEMINI_ONLY_VISUAL_MODE_DEFAULT = "cinematic_real_world"
 COMFY_CHARACTER_ROLE_DEFAULTS = {"character_1": "hero", "character_2": "support", "character_3": "support"}
+COMFY_CHARACTER_ROLE_TYPES = {"auto", "hero", "antagonist", "support"}
 COMFY_ROLE_DOMINANCE_MODES = {"off", "soft", "strict"}
 SCENE_INTENTS = (
     "setup",
@@ -182,9 +183,9 @@ def _clean_refs_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, list[d
                     continue
                 clean_item = {"url": url, "name": str(item.get("name") or "").strip()}
                 role_type = str(item.get("roleType") or "").strip().lower()
-                if role_type:
+                if role_type in COMFY_CHARACTER_ROLE_TYPES:
                     clean_item["roleType"] = role_type
-                    clean_item["roleTypeSource"] = "user_explicit"
+                    clean_item["roleTypeSource"] = "user_explicit" if role_type != "auto" else "user_auto"
                 clean.append(clean_item)
         out[role] = clean
     return out
@@ -400,6 +401,17 @@ def _build_role_type_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, s
         items = refs.get(role)
         if not isinstance(items, list) or len(items) == 0:
             continue
+        explicit_role_type = next(
+            (
+                str((item or {}).get("roleType") or "").strip().lower()
+                for item in items
+                if isinstance(item, dict) and str((item or {}).get("roleType") or "").strip().lower() in COMFY_CHARACTER_ROLE_TYPES
+            ),
+            "",
+        )
+        if explicit_role_type == "auto":
+            role_types[role] = "auto"
+            continue
         role_types[role] = resolve_reference_role_type(role, items)
     return role_types
 
@@ -417,6 +429,9 @@ def _build_role_selection_source_by_role(
             continue
         if any(str((item or {}).get("roleTypeSource") or "").strip().lower() == "user_explicit" for item in items if isinstance(item, dict)):
             selection_source_by_role[role] = "user_explicit"
+            continue
+        if any(str((item or {}).get("roleTypeSource") or "").strip().lower() == "user_auto" for item in items if isinstance(item, dict)):
+            selection_source_by_role[role] = "user_auto"
             continue
         resolved_role_type = str(role_types.get(role) or "").strip().lower()
         if resolved_role_type and resolved_role_type != default_role_type:

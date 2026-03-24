@@ -12,6 +12,7 @@ from app.engine.gemini_rest import post_generate_content
 
 ALLOWED_SOURCE_MODES = {"audio", "video_file", "video_link"}
 ALLOWED_LTX_MODES = {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync"}
+ALLOWED_NARRATION_MODES = {"full", "duck", "pause"}
 DEFAULT_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 FALLBACK_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 LEGACY_START_FRAME_ALIASES = {
@@ -21,7 +22,9 @@ LEGACY_START_FRAME_ALIASES = {
 }
 JSON_ONLY_RETRY_SUFFIX = (
     "\n\nRETRY OVERRIDE: Output ONLY one JSON object. No markdown. No commentary. No comments. "
-    "No alternative versions. Keep the same backend contract and return flat scene fields."
+    "No alternative versions. Keep the same backend contract and return flat scene fields. "
+    "HARD CONTRACT: narration_mode must be present in every scene, must be a string, must never be null, and allowed values are full, duck, pause. "
+    "If unsure use full."
 )
 
 logger = logging.getLogger(__name__)
@@ -378,6 +381,31 @@ def _normalize_legacy_scene_shape(scene: dict) -> dict:
     return normalized
 
 
+def _normalize_scenario_director_scene_defaults(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]:
+    if not isinstance(payload, dict):
+        return payload, [], []
+    repaired = dict(payload)
+    scenes = repaired.get("scenes")
+    if not isinstance(scenes, list):
+        return repaired, [], []
+    normalized_fields: list[str] = []
+    warnings: list[str] = []
+    normalized_scenes: list[Any] = []
+    for idx, raw_scene in enumerate(scenes):
+        if not isinstance(raw_scene, dict):
+            normalized_scenes.append(raw_scene)
+            continue
+        scene = dict(raw_scene)
+        narration_mode = str(scene.get("narration_mode") or "").strip().lower()
+        if narration_mode not in ALLOWED_NARRATION_MODES:
+            scene["narration_mode"] = "full"
+            normalized_fields.append(f"scenes[{idx}].narration_mode")
+            warnings.append("scenario_director_normalized_narration_mode_default")
+        normalized_scenes.append(scene)
+    repaired["scenes"] = normalized_scenes
+    return repaired, normalized_fields, list(dict.fromkeys(warnings))
+
+
 def _repair_scenario_director_payload(payload: dict) -> dict:
     candidate = payload
     changed = False
@@ -398,6 +426,9 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
         if normalized_scenes != scenes:
             changed = True
         repaired["scenes"] = normalized_scenes
+        repaired, normalized_fields, _ = _normalize_scenario_director_scene_defaults(repaired)
+        if normalized_fields:
+            changed = True
 
     if not repaired.get("story_summary"):
         repaired["story_summary"] = repaired.get("summary") or repaired.get("storySummary") or ""
@@ -1099,6 +1130,12 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
         "- Keep timing coherent and use floats in seconds.\n"
         "- Every scene must include concise but useful video/audio planning fields.\n"
         "- Keep the backend-compatible flat scene fields only. Do not output nested visual/audio/ltx blocks in final JSON.\n"
+        "CONTRACT HARD RULE FOR narration_mode:\n"
+        '- Every scene MUST include "narration_mode" explicitly.\n'
+        '- narration_mode MUST always be a string and MUST NEVER be null.\n'
+        '- Allowed values: "full", "duck", "pause".\n'
+        '- If unsure, use "full".\n'
+        '- Never output null for narration_mode and never omit narration_mode.\n'
         "Output contract:\n"
         "{\n"
         '  "story_summary": "",\n'
@@ -1185,7 +1222,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         "systemInstruction": {
             "parts": [
                 {
-                    "text": "You are the production Scenario Director for PhotoStudio COMFY. Return strict JSON only.",
+                    "text": "You are the production Scenario Director for PhotoStudio COMFY. Return strict JSON only. Hard contract: narration_mode must always be a non-null string in every scene (full|duck|pause, default full).",
                 }
             ]
         },
@@ -1228,6 +1265,8 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         model_used = retry_model_used
         parsed_payload = _parse_storyboard_payload(raw_text)
 
+    parsed_payload, normalized_contract_fields, normalization_warnings = _normalize_scenario_director_scene_defaults(parsed_payload)
+
     try:
         storyboard_out = ScenarioDirectorStoryboardOut.model_validate(parsed_payload)
         logger.debug("[SCENARIO_DIRECTOR] validation ok scenes=%s retry=%s", len(storyboard_out.scenes), retried_for_json)
@@ -1257,5 +1296,8 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "attemptedModels": attempted_models,
             "retriedForJson": retried_for_json,
             "rawGeminiTextPreview": raw_text[:2000],
+            "contractNormalizationApplied": bool(normalized_contract_fields),
+            "normalizedContractFields": normalized_contract_fields,
+            "warnings": normalization_warnings,
         },
     }

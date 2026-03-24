@@ -741,12 +741,12 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   };
 
   const comfyRefConfigByHandle = {
-    ref_character_1: { nodeType: "refNode", kind: "ref_character" },
+    ref_character_1: { nodeType: "refNode", kind: "ref_character", role: "character_1" },
     ref_location: { nodeType: "refNode", kind: "ref_location" },
     ref_style: { nodeType: "refNode", kind: "ref_style" },
     ref_props: { nodeType: "refNode", kind: "ref_items" },
-    ref_character_2: { nodeType: "refCharacter2" },
-    ref_character_3: { nodeType: "refCharacter3" },
+    ref_character_2: { nodeType: "refCharacter2", role: "character_2" },
+    ref_character_3: { nodeType: "refCharacter3", role: "character_3" },
     ref_animal: { nodeType: "refAnimal" },
     ref_group: { nodeType: "refGroup" },
   };
@@ -754,16 +754,22 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const normalizeNodeRefs = (sourceNode, cfg = {}) => {
     if (!sourceNode || sourceNode?.type !== cfg.nodeType) return [];
     if (cfg.kind && sourceNode?.data?.kind !== cfg.kind) return [];
+    const roleType = String(sourceNode?.data?.roleType || "").trim().toLowerCase();
+    const withRoleType = (items = []) => {
+      if (!(cfg?.role === "character_1" || cfg?.role === "character_2" || cfg?.role === "character_3")) return items;
+      if (!roleType || roleType === "auto") return items;
+      return items.map((item) => ({ ...item, roleType }));
+    };
     if (cfg.nodeType === "refNode" && typeof normalizeRefDataFn === "function") {
-      return normalizeRefDataFn(sourceNode?.data || {}, cfg.kind || "").refs;
+      return withRoleType(normalizeRefDataFn(sourceNode?.data || {}, cfg.kind || "").refs);
     }
     const refs = Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [];
-    return refs
+    return withRoleType(refs
       .map((item) => {
         if (typeof item === "string") return { url: String(item || "").trim(), name: "" };
         return { url: String(item?.url || "").trim(), name: String(item?.name || "").trim() };
       })
-      .filter((item) => !!item.url);
+      .filter((item) => !!item.url));
   };
   const resolveRefStatus = (sourceNode, refs = []) => {
     const refsCount = Array.isArray(refs) ? refs.length : 0;
