@@ -2645,6 +2645,7 @@ body.ps_clip_fullscreen .mainCol {
   flex-direction: column;
   gap: 12px;
   padding: 18px;
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
   min-width: 0;
   box-sizing: border-box;
   overflow-y: auto;
