@@ -64,6 +64,11 @@ SCENE_PURPOSES = (
     "emotional climax",
     "final image / ending hold",
 )
+TIMELINE_START_TOLERANCE_SEC = 0.35
+TIMELINE_END_TOLERANCE_SEC = 0.75
+TIMELINE_INTERNAL_GAP_WARN_SEC = 1.25
+TIMELINE_TAIL_WARN_SEC = 1.0
+TIMELINE_COVERAGE_RATIO_WARN = 0.95
 
 
 class ScenarioDirectorError(RuntimeError):
@@ -1058,6 +1063,92 @@ def _assert_storyboard_quality(storyboard_out: ScenarioDirectorStoryboardOut) ->
         raise ScenarioDirectorError("scenario_director_low_quality", "Scenario Director returned only weak filler scenes.", status_code=502)
 
 
+def _resolve_audio_duration_sec(payload: dict[str, Any]) -> float:
+    candidates = [
+        payload.get("audioDurationSec"),
+        (payload.get("metadata") or {}).get("audioDurationSec") if isinstance(payload.get("metadata"), dict) else None,
+        (payload.get("source") or {}).get("audioDurationSec") if isinstance(payload.get("source"), dict) else None,
+        ((payload.get("source") or {}).get("metadata") or {}).get("audioDurationSec")
+        if isinstance(payload.get("source"), dict) and isinstance((payload.get("source") or {}).get("metadata"), dict)
+        else None,
+    ]
+    for value in candidates:
+        duration = _safe_float(value, 0.0)
+        if duration > 0:
+            return duration
+    return 0.0
+
+
+def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio_duration_sec: float) -> dict[str, Any]:
+    if audio_duration_sec <= 0:
+        return {
+            "audioDurationSec": 0.0,
+            "timelineStartSec": 0.0,
+            "timelineEndSec": 0.0,
+            "timelineCoverageSec": 0.0,
+            "timelineCoverageRatio": 0.0,
+            "uncoveredTailSec": 0.0,
+            "internalGapCount": 0,
+            "timelineCoverageStatus": "ok",
+            "warnings": [],
+        }
+    if not scenes:
+        return {
+            "audioDurationSec": audio_duration_sec,
+            "timelineStartSec": 0.0,
+            "timelineEndSec": 0.0,
+            "timelineCoverageSec": 0.0,
+            "timelineCoverageRatio": 0.0,
+            "uncoveredTailSec": audio_duration_sec,
+            "internalGapCount": 0,
+            "timelineCoverageStatus": "invalid",
+            "warnings": ["timeline_coverage_too_short", "timeline_does_not_reach_audio_end", "timeline_has_uncovered_audio_tail"],
+        }
+    sorted_scenes = sorted(scenes, key=lambda scene: (scene.time_start, scene.time_end))
+    first_start = _safe_float(sorted_scenes[0].time_start, 0.0)
+    last_end = _safe_float(sorted_scenes[-1].time_end, first_start)
+    total_coverage = 0.0
+    gap_count = 0
+    warnings: list[str] = []
+    cursor = 0.0
+    for scene in sorted_scenes:
+        start = _safe_float(scene.time_start, cursor)
+        end = max(start, _safe_float(scene.time_end, start))
+        gap = round(max(0.0, start - cursor), 3)
+        if gap >= TIMELINE_INTERNAL_GAP_WARN_SEC:
+            gap_count += 1
+            warnings.append("timeline_has_large_internal_gap")
+        total_coverage += max(0.0, end - start)
+        cursor = max(cursor, end)
+    uncovered_tail = round(max(0.0, audio_duration_sec - last_end), 3)
+    coverage_ratio = round((total_coverage / audio_duration_sec) if audio_duration_sec > 0 else 0.0, 4)
+    if first_start > TIMELINE_START_TOLERANCE_SEC:
+        warnings.append("timeline_does_not_start_at_zero")
+    if audio_duration_sec - last_end > TIMELINE_END_TOLERANCE_SEC:
+        warnings.append("timeline_does_not_reach_audio_end")
+    if uncovered_tail > TIMELINE_TAIL_WARN_SEC:
+        warnings.append("timeline_has_uncovered_audio_tail")
+    if coverage_ratio < TIMELINE_COVERAGE_RATIO_WARN:
+        warnings.append("timeline_coverage_too_short")
+    status = "ok"
+    unique_warnings = list(dict.fromkeys(warnings))
+    if any(code in unique_warnings for code in ("timeline_does_not_reach_audio_end", "timeline_has_uncovered_audio_tail", "timeline_coverage_too_short")):
+        status = "invalid"
+    elif unique_warnings:
+        status = "warning"
+    return {
+        "audioDurationSec": round(audio_duration_sec, 3),
+        "timelineStartSec": round(first_start, 3),
+        "timelineEndSec": round(last_end, 3),
+        "timelineCoverageSec": round(total_coverage, 3),
+        "timelineCoverageRatio": coverage_ratio,
+        "uncoveredTailSec": uncovered_tail,
+        "internalGapCount": gap_count,
+        "timelineCoverageStatus": status,
+        "warnings": unique_warnings,
+    }
+
+
 def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> ScenarioDirectorStoryboardOut:
     storyboard_out = _apply_scene_count_limit(storyboard_out)
     storyboard_out = _filter_or_repair_weak_scenes(storyboard_out)
@@ -1076,6 +1167,7 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
     director_controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     connected_context_summary = payload.get("connected_context_summary", {})
     metadata = payload.get("metadata", {})
+    audio_duration_sec = _resolve_audio_duration_sec(payload)
     request_text = (
         "You are Scenario Director for PhotoStudio COMFY.\n"
         "Gemini is the planning brain. Do not delegate planning to heuristics.\n"
@@ -1128,6 +1220,11 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
         "- Scenario Director is the main planning node. Storyboard executes your storyboard_out and should not rethink the plan.\n"
         "- Build scenes from story meaning, source-of-truth, connected refs, and director controls.\n"
         "- Keep timing coherent and use floats in seconds.\n"
+        '- If "audioDurationSec" is present and > 0, scene timeline MUST span the full audio duration from 0.0 to audioDurationSec.\n'
+        "- If audioDurationSec > 0: first scene starts at 0.0, final scene reaches near audioDurationSec, and every major audio interval belongs to some scene.\n"
+        "- No large uncovered audio tail at the end. No large silent timeline gap unless explicitly intended as a scene beat.\n"
+        "- If story climax happens early but audio continues, add natural late-stage scenes (aftermath, reaction, realization, escape continuation, tension tail, unresolved closing image, outro suspense).\n"
+        "- Around 60 seconds, 6 scenes can be acceptable only if they truly cover full audio; add scenes when timing is too compressed.\n"
         "- Every scene must include concise but useful video/audio planning fields.\n"
         "- Keep the backend-compatible flat scene fields only. Do not output nested visual/audio/ltx blocks in final JSON.\n"
         "CONTRACT HARD RULE FOR narration_mode:\n"
@@ -1171,11 +1268,44 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
         "    }\n"
         "  ]\n"
         "}\n\n"
-        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata}, ensure_ascii=False, indent=2)}"
+        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None}, ensure_ascii=False, indent=2)}"
     )
     if strict_json_retry:
         request_text += JSON_ONLY_RETRY_SUFFIX
     return request_text
+
+
+def _build_audio_coverage_refinement_prompt(payload: dict[str, Any], storyboard_out: ScenarioDirectorStoryboardOut, coverage: dict[str, Any]) -> str:
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    context_refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    director_controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    compact_scenes: list[dict[str, Any]] = []
+    for scene in storyboard_out.scenes:
+        compact_scenes.append(
+            {
+                "scene_id": scene.scene_id,
+                "time_start": scene.time_start,
+                "time_end": scene.time_end,
+                "duration": scene.duration,
+                "scene_goal": scene.scene_goal,
+                "frame_description": scene.frame_description,
+                "action_in_frame": scene.action_in_frame,
+                "camera": scene.camera,
+            }
+        )
+    return (
+        "Timeline repair pass (not a rewrite). Return strict JSON object only with the same contract keys.\n"
+        "Preserve current story direction and keep strong existing scenes.\n"
+        "Repair timeline to fully cover audio. Extend or add scenes only where needed.\n"
+        "Keep progression natural and cinematic.\n"
+        "Final scene must reach audioDurationSec.\n"
+        "If audioDurationSec is > 0: first scene must start at 0.0, no large uncovered tail, and no large internal uncovered gap.\n"
+        "Prefer preserving story quality while fixing coverage boundaries.\n"
+        f"Coverage diagnostics: {json.dumps(coverage, ensure_ascii=False)}\n"
+        f"Runtime payload: {json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'metadata': metadata, 'audioDurationSec': coverage.get('audioDurationSec')}, ensure_ascii=False)}\n"
+        f"Current storyboard snapshot: {json.dumps({'story_summary': storyboard_out.story_summary, 'full_scenario': storyboard_out.full_scenario, 'voice_script': storyboard_out.voice_script, 'music_prompt': storyboard_out.music_prompt, 'director_summary': storyboard_out.director_summary, 'scenes': compact_scenes}, ensure_ascii=False)}"
+    )
 
 
 def _send_director_request(api_key: str, body: dict[str, Any]) -> tuple[dict[str, Any] | None, str, list[str]]:
@@ -1222,7 +1352,11 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         "systemInstruction": {
             "parts": [
                 {
-                    "text": "You are the production Scenario Director for PhotoStudio COMFY. Return strict JSON only. Hard contract: narration_mode must always be a non-null string in every scene (full|duck|pause, default full).",
+                    "text": (
+                        "You are the production Scenario Director for PhotoStudio COMFY. Return strict JSON only. "
+                        "Hard contract: narration_mode must always be a non-null string in every scene (full|duck|pause, default full). "
+                        "If audioDurationSec > 0, scene timeline MUST span full audio from 0.0 to audioDurationSec."
+                    ),
                 }
             ]
         },
@@ -1280,6 +1414,50 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
     storyboard_out = _harden_storyboard_out(storyboard_out, payload)
+    audio_duration_sec = _resolve_audio_duration_sec(payload)
+    coverage = _validate_audio_timeline_coverage(storyboard_out.scenes, audio_duration_sec)
+    coverage_warnings: list[str] = list(coverage.get("warnings") or [])
+    timeline_refinement_attempted = False
+    timeline_refinement_succeeded = False
+    if audio_duration_sec > 0 and coverage.get("timelineCoverageStatus") == "invalid":
+        timeline_refinement_attempted = True
+        refinement_body = {
+            **body,
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": _build_audio_coverage_refinement_prompt(payload, storyboard_out, coverage)}],
+                }
+            ],
+        }
+        refinement_response, refinement_model_used, refinement_attempted_models = _send_director_request(api_key, refinement_body)
+        attempted_models.extend(model for model in refinement_attempted_models if model not in attempted_models)
+        if isinstance(refinement_response, dict) and not refinement_response.get("__http_error__"):
+            refinement_raw_text = _extract_gemini_text(refinement_response)
+            try:
+                refinement_parsed = _parse_storyboard_payload(refinement_raw_text)
+                refinement_parsed, _, refinement_normalization_warnings = _normalize_scenario_director_scene_defaults(refinement_parsed)
+                refined_storyboard = ScenarioDirectorStoryboardOut.model_validate(refinement_parsed)
+                refined_storyboard = _harden_storyboard_out(refined_storyboard, payload)
+                refined_coverage = _validate_audio_timeline_coverage(refined_storyboard.scenes, audio_duration_sec)
+                if refined_coverage.get("timelineCoverageStatus") == "ok":
+                    storyboard_out = refined_storyboard
+                    coverage = refined_coverage
+                    coverage_warnings = list(dict.fromkeys([*coverage_warnings, *refinement_normalization_warnings, *list(refined_coverage.get("warnings") or [])]))
+                    timeline_refinement_succeeded = True
+                    model_used = refinement_model_used
+            except (ScenarioDirectorError, ValidationError):
+                coverage_warnings.append("timeline_refinement_contract_invalid")
+        else:
+            coverage_warnings.append("timeline_refinement_request_failed")
+    if audio_duration_sec > 0 and coverage.get("timelineCoverageStatus") == "invalid":
+        raise ScenarioDirectorError(
+            "contract_invalid_for_timeline",
+            "Scenario Director timeline does not fully cover audioDurationSec after refinement.",
+            status_code=502,
+            details=coverage,
+        )
+
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
     return {
@@ -1298,6 +1476,17 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "rawGeminiTextPreview": raw_text[:2000],
             "contractNormalizationApplied": bool(normalized_contract_fields),
             "normalizedContractFields": normalized_contract_fields,
-            "warnings": normalization_warnings,
+            "audioDurationSec": coverage.get("audioDurationSec"),
+            "timelineStartSec": coverage.get("timelineStartSec"),
+            "timelineEndSec": coverage.get("timelineEndSec"),
+            "timelineCoverageSec": coverage.get("timelineCoverageSec"),
+            "timelineCoverageRatio": coverage.get("timelineCoverageRatio"),
+            "uncoveredTailSec": coverage.get("uncoveredTailSec"),
+            "internalGapCount": coverage.get("internalGapCount"),
+            "timelineCoverageStatus": coverage.get("timelineCoverageStatus"),
+            "timelineCoverageWarnings": coverage.get("warnings") or [],
+            "timelineRefinementAttempted": timeline_refinement_attempted,
+            "timelineRefinementSucceeded": timeline_refinement_succeeded,
+            "warnings": list(dict.fromkeys([*normalization_warnings, *coverage_warnings])),
         },
     }
