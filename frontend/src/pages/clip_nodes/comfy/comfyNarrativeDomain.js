@@ -128,6 +128,25 @@ function resolveScenarioAudioContext(connectedInputs = {}, resolvedSource = {}) 
   };
 }
 
+function resolveAudioDurationFallback(state = {}) {
+  const metadata = state?.metadata && typeof state.metadata === "object" ? state.metadata : {};
+  const source = state?.source && typeof state.source === "object" ? state.source : {};
+  const sourceMetadata = source?.metadata && typeof source.metadata === "object" ? source.metadata : {};
+  const sourceAudioMeta = sourceMetadata?.audio && typeof sourceMetadata.audio === "object" ? sourceMetadata.audio : {};
+  const metadataAudio = metadata?.audio && typeof metadata.audio === "object" ? metadata.audio : {};
+
+  return toAudioDurationSec(
+    state?.audioDurationSec
+      ?? state?.audioContext?.audioDurationSec
+      ?? source?.audioDurationSec
+      ?? sourceMetadata?.audioDurationSec
+      ?? sourceAudioMeta?.durationSec
+      ?? metadata?.audioDurationSec
+      ?? metadataAudio?.durationSec
+      ?? 0
+  );
+}
+
 function buildReferencePayload(input, fallbackLabel) {
   if (!input || typeof input !== "object") return null;
   const normalizedRefs = Array.isArray(input.refs)
@@ -329,7 +348,14 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
 
   const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
   const connectedContextSummary = summarizeNarrativeConnectedContext({ ...state, resolvedSource });
-  const audioContext = resolveScenarioAudioContext(connectedInputs, resolvedSource);
+  const audioContextRaw = resolveScenarioAudioContext(connectedInputs, resolvedSource);
+  const persistedAudioDurationSec = resolveAudioDurationFallback(state);
+  const effectiveAudioDurationSec = toAudioDurationSec(audioContextRaw.audioDurationSec || persistedAudioDurationSec);
+  const wasDurationResolved = effectiveAudioDurationSec > 0;
+  const audioContext = {
+    ...audioContextRaw,
+    audioDurationSec: effectiveAudioDurationSec,
+  };
   const preferAudioOverText = audioContext.hasAudioSource;
   const segmentationMode = audioContext.hasAudioSource ? "phrase-first" : "default";
   const timelineSource = audioContext.hasAudioSource ? "audio" : "text";
@@ -404,9 +430,12 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   if (audioContext.hasAudioSource) {
     console.debug("[ScenarioDirector] audio payload context", {
       sourceMode: normalizeNarrativeSourceMode(resolvedSource.mode),
+      audioUrl: audioContext.url || sourceValue,
       source_origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
       metadataAudioOrigin: audioContext.audioOrigin || "audio_node",
       audioDurationSec: audioContext.audioDurationSec,
+      wasDurationResolved,
+      persistedAudioDurationSec,
       timelineSource,
       segmentationMode,
     });

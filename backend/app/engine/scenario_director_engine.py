@@ -537,14 +537,53 @@ def _resolve_audio_asset_path(audio_url: str | None) -> str | None:
 def _resolve_audio_source_for_analysis(audio_url: str | None) -> dict[str, Any]:
     clean = str(audio_url or "").strip()
     if not clean:
-        return {"ok": False, "mode": "missing", "path": None, "url": None, "normalized": "", "hint": "audio_url_missing"}
+        return {"ok": False, "mode": "missing", "path": None, "url": None, "normalized": "", "hint": "audio_url_missing", "reason": "audio_url_missing"}
+
+    def _resolve_local_static_asset(path_value: str) -> str | None:
+        path_clean = str(path_value or "").strip()
+        if not path_clean:
+            return None
+        normalized_path = path_clean.split("?", 1)[0].split("#", 1)[0]
+        normalized_path = normalized_path.lstrip("/")
+        if not normalized_path.startswith("static/assets/"):
+            return None
+        relative_path = normalized_path[len("static/"):].strip("/")
+        if not relative_path:
+            return None
+        candidate = (BACKEND_DIR / "static" / relative_path).resolve()
+        try:
+            candidate.relative_to((BACKEND_DIR / "static").resolve())
+        except ValueError:
+            return None
+        if candidate.is_file():
+            return str(candidate)
+        return None
 
     parsed = urlparse(clean)
     if parsed.scheme in {"http", "https"}:
-        return {"ok": True, "mode": "http", "path": None, "url": clean, "normalized": clean, "hint": "audio_url_absolute"}
+        local_static_path = _resolve_local_static_asset(parsed.path or "")
+        if local_static_path:
+            return {
+                "ok": True,
+                "mode": "local_file",
+                "path": local_static_path,
+                "url": None,
+                "normalized": local_static_path,
+                "hint": "audio_local_static_asset_from_http_url",
+                "reason": "http_url_points_to_static_assets_local_file_exists",
+            }
+        return {
+            "ok": True,
+            "mode": "http",
+            "path": None,
+            "url": clean,
+            "normalized": clean,
+            "hint": "audio_url_absolute",
+            "reason": "absolute_http_url_fallback",
+        }
 
     if parsed.scheme:
-        return {"ok": False, "mode": "invalid", "path": None, "url": None, "normalized": clean, "hint": "audio_url_not_absolute"}
+        return {"ok": False, "mode": "invalid", "path": None, "url": None, "normalized": clean, "hint": "audio_url_not_absolute", "reason": "unsupported_url_scheme"}
 
     normalized = clean.lstrip("/")
     path_variants = [normalized]
@@ -566,6 +605,7 @@ def _resolve_audio_source_for_analysis(audio_url: str | None) -> dict[str, Any]:
                 "url": None,
                 "normalized": str(candidate),
                 "hint": "audio_local_file_resolved",
+                "reason": "relative_path_resolved_to_backend_file",
             }
 
     asset_path = _resolve_audio_asset_path(clean)
@@ -577,6 +617,7 @@ def _resolve_audio_source_for_analysis(audio_url: str | None) -> dict[str, Any]:
             "url": None,
             "normalized": asset_path,
             "hint": "audio_asset_resolved",
+            "reason": "asset_filename_resolved",
         }
 
     public_base = (getattr(settings, "PUBLIC_BASE_URL", None) or "").strip()
@@ -590,9 +631,10 @@ def _resolve_audio_source_for_analysis(audio_url: str | None) -> dict[str, Any]:
             "url": fallback_url,
             "normalized": fallback_url,
             "hint": "audio_public_base_url_fallback",
+            "reason": "public_base_url_fallback",
         }
 
-    return {"ok": False, "mode": "missing", "path": None, "url": None, "normalized": clean, "hint": "audio_asset_not_found"}
+    return {"ok": False, "mode": "missing", "path": None, "url": None, "normalized": clean, "hint": "audio_asset_not_found", "reason": "asset_not_found_locally_and_no_http_fallback"}
 
 
 def _normalize_audio_context(payload: dict[str, Any]) -> dict[str, Any]:
@@ -692,9 +734,11 @@ def _analyze_audio_for_scenario_director(audio_context: dict[str, Any]) -> dict[
             "audioUrlRaw": audio_url or None,
             "audioUrlNormalized": resolution.get("normalized"),
             "audioUrlResolutionMode": resolution.get("mode"),
+            "audioResolvedPath": resolution.get("path"),
+            "audioResolutionReason": resolution.get("reason"),
         }
 
-    source = "local_asset" if resolution.get("mode") == "local_file" else "http_download"
+    source = "local_file" if resolution.get("mode") == "local_file" else "http_download"
     temp_path: str | None = None
     errors: list[str] = []
     try:
@@ -707,6 +751,8 @@ def _analyze_audio_for_scenario_director(audio_context: dict[str, Any]) -> dict[
                     "audioUrlRaw": audio_url or None,
                     "audioUrlNormalized": resolution.get("normalized"),
                     "audioUrlResolutionMode": "invalid",
+                    "audioResolvedPath": resolution.get("path"),
+                    "audioResolutionReason": resolution.get("reason"),
                 }
             suffix = os.path.splitext(urlparse(fetch_url).path)[1] or ".audio"
             response = requests.get(fetch_url, timeout=30)
@@ -735,6 +781,8 @@ def _analyze_audio_for_scenario_director(audio_context: dict[str, Any]) -> dict[
             "audioUrlRaw": audio_url or None,
             "audioUrlNormalized": resolution.get("normalized"),
             "audioUrlResolutionMode": resolution.get("mode"),
+            "audioResolvedPath": resolution.get("path"),
+            "audioResolutionReason": resolution.get("reason"),
         }
     except Exception as exc:
         errors.append(f"audio_analysis_failed:{str(exc)[:180]}")
@@ -744,6 +792,8 @@ def _analyze_audio_for_scenario_director(audio_context: dict[str, Any]) -> dict[
             "audioUrlRaw": audio_url or None,
             "audioUrlNormalized": resolution.get("normalized"),
             "audioUrlResolutionMode": resolution.get("mode"),
+            "audioResolvedPath": resolution.get("path"),
+            "audioResolutionReason": resolution.get("reason"),
         }
     finally:
         if temp_path and os.path.exists(temp_path):
@@ -2050,6 +2100,8 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "audioUrl_raw": audio_url_raw or None,
             "audioUrl_normalized": str(audio_analysis.get("audioUrlNormalized") or audio_url_normalized or "") or None,
             "audioUrlResolutionMode": str(audio_analysis.get("audioUrlResolutionMode") or ("missing" if not audio_url_normalized else "invalid")),
+            "audioResolvedPath": str(audio_analysis.get("audioResolvedPath") or "") or None,
+            "audioResolutionReason": str(audio_analysis.get("audioResolutionReason") or "") or None,
             "preferAudioOverText": prefer_audio_over_text,
             "timelineSource": audio_context.get("timelineSource"),
             "segmentationMode": audio_context.get("segmentationMode"),

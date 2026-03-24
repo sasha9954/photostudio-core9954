@@ -2511,10 +2511,26 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     const audioUrl = String(sourceNode?.data?.audioUrl || "").trim();
     if (!audioUrl) return null;
     const audioName = String(sourceNode?.data?.audioName || "").trim();
+    const rawDuration = Number(sourceNode?.data?.audioDurationSec);
+    const audioDurationSec = Number.isFinite(rawDuration) && rawDuration > 0 ? Number(rawDuration.toFixed(3)) : null;
     return {
       value: audioUrl,
       preview: audioName || audioUrl,
       sourceLabel: "Внешний аудио-источник",
+      url: audioUrl,
+      fileName: audioName || "",
+      audioDurationSec,
+      durationSec: audioDurationSec,
+      mimeType: String(sourceNode?.data?.audioMime || "").trim(),
+      meta: {
+        kind: "audio_node",
+        url: audioUrl,
+        fileName: audioName || "",
+        mimeType: String(sourceNode?.data?.audioMime || "").trim(),
+        audioDurationSec,
+        durationSec: audioDurationSec,
+        origin: "audio_node",
+      },
     };
   }
 
