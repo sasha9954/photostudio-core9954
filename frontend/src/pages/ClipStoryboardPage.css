@@ -4260,7 +4260,7 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_scenarioBgAudioItem.isActive {
-  background: rgba(255,255,255,0.06);
+  background: rgba(120,190,255,0.14);
   box-shadow:
     inset 0 0 0 1px rgba(122, 194, 255, 0.92),
     0 0 0 1px rgba(122, 194, 255, 0.38),
@@ -4280,7 +4280,7 @@ body.ps_clip_fullscreen .mainCol {
   display: grid;
   grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.05fr);
   gap: 8px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .clipSB_scenarioBgAudioCol {
@@ -4291,6 +4291,7 @@ body.ps_clip_fullscreen .mainCol {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  height: 100%;
 }
 
 .clipSB_scenarioBgAudioCol h5 {
@@ -4358,11 +4359,15 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_scenarioBgAudioGenerateCol {
   justify-content: flex-start;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
 .clipSB_scenarioBgAudioPrompt {
   min-height: 84px;
   resize: vertical;
+  flex: 1;
 }
 
 .clipSB_tagStatus--idle { opacity: 0.75; }
