@@ -75,6 +75,24 @@ SCENE_INTENTS = (
     "observation",
     "transition",
 )
+
+SCENE_INTENT_PHRASE_PATTERNS: list[tuple[str, tuple[str, ...], float]] = [
+    ("escape", ("trying to escape", "tries to escape", "attempts to escape", "breaks free"), 0.87),
+    ("pursuit", ("moves toward", "move toward", "closing distance", "closes in", "gives chase"), 0.86),
+    ("confrontation", ("stands against", "stand against", "faces off", "faces ", "direct standoff"), 0.85),
+    ("observation", ("watching", "observing silently", "watching silently", "keeps observing"), 0.84),
+]
+
+SCENE_INTENT_KEYWORD_MAP: list[tuple[str, tuple[str, ...]]] = [
+    ("pursuit", ("chase", "run", "follow", "track", "hunt")),
+    ("confrontation", ("fight", "argue", "attack", "clash", "challenge")),
+    ("threat", ("danger", "fear", "control", "menace", "intimidate", "threat")),
+    ("escape", ("escape", "flee", "evade", "break out")),
+    ("support", ("help", "comfort", "assist", "protect")),
+    ("dialogue", ("talk", "say", "explain", "discuss", "converse")),
+    ("reveal", ("discover", "realize", "uncover", "reveal")),
+    ("observation", ("watch", "observe", "notice", "scan")),
+]
 SYSTEM_PROMPT_CLIP_PLANNER_VERSION = "clip_planner_v1"
 SYSTEM_PROMPT_CLIP_PLANNER = """You are a strict cinematic storyboard planner for COMFY CLIP.
 You are a planner only, not an image generator.
@@ -1878,7 +1896,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "Do not invent dominant unexplained foreground props. Do not introduce oversized machines, devices, or artifacts unless the narration meaning or explicit refs require them. If no prop is required, keep the frame clean and semantically grounded.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
-        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected, plus audioStoryMode, roleMode, roleModeReason, roleDominanceMode, roleDominanceModeReason, roleDominanceApplied, roleTypeByRole, roleSelectionSourceByRole, roleUsageByScene, dominantRoleByScene, dominantRoleTypeByScene, roleDominanceWarnings, roleValidationWarnings, roleValidationStatus, sceneIntentByScene, sceneIntentConfidence, sceneIntentWarnings, textSource, transcriptAvailable, spokenMeaningPrimary, charactersAllowed, sceneSemanticSource per scene, peopleAutoAddedCount, oversizedSpeechScenesDetected, oversizedSpeechScenesSplitCount, speechSplitReasons, promptLanguageStatus, ruPromptMissing, enPromptPresent, and objectHallucinationRisk when available.\n"
+        "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected, plus audioStoryMode, roleMode, roleModeReason, roleDominanceMode, roleDominanceModeReason, roleDominanceApplied, roleTypeByRole, roleSelectionSourceByRole, roleUsageByScene, dominantRoleByScene, dominantRoleTypeByScene, roleDominanceWarnings, roleValidationWarnings, roleValidationStatus, sceneIntentByScene, sceneIntentConfidence, sceneIntentWarnings, sceneIntentDiagnostics, textSource, transcriptAvailable, spokenMeaningPrimary, charactersAllowed, sceneSemanticSource per scene, peopleAutoAddedCount, oversizedSpeechScenesDetected, oversizedSpeechScenesSplitCount, speechSplitReasons, promptLanguageStatus, ruPromptMissing, enPromptPresent, and objectHallucinationRisk when available.\n"
         f"INPUT={json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -2224,22 +2242,59 @@ def _estimate_scene_intent(scene: dict[str, Any], scene_index: int) -> tuple[str
             "sceneAction",
         ]
     ).lower()
-    keyword_map = [
-        ("pursuit", ("chase", "run", "follow")),
-        ("confrontation", ("fight", "argue", "attack")),
-        ("threat", ("danger", "fear", "control")),
-        ("escape", ("escape", "flee")),
-        ("support", ("help", "comfort")),
-        ("dialogue", ("talk", "say", "explain")),
-        ("reveal", ("discover", "realize")),
-        ("observation", ("watch", "observe")),
-    ]
-    for intent, keywords in keyword_map:
+    for intent, phrases, confidence in SCENE_INTENT_PHRASE_PATTERNS:
+        if any(phrase in scene_blob for phrase in phrases):
+            return intent, confidence
+    for intent, keywords in SCENE_INTENT_KEYWORD_MAP:
         if any(keyword in scene_blob for keyword in keywords):
             return intent, 0.82
     if scene_index == 0:
         return "setup", 0.58
     return "transition", 0.5
+
+
+def _extract_scene_intent_keywords(scene: dict[str, Any], intent: str) -> list[str]:
+    scene_blob = " ".join(
+        str(scene.get(key) or "")
+        for key in [
+            "title",
+            "sceneText",
+            "sceneMeaning",
+            "visualDescription",
+            "sceneNarrativeStep",
+            "sceneGoal",
+            "continuity",
+            "cameraIntent",
+            "sceneAction",
+            "intent",
+        ]
+    ).lower()
+    matches: list[str] = []
+    for mapped_intent, phrases, _ in SCENE_INTENT_PHRASE_PATTERNS:
+        if mapped_intent == intent:
+            matches.extend([phrase for phrase in phrases if phrase in scene_blob])
+    for mapped_intent, keywords in SCENE_INTENT_KEYWORD_MAP:
+        if mapped_intent == intent:
+            matches.extend([keyword for keyword in keywords if keyword in scene_blob])
+    return list(dict.fromkeys(matches))
+
+
+def _validate_scene_intent(scene: dict[str, Any], role: str, intent: str) -> list[str]:
+    warnings: list[str] = []
+    raw_intent = str(scene.get("intent") or "").strip().lower()
+    normalized_intent = str(intent or "").strip().lower()
+    normalized_role = str(role or "").strip().lower()
+    if not raw_intent:
+        warnings.append("strict_missing_scene_intent")
+    if normalized_intent in {"", "transition", "setup"} and not _extract_scene_intent_keywords(scene, normalized_intent):
+        warnings.append("weak_intent_signal")
+    if (
+        (normalized_role == "antagonist" and normalized_intent == "support")
+        or (normalized_role == "hero" and normalized_intent == "threat")
+        or (normalized_role == "support" and normalized_intent in {"threat", "confrontation"})
+    ):
+        warnings.append("strict_intent_role_mismatch")
+    return warnings
 
 
 def _build_role_distribution_warnings(
@@ -2318,7 +2373,10 @@ def _validate_role_distribution(
     dominant_role_type_by_scene: dict[str, str] = {}
     scene_intent_by_scene: list[dict[str, str]] = []
     scene_intent_confidence: list[dict[str, Any]] = []
+    scene_intent_diagnostics: list[dict[str, Any]] = []
     explicit_intent_missing = 0
+    transition_intent_count = 0
+    conflict_intent_count = 0
     for item, scene in zip(role_usage_by_scene, scenes):
         dominance = _estimate_scene_role_dominance(scene, role_type_by_role=role_type_by_role)
         item.update(dominance)
@@ -2328,7 +2386,24 @@ def _validate_role_distribution(
             explicit_intent_missing += 1
             scene["intent"] = intent
         scene_intent_by_scene.append({"sceneId": scene_id, "intent": intent})
-        scene_intent_confidence.append({"sceneId": scene_id, "intent": intent, "confidence": round(confidence, 2)})
+        confidence_value = round(confidence, 2)
+        confidence_source = "planner" if isinstance(scene, dict) and str(scene.get("intent") or "").strip().lower() in SCENE_INTENTS else "estimated"
+        matched_keywords = _extract_scene_intent_keywords(scene if isinstance(scene, dict) else {}, intent)
+        scene_intent_confidence.append({"sceneId": scene_id, "intent": intent, "confidence": confidence_value, "source": confidence_source})
+        scene_intent_diagnostics.append(
+            {
+                "sceneId": scene_id,
+                "intent": intent,
+                "confidence": confidence_value,
+                "source": confidence_source,
+                "matchedKeywords": matched_keywords,
+                "suggestedRenderModes": [],
+            }
+        )
+        if intent == "transition":
+            transition_intent_count += 1
+        if intent in {"confrontation", "threat"}:
+            conflict_intent_count += 1
         if scene_id:
             dominant_role_by_scene[scene_id] = str(dominance.get("dominantRole") or "")
             dominant_role_type_by_scene[scene_id] = str(dominance.get("dominantRoleType") or "unknown")
@@ -2340,19 +2415,31 @@ def _validate_role_distribution(
     )
     scene_intent_warnings: list[str] = []
     if str(role_dominance_mode or "").strip().lower() == "strict":
-        if explicit_intent_missing > 0:
-            scene_intent_warnings.append("strict_missing_scene_intent")
         for item in role_usage_by_scene:
             scene_id = str(item.get("sceneId") or "")
             dominant_role_type = str(item.get("dominantRoleType") or "").strip().lower()
             intent = next((str(x.get("intent") or "") for x in scene_intent_by_scene if str(x.get("sceneId") or "") == scene_id), "")
-            if (
-                (dominant_role_type == "antagonist" and intent == "support")
-                or (dominant_role_type == "hero" and intent == "threat")
-                or (dominant_role_type == "support" and intent in {"threat", "confrontation"})
-            ):
-                scene_intent_warnings.append("strict_intent_role_mismatch")
-                break
+            scene_lookup = next(
+                (candidate for candidate in scenes if isinstance(candidate, dict) and str(candidate.get("sceneId") or "") == scene_id),
+                {},
+            )
+            scene_intent_warnings.extend(_validate_scene_intent(scene_lookup if isinstance(scene_lookup, dict) else {}, dominant_role_type, intent))
+    if explicit_intent_missing > 0:
+        scene_intent_warnings.append("strict_missing_scene_intent")
+    weak_intent_count = sum(
+        1
+        for diag in scene_intent_diagnostics
+        if str(diag.get("intent") or "").strip().lower() in {"transition", "setup"} and not diag.get("matchedKeywords")
+    )
+    if weak_intent_count > 0:
+        scene_intent_warnings.append("weak_intent_signal")
+    scene_count = len(scene_intent_by_scene)
+    if scene_count and transition_intent_count > max(1, scene_count // 2):
+        scene_intent_warnings.append("scene_intent_transition_overuse")
+    if scene_count >= 3 and conflict_intent_count == 0:
+        scene_intent_warnings.append("scene_intent_conflict_missing")
+    if any(item in {"scene_intent_transition_overuse", "scene_intent_conflict_missing"} for item in scene_intent_warnings):
+        scene_intent_warnings.append("scenes lack clear narrative intent or progression")
     warnings.extend(scene_intent_warnings)
     deduped_warnings = list(dict.fromkeys(warnings))
     return {
@@ -2361,6 +2448,7 @@ def _validate_role_distribution(
         "dominantRoleTypeByScene": dominant_role_type_by_scene,
         "sceneIntentByScene": scene_intent_by_scene,
         "sceneIntentConfidence": scene_intent_confidence,
+        "sceneIntentDiagnostics": scene_intent_diagnostics,
         "sceneIntentWarnings": list(dict.fromkeys(scene_intent_warnings)),
         "roleDominanceWarnings": deduped_warnings,
         "roleValidationWarnings": deduped_warnings,
@@ -2380,6 +2468,10 @@ LOCKED_ROLE_REFINEMENT_WARNING_TRIGGERS = {
     "strict_support_overrides_hero",
     "strict_missing_scene_intent",
     "strict_intent_role_mismatch",
+    "weak_intent_signal",
+    "scene_intent_transition_overuse",
+    "scene_intent_conflict_missing",
+    "scenes lack clear narrative intent or progression",
 }
 
 
@@ -3387,6 +3479,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "sceneIntentByScene": [],
                 "sceneIntentConfidence": [],
                 "sceneIntentWarnings": [],
+                "sceneIntentDiagnostics": [],
                 "roleDominanceWarnings": [],
                 "roleValidationWarnings": [],
                 "roleValidationStatus": "ok",
@@ -3437,6 +3530,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 "sceneIntentByScene": [],
                 "sceneIntentConfidence": [],
                 "sceneIntentWarnings": [],
+                "sceneIntentDiagnostics": [],
                 "roleDominanceWarnings": [],
                 "roleValidationWarnings": [],
                 "roleValidationStatus": "ok",
@@ -3549,6 +3643,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     scene_intent_by_scene = role_validation.get("sceneIntentByScene") if isinstance(role_validation.get("sceneIntentByScene"), list) else []
     scene_intent_confidence = role_validation.get("sceneIntentConfidence") if isinstance(role_validation.get("sceneIntentConfidence"), list) else []
     scene_intent_warnings = role_validation.get("sceneIntentWarnings") if isinstance(role_validation.get("sceneIntentWarnings"), list) else []
+    scene_intent_diagnostics = role_validation.get("sceneIntentDiagnostics") if isinstance(role_validation.get("sceneIntentDiagnostics"), list) else []
     role_dominance_warnings = role_validation.get("roleDominanceWarnings") if isinstance(role_validation.get("roleDominanceWarnings"), list) else []
     role_validation_warnings = role_validation.get("roleValidationWarnings") if isinstance(role_validation.get("roleValidationWarnings"), list) else []
     role_validation_status = str(role_validation.get("roleValidationStatus") or "ok")
@@ -3678,6 +3773,11 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(refined_role_validation.get("sceneIntentWarnings"), list)
                 else []
             )
+            refined_scene_intent_diagnostics = (
+                refined_role_validation.get("sceneIntentDiagnostics")
+                if isinstance(refined_role_validation.get("sceneIntentDiagnostics"), list)
+                else []
+            )
             refined_role_validation_status = str(refined_role_validation.get("roleValidationStatus") or "ok")
             role_refinement_status_after = refined_role_validation_status
             role_refinement_warnings_after = list(refined_role_validation_warnings)
@@ -3718,6 +3818,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
                 scene_intent_by_scene = list(refined_scene_intent_by_scene)
                 scene_intent_confidence = list(refined_scene_intent_confidence)
                 scene_intent_warnings = list(refined_scene_intent_warnings)
+                scene_intent_diagnostics = list(refined_scene_intent_diagnostics)
                 role_validation_status = refined_role_validation_status
                 role_refinement_note = "Locked-role refinement was applied and improved or preserved validation without making it worse."
             else:
@@ -3806,6 +3907,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "sceneIntentByScene": scene_intent_by_scene,
         "sceneIntentConfidence": scene_intent_confidence,
         "sceneIntentWarnings": scene_intent_warnings,
+        "sceneIntentDiagnostics": scene_intent_diagnostics,
         "roleDominanceWarnings": role_dominance_warnings,
         "roleRefinementAttempted": role_refinement_attempted,
         "roleRefinementSucceeded": role_refinement_succeeded,
@@ -3909,6 +4011,7 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "sceneIntentByScene": scene_intent_by_scene,
             "sceneIntentConfidence": scene_intent_confidence,
             "sceneIntentWarnings": scene_intent_warnings,
+            "sceneIntentDiagnostics": scene_intent_diagnostics,
             "roleDominanceWarnings": role_dominance_warnings,
             "roleValidationWarnings": role_validation_warnings,
             "roleValidationStatus": role_validation_status,
@@ -4251,6 +4354,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     scene_intent_by_scene = role_validation.get("sceneIntentByScene") if isinstance(role_validation.get("sceneIntentByScene"), list) else []
     scene_intent_confidence = role_validation.get("sceneIntentConfidence") if isinstance(role_validation.get("sceneIntentConfidence"), list) else []
     scene_intent_warnings = role_validation.get("sceneIntentWarnings") if isinstance(role_validation.get("sceneIntentWarnings"), list) else []
+    scene_intent_diagnostics = role_validation.get("sceneIntentDiagnostics") if isinstance(role_validation.get("sceneIntentDiagnostics"), list) else []
     role_dominance_warnings = role_validation.get("roleDominanceWarnings") if isinstance(role_validation.get("roleDominanceWarnings"), list) else []
     role_validation_warnings = role_validation.get("roleValidationWarnings") if isinstance(role_validation.get("roleValidationWarnings"), list) else []
     role_validation_status = str(role_validation.get("roleValidationStatus") or "ok")
@@ -4263,6 +4367,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         "sceneIntentByScene": scene_intent_by_scene,
         "sceneIntentConfidence": scene_intent_confidence,
         "sceneIntentWarnings": scene_intent_warnings,
+        "sceneIntentDiagnostics": scene_intent_diagnostics,
     })
 
     result = {
@@ -4325,6 +4430,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "sceneIntentByScene": scene_intent_by_scene,
             "sceneIntentConfidence": scene_intent_confidence,
             "sceneIntentWarnings": scene_intent_warnings,
+            "sceneIntentDiagnostics": scene_intent_diagnostics,
             "sceneRoleSelection": scene_refs_debug,
             "activeRolesByScene": {item.get("sceneId"): item.get("activeRoles") for item in scene_refs_debug},
         },

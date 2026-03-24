@@ -54,6 +54,37 @@ SCENE_INTENTS = (
     "transition",
 )
 
+INTENT_RENDER_PREFERENCES: dict[str, tuple[RenderMode, ...]] = {
+    "setup": (RenderMode.i2v,),
+    "observation": (RenderMode.i2v_as,),
+    "pursuit": (RenderMode.i2v_as,),
+    "confrontation": (RenderMode.f_l, RenderMode.i2v_as),
+    "threat": (RenderMode.i2v_as,),
+    "escape": (RenderMode.i2v_as,),
+    "support": (RenderMode.i2v,),
+    "dialogue": (RenderMode.lip_sync, RenderMode.i2v),
+    "reveal": (RenderMode.f_l_as, RenderMode.i2v_as),
+    "transition": (RenderMode.continuation, RenderMode.i2v),
+}
+
+INTENT_PHRASE_PATTERNS: list[tuple[str, tuple[str, ...], float]] = [
+    ("escape", ("trying to escape", "tries to escape", "attempts to escape", "breaks free"), 0.87),
+    ("pursuit", ("moves toward", "move toward", "closing distance", "closes in", "gives chase"), 0.86),
+    ("confrontation", ("stands against", "stand against", "faces off", "faces ", "direct standoff"), 0.85),
+    ("observation", ("observing silently", "watching silently", "keeps watching", "from a distance"), 0.84),
+]
+
+INTENT_KEYWORD_MAP: list[tuple[str, tuple[str, ...]]] = [
+    ("pursuit", ("chase", "run", "follow", "track", "hunt")),
+    ("confrontation", ("fight", "argue", "attack", "clash", "challenge")),
+    ("threat", ("danger", "fear", "control", "menace", "intimidate", "threat")),
+    ("escape", ("escape", "flee", "evade", "break out")),
+    ("support", ("help", "comfort", "assist", "protect")),
+    ("dialogue", ("talk", "say", "explain", "discuss", "converse")),
+    ("reveal", ("discover", "realize", "uncover", "reveal")),
+    ("observation", ("watch", "observe", "notice", "scan")),
+]
+
 
 class AudioLayerRef(BaseModel):
     kind: str
@@ -220,22 +251,59 @@ def _estimate_scene_intent(scene: dict[str, Any], scene_index: int) -> tuple[str
             _clean_str(scene.get("sceneGoal")),
         ]
     ).lower()
-    keyword_map = [
-        ("pursuit", ("chase", "run", "follow")),
-        ("confrontation", ("fight", "argue", "attack")),
-        ("threat", ("danger", "fear", "control")),
-        ("escape", ("escape", "flee")),
-        ("support", ("help", "comfort")),
-        ("dialogue", ("talk", "say", "explain")),
-        ("reveal", ("discover", "realize")),
-        ("observation", ("watch", "observe")),
-    ]
-    for intent, keywords in keyword_map:
+    for intent, phrases, confidence in INTENT_PHRASE_PATTERNS:
+        if any(phrase in scene_blob for phrase in phrases):
+            return intent, confidence
+    for intent, keywords in INTENT_KEYWORD_MAP:
         if any(keyword in scene_blob for keyword in keywords):
             return intent, 0.82
     if scene_index == 0:
         return "setup", 0.58
     return "transition", 0.5
+
+
+def _extract_intent_matches(scene: dict[str, Any], intent: str) -> list[str]:
+    scene_blob = " ".join(
+        [
+            _clean_str(scene.get("intent")),
+            _clean_str(scene.get("sceneText")),
+            _clean_str(scene.get("visualDescription")),
+            _clean_str(scene.get("sceneMeaning")),
+            _clean_str(scene.get("summary")),
+            _clean_str(scene.get("title")),
+            _clean_str(scene.get("sceneNarrativeStep")),
+            _clean_str(scene.get("sceneGoal")),
+        ]
+    ).lower()
+    matches: list[str] = []
+    for mapped_intent, phrases, _ in INTENT_PHRASE_PATTERNS:
+        if mapped_intent == intent:
+            matches.extend([phrase for phrase in phrases if phrase in scene_blob])
+    for mapped_intent, keywords in INTENT_KEYWORD_MAP:
+        if mapped_intent == intent:
+            matches.extend([keyword for keyword in keywords if keyword in scene_blob])
+    return list(dict.fromkeys(matches))
+
+
+def _map_intent_to_render_mode(
+    intent: str,
+    audio_segment_type: AudioSegmentType,
+    has_vocal_rhythm: bool,
+) -> tuple[list[RenderMode], float]:
+    normalized_intent = _clean_str(intent).lower()
+    preferred_modes = list(INTENT_RENDER_PREFERENCES.get(normalized_intent, (RenderMode.i2v,)))
+    if normalized_intent == "dialogue":
+        preferred_modes = [RenderMode.lip_sync, RenderMode.i2v] if has_vocal_rhythm else [RenderMode.i2v]
+    if audio_segment_type == AudioSegmentType.narration and RenderMode.lip_sync in preferred_modes:
+        preferred_modes = [mode for mode in preferred_modes if mode != RenderMode.lip_sync] or [RenderMode.i2v]
+    if audio_segment_type == AudioSegmentType.local_phrase and RenderMode.lip_sync in preferred_modes:
+        preferred_modes = [mode for mode in preferred_modes if mode != RenderMode.lip_sync] or [RenderMode.i2v]
+    priority = 0.64 if normalized_intent in INTENT_RENDER_PREFERENCES else 0.4
+    if has_vocal_rhythm and normalized_intent == "dialogue":
+        priority = max(priority, 0.88)
+    if normalized_intent in {"confrontation", "reveal", "transition"}:
+        priority = max(priority, 0.72)
+    return preferred_modes, round(priority, 2)
 
 
 def build_project_planning_input(payload: dict[str, Any]) -> ProjectPlanningInput:
@@ -408,20 +476,43 @@ def _select_render_mode(
     audio_segment_type: AudioSegmentType,
     has_vocal_rhythm: bool,
     lipsync_policy: LipSyncPolicy,
-) -> tuple[RenderMode, str]:
+) -> tuple[RenderMode, str, list[RenderMode], float]:
     wants_lipsync = bool(scene.get("isLipSync") is True or scene.get("lipSync") is True)
+    scene_intent_raw = _clean_str(scene.get("intent")).lower()
+    estimated_intent, _ = _estimate_scene_intent(scene, -1)
+    scene_intent = scene_intent_raw if scene_intent_raw in SCENE_INTENTS else estimated_intent
+    intent_modes, intent_priority = _map_intent_to_render_mode(scene_intent, audio_segment_type, has_vocal_rhythm)
+    selected_mode: RenderMode
+    selected_reason: str
     if wants_lipsync and lipsync_policy.allowed and has_vocal_rhythm:
-        return RenderMode.lip_sync, "music_vocal_scene_with_rhythm_and_supported_framing"
-    if _is_continuation(scene):
-        return RenderMode.continuation, "continuation_of_previous_visual_flow"
-    audio_accent = _has_audio_accent(scene, audio_segment_type)
-    if _needs_controlled_transition(scene):
-        if audio_accent:
-            return RenderMode.f_l_as, "controlled_a_to_b_transition_aligned_to_audio_accent"
-        return RenderMode.f_l, "controlled_a_to_b_transition_without_audio_accent"
-    if audio_accent:
-        return RenderMode.i2v_as, "audio_sensitive_motion_without_speech_articulation"
-    return RenderMode.i2v, "base_single_frame_animation_without_forced_articulation"
+        selected_mode = RenderMode.lip_sync
+        selected_reason = "music_vocal_scene_with_rhythm_and_supported_framing"
+    elif _is_continuation(scene):
+        selected_mode = RenderMode.continuation
+        selected_reason = "continuation_of_previous_visual_flow"
+    else:
+        audio_accent = _has_audio_accent(scene, audio_segment_type)
+        if _needs_controlled_transition(scene):
+            if audio_accent:
+                selected_mode = RenderMode.f_l_as
+                selected_reason = "controlled_a_to_b_transition_aligned_to_audio_accent"
+            else:
+                selected_mode = RenderMode.f_l
+                selected_reason = "controlled_a_to_b_transition_without_audio_accent"
+        elif audio_accent:
+            selected_mode = RenderMode.i2v_as
+            selected_reason = "audio_sensitive_motion_without_speech_articulation"
+        else:
+            selected_mode = RenderMode.i2v
+            selected_reason = "base_single_frame_animation_without_forced_articulation"
+    if selected_mode not in intent_modes:
+        selected_reason = (
+            f"{selected_reason}|intent_soft_mismatch:{scene_intent}"
+            f"|preferred:{','.join(mode.value for mode in intent_modes)}"
+        )
+    else:
+        selected_reason = f"{selected_reason}|intent_aligned:{scene_intent}"
+    return selected_mode, selected_reason, intent_modes, intent_priority
 
 
 def _motion_interpretation(render_mode: RenderMode, audio_segment_type: AudioSegmentType) -> str:
@@ -527,6 +618,10 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
     render_tasks: list[LtxRenderTask] = []
     scene_intent_by_scene: list[dict[str, str]] = []
     scene_intent_confidence: list[dict[str, Any]] = []
+    scene_intent_diagnostics: list[dict[str, Any]] = []
+    scene_intent_warnings: list[str] = []
+    transition_intent_count = 0
+    conflict_intent_count = 0
     previous_shot_id: str | None = None
 
     for idx, scene in enumerate(raw_scenes):
@@ -539,11 +634,21 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
         audio_segment_type = _infer_audio_segment_type(scene, project_input, context)
         narration_mode = _infer_narration_mode(scene, audio_segment_type)
         lipsync_policy, has_vocal_rhythm = _compute_lipsync_policy(scene, context, audio_segment_type)
-        render_mode, render_reason = _select_render_mode(scene, project_input, audio_segment_type, has_vocal_rhythm, lipsync_policy)
+        render_mode, render_reason, suggested_modes, intent_priority = _select_render_mode(
+            scene,
+            project_input,
+            audio_segment_type,
+            has_vocal_rhythm,
+            lipsync_policy,
+        )
         shot_id = f"{scene_id}__shot_001"
         scene_intent_raw = _clean_str(scene.get("intent")).lower()
         estimated_intent, estimated_confidence = _estimate_scene_intent(scene, idx)
         scene_intent = scene_intent_raw if scene_intent_raw in SCENE_INTENTS else estimated_intent
+        if scene_intent == "transition":
+            transition_intent_count += 1
+        if scene_intent in {"confrontation", "threat"}:
+            conflict_intent_count += 1
         continuation = render_mode == RenderMode.continuation
         start_frame_source = "previous_shot_last_frame" if continuation else "scene_keyframe"
         shot = PlannedShot(
@@ -593,11 +698,34 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             "confidence": round(0.95, 2) if scene_intent_raw in SCENE_INTENTS else round(estimated_confidence, 2),
             "source": "planner" if scene_intent_raw in SCENE_INTENTS else "estimated",
         })
+        matched_keywords = _extract_intent_matches(scene, scene_intent)
+        scene_intent_diagnostics.append(
+            {
+                "sceneId": scene_id,
+                "intent": scene_intent,
+                "confidence": round(0.95, 2) if scene_intent_raw in SCENE_INTENTS else round(estimated_confidence, 2),
+                "source": "planner" if scene_intent_raw in SCENE_INTENTS else "estimated",
+                "matchedKeywords": matched_keywords,
+                "suggestedRenderModes": [mode.value for mode in suggested_modes],
+                "intentRenderPriority": intent_priority,
+                "selectedRenderMode": render_mode.value,
+            }
+        )
+        if render_mode not in suggested_modes:
+            scene_intent_warnings.append("intent_render_mode_mismatch_soft")
         validation.errors.extend(shot_validation.errors)
         validation.warnings.extend(shot_validation.warnings)
         previous_shot_id = shot_id
 
+    if raw_scenes and transition_intent_count > max(1, len(raw_scenes) // 2):
+        scene_intent_warnings.append("scene_intent_transition_overuse")
+    if len(raw_scenes) >= 3 and conflict_intent_count == 0:
+        scene_intent_warnings.append("scene_intent_conflict_missing")
+    if any(item in {"scene_intent_transition_overuse", "scene_intent_conflict_missing"} for item in scene_intent_warnings):
+        scene_intent_warnings.append("scenes lack clear narrative intent or progression")
+
     validation.errors = list(dict.fromkeys(validation.errors))
+    validation.warnings.extend(scene_intent_warnings)
     validation.warnings = list(dict.fromkeys(validation.warnings))
     validation.valid = len(validation.errors) == 0
 
@@ -615,6 +743,7 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             "globalMusicTrackGeneralized": bool(project_input.global_music_track_url),
             "sceneIntentByScene": scene_intent_by_scene,
             "sceneIntentConfidence": scene_intent_confidence,
-            "sceneIntentWarnings": [],
+            "sceneIntentWarnings": list(dict.fromkeys(scene_intent_warnings)),
+            "sceneIntentDiagnostics": scene_intent_diagnostics,
         },
     )
