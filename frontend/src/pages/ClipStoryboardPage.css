@@ -4129,6 +4129,137 @@ body.ps_clip_fullscreen .mainCol {
   grid-template-columns: 320px minmax(0, 1fr);
 }
 
+.clipSB_scenarioEditorTopTabs {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  display: grid;
+  gap: 8px;
+}
+
+.clipSB_scenarioEditorTabsRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.clipSB_scenarioEditorTabBtn {
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.04);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 7px 11px;
+  cursor: pointer;
+}
+
+.clipSB_scenarioEditorTabBtn.isActive {
+  background: rgba(120,190,255,0.2);
+  border-color: rgba(120,190,255,0.6);
+}
+
+.clipSB_scenarioEditorTabPanel {
+  border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+  padding: 10px;
+  max-height: 30vh;
+  overflow: auto;
+}
+
+.clipSB_scenarioEditorTabBody {
+  display: grid;
+  gap: 8px;
+}
+
+.clipSB_scenarioEditorSimpleRow {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+}
+
+.clipSB_scenarioEditorDebug {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.clipSB_scenarioEditorSceneList {
+  overflow: auto;
+}
+
+.clipSB_scenarioEditorWork {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.clipSB_scenarioEditorGlobalAudio,
+.clipSB_scenarioEditorBlock {
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.clipSB_scenarioEditorSceneTitle {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.clipSB_scenarioEditorBlockHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.clipSB_scenarioEditorBlockHead h4 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.clipSB_scenarioEditorBtnRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.clipSB_scenarioEditorImagePreview,
+.clipSB_scenarioEditorVideoPreview {
+  width: 100%;
+  max-height: 230px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.35);
+  object-fit: contain;
+}
+
+.clipSB_scenarioEditorBadgeRow {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.clipSB_checkRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.clipSB_tagStatus--idle { opacity: 0.75; }
+.clipSB_tagStatus--loading { background: rgba(120,190,255,0.2); }
+.clipSB_tagStatus--done { background: rgba(72,201,123,0.22); }
+.clipSB_tagStatus--error { background: rgba(255,109,109,0.24); }
+
 .clipSB_scenarioEditorSection {
   border-radius: 10px;
   background: rgba(255,255,255,0.03);
