@@ -4366,13 +4366,18 @@ body.ps_clip_fullscreen .mainCol {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  padding-bottom: 12px;
+}
+
+.clipSB_scenarioBgAudioGenerateCol .clipSB_scenarioEditorBtnRow {
+  margin-top: auto;
 }
 
 .clipSB_scenarioBgAudioPrompt {
-  min-height: 84px;
+  min-height: 128px;
   resize: vertical;
   flex: 0 1 auto;
-  max-height: min(38vh, 320px);
+  max-height: min(44vh, 360px);
   overflow-y: auto;
 }
 
