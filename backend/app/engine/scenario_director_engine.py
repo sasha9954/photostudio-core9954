@@ -33,6 +33,14 @@ JSON_ONLY_RETRY_SUFFIX = (
     "HARD CONTRACT: narration_mode must be present in every scene, must be a string, must never be null, and allowed values are full, duck, pause. "
     "If unsure use full."
 )
+MASTER_JSON_RETRY_SUFFIX = (
+    "\n\nRETRY OVERRIDE: Return ONLY JSON. No markdown. No comments. "
+    "MASTER MODE ONLY. DO NOT generate scenes. Keep fields short."
+)
+SCENES_JSON_RETRY_SUFFIX = (
+    "\n\nRETRY OVERRIDE: Return ONLY JSON. No markdown. No comments. "
+    "SCENES MODE ONLY. Keep short fields only."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2712,3 +2720,272 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             ),
         },
     }
+
+
+def _build_master_request_text(payload: dict[str, Any], *, audio_context: dict[str, Any], audio_analysis: dict[str, Any], retry_level: int = 0) -> str:
+    base = _build_request_text(payload, audio_context=audio_context, audio_analysis=audio_analysis, audio_guidance={})
+    retry_hint = ""
+    if retry_level >= 1:
+        retry_hint += MASTER_JSON_RETRY_SUFFIX
+    if retry_level >= 2:
+        retry_hint += "\nRETRY 2 OVERRIDE: Reduce acts to 5. Minimal output."
+    return (
+        f"{base}\n\n"
+        "MASTER MODE:\n"
+        "- DO NOT generate scenes.\n"
+        "- Return only world truth and story arc.\n"
+        "- Keep summary <= 300 chars.\n"
+        "- Keep acts count between 1 and 8.\n"
+        "- Keep text compact.\n"
+        "Return JSON contract:\n"
+        "{\n"
+        '  "audioUnderstanding": {},\n'
+        '  "worldContext": "",\n'
+        '  "narrativeStrategy": {\n'
+        '    "didAudioRemainPrimary": true,\n'
+        '    "didDirectorNoteOverrideAudio": false\n'
+        "  },\n"
+        '  "storyArc": {\n'
+        '    "summary": "",\n'
+        '    "acts": [\n'
+        "      {\n"
+        '        "id": "A1",\n'
+        '        "approxStart": 0,\n'
+        '        "approxEnd": 30,\n'
+        '        "purpose": "",\n'
+        '        "whatFromAudioDefinesThisAct": ""\n'
+        "      }\n"
+        "    ]\n"
+        "  }\n"
+        "}\n"
+        f"{retry_hint}"
+    )
+
+
+def _short_text(value: Any, *, limit: int = 160) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _sanitize_master_output(parsed_payload: dict[str, Any]) -> dict[str, Any]:
+    audio_understanding = parsed_payload.get("audioUnderstanding")
+    if not isinstance(audio_understanding, dict):
+        audio_understanding = {}
+    world_context = _short_text(
+        parsed_payload.get("worldContext")
+        or (audio_understanding.get("worldContext") if isinstance(audio_understanding, dict) else "")
+        or "",
+        limit=300,
+    )
+    narrative_strategy = parsed_payload.get("narrativeStrategy") if isinstance(parsed_payload.get("narrativeStrategy"), dict) else {}
+    story_arc = parsed_payload.get("storyArc") if isinstance(parsed_payload.get("storyArc"), dict) else {}
+    acts_raw = story_arc.get("acts") if isinstance(story_arc.get("acts"), list) else []
+    acts: list[dict[str, Any]] = []
+    for idx, act in enumerate(acts_raw[:8], start=1):
+        item = act if isinstance(act, dict) else {}
+        acts.append(
+            {
+                "id": _short_text(item.get("id") or f"A{idx}", limit=12) or f"A{idx}",
+                "approxStart": _safe_float(item.get("approxStart"), 0.0),
+                "approxEnd": _safe_float(item.get("approxEnd"), 0.0),
+                "purpose": _short_text(item.get("purpose"), limit=160),
+                "whatFromAudioDefinesThisAct": _short_text(item.get("whatFromAudioDefinesThisAct"), limit=160),
+            }
+        )
+    return {
+        "audioUnderstanding": audio_understanding,
+        "worldContext": world_context,
+        "narrativeStrategy": {
+            "didAudioRemainPrimary": _coerce_bool(narrative_strategy.get("didAudioRemainPrimary"), True),
+            "didDirectorNoteOverrideAudio": _coerce_bool(narrative_strategy.get("didDirectorNoteOverrideAudio"), False),
+        },
+        "storyArc": {
+            "summary": _short_text(story_arc.get("summary"), limit=300),
+            "acts": acts,
+        },
+    }
+
+
+def run_scenario_director_master(payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = (getattr(settings, "GEMINI_API_KEY", None) or os.getenv("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        raise ScenarioDirectorError("gemini_api_key_missing", "GEMINI_API_KEY is missing for Scenario Director generation.", status_code=503)
+
+    audio_context = _normalize_audio_context(payload)
+    audio_analysis = _build_audio_analysis_fallback(_safe_float(audio_context.get("audioDurationSec"), 0.0), "analysis_skipped")
+    if str(audio_context.get("sourceMode") or "").upper() == "AUDIO" and audio_context.get("hasAudio"):
+        audio_analysis = _analyze_audio_for_scenario_director(audio_context)
+
+    attempted_models: list[str] = []
+    model_used = DEFAULT_TEXT_MODEL
+    last_error: ScenarioDirectorError | None = None
+    for retry_level in range(0, 3):
+        body = {
+            "systemInstruction": {
+                "parts": [
+                    {
+                        "text": (
+                            "You are the production Scenario Director for PhotoStudio COMFY. Return strict JSON only. "
+                            "MASTER MODE: DO NOT generate scenes. Return only world truth and story arc."
+                        )
+                    }
+                ]
+            },
+            "contents": [{"role": "user", "parts": [{"text": _build_master_request_text(payload, audio_context=audio_context, audio_analysis=audio_analysis, retry_level=retry_level)}]}],
+            "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json", "maxOutputTokens": 4096},
+        }
+        response, model_used, retry_models = _send_director_request(api_key, body)
+        attempted_models.extend(model for model in retry_models if model not in attempted_models)
+        if not isinstance(response, dict) or response.get("__http_error__"):
+            last_error = ScenarioDirectorError("gemini_request_failed", "Gemini request failed in Scenario Director master mode.", status_code=502)
+            continue
+        raw_text = _extract_gemini_text(response)
+        parsed_payload = _extract_json_object(raw_text)
+        if isinstance(parsed_payload, dict):
+            sanitized = _sanitize_master_output(parsed_payload)
+            return {
+                "ok": True,
+                "mode": "master",
+                "masterOutput": sanitized,
+                "meta": {"plannerSource": "gemini", "modelUsed": model_used, "attemptedModels": attempted_models, "retryCount": retry_level},
+            }
+        last_error = ScenarioDirectorError("gemini_invalid_json", "Gemini returned invalid JSON for Scenario Director master mode.", status_code=502)
+
+    raise last_error or ScenarioDirectorError("gemini_invalid_json", "Gemini returned invalid JSON for Scenario Director master mode.", status_code=502)
+
+
+def _build_scenes_request_text(
+    payload: dict[str, Any],
+    *,
+    master_output: dict[str, Any],
+    start_sec: float,
+    end_sec: float,
+    expected_scenes: int,
+    audio_analysis: dict[str, Any],
+    retry_level: int = 0,
+) -> str:
+    retry_hint = ""
+    if retry_level >= 1:
+        retry_hint += SCENES_JSON_RETRY_SUFFIX + "\nRETRY 1 OVERRIDE: Return ONLY JSON. Short fields only."
+    if retry_level >= 2:
+        retry_hint += "\nRETRY 2 OVERRIDE: Reduce scenes to 5. Minimal output."
+    compact_audio = {
+        "audioDurationSec": _safe_float(audio_analysis.get("audioDurationSec"), 0.0),
+        "phrases": (audio_analysis.get("phrases") or [])[:16],
+        "pauseWindows": (audio_analysis.get("pauseWindows") or [])[:16],
+        "energyTransitions": (audio_analysis.get("energyTransitions") or [])[:16],
+    }
+    return (
+        "SCENES MODE:\n"
+        "- DO NOT redefine story.\n"
+        "- Use provided MASTER as immutable truth.\n"
+        "- Do not rewrite worldContext.\n"
+        "- Do not expand beyond given time window.\n"
+        "- Keep scene count <= expectedScenes and <= 8.\n"
+        "- Keep every string <= 160 chars.\n"
+        "Return JSON contract:\n"
+        "{\n"
+        '  "scenes": [\n'
+        "    {\n"
+        '      "id": "S1",\n'
+        '      "t0": 0,\n'
+        '      "t1": 5,\n'
+        '      "whatFromAudioThisSceneUses": "",\n'
+        '      "audioAnchorEvidence": "",\n'
+        '      "frame": "",\n'
+        '      "action": "",\n'
+        '      "confidence": 0.8\n'
+        "    }\n"
+        "  ],\n"
+        '  "diagnostics": { "audioGroundingScore": 0.82 }\n'
+        "}\n\n"
+        f"Runtime: {json.dumps({'timeWindow': {'startSec': start_sec, 'endSec': end_sec}, 'expectedScenes': expected_scenes, 'masterOutput': master_output, 'audioAnalysis': compact_audio, 'metadata': payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}}, ensure_ascii=False)}"
+        f"{retry_hint}"
+    )
+
+
+def _sanitize_scenes_output(parsed_payload: dict[str, Any], *, start_sec: float, end_sec: float, max_scenes: int) -> dict[str, Any]:
+    scenes_raw = parsed_payload.get("scenes") if isinstance(parsed_payload.get("scenes"), list) else []
+    scenes: list[dict[str, Any]] = []
+    for idx, scene in enumerate(scenes_raw[:max_scenes], start=1):
+        item = scene if isinstance(scene, dict) else {}
+        t0 = max(start_sec, min(end_sec, _safe_float(item.get("t0"), start_sec)))
+        t1 = max(t0, min(end_sec, _safe_float(item.get("t1"), t0)))
+        scenes.append(
+            {
+                "id": _short_text(item.get("id") or f"S{idx}", limit=12) or f"S{idx}",
+                "t0": round(t0, 3),
+                "t1": round(t1, 3),
+                "whatFromAudioThisSceneUses": _short_text(item.get("whatFromAudioThisSceneUses"), limit=160),
+                "audioAnchorEvidence": _short_text(item.get("audioAnchorEvidence"), limit=160),
+                "frame": _short_text(item.get("frame"), limit=160),
+                "action": _short_text(item.get("action"), limit=160),
+                "confidence": max(0.0, min(1.0, _safe_float(item.get("confidence"), 0.5))),
+            }
+        )
+    diagnostics_raw = parsed_payload.get("diagnostics") if isinstance(parsed_payload.get("diagnostics"), dict) else {}
+    return {
+        "scenes": scenes,
+        "diagnostics": {"audioGroundingScore": max(0.0, min(1.0, _safe_float(diagnostics_raw.get("audioGroundingScore"), 0.0)))},
+    }
+
+
+def run_scenario_director_scenes(payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = (getattr(settings, "GEMINI_API_KEY", None) or os.getenv("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        raise ScenarioDirectorError("gemini_api_key_missing", "GEMINI_API_KEY is missing for Scenario Director generation.", status_code=503)
+
+    master_output = payload.get("master_output") if isinstance(payload.get("master_output"), dict) else {}
+    if not master_output:
+        raise ScenarioDirectorError("master_output_missing", "master_output is required for Scenario Director scenes mode.", status_code=422)
+    time_window = payload.get("timeWindow") if isinstance(payload.get("timeWindow"), dict) else {}
+    start_sec = max(0.0, _safe_float(time_window.get("startSec"), 0.0))
+    raw_end_sec = _safe_float(time_window.get("endSec"), start_sec + 60.0)
+    end_sec = raw_end_sec if raw_end_sec >= start_sec else start_sec
+    if (end_sec - start_sec) > 60.0:
+        end_sec = round(start_sec + 60.0, 3)
+    expected_scenes = int(_safe_float(payload.get("expectedScenes"), max(1, round((end_sec - start_sec) / 8.0))))
+    expected_scenes = max(1, min(expected_scenes, 8))
+
+    audio_context = _normalize_audio_context(payload)
+    audio_analysis = _build_audio_analysis_fallback(_safe_float(audio_context.get("audioDurationSec"), 0.0), "analysis_skipped")
+    if str(audio_context.get("sourceMode") or "").upper() == "AUDIO" and audio_context.get("hasAudio"):
+        audio_analysis = _analyze_audio_for_scenario_director(audio_context)
+
+    attempted_models: list[str] = []
+    model_used = DEFAULT_TEXT_MODEL
+    last_error: ScenarioDirectorError | None = None
+    for retry_level in range(0, 3):
+        body = {
+            "systemInstruction": {
+                "parts": [
+                    {
+                        "text": (
+                            "You are the production Scenario Director for PhotoStudio COMFY. Return strict JSON only. "
+                            "SCENES MODE: Do not redefine story. Use MASTER as immutable truth. Do not rewrite worldContext."
+                        )
+                    }
+                ]
+            },
+            "contents": [{"role": "user", "parts": [{"text": _build_scenes_request_text(payload, master_output=master_output, start_sec=start_sec, end_sec=end_sec, expected_scenes=expected_scenes, audio_analysis=audio_analysis, retry_level=retry_level)}]}],
+            "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json", "maxOutputTokens": 4096},
+        }
+        response, model_used, retry_models = _send_director_request(api_key, body)
+        attempted_models.extend(model for model in retry_models if model not in attempted_models)
+        if not isinstance(response, dict) or response.get("__http_error__"):
+            last_error = ScenarioDirectorError("gemini_request_failed", "Gemini request failed in Scenario Director scenes mode.", status_code=502)
+            continue
+        raw_text = _extract_gemini_text(response)
+        parsed_payload = _extract_json_object(raw_text)
+        if isinstance(parsed_payload, dict):
+            max_scenes = 5 if retry_level >= 2 else expected_scenes
+            sanitized = _sanitize_scenes_output(parsed_payload, start_sec=start_sec, end_sec=end_sec, max_scenes=max_scenes)
+            return {
+                "ok": True,
+                "mode": "scenes",
+                "timeWindow": {"startSec": start_sec, "endSec": end_sec},
+                **sanitized,
+                "meta": {"plannerSource": "gemini", "modelUsed": model_used, "attemptedModels": attempted_models, "retryCount": retry_level, "expectedScenes": expected_scenes},
+            }
+        last_error = ScenarioDirectorError("gemini_invalid_json", "Gemini returned invalid JSON for Scenario Director scenes mode.", status_code=502)
+
+    raise last_error or ScenarioDirectorError("gemini_invalid_json", "Gemini returned invalid JSON for Scenario Director scenes mode.", status_code=502)
