@@ -1,6 +1,8 @@
 import ast
+import base64
 import json
 import logging
+import mimetypes
 import os
 import re
 import tempfile
@@ -2399,6 +2401,289 @@ def _parse_storyboard_payload(raw_text: str) -> dict[str, Any]:
     return repaired
 
 
+def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
+    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
+    director_note = str(controls.get("directorNote") or controls.get("director_note") or "").strip()
+    return (
+        "You are Scenario Director. AUDIO is the primary source of truth.\n"
+        "Do not invent story that contradicts spoken audio.\n"
+        "Scene timing must follow speech phrases, pauses, and energy shifts.\n"
+        "Every scene must be grounded in spoken content.\n"
+        "Return strict JSON only.\n"
+        f"Director note: {director_note if director_note else 'empty'}\n"
+        "Output JSON contract:\n"
+        "{\n"
+        '  "transcript": [\n'
+        '    { "t0": 0.0, "t1": 0.0, "text": "" }\n'
+        "  ],\n"
+        '  "audioStructure": {\n'
+        '    "pauses": [],\n'
+        '    "energyPeaks": [],\n'
+        '    "transitions": [],\n'
+        '    "pacingType": "",\n'
+        '    "rhythmDescription": ""\n'
+        "  },\n"
+        '  "semanticTimeline": [\n'
+        "    {\n"
+        '      "t0": 0.0,\n'
+        '      "t1": 0.0,\n'
+        '      "text": "",\n'
+        '      "meaning": "",\n'
+        '      "visualFocus": "",\n'
+        '      "emotion": "",\n'
+        '      "sceneType": "intro",\n'
+        '      "transitionHint": ""\n'
+        "    }\n"
+        "  ],\n"
+        '  "scenes": [\n'
+        "    {\n"
+        '      "sceneId": "S1",\n'
+        '      "t0": 0.0,\n'
+        '      "t1": 0.0,\n'
+        '      "duration": 0.0,\n'
+        '      "summary": "",\n'
+        '      "visualPrompt": "",\n'
+        '      "characters": [],\n'
+        '      "environment": "",\n'
+        '      "camera": "",\n'
+        '      "motion": "",\n'
+        '      "transitionIn": "",\n'
+        '      "transitionOut": ""\n'
+        "    }\n"
+        "  ],\n"
+        '  "globalStory": {\n'
+        '    "overallNarrative": "",\n'
+        '    "mainTopic": "",\n'
+        '    "worldDescription": "",\n'
+        '    "tone": ""\n'
+        "  },\n"
+        '  "debug": {\n'
+        '    "audioUsage": "",\n'
+        '    "alignment": "",\n'
+        '    "boundaryLogic": "",\n'
+        '    "signals": ""\n'
+        "  }\n"
+        "}"
+    )
+
+
+def _build_inline_audio_part(audio_context: dict[str, Any]) -> dict[str, Any]:
+    audio_url = str(audio_context.get("audioUrl") or "").strip()
+    resolution = _resolve_audio_source_for_analysis(audio_url)
+    if not resolution.get("ok"):
+        raise ScenarioDirectorError(
+            "audio_source_unavailable",
+            "Audio source is required for audio-first single-call mode.",
+            status_code=400,
+            details={"audioUrl": audio_url or None, "reason": resolution.get("reason"), "hint": resolution.get("hint")},
+        )
+
+    mime_type = (
+        str(audio_context.get("audioMimeType") or "").strip()
+        or str(audio_context.get("mimeType") or "").strip()
+        or mimetypes.guess_type(str(audio_url or ""))[0]
+        or "audio/mpeg"
+    )
+    raw_audio = b""
+    if resolution.get("mode") == "local_file" and resolution.get("path"):
+        with open(str(resolution.get("path")), "rb") as fp:
+            raw_audio = fp.read()
+    else:
+        fetch_url = str(resolution.get("url") or "").strip()
+        if not fetch_url:
+            raise ScenarioDirectorError(
+                "audio_source_unavailable",
+                "Resolved audio source has no readable path or URL.",
+                status_code=400,
+                details={"audioUrl": audio_url or None, "reason": resolution.get("reason")},
+            )
+        response = requests.get(fetch_url, timeout=60)
+        response.raise_for_status()
+        raw_audio = response.content
+        mime_type = response.headers.get("content-type", mime_type).split(";")[0].strip() or mime_type
+    if not raw_audio:
+        raise ScenarioDirectorError(
+            "audio_source_unavailable",
+            "Audio file is empty for audio-first single-call mode.",
+            status_code=400,
+            details={"audioUrl": audio_url or None},
+        )
+    return {"inlineData": {"mimeType": mime_type, "data": base64.b64encode(raw_audio).decode("utf-8")}}
+
+
+def _parse_audio_first_single_call_payload(raw_text: str) -> dict[str, Any]:
+    extracted = _extract_json_object(raw_text)
+    if extracted is None:
+        raise ScenarioDirectorError(
+            "gemini_invalid_json",
+            "Gemini returned invalid JSON for audio-first single-call mode.",
+            status_code=502,
+            details={"rawPreview": str(raw_text or "")[:1000]},
+        )
+    required = ("transcript", "audioStructure", "semanticTimeline", "scenes")
+    missing = [key for key in required if key not in extracted]
+    if missing:
+        raise ScenarioDirectorError(
+            "gemini_contract_invalid",
+            "Gemini audio-first payload missed required fields.",
+            status_code=502,
+            details={"missingFields": missing, "rawPreview": str(raw_text or "")[:1000]},
+        )
+    return extracted
+
+
+def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]:
+    global_story = result.get("globalStory") if isinstance(result.get("globalStory"), dict) else {}
+    transcript_rows = result.get("transcript") if isinstance(result.get("transcript"), list) else []
+    semantic_timeline = result.get("semanticTimeline") if isinstance(result.get("semanticTimeline"), list) else []
+    raw_scenes = result.get("scenes") if isinstance(result.get("scenes"), list) else []
+    transcript_text_parts = [
+        str(item.get("text") or "").strip()
+        for item in transcript_rows
+        if isinstance(item, dict) and str(item.get("text") or "").strip()
+    ]
+    voice_script = " ".join(transcript_text_parts).strip()
+    legacy_scenes: list[dict[str, Any]] = []
+    for idx, scene in enumerate(raw_scenes, start=1):
+        if not isinstance(scene, dict):
+            continue
+        scene_start = _safe_float(scene.get("t0"), 0.0)
+        scene_end = _safe_float(scene.get("t1"), scene_start)
+        scene_duration = _safe_float(scene.get("duration"), max(0.0, scene_end - scene_start))
+        timeline_hit = semantic_timeline[idx - 1] if idx - 1 < len(semantic_timeline) and isinstance(semantic_timeline[idx - 1], dict) else {}
+        legacy_scenes.append(
+            {
+                "scene_id": str(scene.get("sceneId") or f"S{idx}").strip() or f"S{idx}",
+                "time_start": scene_start,
+                "time_end": scene_end,
+                "duration": scene_duration,
+                "actors": [str(actor).strip() for actor in (scene.get("characters") or []) if str(actor).strip()],
+                "location": str(scene.get("environment") or "").strip(),
+                "props": [],
+                "emotion": str(timeline_hit.get("emotion") or "").strip(),
+                "scene_goal": str(scene.get("summary") or "").strip(),
+                "frame_description": str(scene.get("summary") or "").strip(),
+                "action_in_frame": str(scene.get("motion") or "").strip(),
+                "camera": str(scene.get("camera") or "").strip(),
+                "image_prompt": str(scene.get("visualPrompt") or "").strip(),
+                "video_prompt": str(scene.get("visualPrompt") or "").strip(),
+                "ltx_mode": "i2v_as",
+                "ltx_reason": "Audio-first single-call default mapping.",
+                "start_frame_source": "new",
+                "needs_two_frames": False,
+                "continuation_from_previous": idx > 1,
+                "narration_mode": "full",
+                "local_phrase": str(timeline_hit.get("text") or "").strip() or None,
+                "sfx": "",
+                "music_mix_hint": "off",
+                "whatFromAudioThisSceneUses": str(timeline_hit.get("meaning") or scene.get("summary") or "").strip(),
+                "directorNoteLayer": "",
+                "boundaryReason": "phrase",
+                "audioAnchorEvidence": str(timeline_hit.get("transitionHint") or "").strip(),
+                "confidence": 0.9,
+            }
+        )
+    return {
+        "story_summary": str(global_story.get("overallNarrative") or "").strip(),
+        "full_scenario": str(global_story.get("overallNarrative") or "").strip(),
+        "voice_script": voice_script,
+        "music_prompt": "",
+        "director_summary": "Audio-first single-call Gemini output.",
+        "audio_understanding": {
+            "main_topic": str(global_story.get("mainTopic") or "").strip(),
+            "world_context": str(global_story.get("worldDescription") or "").strip(),
+            "implied_events": [],
+            "emotional_tone_from_audio": str(global_story.get("tone") or "").strip(),
+            "confidence_audio_understood": 0.9,
+            "what_from_audio_defines_world": str(global_story.get("worldDescription") or "").strip(),
+        },
+        "conflict_analysis": {
+            "audio_vs_director_note_conflict": False,
+            "conflict_description": "",
+            "resolution_strategy": "",
+        },
+        "narrative_strategy": {
+            "story_core_source": "audio",
+            "did_audio_remain_primary": True,
+            "did_director_note_override_audio": False,
+            "why": "Audio-first single-call output.",
+        },
+        "story": {
+            "title": str(global_story.get("mainTopic") or "").strip(),
+            "summary": str(global_story.get("overallNarrative") or "").strip(),
+            "how_director_note_was_integrated": "",
+            "how_romance_exists_inside_audio_world": "",
+        },
+        "diagnostics": {
+            "used_audio_as_content_source": True,
+            "used_audio_only_as_mood": False,
+            "did_fallback_from_audio_content_truth": False,
+            "biggest_risk": "",
+            "what_may_be_wrong": "",
+            "planner_mode": "full_audio_first",
+            "how_director_note_was_integrated": "",
+        },
+        "scenes": legacy_scenes or [{"scene_id": "S1"}],
+    }
+
+
+def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[str, Any], api_key: str) -> dict[str, Any]:
+    logger.info("[SCENARIO DIRECTOR] audio-first single-call mode")
+    prompt = _build_audio_first_single_call_prompt(payload)
+    logger.info("[SCENARIO DIRECTOR] sending inline audio to Gemini")
+    inline_audio_part = _build_inline_audio_part(audio_context)
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}, inline_audio_part]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+            "maxOutputTokens": 8192,
+        },
+    }
+    response, model_used, attempted_models = _send_director_request(api_key, body)
+    if not isinstance(response, dict):
+        raise ScenarioDirectorError("gemini_request_failed", "Gemini did not return a JSON object.", status_code=502)
+    if response.get("__http_error__"):
+        status_code = int(response.get("status") or 502)
+        raise ScenarioDirectorError(
+            "gemini_request_failed",
+            f"Gemini request failed with HTTP {status_code}: {str(response.get('text') or '')[:400]}",
+            status_code=502,
+            details={"httpStatus": status_code},
+        )
+    raw_text = _extract_gemini_text(response)
+    parsed_single = _parse_audio_first_single_call_payload(raw_text)
+    logger.info("[SCENARIO DIRECTOR] received single-call json keys=%s", list(parsed_single.keys()))
+    legacy_payload = _map_single_call_to_storyboard_out(parsed_single)
+    logger.info("[SCENARIO DIRECTOR] mapped single-call result to legacy storyboardOut")
+    storyboard_out = ScenarioDirectorStoryboardOut.model_validate(legacy_payload)
+    storyboard_out = _harden_storyboard_out(storyboard_out, payload)
+    director_output = _build_director_output(storyboard_out, payload)
+    brain_package = _build_brain_package(storyboard_out, payload)
+    return {
+        "ok": True,
+        "transcript": parsed_single.get("transcript") or [],
+        "audioStructure": parsed_single.get("audioStructure") if isinstance(parsed_single.get("audioStructure"), dict) else {},
+        "semanticTimeline": parsed_single.get("semanticTimeline") or [],
+        "scenes": parsed_single.get("scenes") or [],
+        "globalStory": parsed_single.get("globalStory") if isinstance(parsed_single.get("globalStory"), dict) else {},
+        "debug": parsed_single.get("debug") if isinstance(parsed_single.get("debug"), dict) else {},
+        "storyboardOut": storyboard_out.model_dump(mode="json"),
+        "directorOutput": director_output,
+        "scenario": storyboard_out.full_scenario,
+        "voiceScript": storyboard_out.voice_script,
+        "bgMusicPrompt": storyboard_out.music_prompt,
+        "brainPackage": brain_package,
+        "meta": {
+            "plannerSource": "gemini",
+            "modelUsed": model_used,
+            "attemptedModels": attempted_models,
+            "audioFirstSingleCall": True,
+            "rawGeminiTextPreview": raw_text[:2000],
+        },
+    }
+
+
 def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     api_key = (getattr(settings, "GEMINI_API_KEY", None) or os.getenv("GEMINI_API_KEY") or "").strip()
     if not api_key:
@@ -2414,6 +2699,8 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     metadata_audio = metadata.get("audio") if isinstance(metadata.get("audio"), dict) else {}
     audio_context = _normalize_audio_context(payload)
+    if str(audio_context.get("sourceMode") or "").upper() == "AUDIO" and _coerce_bool(audio_context.get("hasAudio"), False):
+        return _run_audio_first_single_call(payload, audio_context, api_key)
     source_origin_raw = str(
         payload.get("source_origin")
         or source.get("source_origin")
