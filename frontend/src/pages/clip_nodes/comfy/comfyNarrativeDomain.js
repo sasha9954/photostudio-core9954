@@ -105,12 +105,13 @@ function resolveScenarioAudioContext(connectedInputs = {}, resolvedSource = {}) 
       ?? 0
   );
 
-  const sourceOrigin = normalizeText(
+  const detectedOrigin = normalizeText(
     audioInput?.origin
       || meta?.origin
       || meta?.sourceOrigin
       || (hasAudioSource ? "audio_node" : "")
   );
+  const sourceOrigin = hasAudioSource ? "connected" : normalizeText(resolvedSource?.origin);
 
   const mimeType = normalizeText(audioInput?.mimeType || meta?.mimeType || meta?.audio?.mimeType);
   const fileName = normalizeText(audioInput?.fileName || meta?.fileName || meta?.audio?.fileName || audioInput?.preview);
@@ -120,6 +121,7 @@ function resolveScenarioAudioContext(connectedInputs = {}, resolvedSource = {}) 
     hasAudioSource,
     audioDurationSec,
     sourceOrigin,
+    audioOrigin: detectedOrigin || (hasAudioSource ? "audio_node" : ""),
     mimeType,
     fileName,
     url,
@@ -366,7 +368,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
           mimeType: audioContext.mimeType,
           fileName: audioContext.fileName,
           url: audioContext.url || sourceValue,
-          origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
+          origin: audioContext.audioOrigin || "audio_node",
         },
       },
     },
@@ -394,7 +396,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
         mimeType: audioContext.mimeType,
         fileName: audioContext.fileName,
         url: audioContext.url || sourceValue,
-        origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
+        origin: audioContext.audioOrigin || "audio_node",
       },
     },
   };
@@ -402,11 +404,11 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   if (audioContext.hasAudioSource) {
     console.debug("[ScenarioDirector] audio payload context", {
       sourceMode: normalizeNarrativeSourceMode(resolvedSource.mode),
-      hasAudioSource: audioContext.hasAudioSource,
-      audioDurationSec: audioContext.audioDurationSec,
       source_origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
-      preferAudioOverText,
+      metadataAudioOrigin: audioContext.audioOrigin || "audio_node",
+      audioDurationSec: audioContext.audioDurationSec,
       timelineSource,
+      segmentationMode,
     });
   }
 

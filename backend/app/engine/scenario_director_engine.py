@@ -5,14 +5,14 @@ import os
 import re
 import tempfile
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from app.core.config import settings
-from app.core.static_paths import ASSETS_DIR
+from app.core.static_paths import ASSETS_DIR, BACKEND_DIR
 from app.engine.audio_analyzer import analyze_audio, derive_audio_semantic_profile
 from app.engine.gemini_rest import post_generate_content
 
@@ -534,6 +534,67 @@ def _resolve_audio_asset_path(audio_url: str | None) -> str | None:
     return None
 
 
+def _resolve_audio_source_for_analysis(audio_url: str | None) -> dict[str, Any]:
+    clean = str(audio_url or "").strip()
+    if not clean:
+        return {"ok": False, "mode": "missing", "path": None, "url": None, "normalized": "", "hint": "audio_url_missing"}
+
+    parsed = urlparse(clean)
+    if parsed.scheme in {"http", "https"}:
+        return {"ok": True, "mode": "http", "path": None, "url": clean, "normalized": clean, "hint": "audio_url_absolute"}
+
+    if parsed.scheme:
+        return {"ok": False, "mode": "invalid", "path": None, "url": None, "normalized": clean, "hint": "audio_url_not_absolute"}
+
+    normalized = clean.lstrip("/")
+    path_variants = [normalized]
+    if normalized.startswith("static/"):
+        path_variants.append(normalized[len("static/"):])
+    if normalized.startswith("assets/"):
+        path_variants.append(f"static/{normalized}")
+
+    for variant in path_variants:
+        variant_clean = variant.strip("/")
+        if not variant_clean:
+            continue
+        candidate = (BACKEND_DIR / variant_clean).resolve()
+        if candidate.is_file():
+            return {
+                "ok": True,
+                "mode": "local_file",
+                "path": str(candidate),
+                "url": None,
+                "normalized": str(candidate),
+                "hint": "audio_local_file_resolved",
+            }
+
+    asset_path = _resolve_audio_asset_path(clean)
+    if asset_path:
+        return {
+            "ok": True,
+            "mode": "local_file",
+            "path": asset_path,
+            "url": None,
+            "normalized": asset_path,
+            "hint": "audio_asset_resolved",
+        }
+
+    public_base = (getattr(settings, "PUBLIC_BASE_URL", None) or "").strip()
+    if public_base:
+        normalized_url_path = clean if clean.startswith("/") else f"/{clean}"
+        fallback_url = urljoin(public_base.rstrip("/") + "/", normalized_url_path.lstrip("/"))
+        return {
+            "ok": True,
+            "mode": "http",
+            "path": None,
+            "url": fallback_url,
+            "normalized": fallback_url,
+            "hint": "audio_public_base_url_fallback",
+        }
+
+    return {"ok": False, "mode": "missing", "path": None, "url": None, "normalized": clean, "hint": "audio_asset_not_found"}
+
+
 def _normalize_audio_context(payload: dict[str, Any]) -> dict[str, Any]:
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
@@ -567,7 +628,7 @@ def _normalize_audio_context(payload: dict[str, Any]) -> dict[str, Any]:
             duration_source = key
             break
 
-    source_origin = str(
+    source_origin_raw = str(
         payload.get("source_origin")
         or source.get("source_origin")
         or source.get("origin")
@@ -575,6 +636,8 @@ def _normalize_audio_context(payload: dict[str, Any]) -> dict[str, Any]:
         or payload.get("sourceOrigin")
         or ("connected" if source_mode == "audio" else "")
     ).strip()
+    source_origin_lower = source_origin_raw.lower()
+    source_origin = "connected" if source_origin_lower in {"connected", "audio_node", "audio_upload", "audio_generated"} else source_origin_raw
     audio_url = str(
         source.get("source_value")
         or source.get("value")
@@ -595,6 +658,7 @@ def _normalize_audio_context(payload: dict[str, Any]) -> dict[str, Any]:
         "audioDurationSource": duration_source,
         "sourceMode": source_mode.upper(),
         "sourceOrigin": source_origin or None,
+        "sourceOriginRaw": source_origin_raw or None,
         "preferAudioOverText": prefer_audio_over_text,
         "timelineSource": timeline_source,
         "segmentationMode": segmentation_mode,
@@ -621,18 +685,31 @@ def _build_audio_analysis_fallback(duration_sec: float, hint: str, source: str =
 def _analyze_audio_for_scenario_director(audio_context: dict[str, Any]) -> dict[str, Any]:
     audio_url = str(audio_context.get("audioUrl") or "").strip()
     payload_duration = _safe_float(audio_context.get("audioDurationSec"), 0.0)
-    if not audio_url:
-        return _build_audio_analysis_fallback(payload_duration, "audio_url_missing", source="missing")
+    resolution = _resolve_audio_source_for_analysis(audio_url)
+    if not resolution.get("ok"):
+        return {
+            **_build_audio_analysis_fallback(payload_duration, str(resolution.get("hint") or "audio_url_missing"), source="missing"),
+            "audioUrlRaw": audio_url or None,
+            "audioUrlNormalized": resolution.get("normalized"),
+            "audioUrlResolutionMode": resolution.get("mode"),
+        }
 
-    local_path = _resolve_audio_asset_path(audio_url)
-    source = "local_asset" if local_path else "http_download"
+    source = "local_asset" if resolution.get("mode") == "local_file" else "http_download"
     temp_path: str | None = None
     errors: list[str] = []
     try:
-        analysis = analyze_audio(local_path) if local_path else None
+        analysis = analyze_audio(str(resolution.get("path"))) if resolution.get("mode") == "local_file" and resolution.get("path") else None
         if analysis is None:
-            suffix = os.path.splitext(urlparse(audio_url).path)[1] or ".audio"
-            response = requests.get(audio_url, timeout=30)
+            fetch_url = str(resolution.get("url") or "")
+            if not fetch_url:
+                return {
+                    **_build_audio_analysis_fallback(payload_duration, "audio_url_not_absolute", source=source),
+                    "audioUrlRaw": audio_url or None,
+                    "audioUrlNormalized": resolution.get("normalized"),
+                    "audioUrlResolutionMode": "invalid",
+                }
+            suffix = os.path.splitext(urlparse(fetch_url).path)[1] or ".audio"
+            response = requests.get(fetch_url, timeout=30)
             response.raise_for_status()
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 tmp.write(response.content)
@@ -655,12 +732,18 @@ def _analyze_audio_for_scenario_director(audio_context: dict[str, Any]) -> dict[
             "hint": "analysis_ok",
             "errors": errors,
             "semantic": semantic,
+            "audioUrlRaw": audio_url or None,
+            "audioUrlNormalized": resolution.get("normalized"),
+            "audioUrlResolutionMode": resolution.get("mode"),
         }
     except Exception as exc:
         errors.append(f"audio_analysis_failed:{str(exc)[:180]}")
         return {
-            **_build_audio_analysis_fallback(payload_duration, "analysis_failed", source=source),
+            **_build_audio_analysis_fallback(payload_duration, "audio_fetch_failed", source=source),
             "errors": errors,
+            "audioUrlRaw": audio_url or None,
+            "audioUrlNormalized": resolution.get("normalized"),
+            "audioUrlResolutionMode": resolution.get("mode"),
         }
     finally:
         if temp_path and os.path.exists(temp_path):
@@ -755,7 +838,7 @@ def _resolve_effective_role_type_by_role(payload: dict[str, Any]) -> tuple[dict[
 def _is_audio_connected(payload: dict[str, Any]) -> bool:
     audio_context = _normalize_audio_context(payload)
     source_origin = str(audio_context.get("sourceOrigin") or "connected").strip().lower()
-    return bool(audio_context.get("hasAudio") and source_origin == "connected")
+    return bool(audio_context.get("hasAudio") and source_origin in {"connected", "audio_node", "audio_upload", "audio_generated"})
 
 
 def _estimate_text_overlap(text: str, anchor: str) -> float:
@@ -1720,11 +1803,36 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             status_code=503,
         )
 
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    source_meta = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+    source_audio_meta = source_meta.get("audio") if isinstance(source_meta.get("audio"), dict) else {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    metadata_audio = metadata.get("audio") if isinstance(metadata.get("audio"), dict) else {}
     audio_context = _normalize_audio_context(payload)
+    source_origin_raw = str(
+        payload.get("source_origin")
+        or source.get("source_origin")
+        or source.get("origin")
+        or metadata_audio.get("origin")
+        or payload.get("sourceOrigin")
+        or ""
+    ).strip()
+    source_origin_normalized = str(audio_context.get("sourceOrigin") or source_origin_raw or "connected").strip().lower()
+    audio_url_raw = str(
+        source.get("source_value")
+        or source.get("value")
+        or payload.get("source_value")
+        or metadata_audio.get("url")
+        or source_audio_meta.get("url")
+        or ""
+    ).strip()
+    audio_url_normalized = str(audio_context.get("audioUrl") or audio_url_raw).strip()
     audio_analysis = _build_audio_analysis_fallback(_safe_float(audio_context.get("audioDurationSec"), 0.0), "analysis_skipped")
     audio_hints: list[str] = []
     audio_errors: list[str] = []
+    audio_analysis_attempted = False
     if str(audio_context.get("sourceMode") or "").upper() == "AUDIO" and audio_context.get("hasAudio"):
+        audio_analysis_attempted = True
         audio_analysis = _analyze_audio_for_scenario_director(audio_context)
         if audio_analysis.get("ok"):
             audio_hints.append("audio_analysis_ok")
@@ -1820,6 +1928,13 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     audio_duration_sec = audio_duration_from_analysis or audio_duration_from_payload
     audio_duration_source = "analysis" if audio_duration_from_analysis > 0 else ("payload" if audio_duration_from_payload > 0 else "missing")
     audio_connected = _is_audio_connected(payload)
+    audio_connected_reason = (
+        "audio_connected_via_legacy_origin" if audio_connected and source_origin_raw.lower() in {"audio_node", "audio_upload", "audio_generated"} else "audio_connected"
+    ) if audio_connected else (
+        "source_origin_not_connected"
+        if str(audio_context.get("hasAudio"))
+        else "audio_url_missing"
+    )
     controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     prefer_audio_over_text = _coerce_bool(controls.get("preferAudioOverText"), _coerce_bool(audio_context.get("preferAudioOverText"), True))
     text_hint_present = bool(str(controls.get("directorNote") or "").strip())
@@ -1877,6 +1992,30 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             details=coverage,
         )
 
+    phrase_signals_available = bool(
+        len(audio_analysis.get("phrases") or []) > 0
+        or len(audio_analysis.get("pauseWindows") or []) > 0
+        or len(audio_analysis.get("sections") or []) > 0
+        or len(audio_analysis.get("energyTransitions") or []) > 0
+    )
+    is_audio_mode = str(audio_context.get("sourceMode") or "").upper() == "AUDIO"
+    full_audio_first = bool(is_audio_mode and audio_connected and audio_analysis.get("ok") and phrase_signals_available)
+    partial_audio_first = bool(
+        is_audio_mode
+        and not full_audio_first
+        and (audio_connected or audio_duration_sec > 0 or _coerce_bool(audio_context.get("preferAudioOverText"), True))
+    )
+    fallback_mode = "full_audio_first" if full_audio_first else ("partial_audio_first" if partial_audio_first else "text_fallback")
+    if full_audio_first:
+        fallback_reason = "audio_connected_with_usable_analysis_signals"
+        audio_primary_driver_reason = "full_audio_phrase_pause_section_guidance"
+    elif partial_audio_first:
+        fallback_reason = "audio_mode_with_duration_or_partial_signals"
+        audio_primary_driver_reason = "partial_audio_guidance_duration_aware"
+    else:
+        fallback_reason = "audio_unusable_or_non_audio_source"
+        audio_primary_driver_reason = "text_fallback_only"
+
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
     return {
@@ -1900,12 +2039,23 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "audioDurationSec_analysis": audio_duration_from_analysis,
             "audioConnected": audio_connected,
             "audioDurationSource": audio_duration_source,
-            "audioUsedAsPrimaryNarrativeDriver": bool(audio_connected and prefer_audio_over_text),
+            "audioUsedAsPrimaryNarrativeDriver": bool(full_audio_first or partial_audio_first),
+            "audioPrimaryDriverReason": audio_primary_driver_reason,
+            "fallbackMode": fallback_mode,
+            "fallbackReason": fallback_reason,
             "audioSourceMode": audio_context.get("sourceMode"),
+            "sourceOrigin_raw": source_origin_raw or None,
+            "sourceOrigin_normalized": source_origin_normalized or None,
+            "audioConnectedReason": audio_connected_reason,
+            "audioUrl_raw": audio_url_raw or None,
+            "audioUrl_normalized": str(audio_analysis.get("audioUrlNormalized") or audio_url_normalized or "") or None,
+            "audioUrlResolutionMode": str(audio_analysis.get("audioUrlResolutionMode") or ("missing" if not audio_url_normalized else "invalid")),
             "preferAudioOverText": prefer_audio_over_text,
             "timelineSource": audio_context.get("timelineSource"),
             "segmentationMode": audio_context.get("segmentationMode"),
+            "audioAnalysisAttempted": audio_analysis_attempted,
             "audioAnalysisOk": bool(audio_analysis.get("ok")),
+            "audioAnalysisReason": str(audio_analysis.get("hint") or ("analysis_not_attempted" if not audio_analysis_attempted else "analysis_failed")),
             "phraseCount": len(audio_analysis.get("phrases") or []),
             "pauseCount": len(audio_analysis.get("pauseWindows") or []),
             "sectionCount": len(audio_analysis.get("sections") or []),
