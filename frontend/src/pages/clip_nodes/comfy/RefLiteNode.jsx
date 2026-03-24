@@ -10,7 +10,14 @@ const REF_STATUS_LABELS = {
   error: "ошибка",
 };
 
-export default function RefLiteNode({ id, data, title, className, handleId }) {
+const ROLE_TYPE_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "hero", label: "Hero" },
+  { value: "antagonist", label: "Antagonist" },
+  { value: "support", label: "Support" },
+];
+
+export default function RefLiteNode({ id, data, title, className, handleId, showRoleSelector = false }) {
   const inputRef = useRef(null);
   const maxFiles = 5;
   const refs = Array.isArray(data?.refs) ? data.refs.map((item) => ({ url: String(item?.url || "").trim(), name: String(item?.name || "").trim(), type: String(item?.type || "").trim() })).filter((item) => !!item.url).slice(0, maxFiles) : [];
@@ -23,6 +30,7 @@ export default function RefLiteNode({ id, data, title, className, handleId }) {
   const detailsOpen = !!data?.refDetailsOpen;
   const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
+  const roleType = String(data?.roleType || "auto").trim().toLowerCase() || "auto";
 
   const openPicker = () => { if (canAddMore) inputRef.current?.click(); };
   const onInputChange = async (e) => { const files = Array.from(e.target.files || []); if (files.length) await data?.onPickImage?.(id, files); e.target.value = ""; };
@@ -43,6 +51,19 @@ export default function RefLiteNode({ id, data, title, className, handleId }) {
       {canToggleDetails && detailsOpen ? (
         <div className="clipSB_refDetailsBox">
           {detailsLines.map((line, idx) => <div key={`${id}-details-${idx}`} className="clipSB_refDetailsLine">{line}</div>)}
+        </div>
+      ) : null}
+      {showRoleSelector ? (
+        <div style={{ marginBottom: 10 }}>
+          <div className="clipSB_small" style={{ marginBottom: 4 }}>Role:</div>
+          <select
+            className="clipSB_select"
+            value={roleType}
+            onChange={(event) => data?.onField?.(id, "roleType", String(event?.target?.value || "auto").trim().toLowerCase() || "auto")}
+            disabled={refStatus === "loading"}
+          >
+            {ROLE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
         </div>
       ) : null}
       <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => <div className="clipSB_refThumb" key={`${item.url}-${idx}`}><button className="clipSB_refLiteOpen" onClick={() => data?.onOpenLightbox?.(item.url)} title="Открыть фото"><img src={resolveAssetUrl(item.url)} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" /></button><button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button></div>)}{canAddMore ? <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">+</button> : null}</div>}</div>

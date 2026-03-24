@@ -2596,13 +2596,14 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
   if (targetHandle === "ref_character_1" && sourceNode.type === "refNode" && sourceHandle === "ref_character") {
     const normalized = normalizeRefData(sourceNode?.data || {}, "ref_character");
     if (!normalized.refs.length) return null;
+    const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
     return {
       value: normalized.refs[0]?.url || "",
       preview: normalized.refs[0]?.name || `Character 1 • ${normalized.refs.length} refs`,
       sourceLabel: "Character 1",
-      refs: normalized.refs.map((item) => item.url),
+      refs: normalized.refs.map((item) => ({ url: item.url, roleType })),
       count: normalized.refs.length,
-      meta: { kind: "ref_character", count: normalized.refs.length },
+      meta: { kind: "ref_character", count: normalized.refs.length, roleType },
     };
   }
 
@@ -2612,13 +2613,14 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .filter(Boolean)
       .slice(0, 5);
     if (!refs.length) return null;
+    const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Character 2 • ${refs.length} refs`,
       sourceLabel: "Character 2",
-      refs,
+      refs: refs.map((url) => ({ url, roleType })),
       count: refs.length,
-      meta: { kind: "ref_character_2", count: refs.length },
+      meta: { kind: "ref_character_2", count: refs.length, roleType },
     };
   }
 
@@ -2628,13 +2630,14 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .filter(Boolean)
       .slice(0, 5);
     if (!refs.length) return null;
+    const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Character 3 • ${refs.length} refs`,
       sourceLabel: "Character 3",
-      refs,
+      refs: refs.map((url) => ({ url, roleType })),
       count: refs.length,
-      meta: { kind: "ref_character_3", count: refs.length },
+      meta: { kind: "ref_character_3", count: refs.length, roleType },
     };
   }
 
@@ -3043,6 +3046,18 @@ const REF_STATUS_LABELS = {
   ready: "готово",
   error: "ошибка",
 };
+const CHARACTER_ROLE_TYPES = new Set(["auto", "hero", "antagonist", "support"]);
+const CHARACTER_ROLE_TYPE_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "hero", label: "Hero" },
+  { value: "antagonist", label: "Antagonist" },
+  { value: "support", label: "Support" },
+];
+
+function normalizeCharacterRoleType(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  return CHARACTER_ROLE_TYPES.has(clean) ? clean : "auto";
+}
 
 function resolveRefRoleForNode(node = {}) {
   if (!node || typeof node !== "object") return "";
@@ -3073,8 +3088,10 @@ function normalizeRefNodeData(data = {}, kindHint = "") {
   const refs = Array.isArray(normalized?.refs) ? normalized.refs : [];
   const refStatus = deriveRefNodeStatus({ ...normalized, refs });
   const refShortLabel = String(normalized?.refShortLabel || "").trim();
+  const kind = String(normalized?.kind || kindHint || "");
   return {
     ...normalized,
+    roleType: kind === "ref_character" ? normalizeCharacterRoleType(normalized?.roleType) : "",
     refStatus,
     refShortLabel,
     refDetailsOpen: !!normalized?.refDetailsOpen,
@@ -3106,6 +3123,7 @@ function normalizeComfyRefNodeData(nodeType = "", data = {}, kindHint = "") {
   const normalized = {
     ...data,
     refs,
+    roleType: (nodeType === "refCharacter2" || nodeType === "refCharacter3") ? normalizeCharacterRoleType(data?.roleType) : "",
     refStatus: deriveRefNodeStatus({ ...(data || {}), refs }),
     refShortLabel: String(data?.refShortLabel || "").trim(),
     refDetailsOpen: !!data?.refDetailsOpen,
@@ -4294,6 +4312,8 @@ function RefNode({ id, data }) {
   const detailsOpen = !!data?.refDetailsOpen;
   const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
+  const showRoleSelector = kind === "ref_character";
+  const roleType = normalizeCharacterRoleType(data?.roleType);
 
   const openPicker = () => {
     if (!canAddMore) return;
@@ -4355,6 +4375,19 @@ function RefNode({ id, data }) {
         {canToggleDetails && detailsOpen ? (
           <div className="clipSB_refDetailsBox">
             {detailsLines.map((line, idx) => <div key={`${id}-details-${idx}`} className="clipSB_refDetailsLine">{line}</div>)}
+          </div>
+        ) : null}
+        {showRoleSelector ? (
+          <div style={{ marginBottom: 10 }}>
+            <div className="clipSB_small" style={{ marginBottom: 4 }}>Role:</div>
+            <select
+              className="clipSB_select"
+              value={roleType}
+              onChange={(event) => data?.onField?.(id, "roleType", normalizeCharacterRoleType(event?.target?.value))}
+              disabled={refStatus === "loading"}
+            >
+              {CHARACTER_ROLE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
           </div>
         ) : null}
 
@@ -9066,6 +9099,7 @@ onClipSec: (nodeId, value) => {
             ...base,
             data: {
               ...normalizedRefData,
+              onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: key === "roleType" ? normalizeCharacterRoleType(value) : value } } : x))),
               onPickImage: async (nodeId, file) => {
                 const pickedFiles = Array.isArray(file) ? file : (file ? [file] : []);
                 if (!pickedFiles.length) return;
@@ -11315,7 +11349,7 @@ const hydrate = useCallback((source = "unknown") => {
     } else if (type === "brain") {
       node = { id, type: "brainNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: "clip", scenarioKey: "clip", shootKey: "cinema", styleKey: "realism", freezeStyle: false, clipSec: 30 } };
     } else if (type === "ref_character") {
-      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПЕРСОНАЖ", icon: "🧍", kind: "ref_character", refs: [], uploading: false, refStatus: "empty" } };
+      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПЕРСОНАЖ", icon: "🧍", kind: "ref_character", refs: [], roleType: "auto", uploading: false, refStatus: "empty" } };
     } else if (type === "ref_location") {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ЛОКАЦИЯ", icon: "📍", kind: "ref_location", refs: [], uploading: false, refStatus: "empty" } };
     } else if (type === "ref_style") {
@@ -11350,9 +11384,9 @@ const hydrate = useCallback((source = "unknown") => {
     } else if (type === "comfyVideoPreview") {
       node = { id, type: "comfyVideoPreview", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { previewStatus: 'idle', previewUrl: '', workflowPreset: 'comfy-default', format: '9:16', duration: 0 } };
     } else if (type === "refCharacter2") {
-      node = { id, type: "refCharacter2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
+      node = { id, type: "refCharacter2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], roleType: "auto", uploading: false, refStatus: 'empty' } };
     } else if (type === "refCharacter3") {
-      node = { id, type: "refCharacter3", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
+      node = { id, type: "refCharacter3", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], roleType: "auto", uploading: false, refStatus: 'empty' } };
     } else if (type === "refAnimal") {
       node = { id, type: "refAnimal", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'single animal', speciesHint: '', scaleLock: false, behavior: 'neutral', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
     } else if (type === "refGroup") {

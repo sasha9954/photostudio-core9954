@@ -86,8 +86,18 @@ function normalizeNarrativeSourceMode(mode) {
 
 function buildReferencePayload(input, fallbackLabel) {
   if (!input || typeof input !== "object") return null;
-  const refs = Array.isArray(input.refs) ? input.refs.map((item) => normalizeText(item)).filter(Boolean) : [];
-  const value = normalizeText(input.value) || refs[0] || "";
+  const refs = Array.isArray(input.refs)
+    ? input.refs
+      .map((item) => {
+        if (typeof item === "string") return normalizeText(item) ? { url: normalizeText(item) } : null;
+        const url = normalizeText(item?.url || item);
+        if (!url) return null;
+        const roleType = normalizeText(item?.roleType).toLowerCase();
+        return roleType ? { url, roleType } : { url };
+      })
+      .filter(Boolean)
+    : [];
+  const value = normalizeText(input.value) || normalizeText(refs[0]?.url) || "";
   if (!value && !refs.length && !normalizeText(input.preview)) return null;
   return {
     label: fallbackLabel,
