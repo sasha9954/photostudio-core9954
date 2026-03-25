@@ -180,17 +180,19 @@ const GLOBAL_FORBIDDEN_INSERTIONS_GUARDS = [
 ];
 
 function normalizeScenarioStringList(value) {
+  const normalizeScalar = (item) => {
+    if (typeof item === "string") return item.trim();
+    if (typeof item === "number" || typeof item === "boolean") return String(item).trim();
+    return "";
+  };
   if (Array.isArray(value)) {
-    return Array.from(new Set(value.map((item) => String(item || "").trim()).filter(Boolean)));
+    return Array.from(new Set(value.map((item) => normalizeScalar(item)).filter(Boolean)));
   }
   if (typeof value === "string") {
     const trimmed = value.trim();
     return trimmed ? [trimmed] : [];
   }
-  if (!value) return [];
-  if (typeof value === "object") {
-    return Array.from(new Set(Object.values(value).map((item) => String(item || "").trim()).filter(Boolean)));
-  }
+  if (typeof value === "number" || typeof value === "boolean") return [String(value).trim()];
   return [];
 }
 
@@ -200,9 +202,10 @@ function mergeScenarioStringLists(...lists) {
 
 function stringifyScenarioLockValue(value) {
   if (typeof value === "string") return value.trim();
-  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+  if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
+  if (Array.isArray(value)) return normalizeScenarioStringList(value).join(", ");
   if (value && typeof value === "object") {
-    return Object.values(value).map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+    return normalizeScenarioStringList(Object.values(value)).join(", ");
   }
   return "";
 }
@@ -229,8 +232,11 @@ function buildScenarioVisualGlueText(scene = {}) {
     globalCameraProfile?.exposureProfile || "balanced exposure with protected highlights",
     globalCameraProfile?.dynamicRangeProfile || "wide dynamic range feel with soft highlight rolloff",
     globalCameraProfile?.sharpnessProfile || "natural premium detail without over-sharpening",
+    globalCameraProfile?.textureProfile || "consistent premium texture fidelity across scenes",
+    globalCameraProfile?.motionProfile ? `imply ${globalCameraProfile.motionProfile}` : "",
+    ...normalizeScenarioStringList(globalCameraProfile?.forbiddenCameraDrift).slice(0, 2),
     globalCameraProfile?.continuityProfile || "same capture system feel across the entire sequence",
-  ].filter(Boolean).slice(0, 6);
+  ].filter(Boolean).slice(0, 8);
   return [
     "GLOBAL VISUAL CONSISTENCY:",
     ...visualConsistencyLines.map((line) => `- ${line}`),
@@ -255,8 +261,10 @@ function buildScenarioVideoVisualGlueText(scene = {}) {
     globalCameraProfile?.exposureProfile || "maintain stable exposure and contrast feel",
     globalCameraProfile?.dynamicRangeProfile || "preserve highlight rolloff and dynamic range feel",
     globalCameraProfile?.textureProfile || "keep natural premium detail level",
+    globalCameraProfile?.motionProfile || "maintain a controlled cinematic motion language",
+    ...normalizeScenarioStringList(globalCameraProfile?.forbiddenCameraDrift).slice(0, 3),
     globalCameraProfile?.continuityProfile || "keep the sequence visually unified",
-  ].filter(Boolean).slice(0, 6);
+  ].filter(Boolean).slice(0, 8);
   return [
     "GLOBAL VIDEO CONSISTENCY:",
     ...videoConsistencyLines.map((line) => `- ${line}`),

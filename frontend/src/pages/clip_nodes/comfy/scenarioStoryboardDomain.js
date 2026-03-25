@@ -34,23 +34,21 @@ const DEFAULT_GLOBAL_CAMERA_PROFILE = {
     "no change in cinematic capture feel",
   ],
 };
-const GLOBAL_VISUAL_DRIFT_GUARDS = [
-  "no change in lighting style",
-  "no change in color grading",
-  "no drop in visual quality",
-  "no change in camera style",
-];
+function normalizeStringScalar(value) {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
+  return "";
+}
+
 const normalizeStringList = (value) => {
   if (Array.isArray(value)) {
-    return value.map((item) => String(item || "").trim()).filter(Boolean);
+    return Array.from(new Set(value.map((item) => normalizeStringScalar(item)).filter(Boolean)));
   }
   if (typeof value === "string") {
     const trimmed = value.trim();
     return trimmed ? [trimmed] : [];
   }
-  if (value && typeof value === "object") {
-    return Object.values(value).map((item) => String(item || "").trim()).filter(Boolean);
-  }
+  if (typeof value === "number" || typeof value === "boolean") return [String(value).trim()];
   return [];
 };
 
@@ -171,8 +169,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     sceneAction: source.sceneAction ?? source.scene_action,
     cameraIntent: source.cameraIntent ?? source.camera_intent,
     environmentMotion: source.environmentMotion ?? source.environment_motion,
-    forbiddenInsertions: Array.from(new Set([...forbiddenInsertions, ...GLOBAL_VISUAL_DRIFT_GUARDS])),
-    forbiddenChanges: Array.from(new Set([...forbiddenChanges, ...GLOBAL_VISUAL_DRIFT_GUARDS])),
+    forbiddenInsertions,
+    forbiddenChanges,
     lipSync: source.lipSync ?? source.lip_sync,
     lipSyncText: source.lipSyncText ?? source.lip_sync_text,
     transitionType: source.transitionType ?? source.transition_type,
