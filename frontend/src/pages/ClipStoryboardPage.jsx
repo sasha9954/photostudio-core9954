@@ -428,6 +428,92 @@ function extractScenarioRefsByRoleFromSource(source = null) {
   return roleMap;
 }
 
+function mergeScenarioRefsByRole(...sources) {
+  const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
+  sources.forEach((source) => {
+    const extracted = extractScenarioRefsByRoleFromSource(source);
+    SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
+      roleMap[role] = [...new Set([...(roleMap[role] || []), ...((extracted || {})[role] || [])])];
+    });
+  });
+  return roleMap;
+}
+
+function collectScenarioNarrativeRefs({ sourceNode = null } = {}) {
+  const emptyResult = {
+    character: [],
+    location: [],
+    style: [],
+    props: [],
+    refsByRole: Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []])),
+    hasNarrativeRefsByRole: false,
+    hasNarrativeContextRefs: false,
+  };
+  if (!sourceNode || sourceNode?.type !== "comfyNarrative") return emptyResult;
+
+  const nodeData = sourceNode?.data && typeof sourceNode.data === "object" ? sourceNode.data : {};
+  const outputs = nodeData?.outputs && typeof nodeData.outputs === "object" ? nodeData.outputs : {};
+  const pendingOutputs = nodeData?.pendingOutputs && typeof nodeData.pendingOutputs === "object" ? nodeData.pendingOutputs : {};
+  const storyboardOut = outputs?.storyboardOut && typeof outputs.storyboardOut === "object" ? outputs.storyboardOut : {};
+  const pendingStoryboardOut = pendingOutputs?.storyboardOut && typeof pendingOutputs.storyboardOut === "object" ? pendingOutputs.storyboardOut : {};
+  const directorOutput = outputs?.directorOutput && typeof outputs.directorOutput === "object" ? outputs.directorOutput : {};
+  const pendingDirectorOutput = pendingOutputs?.directorOutput && typeof pendingOutputs.directorOutput === "object" ? pendingOutputs.directorOutput : {};
+
+  const refsByRole = mergeScenarioRefsByRole(
+    nodeData?.refsByRole,
+    outputs?.refsByRole,
+    pendingOutputs?.refsByRole,
+    storyboardOut?.refsByRole,
+    pendingStoryboardOut?.refsByRole,
+    directorOutput?.refsByRole,
+    pendingDirectorOutput?.refsByRole,
+    nodeData?.context_refs,
+    nodeData?.connected_context_summary?.context_refs,
+    outputs?.context_refs,
+    outputs?.connected_context_summary?.context_refs,
+    pendingOutputs?.context_refs,
+    pendingOutputs?.connected_context_summary?.context_refs,
+    storyboardOut?.context_refs,
+    storyboardOut?.connected_context_summary?.context_refs,
+    pendingStoryboardOut?.context_refs,
+    pendingStoryboardOut?.connected_context_summary?.context_refs,
+    directorOutput?.context_refs,
+    directorOutput?.connected_context_summary?.context_refs,
+    pendingDirectorOutput?.context_refs,
+    pendingDirectorOutput?.connected_context_summary?.context_refs,
+  );
+
+  const castRoles = ["character_1", "character_2", "character_3", "animal", "group"];
+  const legacyCharacter = [...new Set(castRoles.flatMap((role) => refsByRole?.[role] || []))];
+  const hasNarrativeRefsByRole = SCENARIO_IMAGE_ROLE_KEYS.some((role) => (refsByRole?.[role] || []).length > 0);
+  const hasNarrativeContextRefs = Object.values(mergeScenarioRefsByRole(
+    nodeData?.context_refs,
+    nodeData?.connected_context_summary?.context_refs,
+    outputs?.context_refs,
+    outputs?.connected_context_summary?.context_refs,
+    pendingOutputs?.context_refs,
+    pendingOutputs?.connected_context_summary?.context_refs,
+    storyboardOut?.context_refs,
+    storyboardOut?.connected_context_summary?.context_refs,
+    pendingStoryboardOut?.context_refs,
+    pendingStoryboardOut?.connected_context_summary?.context_refs,
+    directorOutput?.context_refs,
+    directorOutput?.connected_context_summary?.context_refs,
+    pendingDirectorOutput?.context_refs,
+    pendingDirectorOutput?.connected_context_summary?.context_refs,
+  )).some((urls) => Array.isArray(urls) && urls.length > 0);
+
+  return {
+    character: legacyCharacter,
+    location: refsByRole?.location || [],
+    style: refsByRole?.style || [],
+    props: refsByRole?.props || [],
+    refsByRole,
+    hasNarrativeRefsByRole,
+    hasNarrativeContextRefs,
+  };
+}
+
 function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, scenarioPackage = {} } = {}) {
   const toUrlList = (items) => (Array.isArray(items)
     ? items.map((item) => String(typeof item === "string" ? item : item?.url || "").trim()).filter(Boolean)
@@ -6217,22 +6303,71 @@ const scenarioBrainRefs = useMemo(() => {
     .reverse()
     .find((e) => e.target === scenarioFlowSourceNode.id && SCENARIO_PLAN_INPUT_HANDLES.has((e.targetHandle || "")));
   if (!incomingPlanEdge?.source) return { character: [], location: [], style: [], props: [], refsByRole: {} };
-  const brainInput = collectBrainPlannerInput({ brainNodeId: incomingPlanEdge.source, nodesList: nodes, edgesList: edges });
-  const brainNode = nodes.find((n) => n.id === incomingPlanEdge.source);
-  const planRefs = brainNode?.data?.scenePlan?.refs || {};
-  const plannerRefsByRole = brainNode?.data?.plannerMeta?.plannerInput?.refsByRole;
-  return {
-    character: Array.isArray(planRefs.character) ? planRefs.character : brainInput.characterRefs,
-    location: Array.isArray(planRefs.location) ? planRefs.location : brainInput.locationRefs,
-    style: Array.isArray(planRefs.style) ? planRefs.style : brainInput.styleRefs,
-    props: Array.isArray(planRefs.props) ? planRefs.props : brainInput.propsRefs,
+  const sourceNode = nodes.find((n) => n.id === incomingPlanEdge.source) || null;
+  const sourceNodeType = String(sourceNode?.type || "").trim();
+  const sourceMode = sourceNodeType === "comfyNarrative" ? "narrative" : "brain";
+  const planRefs = sourceNode?.data?.scenePlan?.refs || {};
+  const plannerRefsByRole = sourceNode?.data?.plannerMeta?.plannerInput?.refsByRole;
+  const plannerRefsByRoleMap = plannerRefsByRole && typeof plannerRefsByRole === "object"
+    ? extractScenarioRefsByRoleFromSource(plannerRefsByRole)
+    : Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
+  const hasPlannerRefsByRole = SCENARIO_IMAGE_ROLE_KEYS.some((role) => (plannerRefsByRoleMap?.[role] || []).length > 0);
+
+  const scenePlanRefsByRoleMap = extractScenarioRefsByRoleFromSource({
+    character_1: planRefs?.character,
+    location: planRefs?.location,
+    style: planRefs?.style,
+    props: planRefs?.props,
+  });
+  const hasScenePlanRefs = SCENARIO_IMAGE_ROLE_KEYS.some((role) => (scenePlanRefsByRoleMap?.[role] || []).length > 0);
+
+  const narrativeRefs = collectScenarioNarrativeRefs({ sourceNode });
+  const refsByRole = sourceMode === "narrative"
+    ? mergeScenarioRefsByRole(narrativeRefs?.refsByRole, plannerRefsByRoleMap)
+    : plannerRefsByRoleMap;
+  const hasNarrativeRefsByRole = !!narrativeRefs?.hasNarrativeRefsByRole;
+  const hasNarrativeContextRefs = !!narrativeRefs?.hasNarrativeContextRefs;
+
+  const brainInput = sourceMode === "brain"
+    ? collectBrainPlannerInput({ brainNodeId: incomingPlanEdge.source, nodesList: nodes, edgesList: edges })
+    : null;
+
+  const result = {
+    character: sourceMode === "narrative"
+      ? (narrativeRefs?.character || [])
+      : (Array.isArray(planRefs.character) ? planRefs.character : (brainInput?.characterRefs || [])),
+    location: sourceMode === "narrative"
+      ? (narrativeRefs?.location || [])
+      : (Array.isArray(planRefs.location) ? planRefs.location : (brainInput?.locationRefs || [])),
+    style: sourceMode === "narrative"
+      ? (narrativeRefs?.style || [])
+      : (Array.isArray(planRefs.style) ? planRefs.style : (brainInput?.styleRefs || [])),
+    props: sourceMode === "narrative"
+      ? (narrativeRefs?.props || [])
+      : (Array.isArray(planRefs.props) ? planRefs.props : (brainInput?.propsRefs || [])),
     propAnchorLabel: planRefs.propAnchorLabel,
     sessionCharacterAnchor: planRefs.sessionCharacterAnchor,
     sessionLocationAnchor: planRefs.sessionLocationAnchor,
     sessionStyleAnchor: planRefs.sessionStyleAnchor,
     sessionBaseline: planRefs.sessionBaseline,
-    refsByRole: plannerRefsByRole && typeof plannerRefsByRole === "object" ? plannerRefsByRole : {},
+    refsByRole,
   };
+
+  if (CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD) {
+    console.debug("[SCENARIO BRAIN REFS]", {
+      sourceNodeId: String(sourceNode?.id || ""),
+      sourceNodeType,
+      sourceHandle: String(incomingPlanEdge?.sourceHandle || ""),
+      sourceMode,
+      hasScenePlanRefs,
+      hasPlannerRefsByRole,
+      hasNarrativeRefsByRole,
+      hasNarrativeContextRefs,
+      refsCountsByRole: summarizeRefsByRole(result?.refsByRole || {}),
+    });
+  }
+
+  return result;
 }, [edges, nodes, scenarioFlowSourceNode?.id]);
 
 const scenarioScenes = useMemo(() => {
