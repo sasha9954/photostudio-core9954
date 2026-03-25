@@ -4237,17 +4237,82 @@ body.ps_clip_fullscreen .mainCol {
   gap: 8px;
 }
 
+
+.clipSB_scenarioEditorImagePromptTextarea {
+  min-height: 146px;
+}
+
+.clipSB_scenarioEditorPreviewPlaceholder {
+  width: 100%;
+  min-height: 300px;
+  border-radius: 10px;
+  background: rgba(66, 71, 80, 0.36);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), inset 0 0 0 2px rgba(0,0,0,0.16);
+  color: rgba(223, 228, 236, 0.82);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 14px;
+  font-size: 12px;
+}
+
+.clipSB_scenarioEditorPreviewPlaceholderIcon {
+  font-size: 20px;
+  opacity: 0.75;
+}
+
+.clipSB_scenarioEditorCollapseHead {
+  border: 0;
+  background: transparent;
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.clipSB_scenarioEditorCollapseHeadRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clipSB_scenarioEditorChevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
+  transition: transform 0.2s ease;
+}
+
+.clipSB_scenarioEditorChevron.isOpen {
+  transform: rotate(180deg);
+}
+
+.clipSB_scenarioEditorCollapsibleBody {
+  display: grid;
+  gap: 8px;
+}
 .clipSB_scenarioEditorImageBody {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
+  gap: 12px;
   align-items: start;
+  min-height: 320px;
 }
 
 .clipSB_scenarioEditorImageLeft,
 .clipSB_scenarioEditorImageRight {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -4263,7 +4328,8 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_scenarioEditorImagePreview,
 .clipSB_scenarioEditorVideoPreview {
   width: 100%;
-  max-height: 230px;
+  min-height: 300px;
+  max-height: 360px;
   border-radius: 10px;
   background: rgba(0,0,0,0.35);
   object-fit: contain;

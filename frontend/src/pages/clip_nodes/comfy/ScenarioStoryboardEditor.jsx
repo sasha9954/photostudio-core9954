@@ -79,6 +79,7 @@ export default function ScenarioStoryboardEditor({
   const [activeSelectionId, setActiveSelectionId] = useState("");
   const [activeTab, setActiveTab] = useState("phrases");
   const [tabPanelOpen, setTabPanelOpen] = useState(true);
+  const [audioSceneOpen, setAudioSceneOpen] = useState(true);
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
 
@@ -423,8 +424,8 @@ export default function ScenarioStoryboardEditor({
                       <div className="clipSB_scenarioEditorImageBody">
                         <div className="clipSB_scenarioEditorImageLeft">
                           <textarea
-                            className="clipSB_textarea"
-                            rows={3}
+                            className="clipSB_textarea clipSB_scenarioEditorImagePromptTextarea"
+                            rows={6}
                             value={String(selectedScene?.imagePromptRu || "")}
                             onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptRu: event.target.value })}
                             placeholder="imagePromptRu"
@@ -439,18 +440,23 @@ export default function ScenarioStoryboardEditor({
                               placeholder="imagePromptEn"
                             />
                           </details>
+                          <div className="clipSB_scenarioEditorBtnRow">
+                            <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "image")} disabled={imageStatus === "loading"}>Создать изображение</button>
+                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { imageUrl: "", imageStatus: "idle" })}>Удалить</button>
+                          </div>
                         </div>
                         <div className="clipSB_scenarioEditorImageRight">
                           <div className="clipSB_scenarioEditorBlockHead">
                             <h4>IMAGE</h4>
                             <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${imageStatus}`}>{imageStatus}</span>
                           </div>
-                          {selectedScene?.imageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={selectedScene.imageUrl} alt={`scene-${selectedSceneId}-image`} /> : <div className="clipSB_hint">preview изображения отсутствует</div>}
+                          {selectedScene?.imageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={selectedScene.imageUrl} alt={`scene-${selectedSceneId}-image`} /> : (
+                            <div className="clipSB_scenarioEditorPreviewPlaceholder" role="status" aria-live="polite">
+                              <div className="clipSB_scenarioEditorPreviewPlaceholderIcon" aria-hidden="true">🖼️</div>
+                              <div>Изображение сцены пока не создано</div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                      <div className="clipSB_scenarioEditorBtnRow">
-                        <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "image")} disabled={imageStatus === "loading"}>Создать изображение</button>
-                        <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { imageUrl: "", imageStatus: "idle" })}>Удалить</button>
                       </div>
                     </>
                   ) : (
@@ -540,15 +546,22 @@ export default function ScenarioStoryboardEditor({
                 </div>
 
                 <div className="clipSB_scenarioEditorBlock">
-                  <div className="clipSB_scenarioEditorBlockHead">
+                  <button className="clipSB_scenarioEditorCollapseHead" type="button" onClick={() => setAudioSceneOpen((prev) => !prev)} aria-expanded={audioSceneOpen}>
                     <h4>2. AUDIO (СЦЕНА)</h4>
-                    <span className="clipSB_tag">{selectedScene?.localPhrase ? "audio attached" : "not used"}</span>
-                  </div>
-                  <div className="clipSB_storyboardKv"><span>narrationMode</span><strong>{selectedScene.narrationMode || "—"}</strong></div>
-                  <div className="clipSB_storyboardKv"><span>localPhrase</span><strong>{selectedScene.localPhrase || "—"}</strong></div>
-                  <div className="clipSB_storyboardKv"><span>audioSliceStartSec</span><strong>{fmtSec(selectedScene.audioSliceStartSec)}s</strong></div>
-                  <div className="clipSB_storyboardKv"><span>audioSliceEndSec</span><strong>{fmtSec(selectedScene.audioSliceEndSec)}s</strong></div>
-                  <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => previewSceneAudioSlice(selectedScene)}>▶ прослушать кусок</button>
+                    <div className="clipSB_scenarioEditorCollapseHeadRight">
+                      <span className="clipSB_tag">{selectedScene?.localPhrase ? "audio attached" : "not used"}</span>
+                      <span className={`clipSB_scenarioEditorChevron ${audioSceneOpen ? "isOpen" : ""}`} aria-hidden="true">⌄</span>
+                    </div>
+                  </button>
+                  {audioSceneOpen ? (
+                    <div className="clipSB_scenarioEditorCollapsibleBody">
+                      <div className="clipSB_storyboardKv"><span>narrationMode</span><strong>{selectedScene.narrationMode || "—"}</strong></div>
+                      <div className="clipSB_storyboardKv"><span>localPhrase</span><strong>{selectedScene.localPhrase || "—"}</strong></div>
+                      <div className="clipSB_storyboardKv"><span>audioSliceStartSec</span><strong>{fmtSec(selectedScene.audioSliceStartSec)}s</strong></div>
+                      <div className="clipSB_storyboardKv"><span>audioSliceEndSec</span><strong>{fmtSec(selectedScene.audioSliceEndSec)}s</strong></div>
+                      <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => previewSceneAudioSlice(selectedScene)}>▶ прослушать кусок</button>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="clipSB_scenarioEditorBlock">
