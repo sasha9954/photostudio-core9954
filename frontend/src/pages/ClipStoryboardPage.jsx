@@ -390,24 +390,72 @@ function normalizeScenarioRoleName(value = "") {
   return aliases[raw] || raw;
 }
 
-function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {} } = {}) {
-  const roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
+const SCENARIO_IMAGE_ROLE_KEYS = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
+
+function extractScenarioRefsByRoleFromSource(source = null) {
+  if (!source || typeof source !== "object") return Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
+  const toUrlList = (items) => (Array.isArray(items)
+    ? items
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") return item?.url || item?.src || item?.imageUrl || "";
+        return "";
+      })
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+    : []);
+  const pullRefsFromRoleValue = (roleValue) => {
+    if (Array.isArray(roleValue)) return toUrlList(roleValue);
+    if (roleValue && typeof roleValue === "object") {
+      return toUrlList(
+        roleValue.refs
+        ?? roleValue.images
+        ?? roleValue.urls
+        ?? roleValue.items
+        ?? roleValue.value
+        ?? roleValue.list
+        ?? []
+      );
+    }
+    return [];
+  };
+  const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
+  Object.entries(source || {}).forEach(([rawRole, roleValue]) => {
+    const role = normalizeScenarioRoleName(rawRole);
+    if (!SCENARIO_IMAGE_ROLE_KEYS.includes(role)) return;
+    roleMap[role] = [...new Set([...(roleMap[role] || []), ...pullRefsFromRoleValue(roleValue)])];
+  });
+  return roleMap;
+}
+
+function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, scenarioPackage = {} } = {}) {
   const toUrlList = (items) => (Array.isArray(items)
     ? items.map((item) => String(typeof item === "string" ? item : item?.url || "").trim()).filter(Boolean)
     : []);
-  const byRoleFromScene = scene?.refsByRole && typeof scene.refsByRole === "object" ? scene.refsByRole : {};
-  const byRoleFromBrain = scenarioBrainRefs?.refsByRole && typeof scenarioBrainRefs.refsByRole === "object" ? scenarioBrainRefs.refsByRole : {};
-  const roleMap = Object.fromEntries(roles.map((role) => [role, []]));
-  Object.entries(byRoleFromBrain || {}).forEach(([rawRole, items]) => {
-    const role = normalizeScenarioRoleName(rawRole);
-    if (!roles.includes(role)) return;
-    roleMap[role] = [...new Set([...(roleMap[role] || []), ...toUrlList(items)])];
-  });
-  Object.entries(byRoleFromScene || {}).forEach(([rawRole, items]) => {
-    const role = normalizeScenarioRoleName(rawRole);
-    if (!roles.includes(role)) return;
-    roleMap[role] = [...new Set([...(roleMap[role] || []), ...toUrlList(items)])];
-  });
+  const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
+  const appendFromSource = (source = null) => {
+    const extracted = extractScenarioRefsByRoleFromSource(source);
+    SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
+      roleMap[role] = [...new Set([...(roleMap[role] || []), ...((extracted || {})[role] || [])])];
+    });
+  };
+
+  appendFromSource(scenarioBrainRefs?.refsByRole);
+  appendFromSource(scene?.refsByRole);
+  appendFromSource(scene?.connectedRefsByRole);
+  appendFromSource(scene?.contextRefs);
+  appendFromSource(scene?.context_refs);
+  appendFromSource(scene?.connectedContextSummary?.context_refs);
+  appendFromSource(scene?.connected_context_summary?.context_refs);
+  appendFromSource(scene?.sceneMeta?.connected_context_summary?.context_refs);
+  appendFromSource(scene?.scene_meta?.connected_context_summary?.context_refs);
+  appendFromSource(scenarioPackage?.refsByRole);
+  appendFromSource(scenarioPackage?.connectedRefsByRole);
+  appendFromSource(scenarioPackage?.cast?.refsByRole);
+  appendFromSource(scenarioPackage?.history?.refsByRole);
+  appendFromSource(scenarioPackage?.context_refs);
+  appendFromSource(scenarioPackage?.connected_context_summary?.context_refs);
+
   roleMap.character_1 = [...new Set([...(roleMap.character_1 || []), ...toUrlList(scenarioBrainRefs?.character)])];
   roleMap.location = [...new Set([...(roleMap.location || []), ...toUrlList(scenarioBrainRefs?.location)])];
   roleMap.style = [...new Set([...(roleMap.style || []), ...toUrlList(scenarioBrainRefs?.style)])];
@@ -417,7 +465,9 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {} } 
 
 function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {}) {
   const castRoles = ["character_1", "character_2", "character_3", "animal", "group"];
-  const roleWithRefs = castRoles.filter((role) => Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0);
+  const orderedRoleWithRefs = ["character_1", "character_2", "character_3", "animal", "group"]
+    .filter((role) => Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0);
+  const roleWithRefs = [...new Set([...orderedRoleWithRefs, ...castRoles.filter((role) => Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0)])];
   const normalizeRoleList = (value) => {
     const list = Array.isArray(value) ? value : [];
     return [...new Set(list.map((role) => normalizeScenarioRoleName(role)).filter(Boolean))];
@@ -431,7 +481,7 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
       ? normalizeRoleList(Object.keys(scene.refsUsed).filter((role) => !!scene.refsUsed[role]))
       : []);
   const mustAppear = normalizeRoleList(scene?.mustAppear);
-  const hasExplicitContract = Boolean(primaryRole || secondaryRoles.length || sceneActiveRoles.length || refsUsed.length || mustAppear.length);
+  const hasExplicitContract = Boolean(primaryRole || secondaryRoles.length || sceneActiveRoles.length || mustAppear.length);
   if (hasExplicitContract) {
     return {
       primaryRole,
@@ -8253,10 +8303,36 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     setScenarioImageError("");
     try {
       const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
+      const scenarioPackageForImage = scenarioFlowSourceNode?.data?.scenarioPackage && typeof scenarioFlowSourceNode.data.scenarioPackage === "object"
+        ? scenarioFlowSourceNode.data.scenarioPackage
+        : {};
       const refsByRoleForImage = buildScenarioRefsByRoleForImage({
         scene: targetScene,
         scenarioBrainRefs,
+        scenarioPackage: scenarioPackageForImage,
       });
+      if (CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD) {
+        const sceneRefs = extractScenarioRefsByRoleFromSource(targetScene?.refsByRole);
+        const scenarioPackageRefs = extractScenarioRefsByRoleFromSource(scenarioPackageForImage?.refsByRole);
+        const contextRefs = extractScenarioRefsByRoleFromSource(
+          targetScene?.connected_context_summary?.context_refs
+          || targetScene?.connectedContextSummary?.context_refs
+          || targetScene?.context_refs
+          || targetScene?.contextRefs
+          || scenarioPackageForImage?.connected_context_summary?.context_refs
+          || scenarioPackageForImage?.context_refs
+          || {}
+        );
+        const contextRefCountsByRole = summarizeRefsByRole(contextRefs);
+        const hasContextRefs = SCENARIO_IMAGE_ROLE_KEYS.some((role) => Number(contextRefCountsByRole?.[role] || 0) > 0);
+        console.debug("[SCENARIO IMAGE SOURCE]", {
+          sceneId,
+          hasSceneRefsByRole: SCENARIO_IMAGE_ROLE_KEYS.some((role) => Array.isArray(sceneRefs?.[role]) && sceneRefs[role].length > 0),
+          hasScenarioPackageRefsByRole: SCENARIO_IMAGE_ROLE_KEYS.some((role) => Array.isArray(scenarioPackageRefs?.[role]) && scenarioPackageRefs[role].length > 0),
+          hasContextRefs,
+          contextRefCountsByRole,
+        });
+      }
       const derivedRoleContract = buildScenarioRoleContractForImage({
         scene: targetScene,
         refsByRole: refsByRoleForImage,
@@ -8390,7 +8466,7 @@ Aspect ratio: ${imageFormat}`,
     } finally {
       setScenarioImageLoading(false);
     }
-  }, [clearActiveVideoJob, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioBrainRefs, updateScenarioScene]);
+  }, [clearActiveVideoJob, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioScenes, scenarioBrainRefs, updateScenarioScene]);
 
   const handleClearScenarioImage = useCallback((slot = "single") => {
     setScenarioImageError("");
