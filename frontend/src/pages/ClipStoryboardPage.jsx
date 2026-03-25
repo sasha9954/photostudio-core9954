@@ -165,6 +165,7 @@ const CLIP_TRACE_SCENARIO_TRANSFER = false;
 const CLIP_TRACE_VISUAL_LOCK = false;
 const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GRAPH = false;
+const CLIP_TRACE_INTRO_PREVIEW = false;
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
 const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
   "no change in lighting style",
@@ -2627,15 +2628,35 @@ function buildIntroFrameAutoTitle({ textValue = "", scenes = [] } = {}) {
   return fallback || "Cinematic Intro";
 }
 
+const INTRO_REF_ROLE_ALIASES = {
+  character_1: ["character_1", "character1", "ref_character_1", "ref_character"],
+  character_2: ["character_2", "character2", "ref_character_2"],
+  character_3: ["character_3", "character3", "ref_character_3"],
+  animal: ["animal", "animals", "ref_animal"],
+  group: ["group", "groups", "crowd", "ref_group"],
+  props: ["props", "ref_props", "ref_items", "items", "objects", "item", "object"],
+  location: ["location", "locations", "ref_location"],
+  style: ["style", "styles", "ref_style"],
+};
+
+function getIntroRefsForRole(refsByRole = {}, role = "") {
+  const aliases = INTRO_REF_ROLE_ALIASES?.[role] || [role];
+  const collected = [];
+  for (const key of aliases) {
+    const items = Array.isArray(refsByRole?.[key]) ? refsByRole[key] : [];
+    for (const item of items) {
+      const url = String(typeof item === "string" ? item : item?.url || "").trim();
+      if (url && !collected.includes(url)) collected.push(url);
+    }
+  }
+  return collected;
+}
+
 function normalizeIntroConnectedRefsByRole(refsByRole = {}) {
   return Object.fromEntries(
     INTRO_COMFY_REF_ROLES.map((role) => {
-      const items = Array.isArray(refsByRole?.[role]) ? refsByRole[role] : [];
-      const urls = items
-        .map((item) => (typeof item === "string" ? item : item?.url))
-        .map((value) => String(value || "").trim())
-        .filter(Boolean);
-      return [role, [...new Set(urls)]];
+      const urls = getIntroRefsForRole(refsByRole, role);
+      return [role, urls];
     })
   );
 }
@@ -2691,8 +2712,15 @@ function extractIntroScenarioRefsByRole(scenarioPackage = null) {
     scenarioPackage?.castRefsByRole,
     scenarioPackage?.history?.refsByRole,
   ];
-  const firstValid = candidates.find((value) => value && typeof value === "object" && !Array.isArray(value)) || {};
-  return normalizeIntroConnectedRefsByRole(firstValid);
+  const mergedScenarioRefs = candidates.reduce((acc, value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return acc;
+    for (const [role, refs] of Object.entries(value)) {
+      if (!Array.isArray(refs) || refs.length === 0) continue;
+      acc[role] = [...(Array.isArray(acc?.[role]) ? acc[role] : []), ...refs];
+    }
+    return acc;
+  }, {});
+  return normalizeIntroConnectedRefsByRole(mergedScenarioRefs);
 }
 
 function buildIntroScenarioRefsByRole({ directorRefsByRole = {}, graphRefsByRole = {}, plannerRefsByRole = {} } = {}) {
@@ -2702,13 +2730,10 @@ function buildIntroScenarioRefsByRole({ directorRefsByRole = {}, graphRefsByRole
   return normalizeIntroConnectedRefsByRole(
     Object.fromEntries(
       INTRO_COMFY_REF_ROLES.map((role) => {
-        const graphUrls = normalizedGraph?.[role] || [];
         const directorUrls = normalizedDirector?.[role] || [];
+        const graphUrls = normalizedGraph?.[role] || [];
         const plannerUrls = normalizedPlanner?.[role] || [];
-        if (graphUrls.length > 0 || directorUrls.length > 0) {
-          return [role, [...graphUrls, ...directorUrls]];
-        }
-        return [role, plannerUrls];
+        return [role, [...directorUrls, ...graphUrls, ...plannerUrls]];
       })
     )
   );
@@ -2978,6 +3003,38 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
+  if (targetHandle === "ref_animal" && sourceNode.type === "refAnimal" && sourceHandle === "ref_animal") {
+    const refs = (Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [])
+      .map((item) => String(item?.url || "").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    if (!refs.length) return null;
+    return {
+      value: refs[0] || "",
+      preview: String(sourceNode?.data?.name || "").trim() || `Animal • ${refs.length} refs`,
+      sourceLabel: "Animal",
+      refs,
+      count: refs.length,
+      meta: { kind: "ref_animal", count: refs.length },
+    };
+  }
+
+  if (targetHandle === "ref_group" && sourceNode.type === "refGroup" && sourceHandle === "ref_group") {
+    const refs = (Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [])
+      .map((item) => String(item?.url || "").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    if (!refs.length) return null;
+    return {
+      value: refs[0] || "",
+      preview: String(sourceNode?.data?.name || "").trim() || `Group • ${refs.length} refs`,
+      sourceLabel: "Group",
+      refs,
+      count: refs.length,
+      meta: { kind: "ref_group", count: refs.length },
+    };
+  }
+
   if (targetHandle === "ref_props" && sourceNode.type === "refNode" && sourceHandle === "ref_items") {
     const normalized = normalizeRefData(sourceNode?.data || {}, "ref_items");
     if (!normalized.refs.length) return null;
@@ -3029,13 +3086,15 @@ function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(
       ref_character_1: null,
       ref_character_2: null,
       ref_character_3: null,
+      ref_animal: null,
+      ref_group: null,
       ref_props: null,
       ref_location: null,
       ref_style: null,
     };
   }
 
-  return ["audio_in", "video_file_in", "video_link_in", "ref_character_1", "ref_character_2", "ref_character_3", "ref_props", "ref_location", "ref_style"].reduce((acc, handleId) => {
+  return ["audio_in", "video_file_in", "video_link_in", "ref_character_1", "ref_character_2", "ref_character_3", "ref_animal", "ref_group", "ref_props", "ref_location", "ref_style"].reduce((acc, handleId) => {
     const edge = getLatestIncomingEdgeForHandle({ targetNodeId: node.id, targetHandle: handleId, edges });
     const sourceNode = edge ? (nodesById.get(edge.source) || null) : null;
     const extracted = extractNarrativeConnectedValue({
@@ -3180,9 +3239,9 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   const narrativeGraphRefsByRole = normalizeIntroConnectedRefsByRole({
     character_1: narrativeInputsSnapshot?.ref_character_1?.refs || [],
     character_2: narrativeInputsSnapshot?.ref_character_2?.refs || [],
-    character_3: [],
-    animal: [],
-    group: [],
+    character_3: narrativeInputsSnapshot?.ref_character_3?.refs || [],
+    animal: narrativeInputsSnapshot?.ref_animal?.refs || [],
+    group: narrativeInputsSnapshot?.ref_group?.refs || [],
     props: narrativeInputsSnapshot?.ref_props?.refs || [],
     location: narrativeInputsSnapshot?.ref_location?.refs || [],
     style: narrativeInputsSnapshot?.ref_style?.refs || [],
@@ -3341,6 +3400,17 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     supportingParticipants,
     importantProps,
   });
+  if (CLIP_TRACE_INTRO_PREVIEW) {
+    console.debug("[INTRO PREVIEW REFS]", {
+      countsByRole: Object.fromEntries(
+        INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(connectedRefsByRole?.[role]) ? connectedRefsByRole[role].length : 0])
+      ),
+      heroParticipants,
+      supportingParticipants,
+      importantProps,
+      introMustAppear,
+    });
+  }
   if (roleAwareCastSummary) summaryParts.push(`cast: ${roleAwareCastSummary}`);
   if (CLIP_TRACE_SCENARIO_FORMAT) {
     console.debug("[INTRO PREVIEW SOURCE]", {
@@ -11254,27 +11324,20 @@ onClipSec: (nodeId, value) => {
                   : x)));
 
                 try {
-                  console.log("[INTRO FRAME PAYLOAD] /api/clip/intro/generate", {
-                    manualTitleRaw: payload.manualTitleRaw,
-                    hookSourceTitle: payload.title,
-                    title: payload.title,
-                    previewFormat: payload.previewFormat,
-                    stylePreset: payload.stylePreset,
-                    rawConnectedRefsByRoleCounts: Object.fromEntries(
-                      INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(freshContext?.graphConnectedRefsByRole?.[role]) ? freshContext.graphConnectedRefsByRole[role].length : 0])
-                    ),
-                    plannerRefsByRoleCounts: Object.fromEntries(
-                      INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(freshContext?.plannerConnectedRefsByRole?.[role]) ? freshContext.plannerConnectedRefsByRole[role].length : 0])
-                    ),
-                    connectedRefsByRoleCounts: Object.fromEntries(
-                      INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(payload?.connectedRefsByRole?.[role]) ? payload.connectedRefsByRole[role].length : 0])
-                    ),
-                    graphConnectedSourceNodeIdsByRole: freshContext?.graphConnectedSourceNodeIdsByRole || {},
-                    introMustAppear: payload.introMustAppear,
-                    introMustNotAppear: payload.introMustNotAppear,
-                    connectedGenderLocksByRole: payload.connectedGenderLocksByRole,
-                    connectedSpeciesLocksByRole: payload.connectedSpeciesLocksByRole,
-                  });
+                  if (CLIP_TRACE_INTRO_PREVIEW) {
+                    console.debug("[INTRO FRAME PAYLOAD] /api/clip/intro/generate", {
+                      title: payload.title,
+                      previewFormat: payload.previewFormat,
+                      stylePreset: payload.stylePreset,
+                      connectedRefsByRoleCounts: Object.fromEntries(
+                        INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(payload?.connectedRefsByRole?.[role]) ? payload.connectedRefsByRole[role].length : 0])
+                      ),
+                      heroParticipants: payload.heroParticipants,
+                      supportingParticipants: payload.supportingParticipants,
+                      importantProps: payload.importantProps,
+                      introMustAppear: payload.introMustAppear,
+                    });
+                  }
                   const out = await fetchJson("/api/clip/intro/generate", {
                     method: "POST",
                     body: payload,
