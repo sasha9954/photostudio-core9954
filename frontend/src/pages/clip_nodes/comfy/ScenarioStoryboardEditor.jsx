@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 
 const TOP_TABS = [
   { id: "scenario", label: "Сценарий" },
@@ -245,6 +246,16 @@ export default function ScenarioStoryboardEditor({
   const bgMontageStatusLabel = hasBgMusic ? `монтаж: ${usesBgMusicInMontage ? "да" : "нет"}` : "";
   const bgSourceStatusLabel = hasBgMusic && bgMusicSource !== "none" ? `source: ${bgMusicSource}` : "";
   const bgPromptStatusLabel = hasBgMusicPrompt ? "prompt: есть" : "prompt: нет";
+  const editorPromptVisible = hasBgMusicPrompt;
+
+  useEffect(() => {
+    if (!CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) return;
+    console.debug("[SCENARIO STORYBOARD MUSIC]", {
+      packageHasGlobalMusicPrompt: !!String(safeAudioData?.packageGlobalMusicPrompt || "").trim(),
+      audioDataHasGlobalMusicPrompt: !!String(safeAudioData?.globalMusicPrompt || "").trim(),
+      editorPromptVisible,
+    });
+  }, [safeAudioData?.packageGlobalMusicPrompt, safeAudioData?.globalMusicPrompt, editorPromptVisible]);
 
   const handleUploadBgMusicClick = () => {
     bgMusicUploadRef.current?.click();
@@ -496,7 +507,7 @@ export default function ScenarioStoryboardEditor({
                     <textarea
                       className="clipSB_textarea clipSB_scenarioBgAudioPrompt"
                       rows={3}
-                      value={String(safeAudioData?.musicPromptRu || safeAudioData?.globalMusicPrompt || "")}
+                      value={globalMusicPrompt}
                       onChange={(event) => onUpdateMusic?.(nodeId, { musicPromptRu: event.target.value, globalMusicPrompt: event.target.value })}
                       placeholder="Сценарист ещё не предложил фоновую музыку"
                     />

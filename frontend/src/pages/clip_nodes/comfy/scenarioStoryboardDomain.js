@@ -1,3 +1,5 @@
+import { buildGlobalMusicPromptFromStructuredMusic } from "./comfyNarrativeDomain";
+
 const normalizeText = (value) => String(value || "").trim();
 const SCENARIO_STORYBOARD_TRACE = false;
 const CLIP_TRACE_SCENARIO_FORMAT = false;
@@ -92,7 +94,7 @@ function resolveFormatAlias(...candidates) {
 }
 
 function resolveScenarioGlobalMusicPrompt(storyboardOut = {}, directorOutput = {}) {
-  return normalizeText(
+  const flatPrompt = normalizeText(
     storyboardOut?.globalMusicPrompt
     ?? storyboardOut?.music_prompt
     ?? storyboardOut?.bgMusicPrompt
@@ -101,6 +103,23 @@ function resolveScenarioGlobalMusicPrompt(storyboardOut = {}, directorOutput = {
     ?? directorOutput?.music?.globalMusicPrompt
     ?? directorOutput?.music_prompt
   );
+  const structuredMusic = (
+    (directorOutput?.music && typeof directorOutput.music === "object" ? directorOutput.music : null)
+    || (storyboardOut?.music && typeof storyboardOut.music === "object" ? storyboardOut.music : null)
+    || null
+  );
+  const synthesizedPrompt = flatPrompt ? "" : buildGlobalMusicPromptFromStructuredMusic(structuredMusic);
+  if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) {
+    console.debug("[SCENARIO GLOBAL MUSIC SYNTH]", {
+      hasFlatPrompt: !!flatPrompt,
+      hasStructuredMusic: !!structuredMusic,
+      mood: normalizeText(structuredMusic?.mood ?? structuredMusic?.musicMood ?? structuredMusic?.music_mood),
+      style: normalizeText(structuredMusic?.style ?? structuredMusic?.musicStyle ?? structuredMusic?.music_style),
+      hasPacingHints: !!normalizeText(structuredMusic?.pacingHints ?? structuredMusic?.pacing_hints ?? structuredMusic?.pacing),
+      synthesizedPromptLength: synthesizedPrompt.length,
+    });
+  }
+  return flatPrompt || synthesizedPrompt;
 }
 
 export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = null) {

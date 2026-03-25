@@ -61,6 +61,7 @@ export const NARRATIVE_CONTEXT_INPUT_HANDLES = NARRATIVE_INPUT_HANDLES.filter((i
 const lookupLabel = (options, value, fallback) => options.find((option) => option.value === value)?.labelRu || fallback;
 
 const normalizeText = (value) => String(value || "").trim();
+const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC_SYNTH = false;
 
 function getConnectedInputRawSignal(input) {
   if (!input || typeof input !== "object") return "";
@@ -226,16 +227,67 @@ const splitEntities = (text) => normalizeText(text)
   .filter(Boolean)
   .slice(0, 6);
 
+function normalizeMusicPromptPart(value) {
+  if (Array.isArray(value)) return value.map((item) => normalizeMusicPromptPart(item)).filter(Boolean).join(", ");
+  if (value && typeof value === "object") return "";
+  return normalizeText(value);
+}
+
+export function buildGlobalMusicPromptFromStructuredMusic(music = null) {
+  const source = music && typeof music === "object" ? music : null;
+  if (!source) return "";
+
+  const mood = normalizeMusicPromptPart(source?.mood ?? source?.musicMood ?? source?.music_mood);
+  const style = normalizeMusicPromptPart(source?.style ?? source?.musicStyle ?? source?.music_style);
+  const pacingHints = normalizeMusicPromptPart(source?.pacingHints ?? source?.pacing_hints ?? source?.pacing);
+  const genre = normalizeMusicPromptPart(source?.genre);
+  const energy = normalizeMusicPromptPart(source?.energy);
+  const instrumentation = normalizeMusicPromptPart(source?.instrumentation ?? source?.instruments);
+
+  const parts = [
+    mood ? `Mood: ${mood}.` : "",
+    style ? `Style: ${style}.` : "",
+    pacingHints ? `Pacing: ${pacingHints}.` : "",
+    genre ? `Genre: ${genre}.` : "",
+    energy ? `Energy: ${energy}.` : "",
+    instrumentation ? `Instrumentation: ${instrumentation}.` : "",
+  ].filter(Boolean);
+  return parts.join(" ").trim();
+}
+
 function resolveDirectorGlobalMusicPrompt(response = {}, storyboardOut = null, directorOutput = null) {
-  return normalizeText(
+  const flatPrompt = normalizeText(
     response?.globalMusicPrompt
     ?? response?.bgMusicPrompt
+    ?? response?.music_prompt
     ?? storyboardOut?.globalMusicPrompt
     ?? storyboardOut?.music_prompt
+    ?? storyboardOut?.bgMusicPrompt
     ?? directorOutput?.music?.globalMusicPrompt
+    ?? directorOutput?.music?.music_prompt
     ?? directorOutput?.music_prompt
     ?? directorOutput?.globalMusicPrompt
   );
+  const structuredMusic = (
+    (response?.directorOutput?.music && typeof response.directorOutput.music === "object" ? response.directorOutput.music : null)
+    || (directorOutput?.music && typeof directorOutput.music === "object" ? directorOutput.music : null)
+    || (response?.music && typeof response.music === "object" ? response.music : null)
+    || (storyboardOut?.music && typeof storyboardOut.music === "object" ? storyboardOut.music : null)
+    || null
+  );
+  const synthesizedPrompt = flatPrompt ? "" : buildGlobalMusicPromptFromStructuredMusic(structuredMusic);
+  const resolvedPrompt = flatPrompt || synthesizedPrompt;
+  if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC_SYNTH) {
+    console.debug("[SCENARIO GLOBAL MUSIC SYNTH]", {
+      hasFlatPrompt: !!flatPrompt,
+      hasStructuredMusic: !!structuredMusic,
+      mood: normalizeMusicPromptPart(structuredMusic?.mood ?? structuredMusic?.musicMood ?? structuredMusic?.music_mood),
+      style: normalizeMusicPromptPart(structuredMusic?.style ?? structuredMusic?.musicStyle ?? structuredMusic?.music_style),
+      hasPacingHints: !!normalizeMusicPromptPart(structuredMusic?.pacingHints ?? structuredMusic?.pacing_hints ?? structuredMusic?.pacing),
+      synthesizedPromptLength: synthesizedPrompt.length,
+    });
+  }
+  return resolvedPrompt;
 }
 
 const buildSceneWindow = (index, totalScenes) => {
@@ -596,6 +648,10 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     format: normalizeText(storyboardOut?.format) || resolvedFormat,
     aspectRatio: normalizeText(storyboardOut?.aspectRatio ?? storyboardOut?.aspect_ratio) || resolvedFormat,
     globalMusicPrompt: normalizeText(storyboardOut?.globalMusicPrompt) || globalMusicPrompt,
+    music: {
+      ...(storyboardOut?.music && typeof storyboardOut.music === "object" ? storyboardOut.music : {}),
+      globalMusicPrompt: normalizeText(storyboardOut?.music?.globalMusicPrompt) || globalMusicPrompt,
+    },
   };
   return {
     storyboardOut: normalizedStoryboardOut,

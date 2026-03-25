@@ -10025,6 +10025,7 @@ onClipSec: (nodeId, value) => {
             audioUrl: String(currentAudioData.audioUrl || normalizedPackage?.audioUrl || "").trim(),
             durationSec: Number(currentAudioData.durationSec ?? normalizedPackage?.audioDurationSec ?? 0) || 0,
             phrases: phraseBreakdown,
+            packageGlobalMusicPrompt: String(normalizedPackage?.globalMusicPrompt || "").trim(),
             globalMusicPrompt: String(
               currentAudioData.globalMusicPrompt
               || normalizedPackage?.globalMusicPrompt
@@ -10037,9 +10038,9 @@ onClipSec: (nodeId, value) => {
             musicUrl: String(currentAudioData.musicUrl || normalizedPackage?.musicUrl || "").trim(),
           };
           if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) {
-            console.debug("[SCENARIO STORYBOARD AUDIO]", {
-              hasScenarioPackageGlobalMusicPrompt: !!String(normalizedPackage?.globalMusicPrompt || "").trim(),
-              hasAudioDataGlobalMusicPrompt: !!String(audioData?.globalMusicPrompt || "").trim(),
+            console.debug("[SCENARIO STORYBOARD MUSIC]", {
+              packageHasGlobalMusicPrompt: !!String(normalizedPackage?.globalMusicPrompt || "").trim(),
+              audioDataHasGlobalMusicPrompt: !!String(audioData?.globalMusicPrompt || "").trim(),
               musicPromptRuLength: String(audioData?.musicPromptRu || "").trim().length,
               musicPromptEnLength: String(audioData?.musicPromptEn || "").trim().length,
               globalMusicPromptLength: String(audioData?.globalMusicPrompt || "").trim().length,
