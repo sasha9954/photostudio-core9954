@@ -4519,8 +4519,59 @@ body.ps_clip_fullscreen .mainCol {
   height: 100%;
 }
 
+.clipSB_scenarioEditorVideoBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.clipSB_scenarioEditorVideoLeft,
+.clipSB_scenarioEditorVideoRight {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.clipSB_scenarioEditorVideoRight {
+  align-content: start;
+}
+
+.clipSB_scenarioEditorVideoFramesGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  min-height: 100%;
+  height: 100%;
+}
+
+.clipSB_scenarioEditorVideoFrameTile {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 8px;
+  min-height: 0;
+}
+
+.clipSB_scenarioEditorVideoFrameLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: rgba(207, 226, 245, 0.86);
+}
+
+.clipSB_scenarioEditorVideoTilePlaceholder {
+  min-height: 180px;
+  font-size: 12px;
+}
+
+.clipSB_scenarioEditorVideoHint {
+  text-align: center;
+}
+
 @media (max-width: 1160px) {
-  .clipSB_scenarioEditorImageBody {
+  .clipSB_scenarioEditorImageBody,
+  .clipSB_scenarioEditorVideoBody,
+  .clipSB_scenarioEditorVideoFramesGrid {
     grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -201,6 +201,13 @@ export default function ScenarioStoryboardEditor({
   const musicStatus = resolveBlockStatus({ runtimeStatus: safeAudioData?.musicStatus, assetUrl: safeAudioData?.musicUrl });
   const isBgAudioSelected = activeSelectionType === "bg_audio";
   const sceneNeedsTwoFrames = isFirstLastScene(selectedScene);
+  const effectiveRenderMode = String(selectedScene?.renderMode || (sceneNeedsTwoFrames ? "first_last" : "image_to_video")).trim();
+  const isFirstLastVideoMode = effectiveRenderMode === "first_last" || sceneNeedsTwoFrames;
+  const sourceImageUrl = String(selectedScene?.imageUrl || "").trim();
+  const startFrameSourceUrl = String(selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl || "").trim();
+  const endFrameSourceUrl = String(selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl || "").trim();
+  const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();
+  const hasSceneVideo = Boolean(sceneVideoUrl);
   const bgMusicSource = resolveMusicSource(safeAudioData);
   const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
   const usesBgMusicInMontage = hasBgMusic && Boolean(safeAudioData?.useInMontage);
@@ -667,42 +674,89 @@ export default function ScenarioStoryboardEditor({
                     <h4>3. VIDEO</h4>
                     <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${videoStatus}`}>{videoStatus}</span>
                   </div>
-                  <textarea
-                    className="clipSB_textarea"
-                    rows={3}
-                    value={String(selectedScene?.videoPromptRu || "")}
-                    onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { videoPromptRu: event.target.value })}
-                    placeholder="videoPromptRu"
-                  />
-                  <details>
-                    <summary>EN</summary>
-                    <textarea
-                      className="clipSB_textarea"
-                      rows={2}
-                      value={String(selectedScene?.videoPromptEn || "")}
-                      onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { videoPromptEn: event.target.value })}
-                      placeholder="videoPromptEn"
-                    />
-                  </details>
-                  <label className="clipSB_narrativeField">
-                    <div className="clipSB_brainLabel">cameraRu</div>
-                    <input
-                      className="clipSB_input"
-                      value={String(selectedScene?.cameraRu || "")}
-                      onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { cameraRu: event.target.value })}
-                    />
-                  </label>
-                  <label className="clipSB_narrativeField">
-                    <div className="clipSB_brainLabel">renderMode</div>
-                    <select className="clipSB_select" value={selectedScene.renderMode || "image_to_video"} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { renderMode: event.target.value })}>
-                      {RENDER_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                  </label>
-                  {selectedScene?.videoUrl ? (
-                    <video className="clipSB_scenarioEditorVideoPreview" controls src={selectedScene.videoUrl} />
-                  ) : (
-                    <div className="clipSB_hint">preview видео отсутствует</div>
-                  )}
+                  <div className="clipSB_scenarioEditorVideoBody">
+                    <div className="clipSB_scenarioEditorVideoLeft">
+                      <textarea
+                        className="clipSB_textarea"
+                        rows={3}
+                        value={String(selectedScene?.videoPromptRu || "")}
+                        onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { videoPromptRu: event.target.value })}
+                        placeholder="videoPromptRu"
+                      />
+                      <details>
+                        <summary>EN</summary>
+                        <textarea
+                          className="clipSB_textarea"
+                          rows={2}
+                          value={String(selectedScene?.videoPromptEn || "")}
+                          onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { videoPromptEn: event.target.value })}
+                          placeholder="videoPromptEn"
+                        />
+                      </details>
+                      <label className="clipSB_narrativeField">
+                        <div className="clipSB_brainLabel">cameraRu</div>
+                        <input
+                          className="clipSB_input"
+                          value={String(selectedScene?.cameraRu || "")}
+                          onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { cameraRu: event.target.value })}
+                        />
+                      </label>
+                      <label className="clipSB_narrativeField">
+                        <div className="clipSB_brainLabel">renderMode</div>
+                        <select
+                          className="clipSB_select"
+                          value={effectiveRenderMode}
+                          onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { renderMode: event.target.value })}
+                        >
+                          {RENDER_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="clipSB_scenarioEditorVideoRight">
+                      <div className={`clipSB_scenarioEditorImagePreviewWrap${hasSceneVideo || isFirstLastVideoMode ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
+                        {hasSceneVideo ? (
+                          <video className="clipSB_scenarioEditorVideoPreview" controls src={sceneVideoUrl} />
+                        ) : isFirstLastVideoMode ? (
+                          <div className="clipSB_scenarioEditorVideoFramesGrid">
+                            <div className="clipSB_scenarioEditorVideoFrameTile">
+                              <div className="clipSB_scenarioEditorVideoFrameLabel">ПЕРВЫЙ КАДР</div>
+                              {startFrameSourceUrl ? (
+                                <img
+                                  className="clipSB_scenarioEditorImagePreview"
+                                  src={startFrameSourceUrl}
+                                  alt={`scene-${selectedSceneId}-video-start-frame`}
+                                />
+                              ) : (
+                                <div className="clipSB_scenarioEditorPreviewPlaceholder clipSB_scenarioEditorVideoTilePlaceholder">Первый кадр отсутствует</div>
+                              )}
+                            </div>
+                            <div className="clipSB_scenarioEditorVideoFrameTile">
+                              <div className="clipSB_scenarioEditorVideoFrameLabel">ПОСЛЕДНИЙ КАДР</div>
+                              {endFrameSourceUrl ? (
+                                <img
+                                  className="clipSB_scenarioEditorImagePreview"
+                                  src={endFrameSourceUrl}
+                                  alt={`scene-${selectedSceneId}-video-end-frame`}
+                                />
+                              ) : (
+                                <div className="clipSB_scenarioEditorPreviewPlaceholder clipSB_scenarioEditorVideoTilePlaceholder">Последний кадр отсутствует</div>
+                              )}
+                            </div>
+                          </div>
+                        ) : sourceImageUrl ? (
+                          <img className="clipSB_scenarioEditorImagePreview" src={sourceImageUrl} alt={`scene-${selectedSceneId}-video-source`} />
+                        ) : (
+                          <div className="clipSB_scenarioEditorPreviewPlaceholder" role="status" aria-live="polite">
+                            <div className="clipSB_scenarioEditorPreviewPlaceholderIcon" aria-hidden="true">🖼️</div>
+                            <div>Исходное изображение для видео отсутствует</div>
+                          </div>
+                        )}
+                      </div>
+                      {!hasSceneVideo ? (
+                        <div className="clipSB_hint clipSB_scenarioEditorVideoHint">Видео сцены пока не создано</div>
+                      ) : null}
+                    </div>
+                  </div>
                   <div className="clipSB_scenarioEditorBtnRow">
                     <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId)} disabled={videoStatus === "loading"}>Создать видео</button>
                     <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { videoUrl: "", videoStatus: "idle", videoError: "", videoJobId: "" })}>Удалить</button>
