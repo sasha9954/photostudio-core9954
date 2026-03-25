@@ -2640,6 +2640,80 @@ function normalizeIntroConnectedRefsByRole(refsByRole = {}) {
   );
 }
 
+function normalizeIntroCastRole(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const direct = normalized.replace(/[\s-]+/g, "_");
+  const map = {
+    character_1: "character_1",
+    character1: "character_1",
+    hero: "character_1",
+    lead: "character_1",
+    protagonist: "character_1",
+    main_character: "character_1",
+    character_2: "character_2",
+    character2: "character_2",
+    secondary: "character_2",
+    deuteragonist: "character_2",
+    character_3: "character_3",
+    character3: "character_3",
+    tertiary: "character_3",
+    animal: "animal",
+    pet: "animal",
+    dog: "animal",
+    group: "group",
+    crowd: "group",
+  };
+  return map[direct] || "";
+}
+
+function normalizeIntroParticipantRoleList(...sources) {
+  const out = [];
+  for (const source of sources) {
+    const items = Array.isArray(source) ? source : [];
+    for (const item of items) {
+      const rawRole = typeof item === "string"
+        ? item
+        : (item?.role || item?.id || item?.entityId || item?.entity_id || item?.slot || item?.name || "");
+      const role = normalizeIntroCastRole(rawRole);
+      if (role && !out.includes(role)) out.push(role);
+    }
+  }
+  return out;
+}
+
+function extractIntroScenarioRefsByRole(scenarioPackage = null) {
+  if (!scenarioPackage || typeof scenarioPackage !== "object") return normalizeIntroConnectedRefsByRole({});
+  const candidates = [
+    scenarioPackage?.refsByRole,
+    scenarioPackage?.connectedRefsByRole,
+    scenarioPackage?.cast?.refsByRole,
+    scenarioPackage?.castRefsByRole,
+    scenarioPackage?.history?.refsByRole,
+  ];
+  const firstValid = candidates.find((value) => value && typeof value === "object" && !Array.isArray(value)) || {};
+  return normalizeIntroConnectedRefsByRole(firstValid);
+}
+
+function buildIntroScenarioRefsByRole({ directorRefsByRole = {}, graphRefsByRole = {}, plannerRefsByRole = {} } = {}) {
+  const normalizedDirector = normalizeIntroConnectedRefsByRole(directorRefsByRole);
+  const normalizedGraph = normalizeIntroConnectedRefsByRole(graphRefsByRole);
+  const normalizedPlanner = normalizeIntroConnectedRefsByRole(plannerRefsByRole);
+  return normalizeIntroConnectedRefsByRole(
+    Object.fromEntries(
+      INTRO_COMFY_REF_ROLES.map((role) => {
+        const graphUrls = normalizedGraph?.[role] || [];
+        const directorUrls = normalizedDirector?.[role] || [];
+        const plannerUrls = normalizedPlanner?.[role] || [];
+        if (graphUrls.length > 0 || directorUrls.length > 0) {
+          return [role, [...graphUrls, ...directorUrls]];
+        }
+        return [role, plannerUrls];
+      })
+    )
+  );
+}
+
 function formatIntroRoleLabel(role) {
   return String(role || "")
     .replace(/^character_/, "character ")
@@ -3097,6 +3171,22 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   if (textValue) summaryParts.push(`text: ${truncateIntroText(textValue, 42)}`);
   if (sourceLabels.length) summaryParts.push(`inputs: ${sourceLabels.join(", ")}`);
   const plannerInput = {};
+  const directorRefsByRole = extractIntroScenarioRefsByRole(scenarioPackage);
+  const narrativeInputsSnapshot = getNarrativeConnectedInputsSnapshot({
+    node: narrativeNode,
+    nodesById,
+    edges,
+  });
+  const narrativeGraphRefsByRole = normalizeIntroConnectedRefsByRole({
+    character_1: narrativeInputsSnapshot?.ref_character_1?.refs || [],
+    character_2: narrativeInputsSnapshot?.ref_character_2?.refs || [],
+    character_3: [],
+    animal: [],
+    group: [],
+    props: narrativeInputsSnapshot?.ref_props?.refs || [],
+    location: narrativeInputsSnapshot?.ref_location?.refs || [],
+    style: narrativeInputsSnapshot?.ref_style?.refs || [],
+  });
   const scenarioFormatCandidates = [
     scenarioPackage?.format,
     scenarioPackage?.aspectRatio,
@@ -3164,24 +3254,43 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   const graphConnectedSourceNodeIdsByRole = graphRefPackage?.connectedSourceNodeIdsByRole || {};
   const graphConnectedRoles = INTRO_COMFY_REF_ROLES.filter((role) => !!String(graphConnectedSourceNodeIdsByRole?.[role] || "").trim());
   const hasGraphConnectedRefs = graphConnectedRoles.some((role) => (graphConnectedRefsByRole?.[role] || []).length > 0);
-  const connectedRefsByRole = normalizeIntroConnectedRefsByRole(
+  const mergedGraphRefsByRole = normalizeIntroConnectedRefsByRole(
     Object.fromEntries(
-      INTRO_COMFY_REF_ROLES.map((role) => {
-        const graphSourceNodeId = String(graphConnectedSourceNodeIdsByRole?.[role] || "").trim();
-        if (graphSourceNodeId) {
-          return [role, graphConnectedRefsByRole?.[role] || []];
-        }
-        if (!hasGraphConnectedRefs) {
-          return [role, plannerConnectedRefsByRole?.[role] || []];
-        }
-        return [role, []];
-      })
+      INTRO_COMFY_REF_ROLES.map((role) => [
+        role,
+        [
+          ...(graphConnectedRefsByRole?.[role] || []),
+          ...(narrativeGraphRefsByRole?.[role] || []),
+        ],
+      ])
     )
   );
+  const connectedRefsByRole = buildIntroScenarioRefsByRole({
+    directorRefsByRole,
+    graphRefsByRole: mergedGraphRefsByRole,
+    plannerRefsByRole: hasGraphConnectedRefs ? {} : plannerConnectedRefsByRole,
+  });
   const activeRefRoles = INTRO_COMFY_REF_ROLES.filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
   const introActiveCastRoles = INTRO_CAST_ROLES.filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
-  const heroParticipants = ["character_1", "character_2", "character_3"].filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
-  const supportingParticipants = ["animal", "group"].filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
+  const directorHeroParticipants = normalizeIntroParticipantRoleList(
+    scenarioPackage?.heroParticipants,
+    scenarioPackage?.primaryParticipants,
+    scenarioPackage?.cast?.heroParticipants,
+    scenarioPackage?.history?.heroParticipants,
+  );
+  const directorSupportingParticipants = normalizeIntroParticipantRoleList(
+    scenarioPackage?.supportingParticipants,
+    scenarioPackage?.cast?.supportingParticipants,
+    scenarioPackage?.history?.supportingParticipants,
+  );
+  const refsHeroParticipants = ["character_1", "character_2", "character_3"].filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
+  const refsSupportingParticipants = ["animal", "group"].filter((role) => (connectedRefsByRole?.[role] || []).length > 0);
+  const heroParticipants = normalizeIntroParticipantRoleList(directorHeroParticipants, refsHeroParticipants);
+  const supportingParticipants = normalizeIntroParticipantRoleList(
+    directorSupportingParticipants,
+    refsSupportingParticipants,
+    introActiveCastRoles.filter((role) => !heroParticipants.includes(role) && !["character_1", "character_2", "character_3"].includes(role)),
+  );
   const roleAwareCastSummary = buildIntroRoleAwareCastSummary(connectedRefsByRole);
   const directRoleProfiles = Object.fromEntries(
     (Array.isArray(nodes) ? nodes : [])
@@ -3207,7 +3316,17 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
       .map((role) => [role, inferIntroSpeciesLockFromProfile(roleProfiles?.[role])])
       .filter(([, value]) => !!value)
   );
-  const introMustAppear = [...introActiveCastRoles];
+  const directorIntroMustAppear = normalizeIntroParticipantRoleList(
+    scenarioPackage?.introMustAppear,
+    scenarioPackage?.cast?.introMustAppear,
+    scenarioPackage?.history?.introMustAppear,
+    scenarioPackage?.mustAppearRoles,
+  );
+  const introMustAppear = normalizeIntroParticipantRoleList(
+    directorIntroMustAppear,
+    heroParticipants,
+    introActiveCastRoles,
+  );
   const introMustNotAppear = [];
   const worldContext = buildIntroWorldContext({
     refsByRole: connectedRefsByRole,
@@ -3223,6 +3342,22 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     importantProps,
   });
   if (roleAwareCastSummary) summaryParts.push(`cast: ${roleAwareCastSummary}`);
+  if (CLIP_TRACE_SCENARIO_FORMAT) {
+    console.debug("[INTRO PREVIEW SOURCE]", {
+      sourceNodeType: String(narrativeNode?.type || ""),
+      hasDirectorOutput: !!scenarioPackage,
+      hasStoryboardOut: !!narrativeStoryboardOut,
+      connectedRefCountsByRole: Object.fromEntries(INTRO_COMFY_REF_ROLES.map((role) => [role, (connectedRefsByRole?.[role] || []).length])),
+      heroParticipants,
+      supportingParticipants,
+      introMustAppear,
+      hasStorySummary: !!storySummary,
+      hasPreviewPrompt: !!previewPrompt,
+      hasWorld: !!world,
+      hasRoles: roles.length > 0,
+      hasToneStyleDirection: !!toneStyleDirection,
+    });
+  }
   return {
     sourceNodeIds: storySources.map((node) => String(node?.id || "")).filter(Boolean),
     sourceNodeTypes: storySources.map((node) => String(node?.type || "")).filter(Boolean),
@@ -3275,6 +3410,13 @@ function buildIntroFrameStoryContextText(context = {}) {
 
   return [
     String(context?.summary || "").trim(),
+    context?.storySummary ? `Story summary: ${truncateIntroText(context.storySummary, 240)}` : "",
+    context?.previewPrompt ? `Preview intent: ${truncateIntroText(context.previewPrompt, 240)}` : "",
+    context?.world ? `World: ${truncateIntroText(context.world, 220)}` : "",
+    Array.isArray(context?.roles) && context.roles.length ? `Scenario roles: ${context.roles.slice(0, 8).join(", ")}` : "",
+    context?.toneStyleDirection ? `Tone/style: ${truncateIntroText(context.toneStyleDirection, 220)}` : "",
+    Array.isArray(context?.introMustAppear) && context.introMustAppear.length ? `Cast contract must appear: ${context.introMustAppear.join(", ")}` : "",
+    Array.isArray(context?.heroParticipants) && context.heroParticipants.length ? `Hero participants: ${context.heroParticipants.join(", ")}` : "",
     storyBeats.length ? `Opening beats: ${storyBeats.join(" | ")}` : "",
   ].filter(Boolean).join(" • ");
 }
@@ -11074,14 +11216,20 @@ onClipSec: (nodeId, value) => {
                   toneStyleDirection: String(freshContext.toneStyleDirection || "").trim(),
                 };
                 if (CLIP_TRACE_SCENARIO_FORMAT) {
-                  console.debug("[SCENARIO PREVIEW SOURCE]", {
-                    hasConnection: Array.isArray(freshContext.sourceNodeIds) && freshContext.sourceNodeIds.length > 0,
+                  console.debug("[INTRO PREVIEW PAYLOAD]", {
                     sourceNodeType: Array.isArray(freshContext.sourceNodeTypes) ? (freshContext.sourceNodeTypes[0] || "") : "",
-                    format: payload.previewFormat,
+                    previewFormat: payload.previewFormat,
+                    connectedRefCountsByRole: Object.fromEntries(
+                      INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(payload?.connectedRefsByRole?.[role]) ? payload.connectedRefsByRole[role].length : 0])
+                    ),
+                    heroParticipants: payload.heroParticipants,
+                    supportingParticipants: payload.supportingParticipants,
+                    introMustAppear: payload.introMustAppear,
                     hasStorySummary: !!payload.storySummary,
                     hasPreviewPrompt: !!payload.previewPrompt,
                     hasWorld: !!payload.world,
                     hasRoles: Array.isArray(payload.roles) && payload.roles.length > 0,
+                    hasToneStyleDirection: !!payload.toneStyleDirection,
                   });
                 }
 
@@ -11112,7 +11260,6 @@ onClipSec: (nodeId, value) => {
                     title: payload.title,
                     previewFormat: payload.previewFormat,
                     stylePreset: payload.stylePreset,
-                    connectedRefsByRole: payload.connectedRefsByRole,
                     rawConnectedRefsByRoleCounts: Object.fromEntries(
                       INTRO_COMFY_REF_ROLES.map((role) => [role, Array.isArray(freshContext?.graphConnectedRefsByRole?.[role]) ? freshContext.graphConnectedRefsByRole[role].length : 0])
                     ),

@@ -160,6 +160,11 @@ class IntroGenerateIn(BaseModel):
     introMustNotAppear: list[str] = Field(default_factory=list)
     connectedGenderLocksByRole: dict | None = None
     connectedSpeciesLocksByRole: dict | None = None
+    storySummary: str | None = None
+    previewPrompt: str | None = None
+    world: str | None = None
+    roles: list[str] = Field(default_factory=list)
+    toneStyleDirection: str | None = None
 
 
 class AssembleClipIn(BaseModel):
@@ -2107,6 +2112,11 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     important_props = _normalize_intro_text_list(getattr(payload, "importantProps", None), max_items=5)
     world_context = str(getattr(payload, "worldContext", "") or "").strip()
     style_context = str(getattr(payload, "styleContext", "") or "").strip()
+    story_summary = str(getattr(payload, "storySummary", "") or "").strip()
+    preview_prompt = str(getattr(payload, "previewPrompt", "") or "").strip()
+    world = str(getattr(payload, "world", "") or "").strip()
+    roles = _normalize_intro_text_list(getattr(payload, "roles", None), max_items=12)
+    tone_style_direction = str(getattr(payload, "toneStyleDirection", "") or "").strip()
     intro_must_appear = _normalize_intro_role_list(getattr(payload, "introMustAppear", None), allowed_roles=COMFY_CAST_ROLES, max_items=6)
     intro_must_not_appear = _normalize_intro_role_list(getattr(payload, "introMustNotAppear", None), allowed_roles=COMFY_CAST_ROLES, max_items=6)
     role_gender_locks = _normalize_intro_lock_map(
@@ -2287,6 +2297,8 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "- no hidden extra faces",
         "- no random replacement characters",
         "- do not replace connected cast with generic people",
+        "- if character refs exist, preserve face, hair, identity, and gender presentation exactly",
+        "- do not replace the lead with a generic random person",
         "- do not merge multiple roles into one person",
         "- do not merge roles",
         "- do not replace one role with another role",
@@ -2322,10 +2334,17 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     prompt_lines.extend([
         "WORLD SOURCE RULE:",
         "- world, environment, and location must come from story context and opening beats",
+        "- storySummary and previewPrompt are primary source-of-truth for what is happening in this frame",
         "- use refs for who is in frame",
         "- use story context for where the frame happens",
         "- do not invent bedroom / home interior / random room if story context suggests industrial / abandoned / gym / tension space",
     ])
+    if intro_must_appear:
+        prompt_lines.append("- if introMustAppear is set, those roles must appear in composition")
+    if hero_participants_resolved:
+        prompt_lines.append("- heroParticipants resolved must be prioritized in composition and visual hierarchy")
+    if story_summary or preview_prompt:
+        prompt_lines.append("- if storySummary or previewPrompt implies a specific conflict/event, render that exact conflict/event visually")
     if role_identity_lock_lines:
         prompt_lines.extend([
             "ROLE IDENTITY LOCK:",
@@ -2374,6 +2393,16 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         context_lines.append(f"Important props: {', '.join(important_props)}")
     if world_context:
         context_lines.append(f"World context: {world_context}")
+    if story_summary:
+        context_lines.append(f"Story summary (source-of-truth): {story_summary}")
+    if preview_prompt:
+        context_lines.append(f"Preview prompt (source-of-truth): {preview_prompt}")
+    if world:
+        context_lines.append(f"World (source-of-truth): {world}")
+    if roles:
+        context_lines.append(f"Scenario roles (source-of-truth): {', '.join(roles)}")
+    if tone_style_direction:
+        context_lines.append(f"Tone/style direction (source-of-truth): {tone_style_direction}")
     if style_context:
         context_lines.append(f"Style context: {style_context}")
     if role_gender_locks:
@@ -2493,6 +2522,11 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "importantProps": important_props,
         "worldContext": world_context or None,
         "styleContext": style_context or None,
+        "storySummary": story_summary or None,
+        "previewPrompt": preview_prompt or None,
+        "world": world or None,
+        "roles": roles,
+        "toneStyleDirection": tone_style_direction or None,
         "styleLabel": style_meta["label"],
         "styleDescription": style_meta["shortDescription"],
         "styleCompositionBias": style_meta["compositionBias"],
@@ -2882,6 +2916,16 @@ def clip_intro_generate(payload: IntroGenerateIn):
         "character1RefAttached": bool(inline_part_debug.get("character1RefAttached")),
         "character2RefAttached": bool(inline_part_debug.get("character2RefAttached")),
         "animalRefAttached": bool(inline_part_debug.get("animalRefAttached")),
+    }, ensure_ascii=False))
+    print("[INTRO PREVIEW BACKEND] " + json.dumps({
+        "refsReceivedByRole": raw_connected_ref_counts,
+        "heroParticipants": debug.get("heroParticipants") or [],
+        "introMustAppear": debug.get("introMustAppear") or [],
+        "hasStorySummary": bool(debug.get("storySummary")),
+        "hasPreviewPrompt": bool(debug.get("previewPrompt")),
+        "hasWorld": bool(debug.get("world")),
+        "hasRoles": bool(debug.get("roles")),
+        "hasToneStyleDirection": bool(debug.get("toneStyleDirection")),
     }, ensure_ascii=False))
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
