@@ -43,9 +43,11 @@ function sceneBadges(scene = {}) {
 }
 
 function isFirstLastScene(scene = {}) {
+  const imageStrategy = String(scene?.imageStrategy || "").trim().toLowerCase();
+  if (imageStrategy === "first_last") return true;
   const mode = String(scene?.renderMode || "").trim().toLowerCase();
   if (mode === "first_last") return true;
-  if (scene?.needsTwoFrames === true) return true;
+  if (scene?.requiresTwoFrames === true || scene?.needsTwoFrames === true) return true;
   const ltxMode = String(scene?.ltxMode || scene?.ltx_mode || "").trim().toLowerCase();
   return ["f_l", "f_l_as", "first_last"].includes(ltxMode);
 }

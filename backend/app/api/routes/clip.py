@@ -118,6 +118,13 @@ class ClipVideoIn(BaseModel):
     shotType: str | None = None
     audioSliceUrl: str | None = None
     provider: str | None = None
+    ltxMode: str | None = None
+    imageStrategy: str | None = None
+    resolvedWorkflowKey: str | None = None
+    resolvedModelKey: str | None = None
+    requiresTwoFrames: bool | None = None
+    requiresContinuation: bool | None = None
+    requiresAudioSensitiveVideo: bool | None = None
 
 
 class AssembleSceneIn(BaseModel):
@@ -9026,6 +9033,10 @@ def clip_video(payload: ClipVideoIn):
     print(
         "[CLIP VIDEO ROUTING] "
         f"sceneId={scene_id} "
+        f"ltxMode={str(payload.ltxMode or '').strip()} "
+        f"imageStrategy={str(payload.imageStrategy or '').strip()} "
+        f"resolvedWorkflowKey={str(payload.resolvedWorkflowKey or '').strip()} "
+        f"resolvedModelKey={str(payload.resolvedModelKey or '').strip()} "
         f"lipSync={bool(payload.lipSync)} "
         f"renderMode={render_mode or 'n/a'} "
         f"transitionType={transition_type} "
@@ -9155,6 +9166,9 @@ def clip_video(payload: ClipVideoIn):
         selected_model = (settings.KIE_VIDEO_MODEL_CONTINUOUS or "").strip()
     else:
         selected_model = (settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
+    explicit_model = str(payload.resolvedModelKey or "").strip()
+    if explicit_model:
+        selected_model = explicit_model
 
     if mode == "continuous" and not selected_model:
         return JSONResponse(

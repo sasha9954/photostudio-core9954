@@ -50,7 +50,14 @@ import {
 } from "./clip_nodes/comfy/comfyBrainDomain";
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
 import { buildScenarioDirectorRequestPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
-import { buildScenarioPreviewInput, normalizeScenarioStoryboardPackage } from "./clip_nodes/comfy/scenarioStoryboardDomain";
+import {
+  buildScenarioPreviewInput,
+  deriveScenarioImageStrategy,
+  normalizeScenarioStoryboardPackage,
+  resolveScenarioExplicitModelKey,
+  resolveScenarioExplicitWorkflowKey,
+  resolveScenarioWorkflowKey,
+} from "./clip_nodes/comfy/scenarioStoryboardDomain";
 import ScenarioStoryboardEditor from "./clip_nodes/comfy/ScenarioStoryboardEditor";
 
 
@@ -298,6 +305,16 @@ function hasScenarioContractValue(value) {
 function buildScenarioSceneContractPayload(scene = {}) {
   const forbiddenInsertions = mergeScenarioStringLists(scene?.forbiddenInsertions, GLOBAL_FORBIDDEN_INSERTIONS_GUARDS);
   const forbiddenChanges = mergeScenarioStringLists(scene?.forbiddenChanges, GLOBAL_FORBIDDEN_CHANGES_GUARDS);
+  const imageStrategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase() || "single";
+  const explicitWorkflow = resolveScenarioExplicitWorkflowKey(scene);
+  const resolvedWorkflowKey = String(scene?.resolvedWorkflowKey || explicitWorkflow || resolveScenarioWorkflowKey(scene)).trim();
+  const explicitModel = resolveScenarioExplicitModelKey(scene);
+  const resolvedModelKey = String(scene?.resolvedModelKey || explicitModel).trim();
+  const requestedDurationSec = Number(
+    scene?.requestedDurationSec
+      ?? scene?.durationSec
+      ?? Math.max(0, Number(scene?.t1 ?? 0) - Number(scene?.t0 ?? 0))
+  );
   return {
     sceneId: scene?.sceneId || "",
     sceneType: scene?.sceneType,
@@ -336,6 +353,16 @@ function buildScenarioSceneContractPayload(scene = {}) {
     audioSliceStartSec: scene?.audioSliceStartSec,
     audioSliceEndSec: scene?.audioSliceEndSec,
     audioDurationSec: scene?.audioDurationSec,
+    imageStrategy,
+    requiresTwoFrames: Boolean(scene?.requiresTwoFrames ?? scene?.needsTwoFrames ?? imageStrategy === "first_last"),
+    requiresContinuation: Boolean(scene?.requiresContinuation ?? scene?.continuationFromPrevious ?? scene?.continuation ?? imageStrategy === "continuation"),
+    requiresAudioSensitiveVideo: Boolean(
+      scene?.requiresAudioSensitiveVideo
+      ?? ["i2v_as", "f_l_as", "lip_sync"].includes(String(scene?.ltxMode || "").trim().toLowerCase())
+    ),
+    resolvedWorkflowKey,
+    resolvedModelKey,
+    requestedDurationSec: Number.isFinite(requestedDurationSec) ? Math.max(0, requestedDurationSec) : undefined,
   };
 }
 
@@ -1304,9 +1331,11 @@ function collectSceneVideoStateStats(scenes, prefix = "scene") {
 
 function isLipSyncScene(scene) {
   if (!scene || typeof scene !== "object") return false;
+  const ltxMode = String(scene.ltxMode || scene.ltx_mode || "").trim().toLowerCase();
   return !!(
     scene.lipSync === true
     || scene.isLipSync === true
+    || ltxMode === "lip_sync"
     || String(scene.renderMode || "").trim().toLowerCase() === "avatar_lipsync"
   );
 }
@@ -1924,6 +1953,8 @@ function resolveIntroCompositionPlan({ refsByRole = {}, heroParticipants = [], s
 }
 
 function resolveSceneTransitionType(scene) {
+  const imageStrategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase();
+  if (imageStrategy === "continuation" || imageStrategy === "first_last") return "continuous";
   const raw = String(scene?.transitionType || "single").toLowerCase();
   if (raw === "continuous" || raw === "continuation" || raw === "enter_transition") return "continuous";
   if (raw === "hard_cut" || raw === "justified_cut") return "hard_cut";
@@ -1939,6 +1970,18 @@ function getSceneTypeBadge(type) {
 
 function getScenePrimaryFramePrompt(scene) {
   return String(scene?.imagePromptRu || scene?.framePrompt || scene?.imagePrompt || scene?.prompt || "").trim();
+}
+
+function getSceneFramePromptByStrategy(scene, slot = "single") {
+  const strategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase();
+  if (strategy === "first_last") {
+    if (slot === "end") return String(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
+    return String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
+  }
+  if (strategy === "continuation" && slot === "start") {
+    return String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
+  }
+  return getScenePrimaryFramePrompt(scene);
 }
 
 function getSceneTransitionPrompt(scene) {
@@ -6033,6 +6076,7 @@ const recommendedNextSceneIndex = useMemo(() => {
 }, [scenarioEditor.selected, scenarioScenes]);
 
 const scenarioSelected = scenarioScenes[scenarioEditor.selected] || null;
+const scenarioSelectedImageStrategy = String(scenarioSelected?.imageStrategy || deriveScenarioImageStrategy(scenarioSelected)).trim().toLowerCase() || "single";
 const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelected);
 const scenarioSelectedIsLipSync = isLipSyncScene(scenarioSelected);
 const scenarioPreviousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
@@ -6066,9 +6110,11 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
     : scenarioPreviousScene?.startImageUrl
       ? "startImageUrl"
       : "none";
-const scenarioHasImageForVideo = scenarioSelectedTransitionType === "continuous"
-  ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl)
-  : !!scenarioSelected?.imageUrl;
+const scenarioHasImageForVideo = scenarioSelectedImageStrategy === "first_last"
+  ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.imageUrl) && !!scenarioSelected?.endImageUrl
+  : scenarioSelectedImageStrategy === "continuation"
+    ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.imageUrl)
+    : !!scenarioSelected?.imageUrl;
 const scenarioCanShowAddToVideoButton = scenarioHasImageForVideo && !scenarioSelectedVideoPanelActivated;
 
 const comfyNode = useMemo(() => {
@@ -7990,9 +8036,13 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
   const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
     if (!scenarioSelected) return;
 
+    const imageStrategy = String(scenarioSelected?.imageStrategy || deriveScenarioImageStrategy(scenarioSelected)).trim().toLowerCase() || "single";
     const transitionType = resolveSceneTransitionType(scenarioSelected);
-    const normalizedSlot = slot === "start" || slot === "end" ? slot : "single";
-    if (transitionType === "continuous" && normalizedSlot === "start" && !!scenarioSelected?.inheritPreviousEndAsStart) {
+    const requestedSlot = slot === "start" || slot === "end" ? slot : "single";
+    const normalizedSlot = imageStrategy === "first_last"
+      ? (requestedSlot === "end" ? "end" : "start")
+      : (imageStrategy === "continuation" ? (requestedSlot === "end" ? "end" : "start") : "single");
+    if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start" && !!scenarioSelected?.inheritPreviousEndAsStart) {
       return;
     }
     const sceneId = String(scenarioSelected?.sceneId || "").trim();
@@ -8014,14 +8064,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     );
     const { width, height } = getSceneImageSize(imageFormat);
 
-    let sceneDelta = "";
-    if (transitionType === "continuous" && normalizedSlot === "start") {
-      sceneDelta = String(scenarioSelected.startFramePrompt || scenarioSelected.imagePrompt || scenarioSelected.prompt || "").trim();
-    } else if (transitionType === "continuous" && normalizedSlot === "end") {
-      sceneDelta = String(scenarioSelected.endFramePrompt || scenarioSelected.imagePrompt || scenarioSelected.prompt || "").trim();
-    } else {
-      sceneDelta = getScenePrimaryFramePrompt(scenarioSelected);
-    }
+    const sceneDelta = getSceneFramePromptByStrategy(scenarioSelected, normalizedSlot);
 
     if (!sceneDelta) {
       setScenarioImageError("Добавьте prompt для генерации кадра");
@@ -8034,6 +8077,16 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     setScenarioImageError("");
     try {
       const scenarioContractPayload = buildScenarioSceneContractPayload(scenarioSelected);
+      console.debug("[SCENE IMAGE STRATEGY]", {
+        sceneId,
+        ltxMode: String(scenarioSelected?.ltxMode || ""),
+        needsTwoFrames: Boolean(scenarioSelected?.needsTwoFrames),
+        continuation: Boolean(scenarioSelected?.continuationFromPrevious ?? scenarioSelected?.continuation),
+        imageStrategy,
+        hasImagePrompt: !!getScenePrimaryFramePrompt(scenarioSelected),
+        hasStartFramePrompt: !!String(scenarioSelected?.startFramePromptRu || scenarioSelected?.startFramePrompt || "").trim(),
+        hasEndFramePrompt: !!String(scenarioSelected?.endFramePromptRu || scenarioSelected?.endFramePrompt || "").trim(),
+      });
       if (CLIP_TRACE_VISUAL_LOCK) {
         console.debug("[SCENARIO VISUAL LOCK] image prompt", {
           sceneId,
@@ -8070,7 +8123,7 @@ Aspect ratio: ${imageFormat}`,
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
 
       const generatedImageUrl = String(out.imageUrl || "");
-      if (transitionType === "continuous" && normalizedSlot === "start") {
+      if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
         updateScenarioScene(scenarioEditor.selected, {
           startImageUrl: generatedImageUrl,
           imageFormat,
@@ -8081,7 +8134,7 @@ Aspect ratio: ${imageFormat}`,
           videoSourceImageUrl: "",
           videoPanelActivated: false,
         });
-      } else if (transitionType === "continuous" && normalizedSlot === "end") {
+      } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
         updateScenarioScene(scenarioEditor.selected, {
           endImageUrl: generatedImageUrl,
           imageFormat,
@@ -8110,6 +8163,9 @@ Aspect ratio: ${imageFormat}`,
         sceneId,
         slot: normalizedSlot,
       });
+      if (imageStrategy === "first_last" && requestedSlot === "single") {
+        await handleGenerateScenarioImage("end");
+      }
     } catch (e) {
       console.error(e);
       setScenarioImageError(String(e?.message || e));
@@ -8303,12 +8359,13 @@ Aspect ratio: ${imageFormat}`,
   }, [scenarioScenes]);
 
   const handleScenarioGenerateVideo = useCallback(async () => {
-    const transitionType = resolveSceneTransitionType(scenarioSelected);
+    const imageStrategy = String(scenarioSelected?.imageStrategy || deriveScenarioImageStrategy(scenarioSelected)).trim().toLowerCase() || "single";
+    const transitionType = imageStrategy === "continuation" || imageStrategy === "first_last" ? "continuous" : "single";
     const frameImageUrl = String(scenarioSelected?.imageUrl || "").trim();
     const effectiveStartImageUrl = String(scenarioSelectedEffectiveStartImageUrl || "").trim();
     const endImageUrl = String(scenarioSelected?.endImageUrl || "").trim();
-    const hasImageForVideo = transitionType === "continuous"
-      ? !!(effectiveStartImageUrl || endImageUrl || frameImageUrl)
+    const hasImageForVideo = imageStrategy === "first_last" || imageStrategy === "continuation"
+      ? !!(effectiveStartImageUrl || frameImageUrl) && (imageStrategy === "continuation" || !!endImageUrl)
       : !!frameImageUrl;
 
     if (!hasImageForVideo) return;
@@ -8323,10 +8380,25 @@ Aspect ratio: ${imageFormat}`,
 
     const sceneId = String(scenarioSelected?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
-    const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
-    const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
-    const dur = Math.max(0, t1 - t0);
-    const requestedDurationSec = dur;
+    const explicitWorkflow = resolveScenarioExplicitWorkflowKey(scenarioSelected);
+    const resolvedWorkflowKey = String(
+      explicitWorkflow
+      || scenarioSelected?.resolvedWorkflowKey
+      || resolveScenarioWorkflowKey(scenarioSelected)
+    ).trim();
+    const explicitModel = resolveScenarioExplicitModelKey(scenarioSelected);
+    const resolvedModelKey = String(explicitModel || scenarioSelected?.resolvedModelKey || "").trim();
+    const requestedDurationSec = Number(
+      scenarioSelected?.requestedDurationSec
+      ?? scenarioSelected?.durationSec
+      ?? Math.max(0, Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0) - Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0))
+    ) || 0;
+    const requiresTwoFrames = Boolean(scenarioSelected?.requiresTwoFrames ?? scenarioSelected?.needsTwoFrames ?? imageStrategy === "first_last");
+    const requiresContinuation = Boolean(scenarioSelected?.requiresContinuation ?? scenarioSelected?.continuationFromPrevious ?? imageStrategy === "continuation");
+    const requiresAudioSensitiveVideo = Boolean(
+      scenarioSelected?.requiresAudioSensitiveVideo
+      ?? ["i2v_as", "f_l_as", "lip_sync"].includes(String(scenarioSelected?.ltxMode || "").trim().toLowerCase())
+    );
 
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: scenarioSelected, previousScene: scenarioPreviousScene })
@@ -8346,6 +8418,17 @@ Aspect ratio: ${imageFormat}`,
       transitionType,
       provider: effectiveVideoProvider,
       sourceImageUrl,
+    });
+    console.debug("[SCENE VIDEO ROUTE]", {
+      sceneId,
+      ltxMode: String(scenarioSelected?.ltxMode || ""),
+      imageStrategy,
+      explicitWorkflow,
+      resolvedWorkflowKey,
+      explicitModel,
+      resolvedModelKey,
+      requiresAudioSensitiveVideo,
+      requestedDurationSec,
     });
     try {
       const endpoint = "/api/clip/video/start";
@@ -8383,6 +8466,13 @@ Aspect ratio: ${imageFormat}`,
           requestedDurationSec,
           lipSync: effectiveLipSync,
           renderMode: effectiveRenderMode,
+          ltxMode: String(scenarioSelected?.ltxMode || ""),
+          imageStrategy,
+          resolvedWorkflowKey,
+          resolvedModelKey,
+          requiresTwoFrames,
+          requiresContinuation,
+          requiresAudioSensitiveVideo,
           shotType: scenarioSelected.shotType || "",
           sceneType: scenarioSelected.sceneType || "",
           format: resolvePreferredSceneFormat(
@@ -8449,6 +8539,13 @@ Aspect ratio: ${imageFormat}`,
           requestedDurationSec,
           lipSync: effectiveLipSync,
           renderMode: effectiveRenderMode,
+          ltxMode: String(scenarioSelected?.ltxMode || ""),
+          imageStrategy,
+          resolvedWorkflowKey,
+          resolvedModelKey,
+          requiresTwoFrames,
+          requiresContinuation,
+          requiresAudioSensitiveVideo,
           shotType: scenarioSelected.shotType || "",
           sceneType: scenarioSelected.sceneType || "",
           format: resolvePreferredSceneFormat(
@@ -13519,7 +13616,7 @@ const hydrate = useCallback((source = "unknown") => {
                           <button
                             className="clipSB_btn clipSB_btnSecondary"
                             onClick={handleScenarioGenerateVideo}
-                            disabled={scenarioVideoLoading || !(scenarioSelectedTransitionType === "continuous" ? (scenarioSelectedEffectiveStartImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) : scenarioSelected.imageUrl) || (scenarioSelectedIsLipSync && !scenarioSelected.audioSliceUrl)}
+                            disabled={scenarioVideoLoading || !scenarioHasImageForVideo || (scenarioSelectedIsLipSync && !scenarioSelected.audioSliceUrl)}
                           >
                             {scenarioVideoLoading ? "Делаю..." : "Сделать видео"}
                           </button>

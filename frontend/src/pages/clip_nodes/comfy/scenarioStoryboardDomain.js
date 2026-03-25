@@ -4,6 +4,13 @@ const normalizeText = (value) => String(value || "").trim();
 const SCENARIO_STORYBOARD_TRACE = false;
 const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
+export const SCENARIO_LTX_WORKFLOW_MAP = {
+  i2v: "image-video.json",
+  i2v_as: "image-video-golos-zvuk.json",
+  f_l: "imag-imag-video-bz.json",
+  f_l_as: "imag-imag-video-zvuk.json",
+  lip_sync: "image-lipsink-video-music.json",
+};
 const DEFAULT_GLOBAL_VISUAL_LOCK = {
   captureStyle: "cinematic commercial realism",
   cameraLanguage: "controlled cinematic camera",
@@ -93,6 +100,81 @@ function resolveFormatAlias(...candidates) {
   return "";
 }
 
+function normalizeDurationFromScene(source = {}, fallback = 0) {
+  const explicitDuration = toNumber(source.durationSec ?? source.duration, Number(fallback) || 0);
+  const t0 = toNumber(source.t0 ?? source.time_start ?? source.timeStart, 0);
+  const t1 = toNumber(source.t1 ?? source.time_end ?? source.timeEnd, t0 + explicitDuration);
+  const fromRange = Math.max(0, t1 - t0);
+  if (Number.isFinite(explicitDuration) && explicitDuration > 0) return Number(explicitDuration.toFixed(3));
+  return Number(fromRange.toFixed(3));
+}
+
+export function deriveScenarioImageStrategy(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const ltxMode = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
+  const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l", "f_l_as"].includes(ltxMode);
+  const requiresContinuation = Boolean(source.continuation ?? source.continuationFromPrevious ?? source.continuation_from_previous);
+  if (requiresTwoFrames) return "first_last";
+  if (requiresContinuation) return "continuation";
+  return "single";
+}
+
+export function resolveScenarioExplicitWorkflowKey(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const modelAssignments = source?.modelAssignments && typeof source.modelAssignments === "object" ? source.modelAssignments : {};
+  const providerHints = source?.providerHints && typeof source.providerHints === "object" ? source.providerHints : {};
+  const candidates = [
+    source.videoWorkflowKey,
+    source.workflowKey,
+    source.workflow_key,
+    source.videoWorkflow,
+    source.workflow,
+    modelAssignments.videoWorkflowKey,
+    modelAssignments.workflowKey,
+    modelAssignments.workflow,
+    providerHints.videoWorkflowKey,
+    providerHints.workflowKey,
+    providerHints.workflow,
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeText(candidate);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+export function resolveScenarioExplicitModelKey(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const modelAssignments = source?.modelAssignments && typeof source.modelAssignments === "object" ? source.modelAssignments : {};
+  const providerHints = source?.providerHints && typeof source.providerHints === "object" ? source.providerHints : {};
+  const candidates = [
+    source.modelKey,
+    source.model_key,
+    source.videoModelKey,
+    source.videoModel,
+    source.model,
+    modelAssignments.videoModelKey,
+    modelAssignments.modelKey,
+    modelAssignments.model,
+    providerHints.videoModelKey,
+    providerHints.modelKey,
+    providerHints.model,
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeText(candidate);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+export function resolveScenarioWorkflowKey(scene = {}) {
+  const explicitWorkflow = resolveScenarioExplicitWorkflowKey(scene);
+  if (explicitWorkflow) return explicitWorkflow;
+  const source = scene && typeof scene === "object" ? scene : {};
+  const ltxMode = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
+  return SCENARIO_LTX_WORKFLOW_MAP[ltxMode] || SCENARIO_LTX_WORKFLOW_MAP.i2v;
+}
+
 function resolveScenarioGlobalMusicPrompt(storyboardOut = {}, directorOutput = {}) {
   const flatPrompt = normalizeText(
     storyboardOut?.globalMusicPrompt
@@ -129,8 +211,17 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const t1 = Math.max(t0, toNumber(source.t1 ?? source.time_end ?? source.timeEnd, t0 + durationRaw));
   const durationSec = Math.max(0, Number((t1 - t0).toFixed(3)));
   const ltxMode = normalizeText(source.ltxMode ?? source.ltx_mode) || "i2v_as";
+  const ltxModeNormalized = ltxMode.toLowerCase();
   const renderMode = normalizeText(source.renderMode)
     || (["f_l", "f_l_as"].includes(ltxMode) ? "first_last" : "image_to_video");
+  const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l", "f_l_as"].includes(ltxModeNormalized);
+  const requiresContinuation = Boolean(source.continuation ?? source.continuationFromPrevious ?? source.continuation_from_previous);
+  const requiresAudioSensitiveVideo = ["i2v_as", "f_l_as", "lip_sync"].includes(ltxModeNormalized);
+  const imageStrategy = deriveScenarioImageStrategy(source);
+  const explicitWorkflowKey = resolveScenarioExplicitWorkflowKey(source);
+  const resolvedWorkflowKey = explicitWorkflowKey || resolveScenarioWorkflowKey(source);
+  const resolvedModelKey = resolveScenarioExplicitModelKey(source);
+  const requestedDurationSec = normalizeDurationFromScene(source, durationSec);
 
   const summaryDual = normalizeDualField({
     ru: source.summaryRu ?? source.summary_ru ?? source.sceneGoalRu ?? source.scene_goal_ru ?? source.sceneGoal ?? source.scene_goal ?? source.action,
@@ -199,6 +290,13 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ltxReason: normalizeText(source.ltxReason ?? source.ltx_reason ?? source.whyThisMode),
     needsTwoFrames: Boolean(source.needsTwoFrames ?? source.needs_two_frames ?? ["first_last"].includes(renderMode)),
     continuationFromPrevious: Boolean(source.continuationFromPrevious ?? source.continuation_from_previous ?? source.continuation),
+    imageStrategy: normalizeText(source.imageStrategy) || imageStrategy,
+    requiresTwoFrames,
+    requiresContinuation,
+    requiresAudioSensitiveVideo,
+    resolvedWorkflowKey: normalizeText(source.resolvedWorkflowKey) || resolvedWorkflowKey,
+    resolvedModelKey: normalizeText(source.resolvedModelKey) || resolvedModelKey,
+    requestedDurationSec,
     narrationMode: normalizeText(source.narrationMode ?? source.narration_mode) || "full",
     localPhrase: normalizeText(source.localPhrase ?? source.local_phrase),
     sfx: normalizeText(source.sfx),
