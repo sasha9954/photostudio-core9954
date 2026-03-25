@@ -7525,6 +7525,11 @@ def clip_image(payload: ClipImageIn):
     for role in incoming_scene_active_roles:
         if role not in scene_active_roles:
             scene_active_roles.append(role)
+    if not scene_active_roles:
+        scene_active_roles = [
+            role for role in COMFY_CAST_ROLES
+            if len(comfy_refs_by_role.get(role) or []) > 0
+        ]
     scene_contract["activeRoles"] = scene_active_roles
     must_not_appear_roles = set(scene_contract.get("mustNotAppear") or [])
 
@@ -7764,7 +7769,7 @@ def clip_image(payload: ClipImageIn):
         "attachedWorldAnchorRoles": [role for role in world_anchor_roles if len(comfy_refs_by_role.get(role) or []) > 0],
         "allowedRolesForImage": sorted(list(allowed_roles_for_image)),
         "filteredOutBySceneContract": filtered_out_by_scene_contract,
-        "incomingReadyRefsByRole": {role: len((raw_refs_by_role_incoming or {}).get(role) or []) for role in comfy_roles} if isinstance(raw_refs_by_role_incoming, dict) else {},
+        "incomingReadyRefsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
         "rawRefsByRole": {role: len((getattr(refs_obj, "refsByRole", {}) or {}).get(role) or []) for role in comfy_roles},
         "filteredRefsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
         "referenceProfilesSummary": reference_profiles_summary,
@@ -8079,8 +8084,14 @@ def clip_image(payload: ClipImageIn):
         print("[COMFY IMAGE ASSEMBLY]", json.dumps(comfy_assembly_debug, ensure_ascii=False))
 
         has_role_aware_refs = any(len(comfy_refs_by_role.get(role) or []) > 0 for role in comfy_roles)
+        has_incoming_role_refs = False
+        if isinstance(raw_refs_by_role_incoming, dict):
+            for role in comfy_roles:
+                if len(_normalize_reference_urls(raw_refs_by_role_incoming.get(role))) > 0:
+                    has_incoming_role_refs = True
+                    break
         has_role_contract = bool(scene_primary_role or scene_secondary_roles or scene_active_roles or must_appear_roles)
-        generation_mode = "reference_driven" if (has_role_aware_refs or has_role_contract) else ("continuity_chain" if previous_scene_image_inline else "baseline_only")
+        generation_mode = "reference_driven" if (has_role_aware_refs or has_role_contract or has_incoming_role_refs) else ("continuity_chain" if previous_scene_image_inline else "baseline_only")
         print("[SCENARIO IMAGE BACKEND] " + json.dumps({
             "sceneId": scene_id,
             "generationMode": generation_mode,
