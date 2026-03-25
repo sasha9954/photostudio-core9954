@@ -163,6 +163,33 @@ const CLIP_TRACE_GRAPH_HYDRATE = false;
 const CLIP_TRACE_ASSEMBLY_SOURCE = false;
 const CLIP_TRACE_SCENARIO_TRANSFER = false;
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
+const GLOBAL_VISUAL_DRIFT_GUARDS = [
+  "no change in lighting style",
+  "no change in color grading",
+  "no drop in visual quality",
+  "no change in camera style",
+];
+const GLOBAL_VISUAL_LOCK_IMAGE_TEXT = `
+GLOBAL VISUAL CONSISTENCY:
+
+* Same camera setup across all scenes
+* Same lighting logic and direction
+* Same color grading and tonal balance
+* Same image density and texture quality
+* Same cinematic realism level
+* No visual style drift between frames
+* Maintain identical production quality
+`.trim();
+const GLOBAL_VISUAL_LOCK_VIDEO_TEXT = `
+GLOBAL VIDEO CONSISTENCY:
+
+* Continuous camera language across scenes
+* Consistent lighting and atmosphere
+* Matching color grading between shots
+* Same production-level quality
+* Smooth continuity between frames
+* No visual jumps or quality drops
+`.trim();
 
 function hasScenarioContractValue(value) {
   if (Array.isArray(value)) return value.length > 0;
@@ -172,6 +199,8 @@ function hasScenarioContractValue(value) {
 }
 
 function buildScenarioSceneContractPayload(scene = {}) {
+  const forbiddenInsertions = Array.isArray(scene?.forbiddenInsertions) ? scene.forbiddenInsertions : [];
+  const forbiddenChanges = Array.isArray(scene?.forbiddenChanges) ? scene.forbiddenChanges : [];
   return {
     sceneId: scene?.sceneId || "",
     sceneType: scene?.sceneType,
@@ -183,8 +212,8 @@ function buildScenarioSceneContractPayload(scene = {}) {
     sceneAction: scene?.sceneAction,
     cameraIntent: scene?.cameraIntent,
     environmentMotion: scene?.environmentMotion,
-    forbiddenInsertions: scene?.forbiddenInsertions,
-    forbiddenChanges: scene?.forbiddenChanges,
+    forbiddenInsertions: Array.from(new Set([...forbiddenInsertions, ...GLOBAL_VISUAL_DRIFT_GUARDS])),
+    forbiddenChanges: Array.from(new Set([...forbiddenChanges, ...GLOBAL_VISUAL_DRIFT_GUARDS])),
     renderMode: scene?.renderMode,
     ltxMode: scene?.ltxMode,
     transitionType: scene?.transitionType,
@@ -203,6 +232,7 @@ function buildScenarioSceneContractPayload(scene = {}) {
     supportEntityIds: scene?.supportEntityIds,
     plannerDebug: scene?.plannerDebug,
     generationHints: scene?.generationHints,
+    globalVisualLock: scene?.globalVisualLock,
     modelAssignments: scene?.modelAssignments,
     providerHints: scene?.providerHints,
     audioSliceStartSec: scene?.audioSliceStartSec,
@@ -7616,11 +7646,16 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       setScenarioImageError("Добавьте prompt для генерации кадра");
       return;
     }
+    const finalImagePrompt = `${GLOBAL_VISUAL_LOCK_IMAGE_TEXT}\n\n${sceneDelta}`.trim();
 
     setScenarioImageLoading(true);
     setScenarioImageError("");
     try {
       const scenarioContractPayload = buildScenarioSceneContractPayload(scenarioSelected);
+      console.log("[VISUAL LOCK IMAGE]", {
+        sceneId,
+        hasLock: !!scenarioSelected?.globalVisualLock,
+      });
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/image", buildScenarioTransferLogData(scenarioSelected, scenarioContractPayload));
       }
@@ -7628,7 +7663,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         method: "POST",
         body: {
           sceneId,
-          sceneDelta: `${sceneDelta}
+          sceneDelta: `${finalImagePrompt}
 Aspect ratio: ${imageFormat}`,
           sceneText,
           width,
@@ -7905,6 +7940,7 @@ Aspect ratio: ${imageFormat}`,
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: scenarioSelected, previousScene: scenarioPreviousScene })
       : "";
+    const finalVideoPrompt = `${GLOBAL_VISUAL_LOCK_VIDEO_TEXT}\n\n${String(scenarioSelected?.videoPrompt || "").trim()}`.trim();
     const sourceImageUrl = transitionType === "continuous"
       ? (effectiveStartImageUrl || endImageUrl || frameImageUrl || "")
       : (frameImageUrl || "");
@@ -7925,6 +7961,10 @@ Aspect ratio: ${imageFormat}`,
         getSceneTransitionPrompt(scenarioSelected),
       ].filter(Boolean).join("\n");
       const scenarioContractPayload = buildScenarioSceneContractPayload(scenarioSelected);
+      console.log("[VISUAL LOCK VIDEO]", {
+        sceneId,
+        hasLock: !!scenarioSelected?.globalVisualLock,
+      });
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/video/start", buildScenarioTransferLogData(scenarioSelected, scenarioContractPayload));
       }
@@ -7936,7 +7976,7 @@ Aspect ratio: ${imageFormat}`,
           startImageUrl: effectiveStartImageUrl,
           endImageUrl,
           audioSliceUrl: scenarioSelected.audioSliceUrl || "",
-          videoPrompt: scenarioSelected.videoPrompt || "",
+          videoPrompt: finalVideoPrompt,
           transitionActionPrompt,
           transitionType,
           requestedDurationSec,
@@ -7999,7 +8039,7 @@ Aspect ratio: ${imageFormat}`,
           startImageUrl: effectiveStartImageUrl,
           endImageUrl,
           audioSliceUrl: scenarioSelected.audioSliceUrl || "",
-          videoPrompt: scenarioSelected.videoPrompt || "",
+          videoPrompt: finalVideoPrompt,
           transitionActionPrompt,
           transitionType,
           requestedDurationSec,
