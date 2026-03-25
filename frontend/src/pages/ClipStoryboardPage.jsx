@@ -163,6 +163,7 @@ const CLIP_TRACE_GRAPH_HYDRATE = false;
 const CLIP_TRACE_ASSEMBLY_SOURCE = false;
 const CLIP_TRACE_SCENARIO_TRANSFER = false;
 const CLIP_TRACE_VISUAL_LOCK = false;
+const CLIP_TRACE_SCENARIO_FORMAT = false;
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
 const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
   "no change in lighting style",
@@ -3052,6 +3053,9 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   const scenarioStoryboardScenes = Array.isArray(scenarioStoryboardNode?.data?.scenes) ? scenarioStoryboardNode.data.scenes : [];
   const scenes = comfyScenes.length ? comfyScenes : (scenarioStoryboardScenes.length ? scenarioStoryboardScenes : storyboardScenes);
   const sceneCount = scenes.length;
+  const scenarioPackage = scenarioStoryboardNode?.data?.scenarioPackage && typeof scenarioStoryboardNode.data.scenarioPackage === "object"
+    ? scenarioStoryboardNode.data.scenarioPackage
+    : null;
   const textValue = String(textNode?.data?.textValue || "").trim();
   const sourceLabels = storySources.map((node) => {
     if (node?.type === "comfyStoryboard") return "COMFY STORYBOARD";
@@ -3068,6 +3072,13 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   if (sourceLabels.length) summaryParts.push(`inputs: ${sourceLabels.join(", ")}`);
   const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || comfyBrainNode?.data?.plannerMeta?.plannerInput || {};
   const scenarioFormatCandidates = [
+    scenarioStoryboardNode?.data?.format,
+    scenarioPackage?.format,
+    scenarioPackage?.aspectRatio,
+    scenarioPackage?.aspect_ratio,
+    scenarioPackage?.canvas,
+    scenes.find((scene) => String(scene?.format || "").trim())?.format,
+    scenes.find((scene) => String(scene?.imageFormat || "").trim())?.imageFormat,
     comfyBrainNode?.data?.format,
     comfyNode?.data?.format,
     plannerInput?.format,
@@ -3077,6 +3088,39 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   const scenarioFormat = scenarioFormatCandidates.length
     ? resolvePreferredSceneFormat(...scenarioFormatCandidates)
     : "";
+  const storySummary = String(
+    scenarioPackage?.storySummaryRu
+    || scenarioPackage?.storySummaryEn
+    || scenarioPackage?.story_summary_ru
+    || scenarioPackage?.story_summary_en
+    || scenarioPackage?.story_summary
+    || ""
+  ).trim();
+  const previewPrompt = String(
+    scenarioPackage?.previewPromptRu
+    || scenarioPackage?.previewPromptEn
+    || scenarioPackage?.preview_prompt_ru
+    || scenarioPackage?.preview_prompt_en
+    || scenarioPackage?.preview_prompt
+    || ""
+  ).trim();
+  const world = String(
+    scenarioPackage?.worldRu
+    || scenarioPackage?.worldEn
+    || scenarioPackage?.world_ru
+    || scenarioPackage?.world_en
+    || scenarioPackage?.world
+    || ""
+  ).trim();
+  const roles = Array.isArray(scenarioPackage?.actors)
+    ? scenarioPackage.actors.filter(Boolean).map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const toneStyleDirection = String(
+    scenarioPackage?.toneStyleDirection
+    || scenarioPackage?.tone_style_direction
+    || scenarioStoryboardNode?.data?.directorOutput?.history?.toneStyleDirection
+    || ""
+  ).trim();
   const plannerConnectedRefsByRole = normalizeIntroConnectedRefsByRole(plannerInput?.refsByRole || {});
   const graphRefPackage = collectIntroConnectedRefPackage({
     comfyNode,
@@ -3168,6 +3212,11 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     importantProps,
     worldContext,
     styleContext,
+    storySummary,
+    previewPrompt,
+    world,
+    roles,
+    toneStyleDirection,
     scenarioFormat,
     activeRefRoles,
     introActiveCastRoles,
@@ -5749,7 +5798,7 @@ const scenarioSelectedEffectiveStartImageUrl = getEffectiveSceneStartImage(scena
 const scenarioSelectedVideoSourceImageUrl = String(scenarioSelected?.videoSourceImageUrl || "").trim();
 const scenarioSelectedVideoPanelActivated = !!scenarioSelected?.videoPanelActivated;
 const scenarioSelectedStartImageSource = getSceneStartImageSource(scenarioSelected, scenarioPreviousScene);
-const scenarioSelectedImageFormat = normalizeSceneImageFormat(scenarioSelected?.imageFormat);
+const scenarioSelectedImageFormat = resolvePreferredSceneFormat(scenarioSelected?.format, scenarioSelected?.imageFormat);
 const scenarioSelectedIndexLabel = Number.isFinite(scenarioEditor.selected) ? scenarioEditor.selected + 1 : 0;
 const scenarioSelectedT0 = Number(scenarioSelected?.t0 ?? scenarioSelected?.start ?? 0);
 const scenarioSelectedT1 = Number(scenarioSelected?.t1 ?? scenarioSelected?.end ?? 0);
@@ -7714,7 +7763,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const previousContinuityMemory = scenarioSelected.previousContinuityMemory
       || previousScene?.continuityMemory
       || null;
-    const imageFormat = normalizeSceneImageFormat(scenarioSelected.imageFormat);
+    const imageFormat = resolvePreferredSceneFormat(
+      scenarioSelected?.format,
+      scenarioSelected?.imageFormat
+    );
     const { width, height } = getSceneImageSize(imageFormat);
 
     let sceneDelta = "";
@@ -8088,7 +8140,10 @@ Aspect ratio: ${imageFormat}`,
           renderMode: effectiveRenderMode,
           shotType: scenarioSelected.shotType || "",
           sceneType: scenarioSelected.sceneType || "",
-          format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
+          format: resolvePreferredSceneFormat(
+            scenarioSelected?.format,
+            scenarioSelected?.imageFormat
+          ),
           provider: effectiveVideoProvider,
           ...scenarioContractPayload,
         },
@@ -8151,7 +8206,10 @@ Aspect ratio: ${imageFormat}`,
           renderMode: effectiveRenderMode,
           shotType: scenarioSelected.shotType || "",
           sceneType: scenarioSelected.sceneType || "",
-          format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
+          format: resolvePreferredSceneFormat(
+            scenarioSelected?.format,
+            scenarioSelected?.imageFormat
+          ),
           provider: effectiveVideoProvider,
           ...scenarioContractPayload,
         },
@@ -9724,6 +9782,12 @@ onClipSec: (nodeId, value) => {
             data: {
               ...base.data,
               scenes,
+              format: resolvePreferredSceneFormat(
+                normalizedPackage?.format,
+                scenes.find((scene) => String(scene?.format || "").trim())?.format,
+                scenes.find((scene) => String(scene?.imageFormat || "").trim())?.imageFormat,
+                base.data?.format
+              ),
               sceneGeneration,
               scenarioPackage: normalizedPackage,
               audioData,
@@ -9988,6 +10052,12 @@ onClipSec: (nodeId, value) => {
                   narrativeAbortControllersRef.current.delete(nodeId);
                   notify({ type: "warning", title: "Source required", message: "Подключите один active source-of-truth перед генерацией сценария." });
                   return;
+                }
+                if (CLIP_TRACE_SCENARIO_FORMAT) {
+                  console.debug("[SCENARIO FORMAT] director request", {
+                    nodeId,
+                    format: requestPayload?.director_controls?.format || "",
+                  });
                 }
 
                 try {
@@ -10829,7 +10899,7 @@ onClipSec: (nodeId, value) => {
             storyboardOut: scenarioStoryboardOut,
             directorOutput: scenarioDirectorOutput,
             styleProfile: scenarioSourceNode?.data?.styleProfile || "",
-            format: base?.data?.format || "9:16",
+            format: scenarioSourceNode?.data?.format || base?.data?.format || "9:16",
           });
           return {
             ...base,
@@ -10957,7 +11027,23 @@ onClipSec: (nodeId, value) => {
                   introMustNotAppear: Array.isArray(freshContext.introMustNotAppear) ? freshContext.introMustNotAppear : [],
                   connectedGenderLocksByRole: freshContext.connectedGenderLocksByRole || {},
                   connectedSpeciesLocksByRole: freshContext.connectedSpeciesLocksByRole || {},
+                  storySummary: String(freshContext.storySummary || "").trim(),
+                  previewPrompt: String(freshContext.previewPrompt || "").trim(),
+                  world: String(freshContext.world || "").trim(),
+                  roles: Array.isArray(freshContext.roles) ? freshContext.roles : [],
+                  toneStyleDirection: String(freshContext.toneStyleDirection || "").trim(),
                 };
+                if (CLIP_TRACE_SCENARIO_FORMAT) {
+                  console.debug("[SCENARIO PREVIEW SOURCE]", {
+                    hasConnection: Array.isArray(freshContext.sourceNodeIds) && freshContext.sourceNodeIds.length > 0,
+                    sourceNodeType: Array.isArray(freshContext.sourceNodeTypes) ? (freshContext.sourceNodeTypes[0] || "") : "",
+                    format: payload.previewFormat,
+                    hasStorySummary: !!payload.storySummary,
+                    hasPreviewPrompt: !!payload.previewPrompt,
+                    hasWorld: !!payload.world,
+                    hasRoles: Array.isArray(payload.roles) && payload.roles.length > 0,
+                  });
+                }
 
                 setNodes((prev) => prev.map((x) => (x.id === nodeId
                   ? {

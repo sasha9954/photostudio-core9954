@@ -8,6 +8,7 @@ import {
   NARRATIVE_CONTENT_TYPE_OPTIONS,
   NARRATIVE_MODE_OPTIONS,
   NARRATIVE_STYLE_OPTIONS,
+  NARRATIVE_FORMAT_OPTIONS,
   NARRATIVE_RESULT_TABS,
   summarizeNarrativeConnectedContext,
 } from "./comfyNarrativeDomain";
@@ -295,6 +296,13 @@ export default function ComfyNarrativeNode({ id, data }) {
                 <div className="clipSB_brainLabel clipSB_brainLabel--compact">Стиль обработки</div>
                 <select className="clipSB_select clipSB_narrativeSelect" value={data?.styleProfile || "realistic"} onChange={(e) => data?.onFieldChange?.(id, { styleProfile: e.target.value })}>
                   {NARRATIVE_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
+                </select>
+              </label>
+
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Format</div>
+                <select className="clipSB_select clipSB_narrativeSelect" value={data?.format || "9:16"} onChange={(e) => data?.onFieldChange?.(id, { format: e.target.value })}>
+                  {NARRATIVE_FORMAT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </label>
             </div>

@@ -32,6 +32,8 @@ export const NARRATIVE_STYLE_OPTIONS = [
   { value: "noir", labelRu: "Нуар" },
 ];
 
+export const NARRATIVE_FORMAT_OPTIONS = ["9:16", "16:9", "1:1"];
+
 export const NARRATIVE_RESULT_TABS = [
   { value: "history", labelRu: "История" },
   { value: "scenes", labelRu: "Сцены" },
@@ -269,6 +271,7 @@ export function getDefaultNarrativeNodeData() {
     contentType: "story",
     narrativeMode: "cinematic_expand",
     styleProfile: "realistic",
+    format: "9:16",
     directorNote: "",
     connectedInputs: {
       audio_in: null,
@@ -374,6 +377,10 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       .filter(([, roleType]) => !!roleType)
   );
 
+  const format = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
+    ? String(state.format).trim()
+    : "9:16";
+
   const payload = {
     source: {
       source_mode: normalizeNarrativeSourceMode(resolvedSource.mode),
@@ -405,6 +412,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       contentType: normalizeText(state.contentType) || "story",
       narrativeMode: normalizeText(state.narrativeMode) || "cinematic_expand",
       styleProfile: normalizeText(state.styleProfile) || "realistic",
+      format,
       directorNote: normalizeText(state.directorNote),
       preferAudioOverText,
       segmentationMode,
@@ -424,6 +432,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
         url: audioContext.url || sourceValue,
         origin: audioContext.audioOrigin || "audio_node",
       },
+      format,
     },
   };
 
@@ -546,16 +555,38 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       ? response.storyboard_out
       : null;
   if (!storyboardOut) return null;
+  const stateFormat = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
+    ? String(state.format).trim()
+    : "";
+  const resolvedFormat = normalizeText(
+    response?.format
+    ?? response?.aspectRatio
+    ?? response?.aspect_ratio
+    ?? response?.canvas
+    ?? storyboardOut?.format
+    ?? storyboardOut?.aspectRatio
+    ?? storyboardOut?.aspect_ratio
+    ?? storyboardOut?.canvas
+    ?? stateFormat
+  ) || "9:16";
   const directorOutput = response?.directorOutput && typeof response.directorOutput === "object"
     ? response.directorOutput
     : mapStoryboardOutToDirectorOutput(storyboardOut, state);
+  const normalizedStoryboardOut = {
+    ...storyboardOut,
+    format: normalizeText(storyboardOut?.format) || resolvedFormat,
+    aspectRatio: normalizeText(storyboardOut?.aspectRatio ?? storyboardOut?.aspect_ratio) || resolvedFormat,
+  };
   return {
-    storyboardOut,
+    storyboardOut: normalizedStoryboardOut,
     scenario: normalizeText(response?.scenario) || normalizeText(storyboardOut.full_scenario),
     voiceScript: normalizeText(response?.voiceScript) || normalizeText(storyboardOut.voice_script),
     brainPackage: response?.brainPackage && typeof response.brainPackage === "object" ? response.brainPackage : null,
     bgMusicPrompt: normalizeText(response?.bgMusicPrompt) || normalizeText(storyboardOut.music_prompt),
-    directorOutput,
+    directorOutput: {
+      ...(directorOutput && typeof directorOutput === "object" ? directorOutput : {}),
+      format: normalizeText(directorOutput?.format) || resolvedFormat,
+    },
   };
 }
 
@@ -565,6 +596,9 @@ export function buildNarrativeOutputs(state = {}) {
   const contentType = NARRATIVE_CONTENT_TYPE_OPTIONS.some((item) => item.value === state.contentType) ? state.contentType : "story";
   const narrativeMode = NARRATIVE_MODE_OPTIONS.some((item) => item.value === state.narrativeMode) ? state.narrativeMode : "cinematic_expand";
   const styleProfile = NARRATIVE_STYLE_OPTIONS.some((item) => item.value === state.styleProfile) ? state.styleProfile : "realistic";
+  const format = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
+    ? String(state.format).trim()
+    : "9:16";
   const connectedContext = summarizeNarrativeConnectedContext({ ...state, resolvedSource });
 
   const directorNote = normalizeText(state.directorNote) || "Без дополнительных правок";
@@ -856,6 +890,8 @@ export function buildNarrativeOutputs(state = {}) {
   });
 
   const storyboardOut = {
+    format,
+    aspectRatio: format,
     story_summary: shortDescription,
     full_scenario: fullScenario,
     voice_script: voiceScript,
@@ -889,6 +925,7 @@ export function buildNarrativeOutputs(state = {}) {
   };
 
   const directorOutput = {
+    format,
     history: {
       summary: shortDescription,
       fullScenario,

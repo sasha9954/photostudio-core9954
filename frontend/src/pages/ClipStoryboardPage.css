@@ -3089,8 +3089,9 @@ body.ps_clip_fullscreen .mainCol {
   --node-accent-header: var(--family-narrative-header);
   --node-accent-glow: var(--family-narrative-glow);
   --node-accent-active: var(--family-narrative-active);
-  width: 760px;
-  max-width: min(760px, calc(100vw - 72px));
+  width: 860px;
+  min-width: 820px;
+  max-width: min(860px, calc(100vw - 72px));
 }
 
 .clipSB_nodeTester {
@@ -3531,15 +3532,15 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_narrativeGrid--compact {
-  grid-template-columns: repeat(3, minmax(112px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(4, minmax(112px, 1fr));
+  gap: 8px;
   align-items: end;
 }
 
 .clipSB_narrativeLayout {
   display: grid;
-  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(340px, 0.92fr) minmax(380px, 1.08fr);
+  gap: 14px;
   align-items: stretch;
   margin-top: 10px;
   min-height: 252px;
@@ -3794,7 +3795,7 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_narrativeTabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
 .clipSB_narrativeResultBody {
@@ -3880,16 +3881,17 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_narrativeTab {
-  min-height: 30px;
-  padding: 6px 8px;
+  min-height: 32px;
+  padding: 6px 10px;
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
+  flex: 0 1 auto;
 }
 
 @media (max-width: 1400px) {
   .clipSB_narrativeGrid--compact {
-    grid-template-columns: repeat(2, minmax(112px, 1fr));
+    grid-template-columns: repeat(2, minmax(132px, 1fr));
   }
 }
 
@@ -4104,7 +4106,8 @@ body.ps_clip_fullscreen .mainCol {
 
 @media (max-width: 900px) {
   .clipSB_nodeNarrative {
-    width: min(760px, calc(100vw - 56px));
+    width: min(860px, calc(100vw - 56px));
+    min-width: 0;
   }
 
   .clipSB_narrativeLayout {

@@ -1,5 +1,6 @@
 const normalizeText = (value) => String(value || "").trim();
 const SCENARIO_STORYBOARD_TRACE = false;
+const CLIP_TRACE_SCENARIO_FORMAT = false;
 const DEFAULT_GLOBAL_VISUAL_LOCK = {
   captureStyle: "cinematic commercial realism",
   cameraLanguage: "controlled cinematic camera",
@@ -80,6 +81,15 @@ function normalizeDualField({ ru = "", en = "" } = {}) {
   return { ru: safeRu, en: safeEn || safeRu };
 }
 
+function resolveFormatAlias(...candidates) {
+  for (const candidate of candidates) {
+    const normalized = normalizeText(candidate);
+    if (!normalized) continue;
+    if (normalized === "9:16" || normalized === "16:9" || normalized === "1:1") return normalized;
+  }
+  return "";
+}
+
 export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = null) {
   const source = scene && typeof scene === "object" ? scene : {};
   const t0 = toNumber(source.t0 ?? source.time_start ?? source.timeStart, index * 5);
@@ -119,6 +129,21 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const forbiddenChangesRaw = source.forbiddenChanges ?? source.forbidden_changes;
   const forbiddenInsertions = normalizeStringList(forbiddenInsertionsRaw);
   const forbiddenChanges = normalizeStringList(forbiddenChangesRaw);
+  const inheritedPackageFormat = resolveFormatAlias(
+    scenarioPackage?.format,
+    scenarioPackage?.aspectRatio,
+    scenarioPackage?.aspect_ratio,
+    scenarioPackage?.canvas
+  );
+  const sceneFormat = resolveFormatAlias(
+    source?.format,
+    source?.imageFormat,
+    source?.image_format,
+    source?.aspectRatio,
+    source?.aspect_ratio,
+    source?.canvas,
+    inheritedPackageFormat
+  );
   const normalizedScene = {
     sceneId: normalizeText(source.sceneId ?? source.scene_id) || `S${index + 1}`,
     t0,
@@ -156,6 +181,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     endFramePromptEn: normalizeText(source.endFramePromptEn ?? source.end_frame_prompt_en ?? source.endFramePrompt),
     imageUrl: normalizeText(source.imageUrl ?? source.image_url ?? source.previewUrl ?? source.preview_url),
     imageStatus: normalizeText(source.imageStatus ?? source.image_status),
+    format: sceneFormat,
+    imageFormat: sceneFormat,
     startFrameImageUrl: normalizeText(source.startFrameImageUrl ?? source.start_frame_image_url ?? source.startFramePreviewUrl ?? source.start_frame_preview_url),
     startFrameStatus: normalizeText(source.startFrameStatus ?? source.start_frame_status),
     endFrameImageUrl: normalizeText(source.endFrameImageUrl ?? source.end_frame_image_url ?? source.endFramePreviewUrl ?? source.end_frame_preview_url),
@@ -278,12 +305,22 @@ function buildGlobalCameraProfile(storyboardOut = {}, directorOutput = {}) {
 export function normalizeScenarioStoryboardPackage({ storyboardOut = null, directorOutput = null } = {}) {
   const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
   const globalCameraProfile = buildGlobalCameraProfile(storyboardOut || {}, directorOutput || {});
+  const format = resolveFormatAlias(
+    storyboardOut?.format,
+    storyboardOut?.aspectRatio,
+    storyboardOut?.aspect_ratio,
+    storyboardOut?.canvas,
+    directorOutput?.format,
+    directorOutput?.aspectRatio,
+    directorOutput?.aspect_ratio,
+    directorOutput?.canvas
+  );
   const scenesRaw = Array.isArray(storyboardOut?.scenes)
     ? storyboardOut.scenes
     : Array.isArray(directorOutput?.scenes)
       ? directorOutput.scenes
       : [];
-  const scenes = scenesRaw.map((scene, idx) => normalizeScenarioScene(scene, idx, { globalVisualLock, globalCameraProfile }));
+  const scenes = scenesRaw.map((scene, idx) => normalizeScenarioScene(scene, idx, { globalVisualLock, globalCameraProfile, format }));
 
   const storySummary = normalizeDualField({
     ru: storyboardOut?.story_summary_ru ?? directorOutput?.history?.summaryRu ?? preferRuFrom(directorOutput?.history, storyboardOut?.story_summary),
@@ -300,8 +337,9 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   const actors = Array.from(new Set(scenes.flatMap((scene) => (Array.isArray(scene.actors) ? scene.actors : [])).filter(Boolean)));
   const locations = Array.from(new Set(scenes.map((scene) => normalizeText(scene.locationEn || scene.locationRu)).filter(Boolean)));
 
-  return {
+  const normalizedPackage = {
     scenes,
+    format,
     storySummaryRu: storySummary.ru,
     storySummaryEn: storySummary.en,
     worldRu: world.ru,
@@ -346,10 +384,18 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     debug: storyboardOut?.debug ?? directorOutput?.debug,
     meta: storyboardOut?.meta ?? directorOutput?.meta,
   };
+  if (CLIP_TRACE_SCENARIO_FORMAT) {
+    console.debug("[SCENARIO FORMAT] normalized package", {
+      format: normalizedPackage.format || "",
+      scenesCount: Array.isArray(normalizedPackage.scenes) ? normalizedPackage.scenes.length : 0,
+    });
+  }
+  return normalizedPackage;
 }
 
 export function buildScenarioPreviewInput({ storyboardOut = null, directorOutput = null, format = "9:16", styleProfile = "" } = {}) {
   const pkg = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
+  const resolvedFormat = resolveFormatAlias(format, pkg?.format) || "9:16";
   return {
     storySummaryRu: pkg.storySummaryRu,
     storySummaryEn: pkg.storySummaryEn,
@@ -361,6 +407,6 @@ export function buildScenarioPreviewInput({ storyboardOut = null, directorOutput
     actors: pkg.actors,
     locations: pkg.locations,
     refsByRole: directorOutput?.refsByRole && typeof directorOutput.refsByRole === "object" ? directorOutput.refsByRole : {},
-    format: normalizeText(format) || "9:16",
+    format: resolvedFormat,
   };
 }
