@@ -4237,6 +4237,29 @@ body.ps_clip_fullscreen .mainCol {
   gap: 8px;
 }
 
+.clipSB_scenarioEditorImageBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.clipSB_scenarioEditorImageLeft,
+.clipSB_scenarioEditorImageRight {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.clipSB_scenarioEditorImageSubBlock {
+  border-radius: 10px;
+  background: rgba(255,255,255,0.02);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
 .clipSB_scenarioEditorImagePreview,
 .clipSB_scenarioEditorVideoPreview {
   width: 100%;
@@ -4244,6 +4267,12 @@ body.ps_clip_fullscreen .mainCol {
   border-radius: 10px;
   background: rgba(0,0,0,0.35);
   object-fit: contain;
+}
+
+@media (max-width: 1160px) {
+  .clipSB_scenarioEditorImageBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .clipSB_scenarioEditorBadgeRow {
