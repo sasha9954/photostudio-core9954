@@ -74,12 +74,13 @@ export default function ScenarioStoryboardEditor({
   onGenerateScene,
   onUpdateMusic,
   onGenerateMusic,
+  onExtractSceneAudio,
 }) {
   const [activeSelectionType, setActiveSelectionType] = useState("scene");
   const [activeSelectionId, setActiveSelectionId] = useState("");
   const [activeTab, setActiveTab] = useState("phrases");
   const [tabPanelOpen, setTabPanelOpen] = useState(true);
-  const [audioSceneOpen, setAudioSceneOpen] = useState(true);
+  const [audioSceneOpen, setAudioSceneOpen] = useState(false);
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
 
@@ -125,18 +126,66 @@ export default function ScenarioStoryboardEditor({
     masterAudioRef.current.play().catch(() => {});
   };
 
-  const previewSceneAudioSlice = (scene) => {
-    if (!scene || !masterAudioRef.current) return;
+  const resolveExtractedAudioStatus = (scene) => {
+    const rawStatus = String(scene?.extractedAudioStatus || "").trim().toLowerCase();
+    if (["not_extracted", "extracting", "ready", "error"].includes(rawStatus)) return rawStatus;
+    if (String(scene?.extractedAudioUrl || "").trim()) return "ready";
+    return "not_extracted";
+  };
+
+  const resolveAudioHeaderBadge = (scene) => {
+    const status = resolveExtractedAudioStatus(scene);
+    if (status === "ready") return "ready";
+    if (status === "extracting") return "audio attached";
+    return "not extracted";
+  };
+
+  const resolveExtractedAudioStatusTone = (scene) => {
+    const status = resolveExtractedAudioStatus(scene);
+    if (status === "ready") return "done";
+    if (status === "extracting") return "loading";
+    if (status === "error") return "error";
+    return "idle";
+  };
+
+  const handleExtractSceneAudio = async (scene) => {
+    const sceneId = String(scene?.sceneId || "").trim();
+    if (!sceneId) return;
     const startSec = Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0);
     const endSec = Number(scene?.audioSliceEndSec ?? scene?.t1 ?? startSec);
-    if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return;
-    masterAudioRef.current.currentTime = Math.max(0, startSec);
-    masterAudioRef.current.play().catch(() => {});
-    const durationMs = Math.max(100, (Math.max(endSec, startSec) - startSec) * 1000);
-    window.setTimeout(() => {
-      if (!masterAudioRef.current) return;
-      masterAudioRef.current.pause();
-    }, durationMs);
+    const durationSec = Math.max(0, endSec - startSec);
+    onUpdateScene?.(nodeId, sceneId, {
+      extractedAudioStatus: "extracting",
+      extractedAudioDurationSec: durationSec,
+      extractedAudioError: "",
+    });
+    try {
+      const result = await onExtractSceneAudio?.(nodeId, sceneId);
+      const extractedAudioUrl = String(
+        result?.extractedAudioUrl
+        || scene?.audioSliceUrl
+        || safeAudioData?.audioUrl
+        || "",
+      ).trim();
+      if (!extractedAudioUrl) {
+        onUpdateScene?.(nodeId, sceneId, {
+          extractedAudioStatus: "error",
+          extractedAudioError: "Не найден источник для audio slice",
+        });
+        return;
+      }
+      onUpdateScene?.(nodeId, sceneId, {
+        extractedAudioUrl,
+        extractedAudioStatus: "ready",
+        extractedAudioDurationSec: Number(result?.extractedAudioDurationSec ?? durationSec),
+        extractedAudioError: "",
+      });
+    } catch (error) {
+      onUpdateScene?.(nodeId, sceneId, {
+        extractedAudioStatus: "error",
+        extractedAudioError: String(error?.message || "Не удалось изъять аудио"),
+      });
+    }
   };
 
   const imageStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.imageStatus || selectedRuntime?.status, assetUrl: selectedScene?.imageUrl });
@@ -547,21 +596,68 @@ export default function ScenarioStoryboardEditor({
                   )}
                 </div>
 
-                <div className="clipSB_scenarioEditorBlock">
+                <div className="clipSB_scenarioEditorBlock clipSB_sceneAudioBlock">
                   <button className="clipSB_scenarioEditorCollapseHead" type="button" onClick={() => setAudioSceneOpen((prev) => !prev)} aria-expanded={audioSceneOpen}>
                     <h4>2. AUDIO (СЦЕНА)</h4>
                     <div className="clipSB_scenarioEditorCollapseHeadRight">
-                      <span className="clipSB_tag">{selectedScene?.localPhrase ? "audio attached" : "not used"}</span>
+                      <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${resolveExtractedAudioStatusTone(selectedScene)}`}>
+                        {resolveAudioHeaderBadge(selectedScene)}
+                      </span>
                       <span className={`clipSB_scenarioEditorChevron ${audioSceneOpen ? "isOpen" : ""}`} aria-hidden="true">⌄</span>
                     </div>
                   </button>
                   {audioSceneOpen ? (
-                    <div className="clipSB_scenarioEditorCollapsibleBody">
-                      <div className="clipSB_storyboardKv"><span>narrationMode</span><strong>{selectedScene.narrationMode || "—"}</strong></div>
-                      <div className="clipSB_storyboardKv"><span>localPhrase</span><strong>{selectedScene.localPhrase || "—"}</strong></div>
-                      <div className="clipSB_storyboardKv"><span>audioSliceStartSec</span><strong>{fmtSec(selectedScene.audioSliceStartSec)}s</strong></div>
-                      <div className="clipSB_storyboardKv"><span>audioSliceEndSec</span><strong>{fmtSec(selectedScene.audioSliceEndSec)}s</strong></div>
-                      <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => previewSceneAudioSlice(selectedScene)}>▶ прослушать кусок</button>
+                    <div className="clipSB_scenarioEditorCollapsibleBody clipSB_sceneAudioGrid">
+                      <div className="clipSB_sceneAudioCol clipSB_sceneAudioInfoCol">
+                        <div className="clipSB_sceneAudioInfoCard">
+                          <span>Режим речи</span>
+                          <strong>{selectedScene.narrationMode || "—"}</strong>
+                        </div>
+                        <div className="clipSB_sceneAudioInfoCard">
+                          <span>Фраза</span>
+                          <strong>{selectedScene.localPhrase || "—"}</strong>
+                        </div>
+                        <div className="clipSB_sceneAudioInfoCard">
+                          <span>Начало</span>
+                          <strong>{fmtSec(selectedScene.audioSliceStartSec)} c</strong>
+                        </div>
+                        <div className="clipSB_sceneAudioInfoCard">
+                          <span>Конец</span>
+                          <strong>{fmtSec(selectedScene.audioSliceEndSec)} c</strong>
+                        </div>
+                        <div className="clipSB_sceneAudioInfoCard">
+                          <span>Длительность</span>
+                          <strong>{fmtSec(Math.max(0, Number(selectedScene.audioSliceEndSec ?? selectedScene?.t1 ?? 0) - Number(selectedScene.audioSliceStartSec ?? selectedScene?.t0 ?? 0)))} c</strong>
+                        </div>
+                      </div>
+
+                      <div className="clipSB_sceneAudioCol clipSB_sceneAudioActionCol">
+                        <div className="clipSB_scenarioEditorBtnRow">
+                          <button
+                            className="clipSB_btn"
+                            type="button"
+                            onClick={() => handleExtractSceneAudio(selectedScene)}
+                            disabled={resolveExtractedAudioStatus(selectedScene) === "extracting"}
+                          >
+                            {resolveExtractedAudioStatus(selectedScene) === "extracting" ? "Извлекаем..." : "Изъять аудио"}
+                          </button>
+                        </div>
+                        {resolveExtractedAudioStatus(selectedScene) === "ready" && selectedScene?.extractedAudioUrl ? (
+                          <div className="clipSB_sceneAudioReadyBox">
+                            <audio controls className="clipSB_audioPlayer" src={selectedScene.extractedAudioUrl} />
+                            <div className="clipSB_sceneAudioReadyMeta">
+                              <span className="clipSB_tag clipSB_tagStatus clipSB_tagStatus--done">extracted / ready</span>
+                              <span className="clipSB_small">Длительность: {fmtSec(selectedScene?.extractedAudioDurationSec ?? Math.max(0, Number(selectedScene.audioSliceEndSec ?? selectedScene?.t1 ?? 0) - Number(selectedScene.audioSliceStartSec ?? selectedScene?.t0 ?? 0)))} c</span>
+                            </div>
+                            <div className="clipSB_sceneAudioLipSyncReady">Готово для lip-sync и sound-enabled scene.</div>
+                          </div>
+                        ) : (
+                          <div className="clipSB_sceneAudioPlaceholder">Аудио-кусок сцены ещё не подготовлен</div>
+                        )}
+                        {resolveExtractedAudioStatus(selectedScene) === "error" ? (
+                          <div className="clipSB_hint" style={{ color: "#ff8a8a" }}>{String(selectedScene?.extractedAudioError || "Ошибка извлечения аудио")}</div>
+                        ) : null}
+                      </div>
                     </div>
                   ) : null}
                 </div>
