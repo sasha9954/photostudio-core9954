@@ -4278,19 +4278,26 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_scenarioEditorPreviewPlaceholder {
   width: 100%;
   min-height: 300px;
-  border-radius: 10px;
-  color: rgba(223, 228, 236, 0.82);
+  border-radius: 12px;
+  color: rgba(223, 228, 236, 0.86);
   display: grid;
   place-items: center;
   text-align: center;
-  gap: 6px;
-  padding: 14px;
+  gap: 8px;
+  padding: 18px;
   font-size: 12px;
+  line-height: 1.45;
+  background:
+    radial-gradient(120% 90% at 50% 10%, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0) 55%),
+    rgba(6, 8, 12, 0.76);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    inset 0 -16px 34px rgba(0,0,0,0.28);
 }
 
 .clipSB_scenarioEditorPreviewPlaceholderIcon {
-  font-size: 20px;
-  opacity: 0.75;
+  font-size: 22px;
+  opacity: 0.8;
 }
 
 .clipSB_scenarioEditorCollapseHead {
@@ -4374,18 +4381,32 @@ body.ps_clip_fullscreen .mainCol {
   width: 100%;
   min-height: 304px;
   max-height: 360px;
-  border-radius: 10px;
-  padding: 8px;
+  border-radius: 14px;
+  padding: 12px;
   box-sizing: border-box;
   overflow: hidden;
-  background: rgba(0,0,0,0.22);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+  background:
+    linear-gradient(180deg, rgba(22, 27, 35, 0.36) 0%, rgba(8, 11, 16, 0.52) 100%),
+    rgba(3, 5, 8, 0.96);
+  box-shadow:
+    inset 0 0 0 1px rgba(181, 203, 232, 0.2),
+    inset 0 14px 26px rgba(0, 0, 0, 0.42),
+    inset 0 -18px 36px rgba(0, 0, 0, 0.3),
+    0 14px 30px rgba(0, 0, 0, 0.26),
+    0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 
 .clipSB_scenarioEditorImagePreviewWrap--empty {
-  background: transparent;
-  box-shadow: none;
+  background:
+    linear-gradient(180deg, rgba(22, 27, 35, 0.36) 0%, rgba(8, 11, 16, 0.52) 100%),
+    rgba(3, 5, 8, 0.96);
+  box-shadow:
+    inset 0 0 0 1px rgba(181, 203, 232, 0.2),
+    inset 0 14px 26px rgba(0, 0, 0, 0.42),
+    inset 0 -18px 36px rgba(0, 0, 0, 0.3),
+    0 14px 30px rgba(0, 0, 0, 0.26),
+    0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 .clipSB_scenarioEditorImageSubBlock {
@@ -4402,8 +4423,11 @@ body.ps_clip_fullscreen .mainCol {
   width: 100%;
   min-height: 300px;
   max-height: 360px;
-  border-radius: 10px;
-  background: rgba(0,0,0,0.35);
+  border-radius: 12px;
+  background: rgba(3, 5, 8, 0.9);
+  box-shadow:
+    inset 0 0 0 1px rgba(208, 224, 246, 0.12),
+    inset 0 12px 28px rgba(0, 0, 0, 0.24);
   object-fit: contain;
 }
 
