@@ -8086,8 +8086,9 @@ def clip_image(payload: ClipImageIn):
         has_role_aware_refs = any(len(comfy_refs_by_role.get(role) or []) > 0 for role in comfy_roles)
         has_incoming_role_refs = False
         if isinstance(raw_refs_by_role_incoming, dict):
+            normalized_incoming_refs_by_role = _clean_refs_by_role_for_image(raw_refs_by_role_incoming)
             for role in comfy_roles:
-                if len(_normalize_reference_urls(raw_refs_by_role_incoming.get(role))) > 0:
+                if len(normalized_incoming_refs_by_role.get(role) or []) > 0:
                     has_incoming_role_refs = True
                     break
         has_role_contract = bool(scene_primary_role or scene_secondary_roles or scene_active_roles or must_appear_roles)

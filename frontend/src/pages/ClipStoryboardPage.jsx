@@ -6212,9 +6212,10 @@ const scenarioFlowSourceNode = useMemo(() => {
 
 const scenarioBrainRefs = useMemo(() => {
   if (!scenarioFlowSourceNode?.id) return { character: [], location: [], style: [], props: [], refsByRole: {} };
+  const SCENARIO_PLAN_INPUT_HANDLES = new Set(["plan_in", "scenario_storyboard_in"]);
   const incomingPlanEdge = [...edges]
     .reverse()
-    .find((e) => e.target === scenarioFlowSourceNode.id && (e.targetHandle || "") === "plan_in");
+    .find((e) => e.target === scenarioFlowSourceNode.id && SCENARIO_PLAN_INPUT_HANDLES.has((e.targetHandle || "")));
   if (!incomingPlanEdge?.source) return { character: [], location: [], style: [], props: [], refsByRole: {} };
   const brainInput = collectBrainPlannerInput({ brainNodeId: incomingPlanEdge.source, nodesList: nodes, edgesList: edges });
   const brainNode = nodes.find((n) => n.id === incomingPlanEdge.source);
