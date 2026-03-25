@@ -181,6 +181,16 @@ const GLOBAL_FORBIDDEN_INSERTIONS_GUARDS = [
   "do not introduce a different production look",
 ];
 
+function traceScenarioGraphConnect(eventType = "rejected", { sourceType = "", sourceHandle = "", targetType = "", targetHandle = "" } = {}) {
+  if (!CLIP_TRACE_SCENARIO_GRAPH) return;
+  console.debug(`[SCENARIO GRAPH STRICT] connect ${eventType}`, {
+    sourceType: String(sourceType || ""),
+    sourceHandle: String(sourceHandle || ""),
+    targetType: String(targetType || ""),
+    targetHandle: String(targetHandle || ""),
+  });
+}
+
 function normalizeScenarioStringList(value) {
   const normalizeScalar = (item) => {
     if (typeof item === "string") return item.trim();
@@ -3057,6 +3067,7 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
       return sourceNode?.type === "comfyNarrative" && String(edge?.sourceHandle || "") === "preview_out";
     }) || null;
   const narrativeNode = narrativeEdge?.source ? (nodesById.get(narrativeEdge.source) || null) : null;
+  const hasValidScenarioSource = !!(narrativeNode?.type === "comfyNarrative" && String(narrativeEdge?.sourceHandle || "") === "preview_out");
   const narrativeDirectorOutput = narrativeNode?.type === "comfyNarrative"
     ? (narrativeNode?.data?.outputs?.directorOutput || narrativeNode?.data?.pendingOutputs?.directorOutput || null)
     : null;
@@ -3064,38 +3075,28 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     sourceNode: narrativeNode,
     sourceHandle: String(narrativeEdge?.sourceHandle || ""),
   });
-  const storySources = storyEdges
-    .map((edge) => nodesById.get(edge?.source) || null)
-    .filter(Boolean);
-  const comfyNode = storySources.find((node) => node?.type === "comfyStoryboard") || null;
-  const comfyBrainNode = storySources.find((node) => node?.type === "comfyBrain") || null;
-  const storyboardNode = storySources.find((node) => node?.type === "storyboardNode") || null;
-  const textNode = storySources.find((node) => node?.type === "textNode") || null;
-  const comfyScenes = normalizeComfyScenesForAssembly(comfyNode?.data?.mockScenes);
-  const storyboardScenes = Array.isArray(storyboardNode?.data?.scenes) ? storyboardNode.data.scenes : [];
+  const storySources = narrativeNode ? [narrativeNode] : [];
+  const comfyNode = null;
+  const comfyBrainNode = null;
+  const textNode = null;
   const narrativeScenes = Array.isArray(narrativeStoryboardOut?.scenes)
     ? narrativeStoryboardOut.scenes.map((scene, idx) => normalizeStoryboardOutScene(scene, idx))
     : [];
-  const scenes = narrativeScenes.length ? narrativeScenes : (comfyScenes.length ? comfyScenes : storyboardScenes);
+  const scenes = narrativeScenes;
   const sceneCount = scenes.length;
   const scenarioPackage = narrativeDirectorOutput && typeof narrativeDirectorOutput === "object"
     ? narrativeDirectorOutput
     : null;
-  const textValue = String(textNode?.data?.textValue || "").trim();
+  const textValue = "";
   const sourceLabels = storySources.map((node) => {
-    if (node?.type === "comfyStoryboard") return "COMFY STORYBOARD";
     if (node?.type === "comfyNarrative") return "SCENARIO DIRECTOR";
-    if (node?.type === "storyboardNode") return "STORYBOARD";
-    if (node?.type === "brainNode") return "BRAIN";
-    if (node?.type === "comfyBrain") return "COMFY BRAIN";
-    if (node?.type === "refNode") return String(node?.data?.title || "REF");
     return String(node?.type || "NODE").toUpperCase();
   });
   const summaryParts = [];
   if (sceneCount) summaryParts.push(`${sceneCount} сцен`);
   if (textValue) summaryParts.push(`text: ${truncateIntroText(textValue, 42)}`);
   if (sourceLabels.length) summaryParts.push(`inputs: ${sourceLabels.join(", ")}`);
-  const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || comfyBrainNode?.data?.plannerMeta?.plannerInput || {};
+  const plannerInput = {};
   const scenarioFormatCandidates = [
     scenarioPackage?.format,
     scenarioPackage?.aspectRatio,
@@ -3146,13 +3147,10 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     || ""
   ).trim();
   if (CLIP_TRACE_SCENARIO_GRAPH) {
-    console.debug("[SCENARIO GRAPH] intro source", {
-      hasConnection: !!narrativeEdge,
+    console.debug("[SCENARIO GRAPH STRICT] intro source", {
       sourceNodeType: String(narrativeNode?.type || ""),
       sourceHandle: String(narrativeEdge?.sourceHandle || ""),
-      hasStorySummary: !!storySummary,
-      hasPreviewPrompt: !!previewPrompt,
-      hasFormat: !!scenarioFormat,
+      validScenarioSource: hasValidScenarioSource,
     });
   }
   const plannerConnectedRefsByRole = normalizeIntroConnectedRefsByRole(plannerInput?.refsByRole || {});
@@ -9773,18 +9771,17 @@ onClipSec: (nodeId, value) => {
             .find((edge) => edge?.target === n.id && String(edge?.targetHandle || "") === "scenario_storyboard_in") || null;
           const sourceNode = incomingEdge?.source ? (nodesById.get(incomingEdge.source) || null) : null;
           const sourceHandle = String(incomingEdge?.sourceHandle || "");
-          const storyboardOut = extractNarrativeStoryboardOut({ sourceNode, sourceHandle });
-          const directorOutput = sourceNode?.type === "comfyNarrative"
+          const validScenarioSource = sourceNode?.type === "comfyNarrative" && sourceHandle === "storyboard_out";
+          const storyboardOut = validScenarioSource ? extractNarrativeStoryboardOut({ sourceNode, sourceHandle }) : null;
+          const directorOutput = validScenarioSource
             ? (sourceNode?.data?.outputs?.directorOutput || sourceNode?.data?.pendingOutputs?.directorOutput || null)
             : null;
           const normalizedPackage = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
           if (CLIP_TRACE_SCENARIO_GRAPH) {
-            console.debug("[SCENARIO GRAPH] storyboard source", {
-              hasConnection: !!incomingEdge,
+            console.debug("[SCENARIO GRAPH STRICT] storyboard source", {
               sourceNodeType: String(sourceNode?.type || ""),
               sourceHandle,
-              hasScenes: Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length > 0,
-              hasFormat: !!String(normalizedPackage?.format || "").trim(),
+              validScenarioSource: !!validScenarioSource,
             });
           }
           if (CLIP_TRACE_VISUAL_LOCK) {
@@ -12392,12 +12389,27 @@ const hydrate = useCallback((source = "unknown") => {
           const targetHandle = params.targetHandle || "";
           const isLegacyStoryboardRoute = dst.type === "storyboardNode" && targetHandle === "plan_in";
           const isScenarioStoryboardRoute = dst.type === "scenarioStoryboard" && targetHandle === "scenario_storyboard_in";
-          if (!isLegacyStoryboardRoute && !isScenarioStoryboardRoute) return eds;
+          if (!isLegacyStoryboardRoute && !isScenarioStoryboardRoute) {
+            traceScenarioGraphConnect("rejected", {
+              sourceType: src.type,
+              sourceHandle: params.sourceHandle || "",
+              targetType: dst.type,
+              targetHandle,
+            });
+            return eds;
+          }
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === targetHandle));
           const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
           nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          if (CLIP_TRACE_SCENARIO_GRAPH && isScenarioStoryboardRoute) {
-            console.debug("[SCENARIO GRAPH] connect accepted", {
+          if (isScenarioStoryboardRoute) {
+            traceScenarioGraphConnect("accepted", {
+              sourceType: src.type,
+              sourceHandle: params.sourceHandle || "",
+              targetType: dst.type,
+              targetHandle,
+            });
+          } else if (CLIP_TRACE_SCENARIO_GRAPH) {
+            console.debug("[SCENARIO GRAPH] legacy storyboard route accepted", {
               sourceType: src.type,
               sourceHandle: params.sourceHandle || "",
               targetType: dst.type,
@@ -12413,21 +12425,35 @@ const hydrate = useCallback((source = "unknown") => {
             const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === INTRO_FRAME_STORY_HANDLE));
             const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
             nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-            if (CLIP_TRACE_SCENARIO_GRAPH) {
-              console.debug("[SCENARIO GRAPH] connect accepted", {
-                sourceType: src.type,
-                sourceHandle: params.sourceHandle || "",
-                targetType: dst.type,
-                targetHandle: params.targetHandle || "",
-              });
-            }
+            traceScenarioGraphConnect("accepted", {
+              sourceType: src.type,
+              sourceHandle: params.sourceHandle || "",
+              targetType: dst.type,
+              targetHandle: params.targetHandle || "",
+            });
             refreshNodeBindingsForEdges(nextEdges, "edges:connect:scenario-intro");
             return nextEdges;
           }
-          if (dst.type !== "comfyVideoPreview" || (params.targetHandle || "") !== "scenario_preview_in") return eds;
+          if (dst.type !== "comfyVideoPreview" || (params.targetHandle || "") !== "scenario_preview_in") {
+            traceScenarioGraphConnect("rejected", {
+              sourceType: src.type,
+              sourceHandle: params.sourceHandle || "",
+              targetType: dst.type,
+              targetHandle: params.targetHandle || "",
+            });
+            return eds;
+          }
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === "scenario_preview_in"));
           const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
           nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          if (CLIP_TRACE_SCENARIO_GRAPH) {
+            console.debug("[SCENARIO GRAPH] legacy preview route accepted", {
+              sourceType: src.type,
+              sourceHandle: params.sourceHandle || "",
+              targetType: dst.type,
+              targetHandle: params.targetHandle || "",
+            });
+          }
           refreshNodeBindingsForEdges(nextEdges, "edges:connect:scenario-preview");
           return nextEdges;
         }
@@ -12444,23 +12470,39 @@ const hydrate = useCallback((source = "unknown") => {
         if (dst.type === "introFrame") {
           const targetHandle = params.targetHandle || "";
           const sourceHandle = params.sourceHandle || "";
-          const allowStoryContext =
+          const allowStoryContextScenario =
             targetHandle === INTRO_FRAME_STORY_HANDLE
-            && (
-              (src.type === "comfyNarrative" && sourceHandle === "preview_out")
-              ||
-              (src.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_INTRO_HANDLE)
-              || (src.type === "storyboardNode" && sourceHandle === "plan_out")
-              || (src.type === "brainNode" && sourceHandle === "plan")
-              || (src.type === "comfyBrain" && sourceHandle === "comfy_plan")
-              || (src.type === "refNode" && ["ref_character", "ref_location", "ref_style", "ref_items"].includes(sourceHandle))
-              || (src.type === "textNode" && sourceHandle === "text")
-            );
-          if (!allowStoryContext) return eds;
+            && src.type === "comfyNarrative"
+            && sourceHandle === "preview_out";
+          if (!allowStoryContextScenario) {
+            traceScenarioGraphConnect("rejected", {
+              sourceType: src.type,
+              sourceHandle,
+              targetType: dst.type,
+              targetHandle,
+            });
+            return eds;
+          }
           const presentation = getEdgePresentation({ sourceHandle, targetHandle, sourceType: src.type, targetType: dst.type });
           nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, eds);
+          traceScenarioGraphConnect("accepted", {
+            sourceType: src.type,
+            sourceHandle,
+            targetType: dst.type,
+            targetHandle,
+          });
           refreshNodeBindingsForEdges(nextEdges, "edges:connect");
           return nextEdges;
+        }
+
+        if (dst.type === "scenarioStoryboard") {
+          traceScenarioGraphConnect("rejected", {
+            sourceType: src.type,
+            sourceHandle: params.sourceHandle || "",
+            targetType: dst.type,
+            targetHandle: params.targetHandle || "",
+          });
+          return eds;
         }
 
         if (src.type === 'comfyStoryboard' && (params.sourceHandle || '') === COMFY_STORYBOARD_MAIN_HANDLE) {
@@ -12484,18 +12526,24 @@ const hydrate = useCallback((source = "unknown") => {
         }
 
         if (src.type === "introFrame" && (params.sourceHandle || "") === "intro_frame_out") {
-          if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_intro") return eds;
-          const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_intro");
-          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
-          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          if (CLIP_TRACE_SCENARIO_GRAPH) {
-            console.debug("[SCENARIO GRAPH] connect accepted", {
+          if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_intro") {
+            traceScenarioGraphConnect("rejected", {
               sourceType: src.type,
               sourceHandle: params.sourceHandle || "",
               targetType: dst.type,
               targetHandle: params.targetHandle || "",
             });
+            return eds;
           }
+          const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_intro");
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          traceScenarioGraphConnect("accepted", {
+            sourceType: src.type,
+            sourceHandle: params.sourceHandle || "",
+            targetType: dst.type,
+            targetHandle: params.targetHandle || "",
+          });
           refreshNodeBindingsForEdges(nextEdges, "edges:connect");
           return nextEdges;
         }
@@ -12510,18 +12558,24 @@ const hydrate = useCallback((source = "unknown") => {
         }
 
         if (src.type === "scenarioStoryboard" && (params.sourceHandle || "") === "scenario_storyboard_out") {
-          if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_in") return eds;
-          const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_in");
-          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
-          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          if (CLIP_TRACE_SCENARIO_GRAPH) {
-            console.debug("[SCENARIO GRAPH] connect accepted", {
+          if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_in") {
+            traceScenarioGraphConnect("rejected", {
               sourceType: src.type,
               sourceHandle: params.sourceHandle || "",
               targetType: dst.type,
               targetHandle: params.targetHandle || "",
             });
+            return eds;
           }
+          const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_in");
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          traceScenarioGraphConnect("accepted", {
+            sourceType: src.type,
+            sourceHandle: params.sourceHandle || "",
+            targetType: dst.type,
+            targetHandle: params.targetHandle || "",
+          });
           refreshNodeBindingsForEdges(nextEdges, "edges:connect:scenario-storyboard-assembly");
           return nextEdges;
         }
