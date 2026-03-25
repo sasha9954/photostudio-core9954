@@ -728,8 +728,8 @@ export default function ScenarioStoryboardEditor({
                         <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { videoUrl: "", videoStatus: "idle", videoError: "", videoJobId: "" })}>Удалить</button>
                       </div>
                     </div>
-                    <div className="clipSB_scenarioEditorVideoRight">
-                      <div className={`clipSB_scenarioEditorImagePreviewWrap${hasSceneVideo || isFirstLastVideoMode ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
+                    <div className="clipSB_scenarioEditorVideoRight clipSB_scenarioEditorVideoPreviewCol">
+                      <div className={`clipSB_scenarioEditorImagePreviewWrap clipSB_scenarioEditorVideoPreviewBox${hasSceneVideo || isFirstLastVideoMode ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
                         {hasSceneVideo ? (
                           <video className="clipSB_scenarioEditorVideoPreview" controls src={sceneVideoUrl} />
                         ) : isFirstLastVideoMode ? (
@@ -767,10 +767,10 @@ export default function ScenarioStoryboardEditor({
                             <div>Исходное изображение для видео отсутствует</div>
                           </div>
                         )}
+                        {!hasSceneVideo ? (
+                          <div className="clipSB_hint clipSB_scenarioEditorVideoHint clipSB_scenarioEditorVideoHint--inside">Видео сцены пока не создано</div>
+                        ) : null}
                       </div>
-                      {!hasSceneVideo ? (
-                        <div className="clipSB_hint clipSB_scenarioEditorVideoHint">Видео сцены пока не создано</div>
-                      ) : null}
                     </div>
                   </div>
                 </div>
