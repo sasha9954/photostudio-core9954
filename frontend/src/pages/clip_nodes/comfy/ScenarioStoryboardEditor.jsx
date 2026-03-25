@@ -450,7 +450,7 @@ export default function ScenarioStoryboardEditor({
                             <h4>IMAGE</h4>
                             <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${imageStatus}`}>{imageStatus}</span>
                           </div>
-                          <div className="clipSB_scenarioEditorImagePreviewWrap">
+                          <div className={`clipSB_scenarioEditorImagePreviewWrap${selectedScene?.imageUrl ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
                             {selectedScene?.imageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={selectedScene.imageUrl} alt={`scene-${selectedSceneId}-image`} /> : (
                               <div className="clipSB_scenarioEditorPreviewPlaceholder" role="status" aria-live="polite">
                                 <div className="clipSB_scenarioEditorPreviewPlaceholderIcon" aria-hidden="true">🖼️</div>
