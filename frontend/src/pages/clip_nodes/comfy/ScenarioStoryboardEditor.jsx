@@ -203,12 +203,12 @@ export default function ScenarioStoryboardEditor({
 
   const imageStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.imageStatus, assetUrl: selectedScene?.imageUrl });
   const startFrameStatus = resolveBlockStatus({
-    runtimeStatus: selectedRuntime?.startFrameStatus || selectedScene?.startFrameStatus || selectedRuntime?.imageStatus,
-    assetUrl: selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl,
+    runtimeStatus: selectedRuntime?.startFrameStatus || selectedScene?.startFrameStatus || selectedRuntime?.imageStatus || selectedScene?.imageStatus,
+    assetUrl: selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl,
   });
   const endFrameStatus = resolveBlockStatus({
-    runtimeStatus: selectedRuntime?.endFrameStatus || selectedScene?.endFrameStatus || selectedRuntime?.imageStatus,
-    assetUrl: selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
+    runtimeStatus: selectedRuntime?.endFrameStatus || selectedScene?.endFrameStatus || selectedRuntime?.imageStatus || selectedScene?.imageStatus,
+    assetUrl: selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
   });
   const videoStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.videoStatus || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
   const musicStatus = resolveBlockStatus({ runtimeStatus: safeAudioData?.musicStatus, assetUrl: safeAudioData?.musicUrl });
@@ -216,15 +216,16 @@ export default function ScenarioStoryboardEditor({
   const sceneNeedsTwoFrames = isFirstLastScene(selectedScene);
   const isFirstLastVideoMode = sceneNeedsTwoFrames;
   const sourceImageUrl = String(selectedScene?.imageUrl || "").trim();
-  const startFrameSourceUrl = String(selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl || "").trim();
-  const endFrameSourceUrl = String(selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl || "").trim();
+  const startFrameSourceUrl = String(selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl || "").trim();
+  const endFrameSourceUrl = String(selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl || "").trim();
   const sourceFrameFirstUrl = String(
     selectedScene?.startFrameImageUrl
+    || selectedScene?.startImageUrl
     || selectedScene?.imageUrl
     || selectedScene?.imagePreviewUrl
     || "",
   ).trim();
-  const sourceFrameLastUrl = String(selectedScene?.endFrameImageUrl || "").trim();
+  const sourceFrameLastUrl = String(selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || "").trim();
   const sourceFrameLastPlaceholder = isFirstLastVideoMode ? "Последний кадр не создан" : "Последний кадр не требуется";
   const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();
   const hasSceneVideo = Boolean(sceneVideoUrl);

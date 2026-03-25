@@ -175,6 +175,8 @@ const CLIP_TRACE_SCENARIO_GRAPH = false;
 const CLIP_TRACE_INTRO_PREVIEW = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = false;
+const CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD = false;
+const CLIP_TRACE_SCENARIO_SCENE_ASSETS = false;
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
 const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
   "no change in lighting style",
@@ -321,6 +323,7 @@ function buildScenarioSceneContractPayload(scene = {}) {
     sceneType: scene?.sceneType,
     primaryRole: scene?.primaryRole,
     secondaryRoles: scene?.secondaryRoles,
+    sceneActiveRoles: scene?.sceneActiveRoles,
     refsUsed: scene?.refsUsed,
     refDirectives: scene?.refDirectives,
     focalSubject: scene?.focalSubject,
@@ -365,6 +368,101 @@ function buildScenarioSceneContractPayload(scene = {}) {
     resolvedModelKey,
     requestedDurationSec: Number.isFinite(requestedDurationSec) ? Math.max(0, requestedDurationSec) : undefined,
   };
+}
+
+function normalizeScenarioRoleName(value = "") {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  const aliases = {
+    char_1: "character_1",
+    character1: "character_1",
+    char_2: "character_2",
+    character2: "character_2",
+    char_3: "character_3",
+    character3: "character_3",
+    ref_props: "props",
+    ref_items: "props",
+    items: "props",
+    item: "props",
+    objects: "props",
+    object: "props",
+  };
+  return aliases[raw] || raw;
+}
+
+function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {} } = {}) {
+  const roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
+  const toUrlList = (items) => (Array.isArray(items)
+    ? items.map((item) => String(typeof item === "string" ? item : item?.url || "").trim()).filter(Boolean)
+    : []);
+  const byRoleFromScene = scene?.refsByRole && typeof scene.refsByRole === "object" ? scene.refsByRole : {};
+  const byRoleFromBrain = scenarioBrainRefs?.refsByRole && typeof scenarioBrainRefs.refsByRole === "object" ? scenarioBrainRefs.refsByRole : {};
+  const roleMap = Object.fromEntries(roles.map((role) => [role, []]));
+  Object.entries(byRoleFromBrain || {}).forEach(([rawRole, items]) => {
+    const role = normalizeScenarioRoleName(rawRole);
+    if (!roles.includes(role)) return;
+    roleMap[role] = [...new Set([...(roleMap[role] || []), ...toUrlList(items)])];
+  });
+  Object.entries(byRoleFromScene || {}).forEach(([rawRole, items]) => {
+    const role = normalizeScenarioRoleName(rawRole);
+    if (!roles.includes(role)) return;
+    roleMap[role] = [...new Set([...(roleMap[role] || []), ...toUrlList(items)])];
+  });
+  roleMap.character_1 = [...new Set([...(roleMap.character_1 || []), ...toUrlList(scenarioBrainRefs?.character)])];
+  roleMap.location = [...new Set([...(roleMap.location || []), ...toUrlList(scenarioBrainRefs?.location)])];
+  roleMap.style = [...new Set([...(roleMap.style || []), ...toUrlList(scenarioBrainRefs?.style)])];
+  roleMap.props = [...new Set([...(roleMap.props || []), ...toUrlList(scenarioBrainRefs?.props)])];
+  return roleMap;
+}
+
+function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {}) {
+  const castRoles = ["character_1", "character_2", "character_3", "animal", "group"];
+  const roleWithRefs = castRoles.filter((role) => Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0);
+  const normalizeRoleList = (value) => {
+    const list = Array.isArray(value) ? value : [];
+    return [...new Set(list.map((role) => normalizeScenarioRoleName(role)).filter(Boolean))];
+  };
+  const primaryRole = normalizeScenarioRoleName(scene?.primaryRole || "");
+  const secondaryRoles = normalizeRoleList(scene?.secondaryRoles);
+  const sceneActiveRoles = normalizeRoleList(scene?.sceneActiveRoles);
+  const refsUsed = Array.isArray(scene?.refsUsed)
+    ? normalizeRoleList(scene.refsUsed)
+    : (scene?.refsUsed && typeof scene.refsUsed === "object"
+      ? normalizeRoleList(Object.keys(scene.refsUsed).filter((role) => !!scene.refsUsed[role]))
+      : []);
+  const mustAppear = normalizeRoleList(scene?.mustAppear);
+  const hasExplicitContract = Boolean(primaryRole || secondaryRoles.length || sceneActiveRoles.length || refsUsed.length || mustAppear.length);
+  if (hasExplicitContract) {
+    return {
+      primaryRole,
+      secondaryRoles,
+      sceneActiveRoles,
+      refsUsed,
+      mustAppear,
+    };
+  }
+  if (roleWithRefs.length >= 2) {
+    const fallbackPrimary = primaryRole || roleWithRefs[0];
+    const fallbackSecondary = roleWithRefs.filter((role) => role !== fallbackPrimary);
+    const fallbackActive = [fallbackPrimary, ...fallbackSecondary];
+    return {
+      primaryRole: fallbackPrimary,
+      secondaryRoles: fallbackSecondary,
+      sceneActiveRoles: fallbackActive,
+      refsUsed: fallbackActive,
+      mustAppear: fallbackActive,
+    };
+  }
+  if (roleWithRefs.length === 1) {
+    return {
+      primaryRole: roleWithRefs[0],
+      secondaryRoles: [],
+      sceneActiveRoles: [roleWithRefs[0]],
+      refsUsed: [roleWithRefs[0]],
+      mustAppear: [roleWithRefs[0]],
+    };
+  }
+  return { primaryRole: "", secondaryRoles: [], sceneActiveRoles: [], refsUsed: [], mustAppear: [] };
 }
 
 function buildScenarioTransferLogData(scene = {}, contractPayload = {}) {
@@ -3811,6 +3909,9 @@ function normalizeClipImageRefsPayload(refs = {}) {
   if (Array.isArray(refs?.secondaryRoles)) {
     normalized.secondaryRoles = refs.secondaryRoles.map((role) => String(role || "").trim()).filter(Boolean);
   }
+  if (Array.isArray(refs?.sceneActiveRoles)) {
+    normalized.sceneActiveRoles = refs.sceneActiveRoles.map((role) => String(role || "").trim()).filter(Boolean);
+  }
   const heroEntityId = String(refs?.heroEntityId || "").trim();
   if (heroEntityId) normalized.heroEntityId = heroEntityId;
   if (Array.isArray(refs?.supportEntityIds)) {
@@ -3848,6 +3949,7 @@ function buildComfySceneRefsPayload({
   refDirectives = null,
   primaryRole = "",
   secondaryRoles = [],
+  sceneActiveRoles = [],
   heroEntityId = "",
   supportEntityIds = [],
   mustAppear = [],
@@ -3906,6 +4008,7 @@ function buildComfySceneRefsPayload({
     refDirectives: refDirectives && typeof refDirectives === 'object' ? refDirectives : undefined,
     primaryRole: String(primaryRole || "").trim(),
     secondaryRoles: Array.isArray(secondaryRoles) ? secondaryRoles : undefined,
+    sceneActiveRoles: Array.isArray(sceneActiveRoles) ? sceneActiveRoles : undefined,
     heroEntityId: String(heroEntityId || "").trim(),
     supportEntityIds: Array.isArray(supportEntityIds) ? supportEntityIds : undefined,
     mustAppear: Array.isArray(mustAppear) ? mustAppear : undefined,
@@ -6058,14 +6161,15 @@ const scenarioFlowSourceNode = useMemo(() => {
 }, [activeScenarioStoryboardNode, scenarioNode]);
 
 const scenarioBrainRefs = useMemo(() => {
-  if (!scenarioFlowSourceNode?.id) return { character: [], location: [], style: [], props: [] };
+  if (!scenarioFlowSourceNode?.id) return { character: [], location: [], style: [], props: [], refsByRole: {} };
   const incomingPlanEdge = [...edges]
     .reverse()
     .find((e) => e.target === scenarioFlowSourceNode.id && (e.targetHandle || "") === "plan_in");
-  if (!incomingPlanEdge?.source) return { character: [], location: [], style: [], props: [] };
+  if (!incomingPlanEdge?.source) return { character: [], location: [], style: [], props: [], refsByRole: {} };
   const brainInput = collectBrainPlannerInput({ brainNodeId: incomingPlanEdge.source, nodesList: nodes, edgesList: edges });
   const brainNode = nodes.find((n) => n.id === incomingPlanEdge.source);
   const planRefs = brainNode?.data?.scenePlan?.refs || {};
+  const plannerRefsByRole = brainNode?.data?.plannerMeta?.plannerInput?.refsByRole;
   return {
     character: Array.isArray(planRefs.character) ? planRefs.character : brainInput.characterRefs,
     location: Array.isArray(planRefs.location) ? planRefs.location : brainInput.locationRefs,
@@ -6076,6 +6180,7 @@ const scenarioBrainRefs = useMemo(() => {
     sessionLocationAnchor: planRefs.sessionLocationAnchor,
     sessionStyleAnchor: planRefs.sessionStyleAnchor,
     sessionBaseline: planRefs.sessionBaseline,
+    refsByRole: plannerRefsByRole && typeof plannerRefsByRole === "object" ? plannerRefsByRole : {},
   };
 }, [edges, nodes, scenarioFlowSourceNode?.id]);
 
@@ -6140,6 +6245,18 @@ const scenarioSelectedAudioSliceError = String(
 const globalAudioUrlRaw = useMemo(() => extractGlobalAudioUrlFromNodes(nodes), [nodes]);
 const globalAudioUrlResolved = useMemo(() => resolveAssetUrl(globalAudioUrlRaw), [globalAudioUrlRaw]);
 const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSelected?.audioSliceUrl), [scenarioSelected?.audioSliceUrl]);
+useEffect(() => {
+  if (!CLIP_TRACE_SCENARIO_SCENE_ASSETS) return;
+  console.debug("[SCENARIO SCENE ASSETS]", {
+    selectedSceneId: String(scenarioSelected?.sceneId || ""),
+    imageUrl: String(scenarioSelected?.imageUrl || "").trim(),
+    startFrameImageUrl: String(scenarioSelected?.startImageUrl || scenarioSelected?.startFrameImageUrl || "").trim(),
+    endFrameImageUrl: String(scenarioSelected?.endImageUrl || scenarioSelected?.endFrameImageUrl || "").trim(),
+    videoUrl: String(scenarioSelected?.videoUrl || "").trim(),
+    imageStatus: String(scenarioSelected?.imageStatus || "").trim(),
+    videoStatus: String(scenarioSelected?.videoStatus || "").trim(),
+  });
+}, [scenarioSelected]);
 const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   ? "endImageUrl"
   : scenarioPreviousScene?.imageUrl
@@ -6410,8 +6527,20 @@ const comfyShowVideoSection = Boolean(
     }
   }, []);
 
-  const updateScenarioScene = useCallback((idx, patch) => {
-    if (!scenarioFlowSourceNode?.id || idx < 0) return;
+  const updateScenarioScene = useCallback((sceneRef, patch) => {
+    if (!scenarioFlowSourceNode?.id) return;
+    const idx = typeof sceneRef === "string"
+      ? scenarioScenes.findIndex((scene) => String(scene?.sceneId || "") === String(sceneRef || ""))
+      : sceneRef;
+    if (!Number.isInteger(idx) || idx < 0) return;
+    if (CLIP_TRACE_SCENARIO_SCENE_ASSETS) {
+      const sceneId = String((scenarioScenes[idx] || {}).sceneId || "");
+      console.debug("[SCENARIO SCENE PATCH]", {
+        nodeId: String(scenarioFlowSourceNode?.id || ""),
+        sceneId,
+        patchedKeys: Object.keys(patch || {}),
+      });
+    }
     setNodes((prev) => prev.map((n) => {
       if (n.id !== scenarioFlowSourceNode.id) return n;
       const scenes = Array.isArray(n?.data?.scenes) ? n.data.scenes : [];
@@ -6419,7 +6548,7 @@ const comfyShowVideoSection = Boolean(
       const nextScenes = scenes.map((s, i) => (i === idx ? { ...s, ...patch } : s));
       return { ...n, data: { ...n.data, scenes: nextScenes } };
     }));
-  }, [scenarioFlowSourceNode?.id, setNodes]);
+  }, [scenarioFlowSourceNode?.id, scenarioScenes, setNodes]);
 
   const stopScenarioVideoPolling = useCallback((sceneId = "") => {
     const key = String(sceneId || "").trim();
@@ -8124,6 +8253,39 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     setScenarioImageError("");
     try {
       const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
+      const refsByRoleForImage = buildScenarioRefsByRoleForImage({
+        scene: targetScene,
+        scenarioBrainRefs,
+      });
+      const derivedRoleContract = buildScenarioRoleContractForImage({
+        scene: targetScene,
+        refsByRole: refsByRoleForImage,
+      });
+      const refsForImageRequest = normalizeClipImageRefsPayload({
+        ...scenarioBrainRefs,
+        refsByRole: refsByRoleForImage,
+        refsUsed: derivedRoleContract.refsUsed,
+        primaryRole: derivedRoleContract.primaryRole,
+        secondaryRoles: derivedRoleContract.secondaryRoles,
+        sceneActiveRoles: derivedRoleContract.sceneActiveRoles,
+        mustAppear: Array.isArray(targetScene?.mustAppear) && targetScene.mustAppear.length
+          ? targetScene.mustAppear
+          : derivedRoleContract.mustAppear,
+        previousContinuityMemory,
+        previousSceneImageUrl,
+      });
+      if (CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD) {
+        const refsSummary = summarizeRefsByRole(refsForImageRequest?.refsByRole || {});
+        console.debug("[SCENARIO IMAGE PAYLOAD]", {
+          sceneId,
+          refsByRole: refsSummary,
+          primaryRole: refsForImageRequest?.primaryRole || "",
+          secondaryRoles: refsForImageRequest?.secondaryRoles || [],
+          sceneActiveRoles: refsForImageRequest?.sceneActiveRoles || [],
+          refsUsed: refsForImageRequest?.refsUsed || [],
+          mustAppear: refsForImageRequest?.mustAppear || [],
+        });
+      }
       console.debug("[SCENE IMAGE STRATEGY]", {
         sceneId,
         ltxMode: String(targetScene?.ltxMode || ""),
@@ -8160,18 +8322,27 @@ Aspect ratio: ${imageFormat}`,
           width,
           height,
           ...scenarioContractPayload,
-          refs: normalizeClipImageRefsPayload({
-            ...scenarioBrainRefs,
-            previousContinuityMemory,
-            previousSceneImageUrl,
-          }),
+          primaryRole: scenarioContractPayload?.primaryRole || refsForImageRequest?.primaryRole || "",
+          secondaryRoles: (Array.isArray(scenarioContractPayload?.secondaryRoles) && scenarioContractPayload.secondaryRoles.length)
+            ? scenarioContractPayload.secondaryRoles
+            : (refsForImageRequest?.secondaryRoles || []),
+          sceneActiveRoles: (Array.isArray(scenarioContractPayload?.sceneActiveRoles) && scenarioContractPayload.sceneActiveRoles.length)
+            ? scenarioContractPayload.sceneActiveRoles
+            : (refsForImageRequest?.sceneActiveRoles || []),
+          refsUsed: (Array.isArray(scenarioContractPayload?.refsUsed) && scenarioContractPayload.refsUsed.length)
+            ? scenarioContractPayload.refsUsed
+            : (refsForImageRequest?.refsUsed || []),
+          mustAppear: (Array.isArray(scenarioContractPayload?.mustAppear) && scenarioContractPayload.mustAppear.length)
+            ? scenarioContractPayload.mustAppear
+            : (refsForImageRequest?.mustAppear || []),
+          refs: refsForImageRequest,
         },
       });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
 
       const generatedImageUrl = String(out.imageUrl || "");
       if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
-        updateScenarioScene(targetSceneIndex, {
+        updateScenarioScene(sceneId, {
           startImageUrl: generatedImageUrl,
           imageFormat,
           videoUrl: "",
@@ -8182,7 +8353,7 @@ Aspect ratio: ${imageFormat}`,
           videoPanelActivated: false,
         });
       } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
-        updateScenarioScene(targetSceneIndex, {
+        updateScenarioScene(sceneId, {
           endImageUrl: generatedImageUrl,
           imageFormat,
           videoUrl: "",
@@ -8193,7 +8364,7 @@ Aspect ratio: ${imageFormat}`,
           videoPanelActivated: false,
         });
       } else {
-        updateScenarioScene(targetSceneIndex, {
+        updateScenarioScene(sceneId, {
           imageUrl: generatedImageUrl,
           imageFormat,
           videoUrl: "",
@@ -10165,9 +10336,42 @@ onClipSec: (nodeId, value) => {
             const sampleScene = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes[0] : null;
             console.debug("[SCENARIO TRANSFER] normalizeScenarioScene sample", buildScenarioTransferLogData(sampleScene || {}, sampleScene || {}));
           }
-          const scenes = Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length
+          const previousScenes = Array.isArray(base?.data?.scenes) ? base.data.scenes : [];
+          const normalizedScenes = Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length
             ? normalizedPackage.scenes
-            : (Array.isArray(base?.data?.scenes) ? base.data.scenes : []);
+            : previousScenes;
+          const previousBySceneId = new Map(
+            previousScenes.map((sceneItem, idx) => [String(sceneItem?.sceneId || `S${idx + 1}`), sceneItem])
+          );
+          const sceneAssetKeys = [
+            "imageUrl",
+            "startImageUrl",
+            "endImageUrl",
+            "startFrameImageUrl",
+            "endFrameImageUrl",
+            "videoUrl",
+            "imageStatus",
+            "startFrameStatus",
+            "endFrameStatus",
+            "videoStatus",
+            "imageError",
+            "videoError",
+            "videoJobId",
+            "videoSourceImageUrl",
+            "videoPanelActivated",
+          ];
+          const scenes = normalizedScenes.map((sceneItem, idx) => {
+            const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`);
+            const persistedScene = previousBySceneId.get(sceneId);
+            if (!persistedScene) return sceneItem;
+            const persistedAssets = {};
+            sceneAssetKeys.forEach((key) => {
+              if (Object.prototype.hasOwnProperty.call(persistedScene, key)) {
+                persistedAssets[key] = persistedScene[key];
+              }
+            });
+            return { ...sceneItem, ...persistedAssets };
+          });
           const sceneGeneration = buildStoryboardSceneGenerationMap(scenes, base.data?.sceneGeneration);
           const currentAudioData = base?.data?.audioData && typeof base.data.audioData === "object" ? base.data.audioData : {};
           const phraseBreakdown = scenes.map((scene, idx) => ({
@@ -10220,6 +10424,13 @@ onClipSec: (nodeId, value) => {
               audioData,
               onOpenScenarioStoryboard: onOpenScenarioStoryboard,
               onScenarioSceneUpdate: (nodeId, sceneId, patch = {}) => {
+                if (CLIP_TRACE_SCENARIO_SCENE_ASSETS) {
+                  console.debug("[SCENARIO SCENE PATCH]", {
+                    nodeId: String(nodeId || ""),
+                    sceneId: String(sceneId || ""),
+                    patchedKeys: Object.keys(patch || {}),
+                  });
+                }
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
                   const nextScenes = (Array.isArray(nodeItem?.data?.scenes) ? nodeItem.data.scenes : []).map((sceneItem) => (

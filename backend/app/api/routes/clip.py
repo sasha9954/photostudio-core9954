@@ -71,6 +71,7 @@ class ClipImageRefsIn(BaseModel):
     refDirectives: dict | None = None
     primaryRole: str | None = None
     secondaryRoles: list[str] | None = None
+    sceneActiveRoles: list[str] | None = None
     plannerMeta: dict | None = None
     propAnchorLabel: str | None = None
     sessionCharacterAnchor: str | None = None
@@ -6744,9 +6745,22 @@ If any of the required descriptive fields are returned in English, the output is
 
 def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[str]]:
     src = refs_by_role if isinstance(refs_by_role, dict) else {}
+    role_aliases = {
+        "ref_props": "props",
+        "ref_items": "props",
+        "items": "props",
+        "item": "props",
+        "objects": "props",
+        "object": "props",
+    }
     out: dict[str, list[str]] = {}
     for role in COMFY_REF_ROLES:
         items = src.get(role)
+        if items is None:
+            for alias_key, canonical in role_aliases.items():
+                if canonical == role and src.get(alias_key) is not None:
+                    items = src.get(alias_key)
+                    break
         urls: list[str] = []
         if isinstance(items, list):
             for item in items:
@@ -7503,6 +7517,14 @@ def clip_image(payload: ClipImageIn):
         for role in (scene_contract.get("activeRoles") or [])
         if str(role or "").strip() in comfy_roles
     ]
+    incoming_scene_active_roles = [
+        str(role or "").strip()
+        for role in (getattr(refs_obj, "sceneActiveRoles", None) or [])
+        if str(role or "").strip() in comfy_roles
+    ]
+    for role in incoming_scene_active_roles:
+        if role not in scene_active_roles:
+            scene_active_roles.append(role)
     scene_contract["activeRoles"] = scene_active_roles
     must_not_appear_roles = set(scene_contract.get("mustNotAppear") or [])
 
@@ -7525,6 +7547,8 @@ def clip_image(payload: ClipImageIn):
     if not must_appear_roles:
         must_appear_roles = [hero_entity_id] + support_entity_ids if hero_entity_id else list(scene_active_roles)
     must_appear_roles = list(dict.fromkeys([role for role in must_appear_roles if role in scene_active_roles]))
+    if incoming_scene_active_roles and not must_appear_roles:
+        must_appear_roles = list(dict.fromkeys([role for role in incoming_scene_active_roles if role in scene_active_roles]))
 
     scene_contract["heroEntityId"] = hero_entity_id
     scene_contract["supportEntityIds"] = support_entity_ids
@@ -8054,7 +8078,18 @@ def clip_image(payload: ClipImageIn):
         refs_debug["comfyAssemblyDebug"] = comfy_assembly_debug
         print("[COMFY IMAGE ASSEMBLY]", json.dumps(comfy_assembly_debug, ensure_ascii=False))
 
-        generation_mode = "continuity_chain" if previous_scene_image_inline else "baseline_only"
+        has_role_aware_refs = any(len(comfy_refs_by_role.get(role) or []) > 0 for role in comfy_roles)
+        has_role_contract = bool(scene_primary_role or scene_secondary_roles or scene_active_roles or must_appear_roles)
+        generation_mode = "reference_driven" if (has_role_aware_refs or has_role_contract) else ("continuity_chain" if previous_scene_image_inline else "baseline_only")
+        print("[SCENARIO IMAGE BACKEND] " + json.dumps({
+            "sceneId": scene_id,
+            "generationMode": generation_mode,
+            "attachedCountsByRole": {role: len(comfy_inline_parts_by_role.get(role) or []) for role in comfy_roles},
+            "allowedRolesForImage": sorted(list(allowed_roles_for_image)),
+            "sceneActiveRoles": scene_active_roles,
+            "primaryRole": scene_primary_role,
+            "mustAppear": must_appear_roles,
+        }, ensure_ascii=False))
 
         if isinstance(session_baseline, dict) and session_baseline:
             parts.append({
