@@ -4239,7 +4239,7 @@ body.ps_clip_fullscreen .mainCol {
 
 
 .clipSB_scenarioEditorImagePromptTextarea {
-  min-height: 146px;
+  min-height: 196px;
 }
 
 .clipSB_scenarioEditorPreviewPlaceholder {
@@ -4309,11 +4309,46 @@ body.ps_clip_fullscreen .mainCol {
   min-height: 320px;
 }
 
+.clipSB_scenarioEditorImageBodyMain {
+  min-height: 356px;
+}
+
 .clipSB_scenarioEditorImageLeft,
 .clipSB_scenarioEditorImageRight {
   display: grid;
   gap: 10px;
   min-width: 0;
+}
+
+.clipSB_scenarioEditorImageLeftMain {
+  grid-template-rows: minmax(0, auto) auto 1fr;
+  gap: 12px;
+}
+
+.clipSB_scenarioEditorImageEn {
+  margin: 0;
+}
+
+.clipSB_scenarioEditorImageBtnRow {
+  margin-top: 6px;
+}
+
+.clipSB_scenarioEditorImageRightMain {
+  align-self: stretch;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+}
+
+.clipSB_scenarioEditorImagePreviewWrap {
+  width: 100%;
+  min-height: 304px;
+  max-height: 360px;
+  border-radius: 10px;
+  padding: 8px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: rgba(0,0,0,0.22);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
 }
 
 .clipSB_scenarioEditorImageSubBlock {
@@ -4333,6 +4368,13 @@ body.ps_clip_fullscreen .mainCol {
   border-radius: 10px;
   background: rgba(0,0,0,0.35);
   object-fit: contain;
+}
+
+.clipSB_scenarioEditorImagePreviewWrap .clipSB_scenarioEditorImagePreview,
+.clipSB_scenarioEditorImagePreviewWrap .clipSB_scenarioEditorPreviewPlaceholder {
+  min-height: 100%;
+  max-height: 100%;
+  height: 100%;
 }
 
 @media (max-width: 1160px) {

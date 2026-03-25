@@ -421,8 +421,8 @@ export default function ScenarioStoryboardEditor({
                   </div>
                   {!sceneNeedsTwoFrames ? (
                     <>
-                      <div className="clipSB_scenarioEditorImageBody">
-                        <div className="clipSB_scenarioEditorImageLeft">
+                      <div className="clipSB_scenarioEditorImageBody clipSB_scenarioEditorImageBodyMain">
+                        <div className="clipSB_scenarioEditorImageLeft clipSB_scenarioEditorImageLeftMain">
                           <textarea
                             className="clipSB_textarea clipSB_scenarioEditorImagePromptTextarea"
                             rows={6}
@@ -430,7 +430,7 @@ export default function ScenarioStoryboardEditor({
                             onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptRu: event.target.value })}
                             placeholder="imagePromptRu"
                           />
-                          <details>
+                          <details className="clipSB_scenarioEditorImageEn">
                             <summary>EN</summary>
                             <textarea
                               className="clipSB_textarea"
@@ -440,22 +440,24 @@ export default function ScenarioStoryboardEditor({
                               placeholder="imagePromptEn"
                             />
                           </details>
-                          <div className="clipSB_scenarioEditorBtnRow">
+                          <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorImageBtnRow">
                             <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "image")} disabled={imageStatus === "loading"}>Создать изображение</button>
                             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { imageUrl: "", imageStatus: "idle" })}>Удалить</button>
                           </div>
                         </div>
-                        <div className="clipSB_scenarioEditorImageRight">
+                        <div className="clipSB_scenarioEditorImageRight clipSB_scenarioEditorImageRightMain">
                           <div className="clipSB_scenarioEditorBlockHead">
                             <h4>IMAGE</h4>
                             <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${imageStatus}`}>{imageStatus}</span>
                           </div>
-                          {selectedScene?.imageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={selectedScene.imageUrl} alt={`scene-${selectedSceneId}-image`} /> : (
-                            <div className="clipSB_scenarioEditorPreviewPlaceholder" role="status" aria-live="polite">
-                              <div className="clipSB_scenarioEditorPreviewPlaceholderIcon" aria-hidden="true">🖼️</div>
-                              <div>Изображение сцены пока не создано</div>
-                            </div>
-                          )}
+                          <div className="clipSB_scenarioEditorImagePreviewWrap">
+                            {selectedScene?.imageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={selectedScene.imageUrl} alt={`scene-${selectedSceneId}-image`} /> : (
+                              <div className="clipSB_scenarioEditorPreviewPlaceholder" role="status" aria-live="polite">
+                                <div className="clipSB_scenarioEditorPreviewPlaceholderIcon" aria-hidden="true">🖼️</div>
+                                <div>Изображение сцены пока не создано</div>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </>
