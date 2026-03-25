@@ -4568,10 +4568,61 @@ body.ps_clip_fullscreen .mainCol {
   text-align: center;
 }
 
+.clipSB_sourceFramesBlock {
+  display: grid;
+  gap: 8px;
+}
+
+.clipSB_sourceFramesGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.clipSB_sourceFrameTile {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 6px;
+}
+
+.clipSB_sourceFrameTileLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: rgba(207, 226, 245, 0.86);
+  text-transform: uppercase;
+}
+
+.clipSB_sourceFramePreview,
+.clipSB_sourceFramePlaceholder {
+  width: 100%;
+  height: 96px;
+  border-radius: 10px;
+  background: rgba(3, 5, 8, 0.9);
+  box-shadow:
+    inset 0 0 0 1px rgba(208, 224, 246, 0.14),
+    inset 0 8px 18px rgba(0, 0, 0, 0.22);
+}
+
+.clipSB_sourceFramePreview {
+  object-fit: cover;
+}
+
+.clipSB_sourceFramePlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 11px;
+  color: rgba(207, 226, 245, 0.72);
+  padding: 8px;
+}
+
 @media (max-width: 1160px) {
   .clipSB_scenarioEditorImageBody,
   .clipSB_scenarioEditorVideoBody,
-  .clipSB_scenarioEditorVideoFramesGrid {
+  .clipSB_scenarioEditorVideoFramesGrid,
+  .clipSB_sourceFramesGrid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
