@@ -13029,7 +13029,7 @@ const hydrate = useCallback((source = "unknown") => {
                                 onClick={(e) => handleComfyPreviewOpenLightbox(resolveAssetUrl(comfySelectedScene.imageUrl), e)}
                               />
                             ) : (
-                              <div className="clipSB_comfyPreviewEmpty">Изображение сцены пока не создано</div>
+                              <div className="clipSB_comfyPreviewEmpty clipSB_comfyPreviewEmptyNoFill">Изображение сцены пока не создано</div>
                             )}
                           </div>
                         </div>
