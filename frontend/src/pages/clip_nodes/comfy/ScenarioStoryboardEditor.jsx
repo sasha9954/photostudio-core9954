@@ -43,9 +43,17 @@ function sceneBadges(scene = {}) {
   const badges = [];
   const mode = String(scene?.renderMode || "image_to_video").trim();
   if (mode === "lip_sync") badges.push("lip_sync");
-  if (mode === "first_last" || scene?.needsTwoFrames) badges.push("first_last");
+  if (isFirstLastScene(scene)) badges.push("first_last");
   if (mode === "image_to_video") badges.push("i2v");
   return badges;
+}
+
+function isFirstLastScene(scene = {}) {
+  const mode = String(scene?.renderMode || "").trim().toLowerCase();
+  if (mode === "first_last") return true;
+  if (scene?.needsTwoFrames === true) return true;
+  const ltxMode = String(scene?.ltxMode || scene?.ltx_mode || "").trim().toLowerCase();
+  return ["f_l", "f_l_as", "first_last"].includes(ltxMode);
 }
 
 function resolveMusicSource(audioData = {}) {
@@ -131,9 +139,18 @@ export default function ScenarioStoryboardEditor({
   };
 
   const imageStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.imageStatus || selectedRuntime?.status, assetUrl: selectedScene?.imageUrl });
+  const startFrameStatus = resolveBlockStatus({
+    runtimeStatus: selectedRuntime?.startFrameStatus || selectedScene?.startFrameStatus || selectedRuntime?.imageStatus || selectedRuntime?.status,
+    assetUrl: selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl,
+  });
+  const endFrameStatus = resolveBlockStatus({
+    runtimeStatus: selectedRuntime?.endFrameStatus || selectedScene?.endFrameStatus || selectedRuntime?.imageStatus || selectedRuntime?.status,
+    assetUrl: selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
+  });
   const videoStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.videoStatus || selectedRuntime?.status || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
   const musicStatus = resolveBlockStatus({ runtimeStatus: safeAudioData?.musicStatus, assetUrl: safeAudioData?.musicUrl });
   const isBgAudioSelected = activeSelectionType === "bg_audio";
+  const sceneNeedsTwoFrames = isFirstLastScene(selectedScene);
   const bgMusicSource = resolveMusicSource(safeAudioData);
   const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
   const usesBgMusicInMontage = hasBgMusic && Boolean(safeAudioData?.useInMontage);
@@ -400,30 +417,126 @@ export default function ScenarioStoryboardEditor({
                 <div className="clipSB_scenarioEditorBlock">
                   <div className="clipSB_scenarioEditorBlockHead">
                     <h4>1. IMAGE</h4>
-                    <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${imageStatus}`}>{imageStatus}</span>
                   </div>
-                  <textarea
-                    className="clipSB_textarea"
-                    rows={3}
-                    value={String(selectedScene?.imagePromptRu || "")}
-                    onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptRu: event.target.value })}
-                    placeholder="imagePromptRu"
-                  />
-                  <details>
-                    <summary>EN</summary>
-                    <textarea
-                      className="clipSB_textarea"
-                      rows={2}
-                      value={String(selectedScene?.imagePromptEn || "")}
-                      onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptEn: event.target.value })}
-                      placeholder="imagePromptEn"
-                    />
-                  </details>
-                  {selectedScene?.imageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={selectedScene.imageUrl} alt={`scene-${selectedSceneId}`} /> : <div className="clipSB_hint">preview изображения отсутствует</div>}
-                  <div className="clipSB_scenarioEditorBtnRow">
-                    <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId)} disabled={imageStatus === "loading"}>Создать изображение</button>
-                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { imageUrl: "" })}>Удалить</button>
-                  </div>
+                  {!sceneNeedsTwoFrames ? (
+                    <>
+                      <div className="clipSB_scenarioEditorImageBody">
+                        <div className="clipSB_scenarioEditorImageLeft">
+                          <textarea
+                            className="clipSB_textarea"
+                            rows={3}
+                            value={String(selectedScene?.imagePromptRu || "")}
+                            onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptRu: event.target.value })}
+                            placeholder="imagePromptRu"
+                          />
+                          <details>
+                            <summary>EN</summary>
+                            <textarea
+                              className="clipSB_textarea"
+                              rows={2}
+                              value={String(selectedScene?.imagePromptEn || "")}
+                              onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptEn: event.target.value })}
+                              placeholder="imagePromptEn"
+                            />
+                          </details>
+                        </div>
+                        <div className="clipSB_scenarioEditorImageRight">
+                          <div className="clipSB_scenarioEditorBlockHead">
+                            <h4>IMAGE</h4>
+                            <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${imageStatus}`}>{imageStatus}</span>
+                          </div>
+                          {selectedScene?.imageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={selectedScene.imageUrl} alt={`scene-${selectedSceneId}-image`} /> : <div className="clipSB_hint">preview изображения отсутствует</div>}
+                        </div>
+                      </div>
+                      <div className="clipSB_scenarioEditorBtnRow">
+                        <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "image")} disabled={imageStatus === "loading"}>Создать изображение</button>
+                        <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { imageUrl: "", imageStatus: "idle" })}>Удалить</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="clipSB_scenarioEditorImageSubBlock">
+                        <div className="clipSB_scenarioEditorBlockHead">
+                          <h4>ПЕРВЫЙ КАДР</h4>
+                          <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${startFrameStatus}`}>{startFrameStatus}</span>
+                        </div>
+                        <div className="clipSB_scenarioEditorImageBody">
+                          <div className="clipSB_scenarioEditorImageLeft">
+                            <textarea
+                              className="clipSB_textarea"
+                              rows={3}
+                              value={String(selectedScene?.startFramePromptRu || "")}
+                              onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptRu: event.target.value })}
+                              placeholder="startFramePromptRu"
+                            />
+                            <details>
+                              <summary>EN</summary>
+                              <textarea
+                                className="clipSB_textarea"
+                                rows={2}
+                                value={String(selectedScene?.startFramePromptEn || "")}
+                                onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptEn: event.target.value })}
+                                placeholder="startFramePromptEn"
+                              />
+                            </details>
+                          </div>
+                          <div className="clipSB_scenarioEditorImageRight">
+                            {selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl ? (
+                              <img
+                                className="clipSB_scenarioEditorImagePreview"
+                                src={selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl}
+                                alt={`scene-${selectedSceneId}-start-frame`}
+                              />
+                            ) : <div className="clipSB_hint">preview первого кадра отсутствует</div>}
+                          </div>
+                        </div>
+                        <div className="clipSB_scenarioEditorBtnRow">
+                          <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "start_frame")} disabled={startFrameStatus === "loading"}>Создать изображение</button>
+                          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { startFrameImageUrl: "", startFramePreviewUrl: "", startFrameStatus: "idle" })}>Удалить</button>
+                        </div>
+                      </div>
+                      <div className="clipSB_scenarioEditorImageSubBlock">
+                        <div className="clipSB_scenarioEditorBlockHead">
+                          <h4>ПОСЛЕДНИЙ КАДР</h4>
+                          <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${endFrameStatus}`}>{endFrameStatus}</span>
+                        </div>
+                        <div className="clipSB_scenarioEditorImageBody">
+                          <div className="clipSB_scenarioEditorImageLeft">
+                            <textarea
+                              className="clipSB_textarea"
+                              rows={3}
+                              value={String(selectedScene?.endFramePromptRu || "")}
+                              onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptRu: event.target.value })}
+                              placeholder="endFramePromptRu"
+                            />
+                            <details>
+                              <summary>EN</summary>
+                              <textarea
+                                className="clipSB_textarea"
+                                rows={2}
+                                value={String(selectedScene?.endFramePromptEn || "")}
+                                onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptEn: event.target.value })}
+                                placeholder="endFramePromptEn"
+                              />
+                            </details>
+                          </div>
+                          <div className="clipSB_scenarioEditorImageRight">
+                            {selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl ? (
+                              <img
+                                className="clipSB_scenarioEditorImagePreview"
+                                src={selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl}
+                                alt={`scene-${selectedSceneId}-end-frame`}
+                              />
+                            ) : <div className="clipSB_hint">preview последнего кадра отсутствует</div>}
+                          </div>
+                        </div>
+                        <div className="clipSB_scenarioEditorBtnRow">
+                          <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "end_frame")} disabled={endFrameStatus === "loading"}>Создать изображение</button>
+                          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { endFrameImageUrl: "", endFramePreviewUrl: "", endFrameStatus: "idle" })}>Удалить</button>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <div className="clipSB_scenarioEditorBlock">

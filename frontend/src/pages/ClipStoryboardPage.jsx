@@ -9503,11 +9503,26 @@ onClipSec: (nodeId, value) => {
                   return { ...nodeItem, data: { ...nodeItem.data, scenes: nextScenes } };
                 })));
               },
-              onScenarioSceneGenerate: (nodeId, sceneId) => {
+              onScenarioSceneGenerate: (nodeId, sceneId, assetType = "scene") => {
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
                   const currentMap = nodeItem?.data?.sceneGeneration && typeof nodeItem.data.sceneGeneration === "object" ? nodeItem.data.sceneGeneration : {};
                   const scene = (Array.isArray(nodeItem?.data?.scenes) ? nodeItem.data.scenes : []).find((item) => String(item?.sceneId || "") === String(sceneId || "")) || {};
+                  const generationPatchByAssetType = {
+                    image: {
+                      imageStatus: "loading",
+                      imagePrompt: String(scene?.imagePromptEn || scene?.imagePromptRu || ""),
+                    },
+                    start_frame: {
+                      startFrameStatus: "loading",
+                      imagePrompt: String(scene?.startFramePromptEn || scene?.startFramePromptRu || ""),
+                    },
+                    end_frame: {
+                      endFrameStatus: "loading",
+                      imagePrompt: String(scene?.endFramePromptEn || scene?.endFramePromptRu || ""),
+                    },
+                  };
+                  const generationPatch = generationPatchByAssetType[assetType] || {};
                   return {
                     ...nodeItem,
                     data: {
@@ -9518,7 +9533,8 @@ onClipSec: (nodeId, value) => {
                           ...(currentMap[sceneId] || {}),
                           status: "done",
                           model: String(scene?.renderMode || "image_to_video"),
-                          imagePrompt: String(scene?.imagePromptEn || scene?.imagePromptRu || ""),
+                          ...generationPatch,
+                          imagePrompt: generationPatch.imagePrompt || String(scene?.imagePromptEn || scene?.imagePromptRu || ""),
                           videoPrompt: String(scene?.videoPromptEn || scene?.videoPromptRu || ""),
                           updatedAt: new Date().toISOString(),
                         },

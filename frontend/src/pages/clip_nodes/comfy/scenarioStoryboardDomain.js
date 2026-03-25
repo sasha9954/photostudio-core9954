@@ -98,6 +98,12 @@ export function normalizeScenarioScene(scene = {}, index = 0) {
     startFramePromptEn: normalizeText(source.startFramePromptEn ?? source.start_frame_prompt_en ?? source.startFramePrompt),
     endFramePromptRu: normalizeText(source.endFramePromptRu ?? source.end_frame_prompt_ru ?? source.endFramePrompt),
     endFramePromptEn: normalizeText(source.endFramePromptEn ?? source.end_frame_prompt_en ?? source.endFramePrompt),
+    imageUrl: normalizeText(source.imageUrl ?? source.image_url ?? source.previewUrl ?? source.preview_url),
+    imageStatus: normalizeText(source.imageStatus ?? source.image_status),
+    startFrameImageUrl: normalizeText(source.startFrameImageUrl ?? source.start_frame_image_url ?? source.startFramePreviewUrl ?? source.start_frame_preview_url),
+    startFrameStatus: normalizeText(source.startFrameStatus ?? source.start_frame_status),
+    endFrameImageUrl: normalizeText(source.endFrameImageUrl ?? source.end_frame_image_url ?? source.endFramePreviewUrl ?? source.end_frame_preview_url),
+    endFrameStatus: normalizeText(source.endFrameStatus ?? source.end_frame_status),
   };
 }
 
