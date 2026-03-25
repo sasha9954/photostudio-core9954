@@ -201,16 +201,16 @@ export default function ScenarioStoryboardEditor({
     }
   };
 
-  const imageStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.imageStatus || selectedRuntime?.status, assetUrl: selectedScene?.imageUrl });
+  const imageStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.imageStatus, assetUrl: selectedScene?.imageUrl });
   const startFrameStatus = resolveBlockStatus({
-    runtimeStatus: selectedRuntime?.startFrameStatus || selectedScene?.startFrameStatus || selectedRuntime?.imageStatus || selectedRuntime?.status,
+    runtimeStatus: selectedRuntime?.startFrameStatus || selectedScene?.startFrameStatus || selectedRuntime?.imageStatus,
     assetUrl: selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl,
   });
   const endFrameStatus = resolveBlockStatus({
-    runtimeStatus: selectedRuntime?.endFrameStatus || selectedScene?.endFrameStatus || selectedRuntime?.imageStatus || selectedRuntime?.status,
+    runtimeStatus: selectedRuntime?.endFrameStatus || selectedScene?.endFrameStatus || selectedRuntime?.imageStatus,
     assetUrl: selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
   });
-  const videoStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.videoStatus || selectedRuntime?.status || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
+  const videoStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.videoStatus || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
   const musicStatus = resolveBlockStatus({ runtimeStatus: safeAudioData?.musicStatus, assetUrl: safeAudioData?.musicUrl });
   const isBgAudioSelected = activeSelectionType === "bg_audio";
   const sceneNeedsTwoFrames = isFirstLastScene(selectedScene);
@@ -794,7 +794,7 @@ export default function ScenarioStoryboardEditor({
                         </div>
                       </div>
                       <div className="clipSB_scenarioEditorBtnRow">
-                        <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId)} disabled={videoStatus === "loading"}>Создать видео</button>
+                        <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "video")} disabled={videoStatus === "loading"}>Создать видео</button>
                         <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { videoUrl: "", videoStatus: "idle", videoError: "", videoJobId: "" })}>Удалить</button>
                       </div>
                     </div>

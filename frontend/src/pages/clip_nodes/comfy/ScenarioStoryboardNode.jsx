@@ -1,6 +1,27 @@
 import React from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 
+const CLIP_TRACE_SCENARIO_COUNTERS = false;
+
+function isSceneImageReady(scene = {}, runtime = {}) {
+  const imageStrategy = String(scene?.imageStrategy || "").trim().toLowerCase() || "single";
+  const hasImageUrl = !!String(scene?.imageUrl || "").trim();
+  const hasStartFrameImageUrl = !!String(scene?.startFrameImageUrl || scene?.startFramePreviewUrl || scene?.startImageUrl || "").trim();
+  const hasEndFrameImageUrl = !!String(scene?.endFrameImageUrl || scene?.endFramePreviewUrl || scene?.endImageUrl || "").trim();
+  const imageStatus = String(runtime?.imageStatus || scene?.imageStatus || "").trim().toLowerCase();
+  const startFrameStatus = String(runtime?.startFrameStatus || scene?.startFrameStatus || "").trim().toLowerCase();
+  const endFrameStatus = String(runtime?.endFrameStatus || scene?.endFrameStatus || "").trim().toLowerCase();
+  if (imageStrategy === "first_last") return (hasStartFrameImageUrl && hasEndFrameImageUrl) || (startFrameStatus === "done" && endFrameStatus === "done");
+  if (imageStrategy === "continuation") return hasStartFrameImageUrl || hasImageUrl || startFrameStatus === "done" || imageStatus === "done";
+  return hasImageUrl || imageStatus === "done";
+}
+
+function isSceneVideoReady(scene = {}, runtime = {}) {
+  const hasVideoUrl = !!String(scene?.videoUrl || "").trim();
+  const videoStatus = String(runtime?.videoStatus || scene?.videoStatus || "").trim().toLowerCase();
+  return hasVideoUrl || videoStatus === "done";
+}
+
 export default function ScenarioStoryboardNode({ id, data }) {
   const scenes = Array.isArray(data?.scenes) ? data.scenes : [];
   const totalScenes = scenes.length;
@@ -8,12 +29,30 @@ export default function ScenarioStoryboardNode({ id, data }) {
   const generatedImages = scenes.filter((scene, idx) => {
     const key = String(scene?.sceneId || `S${idx + 1}`);
     const runtime = generationMap[key] && typeof generationMap[key] === "object" ? generationMap[key] : {};
-    return String(runtime?.imageStatus || runtime?.status || "").trim() === "done";
+    const imageReady = isSceneImageReady(scene, runtime);
+    const videoReady = isSceneVideoReady(scene, runtime);
+    if (CLIP_TRACE_SCENARIO_COUNTERS) {
+      console.debug("[SCENARIO COUNTERS]", {
+        sceneId: key,
+        imageReady,
+        videoReady,
+        imageStrategy: String(scene?.imageStrategy || "").trim().toLowerCase() || "single",
+        hasImageUrl: !!String(scene?.imageUrl || "").trim(),
+        hasStartFrameImageUrl: !!String(scene?.startFrameImageUrl || scene?.startFramePreviewUrl || scene?.startImageUrl || "").trim(),
+        hasEndFrameImageUrl: !!String(scene?.endFrameImageUrl || scene?.endFramePreviewUrl || scene?.endImageUrl || "").trim(),
+        hasVideoUrl: !!String(scene?.videoUrl || "").trim(),
+        imageStatus: String(runtime?.imageStatus || scene?.imageStatus || "").trim(),
+        startFrameStatus: String(runtime?.startFrameStatus || scene?.startFrameStatus || "").trim(),
+        endFrameStatus: String(runtime?.endFrameStatus || scene?.endFrameStatus || "").trim(),
+        videoStatus: String(runtime?.videoStatus || scene?.videoStatus || "").trim(),
+      });
+    }
+    return imageReady;
   }).length;
   const generatedVideos = scenes.filter((scene, idx) => {
     const key = String(scene?.sceneId || `S${idx + 1}`);
     const runtime = generationMap[key] && typeof generationMap[key] === "object" ? generationMap[key] : {};
-    return String(runtime?.videoStatus || runtime?.status || "").trim() === "done";
+    return isSceneVideoReady(scene, runtime);
   }).length;
   const status = totalScenes > 0 ? "ready" : "idle";
 

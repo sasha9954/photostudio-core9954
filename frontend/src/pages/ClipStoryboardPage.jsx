@@ -174,6 +174,7 @@ const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GRAPH = false;
 const CLIP_TRACE_INTRO_PREVIEW = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
+const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = false;
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
 const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
   "no change in lighting style",
@@ -716,6 +717,15 @@ function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
     const prevValue = prev[sceneKey] && typeof prev[sceneKey] === "object" ? prev[sceneKey] : {};
     acc[sceneKey] = {
       status: normalizeStoryboardGenerationStatus(prevValue.status),
+      imageStatus: String(prevValue.imageStatus || ""),
+      imageError: String(prevValue.imageError || ""),
+      startFrameStatus: String(prevValue.startFrameStatus || ""),
+      startFrameError: String(prevValue.startFrameError || ""),
+      endFrameStatus: String(prevValue.endFrameStatus || ""),
+      endFrameError: String(prevValue.endFrameError || ""),
+      videoStatus: String(prevValue.videoStatus || ""),
+      videoError: String(prevValue.videoError || ""),
+      videoJobId: String(prevValue.videoJobId || ""),
       updatedAt: String(prevValue.updatedAt || ""),
       error: String(prevValue.error || ""),
       model: String(prevValue.model || scene?.executorModel || scene?.ltxMode || "i2v"),
@@ -8033,75 +8043,76 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'video', ruText: nextValue });
   }, [comfySafeIndex, comfySelectedScene, scheduleComfyPromptSync, updateComfyScene]);
 
-  const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
-    if (!scenarioSelected) return;
+  const handleGenerateScenarioImage = useCallback(async (slot = "single", options = {}) => {
+    const targetSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : scenarioEditor.selected;
+    const targetScene = scenarioScenes[targetSceneIndex] || null;
+    if (!targetScene) return;
 
-    const imageStrategy = String(scenarioSelected?.imageStrategy || deriveScenarioImageStrategy(scenarioSelected)).trim().toLowerCase() || "single";
-    const transitionType = resolveSceneTransitionType(scenarioSelected);
+    const imageStrategy = String(targetScene?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
     const requestedSlot = slot === "start" || slot === "end" ? slot : "single";
     const normalizedSlot = imageStrategy === "first_last"
       ? (requestedSlot === "end" ? "end" : "start")
       : (imageStrategy === "continuation" ? (requestedSlot === "end" ? "end" : "start") : "single");
-    if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start" && !!scenarioSelected?.inheritPreviousEndAsStart) {
+    if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start" && !!targetScene?.inheritPreviousEndAsStart) {
       return;
     }
-    const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    const sceneId = String(targetScene?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
-    const sceneText = String(scenarioSelected.sceneText || scenarioSelected.visualDescription || "").trim();
-    const previousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
+    const sceneText = String(targetScene.sceneText || targetScene.visualDescription || "").trim();
+    const previousScene = targetSceneIndex > 0 ? scenarioScenes[targetSceneIndex - 1] : null;
     const previousSceneImageUrl = String(
       previousScene?.endImageUrl
       || previousScene?.imageUrl
       || previousScene?.startImageUrl
       || ""
     ).trim();
-    const previousContinuityMemory = scenarioSelected.previousContinuityMemory
+    const previousContinuityMemory = targetScene.previousContinuityMemory
       || previousScene?.continuityMemory
       || null;
     const imageFormat = resolvePreferredSceneFormat(
-      scenarioSelected?.format,
-      scenarioSelected?.imageFormat
+      targetScene?.format,
+      targetScene?.imageFormat
     );
     const { width, height } = getSceneImageSize(imageFormat);
 
-    const sceneDelta = getSceneFramePromptByStrategy(scenarioSelected, normalizedSlot);
+    const sceneDelta = getSceneFramePromptByStrategy(targetScene, normalizedSlot);
 
     if (!sceneDelta) {
       setScenarioImageError("Добавьте prompt для генерации кадра");
       return;
     }
-    const visualGlueText = buildScenarioVisualGlueText(scenarioSelected);
+    const visualGlueText = buildScenarioVisualGlueText(targetScene);
     const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}`.trim();
 
     setScenarioImageLoading(true);
     setScenarioImageError("");
     try {
-      const scenarioContractPayload = buildScenarioSceneContractPayload(scenarioSelected);
+      const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
       console.debug("[SCENE IMAGE STRATEGY]", {
         sceneId,
-        ltxMode: String(scenarioSelected?.ltxMode || ""),
-        needsTwoFrames: Boolean(scenarioSelected?.needsTwoFrames),
-        continuation: Boolean(scenarioSelected?.continuationFromPrevious ?? scenarioSelected?.continuation),
+        ltxMode: String(targetScene?.ltxMode || ""),
+        needsTwoFrames: Boolean(targetScene?.needsTwoFrames),
+        continuation: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation),
         imageStrategy,
-        hasImagePrompt: !!getScenePrimaryFramePrompt(scenarioSelected),
-        hasStartFramePrompt: !!String(scenarioSelected?.startFramePromptRu || scenarioSelected?.startFramePrompt || "").trim(),
-        hasEndFramePrompt: !!String(scenarioSelected?.endFramePromptRu || scenarioSelected?.endFramePrompt || "").trim(),
+        hasImagePrompt: !!getScenePrimaryFramePrompt(targetScene),
+        hasStartFramePrompt: !!String(targetScene?.startFramePromptRu || targetScene?.startFramePrompt || "").trim(),
+        hasEndFramePrompt: !!String(targetScene?.endFramePromptRu || targetScene?.endFramePrompt || "").trim(),
       });
       if (CLIP_TRACE_VISUAL_LOCK) {
         console.debug("[SCENARIO VISUAL LOCK] image prompt", {
           sceneId,
-          renderMode: String(scenarioSelected?.renderMode || ""),
-          ltxMode: String(scenarioSelected?.ltxMode || ""),
-          hasGlobalVisualLock: hasScenarioContractValue(scenarioSelected?.globalVisualLock),
-          hasGlobalCameraProfile: hasScenarioContractValue(scenarioSelected?.globalCameraProfile),
+          renderMode: String(targetScene?.renderMode || ""),
+          ltxMode: String(targetScene?.ltxMode || ""),
+          hasGlobalVisualLock: hasScenarioContractValue(targetScene?.globalVisualLock),
+          hasGlobalCameraProfile: hasScenarioContractValue(targetScene?.globalCameraProfile),
           finalPromptLength: finalSceneDelta.length,
-          hasEnvironmentLock: hasScenarioContractValue(scenarioSelected?.environmentLock),
-          hasStyleLock: hasScenarioContractValue(scenarioSelected?.styleLock),
-          hasIdentityLock: hasScenarioContractValue(scenarioSelected?.identityLock),
+          hasEnvironmentLock: hasScenarioContractValue(targetScene?.environmentLock),
+          hasStyleLock: hasScenarioContractValue(targetScene?.styleLock),
+          hasIdentityLock: hasScenarioContractValue(targetScene?.identityLock),
         });
       }
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
-        console.debug("[SCENARIO TRANSFER] before /api/clip/image", buildScenarioTransferLogData(scenarioSelected, scenarioContractPayload));
+        console.debug("[SCENARIO TRANSFER] before /api/clip/image", buildScenarioTransferLogData(targetScene, scenarioContractPayload));
       }
       const out = await fetchJson(`/api/clip/image`, {
         method: "POST",
@@ -8124,7 +8135,7 @@ Aspect ratio: ${imageFormat}`,
 
       const generatedImageUrl = String(out.imageUrl || "");
       if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
-        updateScenarioScene(scenarioEditor.selected, {
+        updateScenarioScene(targetSceneIndex, {
           startImageUrl: generatedImageUrl,
           imageFormat,
           videoUrl: "",
@@ -8135,7 +8146,7 @@ Aspect ratio: ${imageFormat}`,
           videoPanelActivated: false,
         });
       } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
-        updateScenarioScene(scenarioEditor.selected, {
+        updateScenarioScene(targetSceneIndex, {
           endImageUrl: generatedImageUrl,
           imageFormat,
           videoUrl: "",
@@ -8146,7 +8157,7 @@ Aspect ratio: ${imageFormat}`,
           videoPanelActivated: false,
         });
       } else {
-        updateScenarioScene(scenarioEditor.selected, {
+        updateScenarioScene(targetSceneIndex, {
           imageUrl: generatedImageUrl,
           imageFormat,
           videoUrl: "",
@@ -8164,7 +8175,7 @@ Aspect ratio: ${imageFormat}`,
         slot: normalizedSlot,
       });
       if (imageStrategy === "first_last" && requestedSlot === "single") {
-        await handleGenerateScenarioImage("end");
+        await handleGenerateScenarioImage("end", { sceneIndex: targetSceneIndex });
       }
     } catch (e) {
       console.error(e);
@@ -8172,7 +8183,7 @@ Aspect ratio: ${imageFormat}`,
     } finally {
       setScenarioImageLoading(false);
     }
-  }, [clearActiveVideoJob, scenarioSelected, scenarioEditor.selected, scenarioScenes, scenarioBrainRefs, updateScenarioScene]);
+  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioScenes, scenarioBrainRefs, updateScenarioScene]);
 
   const handleClearScenarioImage = useCallback((slot = "single") => {
     setScenarioImageError("");
@@ -8358,60 +8369,65 @@ Aspect ratio: ${imageFormat}`,
     setAssemblyInfo("Все сцены готовы. Можно собирать клип.");
   }, [scenarioScenes]);
 
-  const handleScenarioGenerateVideo = useCallback(async () => {
-    const imageStrategy = String(scenarioSelected?.imageStrategy || deriveScenarioImageStrategy(scenarioSelected)).trim().toLowerCase() || "single";
+  const handleScenarioGenerateVideo = useCallback(async (options = {}) => {
+    const targetSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : scenarioEditor.selected;
+    const targetScene = scenarioScenes[targetSceneIndex] || null;
+    if (!targetScene) return;
+    const targetPreviousScene = targetSceneIndex > 0 ? scenarioScenes[targetSceneIndex - 1] : null;
+    const targetEffectiveStartImageUrl = getEffectiveSceneStartImage(targetScene, targetPreviousScene);
+    const imageStrategy = String(targetScene?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
     const transitionType = imageStrategy === "continuation" || imageStrategy === "first_last" ? "continuous" : "single";
-    const frameImageUrl = String(scenarioSelected?.imageUrl || "").trim();
-    const effectiveStartImageUrl = String(scenarioSelectedEffectiveStartImageUrl || "").trim();
-    const endImageUrl = String(scenarioSelected?.endImageUrl || "").trim();
+    const frameImageUrl = String(targetScene?.imageUrl || "").trim();
+    const effectiveStartImageUrl = String(targetEffectiveStartImageUrl || "").trim();
+    const endImageUrl = String(targetScene?.endImageUrl || "").trim();
     const hasImageForVideo = imageStrategy === "first_last" || imageStrategy === "continuation"
       ? !!(effectiveStartImageUrl || frameImageUrl) && (imageStrategy === "continuation" || !!endImageUrl)
       : !!frameImageUrl;
 
     if (!hasImageForVideo) return;
-    const effectiveLipSync = isLipSyncScene(scenarioSelected);
-    const effectiveRenderMode = scenarioSelected?.renderMode || (effectiveLipSync ? "avatar_lipsync" : "standard_video");
-    const effectiveVideoProvider = String(scenarioSelected?.sceneRenderProvider || "kie").trim().toLowerCase() === "comfy_remote" ? "comfy_remote" : "kie";
+    const effectiveLipSync = isLipSyncScene(targetScene);
+    const effectiveRenderMode = targetScene?.renderMode || (effectiveLipSync ? "avatar_lipsync" : "standard_video");
+    const effectiveVideoProvider = String(targetScene?.sceneRenderProvider || "kie").trim().toLowerCase() === "comfy_remote" ? "comfy_remote" : "kie";
 
-    if (effectiveLipSync && !scenarioSelected?.audioSliceUrl) {
+    if (effectiveLipSync && !targetScene?.audioSliceUrl) {
       setScenarioVideoError("Для lipSync сначала возьмите аудио");
       return;
     }
 
-    const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    const sceneId = String(targetScene?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
-    const explicitWorkflow = resolveScenarioExplicitWorkflowKey(scenarioSelected);
+    const explicitWorkflow = resolveScenarioExplicitWorkflowKey(targetScene);
     const resolvedWorkflowKey = String(
       explicitWorkflow
-      || scenarioSelected?.resolvedWorkflowKey
-      || resolveScenarioWorkflowKey(scenarioSelected)
+      || targetScene?.resolvedWorkflowKey
+      || resolveScenarioWorkflowKey(targetScene)
     ).trim();
-    const explicitModel = resolveScenarioExplicitModelKey(scenarioSelected);
-    const resolvedModelKey = String(explicitModel || scenarioSelected?.resolvedModelKey || "").trim();
+    const explicitModel = resolveScenarioExplicitModelKey(targetScene);
+    const resolvedModelKey = String(explicitModel || targetScene?.resolvedModelKey || "").trim();
     const requestedDurationSec = Number(
-      scenarioSelected?.requestedDurationSec
-      ?? scenarioSelected?.durationSec
-      ?? Math.max(0, Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0) - Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0))
+      targetScene?.requestedDurationSec
+      ?? targetScene?.durationSec
+      ?? Math.max(0, Number(targetScene.t1 ?? targetScene.end ?? 0) - Number(targetScene.t0 ?? targetScene.start ?? 0))
     ) || 0;
-    const requiresTwoFrames = Boolean(scenarioSelected?.requiresTwoFrames ?? scenarioSelected?.needsTwoFrames ?? imageStrategy === "first_last");
-    const requiresContinuation = Boolean(scenarioSelected?.requiresContinuation ?? scenarioSelected?.continuationFromPrevious ?? imageStrategy === "continuation");
+    const requiresTwoFrames = Boolean(targetScene?.requiresTwoFrames ?? targetScene?.needsTwoFrames ?? imageStrategy === "first_last");
+    const requiresContinuation = Boolean(targetScene?.requiresContinuation ?? targetScene?.continuationFromPrevious ?? imageStrategy === "continuation");
     const requiresAudioSensitiveVideo = Boolean(
-      scenarioSelected?.requiresAudioSensitiveVideo
-      ?? ["i2v_as", "f_l_as", "lip_sync"].includes(String(scenarioSelected?.ltxMode || "").trim().toLowerCase())
+      targetScene?.requiresAudioSensitiveVideo
+      ?? ["i2v_as", "f_l_as", "lip_sync"].includes(String(targetScene?.ltxMode || "").trim().toLowerCase())
     );
 
     const continuityBridgePrompt = transitionType === "continuous"
-      ? buildContinuousContinuityBridge({ scene: scenarioSelected, previousScene: scenarioPreviousScene })
+      ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
       : "";
-    const originalVideoPrompt = String(scenarioSelected?.videoPrompt || "").trim();
-    const videoVisualGlueText = buildScenarioVideoVisualGlueText(scenarioSelected);
+    const originalVideoPrompt = String(targetScene?.videoPrompt || "").trim();
+    const videoVisualGlueText = buildScenarioVideoVisualGlueText(targetScene);
     const finalVideoPrompt = `${videoVisualGlueText}\n\n${originalVideoPrompt}`.trim();
     const sourceImageUrl = transitionType === "continuous"
       ? (effectiveStartImageUrl || endImageUrl || frameImageUrl || "")
       : (frameImageUrl || "");
 
     console.log("[StoryboardVideo] video_loading_on reason=generate_video", { sceneId });
-    updateScenarioScene(scenarioEditor.selected, { videoStatus: "queued", videoError: "", videoJobId: "", videoPanelActivated: true });
+    updateScenarioScene(targetSceneIndex, { videoStatus: "queued", videoError: "", videoJobId: "", videoPanelActivated: true });
     setScenarioVideoError("");
     console.log("[StoryboardVideo] generate", {
       sceneId,
@@ -8421,7 +8437,7 @@ Aspect ratio: ${imageFormat}`,
     });
     console.debug("[SCENE VIDEO ROUTE]", {
       sceneId,
-      ltxMode: String(scenarioSelected?.ltxMode || ""),
+      ltxMode: String(targetScene?.ltxMode || ""),
       imageStrategy,
       explicitWorkflow,
       resolvedWorkflowKey,
@@ -8434,23 +8450,23 @@ Aspect ratio: ${imageFormat}`,
       const endpoint = "/api/clip/video/start";
       const transitionActionPrompt = [
         continuityBridgePrompt,
-        getSceneTransitionPrompt(scenarioSelected),
+        getSceneTransitionPrompt(targetScene),
       ].filter(Boolean).join("\n");
-      const scenarioContractPayload = buildScenarioSceneContractPayload(scenarioSelected);
+      const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
       if (CLIP_TRACE_VISUAL_LOCK) {
         console.debug("[SCENARIO VISUAL LOCK] video prompt", {
           sceneId,
           renderMode: String(effectiveRenderMode || ""),
-          ltxMode: String(scenarioSelected?.ltxMode || ""),
+          ltxMode: String(targetScene?.ltxMode || ""),
           transitionType: String(transitionType || ""),
           lipSync: Boolean(effectiveLipSync),
-          hasGlobalVisualLock: hasScenarioContractValue(scenarioSelected?.globalVisualLock),
-          hasGlobalCameraProfile: hasScenarioContractValue(scenarioSelected?.globalCameraProfile),
+          hasGlobalVisualLock: hasScenarioContractValue(targetScene?.globalVisualLock),
+          hasGlobalCameraProfile: hasScenarioContractValue(targetScene?.globalCameraProfile),
           finalVideoPromptLength: finalVideoPrompt.length,
         });
       }
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
-        console.debug("[SCENARIO TRANSFER] before /api/clip/video/start", buildScenarioTransferLogData(scenarioSelected, scenarioContractPayload));
+        console.debug("[SCENARIO TRANSFER] before /api/clip/video/start", buildScenarioTransferLogData(targetScene, scenarioContractPayload));
       }
       const out = await fetchJson(endpoint, {
         method: "POST",
@@ -8459,25 +8475,25 @@ Aspect ratio: ${imageFormat}`,
           imageUrl: sourceImageUrl,
           startImageUrl: effectiveStartImageUrl,
           endImageUrl,
-          audioSliceUrl: scenarioSelected.audioSliceUrl || "",
+          audioSliceUrl: targetScene.audioSliceUrl || "",
           videoPrompt: finalVideoPrompt,
           transitionActionPrompt,
           transitionType,
           requestedDurationSec,
           lipSync: effectiveLipSync,
           renderMode: effectiveRenderMode,
-          ltxMode: String(scenarioSelected?.ltxMode || ""),
+          ltxMode: String(targetScene?.ltxMode || ""),
           imageStrategy,
           resolvedWorkflowKey,
           resolvedModelKey,
           requiresTwoFrames,
           requiresContinuation,
           requiresAudioSensitiveVideo,
-          shotType: scenarioSelected.shotType || "",
-          sceneType: scenarioSelected.sceneType || "",
+          shotType: targetScene.shotType || "",
+          sceneType: targetScene.sceneType || "",
           format: resolvePreferredSceneFormat(
-            scenarioSelected?.format,
-            scenarioSelected?.imageFormat
+            targetScene?.format,
+            targetScene?.imageFormat
           ),
           provider: effectiveVideoProvider,
           ...scenarioContractPayload,
@@ -8513,7 +8529,7 @@ Aspect ratio: ${imageFormat}`,
           sceneId,
           jobId: String(out.jobId || ""),
         });
-        updateScenarioScene(scenarioEditor.selected, { videoJobId: String(out.jobId), videoStatus: "queued", videoError: "" });
+        updateScenarioScene(targetSceneIndex, { videoJobId: String(out.jobId), videoStatus: "queued", videoError: "" });
         startScenarioVideoPolling({
           jobId: String(out.jobId),
           providerJobId: String(out.providerJobId || ""),
@@ -8532,32 +8548,32 @@ Aspect ratio: ${imageFormat}`,
           imageUrl: sourceImageUrl,
           startImageUrl: effectiveStartImageUrl,
           endImageUrl,
-          audioSliceUrl: scenarioSelected.audioSliceUrl || "",
+          audioSliceUrl: targetScene.audioSliceUrl || "",
           videoPrompt: finalVideoPrompt,
           transitionActionPrompt,
           transitionType,
           requestedDurationSec,
           lipSync: effectiveLipSync,
           renderMode: effectiveRenderMode,
-          ltxMode: String(scenarioSelected?.ltxMode || ""),
+          ltxMode: String(targetScene?.ltxMode || ""),
           imageStrategy,
           resolvedWorkflowKey,
           resolvedModelKey,
           requiresTwoFrames,
           requiresContinuation,
           requiresAudioSensitiveVideo,
-          shotType: scenarioSelected.shotType || "",
-          sceneType: scenarioSelected.sceneType || "",
+          shotType: targetScene.shotType || "",
+          sceneType: targetScene.sceneType || "",
           format: resolvePreferredSceneFormat(
-            scenarioSelected?.format,
-            scenarioSelected?.imageFormat
+            targetScene?.format,
+            targetScene?.imageFormat
           ),
           provider: effectiveVideoProvider,
           ...scenarioContractPayload,
         },
       });
       if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || "video_generation_failed");
-      updateScenarioScene(scenarioEditor.selected, {
+      updateScenarioScene(targetSceneIndex, {
         videoUrl: String(legacyOut.videoUrl || ""),
         mode: String(legacyOut.mode || ""),
         model: String(legacyOut.model || ""),
@@ -8567,13 +8583,13 @@ Aspect ratio: ${imageFormat}`,
         videoError: "",
         videoJobId: "",
       });
-      openNextSceneWithoutVideo(scenarioEditor.selected);
+      openNextSceneWithoutVideo(targetSceneIndex);
     } catch (e) {
       console.error(e);
       setScenarioVideoError(String(e?.message || e));
-      updateScenarioScene(scenarioEditor.selected, { videoStatus: "error", videoError: String(e?.message || e) });
+      updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e) });
     }
-  }, [openNextSceneWithoutVideo, scenarioEditor.selected, scenarioPreviousScene, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, startScenarioVideoPolling, updateScenarioScene]);
+  }, [openNextSceneWithoutVideo, scenarioEditor.selected, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
@@ -10166,29 +10182,67 @@ onClipSec: (nodeId, value) => {
                       ? { ...sceneItem, ...patch }
                       : sceneItem
                   ));
-                  return { ...nodeItem, data: { ...nodeItem.data, scenes: nextScenes } };
+                  const currentMap = nodeItem?.data?.sceneGeneration && typeof nodeItem.data.sceneGeneration === "object" ? nodeItem.data.sceneGeneration : {};
+                  const currentRuntime = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
+                  const runtimePatch = {};
+                  if (Object.prototype.hasOwnProperty.call(patch, "imageUrl")) runtimePatch.imageStatus = String(patch.imageUrl || "").trim() ? "done" : "";
+                  if (Object.prototype.hasOwnProperty.call(patch, "startImageUrl")) runtimePatch.startFrameStatus = String(patch.startImageUrl || "").trim() ? "done" : "";
+                  if (Object.prototype.hasOwnProperty.call(patch, "endImageUrl")) runtimePatch.endFrameStatus = String(patch.endImageUrl || "").trim() ? "done" : "";
+                  if (Object.prototype.hasOwnProperty.call(patch, "videoUrl")) runtimePatch.videoStatus = String(patch.videoUrl || "").trim() ? "done" : "";
+                  if (Object.prototype.hasOwnProperty.call(patch, "videoStatus")) runtimePatch.videoStatus = String(patch.videoStatus || "");
+                  if (Object.prototype.hasOwnProperty.call(patch, "videoJobId")) runtimePatch.videoJobId = String(patch.videoJobId || "");
+                  if (Object.prototype.hasOwnProperty.call(patch, "videoError")) runtimePatch.videoError = String(patch.videoError || "");
+                  if (!Object.keys(runtimePatch).length) return { ...nodeItem, data: { ...nodeItem.data, scenes: nextScenes } };
+                  return {
+                    ...nodeItem,
+                    data: {
+                      ...nodeItem.data,
+                      scenes: nextScenes,
+                      sceneGeneration: {
+                        ...currentMap,
+                        [sceneId]: {
+                          ...currentRuntime,
+                          ...runtimePatch,
+                          updatedAt: new Date().toISOString(),
+                        },
+                      },
+                    },
+                  };
                 })));
               },
               onScenarioSceneGenerate: (nodeId, sceneId, assetType = "scene") => {
+                const normalizedAction = String(assetType || "scene").trim().toLowerCase();
+                const sceneIndex = scenarioScenes.findIndex((sceneItem) => String(sceneItem?.sceneId || "") === String(sceneId || ""));
+                const targetScene = sceneIndex >= 0 ? scenarioScenes[sceneIndex] : null;
+                const imageStrategy = String(targetScene?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
+                if (CLIP_TRACE_SCENARIO_EDITOR_GENERATE) {
+                  const routedHandler = normalizedAction === "image"
+                    ? "handleGenerateScenarioImage(single)"
+                    : normalizedAction === "start_frame"
+                      ? "handleGenerateScenarioImage(start)"
+                      : normalizedAction === "end_frame"
+                        ? "handleGenerateScenarioImage(end)"
+                        : "handleScenarioGenerateVideo";
+                  console.debug("[SCENARIO EDITOR GENERATE]", {
+                    sceneId: String(sceneId || ""),
+                    actionType: normalizedAction || "scene",
+                    imageStrategy,
+                    routedHandler,
+                  });
+                }
+                if (sceneIndex < 0) return;
+
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
                   const currentMap = nodeItem?.data?.sceneGeneration && typeof nodeItem.data.sceneGeneration === "object" ? nodeItem.data.sceneGeneration : {};
-                  const scene = (Array.isArray(nodeItem?.data?.scenes) ? nodeItem.data.scenes : []).find((item) => String(item?.sceneId || "") === String(sceneId || "")) || {};
-                  const generationPatchByAssetType = {
-                    image: {
-                      imageStatus: "loading",
-                      imagePrompt: String(scene?.imagePromptEn || scene?.imagePromptRu || ""),
-                    },
-                    start_frame: {
-                      startFrameStatus: "loading",
-                      imagePrompt: String(scene?.startFramePromptEn || scene?.startFramePromptRu || ""),
-                    },
-                    end_frame: {
-                      endFrameStatus: "loading",
-                      imagePrompt: String(scene?.endFramePromptEn || scene?.endFramePromptRu || ""),
-                    },
+                  const currentRuntime = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
+                  const runtimePatch = {
+                    image: { imageStatus: "loading", imageError: "" },
+                    start_frame: { startFrameStatus: "loading", startFrameError: "" },
+                    end_frame: { endFrameStatus: "loading", endFrameError: "" },
+                    video: { videoStatus: "loading", videoError: "" },
+                    scene: { videoStatus: "loading", videoError: "" },
                   };
-                  const generationPatch = generationPatchByAssetType[assetType] || {};
                   return {
                     ...nodeItem,
                     data: {
@@ -10196,18 +10250,28 @@ onClipSec: (nodeId, value) => {
                       sceneGeneration: {
                         ...currentMap,
                         [sceneId]: {
-                          ...(currentMap[sceneId] || {}),
-                          status: "done",
-                          model: String(scene?.renderMode || "image_to_video"),
-                          ...generationPatch,
-                          imagePrompt: generationPatch.imagePrompt || String(scene?.imagePromptEn || scene?.imagePromptRu || ""),
-                          videoPrompt: String(scene?.videoPromptEn || scene?.videoPromptRu || ""),
+                          ...currentRuntime,
+                          ...(runtimePatch[normalizedAction] || {}),
                           updatedAt: new Date().toISOString(),
                         },
                       },
                     },
                   };
                 })));
+
+                if (normalizedAction === "image") {
+                  handleGenerateScenarioImage("single", { sceneIndex });
+                  return;
+                }
+                if (normalizedAction === "start_frame") {
+                  handleGenerateScenarioImage("start", { sceneIndex });
+                  return;
+                }
+                if (normalizedAction === "end_frame") {
+                  handleGenerateScenarioImage("end", { sceneIndex });
+                  return;
+                }
+                handleScenarioGenerateVideo({ sceneIndex });
               },
               onScenarioMusicUpdate: (nodeId, patch = {}) => {
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
