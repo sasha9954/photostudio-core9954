@@ -534,6 +534,111 @@ def _normalize_clip_video_transition_type(value: str | None) -> str:
     return aliases.get(raw, "single")
 
 
+LTX_WORKFLOW_KEY_TO_FILE = {
+    "i2v": "image-video.json",
+    "i2v_as": "image-video-golos-zvuk.json",
+    "f_l": "imag-imag-video-bz.json",
+    "f_l_as": "imag-imag-video-zvuk.json",
+    "lip_sync": "image-lipsink-video-music.json",
+}
+
+LTX_SINGLE_IMAGE_WORKFLOW_KEYS = {"i2v", "i2v_as", "lip_sync"}
+LTX_FIRST_LAST_WORKFLOW_KEYS = {"f_l", "f_l_as"}
+LTX_AUDIO_SENSITIVE_WORKFLOW_KEYS = {"i2v_as", "f_l_as", "lip_sync"}
+
+LTX_MODE_TO_WORKFLOW_KEY = {
+    "i2v": "i2v",
+    "i2v_as": "i2v_as",
+    "f_l": "f_l",
+    "f_l_as": "f_l_as",
+    "lip_sync": "lip_sync",
+}
+
+
+def _resolve_ltx_workflow_selection(
+    *,
+    payload_workflow_key: str,
+    ltx_mode: str,
+    render_mode: str,
+    is_lipsync: bool,
+    transition_type: str,
+    start_image_url: str,
+    end_image_url: str,
+) -> tuple[str, str, str, str]:
+    normalized_payload_key = str(payload_workflow_key or "").strip().lower()
+    normalized_ltx_mode = str(ltx_mode or "").strip().lower()
+    fallback_workflow_key = ""
+    source = "default"
+
+    if normalized_ltx_mode in LTX_MODE_TO_WORKFLOW_KEY:
+        fallback_workflow_key = LTX_MODE_TO_WORKFLOW_KEY[normalized_ltx_mode]
+        source = "ltx_mode"
+    else:
+        is_continuous = _is_clip_video_transition_mode(transition_type, start_image_url, end_image_url)
+        if is_lipsync or render_mode == "avatar_lipsync":
+            fallback_workflow_key = "lip_sync"
+            source = "legacy_render_mode"
+        elif is_continuous:
+            fallback_workflow_key = "f_l"
+            source = "legacy_transition"
+        else:
+            fallback_workflow_key = "i2v"
+            source = "legacy_default"
+
+    final_workflow_key = normalized_payload_key if normalized_payload_key in LTX_WORKFLOW_KEY_TO_FILE else fallback_workflow_key
+    workflow_source = "payload" if normalized_payload_key in LTX_WORKFLOW_KEY_TO_FILE else source
+    workflow_file = LTX_WORKFLOW_KEY_TO_FILE.get(final_workflow_key) or LTX_WORKFLOW_KEY_TO_FILE["i2v"]
+    workflow_path = f"app/workflows/{workflow_file}"
+    return final_workflow_key, fallback_workflow_key, workflow_source, workflow_path
+
+
+def _validate_ltx_workflow_strategy(
+    *,
+    scene_id: str,
+    workflow_key: str,
+    image_strategy: str,
+    requires_two_frames: bool,
+    image_url: str,
+    start_image_url: str,
+    end_image_url: str,
+    audio_slice_url: str,
+) -> tuple[str | None, str | None]:
+    normalized_strategy = str(image_strategy or "").strip().lower()
+    has_image = bool(image_url)
+    has_start = bool(start_image_url)
+    has_end = bool(end_image_url)
+    has_audio = bool(audio_slice_url)
+
+    print(
+        "[LTX ROUTER VALIDATION] "
+        f"sceneId={scene_id} "
+        f"imageStrategy={normalized_strategy or 'n/a'} "
+        f"requiresTwoFrames={requires_two_frames} "
+        f"hasImageUrl={has_image} "
+        f"hasStartImageUrl={has_start} "
+        f"hasEndImageUrl={has_end} "
+        f"hasAudioSliceUrl={has_audio}"
+    )
+
+    if workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS:
+        if normalized_strategy and normalized_strategy != "first_last":
+            return "LTX_IMAGE_STRATEGY_MISMATCH", "first_last_workflow_requires_imageStrategy_first_last"
+        if not (has_start and has_end):
+            return "LTX_FIRST_LAST_IMAGES_REQUIRED", "startImageUrl_and_endImageUrl_required_for_first_last_workflow"
+    elif workflow_key in LTX_SINGLE_IMAGE_WORKFLOW_KEYS:
+        if normalized_strategy == "first_last":
+            return "LTX_IMAGE_STRATEGY_MISMATCH", "single_image_workflow_not_compatible_with_first_last_strategy"
+        if not (has_image or has_start or has_end):
+            return "VIDEO_SOURCE_IMAGE_REQUIRED", "imageUrl_or_startImageUrl_required"
+
+    if workflow_key in LTX_AUDIO_SENSITIVE_WORKFLOW_KEYS and not has_audio:
+        print(
+            "[LTX ROUTER VALIDATION] "
+            f"sceneId={scene_id} workflowKey={workflow_key} audioSensitive=true hasAudioSliceUrl=false"
+        )
+
+    return None, None
+
 
 
 def _resolve_clip_video_dimensions(output_format: str | None) -> tuple[int, int]:
@@ -8876,6 +8981,7 @@ def clip_video(payload: ClipVideoIn):
     start_image_url = str(payload.startImageUrl or "").strip()
     end_image_url = str(payload.endImageUrl or "").strip()
     output_format = str(payload.format or "9:16").strip() or "9:16"
+    explicit_model = str(payload.resolvedModelKey or "").strip()
 
     if render_mode == "avatar_lipsync" or is_lipsync:
         mode = "lipsync"
@@ -8883,6 +8989,24 @@ def clip_video(payload: ClipVideoIn):
         mode = "continuous" if _is_clip_video_transition_mode(transition_type, start_image_url, end_image_url) else "single"
     elif _is_clip_video_transition_mode(transition_type, start_image_url, end_image_url):
         mode = "continuous"
+    else:
+        mode = "single"
+    legacy_mode = mode
+
+    final_workflow_key, fallback_workflow_key, workflow_source, workflow_path = _resolve_ltx_workflow_selection(
+        payload_workflow_key=str(payload.resolvedWorkflowKey or ""),
+        ltx_mode=str(payload.ltxMode or ""),
+        render_mode=render_mode,
+        is_lipsync=is_lipsync,
+        transition_type=transition_type,
+        start_image_url=start_image_url,
+        end_image_url=end_image_url,
+    )
+
+    if final_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS:
+        mode = "continuous"
+    elif final_workflow_key == "lip_sync":
+        mode = "lipsync"
     else:
         mode = "single"
 
@@ -8893,16 +9017,6 @@ def clip_video(payload: ClipVideoIn):
     )
 
     if provider == "comfy_remote":
-        if bool(payload.lipSync) or mode != "single" or transition_type != "single":
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "ok": False,
-                    "code": "comfy_unsupported_mode",
-                    "hint": "comfy_remote_supports_only_single_image_to_video_without_lipsync",
-                },
-            )
-
         source_image_url = image_url or start_image_url or end_image_url
         if not source_image_url:
             return JSONResponse(
@@ -8939,7 +9053,7 @@ def clip_video(payload: ClipVideoIn):
         image_filename = f"{scene_id}_{int(time.time())}.{(image_ext or 'jpg').lower()}"
         print(
             "[COMFY REMOTE] "
-            f"workflow={settings.COMFY_IMAGE_VIDEO_WORKFLOW} width={width} height={height} requestedDurationSec={requested_duration}"
+            f"workflow={workflow_path} width={width} height={height} requestedDurationSec={requested_duration}"
         )
 
         comfy_out, comfy_err = run_comfy_image_to_video(
@@ -8949,6 +9063,7 @@ def clip_video(payload: ClipVideoIn):
             width=width,
             height=height,
             requested_duration_sec=requested_duration,
+            workflow_path=workflow_path,
         )
         if comfy_err or not comfy_out:
             err_text = str(comfy_err or "comfy_remote_failed")
@@ -8995,9 +9110,9 @@ def clip_video(payload: ClipVideoIn):
             "sceneId": scene_id,
             "videoUrl": video_url,
             "provider": "comfy_remote",
-            "model": "ltx-2.3",
+            "model": explicit_model or "ltx-2.3",
             "taskId": prompt_id,
-            "mode": "single",
+            "mode": mode,
             "requestedDurationSec": round(float(requested_duration), 3),
             "providerDurationSec": round(float(comfy_out.get("requestedDurationSec") or requested_duration), 3),
         }
@@ -9030,17 +9145,39 @@ def clip_video(payload: ClipVideoIn):
             content={"ok": False, "code": "KIE_NOT_CONFIGURED", "hint": "missing_KIE_API_KEY", "details": "Set KIE_API_KEY in environment."},
         )
 
+    validation_code, validation_hint = _validate_ltx_workflow_strategy(
+        scene_id=scene_id,
+        workflow_key=final_workflow_key,
+        image_strategy=str(payload.imageStrategy or ""),
+        requires_two_frames=bool(payload.requiresTwoFrames),
+        image_url=image_url,
+        start_image_url=start_image_url,
+        end_image_url=end_image_url,
+        audio_slice_url=audio_slice_url,
+    )
+    if validation_code:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "code": validation_code,
+                "hint": validation_hint,
+            },
+        )
+
     print(
-        "[CLIP VIDEO ROUTING] "
+        "[LTX ROUTER] "
         f"sceneId={scene_id} "
         f"ltxMode={str(payload.ltxMode or '').strip()} "
         f"imageStrategy={str(payload.imageStrategy or '').strip()} "
-        f"resolvedWorkflowKey={str(payload.resolvedWorkflowKey or '').strip()} "
+        f"payloadResolvedWorkflowKey={str(payload.resolvedWorkflowKey or '').strip()} "
+        f"fallbackResolvedWorkflowKey={fallback_workflow_key} "
+        f"finalWorkflowKey={final_workflow_key} "
+        f"workflowFile={workflow_path} "
         f"resolvedModelKey={str(payload.resolvedModelKey or '').strip()} "
-        f"lipSync={bool(payload.lipSync)} "
-        f"renderMode={render_mode or 'n/a'} "
-        f"transitionType={transition_type} "
-        f"resolved_mode={mode}"
+        f"legacyMode={legacy_mode} "
+        f"finalMode={mode} "
+        f"workflowSource={workflow_source}"
     )
 
     effective_prompt = build_clip_video_motion_prompt(
@@ -9166,7 +9303,6 @@ def clip_video(payload: ClipVideoIn):
         selected_model = (settings.KIE_VIDEO_MODEL_CONTINUOUS or "").strip()
     else:
         selected_model = (settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
-    explicit_model = str(payload.resolvedModelKey or "").strip()
     if explicit_model:
         selected_model = explicit_model
 
@@ -9212,7 +9348,14 @@ def clip_video(payload: ClipVideoIn):
             },
         )
 
-    print(f"[CLIP VIDEO ROUTING] selected_model={selected_model}")
+    print(
+        "[LTX ROUTER] "
+        f"sceneId={scene_id} "
+        f"finalWorkflowKey={final_workflow_key} "
+        f"workflowFile={workflow_path} "
+        f"resolvedModelKey={explicit_model or 'n/a'} "
+        f"finalModelKey={selected_model}"
+    )
 
     try:
         requested_duration = float(payload.requestedDurationSec or 5)

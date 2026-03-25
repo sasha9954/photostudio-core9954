@@ -560,6 +560,7 @@ def run_comfy_image_to_video(
     width: int,
     height: int,
     requested_duration_sec: float,
+    workflow_path: str | None = None,
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
     logger.info(
@@ -571,8 +572,9 @@ def run_comfy_image_to_video(
         float(requested_duration_sec),
         seed,
     )
+    workflow_source = str(workflow_path or settings.COMFY_IMAGE_VIDEO_WORKFLOW or "").strip()
     try:
-        workflow = load_workflow_json(str(settings.COMFY_IMAGE_VIDEO_WORKFLOW or ""))
+        workflow = load_workflow_json(workflow_source)
     except Exception as exc:
         return None, f"workflow_load_failed:{str(exc)[:300]}"
 
@@ -656,7 +658,7 @@ def run_comfy_image_to_video(
         "requestedDurationSec": round(float(requested_duration_sec), 3),
         "taskId": prompt_id,
         "debug": {
-            "workflow": str(settings.COMFY_IMAGE_VIDEO_WORKFLOW or ""),
+            "workflow": workflow_source,
             "usedNodeIds": {
                 "image": FIXED_IMAGE_VIDEO_NODES["image"][0],
                 "promptSource": FIXED_IMAGE_VIDEO_NODES["prompt"][0],
