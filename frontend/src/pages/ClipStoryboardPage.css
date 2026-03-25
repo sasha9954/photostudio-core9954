@@ -4575,14 +4575,18 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_sourceFramesGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
+  max-width: 460px;
+  margin: 0 auto;
 }
 
 .clipSB_sourceFrameTile {
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 6px;
+  min-width: 0;
 }
 
 .clipSB_sourceFrameTileLabel {
@@ -4596,8 +4600,10 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_sourceFramePreview,
 .clipSB_sourceFramePlaceholder {
   width: 100%;
-  height: 96px;
-  border-radius: 10px;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  border-radius: 12px;
+  overflow: hidden;
   background: rgba(3, 5, 8, 0.9);
   box-shadow:
     inset 0 0 0 1px rgba(208, 224, 246, 0.14),
@@ -4605,7 +4611,10 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_sourceFramePreview {
+  display: block;
   object-fit: cover;
+  width: 100%;
+  height: 100%;
 }
 
 .clipSB_sourceFramePlaceholder {
@@ -4621,8 +4630,7 @@ body.ps_clip_fullscreen .mainCol {
 @media (max-width: 1160px) {
   .clipSB_scenarioEditorImageBody,
   .clipSB_scenarioEditorVideoBody,
-  .clipSB_scenarioEditorVideoFramesGrid,
-  .clipSB_sourceFramesGrid {
+  .clipSB_scenarioEditorVideoFramesGrid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
