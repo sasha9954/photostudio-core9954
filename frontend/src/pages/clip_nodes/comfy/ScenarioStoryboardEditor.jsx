@@ -118,7 +118,15 @@ export default function ScenarioStoryboardEditor({
   const selectedScene = safeIndex >= 0 ? safeScenes[safeIndex] : null;
   const selectedSceneId = String(selectedScene?.sceneId || "").trim();
   const selectedRuntime = safeGeneration[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object" ? safeGeneration[selectedSceneId] : {};
-  const selectedPhraseIndex = phrases.findIndex((phrase) => String(phrase?.sceneId || "") === selectedSceneId);
+  const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || safeScenes[idx]?.sceneId || "").trim();
+  const selectedPhraseIndex = phrases.findIndex((phrase, idx) => resolvePhraseSceneId(phrase, idx) === selectedSceneId);
+
+  const handleSelectPhrase = (phrase, idx) => {
+    const phraseSceneId = resolvePhraseSceneId(phrase, idx);
+    if (!phraseSceneId) return;
+    setActiveSelectionType("scene");
+    setActiveSelectionId(phraseSceneId);
+  };
 
   const jumpToPhrase = (startSec) => {
     if (!masterAudioRef.current) return;
@@ -279,11 +287,37 @@ export default function ScenarioStoryboardEditor({
       return (
         <div className="clipSB_scenarioEditorPhraseList">
           {phrases.map((phrase, idx) => {
+            const phraseSceneId = resolvePhraseSceneId(phrase, idx);
             const isActive = idx === selectedPhraseIndex;
             return (
-              <div key={`${phrase.sceneId || idx}-${idx}`} className={`clipSB_scenarioEditorPhraseItem ${isActive ? "isActive" : ""}`}>
-                <div className="clipSB_small">[{fmtSec(phrase.startSec)} - {fmtSec(phrase.endSec)}] {phrase.text || "—"}</div>
-                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => jumpToPhrase(phrase.startSec)}>▶ Перемотать</button>
+              <div
+                key={`${phraseSceneId || idx}-${idx}`}
+                className={`clipSB_scenarioEditorPhraseItem ${isActive ? "isActive" : ""}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleSelectPhrase(phrase, idx)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    handleSelectPhrase(phrase, idx);
+                  }
+                }}
+              >
+                <div className="clipSB_scenarioEditorPhraseMain">
+                  <div className="clipSB_scenarioEditorPhraseMeta">[{fmtSec(phrase.startSec)} - {fmtSec(phrase.endSec)}]</div>
+                  <div className="clipSB_scenarioEditorPhraseText">{phrase.text || "—"}</div>
+                </div>
+                <button
+                  className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorPhraseJumpBtn"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleSelectPhrase(phrase, idx);
+                    jumpToPhrase(phrase.startSec);
+                  }}
+                >
+                  ▶ Перемотать
+                </button>
               </div>
             );
           })}
