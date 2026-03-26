@@ -67,6 +67,51 @@ function normalizeObjectMap(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function isNonEmptyObject(value) {
+  return !!(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0);
+}
+
+function isNonEmptyArray(value) {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isNonEmptyValue(value) {
+  if (isNonEmptyObject(value) || isNonEmptyArray(value) || isNonEmptyString(value)) return true;
+  return typeof value === "number" || typeof value === "boolean";
+}
+
+function mergeObjectMapsPreferNonEmpty(primary, fallback) {
+  const primaryMap = normalizeObjectMap(primary);
+  const fallbackMap = normalizeObjectMap(fallback);
+  if (!Object.keys(primaryMap).length) return fallbackMap;
+  if (!Object.keys(fallbackMap).length) return primaryMap;
+  return { ...fallbackMap, ...primaryMap };
+}
+
+function mergeStringListsPreferNonEmpty(primary, fallback) {
+  const primaryList = normalizeStringList(primary);
+  const fallbackList = normalizeStringList(fallback);
+  if (!primaryList.length) return fallbackList;
+  if (!fallbackList.length) return primaryList;
+  return Array.from(new Set([...fallbackList, ...primaryList]));
+}
+
+function mergeStructuredPreferNonEmpty(primary, fallback, emptyValue = {}) {
+  if (Array.isArray(primary) && Array.isArray(fallback)) {
+    return Array.from(new Set([...fallback, ...primary].filter((item) => isNonEmptyValue(item))));
+  }
+  if (isNonEmptyObject(primary) && isNonEmptyObject(fallback)) {
+    return { ...fallback, ...primary };
+  }
+  if (isNonEmptyValue(primary)) return primary;
+  if (isNonEmptyValue(fallback)) return fallback;
+  return emptyValue;
+}
+
 function toNumber(value, fallback = 0) {
   const direct = Number(value);
   if (Number.isFinite(direct)) return direct;
@@ -489,15 +534,44 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     ?? directorOutput?.music_prompt_en
   );
 
-  const refsByRole = normalizeObjectMap(storyboardOut?.refsByRole ?? storyboardOut?.refs_by_role ?? directorOutput?.refsByRole ?? directorOutput?.refs_by_role);
-  const connectedRefsByRole = normalizeObjectMap(storyboardOut?.connectedRefsByRole ?? storyboardOut?.connected_refs_by_role ?? directorOutput?.connectedRefsByRole ?? directorOutput?.connected_refs_by_role);
-  const roleTypeByRole = normalizeObjectMap(storyboardOut?.roleTypeByRole ?? storyboardOut?.role_type_by_role ?? directorOutput?.roleTypeByRole ?? directorOutput?.role_type_by_role);
-  const connectedContextSummary = normalizeText(storyboardOut?.connectedContextSummary ?? storyboardOut?.connected_context_summary ?? directorOutput?.connectedContextSummary ?? directorOutput?.connected_context_summary);
-  const heroParticipants = normalizeStringList(storyboardOut?.heroParticipants ?? storyboardOut?.hero_participants ?? directorOutput?.heroParticipants ?? directorOutput?.hero_participants);
-  const supportingParticipants = normalizeStringList(storyboardOut?.supportingParticipants ?? storyboardOut?.supporting_participants ?? directorOutput?.supportingParticipants ?? directorOutput?.supporting_participants);
-  const mustAppearRoles = normalizeStringList(storyboardOut?.mustAppearRoles ?? storyboardOut?.must_appear_roles ?? directorOutput?.mustAppearRoles ?? directorOutput?.must_appear_roles);
-  const contextRefs = normalizeStringList(storyboardOut?.contextRefs ?? storyboardOut?.context_refs ?? directorOutput?.contextRefs ?? directorOutput?.context_refs);
-  const refDirectives = normalizeObjectMap(storyboardOut?.refDirectives ?? storyboardOut?.ref_directives ?? directorOutput?.refDirectives ?? directorOutput?.ref_directives);
+  const refsByRole = mergeObjectMapsPreferNonEmpty(
+    storyboardOut?.refsByRole ?? storyboardOut?.refs_by_role,
+    directorOutput?.refsByRole ?? directorOutput?.refs_by_role
+  );
+  const connectedRefsByRole = mergeObjectMapsPreferNonEmpty(
+    storyboardOut?.connectedRefsByRole ?? storyboardOut?.connected_refs_by_role,
+    directorOutput?.connectedRefsByRole ?? directorOutput?.connected_refs_by_role
+  );
+  const roleTypeByRole = mergeObjectMapsPreferNonEmpty(
+    storyboardOut?.roleTypeByRole ?? storyboardOut?.role_type_by_role,
+    directorOutput?.roleTypeByRole ?? directorOutput?.role_type_by_role
+  );
+  const connectedContextSummary = mergeStructuredPreferNonEmpty(
+    storyboardOut?.connectedContextSummary ?? storyboardOut?.connected_context_summary,
+    directorOutput?.connectedContextSummary ?? directorOutput?.connected_context_summary,
+    ""
+  );
+  const heroParticipants = mergeStringListsPreferNonEmpty(
+    storyboardOut?.heroParticipants ?? storyboardOut?.hero_participants,
+    directorOutput?.heroParticipants ?? directorOutput?.hero_participants
+  );
+  const supportingParticipants = mergeStringListsPreferNonEmpty(
+    storyboardOut?.supportingParticipants ?? storyboardOut?.supporting_participants,
+    directorOutput?.supportingParticipants ?? directorOutput?.supporting_participants
+  );
+  const mustAppearRoles = mergeStringListsPreferNonEmpty(
+    storyboardOut?.mustAppearRoles ?? storyboardOut?.must_appear_roles,
+    directorOutput?.mustAppearRoles ?? directorOutput?.must_appear_roles
+  );
+  const contextRefs = mergeStructuredPreferNonEmpty(
+    storyboardOut?.contextRefs ?? storyboardOut?.context_refs,
+    directorOutput?.contextRefs ?? directorOutput?.context_refs,
+    {}
+  );
+  const refDirectives = mergeObjectMapsPreferNonEmpty(
+    storyboardOut?.refDirectives ?? storyboardOut?.ref_directives,
+    directorOutput?.refDirectives ?? directorOutput?.ref_directives
+  );
 
   const normalizedPackage = {
     scenes,
@@ -578,6 +652,20 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     packageHeroParticipants: normalizedPackage.heroParticipants || [],
     packageSupportingParticipants: normalizedPackage.supportingParticipants || [],
     packageMustAppearRoles: normalizedPackage.mustAppearRoles || [],
+    packageContextRefsType: Array.isArray(normalizedPackage.context_refs)
+      ? "array"
+      : isNonEmptyObject(normalizedPackage.context_refs)
+        ? "object"
+        : isNonEmptyString(normalizedPackage.context_refs)
+          ? "string"
+          : "empty",
+    packageConnectedContextSummaryType: Array.isArray(normalizedPackage.connected_context_summary)
+      ? "array"
+      : isNonEmptyObject(normalizedPackage.connected_context_summary)
+        ? "object"
+        : isNonEmptyString(normalizedPackage.connected_context_summary)
+          ? "string"
+          : "empty",
     sceneRoleSnapshot: (normalizedPackage.scenes || []).map((scene, idx) => ({
       scene: idx + 1,
       primaryRole: normalizeText(scene?.primaryRole),
@@ -593,6 +681,10 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
 export function buildScenarioPreviewInput({ storyboardOut = null, directorOutput = null, format = "9:16", styleProfile = "" } = {}) {
   const pkg = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
   const resolvedFormat = resolveFormatAlias(format, pkg?.format) || "9:16";
+  console.debug("[SCENARIO STORYBOARD PREVIEW INPUT]", {
+    usesNormalizedPackageRefs: true,
+    refsByRoleKeys: Object.keys(pkg?.refsByRole || {}),
+  });
   return {
     storySummaryRu: pkg.storySummaryRu,
     storySummaryEn: pkg.storySummaryEn,
@@ -603,7 +695,7 @@ export function buildScenarioPreviewInput({ storyboardOut = null, directorOutput
     styleProfile: normalizeText(styleProfile),
     actors: pkg.actors,
     locations: pkg.locations,
-    refsByRole: directorOutput?.refsByRole && typeof directorOutput.refsByRole === "object" ? directorOutput.refsByRole : {},
+    refsByRole: pkg?.refsByRole && typeof pkg.refsByRole === "object" ? pkg.refsByRole : {},
     format: resolvedFormat,
   };
 }
