@@ -254,6 +254,23 @@ function normalizeDurationFromScene(source = {}, fallback = 0) {
   return Number(fromRange.toFixed(3));
 }
 
+export function detectScenarioAssetType({ url = "", mime = "", extension = "", preferFrame = false } = {}) {
+  const normalizedUrl = normalizeText(url).toLowerCase();
+  const normalizedMime = normalizeText(mime).toLowerCase();
+  const normalizedExt = normalizeText(extension).toLowerCase().replace(/^\./, "");
+
+  const videoExt = ["mp4", "webm", "mov", "m4v", "avi", "mkv"];
+  const imageExt = ["png", "jpg", "jpeg", "webp", "bmp", "gif", "heic", "heif"];
+
+  if (normalizedMime.startsWith("video/")) return "video";
+  if (normalizedMime.startsWith("image/")) return preferFrame ? "frame" : "image";
+  if (videoExt.some((ext) => normalizedUrl.endsWith(`.${ext}`) || normalizedExt === ext)) return "video";
+  if (imageExt.some((ext) => normalizedUrl.endsWith(`.${ext}`) || normalizedExt === ext)) {
+    return preferFrame ? "frame" : "image";
+  }
+  return "unknown";
+}
+
 export function deriveScenarioImageStrategy(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const ltxMode = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
@@ -537,6 +554,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     continuationFromPrevious: Boolean(source.continuationFromPrevious ?? source.continuation_from_previous ?? source.continuation),
     continuationSourceSceneId: normalizeText(source.continuationSourceSceneId ?? source.continuation_source_scene_id),
     continuationSourceAssetUrl: normalizeText(source.continuationSourceAssetUrl ?? source.continuation_source_asset_url),
+    continuationSourceAssetType: normalizeText(source.continuationSourceAssetType ?? source.continuation_source_asset_type),
     imageStrategy: normalizeText(source.imageStrategy) || imageStrategy,
     requiresTwoFrames,
     requiresContinuation,

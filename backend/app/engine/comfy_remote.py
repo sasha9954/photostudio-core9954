@@ -20,7 +20,7 @@ COMFY_LTX_CAPABILITIES = {
     "first_last": True,
     "audio_sensitive": True,
     "lip_sync": False,
-    "continuation": True,
+    "continuation": False,
 }
 COMFY_AUDIO_WORKFLOW_FILES = {
     "i2v_as": "image-video-golos-zvuk.json",
@@ -86,6 +86,8 @@ def _validate_comfy_ltx_request(
     end_image_bytes: bytes | None,
     audio_bytes: bytes | None,
     audio_url: str | None,
+    continuation_source_asset_url: str | None = None,
+    continuation_source_asset_type: str | None = None,
 ) -> tuple[str | None, str | None]:
     key = str(workflow_key or "i2v").strip().lower() or "i2v"
     requirements = COMFY_LTX_WORKFLOW_REQUIREMENTS.get(key)
@@ -107,8 +109,30 @@ def _validate_comfy_ltx_request(
         return "LTX_SECOND_FRAME_REQUIRED", "start_image_and_end_image_required_for_first_last_mode"
     if requirements["audio_sensitive"] and not (audio_bytes or str(audio_url or "").strip()):
         return "LTX_AUDIO_REQUIRED", "audio_input_required_for_audio_sensitive_mode"
+    if requirements["continuation"]:
+        source_url = str(continuation_source_asset_url or "").strip()
+        if not source_url:
+            return "LTX_CONTINUATION_SOURCE_REQUIRED", "continuation_source_asset_url_missing"
+        normalized_source_type = str(continuation_source_asset_type or "").strip().lower()
+        if normalized_source_type == "video":
+            return (
+                "LTX_CONTINUATION_SOURCE_INCOMPATIBLE",
+                "continuation source resolved to video asset but current continuation path requires image/frame source",
+            )
 
     return None, None
+
+
+def _detect_continuation_asset_type(asset_url: str | None, asset_type_hint: str | None = None) -> str:
+    hinted = str(asset_type_hint or "").strip().lower()
+    if hinted in {"image", "frame", "video"}:
+        return hinted
+    source = str(asset_url or "").strip().lower()
+    if source.endswith((".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv")):
+        return "video"
+    if source.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".heic", ".heif")):
+        return "image"
+    return "unknown"
 
 
 def load_workflow_json(path: str) -> dict:
@@ -763,6 +787,7 @@ def run_comfy_image_to_video(
     audio_bytes: bytes | None = None,
     audio_url: str | None = None,
     continuation_source_asset_url: str | None = None,
+    continuation_source_asset_type: str | None = None,
     requested_mode: str | None = None,
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
@@ -780,6 +805,8 @@ def run_comfy_image_to_video(
         end_image_bytes=end_image_bytes,
         audio_bytes=audio_bytes,
         audio_url=audio_url,
+        continuation_source_asset_url=continuation_source_asset_url,
+        continuation_source_asset_type=continuation_source_asset_type,
     )
     if capability_code:
         return None, f"capability_error:{capability_code}:{capability_hint or ''}"
@@ -874,9 +901,12 @@ def run_comfy_image_to_video(
                 return None, "capability_error:LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED:audio_sensitive_mode_requested_but_audio_loader_nodes_not_found"
             return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{audio_patch_err}"
     continuation_used = False
+    continuation_asset_type = _detect_continuation_asset_type(continuation_source_asset_url, continuation_source_asset_type)
     if normalized_workflow_key == "continuation":
         if not str(continuation_source_asset_url or "").strip():
             return None, "capability_error:LTX_CONTINUATION_SOURCE_REQUIRED:continuation_source_asset_url_missing"
+        if continuation_asset_type == "video":
+            return None, "capability_error:LTX_CONTINUATION_SOURCE_INCOMPATIBLE:continuation source resolved to video asset but current continuation path requires image/frame source"
         return None, "capability_error:LTX_CONTINUATION_NOT_IMPLEMENTED:continuation mode requested by scene but current comfy workflow patcher does not support it yet"
 
     logger.info(
@@ -949,8 +979,11 @@ def run_comfy_image_to_video(
             "end_image_used": bool(first_last_end_node_ids),
             "audio_used": bool(audio_patch_node_ids),
             "continuation_used": continuation_used,
+            "continuation_source_asset_type": continuation_asset_type,
+            "continuation_source_asset_url_present": bool(str(continuation_source_asset_url or "").strip()),
             "audio_patch_node_ids": audio_patch_node_ids,
             "capabilities": COMFY_LTX_CAPABILITIES,
+            "capabilities_snapshot": COMFY_LTX_CAPABILITIES,
             "inputsUsed": {
                 "image": True,
                 "startImage": bool(start_image_bytes),

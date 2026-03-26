@@ -53,6 +53,7 @@ import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
 import { buildScenarioDirectorRequestPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 import {
   buildScenarioPreviewInput,
+  detectScenarioAssetType,
   deriveScenarioImageStrategy,
   normalizeScenarioStoryboardPackage,
   resolveScenarioExplicitModelKey,
@@ -364,6 +365,7 @@ function buildScenarioSceneContractPayload(scene = {}) {
     continuationFromPrevious: Boolean(scene?.continuationFromPrevious ?? scene?.continuation ?? imageStrategy === "continuation"),
     continuationSourceSceneId: String(scene?.continuationSourceSceneId || "").trim(),
     continuationSourceAssetUrl: String(scene?.continuationSourceAssetUrl || "").trim(),
+    continuationSourceAssetType: String(scene?.continuationSourceAssetType || "").trim(),
     requiresAudioSensitiveVideo: Boolean(
       scene?.requiresAudioSensitiveVideo
       ?? ["i2v_as", "f_l_as", "lip_sync"].includes(String(scene?.ltxMode || "").trim().toLowerCase())
@@ -371,6 +373,29 @@ function buildScenarioSceneContractPayload(scene = {}) {
     resolvedWorkflowKey,
     resolvedModelKey,
     requestedDurationSec: Number.isFinite(requestedDurationSec) ? Math.max(0, requestedDurationSec) : undefined,
+  };
+}
+
+function resolveContinuationSourceFromPreviousScene(previousScene = null) {
+  const prev = previousScene && typeof previousScene === "object" ? previousScene : {};
+  const candidates = [
+    { url: prev?.endFrameImageUrl, type: "frame" },
+    { url: prev?.endImageUrl, type: "image" },
+    { url: prev?.imageUrl, type: "image" },
+    { url: prev?.videoUrl, type: "video" },
+  ];
+  for (const candidate of candidates) {
+    const assetUrl = String(candidate?.url || "").trim();
+    if (!assetUrl) continue;
+    const detectedType = detectScenarioAssetType({ url: assetUrl, preferFrame: candidate.type === "frame" });
+    return {
+      continuationSourceAssetUrl: assetUrl,
+      continuationSourceAssetType: detectedType === "unknown" ? candidate.type : detectedType,
+    };
+  }
+  return {
+    continuationSourceAssetUrl: "",
+    continuationSourceAssetType: "",
   };
 }
 
@@ -6885,6 +6910,8 @@ const comfyShowVideoSection = Boolean(
       modelKey: String(jobMeta?.modelKey || sceneSnapshot?.resolvedModelKey || resolveScenarioExplicitModelKey(sceneSnapshot || {}) || "").trim(),
       audioSensitive: Boolean(jobMeta?.audioSensitive ?? sceneSnapshot?.requiresAudioSensitiveVideo),
       continuation: Boolean(jobMeta?.continuation ?? sceneSnapshot?.requiresContinuation ?? sceneSnapshot?.continuationFromPrevious),
+      continuationSourceSceneId: String(jobMeta?.continuationSourceSceneId || sceneSnapshot?.continuationSourceSceneId || "").trim(),
+      continuationSourceAssetType: String(jobMeta?.continuationSourceAssetType || sceneSnapshot?.continuationSourceAssetType || "").trim(),
       startedAt: Number(jobMeta?.startedAt) || now,
       updatedAt: Number(jobMeta?.updatedAt) || now,
       status: String(jobMeta?.status || "queued").toLowerCase(),
@@ -6915,6 +6942,8 @@ const comfyShowVideoSection = Boolean(
       modelKey: String(startMeta.modelKey || ""),
       audioSensitive: Boolean(startMeta.audioSensitive),
       continuation: Boolean(startMeta.continuation),
+      continuationSourceSceneId: String(startMeta.continuationSourceSceneId || ""),
+      continuationSourceAssetType: String(startMeta.continuationSourceAssetType || ""),
     });
 
     const scheduleScenarioPoll = (delayMs, reason) => {
@@ -7164,6 +7193,8 @@ const comfyShowVideoSection = Boolean(
           provider: String(meta?.provider || sceneNow?.sceneRenderProvider || "comfy_remote"),
           audioSensitive: Boolean(meta?.audioSensitive ?? sceneNow?.requiresAudioSensitiveVideo),
           continuation: Boolean(meta?.continuation ?? sceneNow?.requiresContinuation ?? sceneNow?.continuationFromPrevious),
+          continuationSourceSceneId: String(meta?.continuationSourceSceneId || sceneNow?.continuationSourceSceneId || ""),
+          continuationSourceAssetType: String(meta?.continuationSourceAssetType || sceneNow?.continuationSourceAssetType || ""),
         });
       });
       persistActiveVideoJob(nextPersisted);
@@ -9057,20 +9088,17 @@ Aspect ratio: ${imageFormat}`,
     const continuationSourceSceneId = requiresContinuation
       ? String(targetPreviousScene?.sceneId || "").trim()
       : "";
-    const continuationSourceAssetUrl = requiresContinuation
-      ? String(
-        targetPreviousScene?.videoUrl
-        || targetPreviousScene?.endImageUrl
-        || targetPreviousScene?.endFrameImageUrl
-        || targetPreviousScene?.imageUrl
-        || ""
-      ).trim()
-      : "";
+    const continuationSourceSelection = requiresContinuation
+      ? resolveContinuationSourceFromPreviousScene(targetPreviousScene)
+      : { continuationSourceAssetUrl: "", continuationSourceAssetType: "" };
+    const continuationSourceAssetUrl = String(continuationSourceSelection.continuationSourceAssetUrl || "").trim();
+    const continuationSourceAssetType = String(continuationSourceSelection.continuationSourceAssetType || "").trim();
     if (requiresContinuation) {
       updateScenarioScene(targetSceneIndex, {
         continuationFromPrevious: true,
         continuationSourceSceneId,
         continuationSourceAssetUrl,
+        continuationSourceAssetType,
       });
     }
 
@@ -9168,6 +9196,7 @@ Aspect ratio: ${imageFormat}`,
           continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? requiresContinuation),
           continuationSourceSceneId,
           continuationSourceAssetUrl,
+          continuationSourceAssetType,
           shotType: targetScene.shotType || "",
           sceneType: targetScene.sceneType || "",
           format: resolvePreferredSceneFormat(
@@ -9219,6 +9248,8 @@ Aspect ratio: ${imageFormat}`,
           modelKey: resolvedModelKey,
           audioSensitive: requiresAudioSensitiveVideo,
           continuation: requiresContinuation,
+          continuationSourceSceneId,
+          continuationSourceAssetType,
           status: "queued",
         });
         return;
@@ -9248,6 +9279,10 @@ Aspect ratio: ${imageFormat}`,
           requiresTwoFrames,
           requiresContinuation,
           requiresAudioSensitiveVideo,
+          continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? requiresContinuation),
+          continuationSourceSceneId,
+          continuationSourceAssetUrl,
+          continuationSourceAssetType,
           shotType: targetScene.shotType || "",
           sceneType: targetScene.sceneType || "",
           format: resolvePreferredSceneFormat(

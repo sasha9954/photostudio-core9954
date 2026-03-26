@@ -129,6 +129,7 @@ class ClipVideoIn(BaseModel):
     continuationFromPrevious: bool | None = None
     continuationSourceSceneId: str | None = None
     continuationSourceAssetUrl: str | None = None
+    continuationSourceAssetType: str | None = None
     requiresTwoFrames: bool | None = None
     requiresContinuation: bool | None = None
     requiresAudioSensitiveVideo: bool | None = None
@@ -682,6 +683,20 @@ def _resolve_model_key_from_override(model_file_override: str | None) -> str:
     return ""
 
 
+def _detect_scenario_asset_type(asset_url: str | None, asset_type_hint: str | None = None) -> str:
+    hinted = str(asset_type_hint or "").strip().lower()
+    if hinted in {"image", "frame", "video"}:
+        return hinted
+    normalized_url = str(asset_url or "").strip().lower()
+    if not normalized_url:
+        return "unknown"
+    if normalized_url.endswith((".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv")):
+        return "video"
+    if normalized_url.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".heic", ".heif")):
+        return "image"
+    return "unknown"
+
+
 def _validate_ltx_workflow_strategy(
     *,
     scene_id: str,
@@ -694,6 +709,7 @@ def _validate_ltx_workflow_strategy(
     audio_slice_url: str,
     continuation_source_scene_id: str,
     continuation_source_asset_url: str,
+    continuation_source_asset_type: str,
 ) -> tuple[str | None, str | None]:
     normalized_strategy = str(image_strategy or "").strip().lower()
     has_image = bool(image_url)
@@ -733,6 +749,12 @@ def _validate_ltx_workflow_strategy(
         has_continuation_source = bool(continuation_source_scene_id or continuation_source_asset_url or has_start or has_end)
         if not has_continuation_source:
             return "LTX_CONTINUATION_SOURCE_REQUIRED", "continuation_requires_previous_scene_context_or_asset"
+        normalized_source_type = str(continuation_source_asset_type or "").strip().lower()
+        if normalized_source_type == "video":
+            return (
+                "LTX_CONTINUATION_SOURCE_INCOMPATIBLE",
+                "continuation source resolved to video asset but current continuation path requires image/frame source",
+            )
 
     return None, None
 
@@ -9124,6 +9146,10 @@ def clip_video(payload: ClipVideoIn):
     audio_slice_url = str(payload.audioSliceUrl or "").strip()
     continuation_source_scene_id = str(payload.continuationSourceSceneId or "").strip()
     continuation_source_asset_url = str(payload.continuationSourceAssetUrl or "").strip()
+    continuation_source_asset_type = _detect_scenario_asset_type(
+        continuation_source_asset_url,
+        str(payload.continuationSourceAssetType or "").strip(),
+    )
     image_url = str(payload.imageUrl or "").strip()
     start_image_url = str(payload.startImageUrl or "").strip()
     end_image_url = str(payload.endImageUrl or "").strip()
@@ -9163,6 +9189,7 @@ def clip_video(payload: ClipVideoIn):
     )
     if continuation_requested:
         final_workflow_key = "continuation"
+    continuation_image_frame_strategy = final_workflow_key in LTX_CONTINUATION_WORKFLOW_KEYS
 
     resolved_model_key, resolved_model_spec, model_source = _resolve_ltx_model_selection(
         payload_model_key=explicit_model,
@@ -9237,6 +9264,15 @@ def clip_video(payload: ClipVideoIn):
         )
 
     if provider == "comfy_remote":
+        if continuation_image_frame_strategy and continuation_source_asset_type == "video":
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "ok": False,
+                    "code": "LTX_CONTINUATION_SOURCE_INCOMPATIBLE",
+                    "hint": "continuation source resolved to video asset but current continuation path requires image/frame source",
+                },
+            )
         source_image_url = image_url or start_image_url or end_image_url
         if final_workflow_key == "continuation":
             source_image_url = source_image_url or continuation_source_asset_url
@@ -9319,6 +9355,7 @@ def clip_video(payload: ClipVideoIn):
             end_image_bytes=end_image_bytes,
             audio_url=audio_slice_url,
             continuation_source_asset_url=continuation_source_asset_url,
+            continuation_source_asset_type=continuation_source_asset_type,
             requested_mode=str(payload.ltxMode or ""),
         )
         if comfy_err or not comfy_out:
@@ -9421,6 +9458,7 @@ def clip_video(payload: ClipVideoIn):
         audio_slice_url=audio_slice_url,
         continuation_source_scene_id=continuation_source_scene_id,
         continuation_source_asset_url=continuation_source_asset_url,
+        continuation_source_asset_type=continuation_source_asset_type,
     )
     if validation_code:
         return JSONResponse(
