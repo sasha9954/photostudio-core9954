@@ -39,7 +39,29 @@ function sceneBadges(scene = {}) {
   if (mode === "lip_sync") badges.push("lip_sync");
   if (isFirstLastScene(scene)) badges.push("first_last");
   if (mode === "image_to_video") badges.push("i2v");
+  const warnings = Array.isArray(scene?.contractWarnings) ? scene.contractWarnings : [];
+  if (warnings.length) badges.push(`warnings:${warnings.length}`);
   return badges;
+}
+
+function renderContractWarnings(scene = {}) {
+  const warnings = Array.isArray(scene?.contractWarnings) ? scene.contractWarnings : [];
+  if (!warnings.length) return <span className="clipSB_tag clipSB_tagStatus clipSB_tagStatus--done">no warnings</span>;
+  return warnings.map((warning, idx) => (
+    <span key={`${warning?.code || idx}-${idx}`} className="clipSB_tag clipSB_tagStatus clipSB_tagStatus--error">
+      {String(warning?.label || warning?.code || "warning")}
+    </span>
+  ));
+}
+
+function ContractField({ label, value }) {
+  const printable = Array.isArray(value) ? value.join(", ") : String(value || "").trim();
+  return (
+    <div className="clipSB_storyboardKv">
+      <span>{label}</span>
+      <strong>{printable || "—"}</strong>
+    </div>
+  );
 }
 
 function isFirstLastScene(scene = {}) {
@@ -341,8 +363,31 @@ export default function ScenarioStoryboardEditor({
       return (
         <div className="clipSB_scenarioEditorTabBody">
           <div className="clipSB_storyboardKv"><span>Сцен</span><strong>{safeScenes.length}</strong></div>
-          <div className="clipSB_storyboardKv"><span>Текущая сцена</span><strong>{selectedSceneId || "—"}</strong></div>
-          <div className="clipSB_storyboardKv"><span>summaryRu</span><strong>{selectedScene?.summaryRu || "—"}</strong></div>
+          {safeScenes.map((scene, idx) => {
+            const sceneId = String(scene?.sceneId || `S${idx + 1}`);
+            return (
+              <details key={`contract-${sceneId}-${idx}`} style={{ marginBottom: 10 }}>
+                <summary>{sceneId} · {fmtSec(scene?.t0)}–{fmtSec(scene?.t1)}</summary>
+                <ContractField label="sceneId" value={sceneId} />
+                <ContractField label="t0/t1" value={`${fmtSec(scene?.t0)} / ${fmtSec(scene?.t1)}`} />
+                <ContractField label="lyric text" value={scene?.localPhrase || scene?.lyricText} />
+                <ContractField label="summary" value={scene?.summaryRu || scene?.summaryEn} />
+                <ContractField label="sceneGoal" value={scene?.sceneGoalRu || scene?.sceneGoalEn} />
+                <ContractField label="actors" value={scene?.actors || []} />
+                <ContractField label="primaryRole" value={scene?.primaryRole} />
+                <ContractField label="secondaryRoles" value={scene?.secondaryRoles || []} />
+                <ContractField label="mustAppear" value={scene?.mustAppear || []} />
+                <ContractField label="imagePrompt" value={scene?.imagePromptRu || scene?.imagePromptEn} />
+                <ContractField label="videoPrompt" value={scene?.videoPromptRu || scene?.videoPromptEn} />
+                <ContractField label="lipSync" value={String(Boolean(scene?.lipSync))} />
+                <ContractField label="audioSliceUrl" value={scene?.audioSliceUrl} />
+                <ContractField label="renderMode / ltxMode / model" value={`${scene?.renderMode || "—"} / ${scene?.ltxMode || "—"} / ${scene?.resolvedModelKey || "—"}`} />
+                <div className="clipSB_scenarioEditorBadgeRow">
+                  {renderContractWarnings(scene)}
+                </div>
+              </details>
+            );
+          })}
         </div>
       );
     }

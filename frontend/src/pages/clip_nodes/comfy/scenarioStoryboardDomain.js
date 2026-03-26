@@ -226,6 +226,76 @@ function toNumber(value, fallback = 0) {
   return fallback;
 }
 
+function normalizePromptForCompare(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenOverlapRatio(first = "", second = "") {
+  const left = new Set(normalizePromptForCompare(first).split(" ").filter(Boolean));
+  const right = new Set(normalizePromptForCompare(second).split(" ").filter(Boolean));
+  if (!left.size || !right.size) return 0;
+  const overlap = [...left].filter((token) => right.has(token)).length;
+  return overlap / Math.max(left.size, right.size);
+}
+
+function hasAnyKeyword(value = "", keywords = []) {
+  const text = normalizePromptForCompare(value);
+  if (!text) return false;
+  return keywords.some((keyword) => text.includes(String(keyword || "").toLowerCase()));
+}
+
+function buildScenarioSceneContractWarnings(scene = {}) {
+  const mustAppear = normalizeStringList(scene.mustAppear);
+  const actors = normalizeStringList(scene.actors);
+  const primaryRole = normalizeText(scene.primaryRole);
+  const secondaryRoles = normalizeStringList(scene.secondaryRoles);
+  const sceneActiveRoles = normalizeStringList(scene.sceneActiveRoles);
+  const refsUsed = normalizeStringList(scene.refsUsed);
+  const summaryText = [scene.summaryRu, scene.summaryEn].map((item) => normalizeText(item)).filter(Boolean).join(" ");
+  const sceneGoalText = [scene.sceneGoalRu, scene.sceneGoalEn].map((item) => normalizeText(item)).filter(Boolean).join(" ");
+  const imagePrompt = [scene.imagePromptRu, scene.imagePromptEn].map((item) => normalizeText(item)).filter(Boolean).join(" ");
+  const videoPrompt = [scene.videoPromptRu, scene.videoPromptEn].map((item) => normalizeText(item)).filter(Boolean).join(" ");
+  const lyricSliceText = normalizeText(scene.localPhrase || scene.lyricText);
+  const warnings = [];
+
+  const twoCharacterRequired = mustAppear.includes("character_1") && mustAppear.includes("character_2");
+  const oneActorSignals = ["один", "solo", "alone", "одиноч", "single character", "single actor"];
+  const twoActorSignals = ["вместе", "оба", "both", "together", "друг на", "reaction", "dialog", "диалог"];
+  const sceneNarrative = [summaryText, sceneGoalText].filter(Boolean).join(" ");
+  if (twoCharacterRequired) {
+    const hasTwoActorLanguage = hasAnyKeyword(sceneNarrative, twoActorSignals);
+    const hasOneActorLanguage = hasAnyKeyword(sceneNarrative, oneActorSignals);
+    if (!hasTwoActorLanguage || hasOneActorLanguage) {
+      warnings.push({ code: "two_character_summary_one_actor", level: "warning", label: "2-char contract vs 1-char summary" });
+    }
+  }
+
+  if (tokenOverlapRatio(imagePrompt, videoPrompt) >= 0.82) {
+    warnings.push({ code: "video_prompt_too_similar_to_image", level: "warning", label: "videoPrompt ~ imagePrompt" });
+  }
+
+  const intimateKeywords = ["whisper", "шеп", "тихо", "на ухо", "intimate", "нежно", "close confession"];
+  const hasIntimateSpeech = hasAnyKeyword([lyricSliceText, summaryText, sceneGoalText].join(" "), intimateKeywords);
+  if (hasIntimateSpeech && !(scene.lipSync || scene.requiresAudioSensitiveVideo)) {
+    warnings.push({
+      code: "intimate_phrase_without_lipsync_or_audio_sensitive",
+      level: "warning",
+      label: "intimate phrase without lipSync",
+    });
+  }
+
+  const roleUniverse = new Set([primaryRole, ...secondaryRoles, ...sceneActiveRoles, ...refsUsed, ...actors].filter(Boolean));
+  const mismatchedRoles = mustAppear.filter((role) => !roleUniverse.has(role));
+  if (mismatchedRoles.length) {
+    warnings.push({ code: "must_appear_mismatch", level: "warning", label: `mustAppear mismatch: ${mismatchedRoles.join(", ")}` });
+  }
+  return warnings;
+}
+
 function preferRuFrom(source = {}, fallback = "") {
   return normalizeText(
     source?.ru
@@ -642,7 +712,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const requiresContinuation = continuationRequested || ltxModeNormalized === "continuation" || explicitWorkflowKey === "continuation";
   const imageStrategy = deriveScenarioImageStrategy(source);
   const resolvedWorkflowKey = explicitWorkflowKey || resolveScenarioWorkflowKey(source);
-  const requiresAudioSensitiveVideo = resolvedWorkflowKey === "lip_sync";
+  const requiresAudioSensitiveVideo = resolvedWorkflowKey === "lip_sync" || Boolean(source.lipSync ?? source.lip_sync);
   const resolvedModelKey = resolveScenarioExplicitModelKey(source) || SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY[resolvedWorkflowKey] || "";
   const sceneRenderProvider = resolveScenarioRenderProvider(source, scenarioPackage);
   const requestedDurationSec = normalizeDurationFromScene(source, durationSec);
@@ -671,6 +741,10 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ru: source.locationRu ?? source.location_ru ?? source.worldRu ?? source.world_ru ?? source.location,
     en: source.locationEn ?? source.location_en ?? source.worldEn ?? source.world_en ?? source.location,
   });
+  const sceneGoalDual = normalizeDualField({
+    ru: source.sceneGoalRu ?? source.scene_goal_ru ?? source.sceneGoal ?? source.scene_goal ?? source.shotPurposeRu,
+    en: source.sceneGoalEn ?? source.scene_goal_en ?? source.sceneGoal ?? source.scene_goal ?? source.shotPurposeEn,
+  });
 
   const forbiddenInsertionsRaw = source.forbiddenInsertions ?? source.forbidden_insertions;
   const forbiddenChangesRaw = source.forbiddenChanges ?? source.forbidden_changes;
@@ -698,6 +772,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     durationSec,
     summaryRu: summaryDual.ru,
     summaryEn: summaryDual.en,
+    sceneGoalRu: sceneGoalDual.ru,
+    sceneGoalEn: sceneGoalDual.en,
     imagePromptRu: imageDual.ru,
     imagePromptEn: imageDual.en,
     videoPromptRu: videoDual.ru,
@@ -732,6 +808,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     requestedDurationSec,
     narrationMode: normalizeText(source.narrationMode ?? source.narration_mode) || "full",
     localPhrase: normalizeText(source.localPhrase ?? source.local_phrase),
+    lyricText: normalizeText(source.lyricText ?? source.lyric_text ?? source.lyricFragment ?? source.lyric_fragment),
     sfx: normalizeText(source.sfx),
     musicMixHint: normalizeText(source.musicMixHint ?? source.music_mix_hint) || "medium",
     speakerRole: normalizeText(source.speakerRole ?? source.speaker_role),
@@ -860,6 +937,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     forceTwoPerson: Boolean(resolvedRoleContract.debug?.forceTwoPerson),
     hasSemanticTwoPerson: Boolean(resolvedRoleContract.debug?.hasSemanticTwoPerson),
   });
+  normalizedScene.contractWarnings = buildScenarioSceneContractWarnings(normalizedScene);
+  normalizedScene.contractWarningCodes = normalizedScene.contractWarnings.map((item) => item.code);
   return normalizedScene;
 }
 

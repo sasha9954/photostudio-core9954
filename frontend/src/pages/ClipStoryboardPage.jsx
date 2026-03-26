@@ -382,7 +382,7 @@ function buildScenarioSceneContractPayload(scene = {}) {
     continuationSourceSceneId: String(scene?.continuationSourceSceneId || "").trim(),
     continuationSourceAssetUrl: String(scene?.continuationSourceAssetUrl || "").trim(),
     continuationSourceAssetType: String(scene?.continuationSourceAssetType || "").trim(),
-    requiresAudioSensitiveVideo: resolvedWorkflowKey === "lip_sync",
+    requiresAudioSensitiveVideo: resolvedWorkflowKey === "lip_sync" || Boolean(scene?.lipSync),
     resolvedWorkflowKey,
     resolvedModelKey,
     requestedDurationSec: Number.isFinite(requestedDurationSec) ? Math.max(0, requestedDurationSec) : undefined,
@@ -9374,7 +9374,8 @@ Aspect ratio: ${imageFormat}`,
     const effectiveRenderMode = targetScene?.renderMode || (effectiveLipSync ? "avatar_lipsync" : "standard_video");
     const effectiveVideoProvider = resolveScenarioSceneVideoProvider(targetScene);
 
-    if (effectiveLipSync && !targetScene?.audioSliceUrl) {
+    const attachedAudioSliceUrl = String(targetScene?.audioSliceUrl || "").trim();
+    if (effectiveLipSync && !attachedAudioSliceUrl) {
       setScenarioVideoError("Для lipSync сначала возьмите аудио");
       return;
     }
@@ -9406,7 +9407,8 @@ Aspect ratio: ${imageFormat}`,
     ) || 0;
     const requiresTwoFrames = Boolean(targetScene?.requiresTwoFrames ?? targetScene?.needsTwoFrames ?? imageStrategy === "first_last");
     const requiresContinuation = Boolean(targetScene?.requiresContinuation ?? targetScene?.continuationFromPrevious ?? imageStrategy === "continuation");
-    const requiresAudioSensitiveVideo = resolvedWorkflowKey === "lip_sync";
+    const requiresAudioSensitiveVideo = resolvedWorkflowKey === "lip_sync" || Boolean(effectiveLipSync);
+    const shouldAttachAudioSlice = Boolean(attachedAudioSliceUrl) && (requiresAudioSensitiveVideo || Boolean(effectiveLipSync));
     const continuationSourceSceneId = requiresContinuation
       ? String(targetPreviousScene?.sceneId || "").trim()
       : "";
@@ -9506,9 +9508,9 @@ Aspect ratio: ${imageFormat}`,
         imageUrl: sourceImageUrl,
         startImageUrl: effectiveStartImageUrl,
         endImageUrl,
-        audioSliceUrl: requiresAudioSensitiveVideo ? (targetScene.audioSliceUrl || "") : "",
-        external_audio_used: requiresAudioSensitiveVideo,
-        external_audio_reason: requiresAudioSensitiveVideo ? "lip_sync_scene" : "not_applicable_non_lipsync",
+        audioSliceUrl: shouldAttachAudioSlice ? attachedAudioSliceUrl : "",
+        external_audio_used: shouldAttachAudioSlice,
+        external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
         videoPrompt: finalVideoPrompt,
         sceneHumanVisualAnchors,
         transitionActionPrompt,
@@ -9615,9 +9617,9 @@ Aspect ratio: ${imageFormat}`,
         imageUrl: sourceImageUrl,
         startImageUrl: effectiveStartImageUrl,
         endImageUrl,
-        audioSliceUrl: requiresAudioSensitiveVideo ? (targetScene.audioSliceUrl || "") : "",
-        external_audio_used: requiresAudioSensitiveVideo,
-        external_audio_reason: requiresAudioSensitiveVideo ? "lip_sync_scene" : "not_applicable_non_lipsync",
+        audioSliceUrl: shouldAttachAudioSlice ? attachedAudioSliceUrl : "",
+        external_audio_used: shouldAttachAudioSlice,
+        external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
         videoPrompt: finalVideoPrompt,
         transitionActionPrompt,
         transitionType,
