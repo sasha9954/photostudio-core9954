@@ -189,6 +189,14 @@ const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
   "no dynamic range drift",
   "no sharpness regime shift",
 ];
+
+const normalizeScenarioWorkflowKeyForProduction = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "i2v_as") return "i2v";
+  if (normalized === "f_l_as") return "f_l";
+  return normalized;
+};
+
 const GLOBAL_FORBIDDEN_INSERTIONS_GUARDS = [
   "do not introduce a different visual style",
   "do not introduce a different lens feel",
@@ -312,7 +320,7 @@ function buildScenarioSceneContractPayload(scene = {}) {
   const forbiddenChanges = mergeScenarioStringLists(scene?.forbiddenChanges, GLOBAL_FORBIDDEN_CHANGES_GUARDS);
   const imageStrategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase() || "single";
   const explicitWorkflow = resolveScenarioExplicitWorkflowKey(scene);
-  const resolvedWorkflowKey = String(scene?.resolvedWorkflowKey || explicitWorkflow || resolveScenarioWorkflowKey(scene)).trim();
+  const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(scene?.resolvedWorkflowKey || explicitWorkflow || resolveScenarioWorkflowKey(scene));
   const explicitModel = resolveScenarioExplicitModelKey(scene);
   const resolvedModelKey = String(scene?.resolvedModelKey || explicitModel).trim();
   const requestedDurationSec = Number(
@@ -366,10 +374,7 @@ function buildScenarioSceneContractPayload(scene = {}) {
     continuationSourceSceneId: String(scene?.continuationSourceSceneId || "").trim(),
     continuationSourceAssetUrl: String(scene?.continuationSourceAssetUrl || "").trim(),
     continuationSourceAssetType: String(scene?.continuationSourceAssetType || "").trim(),
-    requiresAudioSensitiveVideo: Boolean(
-      scene?.requiresAudioSensitiveVideo
-      ?? ["i2v_as", "f_l_as", "lip_sync"].includes(String(scene?.ltxMode || "").trim().toLowerCase())
-    ),
+    requiresAudioSensitiveVideo: resolvedWorkflowKey === "lip_sync",
     resolvedWorkflowKey,
     resolvedModelKey,
     requestedDurationSec: Number.isFinite(requestedDurationSec) ? Math.max(0, requestedDurationSec) : undefined,
@@ -401,12 +406,12 @@ function resolveContinuationSourceFromPreviousScene(previousScene = null) {
 
 function resolveScenarioSceneVideoProvider(scene = {}) {
   const rawProvider = String(scene?.sceneRenderProvider || "").trim().toLowerCase();
-  const resolvedWorkflowKey = String(
+  const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
     scene?.resolvedWorkflowKey
     || resolveScenarioExplicitWorkflowKey(scene)
     || resolveScenarioWorkflowKey(scene)
     || ""
-  ).trim().toLowerCase();
+  );
   const isLipSyncWorkflow = resolvedWorkflowKey === "lip_sync";
   const hasLtxContract = Boolean(
     String(scene?.ltxMode || "").trim()
@@ -416,7 +421,7 @@ function resolveScenarioSceneVideoProvider(scene = {}) {
     || scene?.needsTwoFrames
     || scene?.requiresTwoFrames
     || scene?.requiresContinuation
-    || scene?.requiresAudioSensitiveVideo
+    || resolvedWorkflowKey === "lip_sync"
   );
   if (rawProvider) {
     if (isLipSyncWorkflow) return rawProvider;
@@ -5481,7 +5486,7 @@ function StoryboardPlanNode({ id, data }) {
                           value={s.executorModel}
                           onChange={(event) => data?.onStoryboardSceneGenerationUpdate?.(id, s.sceneId, { model: event.target.value })}
                         >
-                          {["i2v", "i2v_as", "f_l", "f_l_as", "continuation"].map((option) => (
+                          {["i2v", "f_l", "continuation"].map((option) => (
                             <option key={option} value={option}>{option}</option>
                           ))}
                         </select>
@@ -6908,7 +6913,7 @@ const comfyShowVideoSection = Boolean(
       provider: String(jobMeta?.provider || sceneSnapshot?.sceneRenderProvider || "comfy_remote").trim() || "comfy_remote",
       workflowKey: String(jobMeta?.workflowKey || sceneSnapshot?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneSnapshot || {}) || "").trim(),
       modelKey: String(jobMeta?.modelKey || sceneSnapshot?.resolvedModelKey || resolveScenarioExplicitModelKey(sceneSnapshot || {}) || "").trim(),
-      audioSensitive: Boolean(jobMeta?.audioSensitive ?? sceneSnapshot?.requiresAudioSensitiveVideo),
+      audioSensitive: Boolean(jobMeta?.audioSensitive ?? normalizeScenarioWorkflowKeyForProduction(sceneSnapshot?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneSnapshot || {})) === "lip_sync"),
       continuation: Boolean(jobMeta?.continuation ?? sceneSnapshot?.requiresContinuation ?? sceneSnapshot?.continuationFromPrevious),
       continuationSourceSceneId: String(jobMeta?.continuationSourceSceneId || sceneSnapshot?.continuationSourceSceneId || "").trim(),
       continuationSourceAssetType: String(jobMeta?.continuationSourceAssetType || sceneSnapshot?.continuationSourceAssetType || "").trim(),
@@ -7191,7 +7196,7 @@ const comfyShowVideoSection = Boolean(
           workflowKey: String(meta?.workflowKey || sceneNow?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneNow || {}) || ""),
           modelKey: String(meta?.modelKey || sceneNow?.resolvedModelKey || resolveScenarioExplicitModelKey(sceneNow || {}) || ""),
           provider: String(meta?.provider || sceneNow?.sceneRenderProvider || "comfy_remote"),
-          audioSensitive: Boolean(meta?.audioSensitive ?? sceneNow?.requiresAudioSensitiveVideo),
+          audioSensitive: Boolean(meta?.audioSensitive ?? normalizeScenarioWorkflowKeyForProduction(sceneNow?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneNow || {})) === "lip_sync"),
           continuation: Boolean(meta?.continuation ?? sceneNow?.requiresContinuation ?? sceneNow?.continuationFromPrevious),
           continuationSourceSceneId: String(meta?.continuationSourceSceneId || sceneNow?.continuationSourceSceneId || ""),
           continuationSourceAssetType: String(meta?.continuationSourceAssetType || sceneNow?.continuationSourceAssetType || ""),
@@ -9055,18 +9060,16 @@ Aspect ratio: ${imageFormat}`,
     const sceneId = String(targetScene?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
     const explicitWorkflow = resolveScenarioExplicitWorkflowKey(targetScene);
-    const resolvedWorkflowKey = String(
+    const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
       explicitWorkflow
       || targetScene?.resolvedWorkflowKey
       || resolveScenarioWorkflowKey(targetScene)
-    ).trim();
+    );
     const explicitModel = resolveScenarioExplicitModelKey(targetScene);
     const workflowDefaultModelMap = {
       i2v: "ltx23_dev_fp8",
-      i2v_as: "ltx23_dev_fp8",
       lip_sync: "ltx23_dev_fp8",
       f_l: "ltx23_distilled_fp8",
-      f_l_as: "ltx23_distilled_fp8",
     };
     const resolvedModelKey = String(
       explicitModel
@@ -9081,10 +9084,7 @@ Aspect ratio: ${imageFormat}`,
     ) || 0;
     const requiresTwoFrames = Boolean(targetScene?.requiresTwoFrames ?? targetScene?.needsTwoFrames ?? imageStrategy === "first_last");
     const requiresContinuation = Boolean(targetScene?.requiresContinuation ?? targetScene?.continuationFromPrevious ?? imageStrategy === "continuation");
-    const requiresAudioSensitiveVideo = Boolean(
-      targetScene?.requiresAudioSensitiveVideo
-      ?? ["i2v_as", "f_l_as", "lip_sync"].includes(String(targetScene?.ltxMode || "").trim().toLowerCase())
-    );
+    const requiresAudioSensitiveVideo = resolvedWorkflowKey === "lip_sync";
     const continuationSourceSceneId = requiresContinuation
       ? String(targetPreviousScene?.sceneId || "").trim()
       : "";
@@ -9177,7 +9177,9 @@ Aspect ratio: ${imageFormat}`,
           imageUrl: sourceImageUrl,
           startImageUrl: effectiveStartImageUrl,
           endImageUrl,
-          audioSliceUrl: targetScene.audioSliceUrl || "",
+          audioSliceUrl: requiresAudioSensitiveVideo ? (targetScene.audioSliceUrl || "") : "",
+          external_audio_used: requiresAudioSensitiveVideo,
+          external_audio_reason: requiresAudioSensitiveVideo ? "lip_sync_scene" : "not_applicable_non_lipsync",
           videoPrompt: finalVideoPrompt,
           transitionActionPrompt,
           transitionType,
@@ -9263,7 +9265,9 @@ Aspect ratio: ${imageFormat}`,
           imageUrl: sourceImageUrl,
           startImageUrl: effectiveStartImageUrl,
           endImageUrl,
-          audioSliceUrl: targetScene.audioSliceUrl || "",
+          audioSliceUrl: requiresAudioSensitiveVideo ? (targetScene.audioSliceUrl || "") : "",
+          external_audio_used: requiresAudioSensitiveVideo,
+          external_audio_reason: requiresAudioSensitiveVideo ? "lip_sync_scene" : "not_applicable_non_lipsync",
           videoPrompt: finalVideoPrompt,
           transitionActionPrompt,
           transitionType,

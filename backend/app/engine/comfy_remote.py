@@ -38,32 +38,31 @@ COMFY_AUDIO_INPUT_KEYS = ("audio", "audio_file", "audio_path", "path", "filename
 
 COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "i2v": {"single_image": True, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": False},
-    "i2v_as": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": False, "continuation": False},
     "f_l": {"single_image": False, "first_last": True, "audio_sensitive": False, "lip_sync": False, "continuation": False},
-    "f_l_as": {"single_image": False, "first_last": True, "audio_sensitive": True, "lip_sync": False, "continuation": False},
     "continuation": {"single_image": False, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": True},
     "lip_sync": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": True, "continuation": False},
 }
+COMFY_LEGACY_WORKFLOW_ALIASES = {"i2v_as": "i2v", "f_l_as": "f_l"}
 MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
         "key": "ltx23_dev_fp8",
         "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
     "ltx23_distilled_fp8": {
         "key": "ltx23_distilled_fp8",
         "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
     "ltx23_dev_fp16": {
         "key": "ltx23_dev_fp16",
         "ckpt_name": "ltx-2.3-22b-dev-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
     "ltx23_distilled_fp16": {
         "key": "ltx23_distilled_fp16",
         "ckpt_name": "ltx-2.3-22b-distilled-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
     "ltx23_13b_dev_fp8": {
         "key": "ltx23_13b_dev_fp8",
@@ -89,24 +88,25 @@ def _validate_comfy_ltx_request(
     continuation_source_asset_url: str | None = None,
     continuation_source_asset_type: str | None = None,
 ) -> tuple[str | None, str | None]:
-    key = str(workflow_key or "i2v").strip().lower() or "i2v"
+    raw_key = str(workflow_key or "i2v").strip().lower() or "i2v"
+    key = COMFY_LEGACY_WORKFLOW_ALIASES.get(raw_key, raw_key)
     requirements = COMFY_LTX_WORKFLOW_REQUIREMENTS.get(key)
     if not requirements:
         return "LTX_MODE_NOT_IMPLEMENTED", f"workflow_key_not_supported:{key}"
 
+    if requirements["lip_sync"] and not (audio_bytes or str(audio_url or "").strip()):
+        return "LTX_AUDIO_REQUIRED_FOR_LIPSYNC", "audio_input_required_for_lip_sync_mode"
     if requirements["lip_sync"] and not COMFY_LTX_CAPABILITIES["lip_sync"]:
         return "LTX_LIPSYNC_NOT_IMPLEMENTED", "lip_sync_mode_not_implemented_for_comfy_remote"
     if requirements["first_last"] and not COMFY_LTX_CAPABILITIES["first_last"]:
         return "LTX_FIRST_LAST_NOT_IMPLEMENTED", "first_last_mode_not_implemented_for_comfy_remote"
-    if requirements["audio_sensitive"] and not COMFY_LTX_CAPABILITIES["audio_sensitive"]:
-        return "LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED", "audio_sensitive_mode_not_implemented_for_comfy_remote"
+    if requirements["lip_sync"] and requirements["audio_sensitive"] and not COMFY_LTX_CAPABILITIES["audio_sensitive"]:
+        return "LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED", "lip_sync_audio_path_not_implemented_for_comfy_remote"
     if requirements["single_image"] and not COMFY_LTX_CAPABILITIES["single_image"]:
         return "LTX_MODE_NOT_IMPLEMENTED", "single_image_mode_not_implemented_for_comfy_remote"
 
     if requirements["first_last"] and not (start_image_bytes and end_image_bytes):
         return "LTX_SECOND_FRAME_REQUIRED", "start_image_and_end_image_required_for_first_last_mode"
-    if requirements["audio_sensitive"] and not (audio_bytes or str(audio_url or "").strip()):
-        return "LTX_AUDIO_REQUIRED", "audio_input_required_for_audio_sensitive_mode"
     if requirements["continuation"]:
         source_url = str(continuation_source_asset_url or "").strip()
         if not source_url:
@@ -791,7 +791,8 @@ def run_comfy_image_to_video(
     requested_mode: str | None = None,
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
-    normalized_workflow_key = str(workflow_key or "i2v").strip().lower() or "i2v"
+    raw_workflow_key = str(workflow_key or "i2v").strip().lower() or "i2v"
+    normalized_workflow_key = COMFY_LEGACY_WORKFLOW_ALIASES.get(raw_workflow_key, raw_workflow_key)
     normalized_model_key = str(model_key or "").strip().lower()
     effective_model_spec = model_spec if isinstance(model_spec, dict) else MODEL_KEY_TO_MODEL_SPEC.get(normalized_model_key)
     if not effective_model_spec:
@@ -845,11 +846,11 @@ def run_comfy_image_to_video(
     effective_prompt = str(prompt or "").strip()
     uploaded_start_name = uploaded_name
     uploaded_end_name = ""
-    if start_image_bytes and normalized_workflow_key in {"f_l", "f_l_as"}:
+    if start_image_bytes and normalized_workflow_key in {"f_l"}:
         uploaded_start_name, start_upload_err = upload_image_to_comfy(start_image_bytes, f"{Path(image_filename).stem}_start.jpg")
         if start_upload_err or not uploaded_start_name:
             return None, f"upload_failed:{start_upload_err or 'start_image_upload_failed'}"
-    if end_image_bytes and normalized_workflow_key in {"f_l", "f_l_as"}:
+    if end_image_bytes and normalized_workflow_key in {"f_l"}:
         uploaded_end_name, end_upload_err = upload_image_to_comfy(end_image_bytes, f"{Path(image_filename).stem}_end.jpg")
         if end_upload_err or not uploaded_end_name:
             return None, f"upload_failed:{end_upload_err or 'end_image_upload_failed'}"
@@ -874,7 +875,7 @@ def run_comfy_image_to_video(
     first_last_applied = False
     first_last_start_node_ids: list[str] = []
     first_last_end_node_ids: list[str] = []
-    if normalized_workflow_key in {"f_l", "f_l_as"}:
+    if normalized_workflow_key in {"f_l"}:
         if not uploaded_end_name:
             return None, "capability_error:LTX_SECOND_FRAME_REQUIRED:end_image_missing_for_first_last_workflow"
         first_last_applied, first_last_start_node_ids, first_last_end_node_ids = _patch_first_last_images(
@@ -885,7 +886,7 @@ def run_comfy_image_to_video(
         if not first_last_applied:
             return None, "capability_error:LTX_FIRST_LAST_NOT_IMPLEMENTED:second_frame_patch_not_applied"
     audio_patch_node_ids: list[str] = []
-    if normalized_workflow_key in {"i2v_as", "f_l_as"}:
+    if normalized_workflow_key == "lip_sync":
         valid_audio_workflow, workflow_audio_err = _validate_audio_workflow_file(
             workflow_key=normalized_workflow_key,
             workflow_source=workflow_source,
@@ -898,7 +899,7 @@ def run_comfy_image_to_video(
         )
         if audio_patch_err:
             if audio_patch_err == "audio_loader_nodes_not_found":
-                return None, "capability_error:LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED:audio_sensitive_mode_requested_but_audio_loader_nodes_not_found"
+                return None, "capability_error:LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED:lip_sync_mode_requested_but_audio_loader_nodes_not_found"
             return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{audio_patch_err}"
     continuation_used = False
     continuation_asset_type = _detect_continuation_asset_type(continuation_source_asset_url, continuation_source_asset_type)

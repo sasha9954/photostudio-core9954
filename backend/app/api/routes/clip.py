@@ -558,16 +558,16 @@ LTX_WORKFLOW_FILE_TO_KEY = {
     "image-lipsink-video-music.json": "lip_sync",
 }
 
-LTX_SINGLE_IMAGE_WORKFLOW_KEYS = {"i2v", "i2v_as", "lip_sync"}
-LTX_FIRST_LAST_WORKFLOW_KEYS = {"f_l", "f_l_as"}
-LTX_AUDIO_SENSITIVE_WORKFLOW_KEYS = {"i2v_as", "f_l_as", "lip_sync"}
+LTX_SINGLE_IMAGE_WORKFLOW_KEYS = {"i2v", "lip_sync"}
+LTX_FIRST_LAST_WORKFLOW_KEYS = {"f_l"}
 LTX_CONTINUATION_WORKFLOW_KEYS = {"continuation"}
+LTX_LEGACY_WORKFLOW_ALIASES = {"i2v_as": "i2v", "f_l_as": "f_l"}
 
 LTX_MODE_TO_WORKFLOW_KEY = {
     "i2v": "i2v",
-    "i2v_as": "i2v_as",
+    "i2v_as": "i2v",
     "f_l": "f_l",
-    "f_l_as": "f_l_as",
+    "f_l_as": "f_l",
     "continuation": "continuation",
     "lip_sync": "lip_sync",
 }
@@ -617,9 +617,9 @@ def _normalize_ltx_workflow_key(candidate: str | None) -> str:
     if not raw:
         return ""
     if raw in LTX_WORKFLOW_KEY_TO_FILE:
-        return raw
+        return LTX_LEGACY_WORKFLOW_ALIASES.get(raw, raw)
     if raw in LTX_WORKFLOW_FILE_TO_KEY:
-        return LTX_WORKFLOW_FILE_TO_KEY[raw]
+        return LTX_LEGACY_WORKFLOW_ALIASES.get(LTX_WORKFLOW_FILE_TO_KEY[raw], LTX_WORKFLOW_FILE_TO_KEY[raw])
     return ""
 
 
@@ -739,11 +739,8 @@ def _validate_ltx_workflow_strategy(
         if not (has_image or has_start or has_end):
             return "VIDEO_SOURCE_IMAGE_REQUIRED", "imageUrl_or_startImageUrl_required"
 
-    if workflow_key in LTX_AUDIO_SENSITIVE_WORKFLOW_KEYS and not has_audio:
-        return "LTX_AUDIO_REQUIRED", "audio_input_required_for_audio_sensitive_workflow"
-
     if workflow_key == "lip_sync" and not has_audio:
-        return "LTX_LIPSYNC_NOT_IMPLEMENTED", "audio_input_required_for_lip_sync_workflow"
+        return "LTX_AUDIO_REQUIRED_FOR_LIPSYNC", "audioSliceUrl_required_for_lip_sync_workflow"
 
     return None, None
 
@@ -9359,10 +9356,10 @@ def clip_video(payload: ClipVideoIn):
                     status_code=400,
                     content={"ok": False, "code": "VIDEO_SOURCE_IMAGE_REQUIRED", "hint": f"first_last_image_download_failed:{str(exc)[:240]}"},
                 )
-        if final_workflow_key in LTX_AUDIO_SENSITIVE_WORKFLOW_KEYS and not audio_slice_url:
+        if final_workflow_key == "lip_sync" and not audio_slice_url:
             return JSONResponse(
                 status_code=422,
-                content={"ok": False, "code": "LTX_AUDIO_REQUIRED", "hint": "audioSliceUrl_required_for_audio_sensitive_workflow"},
+                content={"ok": False, "code": "LTX_AUDIO_REQUIRED_FOR_LIPSYNC", "hint": "audioSliceUrl_required_for_lip_sync_workflow"},
             )
 
         image_filename = f"{scene_id}_{int(time.time())}.{(image_ext or 'jpg').lower()}"

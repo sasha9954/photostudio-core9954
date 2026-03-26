@@ -6,17 +6,17 @@ const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 export const SCENARIO_LTX_WORKFLOW_MAP = {
   i2v: "i2v",
-  i2v_as: "i2v_as",
+  i2v_as: "i2v",
   f_l: "f_l",
-  f_l_as: "f_l_as",
+  f_l_as: "f_l",
   continuation: "continuation",
   lip_sync: "lip_sync",
 };
 const SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY = {
   "image-video.json": "i2v",
-  "image-video-golos-zvuk.json": "i2v_as",
+  "image-video-golos-zvuk.json": "i2v",
   "imag-imag-video-bz.json": "f_l",
-  "imag-imag-video-zvuk.json": "f_l_as",
+  "imag-imag-video-zvuk.json": "f_l",
   "image-lipsink-video-music.json": "lip_sync",
 };
 export const SCENARIO_MODEL_KEY_TO_SPEC = {
@@ -53,10 +53,8 @@ export const SCENARIO_MODEL_KEY_TO_SPEC = {
 };
 const SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY = {
   i2v: "ltx23_dev_fp8",
-  i2v_as: "ltx23_dev_fp8",
   lip_sync: "ltx23_dev_fp8",
   f_l: "ltx23_distilled_fp8",
-  f_l_as: "ltx23_distilled_fp8",
 };
 const SCENARIO_MODEL_KEY_ALIASES = {
   "ltx-2.3": "ltx23_dev_fp8",
@@ -273,8 +271,9 @@ export function detectScenarioAssetType({ url = "", mime = "", extension = "", p
 
 export function deriveScenarioImageStrategy(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
-  const ltxMode = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
-  const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l", "f_l_as"].includes(ltxMode);
+  const ltxModeRaw = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
+  const ltxMode = SCENARIO_LTX_WORKFLOW_MAP[ltxModeRaw] || ltxModeRaw;
+  const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l"].includes(ltxMode);
   const requiresContinuation = Boolean(source.continuation ?? source.continuationFromPrevious ?? source.continuation_from_previous) || ltxMode === "continuation";
   if (requiresTwoFrames) return "first_last";
   if (requiresContinuation) return "continuation";
@@ -378,7 +377,7 @@ function resolveScenarioRenderProvider(source = {}, scenarioPackage = null) {
     || source.needs_two_frames
     || source.requiresTwoFrames
     || source.requiresContinuation
-    || source.requiresAudioSensitiveVideo
+    || normalizeText(source.resolvedWorkflowKey || resolveScenarioExplicitWorkflowKey(source) || resolveScenarioWorkflowKey(source)).toLowerCase() === "lip_sync"
   );
   for (const candidate of providerCandidates) {
     const normalized = normalizeText(candidate).toLowerCase();
@@ -472,15 +471,15 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const explicitWorkflowKey = resolveScenarioExplicitWorkflowKey(source);
   const continuationRequested = Boolean(source.continuation ?? source.continuationFromPrevious ?? source.continuation_from_previous);
   const ltxModeFromSource = normalizeText(source.ltxMode ?? source.ltx_mode);
-  const ltxMode = ltxModeFromSource || (continuationRequested ? "continuation" : "i2v_as");
+  const ltxMode = SCENARIO_LTX_WORKFLOW_MAP[ltxModeFromSource.toLowerCase()] || ltxModeFromSource || (continuationRequested ? "continuation" : "i2v");
   const ltxModeNormalized = ltxMode.toLowerCase();
   const renderMode = normalizeText(source.renderMode)
-    || (["f_l", "f_l_as"].includes(ltxMode) ? "first_last" : "image_to_video");
-  const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l", "f_l_as"].includes(ltxModeNormalized);
+    || (["f_l"].includes(ltxMode) ? "first_last" : "image_to_video");
+  const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l"].includes(ltxModeNormalized);
   const requiresContinuation = continuationRequested || ltxModeNormalized === "continuation" || explicitWorkflowKey === "continuation";
-  const requiresAudioSensitiveVideo = ["i2v_as", "f_l_as", "lip_sync"].includes(ltxModeNormalized);
   const imageStrategy = deriveScenarioImageStrategy(source);
   const resolvedWorkflowKey = explicitWorkflowKey || resolveScenarioWorkflowKey(source);
+  const requiresAudioSensitiveVideo = resolvedWorkflowKey === "lip_sync";
   const resolvedModelKey = resolveScenarioExplicitModelKey(source) || SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY[resolvedWorkflowKey] || "";
   const sceneRenderProvider = resolveScenarioRenderProvider(source, scenarioPackage);
   const requestedDurationSec = normalizeDurationFromScene(source, durationSec);
