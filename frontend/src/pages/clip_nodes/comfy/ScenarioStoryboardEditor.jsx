@@ -256,11 +256,17 @@ export default function ScenarioStoryboardEditor({
   const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();
   const hasSceneVideo = Boolean(sceneVideoUrl);
   const bgMusicSource = resolveMusicSource(safeAudioData);
-  const globalMusicPrompt = String(
-    safeAudioData?.globalMusicPrompt
+  const musicPromptSourceKind = String(safeAudioData?.musicPromptSourceKind || "").trim().toLowerCase() || "empty";
+  const musicPromptSourceText = String(
+    safeAudioData?.musicPromptSourceText
+    || safeAudioData?.globalMusicPrompt
     || safeAudioData?.musicPromptRu
     || safeAudioData?.musicPromptEn
     || "",
+  ).trim();
+  const fallbackMusicPrompt = String(safeAudioData?.fallbackMusicPrompt || "").trim();
+  const globalMusicPrompt = String(
+    musicPromptSourceText
   ).trim();
   const hasBgMusicPrompt = Boolean(globalMusicPrompt);
   const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
@@ -276,6 +282,11 @@ export default function ScenarioStoryboardEditor({
   const bgSourceStatusLabel = hasBgMusic && bgMusicSource !== "none" ? `source: ${bgMusicSource}` : "";
   const bgPromptStatusLabel = hasBgMusicPrompt ? "prompt: есть" : "prompt: нет";
   const editorPromptVisible = hasBgMusicPrompt;
+  const musicPromptSourceLabel = musicPromptSourceKind === "real"
+    ? "generated music prompt"
+    : musicPromptSourceKind === "fallback"
+      ? "fallback music prompt (derived from mood/style/pacing)"
+      : "music prompt not provided";
 
   useEffect(() => {
     if (!CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) return;
@@ -537,9 +548,23 @@ export default function ScenarioStoryboardEditor({
                       className="clipSB_textarea clipSB_scenarioBgAudioPrompt"
                       rows={3}
                       value={globalMusicPrompt}
-                      onChange={(event) => onUpdateMusic?.(nodeId, { musicPromptRu: event.target.value, globalMusicPrompt: event.target.value })}
+                      onChange={(event) => onUpdateMusic?.(nodeId, {
+                        musicPromptRu: event.target.value,
+                        globalMusicPrompt: event.target.value,
+                        musicPromptSourceText: event.target.value,
+                        musicPromptSourceKind: event.target.value.trim() ? "real" : "empty",
+                      })}
                       placeholder="Сценарист ещё не предложил фоновую музыку"
                     />
+                    <div className="clipSB_hint" style={{ marginTop: 6 }}>
+                      {musicPromptSourceLabel}
+                    </div>
+                    {musicPromptSourceKind === "empty" ? (
+                      <div className="clipSB_hint">music prompt not provided</div>
+                    ) : null}
+                    {musicPromptSourceKind === "fallback" && fallbackMusicPrompt ? (
+                      <div className="clipSB_hint">derived fallback length: {fallbackMusicPrompt.length}</div>
+                    ) : null}
                     <details>
                       <summary>EN</summary>
                       <textarea

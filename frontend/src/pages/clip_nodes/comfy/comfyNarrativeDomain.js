@@ -275,7 +275,8 @@ function resolveDirectorGlobalMusicPrompt(response = {}, storyboardOut = null, d
     || (storyboardOut?.music && typeof storyboardOut.music === "object" ? storyboardOut.music : null)
     || null
   );
-  const synthesizedPrompt = flatPrompt ? "" : buildGlobalMusicPromptFromStructuredMusic(structuredMusic);
+  const shouldSkipStructuredFallback = Boolean(structuredMusic?.__isDerivedFallback);
+  const synthesizedPrompt = (flatPrompt || shouldSkipStructuredFallback) ? "" : buildGlobalMusicPromptFromStructuredMusic(structuredMusic);
   const resolvedPrompt = flatPrompt || synthesizedPrompt;
   if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC_SYNTH) {
     console.debug("[SCENARIO GLOBAL MUSIC SYNTH]", {
@@ -552,6 +553,7 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
     ?? storyboardOut?.music_prompt
     ?? storyboardOut?.bgMusicPrompt
   );
+  const hasRealGlobalMusicPrompt = Boolean(globalMusicPrompt);
   const normalizedScenes = scenes.map((scene, index) => {
     const ltxMode = normalizeText(scene.ltx_mode) || "i2v";
     return {
@@ -613,6 +615,7 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
       mood: normalizeText(state.styleProfile) || "realistic",
       style: `${normalizeText(state.contentType) || "story"} / ${normalizeText(state.styleProfile) || "realistic"}`,
       pacingHints: "Use the approved storyboard_out pacing when Storyboard executes the scenes.",
+      __isDerivedFallback: !hasRealGlobalMusicPrompt,
     },
     globalMusicPrompt,
   };

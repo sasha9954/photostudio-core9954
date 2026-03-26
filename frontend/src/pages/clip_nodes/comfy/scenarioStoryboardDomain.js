@@ -267,7 +267,8 @@ function resolveScenarioGlobalMusicPrompt(storyboardOut = {}, directorOutput = {
     || (storyboardOut?.music && typeof storyboardOut.music === "object" ? storyboardOut.music : null)
     || null
   );
-  const synthesizedPrompt = flatPrompt ? "" : buildGlobalMusicPromptFromStructuredMusic(structuredMusic);
+  const shouldSkipStructuredFallback = Boolean(structuredMusic?.__isDerivedFallback);
+  const synthesizedPrompt = (flatPrompt || shouldSkipStructuredFallback) ? "" : buildGlobalMusicPromptFromStructuredMusic(structuredMusic);
   if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) {
     console.debug("[SCENARIO GLOBAL MUSIC SYNTH]", {
       hasFlatPrompt: !!flatPrompt,
@@ -279,6 +280,50 @@ function resolveScenarioGlobalMusicPrompt(storyboardOut = {}, directorOutput = {
     });
   }
   return flatPrompt || synthesizedPrompt;
+}
+
+function resolveScenarioMusicPromptSource(storyboardOut = {}, directorOutput = {}) {
+  const storyboardMusicPrompt = normalizeText(storyboardOut?.music_prompt);
+  const storyboardGlobalMusicPrompt = normalizeText(storyboardOut?.globalMusicPrompt);
+  const directorMusicPrompt = normalizeText(directorOutput?.music_prompt);
+  const directorGlobalMusicPrompt = normalizeText(directorOutput?.globalMusicPrompt ?? directorOutput?.music?.globalMusicPrompt);
+  const musicPromptRu = normalizeText(
+    storyboardOut?.musicPromptRu
+    ?? storyboardOut?.music_prompt_ru
+    ?? directorOutput?.musicPromptRu
+    ?? directorOutput?.music_prompt_ru
+  );
+  const musicPromptEn = normalizeText(
+    storyboardOut?.musicPromptEn
+    ?? storyboardOut?.music_prompt_en
+    ?? directorOutput?.musicPromptEn
+    ?? directorOutput?.music_prompt_en
+  );
+
+  const realMusicPrompt = (
+    storyboardMusicPrompt
+    || storyboardGlobalMusicPrompt
+    || directorMusicPrompt
+    || directorGlobalMusicPrompt
+    || musicPromptRu
+    || musicPromptEn
+  );
+  const fallbackMusicPrompt = resolveScenarioGlobalMusicPrompt(storyboardOut, directorOutput);
+  if (realMusicPrompt) {
+    return {
+      kind: "real",
+      text: realMusicPrompt,
+      fallbackText: fallbackMusicPrompt && fallbackMusicPrompt !== realMusicPrompt ? fallbackMusicPrompt : "",
+    };
+  }
+  if (fallbackMusicPrompt) {
+    return {
+      kind: "fallback",
+      text: fallbackMusicPrompt,
+      fallbackText: fallbackMusicPrompt,
+    };
+  }
+  return { kind: "empty", text: "", fallbackText: "" };
 }
 
 export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = null) {
@@ -549,6 +594,7 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   const actors = Array.from(new Set(scenes.flatMap((scene) => (Array.isArray(scene.actors) ? scene.actors : [])).filter(Boolean)));
   const locations = Array.from(new Set(scenes.map((scene) => normalizeText(scene.locationEn || scene.locationRu)).filter(Boolean)));
   const globalMusicPrompt = resolveScenarioGlobalMusicPrompt(storyboardOut || {}, directorOutput || {});
+  const musicPromptSource = resolveScenarioMusicPromptSource(storyboardOut || {}, directorOutput || {});
   const musicPromptRu = normalizeText(
     storyboardOut?.musicPromptRu
     ?? storyboardOut?.music_prompt_ru
@@ -637,6 +683,9 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
       0
     ),
     globalMusicPrompt,
+    musicPromptSourceKind: musicPromptSource.kind,
+    musicPromptSourceText: musicPromptSource.text,
+    fallbackMusicPrompt: musicPromptSource.fallbackText,
     musicPromptRu,
     musicPromptEn,
     bgMusicPrompt: normalizeText(storyboardOut?.bgMusicPrompt ?? directorOutput?.bgMusicPrompt) || globalMusicPrompt,
