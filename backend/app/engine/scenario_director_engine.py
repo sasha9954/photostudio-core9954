@@ -51,6 +51,27 @@ SCENES_JSON_RETRY_SUFFIX = (
 
 logger = logging.getLogger(__name__)
 
+SCENARIO_CANONICAL_ROLES = (
+    "character_1",
+    "character_2",
+    "character_3",
+    "animal",
+    "animal_1",
+    "group",
+    "group_faces",
+    "location",
+    "style",
+    "props",
+)
+SCENARIO_CAST_ROLES = {"character_1", "character_2", "character_3", "animal", "animal_1", "group", "group_faces"}
+SCENARIO_ROLE_ALIASES = {
+    "character1": "character_1",
+    "character2": "character_2",
+    "character3": "character_3",
+    "animal1": "animal_1",
+    "group_face": "group_faces",
+}
+
 WEAK_SCENE_PATTERNS = (
     "character walks",
     "walks with determination",
@@ -1256,6 +1277,71 @@ def _resolve_effective_role_type_by_role(payload: dict[str, Any]) -> tuple[dict[
     return effective, source_map, role_override_applied
 
 
+def _normalize_scenario_role(role: Any) -> str:
+    clean = str(role or "").strip().lower()
+    if not clean:
+        return ""
+    return SCENARIO_ROLE_ALIASES.get(clean, clean)
+
+
+def _collect_known_roles(payload: dict[str, Any], scenes: list[ScenarioDirectorScene]) -> list[str]:
+    refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    connected_refs = payload.get("connectedRefsByRole") if isinstance(payload.get("connectedRefsByRole"), dict) else {}
+    connected_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
+    connected_summary_refs = connected_summary.get("refsByRole") if isinstance(connected_summary.get("refsByRole"), dict) else {}
+    raw_role_types = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
+    effective_role_types, _, _ = _resolve_effective_role_type_by_role(payload)
+    ordered: list[str] = []
+
+    def _push(role: Any) -> None:
+        normalized = _normalize_scenario_role(role)
+        if normalized and normalized not in ordered:
+            ordered.append(normalized)
+
+    for role in SCENARIO_CANONICAL_ROLES:
+        _push(role)
+    for role in refs.keys():
+        _push(role)
+    for role in connected_refs.keys():
+        _push(role)
+    for role in connected_summary_refs.keys():
+        _push(role)
+    for role in raw_role_types.keys():
+        _push(role)
+    for role in effective_role_types.keys():
+        _push(role)
+    for scene in scenes:
+        for actor in scene.actors:
+            _push(actor)
+    return ordered
+
+
+def _collect_refs_by_role(payload: dict[str, Any], known_roles: list[str]) -> dict[str, list[str]]:
+    refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    out: dict[str, list[str]] = {role: [] for role in known_roles}
+    for role, item in refs.items():
+        normalized_role = _normalize_scenario_role(role)
+        if not normalized_role or normalized_role not in out or not isinstance(item, dict):
+            continue
+        out[normalized_role].extend([str(ref).strip() for ref in (item.get("refs") or []) if str(ref).strip()])
+    return {role: list(dict.fromkeys(items)) for role, items in out.items() if items}
+
+
+def _collect_connected_refs_by_role(payload: dict[str, Any], known_roles: list[str]) -> dict[str, list[str]]:
+    connected_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
+    connected_raw = payload.get("connectedRefsByRole") if isinstance(payload.get("connectedRefsByRole"), dict) else {}
+    summary_refs = connected_summary.get("refsByRole") if isinstance(connected_summary.get("refsByRole"), dict) else {}
+    out: dict[str, list[str]] = {role: [] for role in known_roles}
+    for source_map in (connected_raw, summary_refs):
+        for role, refs in source_map.items():
+            normalized_role = _normalize_scenario_role(role)
+            if not normalized_role or normalized_role not in out:
+                continue
+            if isinstance(refs, list):
+                out[normalized_role].extend([str(ref).strip() for ref in refs if str(ref).strip()])
+    return {role: list(dict.fromkeys(items)) for role, items in out.items() if items}
+
+
 def _is_audio_connected(payload: dict[str, Any]) -> bool:
     audio_context = _normalize_audio_context(payload)
     source_origin = str(audio_context.get("sourceOrigin") or "connected").strip().lower()
@@ -1273,6 +1359,46 @@ def _estimate_text_overlap(text: str, anchor: str) -> float:
 
 def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> dict[str, Any]:
     role_labels = _build_reference_role_map(payload)
+    known_roles = _collect_known_roles(payload, storyboard_out.scenes)
+    refs_by_role = _collect_refs_by_role(payload, known_roles)
+    connected_refs_by_role = _collect_connected_refs_by_role(payload, known_roles)
+    effective_role_types, role_type_source, _ = _resolve_effective_role_type_by_role(payload)
+    role_type_by_role: dict[str, str] = {}
+    raw_role_types = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
+    for role in known_roles:
+        normalized = _normalize_scenario_role(role)
+        raw_type = str(raw_role_types.get(role) or raw_role_types.get(normalized) or "").strip().lower()
+        if raw_type in ALLOWED_EXPLICIT_ROLE_TYPES:
+            role_type_by_role[normalized] = raw_type
+    for role, role_type in effective_role_types.items():
+        normalized = _normalize_scenario_role(role)
+        if normalized:
+            role_type_by_role[normalized] = str(role_type or "").strip().lower() or "auto"
+    for role in known_roles:
+        normalized = _normalize_scenario_role(role)
+        if normalized and normalized not in role_type_by_role:
+            role_type_by_role[normalized] = "auto"
+
+    connected_context_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
+    context_refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    role_presence = {
+        role for role in known_roles
+        if len(refs_by_role.get(role) or []) > 0 or len(connected_refs_by_role.get(role) or []) > 0
+    }
+    hero_participants = [role for role in known_roles if role in SCENARIO_CAST_ROLES and role_type_by_role.get(role) == "hero" and role in role_presence]
+    supporting_participants = [
+        role for role in known_roles
+        if role in SCENARIO_CAST_ROLES and role in role_presence and role_type_by_role.get(role) in {"support", "antagonist"}
+    ]
+    if not hero_participants and "character_1" in role_presence:
+        hero_participants = ["character_1"]
+    must_appear_roles = [role for role in known_roles if role in SCENARIO_CAST_ROLES and role in role_presence]
+    ref_directives = {
+        role: ("hero" if role in hero_participants else ("required" if role in must_appear_roles or role in {"location", "props"} else "optional"))
+        for role in known_roles
+        if role in refs_by_role or role in connected_refs_by_role
+    }
+
     history = {
         "summary": storyboard_out.story_summary,
         "fullScenario": storyboard_out.full_scenario,
@@ -1285,6 +1411,34 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     sound = []
     for scene in storyboard_out.scenes:
         participants = _scene_participants(scene, role_labels)
+        actor_roles: list[str] = []
+        for actor in scene.actors:
+            normalized_actor = _normalize_scenario_role(actor)
+            if normalized_actor and normalized_actor in known_roles and normalized_actor not in actor_roles:
+                actor_roles.append(normalized_actor)
+        scene_anchor_roles: list[str] = []
+        if str(scene.location or "").strip() and (refs_by_role.get("location") or connected_refs_by_role.get("location")):
+            scene_anchor_roles.append("location")
+        if scene.props and (refs_by_role.get("props") or connected_refs_by_role.get("props")):
+            scene_anchor_roles.append("props")
+        if (
+            (refs_by_role.get("style") or connected_refs_by_role.get("style"))
+            and any(str(value or "").strip() for value in [scene.frame_description, scene.action_in_frame, scene.image_prompt, scene.video_prompt, scene.camera])
+        ):
+            scene_anchor_roles.append("style")
+        scene_active_roles = list(dict.fromkeys([*actor_roles, *scene_anchor_roles]))
+        refs_used_roles: list[str] = []
+        refs_used_map: dict[str, list[str]] = {}
+        for role in dict.fromkeys([*scene_active_roles, *scene_anchor_roles]):
+            role_refs = list(dict.fromkeys([*(refs_by_role.get(role) or []), *(connected_refs_by_role.get(role) or [])]))
+            if not role_refs:
+                continue
+            refs_used_roles.append(role)
+            refs_used_map[role] = role_refs
+        primary_role = next((role for role in actor_roles if role_type_by_role.get(role) == "hero"), actor_roles[0] if actor_roles else "")
+        secondary_roles = [role for role in actor_roles if role != primary_role]
+        must_appear = [role for role in actor_roles if role in must_appear_roles]
+        support_entity_ids = [role_labels.get(role, role) for role in secondary_roles]
         scene_item = {
             "sceneId": scene.scene_id,
             "title": scene.scene_id,
@@ -1313,6 +1467,16 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "soundNotes": scene.sfx,
             "pauseDuckSilenceNotes": "",
             "musicMixHint": scene.music_mix_hint,
+            "primaryRole": primary_role,
+            "secondaryRoles": secondary_roles,
+            "sceneActiveRoles": scene_active_roles,
+            "refsUsed": refs_used_roles,
+            "refsUsedByRole": refs_used_map,
+            "mustAppear": must_appear,
+            "mustNotAppear": [],
+            "heroEntityId": role_labels.get(primary_role, primary_role) if primary_role else "",
+            "supportEntityIds": support_entity_ids,
+            "refDirectives": {role: ref_directives.get(role, "optional") for role in refs_used_roles},
         }
         scenes.append(scene_item)
         video.append(
@@ -1340,18 +1504,74 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "pauseDuckSilenceNotes": "",
             }
         )
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s primaryRole=%s", scene.scene_id, primary_role)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s secondaryRoles=%s", scene.scene_id, secondary_roles)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s sceneActiveRoles=%s", scene.scene_id, scene_active_roles)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s refsUsed=%s", scene.scene_id, refs_used_roles)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s mustAppear=%s", scene.scene_id, must_appear)
     music = {
         "globalMusicPrompt": storyboard_out.music_prompt,
         "mood": str(payload.get("director_controls", {}).get("styleProfile") or "").strip(),
         "style": f"{payload.get('director_controls', {}).get('contentType') or ''} / {payload.get('director_controls', {}).get('styleProfile') or ''}".strip(" /"),
         "pacingHints": "Use the Gemini scene pacing to build intro, escalation, climax, and resolution.",
     }
+    logger.debug("[SCENARIO DIRECTOR OUTPUT] package refsByRole keys=%s", sorted(refs_by_role.keys()))
+    logger.debug("[SCENARIO DIRECTOR OUTPUT] package connectedRefsByRole keys=%s", sorted(connected_refs_by_role.keys()))
+    logger.debug("[SCENARIO DIRECTOR OUTPUT] package roleTypeByRole=%s", role_type_by_role)
+    logger.debug("[SCENARIO DIRECTOR OUTPUT] package heroParticipants=%s", hero_participants)
+    logger.debug("[SCENARIO DIRECTOR OUTPUT] package mustAppearRoles=%s", must_appear_roles)
+    logger.debug(
+        "[SCENARIO DIRECTOR OUTPUT] package worldRefs location=%s style=%s props=%s animal_group=%s",
+        bool(refs_by_role.get("location") or connected_refs_by_role.get("location")),
+        bool(refs_by_role.get("style") or connected_refs_by_role.get("style")),
+        bool(refs_by_role.get("props") or connected_refs_by_role.get("props")),
+        bool(
+            refs_by_role.get("animal")
+            or connected_refs_by_role.get("animal")
+            or refs_by_role.get("animal_1")
+            or connected_refs_by_role.get("animal_1")
+            or refs_by_role.get("group")
+            or connected_refs_by_role.get("group")
+            or refs_by_role.get("group_faces")
+            or connected_refs_by_role.get("group_faces")
+        ),
+    )
     return {
         "history": history,
         "scenes": scenes,
         "video": video,
         "sound": sound,
         "music": music,
+        "knownRoles": known_roles,
+        "refsByRole": refs_by_role,
+        "connectedRefsByRole": connected_refs_by_role,
+        "roleTypeByRole": role_type_by_role,
+        "connected_context_summary": connected_context_summary,
+        "heroParticipants": hero_participants,
+        "supportingParticipants": supporting_participants,
+        "mustAppearRoles": must_appear_roles,
+        "context_refs": context_refs,
+        "refDirectives": ref_directives,
+        "debugRoleContract": {
+            "knownRoles": known_roles,
+            "roleTypeByRole": role_type_by_role,
+            "roleTypeSourceByRole": role_type_source,
+            "refsByRoleKeys": sorted(refs_by_role.keys()),
+            "connectedRefsByRoleKeys": sorted(connected_refs_by_role.keys()),
+            "hasLocationRef": bool(refs_by_role.get("location") or connected_refs_by_role.get("location")),
+            "hasStyleRef": bool(refs_by_role.get("style") or connected_refs_by_role.get("style")),
+            "hasPropsRef": bool(refs_by_role.get("props") or connected_refs_by_role.get("props")),
+            "hasAnimalGroupRef": bool(
+                refs_by_role.get("animal")
+                or connected_refs_by_role.get("animal")
+                or refs_by_role.get("animal_1")
+                or connected_refs_by_role.get("animal_1")
+                or refs_by_role.get("group")
+                or connected_refs_by_role.get("group")
+                or refs_by_role.get("group_faces")
+                or connected_refs_by_role.get("group_faces")
+            ),
+        },
     }
 
 
@@ -2149,7 +2369,18 @@ def _build_request_text(
     source_origin = str(normalized_audio.get("sourceOrigin") or source.get("source_origin") or payload.get("sourceOrigin") or "connected").strip().lower()
     audio_connected = bool(normalized_audio.get("hasAudio"))
     prefer_audio_over_text = _coerce_bool(normalized_audio.get("preferAudioOverText"), True)
-    role_type_by_role = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
+    raw_role_type_by_role = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
+    effective_role_type_by_role, _, _ = _resolve_effective_role_type_by_role(payload)
+    role_type_by_role: dict[str, str] = {}
+    for role, role_type in raw_role_type_by_role.items():
+        normalized_role = _normalize_scenario_role(role)
+        clean_type = str(role_type or "").strip().lower()
+        if normalized_role and clean_type in ALLOWED_EXPLICIT_ROLE_TYPES:
+            role_type_by_role[normalized_role] = clean_type
+    for role, role_type in effective_role_type_by_role.items():
+        normalized_role = _normalize_scenario_role(role)
+        if normalized_role:
+            role_type_by_role[normalized_role] = str(role_type or "").strip().lower() or "auto"
     request_text = (
         "You are Scenario Director for PhotoStudio COMFY.\n"
         "Gemini is the planning brain. Do not delegate planning to heuristics.\n"
