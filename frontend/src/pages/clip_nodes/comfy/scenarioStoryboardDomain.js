@@ -919,7 +919,6 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
 export function buildScenarioHumanVisualAnchors(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const actorList = Array.isArray(source.actors) ? source.actors.map((item) => normalizeText(item)).filter(Boolean) : [];
-  const parsedActors = actorList.slice(0, 2);
   const summary = normalizeText(source.summaryEn || source.summaryRu || source.summary || source.sceneGoal || source.sceneType);
   const promptText = normalizeText(source.videoPromptEn || source.videoPromptRu || source.videoPrompt);
   const positionHints = [];
@@ -927,15 +926,29 @@ export function buildScenarioHumanVisualAnchors(scene = {}) {
   if (promptBlob.includes("left")) positionHints.push("left side of frame");
   if (promptBlob.includes("right")) positionHints.push("right side of frame");
 
+  const roleCandidates = Array.from(new Set([
+    ...normalizeStringList(source.sceneActiveRoles ?? source.scene_active_roles),
+    ...normalizeStringList(source.refsUsed ?? source.refs_used),
+    ...normalizeStringList(source.mustAppear ?? source.must_appear),
+    ...normalizeStringList(source.secondaryRoles ?? source.secondary_roles),
+    normalizeText(source.primaryRole ?? source.primary_role),
+    ...Object.keys(normalizeObjectMap(source.refsByRole ?? source.refs_by_role)),
+  ].filter(Boolean)));
+  const canonicalRoles = ["character_1", "character_2", "character_3"].filter((role) => roleCandidates.includes(role));
+  const primaryIds = canonicalRoles.length
+    ? canonicalRoles
+    : ["person_1", "person_2"].slice(0, Math.max(1, Math.min(2, actorList.length || 1)));
+
   const anchors = [];
-  if (parsedActors[0]) {
-    anchors.push(`woman 1: ${parsedActors[0]}${positionHints[0] ? `, ${positionHints[0]}` : ""}`);
-  }
-  if (parsedActors[1]) {
-    anchors.push(`woman 2: ${parsedActors[1]}${positionHints[1] ? `, ${positionHints[1]}` : ""}`);
-  }
-  if (anchors.length >= 2) {
-    anchors.push("keep woman 1 and woman 2 in the same left/right arrangement from source frame");
+  primaryIds.forEach((identityId, index) => {
+    const refTarget = identityId.startsWith("character_")
+      ? `same subject as ref node ${identityId}`
+      : `same subject as source frame ${identityId}`;
+    const positionHint = positionHints[index] ? `, ${positionHints[index]}` : "";
+    anchors.push(`${identityId}: ${refTarget}${positionHint}, preserve exact face, hair, clothing`);
+  });
+  if (primaryIds.length >= 2) {
+    anchors.push(`keep ${primaryIds[0]} and ${primaryIds[1]} in the same left/right arrangement from source frame`);
   }
   return anchors;
 }

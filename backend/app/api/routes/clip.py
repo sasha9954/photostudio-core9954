@@ -828,11 +828,19 @@ def _looks_like_human_scene(*values: Any, scene_human_visual_anchors: list[str] 
 
 
 def _build_hard_identity_lock_block(*, scene_human_visual_anchors: list[str] | None = None) -> str:
-    safe_anchors = [str(item or "").strip() for item in (scene_human_visual_anchors or []) if str(item or "").strip()]
+    safe_anchors: list[str] = []
+    for item in (scene_human_visual_anchors or []):
+        raw = str(item or "").strip()
+        if not raw:
+            continue
+        normalized = re.sub(r"^\s*(?:woman|man|girl|boy)\s*([1-3])\s*:\s*", lambda m: f"character_{m.group(1)}: ", raw, flags=re.IGNORECASE)
+        safe_anchors.append(normalized)
+    has_role_anchor = any(re.search(r"\bcharacter_[1-3]\b", anchor) for anchor in safe_anchors)
     lines = [
         "HARD IDENTITY LOCK (NON-NEGOTIABLE):",
-        "- preserve exact same subjects from source frame",
-        "- keep the same two people if two people are present in source frame",
+        "- primary identity keys: character_1 / character_2 / character_3 (from refsByRole / sceneActiveRoles / mustAppear / refsUsed)",
+        "- fallback identity keys only if role keys are unavailable: person_1 / person_2",
+        "- preserve exact same subjects from source frame and connected role refs",
         "- do not replace faces",
         "- do not introduce new people",
         "- preserve hair, clothing, body proportions, and age impression",
@@ -841,7 +849,10 @@ def _build_hard_identity_lock_block(*, scene_human_visual_anchors: list[str] | N
         "- no identity drift",
         "- no face drift",
         "- no costume drift",
+        "- woman/man labels may be used as weak descriptors only, never as primary identity ids",
     ]
+    if not has_role_anchor:
+        lines.append("- role anchors missing in scene-specific anchors: apply neutral person_1/person_2 fallback without changing identity")
     if safe_anchors:
         lines.extend([
             "",
