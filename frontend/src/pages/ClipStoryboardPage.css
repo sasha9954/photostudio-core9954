@@ -4282,6 +4282,27 @@ body.ps_clip_fullscreen .mainCol {
   word-break: break-word;
 }
 
+.clipSB_readonlyTextFieldWrap {
+  gap: 6px;
+}
+
+.clipSB_readonlyTextField {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  background: rgba(0,0,0,0.16);
+  color: rgba(255,255,255,0.94);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px 10px;
+  font-family: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
 .clipSB_scenarioEditorInfoModalOverlay {
   position: absolute;
   inset: 0;
