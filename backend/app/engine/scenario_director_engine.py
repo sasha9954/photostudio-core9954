@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import tempfile
+import time
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -29,6 +30,7 @@ ALLOWED_NARRATION_MODES = {"full", "duck", "pause"}
 ALLOWED_EXPLICIT_ROLE_TYPES = {"hero", "support", "antagonist", "auto"}
 DEFAULT_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 FALLBACK_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC = (1.5, 4.0, 8.0)
 LEGACY_START_FRAME_ALIASES = {
     "previous_last_frame": "previous_frame",
     "prev_last": "previous_frame",
@@ -2902,6 +2904,13 @@ def _build_audio_coverage_refinement_prompt(payload: dict[str, Any], storyboard_
 
 
 def _send_director_request(api_key: str, body: dict[str, Any]) -> tuple[dict[str, Any] | None, str, list[str]]:
+    def _is_temp_unavailable(response_payload: dict[str, Any] | None) -> bool:
+        if not isinstance(response_payload, dict) or not response_payload.get("__http_error__"):
+            return False
+        status = int(response_payload.get("status") or 0)
+        text_l = str(response_payload.get("text") or "").lower()
+        return status == 503 or "unavailable" in text_l or "high demand" in text_l
+
     attempted_models: list[str] = []
     response: dict[str, Any] | None = None
     model_used = DEFAULT_TEXT_MODEL
@@ -2909,11 +2918,48 @@ def _send_director_request(api_key: str, body: dict[str, Any]) -> tuple[dict[str
         if candidate_model in attempted_models:
             continue
         attempted_models.append(candidate_model)
-        response = post_generate_content(api_key, candidate_model, body, timeout=120)
+        for retry_idx in range(0, len(GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC) + 1):
+            response = post_generate_content(api_key, candidate_model, body, timeout=120)
+            if not _is_temp_unavailable(response):
+                break
+            if retry_idx >= len(GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC):
+                break
+            backoff_sec = GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC[retry_idx]
+            logger.warning(
+                "[SCENARIO DIRECTOR] Gemini temporary unavailable model=%s retry=%s backoff=%.1fs",
+                candidate_model,
+                retry_idx + 1,
+                backoff_sec,
+            )
+            time.sleep(backoff_sec)
         model_used = candidate_model
         if not isinstance(response, dict) or not response.get("__http_error__"):
             break
     return response, model_used, attempted_models
+
+
+def _build_scenario_director_http_error(response: dict[str, Any], *, fallback_code: str, fallback_message: str) -> ScenarioDirectorError:
+    status_code = int(response.get("status") or 502)
+    error_text = str(response.get("text") or "")
+    error_text_l = error_text.lower()
+    is_temp_unavailable = status_code == 503 or "unavailable" in error_text_l or "high demand" in error_text_l
+    if is_temp_unavailable:
+        return ScenarioDirectorError(
+            "gemini_temporarily_unavailable",
+            "Модель Gemini сейчас перегружена, попробуйте ещё раз через несколько секунд.",
+            status_code=503,
+            details={
+                "httpStatus": status_code,
+                "retryable": True,
+                "retryAfterSec": GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC[-1],
+            },
+        )
+    return ScenarioDirectorError(
+        fallback_code,
+        f"{fallback_message} with HTTP {status_code}: {error_text[:400]}",
+        status_code=502,
+        details={"httpStatus": status_code},
+    )
 
 
 def _parse_storyboard_payload(raw_text: str, *, parse_stage: str = "initial", finish_reason: str = "") -> dict[str, Any]:
@@ -3339,12 +3385,10 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
     if not isinstance(response, dict):
         raise ScenarioDirectorError("gemini_request_failed", "Gemini did not return a JSON object.", status_code=502)
     if response.get("__http_error__"):
-        status_code = int(response.get("status") or 502)
-        raise ScenarioDirectorError(
-            "gemini_request_failed",
-            f"Gemini request failed with HTTP {status_code}: {str(response.get('text') or '')[:400]}",
-            status_code=502,
-            details={"httpStatus": status_code},
+        raise _build_scenario_director_http_error(
+            response,
+            fallback_code="gemini_request_failed",
+            fallback_message="Gemini request failed",
         )
     raw_text = _extract_gemini_text(response)
     finish_reason = _extract_gemini_finish_reason(response)
@@ -3486,12 +3530,10 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(response, dict):
         raise ScenarioDirectorError("gemini_request_failed", "Gemini did not return a JSON object.", status_code=502)
     if response.get("__http_error__"):
-        status_code = int(response.get("status") or 502)
-        raise ScenarioDirectorError(
-            "gemini_request_failed",
-            f"Gemini request failed with HTTP {status_code}: {str(response.get('text') or '')[:400]}",
-            status_code=502,
-            details={"httpStatus": status_code},
+        raise _build_scenario_director_http_error(
+            response,
+            fallback_code="gemini_request_failed",
+            fallback_message="Gemini request failed",
         )
 
     raw_text = _extract_gemini_text(response)
@@ -3923,7 +3965,16 @@ def run_scenario_director_master(payload: dict[str, Any]) -> dict[str, Any]:
         response, model_used, retry_models = _send_director_request(api_key, body)
         attempted_models.extend(model for model in retry_models if model not in attempted_models)
         if not isinstance(response, dict) or response.get("__http_error__"):
-            last_error = ScenarioDirectorError("gemini_request_failed", "Gemini request failed in Scenario Director master mode.", status_code=502)
+            if isinstance(response, dict) and response.get("__http_error__"):
+                last_error = _build_scenario_director_http_error(
+                    response,
+                    fallback_code="gemini_request_failed",
+                    fallback_message="Gemini request failed in Scenario Director master mode",
+                )
+                if last_error.code == "gemini_temporarily_unavailable":
+                    break
+            else:
+                last_error = ScenarioDirectorError("gemini_request_failed", "Gemini request failed in Scenario Director master mode.", status_code=502)
             continue
         raw_text = _extract_gemini_text(response)
         finish_reason = _extract_gemini_finish_reason(response)
@@ -4071,7 +4122,16 @@ def run_scenario_director_scenes(payload: dict[str, Any]) -> dict[str, Any]:
         response, model_used, retry_models = _send_director_request(api_key, body)
         attempted_models.extend(model for model in retry_models if model not in attempted_models)
         if not isinstance(response, dict) or response.get("__http_error__"):
-            last_error = ScenarioDirectorError("gemini_request_failed", "Gemini request failed in Scenario Director scenes mode.", status_code=502)
+            if isinstance(response, dict) and response.get("__http_error__"):
+                last_error = _build_scenario_director_http_error(
+                    response,
+                    fallback_code="gemini_request_failed",
+                    fallback_message="Gemini request failed in Scenario Director scenes mode",
+                )
+                if last_error.code == "gemini_temporarily_unavailable":
+                    break
+            else:
+                last_error = ScenarioDirectorError("gemini_request_failed", "Gemini request failed in Scenario Director scenes mode.", status_code=502)
             continue
         raw_text = _extract_gemini_text(response)
         finish_reason = _extract_gemini_finish_reason(response)
