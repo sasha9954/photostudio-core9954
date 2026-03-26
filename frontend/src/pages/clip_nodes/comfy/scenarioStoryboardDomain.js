@@ -916,6 +916,30 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   return normalizedPackage;
 }
 
+export function buildScenarioHumanVisualAnchors(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const actorList = Array.isArray(source.actors) ? source.actors.map((item) => normalizeText(item)).filter(Boolean) : [];
+  const parsedActors = actorList.slice(0, 2);
+  const summary = normalizeText(source.summaryEn || source.summaryRu || source.summary || source.sceneGoal || source.sceneType);
+  const promptText = normalizeText(source.videoPromptEn || source.videoPromptRu || source.videoPrompt);
+  const positionHints = [];
+  const promptBlob = `${summary} ${promptText}`.toLowerCase();
+  if (promptBlob.includes("left")) positionHints.push("left side of frame");
+  if (promptBlob.includes("right")) positionHints.push("right side of frame");
+
+  const anchors = [];
+  if (parsedActors[0]) {
+    anchors.push(`woman 1: ${parsedActors[0]}${positionHints[0] ? `, ${positionHints[0]}` : ""}`);
+  }
+  if (parsedActors[1]) {
+    anchors.push(`woman 2: ${parsedActors[1]}${positionHints[1] ? `, ${positionHints[1]}` : ""}`);
+  }
+  if (anchors.length >= 2) {
+    anchors.push("keep woman 1 and woman 2 in the same left/right arrangement from source frame");
+  }
+  return anchors;
+}
+
 export function buildScenarioPreviewInput({ storyboardOut = null, directorOutput = null, format = "9:16", styleProfile = "" } = {}) {
   const pkg = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
   const resolvedFormat = resolveFormatAlias(format, pkg?.format) || "9:16";

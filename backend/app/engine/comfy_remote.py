@@ -673,6 +673,7 @@ FIXED_IMAGE_VIDEO_NODES = {
 
 # These seed node ids are intentionally pinned to image-video-silent-directprompt.json.
 FIXED_SEED_NODES = (("267:216", "noise_seed"), ("267:237", "noise_seed"))
+FIXED_PROMPT_PATCH_NODE_IDS = [FIXED_IMAGE_VIDEO_NODES["prompt"][0]]
 
 
 def _resolve_workflow_fps(workflow: dict, default_fps: int = 24) -> int:
@@ -999,6 +1000,15 @@ def run_comfy_image_to_video(
             "audioFrames": patched_workflow.get("267:214", {}).get("inputs", {}).get("frames_number"),
         },
     )
+    logger.info(
+        "[COMFY REMOTE PROMPT TRANSPORT] scene_id=%s workflow_key=%s model_key=%s prompt_patched_node_ids=%s final_prompt_length=%s final_prompt_preview=%r",
+        str(scene_id or "").strip(),
+        normalized_workflow_key,
+        normalized_model_key,
+        FIXED_PROMPT_PATCH_NODE_IDS,
+        len(effective_prompt),
+        effective_prompt[:500],
+    )
 
     prompt_id, submit_err = submit_comfy_prompt(patched_workflow)
     if submit_err or not prompt_id:
@@ -1068,6 +1078,7 @@ def run_comfy_image_to_video(
             "model_ckpt_applied": str(effective_model_spec.get("ckpt_name") or ""),
             "actual_mode": normalized_workflow_key,
             "patched_node_ids": list(dict.fromkeys([*patched_model_node_ids, *first_last_start_node_ids, *first_last_end_node_ids, *audio_patch_node_ids])),
+            "prompt_patched_node_ids": FIXED_PROMPT_PATCH_NODE_IDS,
             "first_last_start_node_ids": first_last_start_node_ids,
             "first_last_end_node_ids": first_last_end_node_ids,
             "start_image_used": bool(first_last_start_node_ids),
@@ -1109,5 +1120,8 @@ def run_comfy_image_to_video(
             "finalVideoUrl": video_url,
             "frames": frame_count,
             "fps": fps,
+            "final_prompt_length": len(effective_prompt),
+            "final_prompt_preview": effective_prompt[:500],
+            "final_prompt_sent": effective_prompt,
         },
     }, None

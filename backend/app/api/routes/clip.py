@@ -112,6 +112,7 @@ class ClipVideoIn(BaseModel):
     startImageUrl: str | None = None
     endImageUrl: str | None = None
     transitionActionPrompt: str | None = None
+    sceneHumanVisualAnchors: list[str] | None = None
     format: str | None = "9:16"
     lipSync: bool | None = False
     renderMode: str | None = None
@@ -793,6 +794,100 @@ def _is_back_view_scene_prompt(prompt: str | None) -> bool:
         "character seen from behind",
     ]
     return any(marker in normalized_prompt for marker in back_view_markers)
+
+
+def _prompt_preview(value: str | None, limit: int = 500) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return raw[: max(80, int(limit or 500))]
+
+
+def _looks_like_human_scene(*values: Any, scene_human_visual_anchors: list[str] | None = None) -> bool:
+    if isinstance(scene_human_visual_anchors, list) and any(str(item or "").strip() for item in scene_human_visual_anchors):
+        return True
+    normalized = " ".join(str(value or "").strip().lower() for value in values if str(value or "").strip())
+    if not normalized:
+        return False
+    human_markers = (
+        "woman",
+        "women",
+        "man",
+        "men",
+        "girl",
+        "boy",
+        "person",
+        "people",
+        "human",
+        "face",
+        "character",
+        "couple",
+        "two people",
+    )
+    return any(marker in normalized for marker in human_markers)
+
+
+def _build_hard_identity_lock_block(*, scene_human_visual_anchors: list[str] | None = None) -> str:
+    safe_anchors = [str(item or "").strip() for item in (scene_human_visual_anchors or []) if str(item or "").strip()]
+    lines = [
+        "HARD IDENTITY LOCK (NON-NEGOTIABLE):",
+        "- preserve exact same subjects from source frame",
+        "- keep the same two people if two people are present in source frame",
+        "- do not replace faces",
+        "- do not introduce new people",
+        "- preserve hair, clothing, body proportions, and age impression",
+        "- maintain exact identity continuity",
+        "- motion only, no redesign",
+        "- no identity drift",
+        "- no face drift",
+        "- no costume drift",
+    ]
+    if safe_anchors:
+        lines.extend([
+            "",
+            "SCENE-SPECIFIC HUMAN VISUAL ANCHORS (SOURCE FRAME):",
+            *[f"- {anchor}" for anchor in safe_anchors[:4]],
+        ])
+    return "\n".join(lines).strip()
+
+
+def _compose_video_effective_prompt(
+    *,
+    video_prompt: str,
+    transition_action_prompt: str,
+    output_format: str,
+    requested_duration_sec: int | float | None,
+    scene_human_visual_anchors: list[str] | None = None,
+    scene_type: str | None = None,
+    shot_type: str | None = None,
+) -> tuple[str, dict]:
+    base_prompt = str(video_prompt or "").strip()
+    transition_prompt = str(transition_action_prompt or "").strip()
+    base_effective_prompt = build_clip_video_motion_prompt(
+        base_prompt=base_prompt,
+        transition_prompt=transition_prompt,
+        fmt=output_format,
+        seconds=requested_duration_sec,
+    )
+    has_humans = _looks_like_human_scene(
+        base_prompt,
+        transition_prompt,
+        scene_type,
+        shot_type,
+        scene_human_visual_anchors=scene_human_visual_anchors,
+    )
+    identity_lock_block = _build_hard_identity_lock_block(scene_human_visual_anchors=scene_human_visual_anchors) if has_humans else ""
+    effective_prompt = "\n\n".join(part for part in [base_effective_prompt, identity_lock_block] if str(part or "").strip()).strip()
+    return effective_prompt, {
+        "has_humans": has_humans,
+        "requestedPromptPreview": _prompt_preview(base_prompt, 500),
+        "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+        "effectivePromptLength": len(effective_prompt),
+        "videoPromptLength": len(base_prompt),
+        "transitionActionPromptLength": len(transition_prompt),
+        "sceneHumanVisualAnchors": [str(item or "").strip() for item in (scene_human_visual_anchors or []) if str(item or "").strip()],
+        "identityLockApplied": bool(identity_lock_block),
+    }
 
 
 def _infer_selected_view_hint(*values: Any) -> str:
@@ -9175,6 +9270,10 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "requestedDurationSec": out.get("requestedDurationSec"),
                 "providerDurationSec": out.get("providerDurationSec"),
                 "error": None if status == "done" else str(out.get("details") or out.get("hint") or out.get("code") or f"HTTP_{status_code}"),
+                "requestedPromptPreview": str(((out.get("debug") or {}).get("requestedPromptPreview") if isinstance(out.get("debug"), dict) else "") or ""),
+                "effectivePromptPreview": str(((out.get("debug") or {}).get("effectivePromptPreview") if isinstance(out.get("debug"), dict) else "") or ""),
+                "effectivePromptLength": int(((out.get("debug") or {}).get("effectivePromptLength") if isinstance(out.get("debug"), dict) else 0) or 0),
+                "promptPatchedNodeIds": ((out.get("debug") or {}).get("promptPatchedNodeIds") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("promptPatchedNodeIds"), list) else []),
                 "updatedAt": time.time(),
                 "completedAt": time.time() if status == "done" else None,
             })
@@ -9217,6 +9316,10 @@ def clip_video_start(payload: ClipVideoIn):
             "requestedDurationSec": None,
             "providerDurationSec": None,
             "error": None,
+            "requestedPromptPreview": "",
+            "effectivePromptPreview": "",
+            "effectivePromptLength": 0,
+            "promptPatchedNodeIds": [],
             "updatedAt": time.time(),
             "completedAt": None,
         }
@@ -9422,11 +9525,23 @@ def clip_video(payload: ClipVideoIn):
             requested_duration = 5.0
         requested_duration = max(1.0, min(8.0, requested_duration))
 
-        effective_prompt = build_clip_video_motion_prompt(
-            base_prompt=str(payload.videoPrompt or "").strip(),
-            transition_prompt=str(payload.transitionActionPrompt or "").strip(),
-            fmt=output_format,
-            seconds=requested_duration,
+        scene_human_visual_anchors = [str(item or "").strip() for item in (payload.sceneHumanVisualAnchors or []) if str(item or "").strip()]
+        effective_prompt, prompt_debug = _compose_video_effective_prompt(
+            video_prompt=str(payload.videoPrompt or "").strip(),
+            transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
+            output_format=output_format,
+            requested_duration_sec=requested_duration,
+            scene_human_visual_anchors=scene_human_visual_anchors,
+            scene_type=str(payload.sceneType or "").strip(),
+            shot_type=str(payload.shotType or "").strip(),
+        )
+        print(
+            "[CLIP VIDEO PROMPT TRANSPORT] "
+            f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key} source_image_url={source_image_url} "
+            f"videoPromptLength={prompt_debug.get('videoPromptLength')} transitionActionPromptLength={prompt_debug.get('transitionActionPromptLength')} "
+            f"effectivePromptLength={prompt_debug.get('effectivePromptLength')} "
+            f"requestedPromptPreview={_prompt_preview(str(payload.videoPrompt or ''), 320)} "
+            f"effectivePromptPreview={str(prompt_debug.get('effectivePromptPreview') or '')}"
         )
 
         try:
@@ -9541,6 +9656,13 @@ def clip_video(payload: ClipVideoIn):
 
         video_url = str(comfy_out.get("videoUrl") or "").strip()
         prompt_id = str(comfy_out.get("taskId") or "").strip()
+        comfy_debug = comfy_out.get("debug") if isinstance(comfy_out, dict) and isinstance(comfy_out.get("debug"), dict) else {}
+        print(
+            "[CLIP VIDEO PROMPT PATCHED NODES] "
+            f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key} "
+            f"promptPatchedNodeIds={comfy_debug.get('prompt_patched_node_ids') or []} "
+            f"finalPromptPreview={str(comfy_debug.get('final_prompt_preview') or '')}"
+        )
         print(f"[COMFY REMOTE] prompt_id={prompt_id}")
         print(f"[COMFY REMOTE] video_url={video_url}")
 
@@ -9554,7 +9676,13 @@ def clip_video(payload: ClipVideoIn):
             "mode": str(comfy_out.get("mode") or mode),
             "requestedDurationSec": round(float(requested_duration), 3),
             "providerDurationSec": round(float(comfy_out.get("requestedDurationSec") or requested_duration), 3),
-            "debug": comfy_out.get("debug") if isinstance(comfy_out, dict) else None,
+            "debug": {
+                **comfy_debug,
+                "requestedPromptPreview": prompt_debug.get("requestedPromptPreview"),
+                "effectivePromptPreview": prompt_debug.get("effectivePromptPreview"),
+                "effectivePromptLength": prompt_debug.get("effectivePromptLength"),
+                "promptPatchedNodeIds": comfy_debug.get("prompt_patched_node_ids") or [],
+            },
         }
 
     guard_prompt = " ".join([
@@ -9625,11 +9753,15 @@ def clip_video(payload: ClipVideoIn):
         f"workflowSource={workflow_source}"
     )
 
-    effective_prompt = build_clip_video_motion_prompt(
-        base_prompt=str(payload.videoPrompt or "").strip(),
-        transition_prompt=str(payload.transitionActionPrompt or "").strip(),
-        fmt=output_format,
-        seconds=payload.requestedDurationSec,
+    scene_human_visual_anchors = [str(item or "").strip() for item in (payload.sceneHumanVisualAnchors or []) if str(item or "").strip()]
+    effective_prompt, prompt_debug = _compose_video_effective_prompt(
+        video_prompt=str(payload.videoPrompt or "").strip(),
+        transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
+        output_format=output_format,
+        requested_duration_sec=payload.requestedDurationSec,
+        scene_human_visual_anchors=scene_human_visual_anchors,
+        scene_type=str(payload.sceneType or "").strip(),
+        shot_type=str(payload.shotType or "").strip(),
     )
     if mode == "lipsync":
         effective_prompt = _build_lipsync_avatar_prompt(effective_prompt, str(payload.shotType or ""))
@@ -9638,6 +9770,14 @@ def clip_video(payload: ClipVideoIn):
 
     print(f"[CLIP VIDEO] transition_type={transition_type}")
     print(f"[CLIP VIDEO] effective_prompt={effective_prompt[:300]}")
+    print(
+        "[CLIP VIDEO PROMPT TRANSPORT] "
+        f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key or 'n/a'} "
+        f"source_image_url=pending videoPromptLength={prompt_debug.get('videoPromptLength')} "
+        f"transitionActionPromptLength={prompt_debug.get('transitionActionPromptLength')} effectivePromptLength={len(effective_prompt)} "
+        f"requestedPromptPreview={str(prompt_debug.get('requestedPromptPreview') or '')} "
+        f"effectivePromptPreview={_prompt_preview(effective_prompt, 500)}"
+    )
     print(f"[CLIP VIDEO] audio_slice_url={audio_slice_url}")
 
     if mode == "single":
@@ -9936,4 +10076,10 @@ def clip_video(payload: ClipVideoIn):
         "mode": mode,
         "requestedDurationSec": round(requested_duration, 3),
         "providerDurationSec": provider_duration_sec,
+        "debug": {
+            "requestedPromptPreview": prompt_debug.get("requestedPromptPreview"),
+            "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+            "effectivePromptLength": len(effective_prompt),
+            "promptPatchedNodeIds": [],
+        },
     }

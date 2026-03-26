@@ -52,6 +52,7 @@ import {
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
 import { buildScenarioDirectorRequestPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 import {
+  buildScenarioHumanVisualAnchors,
   buildScenarioPreviewInput,
   detectScenarioAssetType,
   deriveScenarioImageStrategy,
@@ -7125,6 +7126,12 @@ const comfyShowVideoSection = Boolean(
               model: String(out?.model || ""),
               requestedDurationSec: normalizeDurationSec(out?.requestedDurationSec),
               providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
+              videoRequestedPromptPreview: String(out?.requestedPromptPreview || out?.debug?.requestedPromptPreview || ""),
+              videoEffectivePromptPreview: String(out?.effectivePromptPreview || out?.debug?.effectivePromptPreview || ""),
+              videoEffectivePromptLength: Number(out?.effectivePromptLength || out?.debug?.effectivePromptLength || 0) || 0,
+              videoPromptPatchedNodeIds: Array.isArray(out?.promptPatchedNodeIds)
+                ? out.promptPatchedNodeIds
+                : (Array.isArray(out?.debug?.promptPatchedNodeIds) ? out.debug.promptPatchedNodeIds : []),
               videoStatus: "done",
               videoError: "",
               videoJobId: settledMeta.jobId,
@@ -7779,6 +7786,12 @@ const comfyShowVideoSection = Boolean(
               updateComfySceneById(sceneId, {
                 videoUrl: doneVideoUrl,
                 videoPanelOpen: true,
+                videoRequestedPromptPreview: String(out?.requestedPromptPreview || out?.debug?.requestedPromptPreview || ""),
+                videoEffectivePromptPreview: String(out?.effectivePromptPreview || out?.debug?.effectivePromptPreview || ""),
+                videoEffectivePromptLength: Number(out?.effectivePromptLength || out?.debug?.effectivePromptLength || 0) || 0,
+                videoPromptPatchedNodeIds: Array.isArray(out?.promptPatchedNodeIds)
+                  ? out.promptPatchedNodeIds
+                  : (Array.isArray(out?.debug?.promptPatchedNodeIds) ? out.debug.promptPatchedNodeIds : []),
                 videoStatus: "done",
                 videoError: "",
                 videoJobId: null,
@@ -7963,6 +7976,12 @@ const comfyShowVideoSection = Boolean(
               updateComfySceneById(normalizedSceneId, {
                 videoUrl: doneVideoUrl,
                 videoPanelOpen: true,
+                videoRequestedPromptPreview: String(out?.requestedPromptPreview || out?.debug?.requestedPromptPreview || ""),
+                videoEffectivePromptPreview: String(out?.effectivePromptPreview || out?.debug?.effectivePromptPreview || ""),
+                videoEffectivePromptLength: Number(out?.effectivePromptLength || out?.debug?.effectivePromptLength || 0) || 0,
+                videoPromptPatchedNodeIds: Array.isArray(out?.promptPatchedNodeIds)
+                  ? out.promptPatchedNodeIds
+                  : (Array.isArray(out?.debug?.promptPatchedNodeIds) ? out.debug.promptPatchedNodeIds : []),
                 videoStatus: "done",
                 videoJobId: null,
                 videoError: "",
@@ -8344,6 +8363,12 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
               updateComfySceneById(sceneId, {
                 videoUrl: immediateVideoUrl,
                 videoPanelOpen: true,
+                videoRequestedPromptPreview: String(immediateOut?.requestedPromptPreview || immediateOut?.debug?.requestedPromptPreview || ""),
+                videoEffectivePromptPreview: String(immediateOut?.effectivePromptPreview || immediateOut?.debug?.effectivePromptPreview || ""),
+                videoEffectivePromptLength: Number(immediateOut?.effectivePromptLength || immediateOut?.debug?.effectivePromptLength || 0) || 0,
+                videoPromptPatchedNodeIds: Array.isArray(immediateOut?.promptPatchedNodeIds)
+                  ? immediateOut.promptPatchedNodeIds
+                  : (Array.isArray(immediateOut?.debug?.promptPatchedNodeIds) ? immediateOut.debug.promptPatchedNodeIds : []),
                 videoStatus: 'done',
                 videoError: '',
                 videoJobId: startedMeta.jobId,
@@ -9177,8 +9202,15 @@ Aspect ratio: ${imageFormat}`,
       ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
       : "";
     const originalVideoPrompt = String(targetScene?.videoPrompt || "").trim();
+    const sceneHumanVisualAnchors = buildScenarioHumanVisualAnchors(targetScene);
+    const humanAnchorBlock = sceneHumanVisualAnchors.length
+      ? [
+        "SCENE-SPECIFIC HUMAN VISUAL ANCHORS (SOURCE FRAME):",
+        ...sceneHumanVisualAnchors.map((line) => `- ${line}`),
+      ].join("\n")
+      : "";
     const videoVisualGlueText = buildScenarioVideoVisualGlueText(targetScene);
-    const finalVideoPrompt = `${videoVisualGlueText}\n\n${originalVideoPrompt}`.trim();
+    const finalVideoPrompt = [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
     const sourceImageUrl = transitionType === "continuous"
       ? (effectiveStartImageUrl || endImageUrl || frameImageUrl || "")
       : (frameImageUrl || "");
@@ -9254,6 +9286,7 @@ Aspect ratio: ${imageFormat}`,
           external_audio_used: requiresAudioSensitiveVideo,
           external_audio_reason: requiresAudioSensitiveVideo ? "lip_sync_scene" : "not_applicable_non_lipsync",
           videoPrompt: finalVideoPrompt,
+          sceneHumanVisualAnchors,
           transitionActionPrompt,
           transitionType,
           requestedDurationSec,

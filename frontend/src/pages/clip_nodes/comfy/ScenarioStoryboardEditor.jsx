@@ -391,6 +391,12 @@ export default function ScenarioStoryboardEditor({
         <pre className="clipSB_scenarioEditorDebug">{JSON.stringify({
           sceneId: selectedSceneId,
           sceneRuntime: selectedRuntime,
+          videoPromptDebug: {
+            requestedPromptPreview: String(selectedScene?.videoRequestedPromptPreview || ""),
+            effectivePromptPreview: String(selectedScene?.videoEffectivePromptPreview || ""),
+            effectivePromptLength: Number(selectedScene?.videoEffectivePromptLength || 0) || 0,
+            promptPatchedNodeIds: Array.isArray(selectedScene?.videoPromptPatchedNodeIds) ? selectedScene.videoPromptPatchedNodeIds : [],
+          },
           musicStatus: safeAudioData?.musicStatus || "idle",
         }, null, 2)}</pre>
       </div>
