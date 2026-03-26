@@ -4164,6 +4164,30 @@ function summarizeRefsByRole(refsByRole) {
   return { ...summary, activeRoles };
 }
 
+function hasNonEmptyRefsByRole(refsByRole = {}) {
+  return SCENARIO_IMAGE_ROLE_KEYS.some((role) => {
+    const items = refsByRole?.[role];
+    if (!Array.isArray(items)) return false;
+    return items.some((item) => String(typeof item === "string" ? item : item?.url || "").trim());
+  });
+}
+
+function getNonEmptyRefRoleKeys(refsByRole = {}) {
+  return SCENARIO_IMAGE_ROLE_KEYS.filter((role) => {
+    const items = refsByRole?.[role];
+    if (!Array.isArray(items)) return false;
+    return items.some((item) => String(typeof item === "string" ? item : item?.url || "").trim());
+  });
+}
+
+function hasNonEmptyRoleList(value) {
+  return Array.isArray(value) && value.some((item) => String(item || "").trim());
+}
+
+function hasNonEmptyObjectKeys(value) {
+  return !!(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0);
+}
+
 function looksLikeTechnicalAssetRef(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return false;
@@ -8486,6 +8510,66 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         previousContinuityMemory,
         previousSceneImageUrl,
       });
+      const sourceRefsCandidates = [
+        extractScenarioRefsByRoleFromSource(targetScene?.refsByRole),
+        extractScenarioRefsByRoleFromSource(targetScene?.connectedRefsByRole),
+        extractScenarioRefsByRoleFromSource(targetScene?.contextRefs),
+        extractScenarioRefsByRoleFromSource(targetScene?.context_refs),
+        extractScenarioRefsByRoleFromSource(targetScene?.connectedContextSummary?.context_refs),
+        extractScenarioRefsByRoleFromSource(targetScene?.connected_context_summary?.context_refs),
+        extractScenarioRefsByRoleFromSource(scenarioPackageForImage?.refsByRole),
+        extractScenarioRefsByRoleFromSource(scenarioPackageForImage?.connectedRefsByRole),
+        extractScenarioRefsByRoleFromSource(scenarioPackageForImage?.context_refs),
+        extractScenarioRefsByRoleFromSource(scenarioPackageForImage?.connected_context_summary?.context_refs),
+      ];
+      const sourceRefsByRole = sourceRefsCandidates.reduce((acc, candidate) => mergeScenarioRefsByRole(acc, candidate), {});
+      const sourceRefsKeys = getNonEmptyRefRoleKeys(sourceRefsByRole);
+      const finalRefsKeys = getNonEmptyRefRoleKeys(refsForImageRequest?.refsByRole || {});
+      const hadRoleAwareContract = [
+        targetScene?.primaryRole,
+        ...(Array.isArray(targetScene?.secondaryRoles) ? targetScene.secondaryRoles : []),
+        ...(Array.isArray(targetScene?.sceneActiveRoles) ? targetScene.sceneActiveRoles : []),
+        ...(Array.isArray(targetScene?.refsUsed) ? targetScene.refsUsed : []),
+        ...(Array.isArray(targetScene?.mustAppear) ? targetScene.mustAppear : []),
+        ...(Array.isArray(scenarioPackageForImage?.heroParticipants) ? scenarioPackageForImage.heroParticipants : []),
+        ...(Array.isArray(scenarioPackageForImage?.supportingParticipants) ? scenarioPackageForImage.supportingParticipants : []),
+        ...(Array.isArray(scenarioPackageForImage?.mustAppearRoles) ? scenarioPackageForImage.mustAppearRoles : []),
+      ].some((value) => String(value || "").trim());
+      const hadSourceRefs = sourceRefsKeys.length > 0
+        || hasNonEmptyRefsByRole(extractScenarioRefsByRoleFromSource(scenarioBrainRefs?.refsByRole))
+        || hasNonEmptyRoleList(scenarioBrainRefs?.character)
+        || hasNonEmptyRoleList(scenarioBrainRefs?.location)
+        || hasNonEmptyRoleList(scenarioBrainRefs?.style)
+        || hasNonEmptyRoleList(scenarioBrainRefs?.props)
+        || hasNonEmptyObjectKeys(targetScene?.refDirectives)
+        || hasNonEmptyObjectKeys(scenarioPackageForImage?.refDirectives)
+        || hadRoleAwareContract;
+      const finalHasRefs = hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {});
+      const guardTriggered = hadSourceRefs && !finalHasRefs;
+      const scenarioGuardDebug = {
+        sceneIndex: targetSceneIndex,
+        sceneId,
+        hadSourceRefs,
+        sourceRefsKeys,
+        finalRefsKeys,
+        primaryRole: refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "",
+        secondaryRoles: refsForImageRequest?.secondaryRoles || derivedRoleContract?.secondaryRoles || [],
+        sceneActiveRoles: refsForImageRequest?.sceneActiveRoles || derivedRoleContract?.sceneActiveRoles || [],
+        refsUsed: refsForImageRequest?.refsUsed || derivedRoleContract?.refsUsed || [],
+        mustAppear: refsForImageRequest?.mustAppear || derivedRoleContract?.mustAppear || [],
+        guardTriggered,
+      };
+      console.debug("[SCENARIO IMAGE GUARD]", scenarioGuardDebug);
+      if (guardTriggered) {
+        const guardError = new Error("scenario_refs_lost_before_clip_image");
+        guardError.code = "scenario_refs_lost_before_clip_image";
+        guardError.details = {
+          ...scenarioGuardDebug,
+          reason: "role-aware refs existed in scenario package but final image request refsByRole is empty",
+        };
+        console.error("[SCENARIO IMAGE GUARD] code=scenario_refs_lost_before_clip_image", guardError.details);
+        throw guardError;
+      }
       if (CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD) {
         const refsSummary = summarizeRefsByRole(refsForImageRequest?.refsByRole || {});
         console.debug("[SCENARIO IMAGE PAYLOAD]", {
