@@ -37,6 +37,7 @@ class Settings(BaseSettings):
 
     # Remote ComfyUI image-to-video
     COMFY_BASE_URL: str = "http://127.0.0.1:8000"
+    COMFY_OUTPUT_HANDOFF_STRATEGY: str = "backend_proxy"
     COMFY_UPLOAD_CONNECT_TIMEOUT_SEC: int = 10
     COMFY_UPLOAD_READ_TIMEOUT_SEC: int = 120
     COMFY_UPLOAD_MAX_ATTEMPTS: int = 2

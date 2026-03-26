@@ -550,26 +550,102 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
     return None, "video_output_missing"
 
 
-def build_public_comfy_file_url(filename_or_subpath: str) -> str:
+def parse_comfy_file_ref(filename_or_subpath: str) -> dict | None:
     raw = str(filename_or_subpath or "").strip()
     if not raw:
-        return ""
+        return None
     if raw.startswith("http://") or raw.startswith("https://"):
-        return raw
-
-    base = str(settings.COMFY_BASE_URL).rstrip("/")
-    if raw.startswith("/view?") or raw.startswith("view?"):
-        return f"{base}/{raw.lstrip('/')}"
+        return {
+            "raw_file_ref": raw,
+            "filename": "",
+            "subfolder": "",
+            "type": "output",
+            "format": Path(raw.split("?", 1)[0]).suffix.lstrip(".").lower(),
+            "is_absolute_url": True,
+        }
 
     clean = raw.lstrip("/")
-    if clean.startswith("output/"):
-        return f"{base}/{clean}"
+    parts = [segment for segment in clean.split("/") if segment]
+    if not parts:
+        return None
+    filename = str(parts[-1]).strip()
+    subfolder_parts = parts[:-1]
+    if subfolder_parts and subfolder_parts[0].lower() == "output":
+        subfolder_parts = subfolder_parts[1:]
+    subfolder = "/".join(subfolder_parts).strip("/")
+    return {
+        "raw_file_ref": raw,
+        "filename": filename,
+        "subfolder": subfolder,
+        "type": "output",
+        "format": Path(filename).suffix.lstrip(".").lower(),
+        "is_absolute_url": False,
+    }
 
-    filename = clean.split("/")[-1]
-    subfolder = "/".join(clean.split("/")[:-1]).strip("/")
+
+def _build_comfy_view_url(file_meta: dict, *, base_url: str) -> str:
+    safe_base = str(base_url or "").strip().rstrip("/")
+    if not safe_base:
+        return ""
+    if file_meta.get("is_absolute_url"):
+        return str(file_meta.get("raw_file_ref") or "").strip()
+    filename = str(file_meta.get("filename") or "").strip()
+    if not filename:
+        return ""
+    subfolder = str(file_meta.get("subfolder") or "").strip()
+    file_type = str(file_meta.get("type") or "output").strip() or "output"
     if subfolder:
-        return f"{base}/view?filename={quote(filename)}&subfolder={quote(subfolder)}&type=output"
-    return f"{base}/view?filename={quote(filename)}&type=output"
+        return f"{safe_base}/view?filename={quote(filename)}&subfolder={quote(subfolder)}&type={quote(file_type)}"
+    return f"{safe_base}/view?filename={quote(filename)}&type={quote(file_type)}"
+
+
+def build_public_comfy_file_url(filename_or_subpath: str) -> tuple[str, dict | None, str]:
+    file_meta = parse_comfy_file_ref(filename_or_subpath)
+    if not file_meta:
+        return "", None, "unknown"
+    strategy = str(settings.COMFY_OUTPUT_HANDOFF_STRATEGY or "backend_proxy").strip().lower() or "backend_proxy"
+
+    direct_url = _build_comfy_view_url(file_meta, base_url=str(settings.COMFY_BASE_URL))
+    if not direct_url:
+        return "", file_meta, strategy
+
+    if strategy == "direct_comfy_url" or file_meta.get("is_absolute_url"):
+        return direct_url, file_meta, "direct_comfy_url"
+
+    public_base = str(settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
+    if not public_base:
+        return "", file_meta, "backend_proxy_url"
+    filename = quote(str(file_meta.get("filename") or "").strip())
+    subfolder = quote(str(file_meta.get("subfolder") or "").strip())
+    file_type = quote(str(file_meta.get("type") or "output").strip() or "output")
+    return f"{public_base}/api/clip/video/comfy-output?filename={filename}&subfolder={subfolder}&type={file_type}", file_meta, "backend_proxy_url"
+
+
+def validate_comfy_output_access(file_meta: dict) -> tuple[bool, str | None]:
+    comfy_url = _build_comfy_view_url(file_meta, base_url=str(settings.COMFY_BASE_URL))
+    if not comfy_url:
+        return False, "COMFY_OUTPUT_URL_INVALID"
+    connect_timeout = max(5, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 10))
+    read_timeout = max(20, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 60))
+    try:
+        response = requests.get(comfy_url, timeout=(connect_timeout, read_timeout), stream=True)
+        status_code = int(response.status_code or 0)
+        content_type = str(response.headers.get("content-type") or "").strip().lower()
+        response.close()
+        logger.info(
+            "[COMFY RESULT URL VALIDATION] comfy_url=%s status=%s content_type=%s",
+            comfy_url,
+            status_code,
+            content_type,
+        )
+        if status_code >= 400:
+            return False, f"COMFY_OUTPUT_NOT_ACCESSIBLE:status={status_code}"
+        if "video" not in content_type and "octet-stream" not in content_type:
+            logger.warning("[COMFY RESULT URL VALIDATION] unexpected content-type=%s comfy_url=%s", content_type, comfy_url)
+        return True, None
+    except RequestException as exc:
+        logger.warning("[COMFY RESULT URL VALIDATION] request failed comfy_url=%s error=%s", comfy_url, str(exc)[:300])
+        return False, f"COMFY_OUTPUT_NOT_ACCESSIBLE:{str(exc)[:300]}"
 
 
 def _set_node_input(workflow: dict, node_id: str, input_key: str, value) -> tuple[bool, str | None]:
@@ -948,10 +1024,29 @@ def run_comfy_image_to_video(
     file_ref, extract_err = extract_video_result(history)
     if extract_err or not file_ref:
         return None, f"extract_failed:{extract_err or 'unknown_extract_error'}"
-
-    video_url = build_public_comfy_file_url(file_ref)
+    video_url, file_meta, handoff_strategy = build_public_comfy_file_url(file_ref)
+    logger.info(
+        "[COMFY RESULT FILE REF] prompt_id=%s raw_file_ref=%s filename=%s subfolder=%s type=%s format=%s",
+        prompt_id,
+        str(file_ref or "").strip(),
+        str((file_meta or {}).get("filename") or "").strip(),
+        str((file_meta or {}).get("subfolder") or "").strip(),
+        str((file_meta or {}).get("type") or "").strip(),
+        str((file_meta or {}).get("format") or "").strip(),
+    )
+    logger.info(
+        "[COMFY RESULT URL BUILD] prompt_id=%s base_comfy=%s base_public=%s strategy=%s final_video_url=%s",
+        prompt_id,
+        str(settings.COMFY_BASE_URL).rstrip("/"),
+        str(settings.PUBLIC_BASE_URL).rstrip("/"),
+        handoff_strategy,
+        video_url,
+    )
     if not video_url:
-        return None, "video_url_empty"
+        return None, "COMFY_OUTPUT_URL_INVALID:video_url_empty"
+    is_accessible, access_err = validate_comfy_output_access(file_meta or {})
+    if not is_accessible:
+        return None, access_err or "COMFY_OUTPUT_NOT_ACCESSIBLE"
 
     return {
         "provider": "comfy_remote",
@@ -1007,6 +1102,11 @@ def run_comfy_image_to_video(
             },
             "uploadedImage": uploaded_name,
             "fileRef": file_ref,
+            "rawComfyFileRef": str(file_ref or "").strip(),
+            "fileRefMeta": file_meta,
+            "promptId": prompt_id,
+            "handoffStrategy": handoff_strategy,
+            "finalVideoUrl": video_url,
             "frames": frame_count,
             "fps": fps,
         },

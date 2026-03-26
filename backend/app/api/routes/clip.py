@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 import requests
 from requests import RequestException
@@ -9049,6 +9049,68 @@ def _normalize_clip_video_response_payload(response_obj) -> tuple[dict, int]:
     return {"ok": False, "code": "VIDEO_RESPONSE_INVALID", "hint": "unexpected_response_type"}, 500
 
 
+@router.get("/clip/video/comfy-output")
+def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "output"):
+    safe_filename = str(filename or "").strip()
+    safe_subfolder = str(subfolder or "").strip()
+    safe_type = str(type or "output").strip() or "output"
+    if not safe_filename:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "code": "COMFY_OUTPUT_URL_INVALID", "hint": "filename_required"},
+        )
+
+    comfy_base = str(settings.COMFY_BASE_URL or "").strip().rstrip("/")
+    if not comfy_base:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "code": "COMFY_OUTPUT_PROXY_FAILED", "hint": "COMFY_BASE_URL_not_configured"},
+        )
+
+    comfy_view_url = f"{comfy_base}/view?filename={requests.utils.quote(safe_filename)}&type={requests.utils.quote(safe_type)}"
+    if safe_subfolder:
+        comfy_view_url = (
+            f"{comfy_base}/view?filename={requests.utils.quote(safe_filename)}"
+            f"&subfolder={requests.utils.quote(safe_subfolder)}&type={requests.utils.quote(safe_type)}"
+        )
+    print(
+        "[COMFY RESULT PROXY] "
+        f"filename={safe_filename} subfolder={safe_subfolder} type={safe_type} comfy_view_url={comfy_view_url}"
+    )
+    try:
+        upstream = requests.get(comfy_view_url, stream=True, timeout=(10, 120))
+    except RequestException as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"ok": False, "code": "COMFY_OUTPUT_PROXY_FAILED", "hint": str(exc)[:300]},
+        )
+
+    if upstream.status_code >= 400:
+        body_snippet = ""
+        try:
+            body_snippet = (upstream.text or "")[:240]
+        except Exception:
+            body_snippet = ""
+        return JSONResponse(
+            status_code=upstream.status_code,
+            content={
+                "ok": False,
+                "code": "COMFY_OUTPUT_NOT_ACCESSIBLE",
+                "hint": f"upstream_status={upstream.status_code}",
+                "details": body_snippet,
+            },
+        )
+
+    content_type = str(upstream.headers.get("content-type") or "application/octet-stream").strip() or "application/octet-stream"
+    response_headers = {
+        "Content-Type": content_type,
+        "Cache-Control": "no-cache",
+    }
+    if upstream.headers.get("content-length"):
+        response_headers["Content-Length"] = str(upstream.headers.get("content-length"))
+    return StreamingResponse(upstream.iter_content(chunk_size=1024 * 256), headers=response_headers, status_code=200)
+
+
 def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
     source_image_url = str(payload.imageUrl or payload.startImageUrl or payload.endImageUrl or "").strip()
     print(f"[CLIP VIDEO JOB WORKER] start jobId={job_id} source_image_url={source_image_url}")
@@ -9064,6 +9126,14 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
         status = "done" if status_code < 400 and bool(out.get("ok")) else "error"
         video_url = str(out.get("videoUrl") or "").strip()
         provider_name = str(out.get("provider") or payload.provider or "").strip().lower()
+        if status == "done" and not video_url:
+            status = "error"
+            out = {
+                **(out if isinstance(out, dict) else {}),
+                "ok": False,
+                "code": "COMFY_OUTPUT_URL_INVALID" if provider_name == "comfy_remote" else "VIDEO_URL_MISSING",
+                "hint": "provider_marked_done_without_video_url",
+            }
         if video_url:
             print(f"[CLIP VIDEO JOB WORKER] result_received jobId={job_id} video_url={video_url}")
         with CLIP_VIDEO_JOBS_LOCK:
@@ -9087,6 +9157,12 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
         if status == "done":
             print(f"[CLIP VIDEO JOB WORKER] terminal_transition jobId={job_id} status=done final_video_url={video_url}")
             print(f"[CLIP VIDEO JOB WORKER] status_done jobId={job_id}")
+        else:
+            print(
+                "[CLIP VIDEO JOB FINALIZE] "
+                f"jobId={job_id} status=error provider={provider_name} "
+                f"code={str(out.get('code') or '').strip()} error={str(out.get('details') or out.get('hint') or out.get('code') or '')[:300]}"
+            )
     except Exception as exc:
         print(f"[CLIP VIDEO JOB WORKER] failed jobId={job_id} error={str(exc)[:300]}")
         with CLIP_VIDEO_JOBS_LOCK:
@@ -9424,6 +9500,15 @@ def clip_video(payload: ClipVideoIn):
             elif "history_wait_failed:timeout" in err_text:
                 code = "comfy_timeout"
                 status_code = 504
+            elif "COMFY_OUTPUT_URL_INVALID" in err_text:
+                code = "COMFY_OUTPUT_URL_INVALID"
+                status_code = 502
+            elif "COMFY_OUTPUT_NOT_ACCESSIBLE" in err_text:
+                code = "COMFY_OUTPUT_NOT_ACCESSIBLE"
+                status_code = 502
+            elif "COMFY_OUTPUT_PROXY_FAILED" in err_text:
+                code = "COMFY_OUTPUT_PROXY_FAILED"
+                status_code = 502
             elif "extract_failed" in err_text:
                 code = "comfy_output_missing"
             elif "workflow_" in err_text or "missing_node" in err_text or "missing_input" in err_text:
