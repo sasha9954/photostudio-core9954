@@ -625,6 +625,49 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       ? response.storyboard_out
       : null;
   if (!storyboardOut) return null;
+  const directorOutputFromResponse = response?.directorOutput && typeof response.directorOutput === "object"
+    ? response.directorOutput
+    : null;
+  const packageRoleAwareKeys = [
+    "refsByRole",
+    "connectedRefsByRole",
+    "roleTypeByRole",
+    "heroParticipants",
+    "supportingParticipants",
+    "mustAppearRoles",
+    "context_refs",
+    "refDirectives",
+  ];
+  const sceneRoleAwareKeys = [
+    "primaryRole",
+    "secondaryRoles",
+    "sceneActiveRoles",
+    "refsUsed",
+    "mustAppear",
+    "mustNotAppear",
+    "heroEntityId",
+    "supportEntityIds",
+    "refDirectives",
+  ];
+  const hasAnyKey = (source, keys) => !!source && typeof source === "object" && keys.some((key) => key in source);
+  const extractScenes = (source) => {
+    if (!source || typeof source !== "object") return [];
+    return Array.isArray(source.scenes) ? source.scenes : [];
+  };
+  const responseScenes = extractScenes(response);
+  const storyboardScenes = extractScenes(storyboardOut);
+  const directorScenes = extractScenes(directorOutputFromResponse);
+  const packageContractDetected = [
+    response,
+    storyboardOut,
+    directorOutputFromResponse,
+  ].some((item) => hasAnyKey(item, packageRoleAwareKeys));
+  const sceneContractDetected = [
+    ...responseScenes,
+    ...storyboardScenes,
+    ...directorScenes,
+  ].some((scene) => hasAnyKey(scene, sceneRoleAwareKeys));
+  const newContractDetected = packageContractDetected || sceneContractDetected;
   const stateFormat = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
     ? String(state.format).trim()
     : "";
@@ -639,9 +682,56 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     ?? storyboardOut?.canvas
     ?? stateFormat
   ) || "9:16";
-  const directorOutput = response?.directorOutput && typeof response.directorOutput === "object"
-    ? response.directorOutput
-    : mapStoryboardOutToDirectorOutput(storyboardOut, state);
+  const legacyFallbackOutput = !newContractDetected ? mapStoryboardOutToDirectorOutput(storyboardOut, state) : null;
+  const usedLegacyFallback = !directorOutputFromResponse && !newContractDetected && !!legacyFallbackOutput;
+  const preferredSourceForRoleContract = directorOutputFromResponse || storyboardOut || response;
+  const roleAwareSceneSource = directorScenes.length
+    ? directorScenes
+    : storyboardScenes.length
+      ? storyboardScenes
+      : responseScenes;
+  const roleAwareScenes = roleAwareSceneSource.map((scene) => ({
+    ...(scene && typeof scene === "object" ? scene : {}),
+    primaryRole: normalizeText(scene?.primaryRole),
+    secondaryRoles: Array.isArray(scene?.secondaryRoles) ? scene.secondaryRoles.map((item) => normalizeText(item)).filter(Boolean) : [],
+    sceneActiveRoles: Array.isArray(scene?.sceneActiveRoles) ? scene.sceneActiveRoles.map((item) => normalizeText(item)).filter(Boolean) : [],
+    refsUsed: Array.isArray(scene?.refsUsed) ? scene.refsUsed.filter(Boolean) : [],
+    mustAppear: Array.isArray(scene?.mustAppear) ? scene.mustAppear.map((item) => normalizeText(item)).filter(Boolean) : [],
+    mustNotAppear: Array.isArray(scene?.mustNotAppear) ? scene.mustNotAppear.map((item) => normalizeText(item)).filter(Boolean) : [],
+    heroEntityId: normalizeText(scene?.heroEntityId),
+    supportEntityIds: Array.isArray(scene?.supportEntityIds) ? scene.supportEntityIds.filter(Boolean) : [],
+    refDirectives: scene?.refDirectives && typeof scene.refDirectives === "object" ? scene.refDirectives : {},
+  }));
+  const directorOutput = {
+    ...(legacyFallbackOutput && typeof legacyFallbackOutput === "object" ? legacyFallbackOutput : {}),
+    ...(directorOutputFromResponse && typeof directorOutputFromResponse === "object" ? directorOutputFromResponse : {}),
+    refsByRole: preferredSourceForRoleContract?.refsByRole && typeof preferredSourceForRoleContract.refsByRole === "object"
+      ? preferredSourceForRoleContract.refsByRole
+      : {},
+    connectedRefsByRole: preferredSourceForRoleContract?.connectedRefsByRole && typeof preferredSourceForRoleContract.connectedRefsByRole === "object"
+      ? preferredSourceForRoleContract.connectedRefsByRole
+      : {},
+    roleTypeByRole: preferredSourceForRoleContract?.roleTypeByRole && typeof preferredSourceForRoleContract.roleTypeByRole === "object"
+      ? preferredSourceForRoleContract.roleTypeByRole
+      : {},
+    connected_context_summary: normalizeText(preferredSourceForRoleContract?.connected_context_summary),
+    heroParticipants: Array.isArray(preferredSourceForRoleContract?.heroParticipants)
+      ? preferredSourceForRoleContract.heroParticipants.map((item) => normalizeText(item)).filter(Boolean)
+      : [],
+    supportingParticipants: Array.isArray(preferredSourceForRoleContract?.supportingParticipants)
+      ? preferredSourceForRoleContract.supportingParticipants.map((item) => normalizeText(item)).filter(Boolean)
+      : [],
+    mustAppearRoles: Array.isArray(preferredSourceForRoleContract?.mustAppearRoles)
+      ? preferredSourceForRoleContract.mustAppearRoles.map((item) => normalizeText(item)).filter(Boolean)
+      : [],
+    context_refs: preferredSourceForRoleContract?.context_refs && typeof preferredSourceForRoleContract.context_refs === "object"
+      ? preferredSourceForRoleContract.context_refs
+      : {},
+    refDirectives: preferredSourceForRoleContract?.refDirectives && typeof preferredSourceForRoleContract.refDirectives === "object"
+      ? preferredSourceForRoleContract.refDirectives
+      : {},
+    scenes: roleAwareScenes.length ? roleAwareScenes : extractScenes(legacyFallbackOutput),
+  };
   const globalMusicPrompt = resolveDirectorGlobalMusicPrompt(response, storyboardOut, directorOutput);
   const normalizedStoryboardOut = {
     ...storyboardOut,
@@ -653,6 +743,20 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       globalMusicPrompt: normalizeText(storyboardOut?.music?.globalMusicPrompt) || globalMusicPrompt,
     },
   };
+  console.debug("[SCENARIO NORMALIZE]", {
+    newContractDetected,
+    usedLegacyFallback,
+    packageRefsByRoleKeys: Object.keys(directorOutput?.refsByRole || {}),
+    packageHeroParticipants: directorOutput?.heroParticipants || [],
+    sceneRoleSummary: (Array.isArray(directorOutput?.scenes) ? directorOutput.scenes : []).map((scene, index) => ({
+      scene: index + 1,
+      primaryRole: scene?.primaryRole || "",
+      secondaryRoles: Array.isArray(scene?.secondaryRoles) ? scene.secondaryRoles : [],
+      sceneActiveRoles: Array.isArray(scene?.sceneActiveRoles) ? scene.sceneActiveRoles : [],
+      refsUsed: Array.isArray(scene?.refsUsed) ? scene.refsUsed : [],
+      mustAppear: Array.isArray(scene?.mustAppear) ? scene.mustAppear : [],
+    })),
+  });
   return {
     storyboardOut: normalizedStoryboardOut,
     scenario: normalizeText(response?.scenario) || normalizeText(storyboardOut.full_scenario),
