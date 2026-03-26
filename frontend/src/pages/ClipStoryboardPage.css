@@ -4307,14 +4307,15 @@ body.ps_clip_fullscreen .mainCol {
   position: relative;
   border: 1px solid rgba(255,255,255,0.14);
   border-radius: 10px;
-  background: rgba(0,0,0,0.2);
+  background: rgba(0,0,0,0.22);
   pointer-events: auto;
+  padding: 6px;
 }
 
 .clipSB_scenarioJsonCopyBtn {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 12px;
+  right: 12px;
   width: 30px;
   height: 30px;
   border-radius: 8px;
@@ -4332,12 +4333,12 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_scenarioJsonReadonly {
   width: 100%;
-  min-height: 220px;
+  min-height: 260px;
   max-height: 45vh;
   resize: vertical;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.14);
   color: rgba(255,255,255,0.94);
   font-size: 12px;
   line-height: 1.45;

@@ -468,6 +468,7 @@ export default function ScenarioStoryboardEditor({
     selectedSceneRuntime: selectedRuntime,
     audioData: safeAudioData,
   }, null, 2);
+  const scenarioRawJson = formatRawForCopy();
 
   const handleCopyRawJson = async () => {
     const didCopy = await copyTextToClipboard(formatRawForCopy());
@@ -617,28 +618,11 @@ export default function ScenarioStoryboardEditor({
           <textarea
             className="clipSB_scenarioJsonReadonly nodrag nopan nowheel"
             readOnly
-            value={formatRawForCopy()}
+            value={scenarioRawJson}
             onMouseDown={stopNodeDragEvent}
             onPointerDown={stopNodeDragEvent}
           />
         </div>
-        <pre
-          className="clipSB_scenarioEditorDebug clipSB_copySelectable"
-        >
-          {JSON.stringify({
-          sceneId: selectedSceneId,
-          sceneRuntime: selectedRuntime,
-          videoPromptDebug: {
-            requestedPromptPreview: String(selectedScene?.videoRequestedPromptPreview || ""),
-            effectivePromptPreview: String(selectedScene?.videoEffectivePromptPreview || ""),
-            effectivePromptLength: Number(selectedScene?.videoEffectivePromptLength || 0) || 0,
-            promptPatchedNodeIds: Array.isArray(selectedScene?.videoPromptPatchedNodeIds) ? selectedScene.videoPromptPatchedNodeIds : [],
-          },
-          musicStatus: safeAudioData?.musicStatus || "idle",
-          scenes: safeScenes,
-          audioData: safeAudioData,
-          }, null, 2)}
-        </pre>
       </div>
     );
   })();
