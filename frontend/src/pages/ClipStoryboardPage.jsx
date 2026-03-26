@@ -10750,20 +10750,86 @@ onClipSec: (nodeId, value) => {
                 ? (normalizedPackage?.musicPromptEn || currentAudioData.musicPromptEn || "")
                 : (currentAudioData.musicPromptEn || normalizedPackage?.musicPromptEn || "")
             ).trim(),
-            musicStatus: String(currentAudioData.musicStatus || normalizedPackage?.musicStatus || "idle"),
-            musicUrl: String(currentAudioData.musicUrl || normalizedPackage?.musicUrl || "").trim(),
+            musicStatus: String(
+              revisionChanged
+                ? (normalizedPackage?.musicStatus || "idle")
+                : (currentAudioData.musicStatus || normalizedPackage?.musicStatus || "idle")
+            ),
+            musicUrl: String(
+              revisionChanged
+                ? (normalizedPackage?.musicUrl || "")
+                : (currentAudioData.musicUrl || normalizedPackage?.musicUrl || "")
+            ).trim(),
+            musicError: String(
+              revisionChanged
+                ? (normalizedPackage?.musicError || "")
+                : (currentAudioData.musicError || normalizedPackage?.musicError || "")
+            ).trim(),
+            musicTaskId: String(
+              revisionChanged
+                ? (normalizedPackage?.musicTaskId || "")
+                : (currentAudioData.musicTaskId || normalizedPackage?.musicTaskId || "")
+            ).trim(),
+            musicPreviewUrl: String(
+              revisionChanged
+                ? (normalizedPackage?.musicPreviewUrl || "")
+                : (currentAudioData.musicPreviewUrl || normalizedPackage?.musicPreviewUrl || "")
+            ).trim(),
+            musicFileName: String(
+              revisionChanged
+                ? (normalizedPackage?.musicFileName || "")
+                : (currentAudioData.musicFileName || normalizedPackage?.musicFileName || "")
+            ).trim(),
+            musicSource: String(
+              revisionChanged
+                ? (normalizedPackage?.musicSource || "")
+                : (currentAudioData.musicSource || normalizedPackage?.musicSource || "")
+            ).trim(),
+            musicDuration: Number(
+              revisionChanged
+                ? (normalizedPackage?.musicDuration ?? 0)
+                : (currentAudioData.musicDuration ?? normalizedPackage?.musicDuration ?? 0)
+            ) || 0,
           };
-          const musicSource = revisionChanged
+          const musicPromptSource = revisionChanged
             ? "package"
             : (String(currentAudioData.globalMusicPrompt || currentAudioData.musicPromptRu || currentAudioData.musicPromptEn || "").trim()
               ? "currentAudioData"
               : "fallback");
+          const currentHasMusicResult = !!String(
+            currentAudioData.musicUrl
+            || currentAudioData.musicStatus
+            || currentAudioData.musicError
+            || currentAudioData.musicTaskId
+            || currentAudioData.musicPreviewUrl
+            || currentAudioData.musicFileName
+            || currentAudioData.musicSource
+          ).trim();
+          const packageHasMusicResult = !!String(
+            normalizedPackage?.musicUrl
+            || normalizedPackage?.musicStatus
+            || normalizedPackage?.musicError
+            || normalizedPackage?.musicTaskId
+            || normalizedPackage?.musicPreviewUrl
+            || normalizedPackage?.musicFileName
+            || normalizedPackage?.musicSource
+          ).trim();
+          const musicResultSource = revisionChanged
+            ? (packageHasMusicResult ? "package" : "cleared")
+            : (currentHasMusicResult ? "currentAudioData" : (packageHasMusicResult ? "package" : "cleared"));
           console.debug("[SCENARIO MUSIC SYNC]", {
             revisionChanged,
-            musicSource,
+            musicSource: musicPromptSource,
             globalMusicPromptLength: String(audioData?.globalMusicPrompt || "").trim().length,
             musicPromptRuLength: String(audioData?.musicPromptRu || "").trim().length,
             musicPromptEnLength: String(audioData?.musicPromptEn || "").trim().length,
+          });
+          console.debug("[SCENARIO MUSIC RESULT SYNC]", {
+            revisionChanged,
+            musicPromptSource,
+            musicResultSource,
+            musicStatus: String(audioData?.musicStatus || "idle"),
+            hasMusicUrl: !!String(audioData?.musicUrl || "").trim(),
           });
           if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) {
             console.debug("[SCENARIO STORYBOARD MUSIC]", {
