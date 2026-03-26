@@ -72,6 +72,18 @@ SCENARIO_ROLE_ALIASES = {
     "group_face": "group_faces",
 }
 DUO_SCENE_HINTS = {"duo", "reunion", "shared-presence", "shared_presence", "two-shot", "two_shot", "joint", "together", "both"}
+DUO_SCENE_EXTRA_HINTS = {
+    "two shot",
+    "shared",
+    "meet",
+    "meets",
+    "meeting",
+    "hug",
+    "hugs",
+    "walk together",
+    "walking together",
+}
+WORLD_ANCHOR_ROLES = {"location", "style", "props", "animal", "animal_1", "group", "group_faces"}
 
 WEAK_SCENE_PATTERNS = (
     "character walks",
@@ -1406,6 +1418,73 @@ def _extract_scene_actor_roles(
     return actor_roles
 
 
+def _scene_has_shared_hint(scene: ScenarioDirectorScene, raw_scene: dict[str, Any]) -> bool:
+    signal_parts: list[str] = []
+    for key in (
+        "sceneType",
+        "scene_type",
+        "shotType",
+        "shot_type",
+        "title",
+        "description",
+        "beat",
+        "action",
+        "imagePrompt",
+        "image_prompt",
+        "videoPrompt",
+        "video_prompt",
+    ):
+        signal_parts.append(str(raw_scene.get(key) or "").strip().lower())
+    signal_parts.extend(
+        [
+            str(scene.scene_goal or "").strip().lower(),
+            str(scene.frame_description or "").strip().lower(),
+            str(scene.action_in_frame or "").strip().lower(),
+            str(scene.image_prompt or "").strip().lower(),
+            str(scene.video_prompt or "").strip().lower(),
+        ]
+    )
+    for list_key in ("participants", "mustAppear", "must_appear", "secondaryRoles", "secondary_roles", "refsUsed", "refs_used"):
+        values = raw_scene.get(list_key)
+        if isinstance(values, list):
+            signal_parts.append(" ".join(str(value or "").strip().lower() for value in values))
+    scene_signal = " ".join(part for part in signal_parts if part)
+    if any(hint in scene_signal for hint in DUO_SCENE_HINTS):
+        return True
+    return any(hint in scene_signal for hint in DUO_SCENE_EXTRA_HINTS)
+
+
+def _extract_scene_world_anchor_roles(raw_scene: dict[str, Any], actor_roles: list[str]) -> list[str]:
+    anchor_roles: list[str] = []
+
+    def _push(role: Any) -> None:
+        normalized = _normalize_scenario_role(role)
+        if (
+            normalized
+            and normalized in WORLD_ANCHOR_ROLES
+            and normalized not in actor_roles
+            and normalized not in anchor_roles
+        ):
+            anchor_roles.append(normalized)
+
+    for key in ("sceneActiveRoles", "scene_active_roles", "refsUsed", "refs_used", "refRoles", "activeRoles"):
+        for role in (raw_scene.get(key) or []):
+            _push(role)
+    ref_directives = raw_scene.get("refDirectives") if isinstance(raw_scene.get("refDirectives"), dict) else {}
+    for role, directive in ref_directives.items():
+        if str(directive or "").strip():
+            _push(role)
+    must_appear = raw_scene.get("mustAppear") if raw_scene.get("mustAppear") is not None else raw_scene.get("must_appear")
+    if isinstance(must_appear, list):
+        for role in must_appear:
+            normalized = _normalize_scenario_role(role)
+            if normalized in {"location", "style", "animal", "animal_1", "group", "group_faces"}:
+                _push(normalized)
+            if normalized == "props":
+                _push(normalized)
+    return anchor_roles
+
+
 def _resolve_scene_must_appear(
     scene: ScenarioDirectorScene,
     raw_scene: dict[str, Any],
@@ -1542,7 +1621,18 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             hero_participants=hero_participants,
             supporting_participants=supporting_participants,
         )
-        scene_anchor_roles: list[str] = []
+        actor_roles_before_rescue = list(actor_roles)
+        shared_scene_hint = _scene_has_shared_hint(scene, raw_scene)
+        if actor_roles and shared_scene_hint and len(actor_roles) < 2:
+            rescue_pool = [*hero_participants, *supporting_participants]
+            for role in rescue_pool:
+                normalized = _normalize_scenario_role(role)
+                if normalized and normalized in SCENARIO_CAST_ROLES and normalized not in actor_roles:
+                    actor_roles.append(normalized)
+                if len(actor_roles) >= 2:
+                    break
+        raw_anchor_roles = _extract_scene_world_anchor_roles(raw_scene, actor_roles)
+        scene_anchor_roles: list[str] = list(raw_anchor_roles)
         if str(scene.location or "").strip() and (refs_by_role.get("location") or connected_refs_by_role.get("location")):
             scene_anchor_roles.append("location")
         if scene.props and (refs_by_role.get("props") or connected_refs_by_role.get("props")):
@@ -1552,6 +1642,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             and any(str(value or "").strip() for value in [scene.frame_description, scene.action_in_frame, scene.image_prompt, scene.video_prompt, scene.camera])
         ):
             scene_anchor_roles.append("style")
+        scene_anchor_roles = list(dict.fromkeys(scene_anchor_roles))
         scene_active_roles = list(dict.fromkeys([*actor_roles, *scene_anchor_roles]))
         refs_used_roles: list[str] = []
         refs_used_map: dict[str, list[str]] = {}
@@ -1642,8 +1733,11 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         )
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s primaryRole=%s", scene.scene_id, primary_role)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s secondaryRoles=%s", scene.scene_id, secondary_roles)
-        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s actorRoles=%s", scene.scene_id, actor_roles)
-        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s anchorRoles=%s", scene.scene_id, scene_anchor_roles)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s actorRoles(before)=%s", scene.scene_id, actor_roles_before_rescue)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s actorRoles(after rescue)=%s", scene.scene_id, actor_roles)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s sharedSceneHint=%s", scene.scene_id, shared_scene_hint)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s anchorRoles(raw)=%s", scene.scene_id, raw_anchor_roles)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s anchorRoles(final)=%s", scene.scene_id, scene_anchor_roles)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s sceneActiveRoles=%s", scene.scene_id, scene_active_roles)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s refsUsed=%s", scene.scene_id, refs_used_roles)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s mustAppear=%s", scene.scene_id, must_appear)
