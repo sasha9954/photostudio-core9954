@@ -63,6 +63,10 @@ const normalizeStringList = (value) => {
   return [];
 };
 
+function normalizeObjectMap(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
 function toNumber(value, fallback = 0) {
   const direct = Number(value);
   if (Number.isFinite(direct)) return direct;
@@ -323,9 +327,10 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     contextRefs: source.contextRefs ?? source.context_refs,
     connectedContextSummary: source.connectedContextSummary ?? source.connected_context_summary,
     primaryRole: source.primaryRole ?? source.primary_role,
-    secondaryRoles: source.secondaryRoles ?? source.secondary_roles,
-    refsUsed: source.refsUsed ?? source.refs_used,
-    refDirectives: source.refDirectives ?? source.ref_directives,
+    secondaryRoles: normalizeStringList(source.secondaryRoles ?? source.secondary_roles),
+    sceneActiveRoles: normalizeStringList(source.sceneActiveRoles ?? source.scene_active_roles),
+    refsUsed: normalizeStringList(source.refsUsed ?? source.refs_used),
+    refDirectives: source.refDirectives ?? source.ref_directives ?? {},
     focalSubject: source.focalSubject ?? source.focal_subject,
     sceneAction: source.sceneAction ?? source.scene_action,
     cameraIntent: source.cameraIntent ?? source.camera_intent,
@@ -342,10 +347,10 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     environmentLock: source.environmentLock ?? source.environment_lock,
     styleLock: source.styleLock ?? source.style_lock,
     identityLock: source.identityLock ?? source.identity_lock,
-    mustAppear: source.mustAppear ?? source.must_appear,
-    mustNotAppear: source.mustNotAppear ?? source.must_not_appear,
-    heroEntityId: source.heroEntityId ?? source.hero_entity_id,
-    supportEntityIds: source.supportEntityIds ?? source.support_entity_ids,
+    mustAppear: normalizeStringList(source.mustAppear ?? source.must_appear),
+    mustNotAppear: normalizeStringList(source.mustNotAppear ?? source.must_not_appear),
+    heroEntityId: normalizeText(source.heroEntityId ?? source.hero_entity_id),
+    supportEntityIds: normalizeStringList(source.supportEntityIds ?? source.support_entity_ids),
     plannerDebug: source.plannerDebug ?? source.planner_debug,
     generationHints: source.generationHints ?? source.generation_hints,
     modelAssignments: source.modelAssignments ?? source.model_assignments,
@@ -484,6 +489,16 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     ?? directorOutput?.music_prompt_en
   );
 
+  const refsByRole = normalizeObjectMap(storyboardOut?.refsByRole ?? storyboardOut?.refs_by_role ?? directorOutput?.refsByRole ?? directorOutput?.refs_by_role);
+  const connectedRefsByRole = normalizeObjectMap(storyboardOut?.connectedRefsByRole ?? storyboardOut?.connected_refs_by_role ?? directorOutput?.connectedRefsByRole ?? directorOutput?.connected_refs_by_role);
+  const roleTypeByRole = normalizeObjectMap(storyboardOut?.roleTypeByRole ?? storyboardOut?.role_type_by_role ?? directorOutput?.roleTypeByRole ?? directorOutput?.role_type_by_role);
+  const connectedContextSummary = normalizeText(storyboardOut?.connectedContextSummary ?? storyboardOut?.connected_context_summary ?? directorOutput?.connectedContextSummary ?? directorOutput?.connected_context_summary);
+  const heroParticipants = normalizeStringList(storyboardOut?.heroParticipants ?? storyboardOut?.hero_participants ?? directorOutput?.heroParticipants ?? directorOutput?.hero_participants);
+  const supportingParticipants = normalizeStringList(storyboardOut?.supportingParticipants ?? storyboardOut?.supporting_participants ?? directorOutput?.supportingParticipants ?? directorOutput?.supporting_participants);
+  const mustAppearRoles = normalizeStringList(storyboardOut?.mustAppearRoles ?? storyboardOut?.must_appear_roles ?? directorOutput?.mustAppearRoles ?? directorOutput?.must_appear_roles);
+  const contextRefs = normalizeStringList(storyboardOut?.contextRefs ?? storyboardOut?.context_refs ?? directorOutput?.contextRefs ?? directorOutput?.context_refs);
+  const refDirectives = normalizeObjectMap(storyboardOut?.refDirectives ?? storyboardOut?.ref_directives ?? directorOutput?.refDirectives ?? directorOutput?.ref_directives);
+
   const normalizedPackage = {
     scenes,
     format,
@@ -495,6 +510,17 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     previewPromptEn: previewPrompt.en,
     actors,
     locations,
+    refsByRole,
+    connectedRefsByRole,
+    roleTypeByRole,
+    connected_context_summary: connectedContextSummary,
+    connectedContextSummary,
+    heroParticipants,
+    supportingParticipants,
+    mustAppearRoles,
+    context_refs: contextRefs,
+    contextRefs,
+    refDirectives,
     audioUrl: normalizeText(
       storyboardOut?.audioUrl
       ?? storyboardOut?.audio_url
@@ -545,6 +571,22 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
       normalizedGlobalMusicPromptLength: globalMusicPrompt.length,
     });
   }
+  console.debug("[SCENARIO STORYBOARD PACKAGE]", {
+    status: "package normalized successfully",
+    packageRefsByRoleKeys: Object.keys(normalizedPackage.refsByRole || {}),
+    packageConnectedRefsByRoleKeys: Object.keys(normalizedPackage.connectedRefsByRole || {}),
+    packageHeroParticipants: normalizedPackage.heroParticipants || [],
+    packageSupportingParticipants: normalizedPackage.supportingParticipants || [],
+    packageMustAppearRoles: normalizedPackage.mustAppearRoles || [],
+    sceneRoleSnapshot: (normalizedPackage.scenes || []).map((scene, idx) => ({
+      scene: idx + 1,
+      primaryRole: normalizeText(scene?.primaryRole),
+      secondaryRoles: Array.isArray(scene?.secondaryRoles) ? scene.secondaryRoles : [],
+      sceneActiveRoles: Array.isArray(scene?.sceneActiveRoles) ? scene.sceneActiveRoles : [],
+      refsUsed: Array.isArray(scene?.refsUsed) ? scene.refsUsed : [],
+      mustAppear: Array.isArray(scene?.mustAppear) ? scene.mustAppear : [],
+    })),
+  });
   return normalizedPackage;
 }
 
