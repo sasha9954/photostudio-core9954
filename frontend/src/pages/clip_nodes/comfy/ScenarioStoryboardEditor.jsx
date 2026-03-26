@@ -57,7 +57,11 @@ function renderContractWarnings(scene = {}) {
 function ContractField({ label, value }) {
   const printable = Array.isArray(value) ? value.join(", ") : String(value || "").trim();
   return (
-    <div className="clipSB_storyboardKv clipSB_copySelectable">
+    <div
+      className="clipSB_storyboardKv clipSB_copySelectable nodrag nopan"
+      onMouseDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
       <span>{label}</span>
       <strong>{printable || "—"}</strong>
     </div>
@@ -109,6 +113,7 @@ export default function ScenarioStoryboardEditor({
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
   const prevStoryboardRevisionRef = useRef("");
+  const stopNodeDragEvent = (event) => event.stopPropagation();
 
   useEffect(() => {
     if (!open) return;
@@ -436,20 +441,28 @@ export default function ScenarioStoryboardEditor({
             <button
               className="clipSB_btn clipSB_btnSecondary"
               type="button"
+              onMouseDown={stopNodeDragEvent}
+              onPointerDown={stopNodeDragEvent}
               onClick={() => copyTextToClipboard(formatSceneForCopy(selectedScene || safeScenes[0] || {}, safeIndex >= 0 ? safeIndex : 0))}
             >
               Копировать сцену
             </button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => copyTextToClipboard(formatAllScenesForCopy())}>Копировать весь сценарий</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => copyTextToClipboard(formatRawForCopy())}>Копировать raw JSON</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => copyTextToClipboard(formatPromptsForCopy())}>Копировать prompts</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={() => copyTextToClipboard(formatAllScenesForCopy())}>Копировать весь сценарий</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={() => copyTextToClipboard(formatRawForCopy())}>Копировать raw JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={() => copyTextToClipboard(formatPromptsForCopy())}>Копировать prompts</button>
           </div>
           <div className="clipSB_storyboardKv"><span>Сцен</span><strong>{safeScenes.length}</strong></div>
           {safeScenes.map((scene, idx) => {
             const sceneId = String(scene?.sceneId || `S${idx + 1}`);
             return (
               <details key={`contract-${sceneId}-${idx}`} style={{ marginBottom: 10 }}>
-                <summary className="clipSB_copySelectable">{sceneId} · {fmtSec(scene?.t0)}–{fmtSec(scene?.t1)}</summary>
+                <summary
+                  className="clipSB_copySelectable nodrag nopan"
+                  onMouseDown={stopNodeDragEvent}
+                  onPointerDown={stopNodeDragEvent}
+                >
+                  {sceneId} · {fmtSec(scene?.t0)}–{fmtSec(scene?.t1)}
+                </summary>
                 <ContractField label="sceneId" value={sceneId} />
                 <ContractField label="t0/t1" value={`${fmtSec(scene?.t0)} / ${fmtSec(scene?.t1)}`} />
                 <ContractField label="lyric text" value={scene?.localPhrase || scene?.lyricText} />
@@ -512,9 +525,15 @@ export default function ScenarioStoryboardEditor({
                   }
                 }}
               >
-                <div className="clipSB_scenarioEditorPhraseMain">
-                  <div className="clipSB_scenarioEditorPhraseMeta">[{fmtSec(phrase.startSec)} - {fmtSec(phrase.endSec)}]</div>
-                  <div className="clipSB_scenarioEditorPhraseText">{phrase.text || "—"}</div>
+                  <div className="clipSB_scenarioEditorPhraseMain">
+                    <div className="clipSB_scenarioEditorPhraseMeta">[{fmtSec(phrase.startSec)} - {fmtSec(phrase.endSec)}]</div>
+                  <div
+                    className="clipSB_scenarioEditorPhraseText clipSB_copySelectable nodrag nopan"
+                    onMouseDown={stopNodeDragEvent}
+                    onPointerDown={stopNodeDragEvent}
+                  >
+                    {phrase.text || "—"}
+                  </div>
                 </div>
                 <button
                   className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorPhraseJumpBtn"
@@ -536,9 +555,14 @@ export default function ScenarioStoryboardEditor({
     return (
       <div className="clipSB_scenarioEditorTabBody">
         <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorCopyRow">
-          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => copyTextToClipboard(formatRawForCopy())}>Копировать raw JSON</button>
+          <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={() => copyTextToClipboard(formatRawForCopy())}>Копировать raw JSON</button>
         </div>
-        <pre className="clipSB_scenarioEditorDebug clipSB_copySelectable">{JSON.stringify({
+        <pre
+          className="clipSB_scenarioEditorDebug clipSB_copySelectable nodrag nopan"
+          onMouseDown={stopNodeDragEvent}
+          onPointerDown={stopNodeDragEvent}
+        >
+          {JSON.stringify({
           sceneId: selectedSceneId,
           sceneRuntime: selectedRuntime,
           videoPromptDebug: {
@@ -550,7 +574,8 @@ export default function ScenarioStoryboardEditor({
           musicStatus: safeAudioData?.musicStatus || "idle",
           scenes: safeScenes,
           audioData: safeAudioData,
-        }, null, 2)}</pre>
+          }, null, 2)}
+        </pre>
       </div>
     );
   })();
@@ -559,7 +584,12 @@ export default function ScenarioStoryboardEditor({
 
   return (
     <div className="clipSB_scenarioOverlay" onClick={onClose}>
-      <div className="clipSB_scenarioPanel clipSB_scenarioEditorPanel" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="clipSB_scenarioPanel clipSB_scenarioEditorPanel nodrag nopan nowheel"
+        onClick={(event) => event.stopPropagation()}
+        onMouseDown={stopNodeDragEvent}
+        onPointerDown={stopNodeDragEvent}
+      >
         <div className="clipSB_scenarioHeader">
           <div>
             <div className="clipSB_scenarioTitle">Scenario Storyboard Editor</div>
@@ -587,12 +617,17 @@ export default function ScenarioStoryboardEditor({
         </div>
         {infoModalOpen ? (
           <div className="clipSB_scenarioEditorInfoModalOverlay" onClick={() => setInfoModalOpen(false)}>
-            <div className="clipSB_scenarioEditorInfoModal" onClick={(event) => event.stopPropagation()}>
+            <div
+              className="clipSB_scenarioEditorInfoModal nodrag nopan nowheel"
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={stopNodeDragEvent}
+              onPointerDown={stopNodeDragEvent}
+            >
               <div className="clipSB_scenarioEditorInfoModalHeader">
                 <div className="clipSB_scenarioEditorInfoModalTitle">{TOP_TABS.find((tab) => tab.id === activeTab)?.label || "Инфо"}</div>
                 <button className="clipSB_iconBtn" type="button" onClick={() => setInfoModalOpen(false)}>×</button>
               </div>
-              <div className="clipSB_scenarioEditorInfoModalBody">
+              <div className="clipSB_scenarioEditorInfoModalBody nodrag nopan nowheel" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent}>
                 {tabContent}
               </div>
             </div>
