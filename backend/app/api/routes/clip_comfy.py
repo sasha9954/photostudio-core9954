@@ -190,6 +190,14 @@ def _should_use_scenario_director_fixture(req: dict[str, Any], *, reason: str = 
     metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}
     controls = req.get("director_controls") if isinstance(req.get("director_controls"), dict) else {}
 
+    force_real_director = (
+        _flag_enabled(metadata.get("forceRealScenarioDirector"))
+        or _flag_enabled(metadata.get("force_real_scenario_director"))
+        or _flag_enabled(controls.get("forceRealScenarioDirector"))
+    )
+    if force_real_director:
+        return False
+
     if _flag_enabled(metadata.get("forceLocalDeterministicFixture")):
         return True
     if _flag_enabled(metadata.get("force_local_deterministic_fixture")):
@@ -199,13 +207,13 @@ def _should_use_scenario_director_fixture(req: dict[str, Any], *, reason: str = 
 
     fallback_on_gemini_403 = _flag_enabled(
         metadata.get("fallbackToLocalDeterministicFixtureOnGemini403"),
-        default=True,
+        default=False,
     )
     fallback_on_gemini_invalid_json = _flag_enabled(
         metadata.get("fallbackToLocalDeterministicFixtureOnGeminiInvalidJson"),
         default=False,
     )
-    env_fallback = _flag_enabled(os.getenv("SCENARIO_DIRECTOR_FIXTURE_ON_GEMINI_403"), default=True)
+    env_fallback = _flag_enabled(os.getenv("SCENARIO_DIRECTOR_FIXTURE_ON_GEMINI_403"), default=False)
     env_invalid_json_fallback = _flag_enabled(os.getenv("SCENARIO_DIRECTOR_FIXTURE_ON_GEMINI_INVALID_JSON"), default=False)
     normalized_reason = str(reason or "").strip().lower()
     if "gemini_403" in normalized_reason and fallback_on_gemini_403 and env_fallback:

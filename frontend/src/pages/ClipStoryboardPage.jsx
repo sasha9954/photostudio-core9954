@@ -4278,6 +4278,8 @@ function buildComfySceneRefsPayload({
     hasContinuity: !!String(continuity || "").trim(),
     hasPlannerMeta: !!(plannerMeta && typeof plannerMeta === 'object' && Object.keys(plannerMeta).length),
   };
+  const normalizedPrimaryRole = String(primaryRole || "").trim();
+  const normalizedHeroEntityId = String(heroEntityId || "").trim() || normalizedPrimaryRole;
 
   return normalizeClipImageRefsPayload({
     character: pickUrls(["character_1", "character_2", "character_3", "animal", "group"]),
@@ -4304,10 +4306,10 @@ function buildComfySceneRefsPayload({
     refsUsed: Array.isArray(refsUsed) ? refsUsed : (refsUsed && typeof refsUsed === 'object' ? refsUsed : undefined),
     refDirectives: refDirectives && typeof refDirectives === 'object' ? refDirectives : undefined,
     refsUsedByRole: refsUsedByRole && typeof refsUsedByRole === 'object' ? refsUsedByRole : undefined,
-    primaryRole: String(primaryRole || "").trim(),
+    primaryRole: normalizedPrimaryRole,
     secondaryRoles: Array.isArray(secondaryRoles) ? secondaryRoles : undefined,
     sceneActiveRoles: Array.isArray(sceneActiveRoles) ? sceneActiveRoles : undefined,
-    heroEntityId: String(heroEntityId || "").trim(),
+    heroEntityId: normalizedHeroEntityId,
     supportEntityIds: Array.isArray(supportEntityIds) ? supportEntityIds : undefined,
     mustAppear: Array.isArray(mustAppear) ? mustAppear : undefined,
     mustNotAppear: Array.isArray(mustNotAppear) ? mustNotAppear : undefined,

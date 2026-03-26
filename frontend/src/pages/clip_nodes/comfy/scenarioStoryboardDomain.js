@@ -820,6 +820,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   normalizedScene.refsUsed = resolvedRoleContract.refsUsed;
   normalizedScene.mustAppear = resolvedRoleContract.mustAppear;
   normalizedScene.supportEntityIds = resolvedRoleContract.supportEntityIds;
+  normalizedScene.heroEntityId = normalizedScene.heroEntityId || resolvedRoleContract.primaryRole || "";
   normalizedScene.refsUsedByRole = {
     ...normalizeObjectMap(normalizedScene.refsUsedByRole),
     ...normalizeObjectMap(resolvedRoleContract.refsUsedByRole),
