@@ -8192,6 +8192,7 @@ def clip_image(payload: ClipImageIn):
             "CLIP WORLD LOCK: Every shot in one clip must belong to one shared world identity. Preserve the same lighting logic, atmosphere, weather state, palette, material response, and dust/fog/snow/rain state across shots. Shot variation is allowed, but world identity must remain unchanged. "
             "PROP PHYSICAL CONSISTENCY: Keep consistent size relative to hands, size relative to torso/legs, grip logic, weight impression, handle/cable behavior, and ground contact behavior. The prop must not look weightless, oversized, undersized, or physically inconsistent between scenes. If the prop is handheld, its scale must remain realistically liftable by the character. "
             "Scene text may be Russian and visual prompt may be English. Use both when available: visual prompt defines composition/action, and scene text defines narrative context and emotion. "
+            "NEVER mention filenames, upload names, or reference preview labels anywhere in natural-language scene text, visual prompt text, or generated prose. Use canonical role IDs only (character_1/character_2/character_3/location/style/props) when identity tokens are required. "
             "DEFAULT NO-TEXT RULE: generated scene images must not contain captions, labels, subtitles, UI overlays, watermarks, scene numbers, scene titles, debug/meta text, side annotations, or typography unless the scene explicitly requests integrated title/typography treatment or requires real in-world signage."
         )
 

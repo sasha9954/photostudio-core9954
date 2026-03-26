@@ -54,7 +54,7 @@ function renderHistoryTab(directorOutput) {
         <div className="clipSB_narrativeList">
           {(history.characterRoles || []).map((item) => (
             <div key={`${item.name}:${item.role}`} className="clipSB_narrativeListItem">
-              <strong>{item.name}</strong>
+              <strong>{item.displayName || item.name}</strong>
               <span>{item.role}</span>
             </div>
           ))}

@@ -535,27 +535,32 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   return payload;
 }
 
-function formatActorLabel(actor, roleLabels) {
-  const clean = normalizeText(actor);
-  return roleLabels[clean] || clean;
+function toCanonicalRoleId(value, fallbackIndex = -1) {
+  const clean = normalizeText(value);
+  if (/^character_[1-3]$/i.test(clean)) return clean.toLowerCase();
+  if (Number.isInteger(fallbackIndex) && fallbackIndex >= 0 && fallbackIndex < 3) return `character_${fallbackIndex + 1}`;
+  return clean;
+}
+
+function toHumanizedCanonicalRole(roleId) {
+  const canonical = normalizeText(roleId).toLowerCase();
+  if (canonical === "character_1") return "Character 1";
+  if (canonical === "character_2") return "Character 2";
+  if (canonical === "character_3") return "Character 3";
+  return canonical || "Character";
 }
 
 export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {}) {
   if (!storyboardOut || typeof storyboardOut !== "object") return null;
   const scenes = Array.isArray(storyboardOut.scenes) ? storyboardOut.scenes : [];
-  const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
-  const roleLabels = {
-    character_1: normalizeText(connectedInputs?.ref_character_1?.preview) || "Character 1",
-    character_2: normalizeText(connectedInputs?.ref_character_2?.preview) || "Character 2",
-    character_3: normalizeText(connectedInputs?.ref_character_3?.preview) || "Character 3",
-  };
+  const canonicalRoles = ["character_1", "character_2", "character_3"];
+  const roleLabels = Object.fromEntries(canonicalRoles.map((role) => [role, toHumanizedCanonicalRole(role)]));
   const history = {
     summary: normalizeText(storyboardOut.story_summary),
     fullScenario: normalizeText(storyboardOut.full_scenario),
-    characterRoles: Object.entries(roleLabels)
-      .filter(([, label]) => !!normalizeText(label))
-      .map(([role, label], index) => ({
-        name: label,
+    characterRoles: canonicalRoles.map((role, index) => ({
+        name: role,
+        displayName: roleLabels[role],
         role: index === 0
           ? "Главный герой / главный носитель действия"
           : index === 1
@@ -579,7 +584,7 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
       timeStart: toStoryboardNumericSec(scene.time_start, index * 5),
       timeEnd: toStoryboardNumericSec(scene.time_end, (index + 1) * 5),
       duration: toStoryboardNumericSec(scene.duration, 5),
-      participants: (Array.isArray(scene.actors) ? scene.actors : []).map((actor) => formatActorLabel(actor, roleLabels)),
+      participants: (Array.isArray(scene.actors) ? scene.actors : []).map((actor, actorIndex) => toCanonicalRoleId(actor, actorIndex)).filter(Boolean),
       location: normalizeText(scene.location),
       props: Array.isArray(scene.props) ? scene.props.map((item) => normalizeText(item)).filter(Boolean) : [],
       action: normalizeText(scene.action_in_frame),
