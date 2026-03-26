@@ -72,6 +72,8 @@ class ClipImageRefsIn(BaseModel):
     primaryRole: str | None = None
     secondaryRoles: list[str] | None = None
     sceneActiveRoles: list[str] | None = None
+    refsUsedByRole: dict | None = None
+    participants: list[str] | None = None
     plannerMeta: dict | None = None
     propAnchorLabel: str | None = None
     sessionCharacterAnchor: str | None = None
@@ -7062,6 +7064,7 @@ def _normalize_scene_entity_contract_for_image(
     primary_role: str,
     secondary_roles: list[str],
     refs_used: list[str] | dict | None,
+    refs_used_by_role: dict | None,
     ref_directives: dict | None,
     available_refs_by_role: dict[str, list[str]],
     hero_entity_id: str | None,
@@ -7072,7 +7075,16 @@ def _normalize_scene_entity_contract_for_image(
     style_lock: bool | None,
     identity_lock: bool | None,
 ) -> dict[str, Any]:
-    resolved_roles = _resolve_scene_active_roles_for_image(refs_used, ref_directives, available_refs_by_role, primary_role)
+    refs_used_merged: list[str] | dict | None = refs_used
+    if isinstance(refs_used_by_role, dict) and refs_used_by_role:
+        role_keys = [str(role or "").strip() for role in refs_used_by_role.keys() if str(role or "").strip()]
+        if isinstance(refs_used_merged, dict):
+            refs_used_merged = {**refs_used_merged, **{role: True for role in role_keys if role not in refs_used_merged}}
+        elif isinstance(refs_used_merged, list):
+            refs_used_merged = list(dict.fromkeys([*refs_used_merged, *role_keys]))
+        else:
+            refs_used_merged = role_keys
+    resolved_roles = _resolve_scene_active_roles_for_image(refs_used_merged, ref_directives, available_refs_by_role, primary_role)
     resolved_roles = [role for role in resolved_roles if role in COMFY_REF_ROLES]
     must = [str(r or "").strip() for r in (must_appear or []) if str(r or "").strip() in COMFY_REF_ROLES]
     must = list(dict.fromkeys(must))
@@ -7720,7 +7732,9 @@ def clip_image(payload: ClipImageIn):
     comfy_roles = COMFY_REF_ROLES
 
     scene_refs_used = getattr(refs_obj, "refsUsed", None)
+    scene_refs_used_by_role = getattr(refs_obj, "refsUsedByRole", None)
     scene_ref_directives = getattr(refs_obj, "refDirectives", None)
+    scene_participants = getattr(refs_obj, "participants", None)
     scene_primary_role = str(getattr(refs_obj, "primaryRole", "") or "").strip()
     scene_secondary_roles = [
         str(role or "").strip()
@@ -7731,6 +7745,7 @@ def clip_image(payload: ClipImageIn):
         primary_role=scene_primary_role,
         secondary_roles=scene_secondary_roles,
         refs_used=scene_refs_used,
+        refs_used_by_role=scene_refs_used_by_role,
         ref_directives=scene_ref_directives,
         available_refs_by_role=comfy_refs_by_role,
         hero_entity_id=getattr(refs_obj, "heroEntityId", None),
@@ -7886,7 +7901,9 @@ def clip_image(payload: ClipImageIn):
     print("[COMFY IMAGE DEBUG] refsByRole raw=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] connected active roles=" + json.dumps(connected_active_roles, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene refsUsed=" + json.dumps(scene_refs_used, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] scene refsUsedByRoleKeys=" + json.dumps(sorted(list((scene_refs_used_by_role or {}).keys())) if isinstance(scene_refs_used_by_role, dict) else [], ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene refDirectives=" + json.dumps(scene_ref_directives, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] scene participants=" + json.dumps(scene_participants if isinstance(scene_participants, list) else [], ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene primaryRole=" + json.dumps(scene_primary_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene secondaryRoles=" + json.dumps(scene_secondary_roles, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene contract=" + json.dumps(scene_contract, ensure_ascii=False))

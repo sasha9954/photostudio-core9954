@@ -473,6 +473,151 @@ function resolveScenarioMusicPromptSource(storyboardOut = {}, directorOutput = {
   return { kind: "empty", text: "", fallbackText: "" };
 }
 
+const SCENARIO_CAST_ROLE_KEYS = ["character_1", "character_2", "character_3", "animal", "group"];
+const SCENARIO_TWO_PERSON_INTERACTION_MARKERS = [
+  "gaze",
+  "shared glance",
+  "look into eyes",
+  "eye contact",
+  "whisper",
+  "hold hand",
+  "holding hands",
+  "embrace",
+  "hug",
+  "looks at",
+  "looking at",
+  "див",
+  "смотр",
+  "взгляд",
+  "шепч",
+  "обнима",
+  "держ",
+];
+
+function normalizeScenarioRoleId(value = "") {
+  const raw = normalizeText(value).toLowerCase();
+  if (!raw) return "";
+  if (SCENARIO_CAST_ROLE_KEYS.includes(raw)) return raw;
+  if (raw === "character a" || raw === "charactera" || raw === "a") return "character_1";
+  if (raw === "character b" || raw === "characterb" || raw === "b") return "character_2";
+  const charMatch = raw.match(/^character[\s_-]*(\d+)$/);
+  if (charMatch) {
+    const idx = Number(charMatch[1]);
+    if (Number.isFinite(idx) && idx >= 1 && idx <= 3) return `character_${idx}`;
+  }
+  return "";
+}
+
+function hasScenarioTwoPersonSemanticSignal(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const blob = [
+    source.summaryEn,
+    source.summaryRu,
+    source.imagePromptEn,
+    source.imagePromptRu,
+    source.videoPromptEn,
+    source.videoPromptRu,
+    source.sceneAction,
+    source.focalSubject,
+    source.sceneGoal,
+    source.scene_goal,
+    source.action,
+  ].map((v) => normalizeText(v).toLowerCase()).filter(Boolean).join(" ");
+  if (!blob) return false;
+  return SCENARIO_TWO_PERSON_INTERACTION_MARKERS.some((marker) => blob.includes(marker));
+}
+
+function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const packageRefsByRole = normalizeObjectMap(scenarioPackage?.refsByRole);
+  const packageMustAppearRoles = normalizeStringList(scenarioPackage?.mustAppearRoles).map((r) => normalizeScenarioRoleId(r) || normalizeText(r));
+  const packageRefDirectives = normalizeObjectMap(scenarioPackage?.refDirectives);
+
+  const refsByRole = normalizeObjectMap(source.refsByRole);
+  const refsUsedByRoleInput = normalizeObjectMap(source.refsUsedByRole ?? source.refs_used_by_role);
+  const refsUsedByRoleKeys = Object.keys(refsUsedByRoleInput).map((role) => normalizeScenarioRoleId(role) || normalizeText(role)).filter(Boolean);
+  const participantsRaw = Array.isArray(source.actors) ? source.actors : [];
+  const participantRoles = participantsRaw.map((actor) => normalizeScenarioRoleId(actor)).filter(Boolean);
+  const primaryRole = normalizeScenarioRoleId(source.primaryRole) || normalizeScenarioRoleId(source.primary_role) || "";
+  const secondaryRolesInput = normalizeStringList(source.secondaryRoles ?? source.secondary_roles).map((role) => normalizeScenarioRoleId(role) || role);
+  const sceneActiveInput = normalizeStringList(source.sceneActiveRoles ?? source.scene_active_roles).map((role) => normalizeScenarioRoleId(role) || role);
+  const refsUsedInput = normalizeStringList(source.refsUsed ?? source.refs_used).map((role) => normalizeScenarioRoleId(role) || role);
+  const mustAppearInput = normalizeStringList(source.mustAppear ?? source.must_appear).map((role) => normalizeScenarioRoleId(role) || role);
+  const supportInput = normalizeStringList(source.supportEntityIds ?? source.support_entity_ids).map((role) => normalizeScenarioRoleId(role) || role);
+
+  const availableCastRoles = SCENARIO_CAST_ROLE_KEYS.filter((role) => {
+    const hasSceneRefs = Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0;
+    const hasPackageRefs = Array.isArray(packageRefsByRole?.[role]) && packageRefsByRole[role].length > 0;
+    return hasSceneRefs || hasPackageRefs;
+  });
+  const rolesRequiredByDirective = SCENARIO_CAST_ROLE_KEYS.filter((role) => {
+    const directive = normalizeText(packageRefDirectives?.[role]).toLowerCase();
+    return directive && directive !== "omit";
+  });
+  const castMustAppearRoles = packageMustAppearRoles.filter((role) => SCENARIO_CAST_ROLE_KEYS.includes(role));
+
+  const explicitRoles = Array.from(new Set([
+    primaryRole,
+    ...secondaryRolesInput,
+    ...sceneActiveInput,
+    ...refsUsedInput,
+    ...mustAppearInput,
+    ...supportInput,
+    ...refsUsedByRoleKeys,
+    ...participantRoles,
+  ].map((role) => normalizeScenarioRoleId(role) || normalizeText(role)).filter((role) => SCENARIO_CAST_ROLE_KEYS.includes(role))));
+
+  const hasSemanticTwoPerson = hasScenarioTwoPersonSemanticSignal(source);
+  const hasTwoParticipants = participantRoles.length >= 2 || participantsRaw.length >= 2;
+  const twoPersonFromGlobalContract = availableCastRoles.includes("character_1") && availableCastRoles.includes("character_2")
+    && (hasSemanticTwoPerson || hasTwoParticipants || castMustAppearRoles.includes("character_2") || rolesRequiredByDirective.includes("character_2"));
+  const forceTwoPerson = twoPersonFromGlobalContract && (explicitRoles.includes("character_1") || explicitRoles.length <= 1);
+
+  const activeRoles = Array.from(new Set([
+    ...explicitRoles,
+    ...(forceTwoPerson ? ["character_1", "character_2"] : []),
+  ])).filter((role) => availableCastRoles.includes(role) || role === primaryRole);
+
+  const resolvedPrimary = primaryRole || activeRoles[0] || availableCastRoles[0] || "";
+  const resolvedSecondary = Array.from(new Set(activeRoles.filter((role) => role !== resolvedPrimary)));
+  const resolvedActive = Array.from(new Set([resolvedPrimary, ...resolvedSecondary].filter(Boolean)));
+  const resolvedMustAppear = Array.from(new Set([
+    ...mustAppearInput.filter((role) => resolvedActive.includes(role)),
+    ...(forceTwoPerson ? ["character_1", "character_2"] : []),
+  ])).filter((role) => resolvedActive.includes(role));
+  const finalMustAppear = resolvedMustAppear.length ? resolvedMustAppear : [...resolvedActive];
+  const finalRefsUsed = Array.from(new Set([
+    ...refsUsedInput.filter((role) => resolvedActive.includes(role)),
+    ...resolvedActive,
+  ]));
+  const refsUsedByRole = resolvedActive.reduce((acc, role) => {
+    const sourceRefs = Array.isArray(refsByRole?.[role]) ? refsByRole[role] : (Array.isArray(packageRefsByRole?.[role]) ? packageRefsByRole[role] : []);
+    if (sourceRefs.length > 0) acc[role] = sourceRefs;
+    return acc;
+  }, {});
+  const supportEntityIds = Array.from(new Set([
+    ...supportInput.filter((role) => resolvedSecondary.includes(role)),
+    ...resolvedSecondary,
+  ]));
+
+  return {
+    primaryRole: resolvedPrimary,
+    secondaryRoles: resolvedSecondary,
+    sceneActiveRoles: resolvedActive,
+    refsUsed: finalRefsUsed,
+    mustAppear: finalMustAppear,
+    supportEntityIds,
+    refsUsedByRole,
+    debug: {
+      participants: participantsRaw,
+      hasSemanticTwoPerson,
+      hasTwoParticipants,
+      forceTwoPerson,
+      availableCastRoles,
+    },
+  };
+}
+
 export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = null) {
   const source = scene && typeof scene === "object" ? scene : {};
   const t0 = toNumber(source.t0 ?? source.time_start ?? source.timeStart, index * 5);
@@ -608,6 +753,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     sceneActiveRoles: normalizeStringList(source.sceneActiveRoles ?? source.scene_active_roles),
     refsUsed: normalizeStringList(source.refsUsed ?? source.refs_used),
     refDirectives: source.refDirectives ?? source.ref_directives ?? {},
+    refsUsedByRole: normalizeObjectMap(source.refsUsedByRole ?? source.refs_used_by_role),
     focalSubject: source.focalSubject ?? source.focal_subject,
     sceneAction: source.sceneAction ?? source.scene_action,
     cameraIntent: source.cameraIntent ?? source.camera_intent,
@@ -639,6 +785,18 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     globalVisualLock: scenarioPackage?.globalVisualLock || null,
     globalCameraProfile: scenarioPackage?.globalCameraProfile || null,
   };
+  const resolvedRoleContract = resolveScenarioSceneRoleContract(normalizedScene, scenarioPackage || {});
+  normalizedScene.primaryRole = resolvedRoleContract.primaryRole;
+  normalizedScene.secondaryRoles = resolvedRoleContract.secondaryRoles;
+  normalizedScene.sceneActiveRoles = resolvedRoleContract.sceneActiveRoles;
+  normalizedScene.refsUsed = resolvedRoleContract.refsUsed;
+  normalizedScene.mustAppear = resolvedRoleContract.mustAppear;
+  normalizedScene.supportEntityIds = resolvedRoleContract.supportEntityIds;
+  normalizedScene.refsUsedByRole = {
+    ...normalizeObjectMap(normalizedScene.refsUsedByRole),
+    ...normalizeObjectMap(resolvedRoleContract.refsUsedByRole),
+  };
+
   if (SCENARIO_STORYBOARD_TRACE) {
     console.debug("[SCENARIO TRANSFER] normalized scene", {
       sceneId: normalizedScene.sceneId,
@@ -661,6 +819,18 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
       hasProviderHints: !!normalizedScene.providerHints,
     });
   }
+  console.debug("[SCENARIO SCENE CONTRACT DEBUG]", {
+    sceneId: normalizedScene.sceneId,
+    participants: resolvedRoleContract.debug?.participants || normalizedScene.actors || [],
+    primaryRole: normalizedScene.primaryRole || "",
+    secondaryRoles: normalizedScene.secondaryRoles || [],
+    sceneActiveRoles: normalizedScene.sceneActiveRoles || [],
+    refsUsed: normalizedScene.refsUsed || [],
+    mustAppear: normalizedScene.mustAppear || [],
+    refsUsedByRoleKeys: Object.keys(normalizeObjectMap(normalizedScene.refsUsedByRole)),
+    forceTwoPerson: Boolean(resolvedRoleContract.debug?.forceTwoPerson),
+    hasSemanticTwoPerson: Boolean(resolvedRoleContract.debug?.hasSemanticTwoPerson),
+  });
   return normalizedScene;
 }
 
@@ -731,42 +901,6 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     directorOutput?.aspect_ratio,
     directorOutput?.canvas
   );
-  const scenesRaw = Array.isArray(storyboardOut?.scenes)
-    ? storyboardOut.scenes
-    : Array.isArray(directorOutput?.scenes)
-      ? directorOutput.scenes
-      : [];
-  const scenes = scenesRaw.map((scene, idx) => normalizeScenarioScene(scene, idx, { globalVisualLock, globalCameraProfile, format }));
-
-  const storySummary = normalizeDualField({
-    ru: storyboardOut?.story_summary_ru ?? directorOutput?.history?.summaryRu ?? preferRuFrom(directorOutput?.history, storyboardOut?.story_summary),
-    en: storyboardOut?.story_summary_en ?? storyboardOut?.story_summary ?? directorOutput?.history?.summaryEn ?? directorOutput?.history?.summary,
-  });
-  const world = normalizeDualField({
-    ru: storyboardOut?.world_ru ?? directorOutput?.history?.worldRu ?? scenes.find((scene) => !!scene.locationRu)?.locationRu,
-    en: storyboardOut?.world_en ?? directorOutput?.history?.worldEn ?? scenes.find((scene) => !!scene.locationEn)?.locationEn,
-  });
-  const previewPrompt = normalizeDualField({
-    ru: storyboardOut?.preview_prompt_ru ?? directorOutput?.history?.previewPromptRu ?? storySummary.ru,
-    en: storyboardOut?.preview_prompt_en ?? directorOutput?.history?.previewPromptEn ?? storySummary.en,
-  });
-  const actors = Array.from(new Set(scenes.flatMap((scene) => (Array.isArray(scene.actors) ? scene.actors : [])).filter(Boolean)));
-  const locations = Array.from(new Set(scenes.map((scene) => normalizeText(scene.locationEn || scene.locationRu)).filter(Boolean)));
-  const globalMusicPrompt = resolveScenarioGlobalMusicPrompt(storyboardOut || {}, directorOutput || {});
-  const musicPromptSource = resolveScenarioMusicPromptSource(storyboardOut || {}, directorOutput || {});
-  const musicPromptRu = normalizeText(
-    storyboardOut?.musicPromptRu
-    ?? storyboardOut?.music_prompt_ru
-    ?? directorOutput?.musicPromptRu
-    ?? directorOutput?.music_prompt_ru
-  );
-  const musicPromptEn = normalizeText(
-    storyboardOut?.musicPromptEn
-    ?? storyboardOut?.music_prompt_en
-    ?? directorOutput?.musicPromptEn
-    ?? directorOutput?.music_prompt_en
-  );
-
   const refsByRole = mergeObjectMapsPreferNonEmpty(
     storyboardOut?.refsByRole ?? storyboardOut?.refs_by_role,
     directorOutput?.refsByRole ?? directorOutput?.refs_by_role
@@ -804,6 +938,55 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   const refDirectives = mergeObjectMapsPreferNonEmpty(
     storyboardOut?.refDirectives ?? storyboardOut?.ref_directives,
     directorOutput?.refDirectives ?? directorOutput?.ref_directives
+  );
+
+  const scenesRaw = Array.isArray(storyboardOut?.scenes)
+    ? storyboardOut.scenes
+    : Array.isArray(directorOutput?.scenes)
+      ? directorOutput.scenes
+      : [];
+  const scenes = scenesRaw.map((scene, idx) => normalizeScenarioScene(scene, idx, {
+    globalVisualLock,
+    globalCameraProfile,
+    format,
+    refsByRole,
+    connectedRefsByRole,
+    roleTypeByRole,
+    connectedContextSummary,
+    heroParticipants,
+    supportingParticipants,
+    mustAppearRoles,
+    contextRefs,
+    refDirectives,
+  }));
+
+  const storySummary = normalizeDualField({
+    ru: storyboardOut?.story_summary_ru ?? directorOutput?.history?.summaryRu ?? preferRuFrom(directorOutput?.history, storyboardOut?.story_summary),
+    en: storyboardOut?.story_summary_en ?? storyboardOut?.story_summary ?? directorOutput?.history?.summaryEn ?? directorOutput?.history?.summary,
+  });
+  const world = normalizeDualField({
+    ru: storyboardOut?.world_ru ?? directorOutput?.history?.worldRu ?? scenes.find((scene) => !!scene.locationRu)?.locationRu,
+    en: storyboardOut?.world_en ?? directorOutput?.history?.worldEn ?? scenes.find((scene) => !!scene.locationEn)?.locationEn,
+  });
+  const previewPrompt = normalizeDualField({
+    ru: storyboardOut?.preview_prompt_ru ?? directorOutput?.history?.previewPromptRu ?? storySummary.ru,
+    en: storyboardOut?.preview_prompt_en ?? directorOutput?.history?.previewPromptEn ?? storySummary.en,
+  });
+  const actors = Array.from(new Set(scenes.flatMap((scene) => (Array.isArray(scene.actors) ? scene.actors : [])).filter(Boolean)));
+  const locations = Array.from(new Set(scenes.map((scene) => normalizeText(scene.locationEn || scene.locationRu)).filter(Boolean)));
+  const globalMusicPrompt = resolveScenarioGlobalMusicPrompt(storyboardOut || {}, directorOutput || {});
+  const musicPromptSource = resolveScenarioMusicPromptSource(storyboardOut || {}, directorOutput || {});
+  const musicPromptRu = normalizeText(
+    storyboardOut?.musicPromptRu
+    ?? storyboardOut?.music_prompt_ru
+    ?? directorOutput?.musicPromptRu
+    ?? directorOutput?.music_prompt_ru
+  );
+  const musicPromptEn = normalizeText(
+    storyboardOut?.musicPromptEn
+    ?? storyboardOut?.music_prompt_en
+    ?? directorOutput?.musicPromptEn
+    ?? directorOutput?.music_prompt_en
   );
 
   const normalizedPackage = {
@@ -911,6 +1094,7 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
       sceneActiveRoles: Array.isArray(scene?.sceneActiveRoles) ? scene.sceneActiveRoles : [],
       refsUsed: Array.isArray(scene?.refsUsed) ? scene.refsUsed : [],
       mustAppear: Array.isArray(scene?.mustAppear) ? scene.mustAppear : [],
+      refsUsedByRoleKeys: Object.keys(normalizeObjectMap(scene?.refsUsedByRole)),
     })),
   });
   return normalizedPackage;

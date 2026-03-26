@@ -630,15 +630,44 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
     : (scene?.refsUsed && typeof scene.refsUsed === "object"
       ? normalizeRoleList(Object.keys(scene.refsUsed).filter((role) => !!scene.refsUsed[role]))
       : []);
+  const refsUsedByRoleKeys = normalizeRoleList(Object.keys((scene?.refsUsedByRole && typeof scene.refsUsedByRole === "object") ? scene.refsUsedByRole : {}));
+  const actorsRoleSignals = normalizeRoleList(Array.isArray(scene?.actors) ? scene.actors : []);
+  const semanticTwoPersonSignal = ["gaze", "shared glance", "look into eyes", "eye contact", "whisper", "hold hand", "embrace", "hug", "looks at", "looking at", "див", "смотр", "взгляд", "шепч", "обнима", "держ"]
+    .some((marker) => `${String(scene?.summaryEn || "")} ${String(scene?.summaryRu || "")} ${String(scene?.videoPromptEn || "")} ${String(scene?.videoPromptRu || "")} ${String(scene?.imagePromptEn || "")} ${String(scene?.imagePromptRu || "")}`.toLowerCase().includes(marker));
   const mustAppear = normalizeRoleList(scene?.mustAppear);
+  const availableTwoPersonRefs = roleWithRefs.includes("character_1") && roleWithRefs.includes("character_2");
+  const shouldForceTwoPerson = availableTwoPersonRefs && (
+    semanticTwoPersonSignal
+    || actorsRoleSignals.length >= 2
+    || refsUsedByRoleKeys.includes("character_2")
+    || mustAppear.includes("character_2")
+  );
   const hasExplicitContract = Boolean(primaryRole || secondaryRoles.length || sceneActiveRoles.length || mustAppear.length);
+  const explicitActiveRoles = normalizeRoleList([
+    primaryRole,
+    ...secondaryRoles,
+    ...sceneActiveRoles,
+    ...refsUsed,
+    ...mustAppear,
+    ...refsUsedByRoleKeys,
+  ]);
+  const healedPrimary = primaryRole || explicitActiveRoles[0] || roleWithRefs[0] || "";
+  const healedActive = shouldForceTwoPerson
+    ? normalizeRoleList([...explicitActiveRoles, "character_1", "character_2"])
+    : explicitActiveRoles;
+  const healedSecondary = healedActive.filter((role) => role !== healedPrimary);
+  const healedMustAppear = normalizeRoleList([
+    ...mustAppear,
+    ...(shouldForceTwoPerson ? ["character_1", "character_2"] : healedActive),
+  ]).filter((role) => healedActive.includes(role));
+  const healedRefsUsed = normalizeRoleList([...refsUsed, ...healedActive]);
   if (hasExplicitContract) {
     return {
-      primaryRole,
-      secondaryRoles,
-      sceneActiveRoles,
-      refsUsed,
-      mustAppear,
+      primaryRole: healedPrimary,
+      secondaryRoles: healedSecondary,
+      sceneActiveRoles: healedActive,
+      refsUsed: healedRefsUsed,
+      mustAppear: healedMustAppear.length ? healedMustAppear : healedActive,
     };
   }
   if (roleWithRefs.length >= 2) {
@@ -4105,6 +4134,9 @@ function normalizeClipImageRefsPayload(refs = {}) {
   if (refs?.refDirectives && typeof refs.refDirectives === "object") {
     normalized.refDirectives = refs.refDirectives;
   }
+  if (refs?.refsUsedByRole && typeof refs.refsUsedByRole === "object") {
+    normalized.refsUsedByRole = refs.refsUsedByRole;
+  }
   const primaryRole = String(refs?.primaryRole || "").trim();
   if (primaryRole) normalized.primaryRole = primaryRole;
   if (Array.isArray(refs?.secondaryRoles)) {
@@ -4123,6 +4155,9 @@ function normalizeClipImageRefsPayload(refs = {}) {
   }
   if (Array.isArray(refs?.mustNotAppear)) {
     normalized.mustNotAppear = refs.mustNotAppear.map((role) => String(role || "").trim()).filter(Boolean);
+  }
+  if (Array.isArray(refs?.participants)) {
+    normalized.participants = refs.participants.map((name) => String(name || "").trim()).filter(Boolean);
   }
   if (typeof refs?.environmentLock === "boolean") normalized.environmentLock = refs.environmentLock;
   if (typeof refs?.styleLock === "boolean") normalized.styleLock = refs.styleLock;
@@ -4148,6 +4183,7 @@ function buildComfySceneRefsPayload({
   plannerMeta = null,
   refsUsed = [],
   refDirectives = null,
+  refsUsedByRole = null,
   primaryRole = "",
   secondaryRoles = [],
   sceneActiveRoles = [],
@@ -4155,6 +4191,7 @@ function buildComfySceneRefsPayload({
   supportEntityIds = [],
   mustAppear = [],
   mustNotAppear = [],
+  participants = [],
   environmentLock = null,
   styleLock = null,
   identityLock = null,
@@ -4207,6 +4244,7 @@ function buildComfySceneRefsPayload({
     plannerMeta: plannerMeta && typeof plannerMeta === 'object' ? plannerMeta : undefined,
     refsUsed: Array.isArray(refsUsed) ? refsUsed : (refsUsed && typeof refsUsed === 'object' ? refsUsed : undefined),
     refDirectives: refDirectives && typeof refDirectives === 'object' ? refDirectives : undefined,
+    refsUsedByRole: refsUsedByRole && typeof refsUsedByRole === 'object' ? refsUsedByRole : undefined,
     primaryRole: String(primaryRole || "").trim(),
     secondaryRoles: Array.isArray(secondaryRoles) ? secondaryRoles : undefined,
     sceneActiveRoles: Array.isArray(sceneActiveRoles) ? sceneActiveRoles : undefined,
@@ -4214,6 +4252,7 @@ function buildComfySceneRefsPayload({
     supportEntityIds: Array.isArray(supportEntityIds) ? supportEntityIds : undefined,
     mustAppear: Array.isArray(mustAppear) ? mustAppear : undefined,
     mustNotAppear: Array.isArray(mustNotAppear) ? mustNotAppear : undefined,
+    participants: Array.isArray(participants) ? participants : undefined,
     environmentLock: typeof environmentLock === 'boolean' ? environmentLock : undefined,
     styleLock: typeof styleLock === 'boolean' ? styleLock : undefined,
     identityLock: typeof identityLock === 'boolean' ? identityLock : undefined,
@@ -8711,12 +8750,14 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         ...scenarioBrainRefs,
         refsByRole: refsByRoleForImage,
         refsUsed: derivedRoleContract.refsUsed,
+        refsUsedByRole: targetScene?.refsUsedByRole,
         primaryRole: derivedRoleContract.primaryRole,
         secondaryRoles: derivedRoleContract.secondaryRoles,
         sceneActiveRoles: derivedRoleContract.sceneActiveRoles,
         mustAppear: Array.isArray(targetScene?.mustAppear) && targetScene.mustAppear.length
           ? targetScene.mustAppear
           : derivedRoleContract.mustAppear,
+        participants: Array.isArray(targetScene?.actors) ? targetScene.actors : [],
         previousContinuityMemory,
         previousSceneImageUrl,
       });
