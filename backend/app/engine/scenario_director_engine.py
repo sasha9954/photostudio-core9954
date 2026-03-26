@@ -71,6 +71,7 @@ SCENARIO_ROLE_ALIASES = {
     "animal1": "animal_1",
     "group_face": "group_faces",
 }
+DUO_SCENE_HINTS = {"duo", "reunion", "shared-presence", "shared_presence", "two-shot", "two_shot", "joint", "together", "both"}
 
 WEAK_SCENE_PATTERNS = (
     "character walks",
@@ -1286,6 +1287,7 @@ def _normalize_scenario_role(role: Any) -> str:
 
 def _collect_known_roles(payload: dict[str, Any], scenes: list[ScenarioDirectorScene]) -> list[str]:
     refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    refs_by_role_raw = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
     connected_refs = payload.get("connectedRefsByRole") if isinstance(payload.get("connectedRefsByRole"), dict) else {}
     connected_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
     connected_summary_refs = connected_summary.get("refsByRole") if isinstance(connected_summary.get("refsByRole"), dict) else {}
@@ -1302,6 +1304,8 @@ def _collect_known_roles(payload: dict[str, Any], scenes: list[ScenarioDirectorS
         _push(role)
     for role in refs.keys():
         _push(role)
+    for role in refs_by_role_raw.keys():
+        _push(role)
     for role in connected_refs.keys():
         _push(role)
     for role in connected_summary_refs.keys():
@@ -1316,15 +1320,38 @@ def _collect_known_roles(payload: dict[str, Any], scenes: list[ScenarioDirectorS
     return ordered
 
 
-def _collect_refs_by_role(payload: dict[str, Any], known_roles: list[str]) -> dict[str, list[str]]:
+def _collect_refs_by_role(payload: dict[str, Any], known_roles: list[str]) -> tuple[dict[str, list[str]], dict[str, bool]]:
     refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    top_level_refs = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
+    connected_refs = payload.get("connectedRefsByRole") if isinstance(payload.get("connectedRefsByRole"), dict) else {}
+    connected_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
+    connected_summary_refs = connected_summary.get("refsByRole") if isinstance(connected_summary.get("refsByRole"), dict) else {}
     out: dict[str, list[str]] = {role: [] for role in known_roles}
-    for role, item in refs.items():
+
+    def _extend(role: Any, refs_value: Any) -> None:
         normalized_role = _normalize_scenario_role(role)
-        if not normalized_role or normalized_role not in out or not isinstance(item, dict):
-            continue
-        out[normalized_role].extend([str(ref).strip() for ref in (item.get("refs") or []) if str(ref).strip()])
-    return {role: list(dict.fromkeys(items)) for role, items in out.items() if items}
+        if not normalized_role or normalized_role not in out or not isinstance(refs_value, list):
+            return
+        clean_refs = [str(ref).strip() for ref in refs_value if str(ref).strip()]
+        if clean_refs:
+            out[normalized_role].extend(clean_refs)
+
+    for role, refs_value in top_level_refs.items():
+        _extend(role, refs_value)
+    for role, item in refs.items():
+        if isinstance(item, dict):
+            _extend(role, item.get("refs"))
+    for role, refs_value in connected_refs.items():
+        _extend(role, refs_value)
+    for role, refs_value in connected_summary_refs.items():
+        _extend(role, refs_value)
+    merged = {role: list(dict.fromkeys(items)) for role, items in out.items() if items}
+    source_flags = {
+        "hasTopLevelRefsByRole": bool(top_level_refs),
+        "hasContextRefs": bool(refs),
+        "hasConnectedRefsByRole": bool(connected_refs or connected_summary_refs),
+    }
+    return merged, source_flags
 
 
 def _collect_connected_refs_by_role(payload: dict[str, Any], known_roles: list[str]) -> dict[str, list[str]]:
@@ -1340,6 +1367,100 @@ def _collect_connected_refs_by_role(payload: dict[str, Any], known_roles: list[s
             if isinstance(refs, list):
                 out[normalized_role].extend([str(ref).strip() for ref in refs if str(ref).strip()])
     return {role: list(dict.fromkeys(items)) for role, items in out.items() if items}
+
+
+def _extract_scene_actor_roles(
+    scene: ScenarioDirectorScene,
+    raw_scene: dict[str, Any],
+    *,
+    known_roles: list[str],
+    hero_participants: list[str],
+    supporting_participants: list[str],
+) -> list[str]:
+    actor_roles: list[str] = []
+
+    def _push(role: Any) -> None:
+        normalized = _normalize_scenario_role(role)
+        if normalized and normalized in known_roles and normalized in SCENARIO_CAST_ROLES and normalized not in actor_roles:
+            actor_roles.append(normalized)
+
+    for key in ("primaryRole", "primary_role"):
+        _push(raw_scene.get(key))
+    for key in ("secondaryRoles", "secondary_roles", "sceneActiveRoles", "scene_active_roles", "refsUsed", "refs_used"):
+        for role in (raw_scene.get(key) or []):
+            _push(role)
+    for actor in (scene.actors or []):
+        _push(actor)
+    for role in (raw_scene.get("participants") or []):
+        _push(role)
+    for key in ("mustAppear", "must_appear"):
+        for role in (raw_scene.get(key) or []):
+            _push(role)
+    ref_directives = raw_scene.get("refDirectives") if isinstance(raw_scene.get("refDirectives"), dict) else {}
+    for role, directive in ref_directives.items():
+        if str(directive or "").strip().lower() in {"hero", "required"}:
+            _push(role)
+    if not actor_roles:
+        for role in [*hero_participants, *supporting_participants]:
+            _push(role)
+    return actor_roles
+
+
+def _resolve_scene_must_appear(
+    scene: ScenarioDirectorScene,
+    raw_scene: dict[str, Any],
+    *,
+    actor_roles: list[str],
+    primary_role: str,
+    hero_participants: list[str],
+) -> list[str]:
+    def _normalize_actor_roles(values: Any) -> list[str]:
+        out: list[str] = []
+        if not isinstance(values, list):
+            return out
+        for role in values:
+            normalized = _normalize_scenario_role(role)
+            if normalized and normalized in SCENARIO_CAST_ROLES and normalized in actor_roles and normalized not in out:
+                out.append(normalized)
+        return out
+
+    explicit = _normalize_actor_roles(raw_scene.get("mustAppear") if raw_scene.get("mustAppear") is not None else raw_scene.get("must_appear"))
+    if explicit:
+        return explicit
+    explicit_primary = _normalize_scenario_role(raw_scene.get("primaryRole") if raw_scene.get("primaryRole") is not None else raw_scene.get("primary_role"))
+    explicit_secondary = _normalize_actor_roles(raw_scene.get("secondaryRoles") if raw_scene.get("secondaryRoles") is not None else raw_scene.get("secondary_roles"))
+    if explicit_primary and explicit_primary in actor_roles and explicit_primary in SCENARIO_CAST_ROLES and explicit_secondary:
+        return list(dict.fromkeys([explicit_primary, *explicit_secondary]))
+
+    scene_signal = " ".join(
+        [
+            str(raw_scene.get("sceneType") or raw_scene.get("scene_type") or "").strip().lower(),
+            str(raw_scene.get("shotType") or raw_scene.get("shot_type") or "").strip().lower(),
+            str(raw_scene.get("title") or "").strip().lower(),
+            str(raw_scene.get("description") or "").strip().lower(),
+            str(raw_scene.get("prompt") or "").strip().lower(),
+            str(raw_scene.get("beat") or "").strip().lower(),
+            str(raw_scene.get("action") or "").strip().lower(),
+            str(raw_scene.get("imagePrompt") or raw_scene.get("image_prompt") or scene.image_prompt or "").strip().lower(),
+            str(raw_scene.get("videoPrompt") or raw_scene.get("video_prompt") or scene.video_prompt or "").strip().lower(),
+            str(scene.scene_goal or "").strip().lower(),
+            str(scene.frame_description or "").strip().lower(),
+            str(scene.action_in_frame or "").strip().lower(),
+        ]
+    )
+    if any(hint in scene_signal for hint in DUO_SCENE_HINTS):
+        duo_candidates = [role for role in hero_participants if role in actor_roles]
+        for role in actor_roles:
+            if role not in duo_candidates:
+                duo_candidates.append(role)
+        if len(duo_candidates) >= 2:
+            return duo_candidates[:2]
+
+    if primary_role and primary_role in SCENARIO_CAST_ROLES:
+        return [primary_role]
+    if actor_roles:
+        return [actor_roles[0]]
+    return []
 
 
 def _is_audio_connected(payload: dict[str, Any]) -> bool:
@@ -1360,7 +1481,7 @@ def _estimate_text_overlap(text: str, anchor: str) -> float:
 def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> dict[str, Any]:
     role_labels = _build_reference_role_map(payload)
     known_roles = _collect_known_roles(payload, storyboard_out.scenes)
-    refs_by_role = _collect_refs_by_role(payload, known_roles)
+    refs_by_role, refs_merge_flags = _collect_refs_by_role(payload, known_roles)
     connected_refs_by_role = _collect_connected_refs_by_role(payload, known_roles)
     effective_role_types, role_type_source, _ = _resolve_effective_role_type_by_role(payload)
     role_type_by_role: dict[str, str] = {}
@@ -1409,13 +1530,18 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     scenes = []
     video = []
     sound = []
+    payload_scenes = payload.get("scenes") if isinstance(payload.get("scenes"), list) else []
     for scene in storyboard_out.scenes:
+        scene_index = len(scenes)
+        raw_scene = payload_scenes[scene_index] if scene_index < len(payload_scenes) and isinstance(payload_scenes[scene_index], dict) else {}
         participants = _scene_participants(scene, role_labels)
-        actor_roles: list[str] = []
-        for actor in scene.actors:
-            normalized_actor = _normalize_scenario_role(actor)
-            if normalized_actor and normalized_actor in known_roles and normalized_actor not in actor_roles:
-                actor_roles.append(normalized_actor)
+        actor_roles = _extract_scene_actor_roles(
+            scene,
+            raw_scene,
+            known_roles=known_roles,
+            hero_participants=hero_participants,
+            supporting_participants=supporting_participants,
+        )
         scene_anchor_roles: list[str] = []
         if str(scene.location or "").strip() and (refs_by_role.get("location") or connected_refs_by_role.get("location")):
             scene_anchor_roles.append("location")
@@ -1435,9 +1561,19 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 continue
             refs_used_roles.append(role)
             refs_used_map[role] = role_refs
-        primary_role = next((role for role in actor_roles if role_type_by_role.get(role) == "hero"), actor_roles[0] if actor_roles else "")
+        explicit_primary_role = _normalize_scenario_role(raw_scene.get("primaryRole") if raw_scene.get("primaryRole") is not None else raw_scene.get("primary_role"))
+        primary_role = explicit_primary_role if explicit_primary_role in actor_roles else next(
+            (role for role in actor_roles if role_type_by_role.get(role) == "hero"),
+            actor_roles[0] if actor_roles else "",
+        )
         secondary_roles = [role for role in actor_roles if role != primary_role]
-        must_appear = [role for role in actor_roles if role in must_appear_roles]
+        must_appear = _resolve_scene_must_appear(
+            scene,
+            raw_scene,
+            actor_roles=actor_roles,
+            primary_role=primary_role,
+            hero_participants=hero_participants,
+        )
         support_entity_ids = [role_labels.get(role, role) for role in secondary_roles]
         scene_item = {
             "sceneId": scene.scene_id,
@@ -1506,6 +1642,8 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         )
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s primaryRole=%s", scene.scene_id, primary_role)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s secondaryRoles=%s", scene.scene_id, secondary_roles)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s actorRoles=%s", scene.scene_id, actor_roles)
+        logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s anchorRoles=%s", scene.scene_id, scene_anchor_roles)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s sceneActiveRoles=%s", scene.scene_id, scene_active_roles)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s refsUsed=%s", scene.scene_id, refs_used_roles)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s mustAppear=%s", scene.scene_id, must_appear)
@@ -1515,10 +1653,18 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         "style": f"{payload.get('director_controls', {}).get('contentType') or ''} / {payload.get('director_controls', {}).get('styleProfile') or ''}".strip(" /"),
         "pacingHints": "Use the Gemini scene pacing to build intro, escalation, climax, and resolution.",
     }
+    logger.debug("[SCENARIO DIRECTOR OUTPUT] package knownRoles=%s", known_roles)
+    logger.debug(
+        "[SCENARIO DIRECTOR OUTPUT] package refs merge sources top=%s context=%s connected=%s",
+        refs_merge_flags.get("hasTopLevelRefsByRole"),
+        refs_merge_flags.get("hasContextRefs"),
+        refs_merge_flags.get("hasConnectedRefsByRole"),
+    )
     logger.debug("[SCENARIO DIRECTOR OUTPUT] package refsByRole keys=%s", sorted(refs_by_role.keys()))
     logger.debug("[SCENARIO DIRECTOR OUTPUT] package connectedRefsByRole keys=%s", sorted(connected_refs_by_role.keys()))
     logger.debug("[SCENARIO DIRECTOR OUTPUT] package roleTypeByRole=%s", role_type_by_role)
     logger.debug("[SCENARIO DIRECTOR OUTPUT] package heroParticipants=%s", hero_participants)
+    logger.debug("[SCENARIO DIRECTOR OUTPUT] package supportingParticipants=%s", supporting_participants)
     logger.debug("[SCENARIO DIRECTOR OUTPUT] package mustAppearRoles=%s", must_appear_roles)
     logger.debug(
         "[SCENARIO DIRECTOR OUTPUT] package worldRefs location=%s style=%s props=%s animal_group=%s",
@@ -1558,6 +1704,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "roleTypeSourceByRole": role_type_source,
             "refsByRoleKeys": sorted(refs_by_role.keys()),
             "connectedRefsByRoleKeys": sorted(connected_refs_by_role.keys()),
+            "refsMergeSourceFlags": refs_merge_flags,
             "hasLocationRef": bool(refs_by_role.get("location") or connected_refs_by_role.get("location")),
             "hasStyleRef": bool(refs_by_role.get("style") or connected_refs_by_role.get("style")),
             "hasPropsRef": bool(refs_by_role.get("props") or connected_refs_by_role.get("props")),
