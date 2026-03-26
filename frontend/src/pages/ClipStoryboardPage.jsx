@@ -180,7 +180,7 @@ const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = false;
 const CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD = false;
 const CLIP_TRACE_SCENARIO_SCENE_ASSETS = false;
-const CLIP_TRACE_ROLE_CONTRACT_SCENE_ID = "";
+const CLIP_TRACE_ROLE_CONTRACT_SCENE_ID = "TRACE_SCENE_2P_001";
 
 function shouldTraceRoleContractScene(sceneId = "") {
   const needle = String(CLIP_TRACE_ROLE_CONTRACT_SCENE_ID || "").trim();

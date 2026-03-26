@@ -4,7 +4,7 @@ const normalizeText = (value) => String(value || "").trim();
 const SCENARIO_STORYBOARD_TRACE = false;
 const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
-const SCENARIO_ROLE_TRACE_SCENE_ID = "";
+const SCENARIO_ROLE_TRACE_SCENE_ID = "TRACE_SCENE_2P_001";
 
 function shouldTraceScenarioRoleScene(sceneId = "") {
   const needle = normalizeText(SCENARIO_ROLE_TRACE_SCENE_ID);
