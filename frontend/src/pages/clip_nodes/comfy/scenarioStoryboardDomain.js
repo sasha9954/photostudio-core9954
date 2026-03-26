@@ -329,6 +329,13 @@ export function resolveScenarioWorkflowKey(scene = {}) {
   const explicitWorkflow = resolveScenarioExplicitWorkflowKey(scene);
   if (explicitWorkflow) return explicitWorkflow;
   const source = scene && typeof scene === "object" ? scene : {};
+  const continuationRequested = Boolean(
+    source.continuation
+    ?? source.continuationFromPrevious
+    ?? source.continuation_from_previous
+    ?? source.requiresContinuation
+  );
+  if (continuationRequested) return SCENARIO_LTX_WORKFLOW_MAP.continuation;
   const ltxMode = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
   return SCENARIO_LTX_WORKFLOW_MAP[ltxMode] || SCENARIO_LTX_WORKFLOW_MAP.i2v;
 }
@@ -528,6 +535,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ltxReason: normalizeText(source.ltxReason ?? source.ltx_reason ?? source.whyThisMode),
     needsTwoFrames: Boolean(source.needsTwoFrames ?? source.needs_two_frames ?? ["first_last"].includes(renderMode)),
     continuationFromPrevious: Boolean(source.continuationFromPrevious ?? source.continuation_from_previous ?? source.continuation),
+    continuationSourceSceneId: normalizeText(source.continuationSourceSceneId ?? source.continuation_source_scene_id),
+    continuationSourceAssetUrl: normalizeText(source.continuationSourceAssetUrl ?? source.continuation_source_asset_url),
     imageStrategy: normalizeText(source.imageStrategy) || imageStrategy,
     requiresTwoFrames,
     requiresContinuation,

@@ -127,6 +127,8 @@ class ClipVideoIn(BaseModel):
     modelFileOverride: str | None = None
     continuation: bool | None = None
     continuationFromPrevious: bool | None = None
+    continuationSourceSceneId: str | None = None
+    continuationSourceAssetUrl: str | None = None
     requiresTwoFrames: bool | None = None
     requiresContinuation: bool | None = None
     requiresAudioSensitiveVideo: bool | None = None
@@ -690,6 +692,8 @@ def _validate_ltx_workflow_strategy(
     start_image_url: str,
     end_image_url: str,
     audio_slice_url: str,
+    continuation_source_scene_id: str,
+    continuation_source_asset_url: str,
 ) -> tuple[str | None, str | None]:
     normalized_strategy = str(image_strategy or "").strip().lower()
     has_image = bool(image_url)
@@ -726,7 +730,9 @@ def _validate_ltx_workflow_strategy(
         return "LTX_LIPSYNC_NOT_IMPLEMENTED", "audio_input_required_for_lip_sync_workflow"
 
     if workflow_key == "continuation":
-        return "LTX_CONTINUATION_NOT_IMPLEMENTED", "continuation mode requested by scene but current comfy executor does not support it yet"
+        has_continuation_source = bool(continuation_source_scene_id or continuation_source_asset_url or has_start or has_end)
+        if not has_continuation_source:
+            return "LTX_CONTINUATION_SOURCE_REQUIRED", "continuation_requires_previous_scene_context_or_asset"
 
     return None, None
 
@@ -9116,6 +9122,8 @@ def clip_video(payload: ClipVideoIn):
     render_mode = str(payload.renderMode or "").strip().lower()
     is_lipsync = bool(payload.lipSync is True or render_mode == "avatar_lipsync")
     audio_slice_url = str(payload.audioSliceUrl or "").strip()
+    continuation_source_scene_id = str(payload.continuationSourceSceneId or "").strip()
+    continuation_source_asset_url = str(payload.continuationSourceAssetUrl or "").strip()
     image_url = str(payload.imageUrl or "").strip()
     start_image_url = str(payload.startImageUrl or "").strip()
     end_image_url = str(payload.endImageUrl or "").strip()
@@ -9191,22 +9199,16 @@ def clip_video(payload: ClipVideoIn):
         f"resolvedModelKey={resolved_model_key}"
     )
 
-    if final_workflow_key == "continuation":
-        return JSONResponse(
-            status_code=422,
-            content={
-                "ok": False,
-                "code": "LTX_CONTINUATION_NOT_IMPLEMENTED",
-                "hint": "continuation mode requested by scene but current comfy executor does not support it yet",
-            },
-        )
-
     if not resolved_model_spec:
-        return JSONResponse(
-            status_code=422,
-            content={"ok": False, "code": "LTX_MODEL_NOT_FOUND", "hint": f"unknown_model_key:{resolved_model_key or 'empty'}"},
-        )
-    if final_workflow_key not in set(resolved_model_spec.get("compatible_workflow_keys") or set()):
+        if final_workflow_key == "continuation":
+            resolved_model_key = resolved_model_key or LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY.get("i2v", "")
+            resolved_model_spec = LTX_MODEL_KEY_TO_MODEL_SPEC.get(resolved_model_key)
+        if not resolved_model_spec:
+            return JSONResponse(
+                status_code=422,
+                content={"ok": False, "code": "LTX_MODEL_NOT_FOUND", "hint": f"unknown_model_key:{resolved_model_key or 'empty'}"},
+            )
+    if final_workflow_key != "continuation" and final_workflow_key not in set(resolved_model_spec.get("compatible_workflow_keys") or set()):
         return JSONResponse(
             status_code=422,
             content={
@@ -9236,6 +9238,8 @@ def clip_video(payload: ClipVideoIn):
 
     if provider == "comfy_remote":
         source_image_url = image_url or start_image_url or end_image_url
+        if final_workflow_key == "continuation":
+            source_image_url = source_image_url or continuation_source_asset_url
         if not source_image_url:
             return JSONResponse(
                 status_code=400,
@@ -9314,6 +9318,8 @@ def clip_video(payload: ClipVideoIn):
             start_image_bytes=start_image_bytes,
             end_image_bytes=end_image_bytes,
             audio_url=audio_slice_url,
+            continuation_source_asset_url=continuation_source_asset_url,
+            requested_mode=str(payload.ltxMode or ""),
         )
         if comfy_err or not comfy_out:
             err_text = str(comfy_err or "comfy_remote_failed")
@@ -9370,7 +9376,7 @@ def clip_video(payload: ClipVideoIn):
             "provider": "comfy_remote",
             "model": resolved_model_key,
             "taskId": prompt_id,
-            "mode": mode,
+            "mode": str(comfy_out.get("mode") or mode),
             "requestedDurationSec": round(float(requested_duration), 3),
             "providerDurationSec": round(float(comfy_out.get("requestedDurationSec") or requested_duration), 3),
             "debug": comfy_out.get("debug") if isinstance(comfy_out, dict) else None,
@@ -9413,6 +9419,8 @@ def clip_video(payload: ClipVideoIn):
         start_image_url=start_image_url,
         end_image_url=end_image_url,
         audio_slice_url=audio_slice_url,
+        continuation_source_scene_id=continuation_source_scene_id,
+        continuation_source_asset_url=continuation_source_asset_url,
     )
     if validation_code:
         return JSONResponse(

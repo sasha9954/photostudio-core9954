@@ -18,10 +18,23 @@ logger = logging.getLogger(__name__)
 COMFY_LTX_CAPABILITIES = {
     "single_image": True,
     "first_last": True,
-    "audio_sensitive": False,
+    "audio_sensitive": True,
     "lip_sync": False,
-    "continuation": False,
+    "continuation": True,
 }
+COMFY_AUDIO_WORKFLOW_FILES = {
+    "i2v_as": "image-video-golos-zvuk.json",
+    "f_l_as": "imag-imag-video-zvuk.json",
+    "lip_sync": "image-lipsink-video-music.json",
+}
+COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {
+    "loadaudio",
+    "vhs_loadaudio",
+    "vhs_loadaudioupload",
+    "loadaudiofromurl",
+    "loadaudiofrompath",
+}
+COMFY_AUDIO_INPUT_KEYS = ("audio", "audio_file", "audio_path", "path", "filename", "url")
 
 COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "i2v": {"single_image": True, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": False},
@@ -628,6 +641,45 @@ def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image
     return bool(start_node_ids and end_node_ids), start_node_ids, end_node_ids
 
 
+def _validate_audio_workflow_file(*, workflow_key: str, workflow_source: str) -> tuple[bool, str | None]:
+    expected_name = COMFY_AUDIO_WORKFLOW_FILES.get(str(workflow_key or "").strip().lower())
+    actual_name = Path(str(workflow_source or "")).name
+    if not expected_name:
+        return False, f"unsupported_audio_workflow_key:{workflow_key}"
+    if actual_name != expected_name:
+        return False, f"workflow_file_mismatch:expected={expected_name};actual={actual_name}"
+    return True, None
+
+
+def _patch_audio_input_nodes(workflow: dict, *, audio_url: str) -> tuple[list[str], str | None]:
+    safe_audio_url = str(audio_url or "").strip()
+    if not safe_audio_url:
+        return [], "audio_url_empty"
+    patched_node_ids: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        if class_type not in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES:
+            continue
+        applied = False
+        for input_key in COMFY_AUDIO_INPUT_KEYS:
+            if input_key in inputs:
+                inputs[input_key] = safe_audio_url
+                patched_node_ids.append(str(node_id))
+                applied = True
+                break
+        if not applied:
+            return [], f"audio_loader_input_missing:{node_id}:{class_type}"
+
+    if not patched_node_ids:
+        return [], "audio_loader_nodes_not_found"
+    return patched_node_ids, None
+
+
 def _patch_workflow_inputs(
     workflow: dict,
     *,
@@ -710,6 +762,8 @@ def run_comfy_image_to_video(
     end_image_bytes: bytes | None = None,
     audio_bytes: bytes | None = None,
     audio_url: str | None = None,
+    continuation_source_asset_url: str | None = None,
+    requested_mode: str | None = None,
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
     normalized_workflow_key = str(workflow_key or "i2v").strip().lower() or "i2v"
@@ -718,7 +772,7 @@ def run_comfy_image_to_video(
     if not effective_model_spec:
         return None, f"capability_error:LTX_MODEL_NOT_FOUND:unknown_model_key:{normalized_model_key or 'empty'}"
     compatible_workflow_keys = set(effective_model_spec.get("compatible_workflow_keys") or set())
-    if compatible_workflow_keys and normalized_workflow_key not in compatible_workflow_keys:
+    if normalized_workflow_key != "continuation" and compatible_workflow_keys and normalized_workflow_key not in compatible_workflow_keys:
         return None, f"capability_error:LTX_MODEL_WORKFLOW_INCOMPATIBLE:model={normalized_model_key};workflow={normalized_workflow_key}"
     capability_code, capability_hint = _validate_comfy_ltx_request(
         workflow_key=normalized_workflow_key,
@@ -803,8 +857,27 @@ def run_comfy_image_to_video(
         )
         if not first_last_applied:
             return None, "capability_error:LTX_FIRST_LAST_NOT_IMPLEMENTED:second_frame_patch_not_applied"
+    audio_patch_node_ids: list[str] = []
     if normalized_workflow_key in {"i2v_as", "f_l_as"}:
-        return None, "capability_error:LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED:audio_sensitive_workflow_not_patched_to_audio_nodes"
+        valid_audio_workflow, workflow_audio_err = _validate_audio_workflow_file(
+            workflow_key=normalized_workflow_key,
+            workflow_source=workflow_source,
+        )
+        if not valid_audio_workflow:
+            return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{workflow_audio_err}"
+        audio_patch_node_ids, audio_patch_err = _patch_audio_input_nodes(
+            patched_workflow,
+            audio_url=str(audio_url or "").strip(),
+        )
+        if audio_patch_err:
+            if audio_patch_err == "audio_loader_nodes_not_found":
+                return None, "capability_error:LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED:audio_sensitive_mode_requested_but_audio_loader_nodes_not_found"
+            return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{audio_patch_err}"
+    continuation_used = False
+    if normalized_workflow_key == "continuation":
+        if not str(continuation_source_asset_url or "").strip():
+            return None, "capability_error:LTX_CONTINUATION_SOURCE_REQUIRED:continuation_source_asset_url_missing"
+        return None, "capability_error:LTX_CONTINUATION_NOT_IMPLEMENTED:continuation mode requested by scene but current comfy workflow patcher does not support it yet"
 
     logger.info(
         "[COMFY REMOTE] patched workflow values %s",
@@ -852,25 +925,31 @@ def run_comfy_image_to_video(
 
     return {
         "provider": "comfy_remote",
-        "mode": "single",
+        "mode": normalized_workflow_key,
         "videoUrl": video_url,
         "model": normalized_model_key,
         "requestedDurationSec": round(float(requested_duration_sec), 3),
         "taskId": prompt_id,
         "debug": {
             "scene_id": str(scene_id or "").strip(),
+            "provider": "comfy_remote",
+            "requested_mode": str(requested_mode or "").strip().lower() or normalized_workflow_key,
+            "resolved_workflow_key": normalized_workflow_key,
             "workflow_key": normalized_workflow_key,
             "workflow_file": Path(str(workflow_source)).name,
             "workflow": workflow_source,
             "workflow_path": workflow_source,
             "model_key": normalized_model_key,
             "model_ckpt_applied": str(effective_model_spec.get("ckpt_name") or ""),
-            "patched_node_ids": patched_model_node_ids,
+            "actual_mode": normalized_workflow_key,
+            "patched_node_ids": list(dict.fromkeys([*patched_model_node_ids, *first_last_start_node_ids, *first_last_end_node_ids, *audio_patch_node_ids])),
             "first_last_start_node_ids": first_last_start_node_ids,
             "first_last_end_node_ids": first_last_end_node_ids,
             "start_image_used": bool(first_last_start_node_ids),
             "end_image_used": bool(first_last_end_node_ids),
-            "audio_used": False,
+            "audio_used": bool(audio_patch_node_ids),
+            "continuation_used": continuation_used,
+            "audio_patch_node_ids": audio_patch_node_ids,
             "capabilities": COMFY_LTX_CAPABILITIES,
             "inputsUsed": {
                 "image": True,

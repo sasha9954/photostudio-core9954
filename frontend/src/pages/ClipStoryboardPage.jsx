@@ -361,6 +361,9 @@ function buildScenarioSceneContractPayload(scene = {}) {
     imageStrategy,
     requiresTwoFrames: Boolean(scene?.requiresTwoFrames ?? scene?.needsTwoFrames ?? imageStrategy === "first_last"),
     requiresContinuation: Boolean(scene?.requiresContinuation ?? scene?.continuationFromPrevious ?? scene?.continuation ?? imageStrategy === "continuation"),
+    continuationFromPrevious: Boolean(scene?.continuationFromPrevious ?? scene?.continuation ?? imageStrategy === "continuation"),
+    continuationSourceSceneId: String(scene?.continuationSourceSceneId || "").trim(),
+    continuationSourceAssetUrl: String(scene?.continuationSourceAssetUrl || "").trim(),
     requiresAudioSensitiveVideo: Boolean(
       scene?.requiresAudioSensitiveVideo
       ?? ["i2v_as", "f_l_as", "lip_sync"].includes(String(scene?.ltxMode || "").trim().toLowerCase())
@@ -6880,6 +6883,8 @@ const comfyShowVideoSection = Boolean(
       provider: String(jobMeta?.provider || sceneSnapshot?.sceneRenderProvider || "comfy_remote").trim() || "comfy_remote",
       workflowKey: String(jobMeta?.workflowKey || sceneSnapshot?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneSnapshot || {}) || "").trim(),
       modelKey: String(jobMeta?.modelKey || sceneSnapshot?.resolvedModelKey || resolveScenarioExplicitModelKey(sceneSnapshot || {}) || "").trim(),
+      audioSensitive: Boolean(jobMeta?.audioSensitive ?? sceneSnapshot?.requiresAudioSensitiveVideo),
+      continuation: Boolean(jobMeta?.continuation ?? sceneSnapshot?.requiresContinuation ?? sceneSnapshot?.continuationFromPrevious),
       startedAt: Number(jobMeta?.startedAt) || now,
       updatedAt: Number(jobMeta?.updatedAt) || now,
       status: String(jobMeta?.status || "queued").toLowerCase(),
@@ -6908,6 +6913,8 @@ const comfyShowVideoSection = Boolean(
       provider: String(startMeta.provider || ""),
       workflowKey: String(startMeta.workflowKey || ""),
       modelKey: String(startMeta.modelKey || ""),
+      audioSensitive: Boolean(startMeta.audioSensitive),
+      continuation: Boolean(startMeta.continuation),
     });
 
     const scheduleScenarioPoll = (delayMs, reason) => {
@@ -7155,6 +7162,8 @@ const comfyShowVideoSection = Boolean(
           workflowKey: String(meta?.workflowKey || sceneNow?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneNow || {}) || ""),
           modelKey: String(meta?.modelKey || sceneNow?.resolvedModelKey || resolveScenarioExplicitModelKey(sceneNow || {}) || ""),
           provider: String(meta?.provider || sceneNow?.sceneRenderProvider || "comfy_remote"),
+          audioSensitive: Boolean(meta?.audioSensitive ?? sceneNow?.requiresAudioSensitiveVideo),
+          continuation: Boolean(meta?.continuation ?? sceneNow?.requiresContinuation ?? sceneNow?.continuationFromPrevious),
         });
       });
       persistActiveVideoJob(nextPersisted);
@@ -9045,6 +9054,25 @@ Aspect ratio: ${imageFormat}`,
       targetScene?.requiresAudioSensitiveVideo
       ?? ["i2v_as", "f_l_as", "lip_sync"].includes(String(targetScene?.ltxMode || "").trim().toLowerCase())
     );
+    const continuationSourceSceneId = requiresContinuation
+      ? String(targetPreviousScene?.sceneId || "").trim()
+      : "";
+    const continuationSourceAssetUrl = requiresContinuation
+      ? String(
+        targetPreviousScene?.videoUrl
+        || targetPreviousScene?.endImageUrl
+        || targetPreviousScene?.endFrameImageUrl
+        || targetPreviousScene?.imageUrl
+        || ""
+      ).trim()
+      : "";
+    if (requiresContinuation) {
+      updateScenarioScene(targetSceneIndex, {
+        continuationFromPrevious: true,
+        continuationSourceSceneId,
+        continuationSourceAssetUrl,
+      });
+    }
 
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
@@ -9137,6 +9165,9 @@ Aspect ratio: ${imageFormat}`,
           requiresTwoFrames,
           requiresContinuation,
           requiresAudioSensitiveVideo,
+          continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? requiresContinuation),
+          continuationSourceSceneId,
+          continuationSourceAssetUrl,
           shotType: targetScene.shotType || "",
           sceneType: targetScene.sceneType || "",
           format: resolvePreferredSceneFormat(
@@ -9186,6 +9217,8 @@ Aspect ratio: ${imageFormat}`,
           sceneId,
           workflowKey: resolvedWorkflowKey,
           modelKey: resolvedModelKey,
+          audioSensitive: requiresAudioSensitiveVideo,
+          continuation: requiresContinuation,
           status: "queued",
         });
         return;
