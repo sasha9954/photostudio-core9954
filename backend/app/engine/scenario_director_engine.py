@@ -3555,8 +3555,14 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         }
         retry_response, retry_model_used, retry_attempts = _send_director_request(api_key, retry_body)
         attempted_models.extend(model for model in retry_attempts if model not in attempted_models)
-        if not isinstance(retry_response, dict) or retry_response.get("__http_error__"):
+        if not isinstance(retry_response, dict):
             raise first_exc
+        if retry_response.get("__http_error__"):
+            raise _build_scenario_director_http_error(
+                retry_response,
+                fallback_code="gemini_request_failed",
+                fallback_message="Gemini strict JSON retry failed",
+            )
         raw_text = _extract_gemini_text(retry_response)
         retry_finish_reason = _extract_gemini_finish_reason(retry_response)
         logger.info(
