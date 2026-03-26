@@ -6911,7 +6911,9 @@ const comfyShowVideoSection = Boolean(
       ...jobMeta,
       sceneId,
       provider: String(jobMeta?.provider || sceneSnapshot?.sceneRenderProvider || "comfy_remote").trim() || "comfy_remote",
-      workflowKey: String(jobMeta?.workflowKey || sceneSnapshot?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneSnapshot || {}) || "").trim(),
+      workflowKey: normalizeScenarioWorkflowKeyForProduction(
+        String(jobMeta?.workflowKey || sceneSnapshot?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneSnapshot || {}) || "").trim()
+      ),
       modelKey: String(jobMeta?.modelKey || sceneSnapshot?.resolvedModelKey || resolveScenarioExplicitModelKey(sceneSnapshot || {}) || "").trim(),
       audioSensitive: Boolean(jobMeta?.audioSensitive ?? normalizeScenarioWorkflowKeyForProduction(sceneSnapshot?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneSnapshot || {})) === "lip_sync"),
       continuation: Boolean(jobMeta?.continuation ?? sceneSnapshot?.requiresContinuation ?? sceneSnapshot?.continuationFromPrevious),
@@ -7193,7 +7195,9 @@ const comfyShowVideoSection = Boolean(
         startScenarioVideoPolling({
           ...meta,
           sceneId: normalizedSceneId,
-          workflowKey: String(meta?.workflowKey || sceneNow?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneNow || {}) || ""),
+      workflowKey: normalizeScenarioWorkflowKeyForProduction(
+        String(meta?.workflowKey || sceneNow?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneNow || {}) || "")
+      ),
           modelKey: String(meta?.modelKey || sceneNow?.resolvedModelKey || resolveScenarioExplicitModelKey(sceneNow || {}) || ""),
           provider: String(meta?.provider || sceneNow?.sceneRenderProvider || "comfy_remote"),
           audioSensitive: Boolean(meta?.audioSensitive ?? normalizeScenarioWorkflowKeyForProduction(sceneNow?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneNow || {})) === "lip_sync"),
@@ -9142,7 +9146,9 @@ Aspect ratio: ${imageFormat}`,
       sceneIndex: idx,
       provider: resolveScenarioSceneVideoProvider(scene),
       ltxMode: String(scene?.ltxMode || ""),
-      resolvedWorkflowKey: String(scene?.resolvedWorkflowKey || resolveScenarioWorkflowKey(scene) || ""),
+      resolvedWorkflowKey: normalizeScenarioWorkflowKeyForProduction(
+        String(scene?.resolvedWorkflowKey || resolveScenarioWorkflowKey(scene) || "")
+      ),
       resolvedModelKey: String(scene?.resolvedModelKey || resolveScenarioExplicitModelKey(scene) || ""),
       startImagePresent: Boolean(scene?.startImageUrl || scene?.startFrameImageUrl),
       endImagePresent: Boolean(scene?.endImageUrl || scene?.endFrameImageUrl),

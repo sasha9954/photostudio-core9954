@@ -207,7 +207,7 @@ function participantsToActors(participants = []) {
 }
 
 function needsTwoFramesForMode(ltxMode = "") {
-  return ["f_l", "f_l_as"].includes(String(ltxMode || "").trim());
+  return ["f_l"].includes(String(ltxMode || "").trim());
 }
 
 function isContinuationMode(ltxMode = "") {
@@ -1013,7 +1013,7 @@ export function buildNarrativeOutputs(state = {}) {
       emotion: "Ожидание, настрой, интрига",
       goal: "Дать зрителю понятный вход в мир, героя и общий визуальный тон.",
       cameraIdea: "Плавный establishing shot с мягким заходом камеры.",
-      ltxMode: "i2v_as",
+      ltxMode: "i2v",
       whyThisMode: "Интро должно стартовать как production-ready intro shot с устойчивым первым кадром.",
       narrationMode: "intro_voiceover",
       localPhrase: "Это начало истории и эмоциональный вход для зрителя.",
@@ -1043,7 +1043,7 @@ export function buildNarrativeOutputs(state = {}) {
       emotion: "Рост напряжения, расширение масштаба",
       goal: "Сделать сцену крупнее и драматически ощутимее перед следующим beat.",
       cameraIdea: "Выразительный push-in или движение через глубину пространства.",
-      ltxMode: "f_l_as",
+      ltxMode: "f_l",
       whyThisMode: "Нужен production mode для глубины, масштаба и акцентного движения.",
       narrationMode: "depth_build",
       localPhrase: "Мир истории начинает давить сильнее и становится масштабнее.",
@@ -1073,7 +1073,7 @@ export function buildNarrativeOutputs(state = {}) {
       emotion: "Шок, понимание, эмоциональный отклик",
       goal: "Дать зрителю эмоционально считать последствия и усилить вовлечение.",
       cameraIdea: "Реакционный акцент с устойчивым кадром и мягким движением.",
-      ltxMode: "i2v_as",
+      ltxMode: "i2v",
       whyThisMode: "Реакционный shot должен быть чистым, читаемым и стабильно собранным.",
       narrationMode: "reaction_line",
       localPhrase: "Именно здесь зритель чувствует последствия предыдущего удара.",

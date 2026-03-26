@@ -49,7 +49,7 @@ function isFirstLastScene(scene = {}) {
   if (mode === "first_last") return true;
   if (scene?.requiresTwoFrames === true || scene?.needsTwoFrames === true) return true;
   const ltxMode = String(scene?.ltxMode || scene?.ltx_mode || "").trim().toLowerCase();
-  return ["f_l", "f_l_as", "first_last"].includes(ltxMode);
+  return ["f_l", "first_last"].includes(ltxMode);
 }
 
 function resolveMusicSource(audioData = {}) {
