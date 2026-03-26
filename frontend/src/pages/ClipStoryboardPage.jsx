@@ -10652,6 +10652,9 @@ onClipSec: (nodeId, value) => {
           const normalizedScenes = Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length
             ? normalizedPackage.scenes
             : previousScenes;
+          const previousRevision = String(base?.data?.storyboardRevision || "");
+          const nextRevision = sourceScenarioRevision || previousRevision;
+          const revisionChanged = previousRevision !== nextRevision;
           const previousBySceneId = new Map(
             previousScenes.map((sceneItem, idx) => [String(sceneItem?.sceneId || `S${idx + 1}`), sceneItem])
           );
@@ -10675,7 +10678,7 @@ onClipSec: (nodeId, value) => {
           const scenes = normalizedScenes.map((sceneItem, idx) => {
             const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`);
             const persistedScene = previousBySceneId.get(sceneId);
-            if (!persistedScene) return sceneItem;
+            if (!persistedScene || revisionChanged) return sceneItem;
             const persistedAssets = {};
             sceneAssetKeys.forEach((key) => {
               if (Object.prototype.hasOwnProperty.call(persistedScene, key)) {
@@ -10684,19 +10687,23 @@ onClipSec: (nodeId, value) => {
             });
             return { ...sceneItem, ...persistedAssets };
           });
-          const previousRevision = String(base?.data?.storyboardRevision || "");
-          const nextRevision = sourceScenarioRevision || previousRevision;
-          const revisionChanged = previousRevision !== nextRevision;
           const uiStateUpdated = revisionChanged || scenes.length !== previousScenes.length;
           console.debug("[SCENARIO APPLY RESPONSE]", {
             generateSuccess: validScenarioSource && !!sourceScenarioRevision,
             targetNodeId: String(n?.id || ""),
             hadStoryboardOut: !!storyboardOut,
             hadDirectorOutput: !!directorOutput,
+            revisionChanged,
             normalizedScenesCount: scenes.length,
             previousRevision,
             nextRevision,
             uiStateUpdated,
+          });
+          console.debug("[SCENARIO SCENE ASSET SYNC]", {
+            revisionChanged,
+            preservedAssets: !revisionChanged,
+            scenesCount: scenes.length,
+            clearedAssetFieldsOnNewRevision: revisionChanged,
           });
           const sceneGeneration = buildStoryboardSceneGenerationMap(scenes, base.data?.sceneGeneration);
           const currentAudioData = base?.data?.audioData && typeof base.data.audioData === "object" ? base.data.audioData : {};
@@ -10713,18 +10720,51 @@ onClipSec: (nodeId, value) => {
             audioUrl: String(currentAudioData.audioUrl || normalizedPackage?.audioUrl || "").trim(),
             durationSec: Number(currentAudioData.durationSec ?? normalizedPackage?.audioDurationSec ?? 0) || 0,
             phrases: phraseBreakdown,
-            packageGlobalMusicPrompt: String(normalizedPackage?.globalMusicPrompt || "").trim(),
+            packageGlobalMusicPrompt: String(normalizedPackage?.globalMusicPrompt || normalizedPackage?.bgMusicPrompt || normalizedPackage?.musicPrompt || normalizedPackage?.bgAudioPrompt || "").trim(),
             globalMusicPrompt: String(
-              currentAudioData.globalMusicPrompt
-              || normalizedPackage?.globalMusicPrompt
-              || normalizedPackage?.bgMusicPrompt
-              || ""
+              revisionChanged
+                ? (
+                  normalizedPackage?.globalMusicPrompt
+                  || normalizedPackage?.bgMusicPrompt
+                  || normalizedPackage?.musicPrompt
+                  || normalizedPackage?.bgAudioPrompt
+                  || currentAudioData.globalMusicPrompt
+                  || ""
+                )
+                : (
+                  currentAudioData.globalMusicPrompt
+                  || normalizedPackage?.globalMusicPrompt
+                  || normalizedPackage?.bgMusicPrompt
+                  || normalizedPackage?.musicPrompt
+                  || normalizedPackage?.bgAudioPrompt
+                  || ""
+                )
             ).trim(),
-            musicPromptRu: String(currentAudioData.musicPromptRu || normalizedPackage?.musicPromptRu || "").trim(),
-            musicPromptEn: String(currentAudioData.musicPromptEn || normalizedPackage?.musicPromptEn || "").trim(),
+            musicPromptRu: String(
+              revisionChanged
+                ? (normalizedPackage?.musicPromptRu || currentAudioData.musicPromptRu || "")
+                : (currentAudioData.musicPromptRu || normalizedPackage?.musicPromptRu || "")
+            ).trim(),
+            musicPromptEn: String(
+              revisionChanged
+                ? (normalizedPackage?.musicPromptEn || currentAudioData.musicPromptEn || "")
+                : (currentAudioData.musicPromptEn || normalizedPackage?.musicPromptEn || "")
+            ).trim(),
             musicStatus: String(currentAudioData.musicStatus || normalizedPackage?.musicStatus || "idle"),
             musicUrl: String(currentAudioData.musicUrl || normalizedPackage?.musicUrl || "").trim(),
           };
+          const musicSource = revisionChanged
+            ? "package"
+            : (String(currentAudioData.globalMusicPrompt || currentAudioData.musicPromptRu || currentAudioData.musicPromptEn || "").trim()
+              ? "currentAudioData"
+              : "fallback");
+          console.debug("[SCENARIO MUSIC SYNC]", {
+            revisionChanged,
+            musicSource,
+            globalMusicPromptLength: String(audioData?.globalMusicPrompt || "").trim().length,
+            musicPromptRuLength: String(audioData?.musicPromptRu || "").trim().length,
+            musicPromptEnLength: String(audioData?.musicPromptEn || "").trim().length,
+          });
           if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) {
             console.debug("[SCENARIO STORYBOARD MUSIC]", {
               packageHasGlobalMusicPrompt: !!String(normalizedPackage?.globalMusicPrompt || "").trim(),
