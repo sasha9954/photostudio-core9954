@@ -62,6 +62,7 @@ function resolveMusicSource(audioData = {}) {
 export default function ScenarioStoryboardEditor({
   open,
   nodeId,
+  storyboardRevision,
   scenes,
   sceneGeneration,
   audioData,
@@ -79,6 +80,7 @@ export default function ScenarioStoryboardEditor({
   const [audioSceneOpen, setAudioSceneOpen] = useState(false);
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
+  const prevStoryboardRevisionRef = useRef("");
 
   useEffect(() => {
     if (!open) return;
@@ -91,6 +93,30 @@ export default function ScenarioStoryboardEditor({
       setActiveSelectionId(BG_AUDIO_ITEM_ID);
     }
   }, [open, nodeId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const previousRevision = String(prevStoryboardRevisionRef.current || "");
+    const nextRevision = String(storyboardRevision || "");
+    const revisionChanged = Boolean(nextRevision) && previousRevision !== nextRevision;
+    const safeScenes = Array.isArray(scenes) ? scenes : [];
+    const firstSceneId = String(safeScenes?.[0]?.sceneId || "").trim();
+    if (revisionChanged) {
+      if (firstSceneId) {
+        setActiveSelectionType("scene");
+        setActiveSelectionId(firstSceneId);
+      } else {
+        setActiveSelectionType("bg_audio");
+        setActiveSelectionId(BG_AUDIO_ITEM_ID);
+      }
+    }
+    prevStoryboardRevisionRef.current = nextRevision;
+    console.debug("[SCENARIO EDITOR SYNC]", {
+      revisionChanged,
+      usingNewPackage: revisionChanged,
+      scenesCount: safeScenes.length,
+    });
+  }, [open, scenes, storyboardRevision]);
 
   useEffect(() => {
     if (!open || !infoModalOpen) return undefined;

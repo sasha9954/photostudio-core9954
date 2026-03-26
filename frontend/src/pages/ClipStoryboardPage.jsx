@@ -879,7 +879,8 @@ function extractNarrativeBrainPackageForComfyBrain({ sourceNode = null, sourceHa
 function extractNarrativeStoryboardOut({ sourceNode = null, sourceHandle = "" } = {}) {
   if (!sourceNode || sourceNode.type !== "comfyNarrative" || String(sourceHandle || "") !== "storyboard_out") return null;
   const outputs = sourceNode?.data?.outputs && typeof sourceNode.data.outputs === "object" ? sourceNode.data.outputs : {};
-  const storyboardOut = outputs?.storyboardOut;
+  const pendingOutputs = sourceNode?.data?.pendingOutputs && typeof sourceNode.data.pendingOutputs === "object" ? sourceNode.data.pendingOutputs : {};
+  const storyboardOut = pendingOutputs?.storyboardOut || outputs?.storyboardOut;
   return storyboardOut && typeof storyboardOut === "object" && !Array.isArray(storyboardOut) ? storyboardOut : null;
 }
 
@@ -10623,8 +10624,12 @@ onClipSec: (nodeId, value) => {
           const validScenarioSource = sourceNode?.type === "comfyNarrative" && sourceHandle === "storyboard_out";
           const storyboardOut = validScenarioSource ? extractNarrativeStoryboardOut({ sourceNode, sourceHandle }) : null;
           const directorOutput = validScenarioSource
-            ? (sourceNode?.data?.outputs?.directorOutput || sourceNode?.data?.pendingOutputs?.directorOutput || null)
+            ? (sourceNode?.data?.pendingOutputs?.directorOutput || sourceNode?.data?.outputs?.directorOutput || null)
             : null;
+          const rawScenarioResponse = validScenarioSource ? (sourceNode?.data?.pendingRawResponse || null) : null;
+          const sourceScenarioRevision = validScenarioSource
+            ? String(sourceNode?.data?.pendingScenarioRevision || sourceNode?.data?.scenarioRevision || "")
+            : "";
           const normalizedPackage = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
           if (CLIP_TRACE_SCENARIO_GRAPH) {
             console.debug("[SCENARIO GRAPH STRICT] storyboard source", {
@@ -10679,6 +10684,20 @@ onClipSec: (nodeId, value) => {
             });
             return { ...sceneItem, ...persistedAssets };
           });
+          const previousRevision = String(base?.data?.storyboardRevision || "");
+          const nextRevision = sourceScenarioRevision || previousRevision;
+          const revisionChanged = previousRevision !== nextRevision;
+          const uiStateUpdated = revisionChanged || scenes.length !== previousScenes.length;
+          console.debug("[SCENARIO APPLY RESPONSE]", {
+            generateSuccess: validScenarioSource && !!sourceScenarioRevision,
+            targetNodeId: String(n?.id || ""),
+            hadStoryboardOut: !!storyboardOut,
+            hadDirectorOutput: !!directorOutput,
+            normalizedScenesCount: scenes.length,
+            previousRevision,
+            nextRevision,
+            uiStateUpdated,
+          });
           const sceneGeneration = buildStoryboardSceneGenerationMap(scenes, base.data?.sceneGeneration);
           const currentAudioData = base?.data?.audioData && typeof base.data.audioData === "object" ? base.data.audioData : {};
           const phraseBreakdown = scenes.map((scene, idx) => ({
@@ -10728,6 +10747,12 @@ onClipSec: (nodeId, value) => {
               ),
               sceneGeneration,
               scenarioPackage: normalizedPackage,
+              rawScenarioResponse,
+              storyboardOut,
+              directorOutput,
+              storyboardRevision: nextRevision,
+              scenesCount: scenes.length,
+              status: scenes.length > 0 ? "ready" : "idle",
               audioData,
               onOpenScenarioStoryboard: onOpenScenarioStoryboard,
               onScenarioSceneUpdate: (nodeId, sceneId, patch = {}) => {
@@ -11093,6 +11118,7 @@ onClipSec: (nodeId, value) => {
                   if (!normalizedOutputs?.storyboardOut || !normalizedOutputs?.directorOutput) {
                     throw new Error('Scenario Director backend returned an incomplete contract.');
                   }
+                  const nextRevision = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
                   setNodes((prev) => {
                     const nextNodes = prev.map((x) => {
                       if (x.id !== nodeId) return x;
@@ -11104,7 +11130,11 @@ onClipSec: (nodeId, value) => {
                           isGenerating: false,
                           activeResultTab: 'history',
                           pendingOutputs: normalizedOutputs,
+                          pendingRawResponse: response && typeof response === "object" ? response : null,
+                          pendingStoryboardOut: normalizedOutputs?.storyboardOut || null,
+                          pendingDirectorOutput: normalizedOutputs?.directorOutput || null,
                           pendingGeneratedAt: new Date().toISOString(),
+                          pendingScenarioRevision: nextRevision,
                         },
                       };
                     });
@@ -14267,6 +14297,7 @@ const hydrate = useCallback((source = "unknown") => {
       <ScenarioStoryboardEditor
         open={isScenarioStoryboardOpen}
         nodeId={activeScenarioStoryboardNode?.id || null}
+        storyboardRevision={activeScenarioStoryboardNode?.data?.storyboardRevision || ""}
         scenes={activeScenarioStoryboardNode?.data?.scenes || []}
         sceneGeneration={activeScenarioStoryboardNode?.data?.sceneGeneration || {}}
         audioData={activeScenarioStoryboardNode?.data?.audioData || {}}
