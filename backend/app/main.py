@@ -1,6 +1,7 @@
 from app.engine.engine_init import load_engine_config
 import os
 import re
+import logging
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
@@ -10,8 +11,10 @@ from fastapi.staticfiles import StaticFiles
 from app.api.router import api_router
 from app.db.sqlite import init_db
 from app.core.static_paths import STATIC_DIR, ASSETS_DIR, ensure_static_dirs
+from app.core.config import settings
 
 app = FastAPI(title="PhotoStudio Core API", version="0.2.0")
+logger = logging.getLogger(__name__)
 
 
 @app.exception_handler(ValueError)
@@ -93,6 +96,12 @@ def _startup():
     ensure_static_dirs()
     print("STATIC_DIR =", str(STATIC_DIR))
     print("ASSETS_DIR =", str(ASSETS_DIR))
+    logger.info(
+        "[STARTUP] COMFY_BASE_URL=%s PUBLIC_BASE_URL=%s COMFY_OUTPUT_HANDOFF_STRATEGY=%s",
+        str(settings.COMFY_BASE_URL).rstrip("/"),
+        str(settings.PUBLIC_BASE_URL).rstrip("/"),
+        str(settings.COMFY_OUTPUT_HANDOFF_STRATEGY or "backend_proxy").strip().lower() or "backend_proxy",
+    )
     init_db()
 
 

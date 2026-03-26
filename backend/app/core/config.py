@@ -84,3 +84,8 @@ logger.info(
 )
 
 logger.info("[CONFIG] COMFY_BASE_URL=%s", str(settings.COMFY_BASE_URL).rstrip("/"))
+logger.info("[CONFIG] PUBLIC_BASE_URL=%s", str(settings.PUBLIC_BASE_URL).rstrip("/"))
+logger.info(
+    "[CONFIG] COMFY_OUTPUT_HANDOFF_STRATEGY=%s",
+    str(settings.COMFY_OUTPUT_HANDOFF_STRATEGY or "backend_proxy").strip().lower() or "backend_proxy",
+)

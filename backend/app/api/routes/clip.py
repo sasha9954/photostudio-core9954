@@ -9061,6 +9061,14 @@ def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "out
         )
 
     comfy_base = str(settings.COMFY_BASE_URL or "").strip().rstrip("/")
+    public_base = str(settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
+    handoff_strategy = str(settings.COMFY_OUTPUT_HANDOFF_STRATEGY or "backend_proxy").strip().lower() or "backend_proxy"
+    logger.debug(
+        "[COMFY OUTPUT PROXY] chosen COMFY_BASE_URL=%s PUBLIC_BASE_URL=%s handoff_strategy=%s",
+        comfy_base,
+        public_base,
+        handoff_strategy,
+    )
     if not comfy_base:
         return JSONResponse(
             status_code=500,
@@ -9084,6 +9092,11 @@ def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "out
             status_code=502,
             content={"ok": False, "code": "COMFY_OUTPUT_PROXY_FAILED", "hint": str(exc)[:300]},
         )
+    logger.debug(
+        "[COMFY OUTPUT PROXY] upstream status=%s content_type=%s",
+        upstream.status_code,
+        str(upstream.headers.get("content-type") or "").strip(),
+    )
 
     if upstream.status_code >= 400:
         body_snippet = ""
@@ -9091,6 +9104,8 @@ def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "out
             body_snippet = (upstream.text or "")[:240]
         except Exception:
             body_snippet = ""
+        finally:
+            upstream.close()
         return JSONResponse(
             status_code=upstream.status_code,
             content={
@@ -9108,7 +9123,16 @@ def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "out
     }
     if upstream.headers.get("content-length"):
         response_headers["Content-Length"] = str(upstream.headers.get("content-length"))
-    return StreamingResponse(upstream.iter_content(chunk_size=1024 * 256), headers=response_headers, status_code=200)
+
+    def _stream_and_close():
+        try:
+            for chunk in upstream.iter_content(chunk_size=1024 * 256):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return StreamingResponse(_stream_and_close(), headers=response_headers, status_code=200)
 
 
 def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
