@@ -68,6 +68,33 @@ function ContractField({ label, value }) {
   );
 }
 
+function ScenarioReadonlyTextField({ label, value, minRows = 3 }) {
+  const printable = Array.isArray(value) ? value.join("\n") : String(value || "").trim();
+  const lineCount = Math.max(minRows, String(printable || "—").split("\n").length);
+  return (
+    <div
+      className="clipSB_storyboardKv clipSB_copySelectable clipSB_readonlyTextFieldWrap nodrag nopan nowheel"
+      onMouseDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <span>{label}</span>
+      <textarea
+        className="clipSB_readonlyTextField"
+        readOnly
+        rows={lineCount}
+        value={printable || "—"}
+        onMouseDown={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+      />
+    </div>
+  );
+}
+
+function isLongText(value) {
+  const text = String(value || "").trim();
+  return text.length > 80 || text.includes("\n");
+}
+
 function isFirstLastScene(scene = {}) {
   const imageStrategy = String(scene?.imageStrategy || "").trim().toLowerCase();
   if (imageStrategy === "first_last") return true;
@@ -465,16 +492,18 @@ export default function ScenarioStoryboardEditor({
                 </summary>
                 <ContractField label="sceneId" value={sceneId} />
                 <ContractField label="t0/t1" value={`${fmtSec(scene?.t0)} / ${fmtSec(scene?.t1)}`} />
-                <ContractField label="lyric text" value={scene?.localPhrase || scene?.lyricText} />
-                <ContractField label="summary" value={scene?.summaryRu || scene?.summaryEn} />
-                <ContractField label="sceneGoal" value={scene?.sceneGoalRu || scene?.sceneGoalEn} />
-                <ContractField label="sceneMeaning" value={scene?.sceneMeaningRu || scene?.sceneMeaningEn || scene?.sceneMeaning} />
+                {isLongText(scene?.localPhrase || scene?.lyricText)
+                  ? <ScenarioReadonlyTextField label="lyric text" value={scene?.localPhrase || scene?.lyricText} minRows={2} />
+                  : <ContractField label="lyric text" value={scene?.localPhrase || scene?.lyricText} />}
+                <ScenarioReadonlyTextField label="summary" value={scene?.summaryRu || scene?.summaryEn} minRows={3} />
+                <ScenarioReadonlyTextField label="sceneGoal" value={scene?.sceneGoalRu || scene?.sceneGoalEn} minRows={3} />
+                <ScenarioReadonlyTextField label="sceneMeaning" value={scene?.sceneMeaningRu || scene?.sceneMeaningEn || scene?.sceneMeaning} minRows={3} />
                 <ContractField label="actors" value={scene?.actors || []} />
                 <ContractField label="primaryRole" value={scene?.primaryRole} />
                 <ContractField label="secondaryRoles" value={scene?.secondaryRoles || []} />
                 <ContractField label="mustAppear" value={scene?.mustAppear || []} />
-                <ContractField label="imagePrompt" value={scene?.imagePromptRu || scene?.imagePromptEn} />
-                <ContractField label="videoPrompt" value={scene?.videoPromptRu || scene?.videoPromptEn} />
+                <ScenarioReadonlyTextField label="imagePrompt" value={scene?.imagePromptRu || scene?.imagePromptEn} minRows={4} />
+                <ScenarioReadonlyTextField label="videoPrompt" value={scene?.videoPromptRu || scene?.videoPromptEn} minRows={4} />
                 <ContractField label="lipSync" value={String(Boolean(scene?.lipSync))} />
                 <ContractField label="audioSliceUrl" value={scene?.audioSliceUrl} />
                 <ContractField label="renderMode / ltxMode / model" value={`${scene?.renderMode || "—"} / ${scene?.ltxMode || "—"} / ${scene?.resolvedModelKey || "—"}`} />
