@@ -31,6 +31,17 @@ COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "continuation": {"single_image": False, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": True},
     "lip_sync": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": True, "continuation": False},
 }
+MODEL_KEY_TO_MODEL_SPEC = {
+    "ltx23_dev_fp8": {
+        "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
+        "compatible_workflow_keys": {"i2v", "i2v_as", "lip_sync"},
+    },
+    "ltx23_distilled_fp8": {
+        "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
+        "compatible_workflow_keys": {"f_l", "f_l_as"},
+    },
+}
+MODEL_PATCH_NODE_TYPES = {"CheckpointLoaderSimple", "LTXAVTextEncoderLoader", "LTXVAudioVAELoader"}
 
 
 def _validate_comfy_ltx_request(
@@ -601,6 +612,28 @@ def _patch_workflow_inputs(
     return wf, None, frames, fps
 
 
+def _apply_model_spec_to_workflow(workflow: dict, *, model_spec: dict) -> tuple[list[str], str | None]:
+    ckpt_name = str((model_spec or {}).get("ckpt_name") or "").strip()
+    if not ckpt_name:
+        return [], "model_ckpt_name_missing"
+    patched_node_ids: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip()
+        if class_type in MODEL_PATCH_NODE_TYPES and "ckpt_name" in inputs:
+            inputs["ckpt_name"] = ckpt_name
+            patched_node_ids.append(str(node_id))
+            continue
+        if "ckpt_name" in inputs and isinstance(inputs.get("ckpt_name"), str) and "ltx" in str(inputs.get("ckpt_name")).lower():
+            inputs["ckpt_name"] = ckpt_name
+            patched_node_ids.append(str(node_id))
+    return patched_node_ids, None
+
+
 def run_comfy_image_to_video(
     *,
     image_bytes: bytes,
@@ -611,6 +644,8 @@ def run_comfy_image_to_video(
     requested_duration_sec: float,
     workflow_path: str | None = None,
     workflow_key: str | None = None,
+    model_key: str | None = None,
+    model_spec: dict | None = None,
     start_image_bytes: bytes | None = None,
     end_image_bytes: bytes | None = None,
     audio_bytes: bytes | None = None,
@@ -618,6 +653,13 @@ def run_comfy_image_to_video(
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
     normalized_workflow_key = str(workflow_key or "i2v").strip().lower() or "i2v"
+    normalized_model_key = str(model_key or "").strip().lower()
+    effective_model_spec = model_spec if isinstance(model_spec, dict) else MODEL_KEY_TO_MODEL_SPEC.get(normalized_model_key)
+    if not effective_model_spec:
+        return None, f"capability_error:LTX_MODEL_NOT_FOUND:unknown_model_key:{normalized_model_key or 'empty'}"
+    compatible_workflow_keys = set(effective_model_spec.get("compatible_workflow_keys") or set())
+    if compatible_workflow_keys and normalized_workflow_key not in compatible_workflow_keys:
+        return None, f"capability_error:LTX_MODEL_WORKFLOW_INCOMPATIBLE:model={normalized_model_key};workflow={normalized_workflow_key}"
     capability_code, capability_hint = _validate_comfy_ltx_request(
         workflow_key=normalized_workflow_key,
         start_image_bytes=start_image_bytes,
@@ -671,6 +713,12 @@ def run_comfy_image_to_video(
     )
     if patch_err or not patched_workflow:
         return None, f"workflow_patch_failed:{patch_err or 'unknown_patch_error'}"
+    patched_model_node_ids, model_patch_err = _apply_model_spec_to_workflow(
+        patched_workflow,
+        model_spec=effective_model_spec,
+    )
+    if model_patch_err:
+        return None, f"workflow_model_patch_failed:{model_patch_err}"
 
     logger.info(
         "[COMFY REMOTE] patched workflow values %s",
@@ -720,19 +768,23 @@ def run_comfy_image_to_video(
         "provider": "comfy_remote",
         "mode": "single",
         "videoUrl": video_url,
-        "model": "ltx-2.3",
+        "model": normalized_model_key,
         "requestedDurationSec": round(float(requested_duration_sec), 3),
         "taskId": prompt_id,
         "debug": {
             "workflow_key": normalized_workflow_key,
+            "workflow_file": Path(str(workflow_source)).name,
             "workflow": workflow_source,
             "workflow_path": workflow_source,
+            "model_key": normalized_model_key,
+            "model_ckpt_applied": str(effective_model_spec.get("ckpt_name") or ""),
+            "patched_node_ids": patched_model_node_ids,
             "capabilities": COMFY_LTX_CAPABILITIES,
             "inputsUsed": {
                 "image": True,
-                "startImage": False,
-                "endImage": False,
-                "audio": False,
+                "startImage": bool(start_image_bytes),
+                "endImage": bool(end_image_bytes),
+                "audio": bool(audio_bytes or str(audio_url or "").strip()),
             },
             "inputsProvided": {
                 "startImage": bool(start_image_bytes),

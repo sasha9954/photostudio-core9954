@@ -123,6 +123,10 @@ class ClipVideoIn(BaseModel):
     imageStrategy: str | None = None
     resolvedWorkflowKey: str | None = None
     resolvedModelKey: str | None = None
+    workflowFileOverride: str | None = None
+    modelFileOverride: str | None = None
+    continuation: bool | None = None
+    continuationFromPrevious: bool | None = None
     requiresTwoFrames: bool | None = None
     requiresContinuation: bool | None = None
     requiresAudioSensitiveVideo: bool | None = None
@@ -564,6 +568,23 @@ LTX_MODE_TO_WORKFLOW_KEY = {
     "continuation": "continuation",
     "lip_sync": "lip_sync",
 }
+LTX_MODEL_KEY_TO_MODEL_SPEC = {
+    "ltx23_dev_fp8": {
+        "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
+        "compatible_workflow_keys": {"i2v", "i2v_as", "lip_sync"},
+    },
+    "ltx23_distilled_fp8": {
+        "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
+        "compatible_workflow_keys": {"f_l", "f_l_as"},
+    },
+}
+LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY = {
+    "i2v": "ltx23_dev_fp8",
+    "i2v_as": "ltx23_dev_fp8",
+    "lip_sync": "ltx23_dev_fp8",
+    "f_l": "ltx23_distilled_fp8",
+    "f_l_as": "ltx23_distilled_fp8",
+}
 
 
 def _normalize_ltx_workflow_key(candidate: str | None) -> str:
@@ -614,6 +635,29 @@ def _resolve_ltx_workflow_selection(
     return final_workflow_key, fallback_workflow_key, workflow_source, workflow_path
 
 
+def _resolve_ltx_model_selection(*, payload_model_key: str, workflow_key: str) -> tuple[str, dict | None, str]:
+    raw_model_key = str(payload_model_key or "").strip().lower()
+    if not raw_model_key:
+        raw_model_key = LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY.get(str(workflow_key or "").strip().lower(), "")
+        source = "workflow_default"
+    else:
+        source = "payload"
+    model_spec = LTX_MODEL_KEY_TO_MODEL_SPEC.get(raw_model_key)
+    return raw_model_key, model_spec, source
+
+
+def _resolve_model_key_from_override(model_file_override: str | None) -> str:
+    override = str(model_file_override or "").strip().lower()
+    if not override:
+        return ""
+    if override in LTX_MODEL_KEY_TO_MODEL_SPEC:
+        return override
+    for model_key, spec in LTX_MODEL_KEY_TO_MODEL_SPEC.items():
+        if str(spec.get("ckpt_name") or "").strip().lower() == override:
+            return model_key
+    return ""
+
+
 def _validate_ltx_workflow_strategy(
     *,
     scene_id: str,
@@ -654,10 +698,13 @@ def _validate_ltx_workflow_strategy(
             return "VIDEO_SOURCE_IMAGE_REQUIRED", "imageUrl_or_startImageUrl_required"
 
     if workflow_key in LTX_AUDIO_SENSITIVE_WORKFLOW_KEYS and not has_audio:
-        print(
-            "[LTX ROUTER VALIDATION] "
-            f"sceneId={scene_id} workflowKey={workflow_key} audioSensitive=true hasAudioSliceUrl=false"
-        )
+        return "LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED", "audio_input_required_for_audio_sensitive_workflow"
+
+    if workflow_key == "lip_sync" and not has_audio:
+        return "LTX_LIPSYNC_NOT_IMPLEMENTED", "audio_input_required_for_lip_sync_workflow"
+
+    if workflow_key == "continuation":
+        return "LTX_CONTINUATION_NOT_IMPLEMENTED", "continuation mode requested by scene but current comfy executor does not support it yet"
 
     return None, None
 
@@ -8974,6 +9021,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "provider": provider_name or str(job.get("provider") or payload.provider or "").strip().lower() or None,
                 "mode": str(out.get("mode") or "").strip(),
                 "model": str(out.get("model") or "").strip(),
+                "workflowKey": str(((out.get("debug") or {}).get("workflow_key") if isinstance(out.get("debug"), dict) else "") or "").strip(),
                 "providerJobId": str(out.get("taskId") or job.get("providerJobId") or "").strip(),
                 "requestedDurationSec": out.get("requestedDurationSec"),
                 "providerDurationSec": out.get("providerDurationSec"),
@@ -9010,6 +9058,7 @@ def clip_video_start(payload: ClipVideoIn):
             "videoUrl": None,
             "mode": None,
             "model": None,
+            "workflowKey": None,
             "requestedDurationSec": None,
             "providerDurationSec": None,
             "error": None,
@@ -9049,7 +9098,10 @@ def clip_video(payload: ClipVideoIn):
     start_image_url = str(payload.startImageUrl or "").strip()
     end_image_url = str(payload.endImageUrl or "").strip()
     output_format = str(payload.format or "9:16").strip() or "9:16"
-    explicit_model = str(payload.resolvedModelKey or "").strip()
+    explicit_model = str(payload.resolvedModelKey or "").strip().lower()
+    explicit_model_override = _resolve_model_key_from_override(payload.modelFileOverride)
+    if explicit_model_override:
+        explicit_model = explicit_model_override
 
     if render_mode == "avatar_lipsync" or is_lipsync:
         mode = "lipsync"
@@ -9061,14 +9113,30 @@ def clip_video(payload: ClipVideoIn):
         mode = "single"
     legacy_mode = mode
 
+    workflow_override_candidate = str(payload.workflowFileOverride or "").strip()
+    if workflow_override_candidate:
+        workflow_override_candidate = _normalize_ltx_workflow_key(workflow_override_candidate) or workflow_override_candidate
     final_workflow_key, fallback_workflow_key, workflow_source, workflow_path = _resolve_ltx_workflow_selection(
-        payload_workflow_key=str(payload.resolvedWorkflowKey or ""),
+        payload_workflow_key=workflow_override_candidate or str(payload.resolvedWorkflowKey or ""),
         ltx_mode=str(payload.ltxMode or ""),
         render_mode=render_mode,
         is_lipsync=is_lipsync,
         transition_type=transition_type,
         start_image_url=start_image_url,
         end_image_url=end_image_url,
+    )
+    continuation_requested = bool(
+        payload.requiresContinuation
+        or payload.continuation
+        or payload.continuationFromPrevious
+        or str(payload.ltxMode or "").strip().lower() == "continuation"
+    )
+    if continuation_requested:
+        final_workflow_key = "continuation"
+
+    resolved_model_key, resolved_model_spec, model_source = _resolve_ltx_model_selection(
+        payload_model_key=explicit_model,
+        workflow_key=final_workflow_key,
     )
 
     if final_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS:
@@ -9090,8 +9158,34 @@ def clip_video(payload: ClipVideoIn):
         f"sceneId={scene_id} ltxMode={str(payload.ltxMode or '').strip()} "
         f"resolvedWorkflowKey={str(payload.resolvedWorkflowKey or '').strip()} "
         f"finalWorkflowKey={final_workflow_key} workflowFile={LTX_WORKFLOW_KEY_TO_FILE.get(final_workflow_key, '')} "
-        f"provider={provider} mode={mode}"
+        f"provider={provider} mode={mode} "
+        f"resolvedModelKey={resolved_model_key}"
     )
+
+    if final_workflow_key == "continuation":
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "code": "LTX_CONTINUATION_NOT_IMPLEMENTED",
+                "hint": "continuation mode requested by scene but current comfy executor does not support it yet",
+            },
+        )
+
+    if not resolved_model_spec:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "code": "LTX_MODEL_NOT_FOUND", "hint": f"unknown_model_key:{resolved_model_key or 'empty'}"},
+        )
+    if final_workflow_key not in set(resolved_model_spec.get("compatible_workflow_keys") or set()):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "code": "LTX_MODEL_WORKFLOW_INCOMPATIBLE",
+                "hint": f"model={resolved_model_key} is not compatible with workflow={final_workflow_key}",
+            },
+        )
 
     if provider == "comfy_remote":
         source_image_url = image_url or start_image_url or end_image_url
@@ -9142,6 +9236,8 @@ def clip_video(payload: ClipVideoIn):
             requested_duration_sec=requested_duration,
             workflow_path=workflow_path,
             workflow_key=final_workflow_key,
+            model_key=resolved_model_key,
+            model_spec=resolved_model_spec,
             start_image_bytes=None,
             end_image_bytes=None,
             audio_url=audio_slice_url,
@@ -9199,11 +9295,12 @@ def clip_video(payload: ClipVideoIn):
             "sceneId": scene_id,
             "videoUrl": video_url,
             "provider": "comfy_remote",
-            "model": explicit_model or "ltx-2.3",
+            "model": resolved_model_key,
             "taskId": prompt_id,
             "mode": mode,
             "requestedDurationSec": round(float(requested_duration), 3),
             "providerDurationSec": round(float(comfy_out.get("requestedDurationSec") or requested_duration), 3),
+            "debug": comfy_out.get("debug") if isinstance(comfy_out, dict) else None,
         }
 
     guard_prompt = " ".join([
@@ -9264,6 +9361,8 @@ def clip_video(payload: ClipVideoIn):
         f"finalWorkflowKey={final_workflow_key} "
         f"workflowFile={workflow_path} "
         f"resolvedModelKey={str(payload.resolvedModelKey or '').strip()} "
+        f"finalResolvedModelKey={resolved_model_key} "
+        f"modelSource={model_source} "
         f"legacyMode={legacy_mode} "
         f"finalMode={mode} "
         f"workflowSource={workflow_source}"
@@ -9392,7 +9491,7 @@ def clip_video(payload: ClipVideoIn):
         selected_model = (settings.KIE_VIDEO_MODEL_CONTINUOUS or "").strip()
     else:
         selected_model = (settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
-    if explicit_model:
+    if explicit_model and explicit_model not in LTX_MODEL_KEY_TO_MODEL_SPEC:
         selected_model = explicit_model
 
     if mode == "continuous" and not selected_model:
@@ -9442,7 +9541,7 @@ def clip_video(payload: ClipVideoIn):
         f"sceneId={scene_id} "
         f"finalWorkflowKey={final_workflow_key} "
         f"workflowFile={workflow_path} "
-        f"resolvedModelKey={explicit_model or 'n/a'} "
+        f"resolvedModelKey={resolved_model_key or 'n/a'} "
         f"finalModelKey={selected_model}"
     )
 

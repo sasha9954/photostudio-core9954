@@ -373,14 +373,18 @@ function buildScenarioSceneContractPayload(scene = {}) {
 
 function resolveScenarioSceneVideoProvider(scene = {}) {
   const rawProvider = String(scene?.sceneRenderProvider || "").trim().toLowerCase();
-  if (rawProvider) return rawProvider;
   const hasLtxContract = Boolean(
     String(scene?.ltxMode || "").trim()
     || String(scene?.resolvedWorkflowKey || "").trim()
     || scene?.continuation
     || scene?.continuationFromPrevious
     || scene?.needsTwoFrames
+    || scene?.requiresTwoFrames
+    || scene?.requiresContinuation
+    || scene?.requiresAudioSensitiveVideo
   );
+  if (hasLtxContract && rawProvider === "kie") return "comfy_remote";
+  if (rawProvider) return rawProvider;
   if (hasLtxContract) return "comfy_remote";
   return "kie";
 }
@@ -8992,7 +8996,19 @@ Aspect ratio: ${imageFormat}`,
       || resolveScenarioWorkflowKey(targetScene)
     ).trim();
     const explicitModel = resolveScenarioExplicitModelKey(targetScene);
-    const resolvedModelKey = String(explicitModel || targetScene?.resolvedModelKey || "").trim();
+    const workflowDefaultModelMap = {
+      i2v: "ltx23_dev_fp8",
+      i2v_as: "ltx23_dev_fp8",
+      lip_sync: "ltx23_dev_fp8",
+      f_l: "ltx23_distilled_fp8",
+      f_l_as: "ltx23_distilled_fp8",
+    };
+    const resolvedModelKey = String(
+      explicitModel
+      || targetScene?.resolvedModelKey
+      || workflowDefaultModelMap[String(resolvedWorkflowKey || "").trim().toLowerCase()]
+      || ""
+    ).trim();
     const requestedDurationSec = Number(
       targetScene?.requestedDurationSec
       ?? targetScene?.durationSec
@@ -9026,6 +9042,7 @@ Aspect ratio: ${imageFormat}`,
     });
     console.debug("[SCENE VIDEO ROUTE]", {
       sceneId,
+      sceneIndex: targetSceneIndex,
       ltxMode: String(targetScene?.ltxMode || ""),
       provider: effectiveVideoProvider,
       imageStrategy,
@@ -9035,7 +9052,21 @@ Aspect ratio: ${imageFormat}`,
       resolvedModelKey,
       requiresAudioSensitiveVideo,
       requestedDurationSec,
+      startImagePresent: Boolean(effectiveStartImageUrl),
+      endImagePresent: Boolean(endImageUrl),
+      audioSlicePresent: Boolean(targetScene?.audioSliceUrl),
     });
+    console.debug("[SCENARIO LTX SCENE DEBUG]", (Array.isArray(scenarioScenes) ? scenarioScenes : []).map((scene, idx) => ({
+      sceneId: String(scene?.sceneId || ""),
+      sceneIndex: idx,
+      provider: resolveScenarioSceneVideoProvider(scene),
+      ltxMode: String(scene?.ltxMode || ""),
+      resolvedWorkflowKey: String(scene?.resolvedWorkflowKey || resolveScenarioWorkflowKey(scene) || ""),
+      resolvedModelKey: String(scene?.resolvedModelKey || resolveScenarioExplicitModelKey(scene) || ""),
+      startImagePresent: Boolean(scene?.startImageUrl || scene?.startFrameImageUrl),
+      endImagePresent: Boolean(scene?.endImageUrl || scene?.endFrameImageUrl),
+      audioSlicePresent: Boolean(scene?.audioSliceUrl),
+    })));
     try {
       const endpoint = "/api/clip/video/start";
       const transitionActionPrompt = [
@@ -9076,6 +9107,8 @@ Aspect ratio: ${imageFormat}`,
           imageStrategy,
           resolvedWorkflowKey,
           resolvedModelKey,
+          workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
+          modelFileOverride: String(targetScene?.modelFileOverride || ""),
           requiresTwoFrames,
           requiresContinuation,
           requiresAudioSensitiveVideo,
@@ -9086,6 +9119,7 @@ Aspect ratio: ${imageFormat}`,
             targetScene?.imageFormat
           ),
           provider: effectiveVideoProvider,
+          sceneRenderProvider: effectiveVideoProvider,
           ...scenarioContractPayload,
         },
       });
@@ -9149,6 +9183,8 @@ Aspect ratio: ${imageFormat}`,
           imageStrategy,
           resolvedWorkflowKey,
           resolvedModelKey,
+          workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
+          modelFileOverride: String(targetScene?.modelFileOverride || ""),
           requiresTwoFrames,
           requiresContinuation,
           requiresAudioSensitiveVideo,
@@ -9159,6 +9195,7 @@ Aspect ratio: ${imageFormat}`,
             targetScene?.imageFormat
           ),
           provider: effectiveVideoProvider,
+          sceneRenderProvider: effectiveVideoProvider,
           ...scenarioContractPayload,
         },
       });
