@@ -398,10 +398,10 @@ export default function ScenarioStoryboardEditor({
 
   const copyTextToClipboard = async (text) => {
     const payload = String(text || "");
-    if (!payload.trim()) return;
+    if (!payload.trim()) return false;
     try {
       await navigator.clipboard.writeText(payload);
-      return;
+      return true;
     } catch (error) {
       const fallback = document.createElement("textarea");
       fallback.value = payload;
@@ -410,8 +410,17 @@ export default function ScenarioStoryboardEditor({
       fallback.style.top = "-1000px";
       document.body.appendChild(fallback);
       fallback.select();
-      document.execCommand("copy");
+      const copied = document.execCommand("copy");
       document.body.removeChild(fallback);
+      return copied;
+    }
+  };
+
+  const notify = (detail) => {
+    try {
+      window.dispatchEvent(new CustomEvent("ps:notify", { detail }));
+    } catch {
+      // ignore
     }
   };
 
@@ -460,6 +469,12 @@ export default function ScenarioStoryboardEditor({
     audioData: safeAudioData,
   }, null, 2);
 
+  const handleCopyRawJson = async () => {
+    const didCopy = await copyTextToClipboard(formatRawForCopy());
+    if (!didCopy) return;
+    notify({ type: "success", message: "JSON скопирован" });
+  };
+
   const tabContent = (() => {
     if (activeTab === "scenario") {
       return (
@@ -475,7 +490,7 @@ export default function ScenarioStoryboardEditor({
               Копировать сцену
             </button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={() => copyTextToClipboard(formatAllScenesForCopy())}>Копировать весь сценарий</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={() => copyTextToClipboard(formatRawForCopy())}>Копировать raw JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={handleCopyRawJson}>Копировать raw JSON</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={() => copyTextToClipboard(formatPromptsForCopy())}>Копировать prompts</button>
           </div>
           <div className="clipSB_storyboardKv"><span>Сцен</span><strong>{safeScenes.length}</strong></div>
@@ -583,13 +598,32 @@ export default function ScenarioStoryboardEditor({
     }
     return (
       <div className="clipSB_scenarioEditorTabBody">
-        <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorCopyRow">
-          <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={() => copyTextToClipboard(formatRawForCopy())}>Копировать raw JSON</button>
-        </div>
-        <pre
-          className="clipSB_scenarioEditorDebug clipSB_copySelectable nodrag nopan"
+        <div
+          className="clipSB_scenarioJsonReadonlyWrap nodrag nopan nowheel"
           onMouseDown={stopNodeDragEvent}
           onPointerDown={stopNodeDragEvent}
+        >
+          <button
+            className="clipSB_scenarioJsonCopyBtn nodrag nopan nowheel"
+            type="button"
+            aria-label="Копировать JSON"
+            title="Копировать JSON"
+            onMouseDown={stopNodeDragEvent}
+            onPointerDown={stopNodeDragEvent}
+            onClick={handleCopyRawJson}
+          >
+            📋
+          </button>
+          <textarea
+            className="clipSB_scenarioJsonReadonly nodrag nopan nowheel"
+            readOnly
+            value={formatRawForCopy()}
+            onMouseDown={stopNodeDragEvent}
+            onPointerDown={stopNodeDragEvent}
+          />
+        </div>
+        <pre
+          className="clipSB_scenarioEditorDebug clipSB_copySelectable"
         >
           {JSON.stringify({
           sceneId: selectedSceneId,

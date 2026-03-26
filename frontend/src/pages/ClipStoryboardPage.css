@@ -4303,6 +4303,56 @@ body.ps_clip_fullscreen .mainCol {
   cursor: text;
 }
 
+.clipSB_scenarioJsonReadonlyWrap {
+  position: relative;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 10px;
+  background: rgba(0,0,0,0.2);
+  pointer-events: auto;
+}
+
+.clipSB_scenarioJsonCopyBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.24);
+  background: rgba(20, 26, 40, 0.94);
+  color: rgba(255,255,255,0.96);
+  cursor: pointer;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.clipSB_scenarioJsonCopyBtn:hover {
+  background: rgba(38, 48, 72, 0.96);
+}
+
+.clipSB_scenarioJsonReadonly {
+  width: 100%;
+  min-height: 220px;
+  max-height: 45vh;
+  resize: vertical;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255,255,255,0.94);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 12px;
+  padding-right: 48px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  white-space: pre;
+  overflow: auto;
+  overflow-wrap: normal;
+  user-select: text;
+  -webkit-user-select: text;
+  pointer-events: auto;
+  cursor: text;
+}
+
 .clipSB_scenarioEditorInfoModalOverlay {
   position: absolute;
   inset: 0;
