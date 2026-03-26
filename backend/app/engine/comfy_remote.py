@@ -94,8 +94,6 @@ def _validate_comfy_ltx_request(
     if not requirements:
         return "LTX_MODE_NOT_IMPLEMENTED", f"workflow_key_not_supported:{key}"
 
-    if requirements["continuation"] and not COMFY_LTX_CAPABILITIES["continuation"]:
-        return "LTX_CONTINUATION_NOT_IMPLEMENTED", "continuation_mode_not_implemented_for_comfy_remote"
     if requirements["lip_sync"] and not COMFY_LTX_CAPABILITIES["lip_sync"]:
         return "LTX_LIPSYNC_NOT_IMPLEMENTED", "lip_sync_mode_not_implemented_for_comfy_remote"
     if requirements["first_last"] and not COMFY_LTX_CAPABILITIES["first_last"]:
@@ -119,6 +117,8 @@ def _validate_comfy_ltx_request(
                 "LTX_CONTINUATION_SOURCE_INCOMPATIBLE",
                 "continuation source resolved to video asset but current continuation path requires image/frame source",
             )
+        if not COMFY_LTX_CAPABILITIES["continuation"]:
+            return "LTX_CONTINUATION_NOT_IMPLEMENTED", "continuation execution strategy is not implemented for comfy_remote"
 
     return None, None
 
@@ -907,7 +907,7 @@ def run_comfy_image_to_video(
             return None, "capability_error:LTX_CONTINUATION_SOURCE_REQUIRED:continuation_source_asset_url_missing"
         if continuation_asset_type == "video":
             return None, "capability_error:LTX_CONTINUATION_SOURCE_INCOMPATIBLE:continuation source resolved to video asset but current continuation path requires image/frame source"
-        return None, "capability_error:LTX_CONTINUATION_NOT_IMPLEMENTED:continuation mode requested by scene but current comfy workflow patcher does not support it yet"
+        return None, "capability_error:LTX_CONTINUATION_NOT_IMPLEMENTED:continuation mode requested by scene but current continuation execution strategy is not implemented yet"
 
     logger.info(
         "[COMFY REMOTE] patched workflow values %s",

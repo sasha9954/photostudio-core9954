@@ -745,17 +745,25 @@ def _validate_ltx_workflow_strategy(
     if workflow_key == "lip_sync" and not has_audio:
         return "LTX_LIPSYNC_NOT_IMPLEMENTED", "audio_input_required_for_lip_sync_workflow"
 
-    if workflow_key == "continuation":
-        has_continuation_source = bool(continuation_source_scene_id or continuation_source_asset_url or has_start or has_end)
-        if not has_continuation_source:
-            return "LTX_CONTINUATION_SOURCE_REQUIRED", "continuation_requires_previous_scene_context_or_asset"
-        normalized_source_type = str(continuation_source_asset_type or "").strip().lower()
-        if normalized_source_type == "video":
-            return (
-                "LTX_CONTINUATION_SOURCE_INCOMPATIBLE",
-                "continuation source resolved to video asset but current continuation path requires image/frame source",
-            )
+    return None, None
 
+
+def _validate_continuation_source(
+    *,
+    continuation_source_scene_id: str,
+    continuation_source_asset_url: str,
+    continuation_source_asset_type: str,
+) -> tuple[str | None, str | None]:
+    source_url = str(continuation_source_asset_url or "").strip()
+    if not source_url:
+        return "LTX_CONTINUATION_SOURCE_REQUIRED", "continuation mode requires a valid continuation source asset"
+
+    normalized_source_type = str(continuation_source_asset_type or "").strip().lower()
+    if normalized_source_type == "video":
+        return (
+            "LTX_CONTINUATION_SOURCE_INCOMPATIBLE",
+            "continuation source resolved to video asset but current continuation path requires image/frame source",
+        )
     return None, None
 
 
@@ -9189,7 +9197,6 @@ def clip_video(payload: ClipVideoIn):
     )
     if continuation_requested:
         final_workflow_key = "continuation"
-    continuation_image_frame_strategy = final_workflow_key in LTX_CONTINUATION_WORKFLOW_KEYS
 
     resolved_model_key, resolved_model_spec, model_source = _resolve_ltx_model_selection(
         payload_model_key=explicit_model,
@@ -9263,19 +9270,44 @@ def clip_video(payload: ClipVideoIn):
             },
         )
 
-    if provider == "comfy_remote":
-        if continuation_image_frame_strategy and continuation_source_asset_type == "video":
+    continuation_debug = {
+        "requested_mode": str(payload.ltxMode or "").strip().lower() or final_workflow_key,
+        "resolved_workflow_key": final_workflow_key,
+        "actual_mode": "continuation" if final_workflow_key == "continuation" else mode,
+        "continuation_used": final_workflow_key == "continuation",
+        "continuation_source_asset_type": continuation_source_asset_type,
+        "continuation_source_asset_url_present": bool(continuation_source_asset_url),
+        "continuation_source_scene_id_present": bool(continuation_source_scene_id),
+        "provider": provider,
+    }
+    if final_workflow_key == "continuation":
+        continuation_validation_code, continuation_validation_hint = _validate_continuation_source(
+            continuation_source_scene_id=continuation_source_scene_id,
+            continuation_source_asset_url=continuation_source_asset_url,
+            continuation_source_asset_type=continuation_source_asset_type,
+        )
+        if continuation_validation_code:
             return JSONResponse(
                 status_code=422,
                 content={
                     "ok": False,
-                    "code": "LTX_CONTINUATION_SOURCE_INCOMPATIBLE",
-                    "hint": "continuation source resolved to video asset but current continuation path requires image/frame source",
+                    "code": continuation_validation_code,
+                    "hint": continuation_validation_hint,
+                    "debug": continuation_debug,
                 },
             )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "code": "LTX_CONTINUATION_NOT_IMPLEMENTED",
+                "hint": "continuation mode requested by scene but current continuation execution strategy is not implemented yet",
+                "debug": {**continuation_debug, "strategy_layer_reached": True},
+            },
+        )
+
+    if provider == "comfy_remote":
         source_image_url = image_url or start_image_url or end_image_url
-        if final_workflow_key == "continuation":
-            source_image_url = source_image_url or continuation_source_asset_url
         if not source_image_url:
             return JSONResponse(
                 status_code=400,
