@@ -576,7 +576,7 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
   const activeRoles = Array.from(new Set([
     ...explicitRoles,
     ...(forceTwoPerson ? ["character_1", "character_2"] : []),
-  ])).filter((role) => availableCastRoles.includes(role) || role === primaryRole);
+  ])).filter((role) => SCENARIO_CAST_ROLE_KEYS.includes(role));
 
   const resolvedPrimary = primaryRole || activeRoles[0] || availableCastRoles[0] || "";
   const resolvedSecondary = Array.from(new Set(activeRoles.filter((role) => role !== resolvedPrimary)));
