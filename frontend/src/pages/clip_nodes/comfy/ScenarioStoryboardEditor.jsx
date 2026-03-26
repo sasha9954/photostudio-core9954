@@ -119,6 +119,21 @@ export default function ScenarioStoryboardEditor({
   }, [open, scenes, storyboardRevision]);
 
   useEffect(() => {
+    if (!open) return;
+    const firstSceneId = String(scenes?.[0]?.sceneId || "").trim();
+    if (Array.isArray(scenes) && scenes.length === 1 && firstSceneId && activeSelectionId !== firstSceneId) {
+      setActiveSelectionType("scene");
+      setActiveSelectionId(firstSceneId);
+      return;
+    }
+    const hasSelectedScene = Array.isArray(scenes) && scenes.some((scene, idx) => String(scene?.sceneId || `S${idx + 1}`) === activeSelectionId);
+    if (!hasSelectedScene && firstSceneId) {
+      setActiveSelectionType("scene");
+      setActiveSelectionId(firstSceneId);
+    }
+  }, [activeSelectionId, open, scenes]);
+
+  useEffect(() => {
     if (!open || !infoModalOpen) return undefined;
     const onKeyDown = (event) => {
       if (event.key === "Escape") setInfoModalOpen(false);
@@ -149,6 +164,10 @@ export default function ScenarioStoryboardEditor({
   const selectedRuntime = safeGeneration[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object" ? safeGeneration[selectedSceneId] : {};
   const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || safeScenes[idx]?.sceneId || "").trim();
   const selectedPhraseIndex = phrases.findIndex((phrase, idx) => resolvePhraseSceneId(phrase, idx) === selectedSceneId);
+  const generateMeta = {
+    activeTab,
+    selectedTab: activeTab,
+  };
 
   const handleSelectPhrase = (phrase, idx) => {
     const phraseSceneId = resolvePhraseSceneId(phrase, idx);
@@ -629,7 +648,22 @@ export default function ScenarioStoryboardEditor({
                             />
                           </details>
                           <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorImageBtnRow">
-                            <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "image")} disabled={imageStatus === "loading"}>Создать изображение</button>
+                            <button
+                              className="clipSB_btn"
+                              type="button"
+                              onClick={() => {
+                                console.warn("[SCENARIO STORYBOARD EDITOR] image_generate_click", {
+                                  nodeId: String(nodeId || ""),
+                                  selectedSceneId,
+                                  activeTab,
+                                  disabled: imageStatus === "loading",
+                                });
+                                onGenerateScene?.(nodeId, selectedSceneId, "image", generateMeta);
+                              }}
+                              disabled={imageStatus === "loading"}
+                            >
+                              Создать изображение
+                            </button>
                             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { imageUrl: "", imageStatus: "idle" })}>Удалить</button>
                           </div>
                         </div>
@@ -687,7 +721,7 @@ export default function ScenarioStoryboardEditor({
                           </div>
                         </div>
                         <div className="clipSB_scenarioEditorBtnRow">
-                          <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "start_frame")} disabled={startFrameStatus === "loading"}>Создать изображение</button>
+                          <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "start_frame", generateMeta)} disabled={startFrameStatus === "loading"}>Создать изображение</button>
                           <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { startFrameImageUrl: "", startFramePreviewUrl: "", startFrameStatus: "idle" })}>Удалить</button>
                         </div>
                       </div>
@@ -727,7 +761,7 @@ export default function ScenarioStoryboardEditor({
                           </div>
                         </div>
                         <div className="clipSB_scenarioEditorBtnRow">
-                          <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "end_frame")} disabled={endFrameStatus === "loading"}>Создать изображение</button>
+                          <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "end_frame", generateMeta)} disabled={endFrameStatus === "loading"}>Создать изображение</button>
                           <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { endFrameImageUrl: "", endFramePreviewUrl: "", endFrameStatus: "idle" })}>Удалить</button>
                         </div>
                       </div>

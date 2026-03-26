@@ -177,7 +177,7 @@ const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GRAPH = false;
 const CLIP_TRACE_INTRO_PREVIEW = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
-const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = false;
+const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = true;
 const CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD = false;
 const CLIP_TRACE_SCENARIO_SCENE_ASSETS = false;
 const CLIP_TRACE_ROLE_CONTRACT_SCENE_ID = "TRACE_SCENE_2P_001";
@@ -8700,6 +8700,18 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const targetSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : scenarioEditor.selected;
     const targetScene = scenarioScenes[targetSceneIndex] || null;
     if (CLIP_TRACE_SCENARIO_EDITOR_GENERATE) {
+      console.warn("[SCENARIO EDITOR IMAGE CLICK]", {
+        clicked: true,
+        "options.sceneIndex": Number.isInteger(options?.sceneIndex) ? options.sceneIndex : null,
+        "scenarioEditor.selected": scenarioEditor.selected,
+        "scenarioScenes.length": scenarioScenes.length,
+        activeTab: String(options?.activeTab || options?.selectedTab || "unknown"),
+        selectedTab: String(options?.selectedTab || options?.activeTab || "unknown"),
+        targetSceneIndex,
+        targetSceneFound: !!targetScene,
+      });
+    }
+    if (CLIP_TRACE_SCENARIO_EDITOR_GENERATE) {
       console.debug("[SCENARIO GENERATE ROUTE]", {
         actionType: "image",
         editorNodeId: String(scenarioEditor?.nodeId || ""),
@@ -8708,7 +8720,15 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         resolvedSceneFound: !!targetScene,
       });
     }
-    if (!targetScene) return;
+    if (!targetScene) {
+      console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] no_target_scene", {
+        targetSceneIndex,
+        sceneCount: scenarioScenes.length,
+      });
+      setScenarioImageError("Не удалось определить сцену для генерации изображения.");
+      notify({ type: "error", title: "Scene not selected", message: "Выберите сцену и повторите генерацию изображения." });
+      return;
+    }
 
     const imageStrategy = String(targetScene?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
     const requestedSlot = slot === "start" || slot === "end" ? slot : "single";
@@ -8716,6 +8736,12 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       ? (requestedSlot === "end" ? "end" : "start")
       : (imageStrategy === "continuation" ? (requestedSlot === "end" ? "end" : "start") : "single");
     if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start" && !!targetScene?.inheritPreviousEndAsStart) {
+      console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] blocked_by_inherit_previous_end_as_start", {
+        sceneId: String(targetScene?.sceneId || ""),
+        targetSceneIndex,
+        imageStrategy,
+        normalizedSlot,
+      });
       return;
     }
     const sceneId = String(targetScene?.sceneId || "").trim();
@@ -8741,6 +8767,12 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const sceneDelta = getSceneFramePromptByStrategy(targetScene, normalizedSlot);
 
     if (!sceneDelta) {
+      console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] missing_scene_delta", {
+        sceneId,
+        targetSceneIndex,
+        imageStrategy,
+        normalizedSlot,
+      });
       setScenarioImageError("Добавьте prompt для генерации кадра");
       return;
     }
@@ -8879,6 +8911,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       };
       console.debug("[SCENARIO IMAGE GUARD]", scenarioGuardDebug);
       if (guardTriggered) {
+        console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] guard_triggered", scenarioGuardDebug);
         const guardError = new Error("scenario_refs_lost_before_clip_image");
         guardError.code = "scenario_refs_lost_before_clip_image";
         guardError.details = {
@@ -11411,7 +11444,7 @@ onClipSec: (nodeId, value) => {
                   };
                 })));
               },
-              onScenarioSceneGenerate: (nodeId, sceneId, assetType = "scene") => {
+              onScenarioSceneGenerate: (nodeId, sceneId, assetType = "scene", meta = {}) => {
                 const normalizedAction = String(assetType || "scene").trim().toLowerCase();
                 const sceneIndex = scenarioScenes.findIndex((sceneItem) => String(sceneItem?.sceneId || "") === String(sceneId || ""));
                 const targetScene = sceneIndex >= 0 ? scenarioScenes[sceneIndex] : null;
@@ -11429,9 +11462,19 @@ onClipSec: (nodeId, value) => {
                     actionType: normalizedAction || "scene",
                     imageStrategy,
                     routedHandler,
+                    selectedTab: String(meta?.selectedTab || meta?.activeTab || ""),
                   });
                 }
-                if (sceneIndex < 0) return;
+                if (sceneIndex < 0) {
+                  console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] no_target_scene", {
+                    sceneId: String(sceneId || ""),
+                    sceneIndex,
+                    sceneCount: scenarioScenes.length,
+                    actionType: normalizedAction || "scene",
+                  });
+                  notify({ type: "error", title: "Scene not selected", message: "Сцена не найдена, обновите storyboard и попробуйте снова." });
+                  return;
+                }
 
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
@@ -11461,15 +11504,15 @@ onClipSec: (nodeId, value) => {
                 })));
 
                 if (normalizedAction === "image") {
-                  handleGenerateScenarioImage("single", { sceneIndex });
+                  handleGenerateScenarioImage("single", { sceneIndex, ...meta });
                   return;
                 }
                 if (normalizedAction === "start_frame") {
-                  handleGenerateScenarioImage("start", { sceneIndex });
+                  handleGenerateScenarioImage("start", { sceneIndex, ...meta });
                   return;
                 }
                 if (normalizedAction === "end_frame") {
-                  handleGenerateScenarioImage("end", { sceneIndex });
+                  handleGenerateScenarioImage("end", { sceneIndex, ...meta });
                   return;
                 }
                 handleScenarioGenerateVideo({ sceneIndex });
