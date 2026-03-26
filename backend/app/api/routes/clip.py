@@ -7002,6 +7002,23 @@ def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[s
                 if url:
                     urls.append(url)
         out[role] = list(dict.fromkeys(urls))
+    human_roles = ["character_1", "character_2", "character_3"]
+    shared_group_urls = set(out.get("group") or [])
+    claimed_human_url_to_role: dict[str, str] = {}
+    for role in human_roles:
+        role_urls = out.get(role) or []
+        filtered_urls: list[str] = []
+        for url in role_urls:
+            if not url:
+                continue
+            if url in shared_group_urls:
+                filtered_urls.append(url)
+                continue
+            if url in claimed_human_url_to_role:
+                continue
+            claimed_human_url_to_role[url] = role
+            filtered_urls.append(url)
+        out[role] = list(dict.fromkeys(filtered_urls))
     return out
 
 

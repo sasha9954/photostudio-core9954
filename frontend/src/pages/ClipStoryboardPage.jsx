@@ -589,6 +589,28 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
   const toUrlList = (items) => (Array.isArray(items)
     ? items.map((item) => String(typeof item === "string" ? item : item?.url || "").trim()).filter(Boolean)
     : []);
+  const humanRoles = ["character_1", "character_2", "character_3"];
+  const enforceHumanRoleIsolation = (roleMapInput = {}) => {
+    const outMap = { ...roleMapInput };
+    const sharedGroupRefs = new Set(toUrlList(outMap?.group));
+    const claimedByUrl = new Map();
+    humanRoles.forEach((role) => {
+      const nextUrls = [];
+      (outMap?.[role] || []).forEach((url) => {
+        if (!url) return;
+        if (sharedGroupRefs.has(url)) {
+          nextUrls.push(url);
+          return;
+        }
+        if (!claimedByUrl.has(url)) {
+          claimedByUrl.set(url, role);
+          nextUrls.push(url);
+        }
+      });
+      outMap[role] = [...new Set(nextUrls)];
+    });
+    return outMap;
+  };
   const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
   const appendFromSource = (source = null) => {
     const extracted = extractScenarioRefsByRoleFromSource(source);
@@ -613,11 +635,10 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
   appendFromSource(scenarioPackage?.context_refs);
   appendFromSource(scenarioPackage?.connected_context_summary?.context_refs);
 
-  roleMap.character_1 = [...new Set([...(roleMap.character_1 || []), ...toUrlList(scenarioBrainRefs?.character)])];
   roleMap.location = [...new Set([...(roleMap.location || []), ...toUrlList(scenarioBrainRefs?.location)])];
   roleMap.style = [...new Set([...(roleMap.style || []), ...toUrlList(scenarioBrainRefs?.style)])];
   roleMap.props = [...new Set([...(roleMap.props || []), ...toUrlList(scenarioBrainRefs?.props)])];
-  return roleMap;
+  return enforceHumanRoleIsolation(roleMap);
 }
 
 function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {}) {
