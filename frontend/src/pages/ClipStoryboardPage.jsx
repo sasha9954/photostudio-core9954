@@ -8511,18 +8511,31 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         previousSceneImageUrl,
       });
       const sourceRefsCandidates = [
-        extractScenarioRefsByRoleFromSource(targetScene?.refsByRole),
-        extractScenarioRefsByRoleFromSource(targetScene?.connectedRefsByRole),
-        extractScenarioRefsByRoleFromSource(targetScene?.contextRefs),
-        extractScenarioRefsByRoleFromSource(targetScene?.context_refs),
-        extractScenarioRefsByRoleFromSource(targetScene?.connectedContextSummary?.context_refs),
-        extractScenarioRefsByRoleFromSource(targetScene?.connected_context_summary?.context_refs),
-        extractScenarioRefsByRoleFromSource(scenarioPackageForImage?.refsByRole),
-        extractScenarioRefsByRoleFromSource(scenarioPackageForImage?.connectedRefsByRole),
-        extractScenarioRefsByRoleFromSource(scenarioPackageForImage?.context_refs),
-        extractScenarioRefsByRoleFromSource(scenarioPackageForImage?.connected_context_summary?.context_refs),
+        { label: "scene.refsByRole", value: targetScene?.refsByRole },
+        { label: "scene.connectedRefsByRole", value: targetScene?.connectedRefsByRole },
+        { label: "scene.context_refs", value: targetScene?.context_refs },
+        { label: "scene.contextRefs", value: targetScene?.contextRefs },
+        { label: "scene.connected_context_summary.context_refs", value: targetScene?.connected_context_summary?.context_refs },
+        { label: "scene.connectedContextSummary.context_refs", value: targetScene?.connectedContextSummary?.context_refs },
+        { label: "scene.connected_context_summary.contextRefs", value: targetScene?.connected_context_summary?.contextRefs },
+        { label: "scene.connectedContextSummary.contextRefs", value: targetScene?.connectedContextSummary?.contextRefs },
+        { label: "package.refsByRole", value: scenarioPackageForImage?.refsByRole },
+        { label: "package.connectedRefsByRole", value: scenarioPackageForImage?.connectedRefsByRole },
+        { label: "package.context_refs", value: scenarioPackageForImage?.context_refs },
+        { label: "package.contextRefs", value: scenarioPackageForImage?.contextRefs },
+        { label: "package.connected_context_summary.context_refs", value: scenarioPackageForImage?.connected_context_summary?.context_refs },
+        { label: "package.connectedContextSummary.context_refs", value: scenarioPackageForImage?.connectedContextSummary?.context_refs },
+        { label: "package.connected_context_summary.contextRefs", value: scenarioPackageForImage?.connected_context_summary?.contextRefs },
+        { label: "package.connectedContextSummary.contextRefs", value: scenarioPackageForImage?.connectedContextSummary?.contextRefs },
       ];
-      const sourceRefsByRole = sourceRefsCandidates.reduce((acc, candidate) => mergeScenarioRefsByRole(acc, candidate), {});
+      const sourceRefsEvidenceLabels = [];
+      const sourceRefsByRole = sourceRefsCandidates.reduce((acc, candidate) => {
+        const extracted = extractScenarioRefsByRoleFromSource(candidate?.value);
+        if (hasNonEmptyRefsByRole(extracted)) {
+          sourceRefsEvidenceLabels.push(candidate.label);
+        }
+        return mergeScenarioRefsByRole(acc, extracted);
+      }, {});
       const sourceRefsKeys = getNonEmptyRefRoleKeys(sourceRefsByRole);
       const finalRefsKeys = getNonEmptyRefRoleKeys(refsForImageRequest?.refsByRole || {});
       const hadRoleAwareContract = [
@@ -8535,23 +8548,21 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         ...(Array.isArray(scenarioPackageForImage?.supportingParticipants) ? scenarioPackageForImage.supportingParticipants : []),
         ...(Array.isArray(scenarioPackageForImage?.mustAppearRoles) ? scenarioPackageForImage.mustAppearRoles : []),
       ].some((value) => String(value || "").trim());
-      const hadSourceRefs = sourceRefsKeys.length > 0
-        || hasNonEmptyRefsByRole(extractScenarioRefsByRoleFromSource(scenarioBrainRefs?.refsByRole))
-        || hasNonEmptyRoleList(scenarioBrainRefs?.character)
-        || hasNonEmptyRoleList(scenarioBrainRefs?.location)
-        || hasNonEmptyRoleList(scenarioBrainRefs?.style)
-        || hasNonEmptyRoleList(scenarioBrainRefs?.props)
-        || hasNonEmptyObjectKeys(targetScene?.refDirectives)
-        || hasNonEmptyObjectKeys(scenarioPackageForImage?.refDirectives)
-        || hadRoleAwareContract;
+      const scenarioBrainRefsByRole = extractScenarioRefsByRoleFromSource(scenarioBrainRefs?.refsByRole);
+      const scenarioBrainHasRefsByRole = hasNonEmptyRefsByRole(scenarioBrainRefsByRole);
+      if (scenarioBrainHasRefsByRole) sourceRefsEvidenceLabels.push("scenarioBrain.refsByRole");
+      const hadSourceRefs = sourceRefsKeys.length > 0 || scenarioBrainHasRefsByRole;
       const finalHasRefs = hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {});
       const guardTriggered = hadSourceRefs && !finalHasRefs;
+      const sourceRefEvidence = sourceRefsEvidenceLabels.length ? Array.from(new Set(sourceRefsEvidenceLabels)).join("|") : "none";
       const scenarioGuardDebug = {
         sceneIndex: targetSceneIndex,
         sceneId,
         hadSourceRefs,
+        hadRoleAwareContract,
         sourceRefsKeys,
         finalRefsKeys,
+        sourceRefEvidence,
         primaryRole: refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "",
         secondaryRoles: refsForImageRequest?.secondaryRoles || derivedRoleContract?.secondaryRoles || [],
         sceneActiveRoles: refsForImageRequest?.sceneActiveRoles || derivedRoleContract?.sceneActiveRoles || [],
@@ -8565,7 +8576,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         guardError.code = "scenario_refs_lost_before_clip_image";
         guardError.details = {
           ...scenarioGuardDebug,
-          reason: "role-aware refs existed in scenario package but final image request refsByRole is empty",
+          reason: "source refs existed in scenario inputs but final image request refsByRole is empty",
         };
         console.error("[SCENARIO IMAGE GUARD] code=scenario_refs_lost_before_clip_image", guardError.details);
         throw guardError;
