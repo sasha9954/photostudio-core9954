@@ -84,12 +84,40 @@ function isNonEmptyValue(value) {
   return typeof value === "number" || typeof value === "boolean";
 }
 
+function mergeNestedMapValuePreferNonEmpty(primary, fallback) {
+  if (Array.isArray(primary) || Array.isArray(fallback)) {
+    const primaryList = Array.isArray(primary) ? primary.filter((item) => isNonEmptyValue(item)) : [];
+    const fallbackList = Array.isArray(fallback) ? fallback.filter((item) => isNonEmptyValue(item)) : [];
+    if (!primaryList.length) return fallbackList;
+    if (!fallbackList.length) return primaryList;
+    return Array.from(new Set([...primaryList, ...fallbackList]));
+  }
+  if (isNonEmptyObject(primary) || isNonEmptyObject(fallback)) {
+    const primaryMap = normalizeObjectMap(primary);
+    const fallbackMap = normalizeObjectMap(fallback);
+    const keys = Array.from(new Set([...Object.keys(fallbackMap), ...Object.keys(primaryMap)]));
+    return keys.reduce((acc, key) => {
+      const merged = mergeNestedMapValuePreferNonEmpty(primaryMap[key], fallbackMap[key]);
+      if (isNonEmptyValue(merged)) acc[key] = merged;
+      return acc;
+    }, {});
+  }
+  if (isNonEmptyValue(primary)) return primary;
+  if (isNonEmptyValue(fallback)) return fallback;
+  return undefined;
+}
+
 function mergeObjectMapsPreferNonEmpty(primary, fallback) {
   const primaryMap = normalizeObjectMap(primary);
   const fallbackMap = normalizeObjectMap(fallback);
   if (!Object.keys(primaryMap).length) return fallbackMap;
   if (!Object.keys(fallbackMap).length) return primaryMap;
-  return { ...fallbackMap, ...primaryMap };
+  const keys = Array.from(new Set([...Object.keys(fallbackMap), ...Object.keys(primaryMap)]));
+  return keys.reduce((acc, key) => {
+    const merged = mergeNestedMapValuePreferNonEmpty(primaryMap[key], fallbackMap[key]);
+    if (isNonEmptyValue(merged)) acc[key] = merged;
+    return acc;
+  }, {});
 }
 
 function mergeStringListsPreferNonEmpty(primary, fallback) {
@@ -647,8 +675,10 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   }
   console.debug("[SCENARIO STORYBOARD PACKAGE]", {
     status: "package normalized successfully",
+    packageMergeStrategy: "safe_nested_map_merge",
     packageRefsByRoleKeys: Object.keys(normalizedPackage.refsByRole || {}),
     packageConnectedRefsByRoleKeys: Object.keys(normalizedPackage.connectedRefsByRole || {}),
+    packageRefDirectivesKeys: Object.keys(normalizedPackage.refDirectives || {}),
     packageHeroParticipants: normalizedPackage.heroParticipants || [],
     packageSupportingParticipants: normalizedPackage.supportingParticipants || [],
     packageMustAppearRoles: normalizedPackage.mustAppearRoles || [],
