@@ -492,6 +492,19 @@ def _extract_gemini_text(resp: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_gemini_finish_reason(resp: dict[str, Any]) -> str:
+    candidates = resp.get("candidates") if isinstance(resp, dict) else None
+    if not isinstance(candidates, list):
+        return ""
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        finish = str(candidate.get("finishReason") or "").strip()
+        if finish:
+            return finish
+    return ""
+
+
 def _extract_json_blob(raw_text: str) -> str:
     text = str(raw_text or "").strip()
     if text.startswith("```"):
@@ -553,6 +566,14 @@ def _try_parse_dirty_json(text: str) -> dict[str, Any] | None:
     except Exception:
         pass
 
+    recovered = _recover_partial_json_candidate(candidate)
+    if recovered:
+        try:
+            parsed = json.loads(recovered)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            pass
+
     pythonish = re.sub(r"\btrue\b", "True", candidate, flags=re.IGNORECASE)
     pythonish = re.sub(r"\bfalse\b", "False", pythonish, flags=re.IGNORECASE)
     pythonish = re.sub(r"\bnull\b", "None", pythonish, flags=re.IGNORECASE)
@@ -561,6 +582,42 @@ def _try_parse_dirty_json(text: str) -> dict[str, Any] | None:
         return parsed if isinstance(parsed, dict) else None
     except Exception:
         return None
+
+
+def _recover_partial_json_candidate(candidate: str) -> str | None:
+    text = str(candidate or "").strip()
+    if not text.startswith("{"):
+        return None
+    in_string = False
+    escape = False
+    closers: list[str] = []
+    for char in text:
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            closers.append("}")
+        elif char == "[":
+            closers.append("]")
+        elif char in {"}", "]"} and closers:
+            expected = closers[-1]
+            if char == expected:
+                closers.pop()
+    repaired = text.rstrip()
+    repaired = re.sub(r",\s*$", "", repaired)
+    if in_string:
+        repaired += '"'
+    if closers:
+        repaired += "".join(reversed(closers))
+    return repaired
 
 
 def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
@@ -2859,15 +2916,25 @@ def _send_director_request(api_key: str, body: dict[str, Any]) -> tuple[dict[str
     return response, model_used, attempted_models
 
 
-def _parse_storyboard_payload(raw_text: str) -> dict[str, Any]:
-    logger.debug("[SCENARIO_DIRECTOR] raw response received chars=%s", len(str(raw_text or "")))
+def _parse_storyboard_payload(raw_text: str, *, parse_stage: str = "initial", finish_reason: str = "") -> dict[str, Any]:
+    logger.debug(
+        "[SCENARIO_DIRECTOR] raw response received chars=%s parse_stage=%s finish_reason=%s",
+        len(str(raw_text or "")),
+        parse_stage,
+        finish_reason or "unknown",
+    )
     extracted = _extract_json_object(raw_text)
     if extracted is None:
         raise ScenarioDirectorError(
             "gemini_invalid_json",
             "Gemini returned invalid JSON for Scenario Director: could not extract JSON object.",
             status_code=502,
-            details={"rawPreview": str(raw_text or "")[:1000]},
+            details={
+                "rawPreview": str(raw_text or "")[:4000],
+                "rawLength": len(str(raw_text or "")),
+                "finishReason": finish_reason or "",
+                "parseStage": parse_stage,
+            },
         )
     logger.debug("[SCENARIO_DIRECTOR] json extracted keys=%s", ",".join(list(extracted.keys())[:8]))
     repaired = _repair_scenario_director_payload(extracted)
@@ -3050,14 +3117,19 @@ def _build_inline_audio_part(audio_context: dict[str, Any]) -> dict[str, Any]:
     return {"inlineData": {"mimeType": mime_type, "data": base64.b64encode(raw_audio).decode("utf-8")}}
 
 
-def _parse_audio_first_single_call_payload(raw_text: str) -> dict[str, Any]:
+def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = "initial", finish_reason: str = "") -> dict[str, Any]:
     extracted = _extract_json_object(raw_text)
     if extracted is None:
         raise ScenarioDirectorError(
             "gemini_invalid_json",
             "Gemini returned invalid JSON for audio-first single-call mode.",
             status_code=502,
-            details={"rawPreview": str(raw_text or "")[:1000]},
+            details={
+                "rawPreview": str(raw_text or "")[:4000],
+                "rawLength": len(str(raw_text or "")),
+                "finishReason": finish_reason or "",
+                "parseStage": parse_stage,
+            },
         )
     required = ("transcript", "audioStructure", "semanticTimeline", "scenes")
     missing = [key for key in required if key not in extracted]
@@ -3275,7 +3347,13 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
             details={"httpStatus": status_code},
         )
     raw_text = _extract_gemini_text(response)
-    parsed_single = _parse_audio_first_single_call_payload(raw_text)
+    finish_reason = _extract_gemini_finish_reason(response)
+    logger.info(
+        "[SCENARIO DIRECTOR] audio-first raw response chars=%s finish_reason=%s",
+        len(str(raw_text or "")),
+        finish_reason or "unknown",
+    )
+    parsed_single = _parse_audio_first_single_call_payload(raw_text, parse_stage="audio_first_initial", finish_reason=finish_reason)
     audio_duration_sec = _safe_float(
         payload.get("audioDurationSec") or payload.get("metadata", {}).get("audio", {}).get("durationSec"),
         0.0,
@@ -3417,9 +3495,16 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     raw_text = _extract_gemini_text(response)
+    finish_reason = _extract_gemini_finish_reason(response)
+    logger.info(
+        "[SCENARIO DIRECTOR] raw response chars=%s finish_reason=%s model=%s",
+        len(str(raw_text or "")),
+        finish_reason or "unknown",
+        model_used,
+    )
     retried_for_json = False
     try:
-        parsed_payload = _parse_storyboard_payload(raw_text)
+        parsed_payload = _parse_storyboard_payload(raw_text, parse_stage="initial", finish_reason=finish_reason)
     except ScenarioDirectorError as first_exc:
         retried_for_json = True
         retry_body = {
@@ -3431,8 +3516,15 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(retry_response, dict) or retry_response.get("__http_error__"):
             raise first_exc
         raw_text = _extract_gemini_text(retry_response)
+        retry_finish_reason = _extract_gemini_finish_reason(retry_response)
+        logger.info(
+            "[SCENARIO DIRECTOR] retry raw response chars=%s finish_reason=%s model=%s",
+            len(str(raw_text or "")),
+            retry_finish_reason or "unknown",
+            retry_model_used,
+        )
         model_used = retry_model_used
-        parsed_payload = _parse_storyboard_payload(raw_text)
+        parsed_payload = _parse_storyboard_payload(raw_text, parse_stage="strict_json_retry", finish_reason=retry_finish_reason)
 
     parsed_payload, normalized_contract_fields, normalization_warnings = _normalize_scenario_director_scene_defaults(parsed_payload)
     structured_planner_diagnostics = _extract_structured_diagnostics(parsed_payload)
@@ -3497,7 +3589,11 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(refinement_response, dict) and not refinement_response.get("__http_error__"):
             refinement_raw_text = _extract_gemini_text(refinement_response)
             try:
-                refinement_parsed = _parse_storyboard_payload(refinement_raw_text)
+                refinement_parsed = _parse_storyboard_payload(
+                    refinement_raw_text,
+                    parse_stage="timeline_refinement",
+                    finish_reason=_extract_gemini_finish_reason(refinement_response),
+                )
                 refinement_parsed, _, refinement_normalization_warnings = _normalize_scenario_director_scene_defaults(refinement_parsed)
                 refined_storyboard = ScenarioDirectorStoryboardOut.model_validate(refinement_parsed)
                 refined_storyboard = _harden_storyboard_out(refined_storyboard, payload)
@@ -3830,6 +3926,13 @@ def run_scenario_director_master(payload: dict[str, Any]) -> dict[str, Any]:
             last_error = ScenarioDirectorError("gemini_request_failed", "Gemini request failed in Scenario Director master mode.", status_code=502)
             continue
         raw_text = _extract_gemini_text(response)
+        finish_reason = _extract_gemini_finish_reason(response)
+        logger.info(
+            "[SCENARIO DIRECTOR][master] raw response chars=%s finish_reason=%s retry=%s",
+            len(str(raw_text or "")),
+            finish_reason or "unknown",
+            retry_level,
+        )
         parsed_payload = _extract_json_object(raw_text)
         if isinstance(parsed_payload, dict):
             sanitized = _sanitize_master_output(parsed_payload)
@@ -3839,7 +3942,12 @@ def run_scenario_director_master(payload: dict[str, Any]) -> dict[str, Any]:
                 "masterOutput": sanitized,
                 "meta": {"plannerSource": "gemini", "modelUsed": model_used, "attemptedModels": attempted_models, "retryCount": retry_level},
             }
-        last_error = ScenarioDirectorError("gemini_invalid_json", "Gemini returned invalid JSON for Scenario Director master mode.", status_code=502)
+        last_error = ScenarioDirectorError(
+            "gemini_invalid_json",
+            "Gemini returned invalid JSON for Scenario Director master mode.",
+            status_code=502,
+            details={"rawPreview": str(raw_text or "")[:4000], "rawLength": len(str(raw_text or "")), "finishReason": finish_reason or "", "parseStage": f"master_retry_{retry_level}"},
+        )
 
     raise last_error or ScenarioDirectorError("gemini_invalid_json", "Gemini returned invalid JSON for Scenario Director master mode.", status_code=502)
 
@@ -3966,6 +4074,13 @@ def run_scenario_director_scenes(payload: dict[str, Any]) -> dict[str, Any]:
             last_error = ScenarioDirectorError("gemini_request_failed", "Gemini request failed in Scenario Director scenes mode.", status_code=502)
             continue
         raw_text = _extract_gemini_text(response)
+        finish_reason = _extract_gemini_finish_reason(response)
+        logger.info(
+            "[SCENARIO DIRECTOR][scenes] raw response chars=%s finish_reason=%s retry=%s",
+            len(str(raw_text or "")),
+            finish_reason or "unknown",
+            retry_level,
+        )
         parsed_payload = _extract_json_object(raw_text)
         if isinstance(parsed_payload, dict):
             max_scenes = 5 if retry_level >= 2 else expected_scenes
@@ -3977,6 +4092,11 @@ def run_scenario_director_scenes(payload: dict[str, Any]) -> dict[str, Any]:
                 **sanitized,
                 "meta": {"plannerSource": "gemini", "modelUsed": model_used, "attemptedModels": attempted_models, "retryCount": retry_level, "expectedScenes": expected_scenes},
             }
-        last_error = ScenarioDirectorError("gemini_invalid_json", "Gemini returned invalid JSON for Scenario Director scenes mode.", status_code=502)
+        last_error = ScenarioDirectorError(
+            "gemini_invalid_json",
+            "Gemini returned invalid JSON for Scenario Director scenes mode.",
+            status_code=502,
+            details={"rawPreview": str(raw_text or "")[:4000], "rawLength": len(str(raw_text or "")), "finishReason": finish_reason or "", "parseStage": f"scenes_retry_{retry_level}"},
+        )
 
     raise last_error or ScenarioDirectorError("gemini_invalid_json", "Gemini returned invalid JSON for Scenario Director scenes mode.", status_code=502)

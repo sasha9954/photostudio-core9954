@@ -62,6 +62,16 @@ const lookupLabel = (options, value, fallback) => options.find((option) => optio
 
 const normalizeText = (value) => String(value || "").trim();
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC_SYNTH = false;
+const SCENARIO_DIRECTOR_FIXTURE_TOGGLE_KEY = "ps:scenarioDirector:forceFixture";
+
+function isScenarioDirectorFixtureForced() {
+  if (typeof window === "undefined") return false;
+  const queryRaw = normalizeText(new URLSearchParams(window.location.search).get("scenarioDirectorFixture"));
+  if (["1", "true", "yes", "on"].includes(queryRaw.toLowerCase())) return true;
+  if (["0", "false", "no", "off"].includes(queryRaw.toLowerCase())) return false;
+  const storageRaw = normalizeText(window.localStorage?.getItem(SCENARIO_DIRECTOR_FIXTURE_TOGGLE_KEY));
+  return ["1", "true", "yes", "on"].includes(storageRaw.toLowerCase());
+}
 
 function getConnectedInputRawSignal(input) {
   if (!input || typeof input !== "object") return "";
@@ -500,6 +510,13 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       format,
     },
   };
+
+  const forceFixture = isScenarioDirectorFixtureForced();
+  if (forceFixture) {
+    payload.metadata.forceLocalDeterministicFixture = true;
+    payload.metadata.fixtureDebugToggle = "frontend_query_or_localstorage";
+    console.warn("[ScenarioDirector] DEBUG FIXTURE MODE enabled (forceLocalDeterministicFixture=true)");
+  }
 
   if (audioContext.hasAudioSource) {
     console.debug("[ScenarioDirector] audio payload context", {

@@ -201,8 +201,18 @@ def _should_use_scenario_director_fixture(req: dict[str, Any], *, reason: str = 
         metadata.get("fallbackToLocalDeterministicFixtureOnGemini403"),
         default=True,
     )
+    fallback_on_gemini_invalid_json = _flag_enabled(
+        metadata.get("fallbackToLocalDeterministicFixtureOnGeminiInvalidJson"),
+        default=False,
+    )
     env_fallback = _flag_enabled(os.getenv("SCENARIO_DIRECTOR_FIXTURE_ON_GEMINI_403"), default=True)
-    return "gemini_403" in str(reason or "").strip().lower() and fallback_on_gemini_403 and env_fallback
+    env_invalid_json_fallback = _flag_enabled(os.getenv("SCENARIO_DIRECTOR_FIXTURE_ON_GEMINI_INVALID_JSON"), default=False)
+    normalized_reason = str(reason or "").strip().lower()
+    if "gemini_403" in normalized_reason and fallback_on_gemini_403 and env_fallback:
+        return True
+    if "gemini_invalid_json" in normalized_reason and fallback_on_gemini_invalid_json and env_invalid_json_fallback:
+        return True
+    return False
 
 
 def _build_scenario_director_fixture(req: dict[str, Any], *, fixture_reason: str) -> dict[str, Any]:
@@ -584,6 +594,9 @@ async def clip_comfy_scenario_director_generate(payload: ScenarioDirectorGenerat
         if http_status == 403 and _should_use_scenario_director_fixture(req, reason="gemini_403"):
             logger.warning("[clip_comfy_scenario_director_generate] Gemini 403 fallback to deterministic fixture")
             return _build_scenario_director_fixture(req, fixture_reason="gemini_403_fallback")
+        if str(exc.code or "").strip() == "gemini_invalid_json" and _should_use_scenario_director_fixture(req, reason="gemini_invalid_json"):
+            logger.warning("[clip_comfy_scenario_director_generate] gemini_invalid_json fallback to deterministic fixture")
+            return _build_scenario_director_fixture(req, fixture_reason="gemini_invalid_json_fallback")
         detail: dict[str, Any] = {"code": exc.code, "message": exc.message}
         if exc.details:
             detail["details"] = exc.details
