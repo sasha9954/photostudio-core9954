@@ -9349,6 +9349,10 @@ Aspect ratio: ${imageFormat}`,
         actionType: "video",
         editorNodeId: String(scenarioEditor?.nodeId || ""),
         sourceNodeIdUsedByHandler: String(scenarioFlowSourceNode?.id || ""),
+        requestedSceneIndex,
+        requestedSceneId,
+        resolvedSceneIndex,
+        targetSceneIndex,
         selectedSceneId: String(targetScene?.sceneId || ""),
         resolvedSceneFound: !!targetScene,
       });
@@ -9538,11 +9542,25 @@ Aspect ratio: ${imageFormat}`,
       console.debug("[SCENARIO VIDEO START PAYLOAD]", {
         endpoint,
         sceneId,
+        effectiveVideoPromptLength: finalVideoPrompt.length,
         payload: videoStartPayload,
+      });
+      console.info("[SCENARIO VIDEO START REQUEST]", {
+        endpoint,
+        method: "POST",
+        sceneId,
+        effectiveVideoPromptLength: finalVideoPrompt.length,
       });
       const out = await fetchJson(endpoint, {
         method: "POST",
         body: videoStartPayload,
+      });
+      console.info("[SCENARIO VIDEO START RESULT]", {
+        endpoint,
+        sceneId,
+        status: String(out?.status || ""),
+        response: out,
+        effectiveVideoPromptLength: finalVideoPrompt.length,
       });
       console.info("[VIDEO START RESPONSE]", {
         scope: "scenario",
