@@ -109,8 +109,13 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
         "uses_global_music_prompt": False,
         "supports_lip_sync": True,
         "supports_audio_slices": True,
-        "default_ltx_strategy": "performance_audio_first",
+        "default_ltx_strategy": "image-video",
         "prefers_close_face_for_lipsync": True,
+        "clipWorkflowDefault": "image-video",
+        "clipWorkflowLipSync": "image-lipsink-video-music",
+        "clipWorkflowSound": "image-video-golos-zvuk",
+        "clipWorkflowFirstLast": "imag-imag-video-bz",
+        "clipWorkflowFirstLastSound": "imag-imag-video-zvuk",
         "narrative_priority": "beat_sync",
         "pacing_profile": "rhythmic",
     },
@@ -358,6 +363,24 @@ class ScenarioDirectorScene(BaseModel):
     local_phrase: str | None = None
     sfx: str = ""
     music_mix_hint: str = "off"
+    render_mode: str = "image_video"
+    resolved_workflow_key: str = "image-video"
+    transition_type: str = "cut"
+    shot_type: str = "medium"
+    requested_duration_sec: float = 0.0
+    scene_purpose: str = ""
+    viewer_hook: str = ""
+    performance_framing: str = ""
+    lip_sync: bool = False
+    lip_sync_text: str = ""
+    send_audio_to_generator: bool = False
+    audio_slice_start_sec: float = 0.0
+    audio_slice_end_sec: float = 0.0
+    audio_slice_expected_duration_sec: float = 0.0
+    clip_decision_reason: str = ""
+    workflow_decision_reason: str = ""
+    lip_sync_decision_reason: str = ""
+    audio_slice_decision_reason: str = ""
     what_from_audio_this_scene_uses: str = ""
     director_note_layer: str = ""
     boundary_reason: str = "fallback"
@@ -402,6 +425,30 @@ class ScenarioDirectorScene(BaseModel):
         self.local_phrase = str(self.local_phrase).strip() if self.local_phrase is not None and str(self.local_phrase).strip() else None
         self.sfx = _stringify_sfx(self.sfx)
         self.music_mix_hint = str(self.music_mix_hint or "off").strip() or "off"
+        self.render_mode = str(self.render_mode or "image_video").strip() or "image_video"
+        self.resolved_workflow_key = str(self.resolved_workflow_key or "image-video").strip() or "image-video"
+        self.transition_type = str(self.transition_type or "cut").strip() or "cut"
+        self.shot_type = str(self.shot_type or "").strip()
+        self.requested_duration_sec = _safe_float(
+            self.requested_duration_sec,
+            max(0.0, _safe_float(self.duration, max(0.0, self.time_end - self.time_start))),
+        )
+        self.scene_purpose = str(self.scene_purpose or "").strip()
+        self.viewer_hook = str(self.viewer_hook or "").strip()
+        self.performance_framing = str(self.performance_framing or "").strip()
+        self.lip_sync = _coerce_bool(self.lip_sync, self.ltx_mode == "lip_sync")
+        self.lip_sync_text = str(self.lip_sync_text or "").strip()
+        self.send_audio_to_generator = _coerce_bool(self.send_audio_to_generator, False)
+        self.audio_slice_start_sec = _safe_float(self.audio_slice_start_sec, self.time_start)
+        self.audio_slice_end_sec = _safe_float(self.audio_slice_end_sec, self.time_end)
+        self.audio_slice_expected_duration_sec = _safe_float(
+            self.audio_slice_expected_duration_sec,
+            max(0.0, self.audio_slice_end_sec - self.audio_slice_start_sec),
+        )
+        self.clip_decision_reason = str(self.clip_decision_reason or "").strip()
+        self.workflow_decision_reason = str(self.workflow_decision_reason or "").strip()
+        self.lip_sync_decision_reason = str(self.lip_sync_decision_reason or "").strip()
+        self.audio_slice_decision_reason = str(self.audio_slice_decision_reason or "").strip()
         self.what_from_audio_this_scene_uses = str(self.what_from_audio_this_scene_uses or "").strip()
         self.director_note_layer = str(self.director_note_layer or "").strip()
         boundary_reason = str(self.boundary_reason or "fallback").strip().lower() or "fallback"
@@ -800,6 +847,24 @@ def _normalize_legacy_scene_shape(scene: dict) -> dict:
     normalized.setdefault("boundary_reason", normalized.get("boundaryReason"))
     normalized.setdefault("audio_anchor_evidence", normalized.get("audioAnchorEvidence"))
     normalized.setdefault("confidence", normalized.get("confidence"))
+    normalized.setdefault("render_mode", normalized.get("renderMode"))
+    normalized.setdefault("resolved_workflow_key", normalized.get("resolvedWorkflowKey"))
+    normalized.setdefault("transition_type", normalized.get("transitionType"))
+    normalized.setdefault("shot_type", normalized.get("shotType"))
+    normalized.setdefault("requested_duration_sec", normalized.get("requestedDurationSec"))
+    normalized.setdefault("scene_purpose", normalized.get("scenePurpose"))
+    normalized.setdefault("viewer_hook", normalized.get("viewerHook"))
+    normalized.setdefault("performance_framing", normalized.get("performanceFraming"))
+    normalized.setdefault("lip_sync", normalized.get("lipSync"))
+    normalized.setdefault("lip_sync_text", normalized.get("lipSyncText"))
+    normalized.setdefault("send_audio_to_generator", normalized.get("sendAudioToGenerator"))
+    normalized.setdefault("audio_slice_start_sec", normalized.get("audioSliceStartSec"))
+    normalized.setdefault("audio_slice_end_sec", normalized.get("audioSliceEndSec"))
+    normalized.setdefault("audio_slice_expected_duration_sec", normalized.get("audioSliceExpectedDurationSec"))
+    normalized.setdefault("clip_decision_reason", normalized.get("clipDecisionReason"))
+    normalized.setdefault("workflow_decision_reason", normalized.get("workflowDecisionReason"))
+    normalized.setdefault("lip_sync_decision_reason", normalized.get("lipSyncDecisionReason"))
+    normalized.setdefault("audio_slice_decision_reason", normalized.get("audioSliceDecisionReason"))
 
     if applied:
         logger.debug(
@@ -2007,15 +2072,33 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "videoPrompt": scene.video_prompt,
             "ltxMode": scene.ltx_mode,
             "whyThisMode": scene.ltx_reason,
+            "renderMode": scene.render_mode,
+            "resolvedWorkflowKey": scene.resolved_workflow_key,
+            "scenePurpose": scene.scene_purpose,
+            "viewerHook": scene.viewer_hook,
             "startFrameSource": scene.start_frame_source,
             "needsTwoFrames": scene.needs_two_frames,
             "continuation": scene.continuation_from_previous,
+            "transitionType": scene.transition_type,
+            "shotType": scene.shot_type,
+            "requestedDurationSec": scene.requested_duration_sec,
             "narrationMode": scene.narration_mode,
             "localPhrase": scene.local_phrase,
             "sfx": scene.sfx,
             "soundNotes": scene.sfx,
             "pauseDuckSilenceNotes": "",
             "musicMixHint": scene.music_mix_hint,
+            "lipSync": scene.lip_sync,
+            "lipSyncText": scene.lip_sync_text,
+            "sendAudioToGenerator": scene.send_audio_to_generator,
+            "audioSliceStartSec": scene.audio_slice_start_sec,
+            "audioSliceEndSec": scene.audio_slice_end_sec,
+            "audioSliceExpectedDurationSec": scene.audio_slice_expected_duration_sec,
+            "performanceFraming": scene.performance_framing,
+            "clipDecisionReason": scene.clip_decision_reason,
+            "workflowDecisionReason": scene.workflow_decision_reason,
+            "lipSyncDecisionReason": scene.lip_sync_decision_reason,
+            "audioSliceDecisionReason": scene.audio_slice_decision_reason,
             "primaryRole": primary_role,
             "secondaryRoles": secondary_roles,
             "sceneActiveRoles": scene_active_roles,
@@ -2038,9 +2121,14 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "videoPrompt": scene.video_prompt,
                 "ltxMode": scene.ltx_mode,
                 "whyThisMode": scene.ltx_reason,
+                "renderMode": scene.render_mode,
+                "resolvedWorkflowKey": scene.resolved_workflow_key,
                 "startFrameSource": scene.start_frame_source,
                 "needsTwoFrames": scene.needs_two_frames,
                 "continuation": scene.continuation_from_previous,
+                "transitionType": scene.transition_type,
+                "shotType": scene.shot_type,
+                "requestedDurationSec": scene.requested_duration_sec,
             }
         )
         sound.append(
@@ -2051,6 +2139,12 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "sfx": scene.sfx,
                 "soundNotes": scene.sfx,
                 "pauseDuckSilenceNotes": "",
+                "lipSync": scene.lip_sync,
+                "lipSyncText": scene.lip_sync_text,
+                "sendAudioToGenerator": scene.send_audio_to_generator,
+                "audioSliceStartSec": scene.audio_slice_start_sec,
+                "audioSliceEndSec": scene.audio_slice_end_sec,
+                "audioSliceExpectedDurationSec": scene.audio_slice_expected_duration_sec,
             }
         )
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s primaryRole=%s", scene.scene_id, primary_role)
@@ -2396,9 +2490,204 @@ def _limit_lip_sync_usage(storyboard_out: ScenarioDirectorStoryboardOut) -> Scen
         if lip_sync_seen <= 3:
             continue
         scene.ltx_mode = "i2v_as"
+        scene.render_mode = "image_video_sound" if str(scene.sfx or "").strip() else "image_video"
+        scene.resolved_workflow_key = "image-video-golos-zvuk" if scene.render_mode == "image_video_sound" else "image-video"
+        scene.lip_sync = False
+        scene.send_audio_to_generator = False
+        scene.lip_sync_text = ""
+        scene.audio_slice_start_sec = 0.0
+        scene.audio_slice_end_sec = 0.0
+        scene.audio_slice_expected_duration_sec = 0.0
         original_reason = str(scene.ltx_reason or "").strip()
         replacement_reason = "Normalized from lip_sync to i2v_as because Scenario Director allows at most 3 lip_sync scenes per output."
         scene.ltx_reason = f"{original_reason}; {replacement_reason}" if original_reason else replacement_reason
+    return storyboard_out
+
+
+def _infer_music_video_shot_type(scene: ScenarioDirectorScene) -> str:
+    bundle = " ".join([scene.camera, scene.frame_description, scene.action_in_frame]).lower()
+    if any(token in bundle for token in ("extreme close", "ecu", "macro", "insert", "detail")):
+        return "detail_insert"
+    if any(token in bundle for token in ("close-up", "close up", "portrait", "face", "frontal")):
+        return "close_up"
+    if any(token in bundle for token in ("wide", "establishing", "drone", "aerial", "long shot")):
+        return "wide"
+    if any(token in bundle for token in ("two-shot", "two shot", "duet", "shared frame")):
+        return "duet_shared"
+    return "medium"
+
+
+def _infer_music_video_scene_purpose(index: int, total: int, scene: ScenarioDirectorScene) -> str:
+    if index == 0:
+        return "hook"
+    if index == total - 1:
+        return "ending_hold"
+    bundle = _scene_text_bundle(scene).lower()
+    if any(token in bundle for token in ("transition", "crossfade", "wipe", "smash cut")):
+        return "transition"
+    if any(token in bundle for token in ("reveal", "unveil", "discover")):
+        return "reveal"
+    if any(token in bundle for token in ("climax", "peak", "payoff", "drop")):
+        return "payoff"
+    if any(token in bundle for token in ("intense", "escalat", "burst", "surge")):
+        return "intensify"
+    if any(token in bundle for token in ("sing", "vocal", "lyric", "chorus", "performance")):
+        return "performance"
+    if index >= max(1, total - 2):
+        return "payoff"
+    return "build"
+
+
+def _scene_has_human_performer(scene: ScenarioDirectorScene) -> bool:
+    return any(actor.startswith("character_") or actor in {"group_faces", "group"} for actor in (scene.actors or []))
+
+
+def _scene_has_lip_sync_signal(scene: ScenarioDirectorScene) -> bool:
+    text = " ".join(
+        [
+            scene.local_phrase or "",
+            scene.what_from_audio_this_scene_uses or "",
+            scene.scene_goal or "",
+            scene.action_in_frame or "",
+            scene.frame_description or "",
+        ]
+    ).lower()
+    return any(token in text for token in ("lyric", "vocal", "chorus", "sing", "verse", "hook line", "line"))
+
+
+def _extract_lip_sync_text(scene: ScenarioDirectorScene) -> str:
+    if str(scene.local_phrase or "").strip():
+        return str(scene.local_phrase or "").strip()
+    fallback = str(scene.what_from_audio_this_scene_uses or scene.scene_goal or "").strip()
+    if not fallback:
+        return ""
+    words = fallback.split()
+    return " ".join(words[:8]).strip()
+
+
+def _apply_music_video_mode_policy(
+    storyboard_out: ScenarioDirectorStoryboardOut,
+    *,
+    content_type_policy: dict[str, Any],
+) -> ScenarioDirectorStoryboardOut:
+    scenes = storyboard_out.scenes or []
+    if not scenes:
+        return storyboard_out
+    max_lip_sync = max(1, min(3, len(scenes) // 2 if len(scenes) <= 6 else 3))
+    lip_sync_used = 0
+    prev_lip_sync = False
+    prev_two_frames = False
+    for index, scene in enumerate(scenes):
+        shot_type = _infer_music_video_shot_type(scene)
+        scene.shot_type = shot_type
+        scene.scene_purpose = scene.scene_purpose or _infer_music_video_scene_purpose(index, len(scenes), scene)
+        scene.viewer_hook = scene.viewer_hook or (
+            "Immediate visual hook with rhythm-aware motion."
+            if index == 0
+            else f"{scene.scene_purpose.replace('_', ' ').title()} beat with clear visual intent."
+        )
+        duration = max(0.0, _safe_float(scene.duration, scene.time_end - scene.time_start))
+        scene.requested_duration_sec = _safe_float(scene.requested_duration_sec, duration)
+
+        has_sound_cue = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
+        transition_candidate = _scene_has_transition_evidence(scene) and index > 0 and not prev_two_frames
+        close_capable = shot_type not in {"wide"}
+        lip_sync_candidate = (
+            _scene_has_human_performer(scene)
+            and close_capable
+            and _scene_has_lip_sync_signal(scene)
+            and not transition_candidate
+            and not prev_lip_sync
+            and lip_sync_used < max_lip_sync
+        )
+
+        render_mode = "image_video"
+        resolved_workflow = str(content_type_policy.get("clipWorkflowDefault") or "image-video")
+        ltx_mode = "i2v"
+        needs_two_frames = False
+        continuation = _coerce_bool(scene.continuation_from_previous, False) or scene.ltx_mode == "continuation"
+        send_audio_to_generator = False
+        lip_sync = False
+        performance_framing = str(scene.performance_framing or "").strip()
+        transition_type = "cut" if index > 0 else "cold_open"
+        workflow_reason = "Default clip workflow for standard image-to-video scene."
+        lip_sync_reason = "Not a lip-sync scene."
+        audio_slice_reason = "Audio slice is not required."
+
+        if lip_sync_candidate:
+            render_mode = "lip_sync_music"
+            resolved_workflow = str(content_type_policy.get("clipWorkflowLipSync") or "image-lipsink-video-music")
+            ltx_mode = "lip_sync"
+            lip_sync = True
+            send_audio_to_generator = True
+            performance_framing = "face_close" if performance_framing == "" else performance_framing
+            start_sec = _safe_float(scene.time_start, 0.0)
+            end_cap = min(_safe_float(scene.time_end, start_sec), start_sec + 5.0)
+            end_sec = max(start_sec + 1.2, end_cap)
+            scene.audio_slice_start_sec = start_sec
+            scene.audio_slice_end_sec = end_sec
+            scene.audio_slice_expected_duration_sec = round(max(0.0, end_sec - start_sec), 3)
+            scene.lip_sync_text = _extract_lip_sync_text(scene)
+            workflow_reason = "Lip-sync workflow selected for close human vocal articulation."
+            lip_sync_reason = "Local vocal phrase + human close framing detected."
+            audio_slice_reason = "Slice aligned to scene vocal window with max ~5 seconds."
+            lip_sync_used += 1
+        elif transition_candidate:
+            needs_two_frames = True
+            transition_type = "state_shift"
+            if has_sound_cue:
+                render_mode = "first_last_sound"
+                resolved_workflow = str(content_type_policy.get("clipWorkflowFirstLastSound") or "imag-imag-video-zvuk")
+                ltx_mode = "f_l_as"
+                workflow_reason = "First-last + sound workflow for controlled transition with sound cue."
+            else:
+                render_mode = "first_last"
+                resolved_workflow = str(content_type_policy.get("clipWorkflowFirstLast") or "imag-imag-video-bz")
+                ltx_mode = "f_l"
+                workflow_reason = "First-last workflow for controlled visual state transition."
+        elif has_sound_cue:
+            render_mode = "image_video_sound"
+            resolved_workflow = str(content_type_policy.get("clipWorkflowSound") or "image-video-golos-zvuk")
+            ltx_mode = "i2v_as"
+            workflow_reason = "Sound-aware workflow selected for SFX/short phrase support."
+
+        if continuation and not needs_two_frames and not lip_sync:
+            ltx_mode = "continuation"
+            scene.start_frame_source = "previous_frame"
+            transition_type = "continuation"
+        elif not continuation and index > 0 and not needs_two_frames and not lip_sync and (index % 4 == 0):
+            continuation = True
+            ltx_mode = "continuation"
+            scene.start_frame_source = "previous_frame"
+            transition_type = "continuation"
+        elif needs_two_frames and scene.start_frame_source == "previous_frame":
+            scene.start_frame_source = "first_frame"
+        elif scene.start_frame_source == "previous_frame" and not continuation:
+            scene.start_frame_source = "new"
+
+        scene.needs_two_frames = needs_two_frames
+        scene.continuation_from_previous = continuation
+        scene.render_mode = render_mode
+        scene.resolved_workflow_key = resolved_workflow
+        scene.ltx_mode = ltx_mode
+        scene.ltx_reason = _normalize_ltx_reason(scene.ltx_reason or workflow_reason, ltx_mode, narration_mode=scene.narration_mode)
+        scene.lip_sync = lip_sync
+        scene.send_audio_to_generator = send_audio_to_generator
+        scene.performance_framing = performance_framing
+        scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
+        scene.clip_decision_reason = scene.clip_decision_reason or f"Purpose={scene.scene_purpose}; shot={scene.shot_type}; render={render_mode}."
+        scene.workflow_decision_reason = scene.workflow_decision_reason or workflow_reason
+        scene.lip_sync_decision_reason = scene.lip_sync_decision_reason or lip_sync_reason
+        scene.audio_slice_decision_reason = scene.audio_slice_decision_reason or audio_slice_reason
+
+        if not lip_sync:
+            scene.lip_sync_text = ""
+            scene.audio_slice_start_sec = 0.0
+            scene.audio_slice_end_sec = 0.0
+            scene.audio_slice_expected_duration_sec = 0.0
+
+        prev_lip_sync = lip_sync
+        prev_two_frames = needs_two_frames
     return storyboard_out
 
 
@@ -2793,6 +3082,7 @@ def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio
 
 
 def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> ScenarioDirectorStoryboardOut:
+    content_type_policy = _get_content_type_policy(payload)
     storyboard_out = _apply_scene_count_limit(storyboard_out)
     storyboard_out = _filter_or_repair_weak_scenes(storyboard_out)
     storyboard_out = _enforce_character_lock(payload, storyboard_out)
@@ -2800,6 +3090,9 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     storyboard_out = _apply_timing_variation(storyboard_out)
     storyboard_out = _rebalance_ltx_modes(storyboard_out)
     storyboard_out = _normalize_scene_timeline(storyboard_out)
+    if content_type_policy.get("value") == "music_video":
+        storyboard_out = _apply_music_video_mode_policy(storyboard_out, content_type_policy=content_type_policy)
+        storyboard_out.music_prompt = ""
     storyboard_out = _limit_lip_sync_usage(storyboard_out)
     _assert_storyboard_quality(storyboard_out)
     return storyboard_out
@@ -3584,8 +3877,10 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
                 "camera": str(scene.get("camera") or "").strip(),
                 "image_prompt": str(scene.get("visualPrompt") or "").strip(),
                 "video_prompt": str(scene.get("visualPrompt") or "").strip(),
-                "ltx_mode": "i2v_as",
-                "ltx_reason": "Audio-first single-call default mapping.",
+                "ltx_mode": "i2v",
+                "ltx_reason": "Audio-first single-call mapped to base clip image-video mode.",
+                "render_mode": "image_video",
+                "resolved_workflow_key": "image-video",
                 "start_frame_source": "new",
                 "needs_two_frames": False,
                 "continuation_from_previous": idx > 1,
@@ -3593,6 +3888,8 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
                 "local_phrase": str(timeline_hit.get("text") or "").strip() or None,
                 "sfx": "",
                 "music_mix_hint": "off",
+                "scene_purpose": "hook" if idx == 1 else "build",
+                "viewer_hook": "Immediate rhythmic visual anchor." if idx == 1 else "Beat-matched progression.",
                 "what_from_audio_this_scene_uses": str(timeline_hit.get("meaning") or scene.get("summary") or "").strip(),
                 "director_note_layer": "",
                 "boundary_reason": "phrase",

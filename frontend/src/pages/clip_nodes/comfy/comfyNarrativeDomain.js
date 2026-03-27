@@ -29,7 +29,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
     supportsLipSync: true,
     supportsAudioSlices: true,
     prefersPerformanceCloseup: true,
-    defaultLtxStrategy: "performance_audio_first",
+    defaultLtxStrategy: "image-video",
     summaryStyle: "beat_driven",
     notesRu: "Клип опирается на master audio и не требует synthetic global music prompt.",
   },
@@ -837,15 +837,33 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
       videoPrompt: normalizeText(scene.video_prompt),
       ltxMode,
       whyThisMode: normalizeText(scene.ltx_reason),
+      renderMode: normalizeText(scene.render_mode ?? scene.renderMode) || "image_video",
+      resolvedWorkflowKey: normalizeText(scene.resolved_workflow_key ?? scene.resolvedWorkflowKey) || "image-video",
+      scenePurpose: normalizeText(scene.scene_purpose ?? scene.scenePurpose),
+      viewerHook: normalizeText(scene.viewer_hook ?? scene.viewerHook),
       startFrameSource: normalizeText(scene.start_frame_source) || "new",
       needsTwoFrames: Boolean(scene.needs_two_frames),
       continuation: Boolean(scene.continuation_from_previous),
+      transitionType: normalizeText(scene.transition_type ?? scene.transitionType) || "cut",
+      shotType: normalizeText(scene.shot_type ?? scene.shotType) || "",
+      requestedDurationSec: toStoryboardNumericSec(scene.requested_duration_sec ?? scene.requestedDurationSec, toStoryboardNumericSec(scene.duration, 5)),
       narrationMode: normalizeText(scene.narration_mode) || "full",
       localPhrase: scene.local_phrase ? normalizeText(scene.local_phrase) : null,
       sfx: normalizeText(scene.sfx),
       soundNotes: normalizeText(scene.sfx),
       pauseDuckSilenceNotes: "",
       musicMixHint: normalizeText(scene.music_mix_hint) || "off",
+      lipSync: Boolean(scene.lip_sync ?? scene.lipSync),
+      lipSyncText: normalizeText(scene.lip_sync_text ?? scene.lipSyncText),
+      sendAudioToGenerator: Boolean(scene.send_audio_to_generator ?? scene.sendAudioToGenerator),
+      audioSliceStartSec: toStoryboardNumericSec(scene.audio_slice_start_sec ?? scene.audioSliceStartSec, 0),
+      audioSliceEndSec: toStoryboardNumericSec(scene.audio_slice_end_sec ?? scene.audioSliceEndSec, 0),
+      audioSliceExpectedDurationSec: toStoryboardNumericSec(scene.audio_slice_expected_duration_sec ?? scene.audioSliceExpectedDurationSec, 0),
+      performanceFraming: normalizeText(scene.performance_framing ?? scene.performanceFraming),
+      clipDecisionReason: normalizeText(scene.clip_decision_reason ?? scene.clipDecisionReason),
+      workflowDecisionReason: normalizeText(scene.workflow_decision_reason ?? scene.workflowDecisionReason),
+      lipSyncDecisionReason: normalizeText(scene.lip_sync_decision_reason ?? scene.lipSyncDecisionReason),
+      audioSliceDecisionReason: normalizeText(scene.audio_slice_decision_reason ?? scene.audioSliceDecisionReason),
     };
   });
   return {
@@ -860,9 +878,14 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
       videoPrompt: scene.videoPrompt,
       ltxMode: scene.ltxMode,
       whyThisMode: scene.whyThisMode,
+      renderMode: scene.renderMode,
+      resolvedWorkflowKey: scene.resolvedWorkflowKey,
       startFrameSource: scene.startFrameSource,
       needsTwoFrames: scene.needsTwoFrames,
       continuation: scene.continuation,
+      transitionType: scene.transitionType,
+      shotType: scene.shotType,
+      requestedDurationSec: scene.requestedDurationSec,
     })),
     sound: normalizedScenes.map((scene) => ({
       sceneId: scene.sceneId,
@@ -871,6 +894,12 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
       sfx: scene.sfx,
       soundNotes: scene.soundNotes,
       pauseDuckSilenceNotes: scene.pauseDuckSilenceNotes,
+      lipSync: scene.lipSync,
+      lipSyncText: scene.lipSyncText,
+      sendAudioToGenerator: scene.sendAudioToGenerator,
+      audioSliceStartSec: scene.audioSliceStartSec,
+      audioSliceEndSec: scene.audioSliceEndSec,
+      audioSliceExpectedDurationSec: scene.audioSliceExpectedDurationSec,
     })),
     music: {
       globalMusicPrompt,
@@ -906,6 +935,20 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     "refDirectives",
   ];
   const sceneRoleAwareKeys = [
+    "renderMode",
+    "resolvedWorkflowKey",
+    "lipSync",
+    "lipSyncText",
+    "sendAudioToGenerator",
+    "audioSliceStartSec",
+    "audioSliceEndSec",
+    "audioSliceExpectedDurationSec",
+    "scenePurpose",
+    "viewerHook",
+    "performanceFraming",
+    "transitionType",
+    "shotType",
+    "requestedDurationSec",
     "primaryRole",
     "secondaryRoles",
     "sceneActiveRoles",
@@ -1058,6 +1101,66 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       ...(responseScene || {}),
       ...(storyboardScene || {}),
       ...(directorScene || {}),
+      renderMode: firstNonEmptyText(directorScene?.renderMode, storyboardScene?.renderMode, storyboardScene?.render_mode, responseScene?.renderMode, responseScene?.render_mode) || "image_video",
+      resolvedWorkflowKey: firstNonEmptyText(
+        directorScene?.resolvedWorkflowKey,
+        storyboardScene?.resolvedWorkflowKey,
+        storyboardScene?.resolved_workflow_key,
+        responseScene?.resolvedWorkflowKey,
+        responseScene?.resolved_workflow_key
+      ) || "image-video",
+      lipSync: Boolean(directorScene?.lipSync ?? storyboardScene?.lipSync ?? storyboardScene?.lip_sync ?? responseScene?.lipSync ?? responseScene?.lip_sync),
+      lipSyncText: firstNonEmptyText(directorScene?.lipSyncText, storyboardScene?.lipSyncText, storyboardScene?.lip_sync_text, responseScene?.lipSyncText, responseScene?.lip_sync_text),
+      sendAudioToGenerator: Boolean(
+        directorScene?.sendAudioToGenerator
+        ?? storyboardScene?.sendAudioToGenerator
+        ?? storyboardScene?.send_audio_to_generator
+        ?? responseScene?.sendAudioToGenerator
+        ?? responseScene?.send_audio_to_generator
+      ),
+      audioSliceStartSec: toStoryboardNumericSec(
+        directorScene?.audioSliceStartSec
+        ?? storyboardScene?.audioSliceStartSec
+        ?? storyboardScene?.audio_slice_start_sec
+        ?? responseScene?.audioSliceStartSec
+        ?? responseScene?.audio_slice_start_sec,
+        0
+      ),
+      audioSliceEndSec: toStoryboardNumericSec(
+        directorScene?.audioSliceEndSec
+        ?? storyboardScene?.audioSliceEndSec
+        ?? storyboardScene?.audio_slice_end_sec
+        ?? responseScene?.audioSliceEndSec
+        ?? responseScene?.audio_slice_end_sec,
+        0
+      ),
+      audioSliceExpectedDurationSec: toStoryboardNumericSec(
+        directorScene?.audioSliceExpectedDurationSec
+        ?? storyboardScene?.audioSliceExpectedDurationSec
+        ?? storyboardScene?.audio_slice_expected_duration_sec
+        ?? responseScene?.audioSliceExpectedDurationSec
+        ?? responseScene?.audio_slice_expected_duration_sec,
+        0
+      ),
+      scenePurpose: firstNonEmptyText(directorScene?.scenePurpose, storyboardScene?.scenePurpose, storyboardScene?.scene_purpose, responseScene?.scenePurpose, responseScene?.scene_purpose),
+      viewerHook: firstNonEmptyText(directorScene?.viewerHook, storyboardScene?.viewerHook, storyboardScene?.viewer_hook, responseScene?.viewerHook, responseScene?.viewer_hook),
+      performanceFraming: firstNonEmptyText(
+        directorScene?.performanceFraming,
+        storyboardScene?.performanceFraming,
+        storyboardScene?.performance_framing,
+        responseScene?.performanceFraming,
+        responseScene?.performance_framing
+      ),
+      transitionType: firstNonEmptyText(directorScene?.transitionType, storyboardScene?.transitionType, storyboardScene?.transition_type, responseScene?.transitionType, responseScene?.transition_type) || "cut",
+      shotType: firstNonEmptyText(directorScene?.shotType, storyboardScene?.shotType, storyboardScene?.shot_type, responseScene?.shotType, responseScene?.shot_type),
+      requestedDurationSec: toStoryboardNumericSec(
+        directorScene?.requestedDurationSec
+        ?? storyboardScene?.requestedDurationSec
+        ?? storyboardScene?.requested_duration_sec
+        ?? responseScene?.requestedDurationSec
+        ?? responseScene?.requested_duration_sec,
+        0
+      ),
       primaryRole: firstNonEmptyText(directorScene?.primaryRole, storyboardScene?.primaryRole, responseScene?.primaryRole),
       secondaryRoles: toUniqueTextList(directorScene?.secondaryRoles, storyboardScene?.secondaryRoles, responseScene?.secondaryRoles),
       sceneActiveRoles: toUniqueTextList(directorScene?.sceneActiveRoles, storyboardScene?.sceneActiveRoles, responseScene?.sceneActiveRoles),
