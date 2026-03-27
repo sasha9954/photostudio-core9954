@@ -328,6 +328,44 @@ TIMELINE_INTERNAL_GAP_WARN_SEC = 1.25
 TIMELINE_TAIL_WARN_SEC = 1.0
 TIMELINE_COVERAGE_RATIO_WARN = 0.95
 MAX_INLINE_AUDIO_BYTES = 15 * 1024 * 1024
+PRESENTATION_MALE_HINTS = (
+    "male vocal",
+    "male voice",
+    "male singer",
+    "man singing",
+    "his voice",
+    "he sings",
+    "he is singing",
+    "мужской вокал",
+    "мужской голос",
+    "поет мужчина",
+    "поёт мужчина",
+)
+PRESENTATION_FEMALE_HINTS = (
+    "female vocal",
+    "female voice",
+    "female singer",
+    "woman singing",
+    "her voice",
+    "she sings",
+    "she is singing",
+    "женский вокал",
+    "женский голос",
+    "поет женщина",
+    "поёт женщина",
+)
+PRESENTATION_MIXED_HINTS = (
+    "male and female",
+    "female and male",
+    "mixed vocal",
+    "mixed voices",
+    "duet vocal",
+    "duet",
+    "group vocal",
+    "мужской и женский",
+    "смешанный вокал",
+    "дуэт",
+)
 
 
 class ScenarioDirectorError(RuntimeError):
@@ -2487,6 +2525,7 @@ def _limit_lip_sync_usage(
     content_type_policy: dict[str, Any] | None = None,
 ) -> ScenarioDirectorStoryboardOut:
     content_policy = content_type_policy or {}
+    is_music_video = str(content_policy.get("value") or "").strip().lower() == "music_video"
     lip_sync_seen = 0
     for scene in storyboard_out.scenes:
         if scene.ltx_mode != "lip_sync":
@@ -2495,13 +2534,16 @@ def _limit_lip_sync_usage(
         if lip_sync_seen <= 3:
             continue
         has_sound_cue = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
+        use_sound_workflow = has_sound_cue and not is_music_video
         scene.render_mode = "image_video_sound" if has_sound_cue else "image_video"
+        if is_music_video:
+            scene.render_mode = "image_video"
         scene.resolved_workflow_key = (
             str(content_policy.get("clipWorkflowSound") or "image-video-golos-zvuk")
-            if has_sound_cue
+            if use_sound_workflow
             else str(content_policy.get("clipWorkflowDefault") or "image-video")
         )
-        scene.ltx_mode = "i2v_as" if has_sound_cue else "i2v"
+        scene.ltx_mode = "i2v_as" if use_sound_workflow else "i2v"
         scene.lip_sync = False
         scene.send_audio_to_generator = False
         scene.lip_sync_text = ""
@@ -2511,8 +2553,12 @@ def _limit_lip_sync_usage(
         scene.audio_slice_decision_reason = "Audio slice disabled after lip-sync limit downgrade."
         replacement_reason = (
             "Lip-sync quota reached; downgraded to sound-aware image-video workflow."
-            if has_sound_cue
-            else "Lip-sync quota reached; downgraded to base image-video workflow."
+            if use_sound_workflow
+            else (
+                "Lip-sync quota reached; downgraded to base image-video workflow with sound workflow auto-disabled for music_video."
+                if has_sound_cue and is_music_video
+                else "Lip-sync quota reached; downgraded to base image-video workflow."
+            )
         )
         scene.workflow_decision_reason = replacement_reason
         scene.lip_sync_decision_reason = "Lip-sync disabled because Scenario Director allows at most 3 lip_sync scenes per output."
@@ -2571,6 +2617,110 @@ def _scene_has_lip_sync_signal(scene: ScenarioDirectorScene) -> bool:
     return any(token in text for token in ("lyric", "vocal", "chorus", "sing", "verse", "hook line", "line"))
 
 
+def _infer_presentation_from_texts(texts: list[str]) -> str:
+    lowered = " ".join(str(item or "").strip().lower() for item in texts if str(item or "").strip())
+    if not lowered:
+        return "unknown"
+    has_mixed = any(token in lowered for token in PRESENTATION_MIXED_HINTS)
+    has_male = any(token in lowered for token in PRESENTATION_MALE_HINTS) or bool(
+        re.search(r"\b(male|man|boy|his|him)\b", lowered)
+    )
+    has_female = any(token in lowered for token in PRESENTATION_FEMALE_HINTS) or bool(
+        re.search(r"\b(female|woman|girl|her|she)\b", lowered)
+    )
+    if has_mixed or (has_male and has_female):
+        return "mixed"
+    if has_male:
+        return "male"
+    if has_female:
+        return "female"
+    return "unknown"
+
+
+def _collect_text_fragments(value: Any) -> list[str]:
+    out: list[str] = []
+    if isinstance(value, str):
+        clean = value.strip()
+        if clean:
+            out.append(clean)
+        return out
+    if isinstance(value, dict):
+        for nested in value.values():
+            out.extend(_collect_text_fragments(nested))
+        return out
+    if isinstance(value, list):
+        for nested in value:
+            out.extend(_collect_text_fragments(nested))
+    return out
+
+
+def _infer_vocal_presentation(scene: ScenarioDirectorScene, payload: dict[str, Any]) -> str:
+    audio_context = _normalize_audio_context(payload)
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    source_meta = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+    text_sources: list[str] = [
+        scene.local_phrase or "",
+        scene.what_from_audio_this_scene_uses or "",
+        scene.scene_goal or "",
+        str(metadata.get("transcript") or ""),
+        str(source_meta.get("transcript") or ""),
+    ]
+    for key in ("audioSemantics", "audio_semantics", "audioUnderstanding", "audio_understanding", "plannerDebug"):
+        text_sources.extend(_collect_text_fragments(payload.get(key)))
+    text_sources.extend(_collect_text_fragments(audio_context))
+    return _infer_presentation_from_texts(text_sources)
+
+
+def _role_is_human_performer(role: str) -> bool:
+    return role.startswith("character_") or role in {"group", "group_faces"}
+
+
+def _infer_role_presentation(role: str, payload: dict[str, Any]) -> str:
+    refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    display_labels = payload.get("displayLabelByRole") if isinstance(payload.get("displayLabelByRole"), dict) else {}
+    role_type_by_role = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
+    role_ref = refs.get(role) if isinstance(refs.get(role), dict) else {}
+    text_sources = [str(display_labels.get(role) or ""), str(role_type_by_role.get(role) or "")]
+    text_sources.extend(_collect_text_fragments(role_ref))
+    return _infer_presentation_from_texts(text_sources)
+
+
+def _infer_scene_performer_presentation(scene: ScenarioDirectorScene, payload: dict[str, Any]) -> str:
+    active_roles: list[str] = []
+    for role in scene.actors or []:
+        normalized = str(role or "").strip()
+        if normalized and normalized not in active_roles and _role_is_human_performer(normalized):
+            active_roles.append(normalized)
+    if not active_roles:
+        return "unknown"
+    presentations = {_infer_role_presentation(role, payload) for role in active_roles}
+    presentations.discard("unknown")
+    if not presentations:
+        return "unknown"
+    if len(presentations) > 1:
+        return "mixed"
+    return next(iter(presentations))
+
+
+def _is_lipsync_voice_compatible(vocal_presentation: str, performer_presentation: str) -> tuple[bool, str]:
+    vocal = str(vocal_presentation or "unknown").strip().lower() or "unknown"
+    performer = str(performer_presentation or "unknown").strip().lower() or "unknown"
+    if vocal == "unknown":
+        return False, "unknown_vocal_presentation"
+    if performer == "unknown":
+        return False, "unknown_performer_presentation"
+    if vocal == "male" and performer == "female":
+        return False, "male_vocal_female_performer_conflict"
+    if vocal == "female" and performer == "male":
+        return False, "female_vocal_male_performer_conflict"
+    if vocal == "mixed" or performer == "mixed":
+        return False, "mixed_presentation_not_supported"
+    if vocal == performer:
+        return True, "compatible"
+    return False, "incompatible_presentation"
+
+
 def _extract_lip_sync_text(scene: ScenarioDirectorScene) -> str:
     if str(scene.local_phrase or "").strip():
         return str(scene.local_phrase or "").strip()
@@ -2585,6 +2735,7 @@ def _apply_music_video_mode_policy(
     storyboard_out: ScenarioDirectorStoryboardOut,
     *,
     content_type_policy: dict[str, Any],
+    payload: dict[str, Any],
     audio_duration_sec: float | None = None,
 ) -> ScenarioDirectorStoryboardOut:
     scenes = storyboard_out.scenes or []
@@ -2606,10 +2757,11 @@ def _apply_music_video_mode_policy(
         duration = max(0.0, _safe_float(scene.duration, scene.time_end - scene.time_start))
         scene.requested_duration_sec = _safe_float(scene.requested_duration_sec, duration)
 
+        auto_sound_workflow_enabled = False
         has_sound_cue = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
         transition_candidate = _scene_has_transition_evidence(scene) and index > 0 and not prev_two_frames
         close_capable = shot_type not in {"wide"}
-        lip_sync_candidate = (
+        lip_sync_base_candidate = (
             _scene_has_human_performer(scene)
             and close_capable
             and _scene_has_lip_sync_signal(scene)
@@ -2617,6 +2769,10 @@ def _apply_music_video_mode_policy(
             and not prev_lip_sync
             and lip_sync_used < max_lip_sync
         )
+        vocal_presentation = _infer_vocal_presentation(scene, payload)
+        performer_presentation = _infer_scene_performer_presentation(scene, payload)
+        lip_sync_compatible, lip_sync_compatibility_reason = _is_lipsync_voice_compatible(vocal_presentation, performer_presentation)
+        lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible
 
         render_mode = "image_video"
         resolved_workflow = str(content_type_policy.get("clipWorkflowDefault") or "image-video")
@@ -2653,13 +2809,13 @@ def _apply_music_video_mode_policy(
             scene.audio_slice_expected_duration_sec = round(max(0.0, end_sec - start_sec), 3)
             scene.lip_sync_text = _extract_lip_sync_text(scene)
             workflow_reason = "Lip-sync workflow selected for close human vocal articulation."
-            lip_sync_reason = "Local vocal phrase + human close framing detected."
+            lip_sync_reason = f"Local vocal phrase + human close framing detected; compatibility={lip_sync_compatibility_reason}."
             audio_slice_reason = "Slice clamped to scene vocal window (max ~5s) and timeline bounds."
             lip_sync_used += 1
         elif transition_candidate:
             needs_two_frames = True
             transition_type = "state_shift"
-            if has_sound_cue:
+            if has_sound_cue and auto_sound_workflow_enabled:
                 render_mode = "first_last_sound"
                 resolved_workflow = str(content_type_policy.get("clipWorkflowFirstLastSound") or "imag-imag-video-zvuk")
                 ltx_mode = "f_l_as"
@@ -2668,12 +2824,21 @@ def _apply_music_video_mode_policy(
                 render_mode = "first_last"
                 resolved_workflow = str(content_type_policy.get("clipWorkflowFirstLast") or "imag-imag-video-bz")
                 ltx_mode = "f_l"
-                workflow_reason = "First-last workflow for controlled visual state transition."
-        elif has_sound_cue:
+                workflow_reason = (
+                    "First-last workflow for controlled visual state transition; sound workflow auto-disabled in music_video."
+                    if has_sound_cue and not auto_sound_workflow_enabled
+                    else "First-last workflow for controlled visual state transition."
+                )
+        elif has_sound_cue and auto_sound_workflow_enabled:
             render_mode = "image_video_sound"
             resolved_workflow = str(content_type_policy.get("clipWorkflowSound") or "image-video-golos-zvuk")
             ltx_mode = "i2v_as"
             workflow_reason = "Sound-aware workflow selected for SFX/short phrase support."
+        elif has_sound_cue and not auto_sound_workflow_enabled:
+            workflow_reason = "Sound cue detected but auto sound workflow is disabled for music_video; using base image-video."
+
+        if lip_sync_base_candidate and not lip_sync_compatible:
+            lip_sync_reason = f"Lip-sync candidate rejected by compatibility gate: {lip_sync_compatibility_reason}."
 
         if continuation and not needs_two_frames and not lip_sync:
             ltx_mode = "continuation"
@@ -2703,7 +2868,12 @@ def _apply_music_video_mode_policy(
         scene.send_audio_to_generator = send_audio_to_generator
         scene.performance_framing = performance_framing
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
-        scene.clip_decision_reason = scene.clip_decision_reason or f"Purpose={scene.scene_purpose}; shot={scene.shot_type}; render={render_mode}."
+        scene.clip_decision_reason = scene.clip_decision_reason or (
+            f"Purpose={scene.scene_purpose}; shot={scene.shot_type}; render={render_mode}; "
+            f"vocalPresentation={vocal_presentation}; performerPresentation={performer_presentation}; "
+            f"lipSyncCompatibility={'true' if lip_sync_compatible else 'false'}; lipSyncCompatibilityReason={lip_sync_compatibility_reason}; "
+            f"soundWorkflowAutoDisabled={'true' if not auto_sound_workflow_enabled else 'false'}."
+        )
         scene.workflow_decision_reason = workflow_reason
         scene.lip_sync_decision_reason = lip_sync_reason
         scene.audio_slice_decision_reason = audio_slice_reason
@@ -3123,6 +3293,7 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         storyboard_out = _apply_music_video_mode_policy(
             storyboard_out,
             content_type_policy=content_type_policy,
+            payload=payload,
             audio_duration_sec=audio_duration_sec,
         )
         storyboard_out.music_prompt = ""
