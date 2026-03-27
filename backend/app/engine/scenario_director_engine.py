@@ -3891,32 +3891,102 @@ def _build_request_text(
             "- contentType defines interpretation policy (story/ad/etc); refs remain cast/world anchors.\n"
         )
     )
+    source_hierarchy_policy = (
+        (
+            "SOURCE HIERARCHY (music_video, DIRECTOR-NOTE STORY CORE):\n"
+            "1) STORY_FRAME_TRUTH: director note defines concept/setting/scenario bias and narrative frame.\n"
+            "2) AUDIO_TIMELINE_TRUTH: audio defines rhythm, emotion, scene timing, energy progression, and transition timing.\n"
+            "3) CHARACTER_REFS: character refs are cast anchors; location/style/props refs are world anchors.\n"
+            "4) STYLE_TREATMENT: visual treatment enriches, but does not replace explicit refs.\n"
+            "CONFLICT POLICY (music_video, DIRECTOR-NOTE STORY CORE):\n"
+            "- Do NOT force audio semantics to replace director note story topic when storyCoreSource=director_note.\n"
+            "- Audio MUST still drive pacing, rhythmic accents, emotional contour, and cut timing.\n"
+            "- Director note must NOT replace explicit refs (cast/world anchors).\n"
+            "- Never use audio as mood-only; use audio timing and emotional dynamics in every scene.\n"
+            "AUDIO + STORY COUPLING RULE:\n"
+            "- Keep narrative frame from director note while proving concrete audio usage via boundaries and timing evidence.\n"
+            "- audio timing signals define boundaries; audio dynamics define progression.\n"
+            "FORBIDDEN:\n"
+            "- Replacing explicit refs with text-invented cast/world.\n"
+            "- Ignoring audio timing or transition cues.\n"
+            "- Treating director note as permission to detach scenes from the track rhythm.\n"
+        )
+        if is_music_video_mode and story_core_source == "director_note"
+        else (
+            "SOURCE HIERARCHY (music_video, AUDIO STORY CORE):\n"
+            "1) AUDIO_CONTENT_TRUTH: source/audio semantics define story subject, world facts, implied events/context.\n"
+            "2) AUDIO_TIMELINE_TRUTH: audio defines timing anchors (phrases, pauses, energy transitions, sections).\n"
+            "3) CHARACTER_REFS: character refs are cast anchors; location/style/props refs are world anchors.\n"
+            "4) DIRECTOR_NOTE_INTERPRETATION: enriches framing/tone but must not replace explicit refs.\n"
+            "CONFLICT POLICY (music_video, AUDIO STORY CORE):\n"
+            "- If audio semantics and director note conflict, keep narrative core from source/audio semantics.\n"
+            "- Director note can tune cinematic treatment and emotional layer inside that source-defined frame.\n"
+            "- Never replace a clear audio/source topic with unrelated narrative.\n"
+            "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate.\n"
+            "AUDIO CONTENT TRUTH RULE:\n"
+            "- If audioSemantics.ok=true and audioSemantics.semanticSummary/worldContext/narrativeCore are present, they define story subject, world facts, and implied events.\n"
+            "- audio timing signals define boundaries; audio semantics define meaning.\n"
+            "FORBIDDEN:\n"
+            "- unrelated meet-cute/bar/date story when audio/source defines another world.\n"
+            "- inventing unrelated world/location while clear audio/source world exists.\n"
+            "- replacing explicit refs with text-invented cast/world.\n"
+        )
+        if is_music_video_mode
+        else (
+            "SOURCE HIERARCHY (HARD, AUDIO MODE ONLY):\n"
+            "1) AUDIO_CONTENT_TRUTH: defines story subject, world facts, implied events/context.\n"
+            "2) AUDIO_TIMELINE_TRUTH: defines timing anchors (phrases, pauses, energy transitions, sections).\n"
+            "3) DIRECTOR_NOTE_INTERPRETATION: emotional/relational lens only; never a content override.\n"
+            "4) STYLE_TREATMENT: visual treatment only; does not define world facts.\n"
+            "5) CHARACTER_REFS: who appears and role dynamics; does not replace audio world.\n"
+            "CONFLICT POLICY (HARD):\n"
+            "- If AUDIO meaning conflicts with DIRECTOR NOTE, preserve AUDIO meaning/world/events and reinterpret DIRECTOR NOTE inside that world.\n"
+            "- Never replace a clear audio topic with generic romance or unrelated locations.\n"
+            "- Never use audio as mood-only when audio already provides world/content facts.\n"
+            "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate.\n"
+            "AUDIO CONTENT TRUTH RULE:\n"
+            "- If audioSemantics.ok=true and audioSemantics.semanticSummary/worldContext/narrativeCore are present, they define the story subject, world facts, and implied events.\n"
+            "- Director note may only reinterpret emotional/relationship dynamics inside that audio-defined world.\n"
+            "- Director note must NOT replace audioSemantics topic/world.\n"
+            "- audio timing signals define boundaries; audio semantics define meaning.\n"
+            "FORBIDDEN:\n"
+            "- director note as main subject when audio has stronger subject matter.\n"
+            "- unrelated meet-cute/bar/date story when audio defines another world.\n"
+            "- inventing unrelated world/location while clear audio world exists.\n"
+        )
+    )
+    planner_modes_policy = (
+        (
+            "PLANNER MODES:\n"
+            "- full_audio_first: audio meaning understood + usable timeline signals.\n"
+            "- partial_audio_first: audio meaning partial while timing remains primary.\n"
+            "- text_fallback: only when audio truth is unavailable/unusable.\n"
+            "- For music_video with storyCoreSource=director_note, director note sets story frame; audio remains mandatory for rhythm/emotion/pacing.\n"
+        )
+        if is_music_video_mode and story_core_source == "director_note"
+        else (
+            "PLANNER MODES:\n"
+            "- full_audio_first: audio meaning understood + usable timeline signals.\n"
+            "- partial_audio_first: audio meaning partial but still primary world/content anchor.\n"
+            "- text_fallback: only when audio truth is unavailable/unusable.\n"
+            "- For music_video with storyCoreSource=source_of_truth, audio semantics may define narrative core/topic/world.\n"
+        )
+        if is_music_video_mode
+        else (
+            "PLANNER MODES:\n"
+            "- full_audio_first: audio meaning understood + usable timeline signals.\n"
+            "- partial_audio_first: audio meaning partial but still primary world/content anchor.\n"
+            "- text_fallback: only when audio truth is unavailable/unusable.\n"
+            "- If audio world/topic is clear, director note must not capture story core even in partial mode.\n"
+        )
+    )
     request_text = (
         "You are Scenario Director for PhotoStudio COMFY.\n"
         "Gemini is the planning brain. Do not delegate planning to heuristics.\n"
         "Return a single JSON object only. No markdown, no commentary.\n"
         "The storyboard_out must be production-usable for downstream Storyboard execution.\n"
         f"{mode_source_policy}"
-        "SOURCE HIERARCHY (HARD, AUDIO MODE ONLY):\n"
-        "1) AUDIO_CONTENT_TRUTH: defines story subject, world facts, implied events/context.\n"
-        "2) AUDIO_TIMELINE_TRUTH: defines timing anchors (phrases, pauses, energy transitions, sections).\n"
-        "3) DIRECTOR_NOTE_INTERPRETATION: emotional/relational lens only; never a content override.\n"
-        "4) STYLE_TREATMENT: visual treatment only; does not define world facts.\n"
-        "5) CHARACTER_REFS: who appears and role dynamics; does not replace audio world.\n"
-        "CONFLICT POLICY (HARD):\n"
-        "- If AUDIO meaning conflicts with DIRECTOR NOTE, preserve AUDIO meaning/world/events and reinterpret DIRECTOR NOTE inside that world.\n"
-        "- Never replace a clear audio topic with generic romance or unrelated locations.\n"
-        "- Never use audio as mood-only when audio already provides world/content facts.\n"
-        "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate.\n"
-        "AUDIO CONTENT TRUTH RULE:\n"
-        "- If audioSemantics.ok=true and audioSemantics.semanticSummary/worldContext/narrativeCore are present, they define the story subject, world facts, and implied events.\n"
-        "- Director note may only reinterpret emotional/relationship dynamics inside that audio-defined world.\n"
-        "- Director note must NOT replace audioSemantics topic/world.\n"
-        "- audio timing signals define boundaries; audio semantics define meaning.\n"
-        "FORBIDDEN:\n"
-        "- director note as main subject when audio has stronger subject matter.\n"
-        "- unrelated meet-cute/bar/date story when audio defines another world.\n"
-        "- inventing unrelated world/location while clear audio world exists.\n"
+        f"{source_hierarchy_policy}"
         "TWO-STAGE OUTPUT LOGIC (SINGLE JSON):\n"
         "- First fill truth analysis blocks: audioUnderstanding -> conflictAnalysis -> narrativeStrategy.\n"
         "- Then produce story, scenes, diagnostics.\n"
@@ -3928,11 +3998,7 @@ def _build_request_text(
         "- story.howDirectorNoteWasIntegrated\n"
         "- diagnostics.usedAudioAsContentSource\n"
         "- diagnostics.usedAudioOnlyAsMood\n"
-        "PLANNER MODES:\n"
-        "- full_audio_first: audio meaning understood + usable timeline signals.\n"
-        "- partial_audio_first: audio meaning partial but still primary world/content anchor.\n"
-        "- text_fallback: only when audio truth is unavailable/unusable.\n"
-        "- If audio world/topic is clear, director note must not capture story core even in partial mode.\n"
+        f"{planner_modes_policy}"
         "TEXT-ONLY DEGRADE:\n"
         "- If sourceMode is not AUDIO or audio unavailable, use normal text-led planning and set diagnostics/plannerMode accordingly.\n"
         "AUDIO-FIRST SEGMENTATION:\n"
@@ -4021,7 +4087,7 @@ def _build_request_text(
         '    "resolutionStrategy": ""\n'
         "  },\n"
         '  "narrativeStrategy": {\n'
-        '    "storyCoreSource": "audio",\n'
+        f'    "storyCoreSource": "{story_core_source}",\n'
         '    "didAudioRemainPrimary": true,\n'
         '    "didDirectorNoteOverrideAudio": false,\n'
         '    "why": ""\n'
