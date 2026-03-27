@@ -1042,7 +1042,9 @@ def _compose_video_effective_prompt(
         scene_contract=scene_contract,
         direct_genre_intent=director_genre_intent,
     )
-    genre_hardening_block = _build_genre_hardening_block(genre_intent=genre_intent) if has_humans else ""
+    # Genre hardening must stay independent from human presence so environment-only /
+    # location-only / threat-presence shots still preserve intended directing tone.
+    genre_hardening_block = _build_genre_hardening_block(genre_intent=genre_intent)
     effective_prompt = "\n\n".join(
         part for part in [base_effective_prompt, identity_lock_block, genre_hardening_block, duet_hardening_block] if str(part or "").strip()
     ).strip()
