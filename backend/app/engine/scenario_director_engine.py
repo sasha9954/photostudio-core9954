@@ -1184,6 +1184,19 @@ def _extract_structured_diagnostics(parsed_payload: dict[str, Any]) -> dict[str,
                 False,
             ),
             "why": str(narrative_strategy_raw.get("why") or "").strip(),
+            "story_core_source": str(narrative_strategy_raw.get("story_core_source") or narrative_strategy_raw.get("storyCoreSource") or "").strip().lower() or "mixed",
+            "story_frame_source": str(narrative_strategy_raw.get("story_frame_source") or narrative_strategy_raw.get("storyFrameSource") or "").strip().lower(),
+            "rhythm_source": str(narrative_strategy_raw.get("rhythm_source") or narrative_strategy_raw.get("rhythmSource") or "").strip().lower(),
+            "story_frame_source_reason": str(
+                narrative_strategy_raw.get("story_frame_source_reason")
+                or narrative_strategy_raw.get("storyFrameSourceReason")
+                or ""
+            ).strip(),
+            "rhythm_source_reason": str(
+                narrative_strategy_raw.get("rhythm_source_reason")
+                or narrative_strategy_raw.get("rhythmSourceReason")
+                or ""
+            ).strip(),
         },
         "story": {
             "title": str(story_raw.get("title") or "").strip(),
@@ -3148,6 +3161,72 @@ def _build_music_video_viewer_hook(scene: ScenarioDirectorScene, purpose: str, s
     return f"Keep the clip breathing through contrast in scale, distance, and motion within this {shot_label} beat.{action_tail}".strip()
 
 
+def _build_music_video_image_prompt(scene: ScenarioDirectorScene) -> str:
+    actors = ", ".join(str(actor).replace("_", " ") for actor in (scene.actors or [])[:2] if str(actor).strip())
+    lead = str(scene.frame_description or scene.scene_goal or "").strip()
+    location = str(scene.location or "").strip()
+    emotion = str(scene.emotion or "").strip()
+    visual_anchor = ", ".join(str(prop).strip() for prop in (scene.props or [])[:2] if str(prop).strip())
+    parts: list[str] = []
+    if lead:
+        parts.append(lead)
+    if actors:
+        parts.append(f"Primary subjects: {actors}.")
+    if location:
+        parts.append(f"Location: {location}.")
+    if emotion:
+        parts.append(f"Mood/light: {emotion}.")
+    if visual_anchor:
+        parts.append(f"Visual anchors: {visual_anchor}.")
+    parts.append("Compose as a hero keyframe with clear silhouette, depth layering, and strong frame balance.")
+    return " ".join(parts).strip()
+
+
+def _build_music_video_video_prompt(scene: ScenarioDirectorScene) -> str:
+    action = str(scene.action_in_frame or scene.scene_goal or "").strip()
+    camera = str(scene.camera or "").strip()
+    purpose = str(scene.scene_purpose or "").replace("_", " ").strip()
+    performance = str(scene.performance_framing or "").replace("_", " ").strip()
+    transition_type = str(scene.transition_type or "").replace("_", " ").strip()
+    motion_parts: list[str] = []
+    if action:
+        motion_parts.append(f"Performance motion: {action}.")
+    if camera:
+        motion_parts.append(f"Camera movement: {camera}.")
+    else:
+        motion_parts.append("Camera movement: maintain rhythmic push/pull and subtle reframing on beats.")
+    if performance:
+        motion_parts.append(f"Framing behavior: {performance}.")
+    if purpose:
+        motion_parts.append(f"Scene intent in time: {purpose}.")
+    if scene.render_mode in {"first_last", "first_last_sound"} or scene.resolved_workflow_key == "imag-imag-video-bz":
+        frame_state = str(scene.frame_description or scene.scene_goal or "").strip()
+        motion_parts.append(
+            f"First→last transition: evolve from the opening state '{frame_state}' to a clearly shifted final state with a readable emotional change."
+        )
+    elif transition_type in {"continuation", "state shift", "state_shift"}:
+        motion_parts.append("Transition feel: use this shot as a visual bridge into the next beat, not an isolated loop.")
+    else:
+        motion_parts.append("Temporal feel: preserve beat-synced micro-movements in fabric, hair, gaze, and body weight.")
+    motion_parts.append(f"Transition cue: {transition_type or 'cut'}, paced to music accents.")
+    return " ".join(motion_parts).strip()
+
+
+def _enhance_music_video_transition_language(scene: ScenarioDirectorScene) -> None:
+    transition_kind = str(scene.transition_type or "").strip().lower()
+    render_mode = str(scene.render_mode or "").strip().lower()
+    purpose = str(scene.scene_purpose or "").strip().lower()
+    is_transition_scene = transition_kind in {"state_shift", "continuation"} or render_mode in {"first_last", "first_last_sound"} or purpose == "transition"
+    if not is_transition_scene:
+        return
+    if "visual bridge" not in scene.viewer_hook.lower():
+        scene.viewer_hook = f"{scene.viewer_hook} Use this beat as a visual bridge into a new state.".strip()
+    if "edit pivot" not in scene.video_prompt.lower():
+        scene.video_prompt = f"{scene.video_prompt} Treat the motion as an edit pivot with clear before/after energy."
+    if "state change" not in scene.clip_decision_reason.lower():
+        scene.clip_decision_reason = f"{scene.clip_decision_reason} state_change_bridge=true;"
+
+
 def _build_music_video_clip_decision_reason(
     scene: ScenarioDirectorScene,
     *,
@@ -3422,6 +3501,8 @@ def _apply_music_video_mode_policy(
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
         if forced_transition_scene:
             scene.scene_purpose = "transition"
+        scene.image_prompt = _build_music_video_image_prompt(scene)
+        scene.video_prompt = _build_music_video_video_prompt(scene)
         # Final derived debug layer (must reflect final scene state, not intermediate steps).
         final_shot_type = str(scene.shot_type or shot_type).strip() or shot_type
         final_presence_type = _infer_music_video_presence_type(scene)
@@ -3437,6 +3518,7 @@ def _apply_music_video_mode_policy(
             forced_transition_scene=forced_transition_scene,
             auto_sound_workflow_enabled=auto_sound_workflow_enabled,
         )
+        _enhance_music_video_transition_language(scene)
         scene.workflow_decision_reason = workflow_reason
         scene.lip_sync_decision_reason = lip_sync_reason
         scene.audio_slice_decision_reason = audio_slice_reason
@@ -4748,7 +4830,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
                 "action_in_frame": str(scene.get("motion") or "").strip(),
                 "camera": str(scene.get("camera") or "").strip(),
                 "image_prompt": str(scene.get("visualPrompt") or "").strip(),
-                "video_prompt": str(scene.get("visualPrompt") or "").strip(),
+                "video_prompt": str(scene.get("motion") or "").strip() or "Beat-synced camera and subject motion evolving through the scene.",
                 "ltx_mode": "i2v",
                 "ltx_reason": "Audio-first single-call mapped to base clip image-video mode.",
                 "render_mode": "image_video",
@@ -4796,6 +4878,10 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
         },
         "narrative_strategy": {
             "story_core_source": "audio",
+            "story_frame_source": "source_of_truth",
+            "rhythm_source": "audio",
+            "story_frame_source_reason": "single_call_audio_first_no_director_note",
+            "rhythm_source_reason": "single_call_audio_timeline_drives_pacing",
             "did_audio_remain_primary": True,
             "did_director_note_override_audio": False,
             "why": "Audio-first single-call output.",
@@ -5095,6 +5181,11 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         planner_strategy["rhythmSource"] = rhythm_source
         planner_strategy["storyFrameSourceReason"] = story_frame_source_reason
         planner_strategy["rhythmSourceReason"] = rhythm_source_reason
+        planner_strategy["story_core_source"] = story_core_source
+        planner_strategy["story_frame_source"] = story_frame_source
+        planner_strategy["rhythm_source"] = rhythm_source
+        planner_strategy["story_frame_source_reason"] = story_frame_source_reason
+        planner_strategy["rhythm_source_reason"] = rhythm_source_reason
         structured_planner_diagnostics["narrativeStrategy"] = planner_strategy
     effective_role_type_by_role, role_assignment_source, role_override_applied = _resolve_effective_role_type_by_role(payload)
     coverage = _validate_audio_timeline_coverage(storyboard_out.scenes, audio_duration_sec, coverage_source=audio_duration_source if audio_duration_source in {"analysis", "payload"} else "fallback")
@@ -5322,6 +5413,12 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "rhythmSource": rhythm_source if is_music_video_mode else None,
             "storyFrameSourceReason": story_frame_source_reason if is_music_video_mode else None,
             "rhythmSourceReason": rhythm_source_reason if is_music_video_mode else None,
+            "story_core_source": story_core_source,
+            "story_core_source_reason": story_core_source_reason,
+            "story_frame_source": story_frame_source if is_music_video_mode else "",
+            "rhythm_source": rhythm_source if is_music_video_mode else "",
+            "story_frame_source_reason": story_frame_source_reason if is_music_video_mode else "",
+            "rhythm_source_reason": rhythm_source_reason if is_music_video_mode else "",
             "castIdentityLocked": _coerce_bool(cast_identity_lock_info.get("enabled"), False) if is_music_video_mode else False,
             "castIdentityLockReason": cast_identity_lock_info.get("lockReason") if is_music_video_mode else "not_music_video",
             "castIdentityLockRewritesApplied": cast_identity_lock_info.get("textRewritesApplied") if is_music_video_mode else 0,
