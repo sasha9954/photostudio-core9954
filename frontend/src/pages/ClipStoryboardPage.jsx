@@ -3199,8 +3199,8 @@ function buildIntroRoleAwareCastSummary(refsByRole = {}) {
   const heroRoles = ["character_1", "character_2", "character_3"].filter((role) => (refsByRole?.[role] || []).length > 0);
   const supportRoles = castRoles.filter((role) => !heroRoles.includes(role));
   const summary = [];
-  if (heroRoles.length) summary.push(`heroes: ${heroRoles.map(formatIntroRoleLabel).join(", ")}`);
-  if (supportRoles.length) summary.push(`support: ${supportRoles.map(formatIntroRoleLabel).join(", ")}`);
+  if (heroRoles.length) summary.push(`Герои: ${heroRoles.map(formatIntroRoleLabel).join(", ")}`);
+  if (supportRoles.length) summary.push(`Поддержка: ${supportRoles.map(formatIntroRoleLabel).join(", ")}`);
   return summary.join(" • ");
 }
 
