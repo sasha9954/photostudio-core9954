@@ -332,6 +332,8 @@ PRESENTATION_MALE_HINTS = (
     "male vocal",
     "male voice",
     "male singer",
+    "masculine vocal",
+    "masculine voice",
     "man singing",
     "his voice",
     "he sings",
@@ -345,6 +347,8 @@ PRESENTATION_FEMALE_HINTS = (
     "female vocal",
     "female voice",
     "female singer",
+    "feminine vocal",
+    "feminine voice",
     "woman singing",
     "her voice",
     "she sings",
@@ -366,6 +370,8 @@ PRESENTATION_MIXED_HINTS = (
     "смешанный вокал",
     "дуэт",
 )
+NON_PERFORMER_ROLE_TYPE_HINTS = {"animal", "animal_1", "props", "location", "style", "group", "group_faces", "object", "background"}
+MUSIC_VIDEO_SCENE_PURPOSES = {"hook", "build", "performance", "transition", "payoff", "ending_hold"}
 
 
 class ScenarioDirectorError(RuntimeError):
@@ -2627,24 +2633,35 @@ def _infer_music_video_shot_type(scene: ScenarioDirectorScene) -> str:
     return "medium"
 
 
-def _infer_music_video_scene_purpose(index: int, total: int, scene: ScenarioDirectorScene) -> str:
+def _infer_music_video_scene_purpose(
+    index: int,
+    total: int,
+    scene: ScenarioDirectorScene,
+    *,
+    transition_candidate: bool = False,
+    performance_framing: str = "",
+    performer_presentation: str = "unknown",
+) -> str:
     if index == 0:
         return "hook"
     if index == total - 1:
         return "ending_hold"
     bundle = _scene_text_bundle(scene).lower()
-    if any(token in bundle for token in ("transition", "crossfade", "wipe", "smash cut")):
+    transition_type = str(scene.transition_type or "").strip().lower()
+    if transition_candidate or scene.needs_two_frames or transition_type not in {"", "cut", "continuation"}:
         return "transition"
-    if any(token in bundle for token in ("reveal", "unveil", "discover")):
-        return "reveal"
-    if any(token in bundle for token in ("climax", "peak", "payoff", "drop")):
+    if any(token in bundle for token in ("transition", "crossfade", "wipe", "smash cut", "state shift", "morph")):
+        return "transition"
+    if any(token in bundle for token in ("climax", "peak", "payoff", "drop", "final hit", "crescendo")):
         return "payoff"
-    if any(token in bundle for token in ("intense", "escalat", "burst", "surge")):
-        return "intensify"
-    if any(token in bundle for token in ("sing", "vocal", "lyric", "chorus", "performance")):
+    if index == total - 2:
+        return "payoff"
+    framing = str(performance_framing or "").strip().lower()
+    performer_focused = framing in {"face_close", "close_performance", "medium_performance", "duet_frame"}
+    if performer_focused and performer_presentation in {"male", "female", "mixed"}:
         return "performance"
-    if index >= max(1, total - 2):
-        return "payoff"
+    if any(token in bundle for token in ("sing", "vocal", "lyric", "chorus", "verse", "performance")):
+        return "performance"
     return "build"
 
 
@@ -2685,6 +2702,18 @@ def _infer_presentation_from_texts(texts: list[str]) -> str:
     return "unknown"
 
 
+def _find_raw_scene_payload(scene: ScenarioDirectorScene, payload: dict[str, Any]) -> dict[str, Any]:
+    payload_scenes = payload.get("scenes") if isinstance(payload.get("scenes"), list) else []
+    scene_id = str(scene.scene_id or "").strip()
+    for item in payload_scenes:
+        if not isinstance(item, dict):
+            continue
+        item_scene_id = str(item.get("sceneId") or item.get("scene_id") or "").strip()
+        if item_scene_id and scene_id and item_scene_id == scene_id:
+            return item
+    return {}
+
+
 def _collect_text_fragments(value: Any) -> list[str]:
     out: list[str] = []
     if isinstance(value, str):
@@ -2707,15 +2736,39 @@ def _infer_vocal_presentation(scene: ScenarioDirectorScene, payload: dict[str, A
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     source_meta = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+    raw_scene = _find_raw_scene_payload(scene, payload)
     text_sources: list[str] = [
         scene.local_phrase or "",
         scene.what_from_audio_this_scene_uses or "",
         scene.scene_goal or "",
         str(metadata.get("transcript") or ""),
         str(source_meta.get("transcript") or ""),
+        str(payload.get("directorSummary") or payload.get("director_summary") or ""),
+        str(payload.get("storySummary") or payload.get("story_summary") or ""),
     ]
-    for key in ("audioSemantics", "audio_semantics", "audioUnderstanding", "audio_understanding", "plannerDebug"):
+    for key in (
+        "audioSemantics",
+        "audio_semantics",
+        "audioUnderstanding",
+        "audio_understanding",
+        "plannerDebug",
+        "planner_debug",
+        "structuredPlannerDiagnostics",
+        "structured_planner_diagnostics",
+        "sceneAudioEvidence",
+        "scene_audio_evidence",
+        "runtime_semantics",
+        "runtime_analysis",
+        "lyrics",
+        "lyricText",
+        "lyric_text",
+        "transcriptHints",
+        "transcript_hints",
+    ):
         text_sources.extend(_collect_text_fragments(payload.get(key)))
+        text_sources.extend(_collect_text_fragments(metadata.get(key)))
+        text_sources.extend(_collect_text_fragments(source_meta.get(key)))
+    text_sources.extend(_collect_text_fragments(raw_scene))
     text_sources.extend(_collect_text_fragments(audio_context))
     return _infer_presentation_from_texts(text_sources)
 
@@ -2724,31 +2777,93 @@ def _role_is_human_performer(role: str) -> bool:
     return role.startswith("character_") or role in {"group", "group_faces"}
 
 
-def _infer_role_presentation(role: str, payload: dict[str, Any]) -> str:
+def _infer_role_presentation(role: str, payload: dict[str, Any], *, raw_scene: dict[str, Any] | None = None) -> str:
     refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
     display_labels = payload.get("displayLabelByRole") if isinstance(payload.get("displayLabelByRole"), dict) else {}
     role_type_by_role = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
+    refs_used_by_role = raw_scene.get("refsUsedByRole") if isinstance(raw_scene, dict) and isinstance(raw_scene.get("refsUsedByRole"), dict) else {}
     role_ref = refs.get(role) if isinstance(refs.get(role), dict) else {}
-    text_sources = [str(display_labels.get(role) or ""), str(role_type_by_role.get(role) or "")]
+    text_sources = [str(display_labels.get(role) or ""), str(role_type_by_role.get(role) or ""), str(role or "")]
     text_sources.extend(_collect_text_fragments(role_ref))
+    text_sources.extend(_collect_text_fragments(refs_used_by_role.get(role)))
     return _infer_presentation_from_texts(text_sources)
 
 
 def _infer_scene_performer_presentation(scene: ScenarioDirectorScene, payload: dict[str, Any]) -> str:
-    active_roles: list[str] = []
+    raw_scene = _find_raw_scene_payload(scene, payload)
+    role_type_by_role = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
+    role_candidates: list[str] = []
     for role in scene.actors or []:
         normalized = str(role or "").strip()
-        if normalized and normalized not in active_roles and _role_is_human_performer(normalized):
-            active_roles.append(normalized)
+        if normalized and normalized not in role_candidates:
+            role_candidates.append(normalized)
+    for key in ("primaryRole", "primary_role"):
+        normalized = str(raw_scene.get(key) or "").strip()
+        if normalized and normalized not in role_candidates:
+            role_candidates.append(normalized)
+    for list_key in ("secondaryRoles", "secondary_roles", "sceneActiveRoles", "scene_active_roles", "participants", "refsUsed", "refs_used"):
+        for role in (raw_scene.get(list_key) or []):
+            normalized = str(role or "").strip()
+            if normalized and normalized not in role_candidates:
+                role_candidates.append(normalized)
+    if "group" in role_candidates and any(role in role_candidates for role in ("character_1", "character_2")):
+        role_candidates = [role for role in role_candidates if role != "group"]
+    active_roles: list[str] = []
+    for role in role_candidates:
+        role_type = str(role_type_by_role.get(role) or "").strip().lower()
+        if role_type and role_type in NON_PERFORMER_ROLE_TYPE_HINTS:
+            continue
+        if _role_is_human_performer(role):
+            active_roles.append(role)
+    active_roles = list(dict.fromkeys(active_roles))
     if not active_roles:
         return "unknown"
-    presentations = {_infer_role_presentation(role, payload) for role in active_roles}
+    presentations = {_infer_role_presentation(role, payload, raw_scene=raw_scene) for role in active_roles}
     presentations.discard("unknown")
     if not presentations:
         return "unknown"
     if len(presentations) > 1:
         return "mixed"
     return next(iter(presentations))
+
+
+def _infer_performance_framing(
+    scene: ScenarioDirectorScene,
+    *,
+    shot_type: str,
+    performer_presentation: str,
+    transition_candidate: bool,
+) -> str:
+    shot = str(shot_type or scene.shot_type or "").strip().lower()
+    if transition_candidate:
+        return "non_performance"
+    if shot in {"duet_shared"}:
+        return "duet_frame"
+    has_human_focus = performer_presentation in {"male", "female", "mixed"} or _scene_has_human_performer(scene)
+    if shot in {"close_up"}:
+        return "face_close" if has_human_focus else "close_performance"
+    if shot in {"medium_close", "medium"}:
+        return "medium_performance" if has_human_focus else "non_performance"
+    if shot in {"wide", "establishing"}:
+        return "wide_performance" if has_human_focus else "non_performance"
+    return "non_performance" if not has_human_focus else "medium_performance"
+
+
+def _build_music_video_viewer_hook(scene: ScenarioDirectorScene, purpose: str, shot_type: str) -> str:
+    action = str(scene.action_in_frame or scene.frame_description or scene.scene_goal or "").strip()
+    action_tail = f" {action}" if action else ""
+    if purpose == "hook":
+        return f"Instant visual grab via silhouette, rhythm, or conflict.{action_tail}".strip()
+    if purpose == "performance":
+        return f"Keep eyes on performer expression and presence in-frame.{action_tail}".strip()
+    if purpose == "transition":
+        return f"Sell a visible state shift that resets viewer attention.{action_tail}".strip()
+    if purpose == "payoff":
+        return f"Deliver an emotional image hit that feels earned by the beat.{action_tail}".strip()
+    if purpose == "ending_hold":
+        return f"Land on a final frame worth holding after the music resolves.{action_tail}".strip()
+    shot_label = str(shot_type or "").replace("_", " ").strip() or "scene"
+    return f"Build momentum with clear {shot_label} progression and readable motion.{action_tail}".strip()
 
 
 def _is_lipsync_voice_compatible(vocal_presentation: str, performer_presentation: str) -> tuple[bool, str]:
@@ -2796,19 +2911,38 @@ def _apply_music_video_mode_policy(
     for index, scene in enumerate(scenes):
         shot_type = _infer_music_video_shot_type(scene)
         scene.shot_type = shot_type
-        scene.scene_purpose = scene.scene_purpose or _infer_music_video_scene_purpose(index, len(scenes), scene)
-        scene.viewer_hook = scene.viewer_hook or (
-            "Immediate visual hook with rhythm-aware motion."
-            if index == 0
-            else f"{scene.scene_purpose.replace('_', ' ').title()} beat with clear visual intent."
-        )
         duration = max(0.0, _safe_float(scene.duration, scene.time_end - scene.time_start))
-        scene.requested_duration_sec = _safe_float(scene.requested_duration_sec, duration)
+        if duration > 0:
+            scene.requested_duration_sec = duration
+        else:
+            scene.requested_duration_sec = _safe_float(scene.requested_duration_sec, 0.0)
 
         auto_sound_workflow_enabled = False
         has_sound_cue = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
         transition_candidate = _scene_has_transition_evidence(scene) and index > 0 and not prev_two_frames
-        close_capable = shot_type not in {"wide"}
+        vocal_presentation = _infer_vocal_presentation(scene, payload)
+        performer_presentation = _infer_scene_performer_presentation(scene, payload)
+        inferred_framing = _infer_performance_framing(
+            scene,
+            shot_type=shot_type,
+            performer_presentation=performer_presentation,
+            transition_candidate=transition_candidate,
+        )
+        performance_framing = str(scene.performance_framing or "").strip() or inferred_framing
+        existing_purpose = str(scene.scene_purpose or "").strip().lower()
+        if existing_purpose not in MUSIC_VIDEO_SCENE_PURPOSES:
+            scene.scene_purpose = _infer_music_video_scene_purpose(
+                index,
+                len(scenes),
+                scene,
+                transition_candidate=transition_candidate,
+                performance_framing=performance_framing,
+                performer_presentation=performer_presentation,
+            )
+        else:
+            scene.scene_purpose = existing_purpose
+        scene.viewer_hook = scene.viewer_hook or _build_music_video_viewer_hook(scene, scene.scene_purpose, shot_type)
+        close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
         lip_sync_base_candidate = (
             _scene_has_human_performer(scene)
             and close_capable
@@ -2817,8 +2951,6 @@ def _apply_music_video_mode_policy(
             and not prev_lip_sync
             and lip_sync_used < max_lip_sync
         )
-        vocal_presentation = _infer_vocal_presentation(scene, payload)
-        performer_presentation = _infer_scene_performer_presentation(scene, payload)
         lip_sync_compatible, lip_sync_compatibility_reason = _is_lipsync_voice_compatible(vocal_presentation, performer_presentation)
         lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible
 
@@ -2829,7 +2961,6 @@ def _apply_music_video_mode_policy(
         continuation = _coerce_bool(scene.continuation_from_previous, False) or scene.ltx_mode == "continuation"
         send_audio_to_generator = False
         lip_sync = False
-        performance_framing = str(scene.performance_framing or "").strip()
         transition_type = "cut" if index > 0 else "cold_open"
         workflow_reason = "Default clip workflow for standard image-to-video scene."
         lip_sync_reason = "Not a lip-sync scene."
