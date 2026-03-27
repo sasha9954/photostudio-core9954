@@ -8,6 +8,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "story",
     labelRu: "История",
+    isEnabled: true,
     policyKey: "story",
     modeFamily: "narrative",
     usesGlobalMusicPrompt: true,
@@ -21,6 +22,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "music_video",
     labelRu: "Клип",
+    isEnabled: true,
     policyKey: "music_video",
     modeFamily: "performance",
     usesGlobalMusicPrompt: false,
@@ -34,6 +36,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "ad",
     labelRu: "Реклама",
+    isEnabled: true,
     policyKey: "ad",
     modeFamily: "commercial",
     usesGlobalMusicPrompt: true,
@@ -47,6 +50,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "cartoon",
     labelRu: "Мультфильм",
+    isEnabled: false,
     policyKey: "cartoon",
     modeFamily: "stylized",
     usesGlobalMusicPrompt: true,
@@ -60,6 +64,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "teaser",
     labelRu: "Тизер",
+    isEnabled: false,
     policyKey: "teaser",
     modeFamily: "promo",
     usesGlobalMusicPrompt: true,
@@ -73,6 +78,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "series",
     labelRu: "Сериал",
+    isEnabled: false,
     policyKey: "series",
     modeFamily: "episodic",
     usesGlobalMusicPrompt: true,
@@ -86,6 +92,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "film",
     labelRu: "Фильм",
+    isEnabled: false,
     policyKey: "film",
     modeFamily: "cinematic",
     usesGlobalMusicPrompt: true,
@@ -99,6 +106,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "comics",
     labelRu: "Комикс",
+    isEnabled: false,
     policyKey: "comics",
     modeFamily: "stylized",
     usesGlobalMusicPrompt: true,
@@ -112,6 +120,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "documentary",
     labelRu: "Документалка",
+    isEnabled: false,
     policyKey: "documentary",
     modeFamily: "factual",
     usesGlobalMusicPrompt: true,
@@ -125,6 +134,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   {
     value: "trailer",
     labelRu: "Трейлер",
+    isEnabled: false,
     policyKey: "trailer",
     modeFamily: "promo",
     usesGlobalMusicPrompt: false,
@@ -137,7 +147,11 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
   },
 ];
 
-export const NARRATIVE_CONTENT_TYPE_OPTIONS = NARRATIVE_CONTENT_TYPE_REGISTRY.map(({ value, labelRu }) => ({ value, labelRu }));
+export const NARRATIVE_CONTENT_TYPE_OPTIONS = NARRATIVE_CONTENT_TYPE_REGISTRY.map(({ value, labelRu, isEnabled }) => ({
+  value,
+  labelRu,
+  isEnabled: isEnabled !== false,
+}));
 
 export const NARRATIVE_MODE_OPTIONS = [
   { value: "strict_reference", labelRu: "Строго по референсу" },
@@ -197,6 +211,18 @@ const NARRATIVE_CONTENT_TYPE_POLICY_BY_VALUE = Object.fromEntries(
 export function getNarrativeContentTypePolicy(contentType) {
   const normalized = normalizeText(contentType);
   return NARRATIVE_CONTENT_TYPE_POLICY_BY_VALUE[normalized] || NARRATIVE_CONTENT_TYPE_POLICY_BY_VALUE.story;
+}
+
+export function isNarrativeContentTypeEnabled(contentType) {
+  return getNarrativeContentTypePolicy(contentType)?.isEnabled !== false;
+}
+
+export function getSafeNarrativeContentType(contentType, fallbackContentType = "story") {
+  const normalized = normalizeText(contentType);
+  if (isNarrativeContentTypeEnabled(normalized)) return normalized;
+  if (isNarrativeContentTypeEnabled(fallbackContentType)) return fallbackContentType;
+  const firstEnabled = NARRATIVE_CONTENT_TYPE_OPTIONS.find((item) => item.isEnabled !== false)?.value;
+  return firstEnabled || "story";
 }
 
 function isScenarioDirectorFixtureForced() {
@@ -397,7 +423,7 @@ export function buildGlobalMusicPromptFromStructuredMusic(music = null) {
 
 function resolveDirectorGlobalMusicPrompt(response = {}, storyboardOut = null, directorOutput = null, state = {}) {
   const controls = response?.director_controls && typeof response.director_controls === "object" ? response.director_controls : {};
-  const contentType = normalizeText(
+  const requestedContentType = normalizeText(
     response?.contentType
     ?? controls?.contentType
     ?? directorOutput?.contentType
@@ -405,6 +431,7 @@ function resolveDirectorGlobalMusicPrompt(response = {}, storyboardOut = null, d
     ?? state?.contentType
     ?? "story"
   ) || "story";
+  const contentType = getSafeNarrativeContentType(requestedContentType);
   const contentTypePolicy = getNarrativeContentTypePolicy(contentType);
   const hasMasterAudioSource = Boolean(
     state?.audioContext?.hasAudioSource
@@ -628,6 +655,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     ? String(state.format).trim()
     : "9:16";
 
+  const safeContentType = getSafeNarrativeContentType(state?.contentType, "music_video");
   const payload = {
     source: {
       source_mode: normalizeNarrativeSourceMode(resolvedSource.mode),
@@ -656,7 +684,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     source_origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
     audioDurationSec: audioContext.audioDurationSec,
     director_controls: {
-      contentType: normalizeText(state.contentType) || "story",
+      contentType: safeContentType,
       narrativeMode: normalizeText(state.narrativeMode) || "cinematic_expand",
       styleProfile: normalizeText(state.styleProfile) || "realistic",
       format,
@@ -847,14 +875,14 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
     music: {
       globalMusicPrompt,
       mood: normalizeText(state.styleProfile) || "realistic",
-      style: `${normalizeText(state.contentType) || "story"} / ${normalizeText(state.styleProfile) || "realistic"}`,
+      style: `${getSafeNarrativeContentType(state?.contentType)} / ${normalizeText(state.styleProfile) || "realistic"}`,
       pacingHints: "Use the approved storyboard_out pacing when Storyboard executes the scenes.",
       __isDerivedFallback: !hasRealGlobalMusicPrompt,
     },
     globalMusicPrompt,
     refsByRole,
     connectedRefsByRole,
-    contentTypePolicy: getNarrativeContentTypePolicy(state?.contentType),
+    contentTypePolicy: getNarrativeContentTypePolicy(getSafeNarrativeContentType(state?.contentType)),
   };
 }
 
@@ -1122,7 +1150,10 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
 export function buildNarrativeOutputs(state = {}) {
   const resolvedSource = resolveNarrativeSource(state);
   const sourceMode = resolvedSource.mode || "AUDIO";
-  const contentType = NARRATIVE_CONTENT_TYPE_OPTIONS.some((item) => item.value === state.contentType) ? state.contentType : "story";
+  const contentType = getSafeNarrativeContentType(
+    NARRATIVE_CONTENT_TYPE_OPTIONS.some((item) => item.value === state.contentType) ? state.contentType : "story",
+    "music_video"
+  );
   const contentTypePolicy = getNarrativeContentTypePolicy(contentType);
   const narrativeMode = NARRATIVE_MODE_OPTIONS.some((item) => item.value === state.narrativeMode) ? state.narrativeMode : "cinematic_expand";
   const styleProfile = NARRATIVE_STYLE_OPTIONS.some((item) => item.value === state.styleProfile) ? state.styleProfile : "realistic";

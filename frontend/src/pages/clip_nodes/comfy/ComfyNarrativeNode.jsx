@@ -10,6 +10,8 @@ import {
   NARRATIVE_STYLE_OPTIONS,
   NARRATIVE_FORMAT_OPTIONS,
   NARRATIVE_RESULT_TABS,
+  getSafeNarrativeContentType,
+  isNarrativeContentTypeEnabled,
   summarizeNarrativeConnectedContext,
 } from "./comfyNarrativeDomain";
 import ScenarioTabTextViewer from "./ScenarioTabTextViewer";
@@ -217,6 +219,7 @@ function renderJsonTab(storyboardOut) {
 }
 
 export default function ComfyNarrativeNode({ id, data }) {
+  const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
   const activeResultTab = data?.activeResultTab || "history";
   const outputs = data?.outputs || {};
   const pendingOutputs = data?.pendingOutputs || null;
@@ -272,6 +275,12 @@ export default function ComfyNarrativeNode({ id, data }) {
       setSelectedSceneId(sceneOptions[0]);
     }
   }, [sceneOptions, selectedSceneId]);
+
+  useEffect(() => {
+    if ((data?.contentType || "story") !== safeContentType) {
+      data?.onFieldChange?.(id, { contentType: safeContentType });
+    }
+  }, [data?.contentType, data?.onFieldChange, id, safeContentType]);
 
   const history = directorOutput?.history || storyboardOut?.history || null;
 
@@ -360,9 +369,22 @@ export default function ComfyNarrativeNode({ id, data }) {
             <div className="clipSB_narrativeGrid clipSB_narrativeGrid--compact">
               <label className="clipSB_narrativeField clipSB_narrativeField--compact">
                 <div className="clipSB_brainLabel clipSB_brainLabel--compact">Тип видео</div>
-                <select className="clipSB_select clipSB_narrativeSelect" value={data?.contentType || "story"} onChange={(e) => data?.onFieldChange?.(id, { contentType: e.target.value })}>
-                  {NARRATIVE_CONTENT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
+                <select
+                  className="clipSB_select clipSB_narrativeSelect"
+                  value={safeContentType}
+                  onChange={(e) => {
+                    const requested = e.target.value;
+                    if (!isNarrativeContentTypeEnabled(requested)) return;
+                    data?.onFieldChange?.(id, { contentType: requested });
+                  }}
+                >
+                  {NARRATIVE_CONTENT_TYPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value} disabled={!option.isEnabled}>
+                      {option.isEnabled ? option.labelRu : `${option.labelRu} (soon)`}
+                    </option>
+                  ))}
                 </select>
+                <div className="clipSB_selectHint">Доступно сейчас: История, Клип, Реклама. Остальные режимы скоро.</div>
               </label>
 
               <label className="clipSB_narrativeField clipSB_narrativeField--compact">

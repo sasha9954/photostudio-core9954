@@ -91,6 +91,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "story": {
         "label": "История",
         "description": "Базовый сюжетный режим",
+        "is_enabled": True,
         "mode_family": "narrative",
         "uses_global_music_prompt": True,
         "supports_lip_sync": False,
@@ -103,6 +104,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "music_video": {
         "label": "Клип",
         "description": "Музыкальный режим с опорой на master audio",
+        "is_enabled": True,
         "mode_family": "performance",
         "uses_global_music_prompt": False,
         "supports_lip_sync": True,
@@ -115,6 +117,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "ad": {
         "label": "Реклама",
         "description": "Коммерческий режим",
+        "is_enabled": True,
         "mode_family": "commercial",
         "uses_global_music_prompt": True,
         "supports_lip_sync": False,
@@ -127,6 +130,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "cartoon": {
         "label": "Мультфильм",
         "description": "Стилизация и выразительная подача",
+        "is_enabled": False,
         "mode_family": "stylized",
         "uses_global_music_prompt": True,
         "supports_lip_sync": True,
@@ -139,6 +143,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "teaser": {
         "label": "Тизер",
         "description": "Короткий интригующий формат",
+        "is_enabled": False,
         "mode_family": "promo",
         "uses_global_music_prompt": True,
         "supports_lip_sync": False,
@@ -151,6 +156,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "series": {
         "label": "Сериал",
         "description": "Эпизодический режим",
+        "is_enabled": False,
         "mode_family": "episodic",
         "uses_global_music_prompt": True,
         "supports_lip_sync": False,
@@ -163,6 +169,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "film": {
         "label": "Фильм",
         "description": "Полнометражная кинематографическая подача",
+        "is_enabled": False,
         "mode_family": "cinematic",
         "uses_global_music_prompt": True,
         "supports_lip_sync": False,
@@ -175,6 +182,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "comics": {
         "label": "Комикс",
         "description": "Панельный/графический стиль",
+        "is_enabled": False,
         "mode_family": "stylized",
         "uses_global_music_prompt": True,
         "supports_lip_sync": False,
@@ -187,6 +195,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "documentary": {
         "label": "Документалка",
         "description": "Фактическое повествование",
+        "is_enabled": False,
         "mode_family": "factual",
         "uses_global_music_prompt": True,
         "supports_lip_sync": False,
@@ -199,6 +208,7 @@ SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
     "trailer": {
         "label": "Трейлер",
         "description": "Пиковый промо-монтаж",
+        "is_enabled": False,
         "mode_family": "promo",
         "uses_global_music_prompt": False,
         "supports_lip_sync": False,
@@ -1524,11 +1534,41 @@ def _normalize_content_type(value: Any) -> str:
     return clean if clean in SCENARIO_CONTENT_TYPE_REGISTRY else "story"
 
 
-def _get_content_type_policy(payload: dict[str, Any]) -> dict[str, Any]:
+def _resolve_requested_content_type(payload: dict[str, Any]) -> str:
     controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
-    normalized = _normalize_content_type(controls.get("contentType") or payload.get("contentType"))
-    base = SCENARIO_CONTENT_TYPE_REGISTRY.get(normalized) or SCENARIO_CONTENT_TYPE_REGISTRY["story"]
-    return {"value": normalized, **base}
+    return _normalize_content_type(controls.get("contentType") or payload.get("contentType"))
+
+
+def _is_content_type_enabled(content_type: Any) -> bool:
+    normalized = _normalize_content_type(content_type)
+    policy = SCENARIO_CONTENT_TYPE_REGISTRY.get(normalized) or SCENARIO_CONTENT_TYPE_REGISTRY["story"]
+    return bool(policy.get("is_enabled", True))
+
+
+def _get_safe_content_type(content_type: Any, fallback_content_type: str = "story") -> str:
+    normalized = _normalize_content_type(content_type)
+    if _is_content_type_enabled(normalized):
+        return normalized
+    fallback_normalized = _normalize_content_type(fallback_content_type)
+    if _is_content_type_enabled(fallback_normalized):
+        return fallback_normalized
+    for key, policy in SCENARIO_CONTENT_TYPE_REGISTRY.items():
+        if bool(policy.get("is_enabled", True)):
+            return key
+    return "story"
+
+
+def _get_content_type_policy(payload: dict[str, Any]) -> dict[str, Any]:
+    requested = _resolve_requested_content_type(payload)
+    effective = _get_safe_content_type(requested, "story")
+    base = SCENARIO_CONTENT_TYPE_REGISTRY.get(effective) or SCENARIO_CONTENT_TYPE_REGISTRY["story"]
+    return {
+        "value": effective,
+        **base,
+        "requestedValue": requested,
+        "requestedEnabled": _is_content_type_enabled(requested),
+        "fallbackApplied": requested != effective,
+    }
 
 
 def _resolve_effective_global_music_prompt(payload: dict[str, Any], raw_music_prompt: str) -> str:
@@ -3677,6 +3717,10 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
             "attemptedModels": attempted_models,
             "audioFirstSingleCall": True,
             "rawGeminiTextPreview": raw_text[:2000],
+            "requestedContentType": content_type_policy.get("requestedValue"),
+            "effectiveContentType": content_type_policy.get("value"),
+            "requestedContentTypeEnabled": content_type_policy.get("requestedEnabled"),
+            "contentTypeFallbackApplied": content_type_policy.get("fallbackApplied"),
             "contentTypePolicy": content_type_policy,
         },
     }
@@ -4069,6 +4113,10 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "fakeAudioFirstSuspected": fake_audio_first_suspected,
             "audioGroundingValidation": audio_grounding_validation,
             "audioGroundingScore": audio_grounding_validation.get("score"),
+            "requestedContentType": content_type_policy.get("requestedValue"),
+            "effectiveContentType": content_type_policy.get("value"),
+            "requestedContentTypeEnabled": content_type_policy.get("requestedEnabled"),
+            "contentTypeFallbackApplied": content_type_policy.get("fallbackApplied"),
             "contentTypePolicy": content_type_policy,
             "textHintPresent": text_hint_present,
             "textHintInfluence": text_hint_influence,
