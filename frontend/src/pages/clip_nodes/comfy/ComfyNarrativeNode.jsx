@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 import {
   NARRATIVE_INPUT_HANDLES,
@@ -12,6 +12,7 @@ import {
   NARRATIVE_RESULT_TABS,
   summarizeNarrativeConnectedContext,
 } from "./comfyNarrativeDomain";
+import ScenarioTabTextViewer from "./ScenarioTabTextViewer";
 
 const NARRATIVE_HANDLE_TOP = 104;
 const NARRATIVE_HANDLE_STEP = 24;
@@ -21,151 +22,198 @@ const OUTPUT_HANDLES = [
   { id: "preview_out", labelRu: "Preview" },
 ];
 
-function renderKvRows(rows = []) {
+function toPrettyJson(value) {
+  try {
+    return JSON.stringify(value ?? null, null, 2);
+  } catch {
+    return String(value || "");
+  }
+}
+
+function stopNodeEvent(event) {
+  event.stopPropagation();
+}
+
+function toText(value, fallback = "—") {
+  if (Array.isArray(value)) return value.length ? value.join("\n") : fallback;
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function makeSceneSelector({ sceneOptions = [], selectedSceneId = "", onChange = null }) {
+  if (!sceneOptions.length) return null;
   return (
-    <div className="clipSB_narrativeReadable">
-      {rows.map((row) => (
-        <div key={row.label}>
-          <strong>{row.label}:</strong> {row.value || "—"}
-        </div>
-      ))}
-    </div>
+    <label className="clipSB_scenarioTabSceneSelector nodrag nopan nowheel" onMouseDown={stopNodeEvent} onPointerDown={stopNodeEvent}>
+      <span>Сцена</span>
+      <select
+        className="clipSB_select clipSB_scenarioTabSceneSelect nodrag nopan nowheel"
+        value={selectedSceneId}
+        onMouseDown={stopNodeEvent}
+        onPointerDown={stopNodeEvent}
+        onChange={(event) => onChange?.(event.target.value)}
+      >
+        {sceneOptions.map((scene) => (
+          <option key={scene.sceneId} value={scene.sceneId}>{scene.sceneId}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 
-function renderHistoryTab(directorOutput) {
-  const history = directorOutput?.history;
+function renderHistoryTab({ directorOutput = {}, history = null }) {
   if (!history) return <div className="clipSB_small">История появится после генерации director output.</div>;
 
+  const roleText = Array.isArray(history.characterRoles)
+    ? history.characterRoles
+      .map((item) => `${item?.displayName || item?.name || "—"}: ${item?.role || "—"}`)
+      .join("\n")
+    : "";
+
   return (
     <div className="clipSB_narrativeReadable">
-      <div className="clipSB_narrativeCard">
-        <div className="clipSB_narrativeCardTitle">Краткий summary</div>
-        <div>{history.summary || "—"}</div>
-      </div>
-
-      <div className="clipSB_narrativeCard">
-        <div className="clipSB_narrativeCardTitle">Полный сценарий</div>
-        <pre>{history.fullScenario || "—"}</pre>
-      </div>
-
-      <div className="clipSB_narrativeCard">
-        <div className="clipSB_narrativeCardTitle">Роли персонажей</div>
-        <div className="clipSB_narrativeList">
-          {(history.characterRoles || []).map((item) => (
-            <div key={`${item.name}:${item.role}`} className="clipSB_narrativeListItem">
-              <strong>{item.displayName || item.name}</strong>
-              <span>{item.role}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="clipSB_narrativeCard">
-        <div className="clipSB_narrativeCardTitle">Tone & style direction</div>
-        <div>{history.toneStyleDirection || "—"}</div>
-      </div>
-
-      <div className="clipSB_narrativeCard">
-        <div className="clipSB_narrativeCardTitle">Director summary</div>
-        <pre>{history.directorSummary || "—"}</pre>
-      </div>
+      <ScenarioTabTextViewer title="summary" text={history.summary} minRows={3} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="fullScenario" text={history.fullScenario} minRows={8} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="directorSummary" text={history.directorSummary} minRows={6} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="roles" text={roleText} minRows={4} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="raw history JSON" text={toPrettyJson(directorOutput?.history || history)} minRows={6} copyLabel="Копировать" />
     </div>
   );
 }
 
-function renderScenesTab(directorOutput) {
-  const scenes = Array.isArray(directorOutput?.scenes) ? directorOutput.scenes : [];
-  if (!scenes.length) return <div className="clipSB_small">Сцены появятся после генерации director output.</div>;
+function renderScenesTab({
+  storyboardScenes = [],
+  directorScenes = [],
+  selectedSceneId = "",
+  setSelectedSceneId,
+}) {
+  if (!storyboardScenes.length && !directorScenes.length) return <div className="clipSB_small">Сцены появятся после генерации director output.</div>;
+
+  const selectedStoryboardScene = storyboardScenes.find((scene) => String(scene?.sceneId || "") === selectedSceneId) || storyboardScenes[0] || null;
+  const selectedDirectorScene = directorScenes.find((scene) => String(scene?.sceneId || "") === selectedSceneId) || directorScenes[0] || null;
+  const sceneSource = selectedStoryboardScene || selectedDirectorScene || {};
+  const warnings = Array.isArray(sceneSource?.contractWarnings)
+    ? sceneSource.contractWarnings
+    : Array.isArray(sceneSource?.warnings)
+      ? sceneSource.warnings
+      : [];
+  const warningsText = warnings.length
+    ? warnings.map((warning) => {
+      if (typeof warning === "string") return warning;
+      return String(warning?.label || warning?.code || "warning");
+    }).join("\n")
+    : "—";
+
+  const sceneOptions = (storyboardScenes.length ? storyboardScenes : directorScenes)
+    .map((scene, idx) => ({ sceneId: String(scene?.sceneId || `S${idx + 1}`) }))
+    .filter((scene) => !!scene.sceneId);
 
   return (
-    <div className="clipSB_narrativeStack">
-      {scenes.map((scene) => (
-        <div key={scene.sceneId} className="clipSB_narrativeCard">
-          <div className="clipSB_narrativeCardHeader">
-            <div className="clipSB_narrativeCardTitle">{scene.sceneId}</div>
-            <div className="clipSB_narrativeCardMeta">{scene.duration}</div>
-          </div>
-          {renderKvRows([
-            { label: "time_start", value: `${scene.timeStart}s` },
-            { label: "time_end", value: `${scene.timeEnd}s` },
-            { label: "duration", value: `${scene.duration}s` },
-            { label: "Кто участвует", value: (scene.participants || []).join(", ") },
-            { label: "Локация", value: scene.location },
-            { label: "Props", value: (scene.props || []).join(", ") },
-            { label: "Что происходит", value: scene.action },
-            { label: "Эмоция", value: scene.emotion },
-            { label: "Scene goal", value: scene.sceneGoal },
-          ])}
-        </div>
-      ))}
+    <div className="clipSB_narrativeReadable">
+      <ScenarioTabTextViewer
+        title="scene contract (selected scene)"
+        text={toPrettyJson(sceneSource)}
+        minRows={8}
+        copyLabel="Копировать"
+        copyAllLabel="Копировать всё"
+        onCopyAll={() => navigator.clipboard.writeText(toPrettyJson(storyboardScenes.length ? storyboardScenes : directorScenes)).then(() => true).catch(() => false)}
+        extraActions={makeSceneSelector({ sceneOptions, selectedSceneId, onChange: setSelectedSceneId })}
+      />
+      <ScenarioTabTextViewer title="summary" text={sceneSource?.summaryRu || sceneSource?.summary || sceneSource?.summaryEn} minRows={4} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="sceneGoal" text={sceneSource?.sceneGoalRu || sceneSource?.sceneGoal || sceneSource?.sceneGoalEn} minRows={4} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="imagePrompt" text={sceneSource?.imagePromptRu || sceneSource?.imagePrompt || sceneSource?.imagePromptEn} minRows={5} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="videoPrompt" text={sceneSource?.videoPromptRu || sceneSource?.videoPrompt || sceneSource?.videoPromptEn} minRows={5} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="warnings" text={warningsText} minRows={3} copyLabel="Копировать" />
     </div>
   );
 }
 
-function renderVideoTab(directorOutput) {
-  const videoRows = Array.isArray(directorOutput?.video) ? directorOutput.video : [];
-  if (!videoRows.length) return <div className="clipSB_small">Видео-описание появится после генерации director output.</div>;
+function renderVideoTab({ storyboardScenes = [], videoRows = [], selectedSceneId = "", setSelectedSceneId }) {
+  if (!videoRows.length && !storyboardScenes.length) return <div className="clipSB_small">Видео-описание появится после генерации director output.</div>;
+
+  const selectedStoryboardScene = storyboardScenes.find((scene) => String(scene?.sceneId || "") === selectedSceneId) || storyboardScenes[0] || {};
+  const selectedVideoRow = videoRows.find((scene) => String(scene?.sceneId || "") === selectedSceneId) || videoRows[0] || {};
+  const sceneOptions = (storyboardScenes.length ? storyboardScenes : videoRows)
+    .map((scene, idx) => ({ sceneId: String(scene?.sceneId || `S${idx + 1}`) }))
+    .filter((scene) => !!scene.sceneId);
+
+  const transitionDebug = [
+    `sceneId: ${toText(selectedStoryboardScene?.sceneId || selectedVideoRow?.sceneId)}`,
+    `startFrameSource: ${toText(selectedVideoRow?.startFrameSource || selectedStoryboardScene?.startFrameSource)}`,
+    `continuation: ${toText(selectedVideoRow?.continuation || selectedStoryboardScene?.continuation)}`,
+    `whyThisMode: ${toText(selectedVideoRow?.whyThisMode || selectedStoryboardScene?.whyThisMode)}`,
+    `needsTwoFrames: ${String(Boolean(selectedVideoRow?.needsTwoFrames ?? selectedStoryboardScene?.needsTwoFrames))}`,
+  ].join("\n");
 
   return (
-    <div className="clipSB_narrativeStack">
-      {videoRows.map((scene) => (
-        <div key={scene.sceneId} className="clipSB_narrativeCard">
-          <div className="clipSB_narrativeCardTitle">{scene.sceneId}</div>
-          {renderKvRows([
-            { label: "Frame description", value: scene.frameDescription },
-            { label: "Action in frame", value: scene.actionInFrame },
-            { label: "Camera idea", value: scene.cameraIdea },
-            { label: "Image prompt", value: scene.imagePrompt },
-            { label: "Video prompt", value: scene.videoPrompt },
-            { label: "LTX mode", value: scene.ltxMode },
-            { label: "Why this mode", value: scene.whyThisMode },
-            { label: "Start frame source", value: scene.startFrameSource },
-            { label: "Needs two frames", value: scene.needsTwoFrames ? "Да" : "Нет" },
-            { label: "Continuation", value: scene.continuation },
-          ])}
-        </div>
-      ))}
+    <div className="clipSB_narrativeReadable">
+      <ScenarioTabTextViewer
+        title="videoPrompt"
+        text={selectedStoryboardScene?.videoPromptRu || selectedStoryboardScene?.videoPrompt || selectedVideoRow?.videoPrompt || selectedStoryboardScene?.videoPromptEn}
+        minRows={6}
+        copyLabel="Копировать"
+        extraActions={makeSceneSelector({ sceneOptions, selectedSceneId, onChange: setSelectedSceneId })}
+      />
+      <ScenarioTabTextViewer title="renderMode" text={selectedStoryboardScene?.renderMode || selectedVideoRow?.renderMode} minRows={2} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="ltxMode" text={selectedStoryboardScene?.ltxMode || selectedVideoRow?.ltxMode} minRows={2} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="resolved model" text={selectedStoryboardScene?.resolvedModelKey || selectedVideoRow?.resolvedModelKey || selectedVideoRow?.model} minRows={2} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="transition / debug" text={transitionDebug} minRows={5} copyLabel="Копировать" />
     </div>
   );
 }
 
-function renderSoundTab(directorOutput) {
-  const soundRows = Array.isArray(directorOutput?.sound) ? directorOutput.sound : [];
-  if (!soundRows.length) return <div className="clipSB_small">Звук появится после генерации director output.</div>;
+function renderSoundTab({ storyboardScenes = [], soundRows = [], selectedSceneId = "", setSelectedSceneId }) {
+  if (!soundRows.length && !storyboardScenes.length) return <div className="clipSB_small">Звук появится после генерации director output.</div>;
+
+  const selectedStoryboardScene = storyboardScenes.find((scene) => String(scene?.sceneId || "") === selectedSceneId) || storyboardScenes[0] || {};
+  const selectedSoundRow = soundRows.find((scene) => String(scene?.sceneId || "") === selectedSceneId) || soundRows[0] || {};
+  const sceneOptions = (storyboardScenes.length ? storyboardScenes : soundRows)
+    .map((scene, idx) => ({ sceneId: String(scene?.sceneId || `S${idx + 1}`) }))
+    .filter((scene) => !!scene.sceneId);
+
+  const audioDebug = [
+    `narrationMode: ${toText(selectedSoundRow?.narrationMode)}`,
+    `localPhrase: ${toText(selectedSoundRow?.localPhrase || selectedStoryboardScene?.localPhrase)}`,
+    `sfx: ${toText(selectedSoundRow?.sfx)}`,
+    `soundNotes: ${toText(selectedSoundRow?.soundNotes)}`,
+    `pauseDuckSilenceNotes: ${toText(selectedSoundRow?.pauseDuckSilenceNotes)}`,
+    `raw: ${toPrettyJson(selectedSoundRow)}`,
+  ].join("\n\n");
 
   return (
-    <div className="clipSB_narrativeStack">
-      {soundRows.map((scene) => (
-        <div key={scene.sceneId} className="clipSB_narrativeCard">
-          <div className="clipSB_narrativeCardTitle">{scene.sceneId}</div>
-          {renderKvRows([
-            { label: "Narration mode", value: scene.narrationMode },
-            { label: "Local phrase", value: scene.localPhrase },
-            { label: "SFX", value: scene.sfx },
-            { label: "Sound notes", value: scene.soundNotes },
-            { label: "Pause / duck / silence notes", value: scene.pauseDuckSilenceNotes },
-          ])}
-        </div>
-      ))}
+    <div className="clipSB_narrativeReadable">
+      <ScenarioTabTextViewer
+        title="lipSync"
+        text={String(Boolean(selectedStoryboardScene?.lipSync ?? selectedSoundRow?.lipSync))}
+        minRows={2}
+        copyLabel="Копировать"
+        extraActions={makeSceneSelector({ sceneOptions, selectedSceneId, onChange: setSelectedSceneId })}
+      />
+      <ScenarioTabTextViewer title="audioSliceUrl" text={selectedStoryboardScene?.audioSliceUrl || selectedSoundRow?.audioSliceUrl} minRows={3} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="requiresAudioSensitiveVideo" text={String(Boolean(selectedStoryboardScene?.requiresAudioSensitiveVideo ?? selectedSoundRow?.requiresAudioSensitiveVideo))} minRows={2} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="audio debug" text={audioDebug} minRows={6} copyLabel="Копировать" />
     </div>
   );
 }
 
-function renderMusicTab(directorOutput) {
-  const music = directorOutput?.music;
+function renderMusicTab({ directorOutput = {}, audioData = {} }) {
+  const music = directorOutput?.music || audioData || null;
   if (!music) return <div className="clipSB_small">Музыка появится после генерации director output.</div>;
-  return renderKvRows([
-    { label: "Global music prompt", value: music.globalMusicPrompt },
-    { label: "Mood", value: music.mood },
-    { label: "Style", value: music.style },
-    { label: "Pacing hints", value: music.pacingHints },
-  ]);
+
+  return (
+    <div className="clipSB_narrativeReadable">
+      <ScenarioTabTextViewer title="globalMusicPrompt" text={music.globalMusicPrompt || music.musicPromptSourceText || music.musicPromptRu} minRows={4} copyLabel="Копировать" />
+      <ScenarioTabTextViewer title="music debug / raw" text={toPrettyJson(music)} minRows={7} copyLabel="Копировать" />
+    </div>
+  );
 }
 
 function renderJsonTab(storyboardOut) {
   if (!storyboardOut) return <div className="clipSB_small">JSON появится после генерации storyboard_out.</div>;
-  return <pre>{JSON.stringify(storyboardOut, null, 2)}</pre>;
+  return (
+    <div className="clipSB_narrativeReadable">
+      <ScenarioTabTextViewer title="raw JSON" text={toPrettyJson(storyboardOut)} minRows={12} copyLabel="Копировать" />
+    </div>
+  );
 }
 
 export default function ComfyNarrativeNode({ id, data }) {
@@ -195,6 +243,38 @@ export default function ComfyNarrativeNode({ id, data }) {
         : "Подключён внешний видеофайл"
     : "Подключите один source-of-truth: аудио, видеофайл или ссылку на видео.";
 
+  const storyboardScenes = useMemo(() => (Array.isArray(storyboardOut?.scenes) ? storyboardOut.scenes : []), [storyboardOut?.scenes]);
+  const directorScenes = useMemo(() => (Array.isArray(directorOutput?.scenes) ? directorOutput.scenes : []), [directorOutput?.scenes]);
+  const videoRows = useMemo(() => (Array.isArray(directorOutput?.video) ? directorOutput.video : []), [directorOutput?.video]);
+  const soundRows = useMemo(() => (Array.isArray(directorOutput?.sound) ? directorOutput.sound : []), [directorOutput?.sound]);
+
+  const sceneOptions = useMemo(() => {
+    const source = storyboardScenes.length
+      ? storyboardScenes
+      : directorScenes.length
+        ? directorScenes
+        : videoRows.length
+          ? videoRows
+          : soundRows;
+    return source
+      .map((scene, idx) => String(scene?.sceneId || `S${idx + 1}`))
+      .filter(Boolean);
+  }, [directorScenes, soundRows, storyboardScenes, videoRows]);
+
+  const [selectedSceneId, setSelectedSceneId] = useState("");
+
+  useEffect(() => {
+    if (!sceneOptions.length) {
+      setSelectedSceneId("");
+      return;
+    }
+    if (!sceneOptions.includes(selectedSceneId)) {
+      setSelectedSceneId(sceneOptions[0]);
+    }
+  }, [sceneOptions, selectedSceneId]);
+
+  const history = directorOutput?.history || storyboardOut?.history || null;
+
   const sourceInput = hasConnectedSource ? (
     <div className="clipSB_narrativeSourceStatus isConnected">
       <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
@@ -219,12 +299,12 @@ export default function ComfyNarrativeNode({ id, data }) {
   );
 
   let resultBody = <div className="clipSB_small">Пока нет director output. Подключите источник и нажмите кнопку.</div>;
-  if (activeResultTab === "history") resultBody = renderHistoryTab(directorOutput);
-  if (activeResultTab === "scenes") resultBody = renderScenesTab(directorOutput);
-  if (activeResultTab === "video") resultBody = renderVideoTab(directorOutput);
-  if (activeResultTab === "sound") resultBody = renderSoundTab(directorOutput);
-  if (activeResultTab === "music") resultBody = renderMusicTab(directorOutput);
-  if (activeResultTab === "json") resultBody = renderJsonTab(storyboardOut);
+  if (activeResultTab === "history") resultBody = renderHistoryTab({ directorOutput, history });
+  if (activeResultTab === "scenes") resultBody = renderScenesTab({ storyboardScenes, directorScenes, selectedSceneId, setSelectedSceneId });
+  if (activeResultTab === "video") resultBody = renderVideoTab({ storyboardScenes, videoRows, selectedSceneId, setSelectedSceneId });
+  if (activeResultTab === "sound") resultBody = renderSoundTab({ storyboardScenes, soundRows, selectedSceneId, setSelectedSceneId });
+  if (activeResultTab === "music") resultBody = renderMusicTab({ directorOutput, audioData: storyboardOut?.audioData || {} });
+  if (activeResultTab === "json") resultBody = renderJsonTab(storyboardOut || directorOutput);
 
   return (
     <>
