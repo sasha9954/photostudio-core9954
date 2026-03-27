@@ -6,8 +6,6 @@ import {
   NARRATIVE_SOURCE_OPTIONS,
   NARRATIVE_CONTEXT_INPUT_HANDLES,
   NARRATIVE_CONTENT_TYPE_OPTIONS,
-  NARRATIVE_MODE_OPTIONS,
-  NARRATIVE_STYLE_OPTIONS,
   NARRATIVE_FORMAT_OPTIONS,
   NARRATIVE_RESULT_TABS,
   getSafeNarrativeContentType,
@@ -388,20 +386,6 @@ export default function ComfyNarrativeNode({ id, data }) {
                       {option.isEnabled ? option.labelRu : `${option.labelRu} (soon)`}
                     </option>
                   ))}
-                </select>
-              </label>
-
-              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
-                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Как обработать</div>
-                <select className="clipSB_select clipSB_narrativeSelect" value={data?.narrativeMode || "cinematic_expand"} onChange={(e) => data?.onFieldChange?.(id, { narrativeMode: e.target.value })}>
-                  {NARRATIVE_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
-                </select>
-              </label>
-
-              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
-                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Стиль обработки</div>
-                <select className="clipSB_select clipSB_narrativeSelect" value={data?.styleProfile || "realistic"} onChange={(e) => data?.onFieldChange?.(id, { styleProfile: e.target.value })}>
-                  {NARRATIVE_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
                 </select>
               </label>
             </div>

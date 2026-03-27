@@ -612,7 +612,7 @@ class ScenarioDirectorNarrativeStrategy(BaseModel):
     @model_validator(mode="after")
     def _normalize(self) -> "ScenarioDirectorNarrativeStrategy":
         story_core_source = str(self.story_core_source or "mixed").strip().lower() or "mixed"
-        self.story_core_source = story_core_source if story_core_source in {"audio", "director_note", "mixed", "fallback"} else "mixed"
+        self.story_core_source = story_core_source if story_core_source in {"audio", "source_of_truth", "director_note", "mixed", "fallback"} else "mixed"
         self.did_audio_remain_primary = _coerce_bool(self.did_audio_remain_primary, False)
         self.did_director_note_override_audio = _coerce_bool(self.did_director_note_override_audio, False)
         self.why = str(self.why or "").strip()
@@ -2993,6 +2993,41 @@ def _build_music_video_viewer_hook(scene: ScenarioDirectorScene, purpose: str, s
     return f"Keep the clip breathing through contrast in scale, distance, and motion within this {shot_label} beat.{action_tail}".strip()
 
 
+def _build_music_video_clip_decision_reason(
+    scene: ScenarioDirectorScene,
+    *,
+    shot_type: str,
+    presence_type: str,
+    vocal_presentation: str,
+    performer_presentation: str,
+    lip_sync_compatible: bool,
+    lip_sync_compatibility_reason: str,
+    forced_transition_scene: bool,
+    auto_sound_workflow_enabled: bool,
+) -> str:
+    emphasis: list[str] = []
+    if scene.scene_purpose == "hook":
+        emphasis.append("hook")
+    elif scene.scene_purpose == "payoff":
+        emphasis.append("payoff")
+    elif scene.scene_purpose == "ending_hold":
+        emphasis.append("ending")
+    if forced_transition_scene:
+        emphasis.append("forced_first_last")
+    emphasis_token = ",".join(emphasis) if emphasis else "none"
+    transition_token = scene.transition_type
+    if forced_transition_scene and transition_token != "state_shift":
+        transition_token = f"{transition_token}(forced)"
+    return (
+        f"purpose={scene.scene_purpose}; render={scene.render_mode}; workflow={scene.resolved_workflow_key}; "
+        f"shot={shot_type}; presence={presence_type}; framing={scene.performance_framing}; "
+        f"transition={transition_token}; twoFrames={'true' if scene.needs_two_frames else 'false'}; "
+        f"lipSync={'true' if scene.lip_sync else 'false'}; vocal={vocal_presentation}; performer={performer_presentation}; "
+        f"compatibility={'true' if lip_sync_compatible else 'false'}({lip_sync_compatibility_reason}); "
+        f"soundWorkflowAutoDisabled={'true' if not auto_sound_workflow_enabled else 'false'}; emphasis={emphasis_token}."
+    )
+
+
 def _infer_music_video_presence_type(scene: ScenarioDirectorScene) -> str:
     actors = {str(actor or "").strip() for actor in (scene.actors or []) if str(actor or "").strip()}
     if "character_1" in actors and "character_2" in actors:
@@ -3125,7 +3160,6 @@ def _apply_music_video_mode_policy(
             performance_framing=performance_framing,
             performer_presentation=performer_presentation,
         )
-        scene.viewer_hook = scene.viewer_hook or _build_music_video_viewer_hook(scene, scene.scene_purpose, shot_type)
         close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
         lip_sync_base_candidate = (
             _scene_has_human_performer(scene)
@@ -3233,14 +3267,20 @@ def _apply_music_video_mode_policy(
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
         if forced_transition_scene:
             scene.scene_purpose = "transition"
-            scene.viewer_hook = _build_music_video_viewer_hook(scene, scene.scene_purpose, shot_type)
-        elif not str(scene.viewer_hook or "").strip():
-            scene.viewer_hook = _build_music_video_viewer_hook(scene, scene.scene_purpose, shot_type)
-        scene.clip_decision_reason = scene.clip_decision_reason or (
-            f"Purpose={scene.scene_purpose}; shot={scene.shot_type}; render={render_mode}; "
-            f"vocalPresentation={vocal_presentation}; performerPresentation={performer_presentation}; "
-            f"lipSyncCompatibility={'true' if lip_sync_compatible else 'false'}; lipSyncCompatibilityReason={lip_sync_compatibility_reason}; "
-            f"soundWorkflowAutoDisabled={'true' if not auto_sound_workflow_enabled else 'false'}."
+        # Final derived debug layer (must reflect final scene state, not intermediate steps).
+        final_shot_type = str(scene.shot_type or shot_type).strip() or shot_type
+        final_presence_type = _infer_music_video_presence_type(scene)
+        scene.viewer_hook = _build_music_video_viewer_hook(scene, scene.scene_purpose, final_shot_type)
+        scene.clip_decision_reason = _build_music_video_clip_decision_reason(
+            scene,
+            shot_type=final_shot_type,
+            presence_type=final_presence_type,
+            vocal_presentation=vocal_presentation,
+            performer_presentation=performer_presentation,
+            lip_sync_compatible=lip_sync_compatible,
+            lip_sync_compatibility_reason=lip_sync_compatibility_reason,
+            forced_transition_scene=forced_transition_scene,
+            auto_sound_workflow_enabled=auto_sound_workflow_enabled,
         )
         scene.workflow_decision_reason = workflow_reason
         scene.lip_sync_decision_reason = lip_sync_reason
@@ -3815,6 +3855,15 @@ def _build_request_text(
     source_origin = str(normalized_audio.get("sourceOrigin") or source.get("source_origin") or payload.get("sourceOrigin") or "connected").strip().lower()
     audio_connected = bool(normalized_audio.get("hasAudio"))
     prefer_audio_over_text = _coerce_bool(normalized_audio.get("preferAudioOverText"), True)
+    content_type_policy = _get_content_type_policy(payload)
+    is_music_video_mode = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
+    director_note_text = str(director_controls.get("directorNote") or director_controls.get("director_note") or "").strip()
+    story_core_source = "director_note" if is_music_video_mode and director_note_text else "source_of_truth"
+    story_core_reason = (
+        "music_video_with_director_note_story_frame_plus_audio_rhythm_driver"
+        if story_core_source == "director_note"
+        else "music_video_without_director_note_or_non_music_mode_defaults_to_source_truth"
+    )
     raw_role_type_by_role = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
     effective_role_type_by_role, _, _ = _resolve_effective_role_type_by_role(payload)
     role_type_by_role: dict[str, str] = {}
@@ -3827,11 +3876,27 @@ def _build_request_text(
         normalized_role = _normalize_scenario_role(role)
         if normalized_role:
             role_type_by_role[normalized_role] = str(role_type or "").strip().lower() or "auto"
+    mode_source_policy = (
+        (
+            "MODE POLICY (music_video):\n"
+            f"- storyCoreSource={story_core_source}.\n"
+            "- If storyCoreSource=director_note: use director note as story frame (setting/concept/arc), "
+            "while audio remains mandatory for rhythm, emotion, scene timing, energy progression, and transition timing.\n"
+            "- If storyCoreSource=source_of_truth: derive story frame from source/audio semantics and transcript.\n"
+            "- Refs remain identity/world anchors: character refs define cast; location/style/props refs define world and must not be replaced by text.\n"
+        )
+        if is_music_video_mode
+        else (
+            "MODE POLICY (non-music_video):\n"
+            "- contentType defines interpretation policy (story/ad/etc); refs remain cast/world anchors.\n"
+        )
+    )
     request_text = (
         "You are Scenario Director for PhotoStudio COMFY.\n"
         "Gemini is the planning brain. Do not delegate planning to heuristics.\n"
         "Return a single JSON object only. No markdown, no commentary.\n"
         "The storyboard_out must be production-usable for downstream Storyboard execution.\n"
+        f"{mode_source_policy}"
         "SOURCE HIERARCHY (HARD, AUDIO MODE ONLY):\n"
         "1) AUDIO_CONTENT_TRUTH: defines story subject, world facts, implied events/context.\n"
         "2) AUDIO_TIMELINE_TRUTH: defines timing anchors (phrases, pauses, energy transitions, sections).\n"
@@ -4009,7 +4074,7 @@ def _build_request_text(
         '    "howDirectorNoteWasIntegrated": ""\n'
         "  }\n"
         "}\n\n"
-        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'audioSemantics': {'ok': runtime_semantics.get('ok'), 'transcript': str(runtime_semantics.get('transcript') or '')[:2000], 'semanticSummary': str(runtime_semantics.get('semanticSummary') or '')[:1200], 'narrativeCore': str(runtime_semantics.get('narrativeCore') or '')[:600], 'worldContext': str(runtime_semantics.get('worldContext') or '')[:600], 'entities': [str(item).strip() for item in (runtime_semantics.get('entities') or []) if str(item).strip()][:20], 'impliedEvents': [str(item).strip() for item in (runtime_semantics.get('impliedEvents') or []) if str(item).strip()][:20], 'tone': str(runtime_semantics.get('tone') or '')[:200], 'confidence': runtime_semantics.get('confidence'), 'hint': str(runtime_semantics.get('hint') or '')[:120]}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
+        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'contentType': content_type_policy.get('value'), 'storyCoreSource': story_core_source, 'storyCoreSourceReason': story_core_reason, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'audioSemantics': {'ok': runtime_semantics.get('ok'), 'transcript': str(runtime_semantics.get('transcript') or '')[:2000], 'semanticSummary': str(runtime_semantics.get('semanticSummary') or '')[:1200], 'narrativeCore': str(runtime_semantics.get('narrativeCore') or '')[:600], 'worldContext': str(runtime_semantics.get('worldContext') or '')[:600], 'entities': [str(item).strip() for item in (runtime_semantics.get('entities') or []) if str(item).strip()][:20], 'impliedEvents': [str(item).strip() for item in (runtime_semantics.get('impliedEvents') or []) if str(item).strip()][:20], 'tone': str(runtime_semantics.get('tone') or '')[:200], 'confidence': runtime_semantics.get('confidence'), 'hint': str(runtime_semantics.get('hint') or '')[:120]}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
     )
     if strict_json_retry:
         request_text += JSON_ONLY_RETRY_SUFFIX
@@ -4768,6 +4833,14 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     prefer_audio_over_text = _coerce_bool(controls.get("preferAudioOverText"), _coerce_bool(audio_context.get("preferAudioOverText"), True))
     text_hint_present = bool(str(controls.get("directorNote") or "").strip())
+    content_type_policy = _get_content_type_policy(payload)
+    is_music_video_mode = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
+    story_core_source = "director_note" if is_music_video_mode and text_hint_present else "source_of_truth"
+    story_core_source_reason = (
+        "music_video_director_note_sets_story_frame_audio_drives_rhythm_emotion_timing"
+        if story_core_source == "director_note"
+        else "story_frame_from_source_truth_audio_semantics_refs_anchor_cast_and_world"
+    )
     effective_role_type_by_role, role_assignment_source, role_override_applied = _resolve_effective_role_type_by_role(payload)
     coverage = _validate_audio_timeline_coverage(storyboard_out.scenes, audio_duration_sec, coverage_source=audio_duration_source if audio_duration_source in {"analysis", "payload"} else "fallback")
     coverage_warnings: list[str] = list(coverage.get("warnings") or [])
@@ -4918,7 +4991,6 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
 
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
-    content_type_policy = _get_content_type_policy(payload)
     effective_global_music_prompt = _resolve_effective_global_music_prompt(payload, storyboard_out.music_prompt)
     return {
         "ok": True,
@@ -4989,6 +5061,8 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "contentTypeFallbackApplied": content_type_policy.get("fallbackApplied"),
             "contentTypePolicy": content_type_policy,
             "textHintPresent": text_hint_present,
+            "storyCoreSource": story_core_source,
+            "storyCoreSourceReason": story_core_source_reason,
             "textHintInfluence": text_hint_influence,
             "audioInfluence": audio_influence,
             "narrativeBiasEstimate": narrative_bias_estimate,
