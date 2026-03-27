@@ -4,14 +4,140 @@ export const NARRATIVE_SOURCE_OPTIONS = [
   { value: "VIDEO_LINK", labelRu: "Ссылка на видео" },
 ];
 
-export const NARRATIVE_CONTENT_TYPE_OPTIONS = [
-  { value: "story", labelRu: "История" },
-  { value: "music_video", labelRu: "Клип" },
-  { value: "ad", labelRu: "Реклама" },
-  { value: "cartoon", labelRu: "Мультфильм" },
-  { value: "teaser", labelRu: "Тизер" },
-  { value: "series", labelRu: "Сериал" },
+export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
+  {
+    value: "story",
+    labelRu: "История",
+    policyKey: "story",
+    modeFamily: "narrative",
+    usesGlobalMusicPrompt: true,
+    supportsLipSync: false,
+    supportsAudioSlices: false,
+    prefersPerformanceCloseup: false,
+    defaultLtxStrategy: "balanced_story",
+    summaryStyle: "story_arc",
+    notesRu: "Базовый сюжетный режим с нейтральной музыкальной политикой.",
+  },
+  {
+    value: "music_video",
+    labelRu: "Клип",
+    policyKey: "music_video",
+    modeFamily: "performance",
+    usesGlobalMusicPrompt: false,
+    supportsLipSync: true,
+    supportsAudioSlices: true,
+    prefersPerformanceCloseup: true,
+    defaultLtxStrategy: "performance_audio_first",
+    summaryStyle: "beat_driven",
+    notesRu: "Клип опирается на master audio и не требует synthetic global music prompt.",
+  },
+  {
+    value: "ad",
+    labelRu: "Реклама",
+    policyKey: "ad",
+    modeFamily: "commercial",
+    usesGlobalMusicPrompt: true,
+    supportsLipSync: false,
+    supportsAudioSlices: false,
+    prefersPerformanceCloseup: false,
+    defaultLtxStrategy: "brand_focus",
+    summaryStyle: "value_prop",
+    notesRu: "Коммерческий режим с безопасной stub-политикой.",
+  },
+  {
+    value: "cartoon",
+    labelRu: "Мультфильм",
+    policyKey: "cartoon",
+    modeFamily: "stylized",
+    usesGlobalMusicPrompt: true,
+    supportsLipSync: true,
+    supportsAudioSlices: false,
+    prefersPerformanceCloseup: false,
+    defaultLtxStrategy: "stylized_motion",
+    summaryStyle: "expressive_arc",
+    notesRu: "Анимационный режим с безопасной политикой для будущего апгрейда.",
+  },
+  {
+    value: "teaser",
+    labelRu: "Тизер",
+    policyKey: "teaser",
+    modeFamily: "promo",
+    usesGlobalMusicPrompt: true,
+    supportsLipSync: false,
+    supportsAudioSlices: false,
+    prefersPerformanceCloseup: false,
+    defaultLtxStrategy: "hook_first",
+    summaryStyle: "tease_hook",
+    notesRu: "Короткий промо-режим с акцентом на крючок.",
+  },
+  {
+    value: "series",
+    labelRu: "Сериал",
+    policyKey: "series",
+    modeFamily: "episodic",
+    usesGlobalMusicPrompt: true,
+    supportsLipSync: false,
+    supportsAudioSlices: false,
+    prefersPerformanceCloseup: false,
+    defaultLtxStrategy: "episodic_continuity",
+    summaryStyle: "episode_arc",
+    notesRu: "Эпизодический режим без жёсткой режиссёрской кастомизации.",
+  },
+  {
+    value: "film",
+    labelRu: "Фильм",
+    policyKey: "film",
+    modeFamily: "cinematic",
+    usesGlobalMusicPrompt: true,
+    supportsLipSync: false,
+    supportsAudioSlices: false,
+    prefersPerformanceCloseup: false,
+    defaultLtxStrategy: "cinematic_long_arc",
+    summaryStyle: "feature_arc",
+    notesRu: "Кинорежим как каркас для последующей тонкой режиссуры.",
+  },
+  {
+    value: "comics",
+    labelRu: "Комикс",
+    policyKey: "comics",
+    modeFamily: "stylized",
+    usesGlobalMusicPrompt: true,
+    supportsLipSync: false,
+    supportsAudioSlices: false,
+    prefersPerformanceCloseup: false,
+    defaultLtxStrategy: "panel_like",
+    summaryStyle: "panel_story",
+    notesRu: "Комикс-режим с безопасным policy scaffold.",
+  },
+  {
+    value: "documentary",
+    labelRu: "Документалка",
+    policyKey: "documentary",
+    modeFamily: "factual",
+    usesGlobalMusicPrompt: true,
+    supportsLipSync: false,
+    supportsAudioSlices: true,
+    prefersPerformanceCloseup: false,
+    defaultLtxStrategy: "observational",
+    summaryStyle: "fact_driven",
+    notesRu: "Документальный режим для честного world-context повествования.",
+  },
+  {
+    value: "trailer",
+    labelRu: "Трейлер",
+    policyKey: "trailer",
+    modeFamily: "promo",
+    usesGlobalMusicPrompt: false,
+    supportsLipSync: false,
+    supportsAudioSlices: true,
+    prefersPerformanceCloseup: false,
+    defaultLtxStrategy: "impact_cut",
+    summaryStyle: "peak_moments",
+    notesRu: "Трейлер не синтезирует global music prompt поверх master audio.",
+  },
 ];
+
+export const NARRATIVE_CONTENT_TYPE_OPTIONS = NARRATIVE_CONTENT_TYPE_REGISTRY.map(({ value, labelRu }) => ({ value, labelRu }));
 
 export const NARRATIVE_MODE_OPTIONS = [
   { value: "strict_reference", labelRu: "Строго по референсу" },
@@ -63,6 +189,15 @@ const lookupLabel = (options, value, fallback) => options.find((option) => optio
 const normalizeText = (value) => String(value || "").trim();
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC_SYNTH = false;
 const SCENARIO_DIRECTOR_FIXTURE_TOGGLE_KEY = "ps:scenarioDirector:forceFixture";
+
+const NARRATIVE_CONTENT_TYPE_POLICY_BY_VALUE = Object.fromEntries(
+  NARRATIVE_CONTENT_TYPE_REGISTRY.map((item) => [item.value, item])
+);
+
+export function getNarrativeContentTypePolicy(contentType) {
+  const normalized = normalizeText(contentType);
+  return NARRATIVE_CONTENT_TYPE_POLICY_BY_VALUE[normalized] || NARRATIVE_CONTENT_TYPE_POLICY_BY_VALUE.story;
+}
 
 function isScenarioDirectorFixtureForced() {
   if (typeof window === "undefined") return false;
@@ -208,12 +343,7 @@ function participantsToActors(participants = []) {
   return (Array.isArray(participants) ? participants : [])
     .map((item) => normalizeText(item))
     .filter(Boolean)
-    .map((item, index) => {
-      if (index === 0) return "character_1";
-      if (index === 1) return "character_2";
-      if (index === 2) return "character_3";
-      return item;
-    });
+    .map((item, index) => toCanonicalRoleId(item, index));
 }
 
 function needsTwoFramesForMode(ltxMode = "") {
@@ -265,7 +395,22 @@ export function buildGlobalMusicPromptFromStructuredMusic(music = null) {
   return parts.join(" ").trim();
 }
 
-function resolveDirectorGlobalMusicPrompt(response = {}, storyboardOut = null, directorOutput = null) {
+function resolveDirectorGlobalMusicPrompt(response = {}, storyboardOut = null, directorOutput = null, state = {}) {
+  const controls = response?.director_controls && typeof response.director_controls === "object" ? response.director_controls : {};
+  const contentType = normalizeText(
+    response?.contentType
+    ?? controls?.contentType
+    ?? directorOutput?.contentType
+    ?? storyboardOut?.contentType
+    ?? state?.contentType
+    ?? "story"
+  ) || "story";
+  const contentTypePolicy = getNarrativeContentTypePolicy(contentType);
+  const hasMasterAudioSource = Boolean(
+    state?.audioContext?.hasAudioSource
+    || normalizeNarrativeSourceMode(state?.resolvedSource?.mode) === "audio"
+    || normalizeNarrativeSourceMode(resolveNarrativeSource(state)?.mode) === "audio"
+  );
   const flatPrompt = normalizeText(
     response?.globalMusicPrompt
     ?? response?.bgMusicPrompt
@@ -286,12 +431,19 @@ function resolveDirectorGlobalMusicPrompt(response = {}, storyboardOut = null, d
     || null
   );
   const shouldSkipStructuredFallback = Boolean(structuredMusic?.__isDerivedFallback);
-  const synthesizedPrompt = (flatPrompt || shouldSkipStructuredFallback) ? "" : buildGlobalMusicPromptFromStructuredMusic(structuredMusic);
+  const shouldDisableFallbackByPolicy = !contentTypePolicy?.usesGlobalMusicPrompt
+    || (contentType === "trailer" && hasMasterAudioSource);
+  const synthesizedPrompt = (flatPrompt || shouldSkipStructuredFallback || shouldDisableFallbackByPolicy)
+    ? ""
+    : buildGlobalMusicPromptFromStructuredMusic(structuredMusic);
   const resolvedPrompt = flatPrompt || synthesizedPrompt;
   if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC_SYNTH) {
     console.debug("[SCENARIO GLOBAL MUSIC SYNTH]", {
       hasFlatPrompt: !!flatPrompt,
       hasStructuredMusic: !!structuredMusic,
+      contentType,
+      usesGlobalMusicPrompt: !!contentTypePolicy?.usesGlobalMusicPrompt,
+      hasMasterAudioSource,
       mood: normalizeMusicPromptPart(structuredMusic?.mood ?? structuredMusic?.musicMood ?? structuredMusic?.music_mood),
       style: normalizeMusicPromptPart(structuredMusic?.style ?? structuredMusic?.musicStyle ?? structuredMusic?.music_style),
       hasPacingHints: !!normalizeMusicPromptPart(structuredMusic?.pacingHints ?? structuredMusic?.pacing_hints ?? structuredMusic?.pacing),
@@ -320,8 +472,20 @@ const buildSceneWindow = (index, totalScenes) => {
 export function summarizeNarrativeConnectedContext(state = {}) {
   const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
   const resolvedSource = resolveNarrativeSource(state);
-  const characterHandles = ["ref_character_1", "ref_character_2", "ref_character_3"];
-  const characterCount = characterHandles.reduce((total, handleId) => total + (getConnectedInputCount(connectedInputs?.[handleId]) > 0 ? 1 : 0), 0);
+  const connectedRefsByRole = {
+    character_1: getConnectedInputCount(connectedInputs?.ref_character_1) > 0 ? [getConnectedInputSignal(connectedInputs?.ref_character_1)].filter(Boolean) : [],
+    character_2: getConnectedInputCount(connectedInputs?.ref_character_2) > 0 ? [getConnectedInputSignal(connectedInputs?.ref_character_2)].filter(Boolean) : [],
+    character_3: getConnectedInputCount(connectedInputs?.ref_character_3) > 0 ? [getConnectedInputSignal(connectedInputs?.ref_character_3)].filter(Boolean) : [],
+    props: getConnectedInputCount(connectedInputs?.ref_props) > 0 ? [getConnectedInputSignal(connectedInputs?.ref_props)].filter(Boolean) : [],
+    location: getConnectedInputCount(connectedInputs?.ref_location) > 0 ? [getConnectedInputSignal(connectedInputs?.ref_location)].filter(Boolean) : [],
+    style: getConnectedInputCount(connectedInputs?.ref_style) > 0 ? [getConnectedInputSignal(connectedInputs?.ref_style)].filter(Boolean) : [],
+  };
+  const presentCastRoles = Object.entries(connectedRefsByRole)
+    .filter(([role, refs]) => refs.length > 0 && !["props", "location", "style"].includes(role))
+    .map(([role]) => role);
+  const presentWorldRoles = Object.entries(connectedRefsByRole)
+    .filter(([role, refs]) => refs.length > 0 && ["props", "location", "style"].includes(role))
+    .map(([role]) => role);
   const sourceByHandle = {
     audio_in: getConnectedInputCount(connectedInputs?.audio_in) > 0,
     video_file_in: getConnectedInputCount(connectedInputs?.video_file_in) > 0,
@@ -333,10 +497,15 @@ export function summarizeNarrativeConnectedContext(state = {}) {
     activeSourceLabel: resolvedSource?.label || "Источник не подключён",
     hasActiveSource: resolvedSource?.origin === "connected" && !!normalizeText(resolvedSource?.value),
     sourceByHandle,
-    characterCount,
-    hasProps: getConnectedInputCount(connectedInputs?.ref_props) > 0,
-    hasLocation: getConnectedInputCount(connectedInputs?.ref_location) > 0,
-    hasStyle: getConnectedInputCount(connectedInputs?.ref_style) > 0,
+    characterCount: presentCastRoles.length,
+    hasProps: presentWorldRoles.includes("props"),
+    hasLocation: presentWorldRoles.includes("location"),
+    hasStyle: presentWorldRoles.includes("style"),
+    connectedRoleIds: [...presentCastRoles, ...presentWorldRoles],
+    presentCastRoles,
+    presentWorldRoles,
+    refsPresentByRole: connectedRefsByRole,
+    connectedRefsPresentByRole: connectedRefsByRole,
   };
 }
 
@@ -537,9 +706,12 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
 
 function toCanonicalRoleId(value, fallbackIndex = -1) {
   const clean = normalizeText(value);
-  if (/^character_[1-3]$/i.test(clean)) return clean.toLowerCase();
+  const canonical = clean.toLowerCase().replace(/\s+/g, "_");
+  if (/^character_[1-9]\d*$/i.test(canonical)) return canonical;
+  if (["animal", "animal_1", "group", "group_faces", "props", "location", "style"].includes(canonical)) return canonical;
+  if (/^character[1-9]\d*$/i.test(canonical)) return canonical.replace(/^character/i, "character_");
   if (Number.isInteger(fallbackIndex) && fallbackIndex >= 0 && fallbackIndex < 3) return `character_${fallbackIndex + 1}`;
-  return clean;
+  return canonical;
 }
 
 function toHumanizedCanonicalRole(roleId) {
@@ -547,28 +719,65 @@ function toHumanizedCanonicalRole(roleId) {
   if (canonical === "character_1") return "Character 1";
   if (canonical === "character_2") return "Character 2";
   if (canonical === "character_3") return "Character 3";
+  if (canonical === "animal" || canonical === "animal_1") return "Animal";
+  if (canonical === "group" || canonical === "group_faces") return "Group";
+  if (canonical === "props") return "Props";
+  if (canonical === "location") return "Location";
+  if (canonical === "style") return "Style";
   return canonical || "Character";
 }
 
 export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {}) {
   if (!storyboardOut || typeof storyboardOut !== "object") return null;
   const scenes = Array.isArray(storyboardOut.scenes) ? storyboardOut.scenes : [];
-  const canonicalRoles = ["character_1", "character_2", "character_3"];
-  const roleLabels = Object.fromEntries(canonicalRoles.map((role) => [role, toHumanizedCanonicalRole(role)]));
+  const contextRefs = storyboardOut?.context_refs && typeof storyboardOut.context_refs === "object" ? storyboardOut.context_refs : {};
+  const refsByRole = storyboardOut?.refsByRole && typeof storyboardOut.refsByRole === "object" ? storyboardOut.refsByRole : {};
+  const connectedRefsByRole = storyboardOut?.connectedRefsByRole && typeof storyboardOut.connectedRefsByRole === "object" ? storyboardOut.connectedRefsByRole : {};
+  const connectedSummary = storyboardOut?.connected_context_summary && typeof storyboardOut.connected_context_summary === "object" ? storyboardOut.connected_context_summary : {};
+  const connectedSummaryRefs = connectedSummary?.refsByRole && typeof connectedSummary.refsByRole === "object" ? connectedSummary.refsByRole : {};
+  const roleIds = [];
+  const pushRole = (value) => {
+    const normalized = toCanonicalRoleId(value);
+    if (!normalized || roleIds.includes(normalized)) return;
+    roleIds.push(normalized);
+  };
+  scenes.forEach((scene, index) => {
+    (Array.isArray(scene.actors) ? scene.actors : []).forEach((actor, actorIndex) => pushRole(toCanonicalRoleId(actor, actorIndex)));
+    ["primaryRole", "primary_role"].forEach((key) => pushRole(scene?.[key]));
+    ["secondaryRoles", "secondary_roles", "sceneActiveRoles", "scene_active_roles", "mustAppear", "must_appear", "refsUsed", "refs_used"].forEach((key) => {
+      const values = Array.isArray(scene?.[key]) ? scene[key] : [];
+      values.forEach((value) => pushRole(value));
+    });
+    if (normalizeText(scene.location)) pushRole("location");
+    if (Array.isArray(scene.props) && scene.props.some((item) => normalizeText(item))) pushRole("props");
+  });
+  [contextRefs, refsByRole, connectedRefsByRole, connectedSummaryRefs].forEach((source) => Object.keys(source || {}).forEach(pushRole));
+  const roleLabels = Object.fromEntries(roleIds.map((role) => [role, toHumanizedCanonicalRole(role)]));
+  const castRoles = roleIds.filter((role) => !["props", "location", "style"].includes(role));
+  const worldRoles = roleIds.filter((role) => ["props", "location", "style"].includes(role));
+  const buildRoleCopy = (role) => {
+    if (role === "character_1") return "Главный герой / главный носитель действия";
+    if (role === "character_2") return "Партнёр по сцене / вторичный акцент";
+    if (role === "character_3") return "Поддерживающий персонаж или смысловой объект";
+    if (["animal", "animal_1", "group", "group_faces"].includes(role)) return "Поддерживающий участник кадра";
+    if (["props", "location", "style"].includes(role)) return "Мировой контекст / world anchor";
+    return "Поддерживающая роль";
+  };
   const history = {
     summary: normalizeText(storyboardOut.story_summary),
     fullScenario: normalizeText(storyboardOut.full_scenario),
-    characterRoles: canonicalRoles.map((role, index) => ({
-        name: role,
-        displayName: roleLabels[role],
-        role: index === 0
-          ? "Главный герой / главный носитель действия"
-          : index === 1
-            ? "Партнёр по сцене / вторичный акцент"
-            : role,
-      })),
+    characterRoles: castRoles.map((role) => ({
+      name: role,
+      displayName: roleLabels[role],
+      role: buildRoleCopy(role),
+    })),
     toneStyleDirection: normalizeText(state.styleProfile) || "realistic",
     directorSummary: normalizeText(storyboardOut.director_summary),
+    presentCastRoles: castRoles,
+    presentWorldRoles: worldRoles,
+    hasProps: worldRoles.includes("props"),
+    hasLocation: worldRoles.includes("location"),
+    hasStyle: worldRoles.includes("style"),
   };
   const globalMusicPrompt = normalizeText(
     storyboardOut?.globalMusicPrompt
@@ -640,6 +849,9 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
       __isDerivedFallback: !hasRealGlobalMusicPrompt,
     },
     globalMusicPrompt,
+    refsByRole,
+    connectedRefsByRole,
+    contentTypePolicy: getNarrativeContentTypePolicy(state?.contentType),
   };
 }
 
@@ -851,7 +1063,7 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     refDirectives: mergedPackageRoleContract.refDirectives,
     scenes: roleAwareScenes.length ? roleAwareScenes : legacyScenes,
   };
-  const globalMusicPrompt = resolveDirectorGlobalMusicPrompt(response, storyboardOut, directorOutput);
+  const globalMusicPrompt = resolveDirectorGlobalMusicPrompt(response, storyboardOut, directorOutput, state);
   const normalizedStoryboardOut = storyboardOut ? {
     ...storyboardOut,
     format: normalizeText(storyboardOut?.format) || resolvedFormat,
@@ -908,6 +1120,7 @@ export function buildNarrativeOutputs(state = {}) {
   const resolvedSource = resolveNarrativeSource(state);
   const sourceMode = resolvedSource.mode || "AUDIO";
   const contentType = NARRATIVE_CONTENT_TYPE_OPTIONS.some((item) => item.value === state.contentType) ? state.contentType : "story";
+  const contentTypePolicy = getNarrativeContentTypePolicy(contentType);
   const narrativeMode = NARRATIVE_MODE_OPTIONS.some((item) => item.value === state.narrativeMode) ? state.narrativeMode : "cinematic_expand";
   const styleProfile = NARRATIVE_STYLE_OPTIONS.some((item) => item.value === state.styleProfile) ? state.styleProfile : "realistic";
   const format = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
@@ -937,10 +1150,12 @@ export function buildNarrativeOutputs(state = {}) {
   const readableEntities = entities.length ? entities : ["Главный герой", "Ключевой объект", "Среда действия"];
   const sourceOriginLabel = resolvedSource.origin === "connected" ? "Подключённый источник" : "Источник не подключён";
   const connectedContextLabel = [
-    `Персонажей подключено: ${connectedContext.characterCount}`,
+    `CAST roles: ${connectedContext.presentCastRoles.length} (${connectedContext.presentCastRoles.join(", ") || "нет"})`,
+    `WORLD roles: ${connectedContext.presentWorldRoles.join(", ") || "нет"}`,
     `props: ${connectedContext.hasProps ? "да" : "нет"}`,
     `location: ${connectedContext.hasLocation ? "да" : "нет"}`,
     `style: ${connectedContext.hasStyle ? "да" : "нет"}`,
+    `connected role ids: ${connectedContext.connectedRoleIds.join(", ") || "нет"}`,
   ].join(", ");
 
   const shortDescription = `${contentTypeLabel} в стиле «${styleLabel}». Основа: ${sourceLabel.toLowerCase()}.`;
@@ -999,6 +1214,7 @@ export function buildNarrativeOutputs(state = {}) {
     sourceLabel,
     sourcePreview: normalizeText(resolvedSource.preview) || sourcePayload,
     connectedContext,
+    contentTypePolicy,
     entities: readableEntities,
     sceneLogic: [
       "Вход в мир истории и настрой атмосферы.",
@@ -1010,12 +1226,14 @@ export function buildNarrativeOutputs(state = {}) {
     directorNote,
   };
 
-  const bgMusicPrompt = [
-    `Long background music for a ${contentTypeLabel.toLowerCase()} with ${styleLabel.toLowerCase()} mood.`,
-    `Support the narrative arc from intro to climax to ending.`,
-    `No footsteps, no hits, no sound effects, no stingers, only continuous cinematic background score.`,
-    `Director note: ${directorNote}.`,
-  ].join(" ");
+  const bgMusicPrompt = contentTypePolicy.usesGlobalMusicPrompt
+    ? [
+      `Long background music for a ${contentTypeLabel.toLowerCase()} with ${styleLabel.toLowerCase()} mood.`,
+      `Support the narrative arc from intro to climax to ending.`,
+      `No footsteps, no hits, no sound effects, no stingers, only continuous cinematic background score.`,
+      `Director note: ${directorNote}.`,
+    ].join(" ")
+    : "";
 
   const toneStyleDirection = `${styleLabel}. Режим director: ${narrativeModeLabel}. Видео должно сохранять единый тон и визуальную непрерывность от первого до финального кадра.`;
   const characterRoles = readableEntities.map((entity, index) => ({
@@ -1246,6 +1464,13 @@ export function buildNarrativeOutputs(state = {}) {
       characterRoles,
       toneStyleDirection,
       directorSummary: adaptationSummary,
+      presentCastRoles: connectedContext.presentCastRoles,
+      presentWorldRoles: connectedContext.presentWorldRoles,
+      refsPresentByRole: connectedContext.refsPresentByRole,
+      connectedRefsPresentByRole: connectedContext.connectedRefsPresentByRole,
+      hasProps: connectedContext.hasProps,
+      hasLocation: connectedContext.hasLocation,
+      hasStyle: connectedContext.hasStyle,
     },
     scenes,
     video: scenes.map((scene) => ({
@@ -1275,6 +1500,7 @@ export function buildNarrativeOutputs(state = {}) {
       style: `${contentTypeLabel} / ${styleLabel}`,
       pacingHints: "Start restrained, grow through the middle scenes, peak at the climax, and resolve with a clean outro.",
     },
+    contentTypePolicy,
   };
 
   return {

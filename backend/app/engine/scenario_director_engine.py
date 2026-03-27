@@ -86,6 +86,129 @@ DUO_SCENE_EXTRA_HINTS = {
     "walking together",
 }
 WORLD_ANCHOR_ROLES = {"location", "style", "props", "animal", "animal_1", "group", "group_faces"}
+SCENARIO_WORLD_ROLES = {"location", "style", "props"}
+SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
+    "story": {
+        "label": "История",
+        "description": "Базовый сюжетный режим",
+        "mode_family": "narrative",
+        "uses_global_music_prompt": True,
+        "supports_lip_sync": False,
+        "supports_audio_slices": False,
+        "default_ltx_strategy": "balanced_story",
+        "prefers_close_face_for_lipsync": False,
+        "narrative_priority": "story_arc",
+        "pacing_profile": "balanced",
+    },
+    "music_video": {
+        "label": "Клип",
+        "description": "Музыкальный режим с опорой на master audio",
+        "mode_family": "performance",
+        "uses_global_music_prompt": False,
+        "supports_lip_sync": True,
+        "supports_audio_slices": True,
+        "default_ltx_strategy": "performance_audio_first",
+        "prefers_close_face_for_lipsync": True,
+        "narrative_priority": "beat_sync",
+        "pacing_profile": "rhythmic",
+    },
+    "ad": {
+        "label": "Реклама",
+        "description": "Коммерческий режим",
+        "mode_family": "commercial",
+        "uses_global_music_prompt": True,
+        "supports_lip_sync": False,
+        "supports_audio_slices": False,
+        "default_ltx_strategy": "brand_focus",
+        "prefers_close_face_for_lipsync": False,
+        "narrative_priority": "offer_clarity",
+        "pacing_profile": "concise",
+    },
+    "cartoon": {
+        "label": "Мультфильм",
+        "description": "Стилизация и выразительная подача",
+        "mode_family": "stylized",
+        "uses_global_music_prompt": True,
+        "supports_lip_sync": True,
+        "supports_audio_slices": False,
+        "default_ltx_strategy": "stylized_motion",
+        "prefers_close_face_for_lipsync": False,
+        "narrative_priority": "expressive_action",
+        "pacing_profile": "playful",
+    },
+    "teaser": {
+        "label": "Тизер",
+        "description": "Короткий интригующий формат",
+        "mode_family": "promo",
+        "uses_global_music_prompt": True,
+        "supports_lip_sync": False,
+        "supports_audio_slices": False,
+        "default_ltx_strategy": "hook_first",
+        "prefers_close_face_for_lipsync": False,
+        "narrative_priority": "intrigue",
+        "pacing_profile": "punchy",
+    },
+    "series": {
+        "label": "Сериал",
+        "description": "Эпизодический режим",
+        "mode_family": "episodic",
+        "uses_global_music_prompt": True,
+        "supports_lip_sync": False,
+        "supports_audio_slices": False,
+        "default_ltx_strategy": "episodic_continuity",
+        "prefers_close_face_for_lipsync": False,
+        "narrative_priority": "episode_progression",
+        "pacing_profile": "steady",
+    },
+    "film": {
+        "label": "Фильм",
+        "description": "Полнометражная кинематографическая подача",
+        "mode_family": "cinematic",
+        "uses_global_music_prompt": True,
+        "supports_lip_sync": False,
+        "supports_audio_slices": False,
+        "default_ltx_strategy": "cinematic_long_arc",
+        "prefers_close_face_for_lipsync": False,
+        "narrative_priority": "feature_arc",
+        "pacing_profile": "cinematic",
+    },
+    "comics": {
+        "label": "Комикс",
+        "description": "Панельный/графический стиль",
+        "mode_family": "stylized",
+        "uses_global_music_prompt": True,
+        "supports_lip_sync": False,
+        "supports_audio_slices": False,
+        "default_ltx_strategy": "panel_like",
+        "prefers_close_face_for_lipsync": False,
+        "narrative_priority": "panel_story",
+        "pacing_profile": "framed",
+    },
+    "documentary": {
+        "label": "Документалка",
+        "description": "Фактическое повествование",
+        "mode_family": "factual",
+        "uses_global_music_prompt": True,
+        "supports_lip_sync": False,
+        "supports_audio_slices": True,
+        "default_ltx_strategy": "observational",
+        "prefers_close_face_for_lipsync": False,
+        "narrative_priority": "fact_priority",
+        "pacing_profile": "measured",
+    },
+    "trailer": {
+        "label": "Трейлер",
+        "description": "Пиковый промо-монтаж",
+        "mode_family": "promo",
+        "uses_global_music_prompt": False,
+        "supports_lip_sync": False,
+        "supports_audio_slices": True,
+        "default_ltx_strategy": "impact_cut",
+        "prefers_close_face_for_lipsync": False,
+        "narrative_priority": "peaks_only",
+        "pacing_profile": "impact",
+    },
+}
 
 WEAK_SCENE_PATTERNS = (
     "character walks",
@@ -926,8 +1049,8 @@ def _scene_participants(scene: ScenarioDirectorScene, role_lookup: dict[str, str
     return participants
 
 
-def _build_character_roles(payload: dict[str, Any], role_labels: dict[str, str]) -> list[dict[str, str]]:
-    ordered_roles = ["character_1", "character_2", "character_3"]
+def _build_character_roles(payload: dict[str, Any], role_labels: dict[str, str], known_roles: list[str]) -> list[dict[str, str]]:
+    ordered_roles = [role for role in known_roles if role in SCENARIO_CAST_ROLES]
     effective_role_types, _, _ = _resolve_effective_role_type_by_role(payload)
     role_copy_by_type = {
         "hero": "Главный герой / главный носитель действия",
@@ -938,6 +1061,10 @@ def _build_character_roles(payload: dict[str, Any], role_labels: dict[str, str])
         "character_1": "Главный герой / главный носитель действия",
         "character_2": "Партнёр по сцене / вторичный акцент",
         "character_3": "Поддерживающий персонаж или смысловой объект",
+        "animal": "Животное / поддерживающий участник кадра",
+        "animal_1": "Животное / поддерживающий участник кадра",
+        "group": "Группа / массовка",
+        "group_faces": "Группа / массовка",
     }
     out: list[dict[str, str]] = []
     for role in ordered_roles:
@@ -1392,6 +1519,26 @@ def _normalize_scenario_role(role: Any, *, role_lookup: dict[str, str] | None = 
     return SCENARIO_ROLE_ALIASES.get(clean, clean)
 
 
+def _normalize_content_type(value: Any) -> str:
+    clean = str(value or "").strip().lower()
+    return clean if clean in SCENARIO_CONTENT_TYPE_REGISTRY else "story"
+
+
+def _get_content_type_policy(payload: dict[str, Any]) -> dict[str, Any]:
+    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
+    normalized = _normalize_content_type(controls.get("contentType") or payload.get("contentType"))
+    base = SCENARIO_CONTENT_TYPE_REGISTRY.get(normalized) or SCENARIO_CONTENT_TYPE_REGISTRY["story"]
+    return {"value": normalized, **base}
+
+
+def _resolve_effective_global_music_prompt(payload: dict[str, Any], raw_music_prompt: str) -> str:
+    clean_prompt = str(raw_music_prompt or "").strip()
+    policy = _get_content_type_policy(payload)
+    if policy.get("uses_global_music_prompt", True):
+        return clean_prompt
+    return clean_prompt if clean_prompt else ""
+
+
 def _collect_known_roles(payload: dict[str, Any], scenes: list[ScenarioDirectorScene]) -> list[str]:
     role_lookup = _build_role_lookup_from_payload(payload)
     refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
@@ -1408,8 +1555,6 @@ def _collect_known_roles(payload: dict[str, Any], scenes: list[ScenarioDirectorS
         if normalized and normalized not in ordered:
             ordered.append(normalized)
 
-    for role in SCENARIO_CANONICAL_ROLES:
-        _push(role)
     for role in refs.keys():
         _push(role)
     for role in refs_by_role_raw.keys():
@@ -1425,6 +1570,15 @@ def _collect_known_roles(payload: dict[str, Any], scenes: list[ScenarioDirectorS
     for scene in scenes:
         for actor in scene.actors:
             _push(actor)
+        if str(scene.location or "").strip():
+            _push("location")
+        if any(str(prop or "").strip() for prop in (scene.props or [])):
+            _push("props")
+    for role in SCENARIO_CANONICAL_ROLES:
+        if role in ordered:
+            continue
+        if role in refs or role in refs_by_role_raw or role in connected_refs or role in connected_summary_refs:
+            _push(role)
     return ordered
 
 
@@ -1661,6 +1815,7 @@ def _estimate_text_overlap(text: str, anchor: str) -> float:
 
 
 def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> dict[str, Any]:
+    content_type_policy = _get_content_type_policy(payload)
     role_lookup = _build_role_lookup_from_payload(payload)
     known_roles = _collect_known_roles(payload, storyboard_out.scenes)
     display_label_by_role = _build_display_label_by_role(payload, known_roles)
@@ -1689,6 +1844,17 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         role for role in known_roles
         if len(refs_by_role.get(role) or []) > 0 or len(connected_refs_by_role.get(role) or []) > 0
     }
+    for scene in storyboard_out.scenes:
+        for actor in scene.actors:
+            normalized_actor = _normalize_scenario_role(actor, role_lookup=role_lookup)
+            if normalized_actor:
+                role_presence.add(normalized_actor)
+        if str(scene.location or "").strip():
+            role_presence.add("location")
+        if any(str(item or "").strip() for item in (scene.props or [])):
+            role_presence.add("props")
+    present_cast_roles = [role for role in known_roles if role in SCENARIO_CAST_ROLES and role in role_presence]
+    present_world_roles = [role for role in known_roles if role in SCENARIO_WORLD_ROLES and role in role_presence]
     hero_participants = [role for role in known_roles if role in SCENARIO_CAST_ROLES and role_type_by_role.get(role) == "hero" and role in role_presence]
     supporting_participants = [
         role for role in known_roles
@@ -1706,9 +1872,16 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     history = {
         "summary": storyboard_out.story_summary,
         "fullScenario": storyboard_out.full_scenario,
-        "characterRoles": _build_character_roles(payload, display_label_by_role),
+        "characterRoles": _build_character_roles(payload, display_label_by_role, known_roles),
         "toneStyleDirection": str(payload.get("director_controls", {}).get("styleProfile") or "").strip() or "Scenario Director tone guidance from Gemini.",
         "directorSummary": storyboard_out.director_summary,
+        "presentCastRoles": present_cast_roles,
+        "presentWorldRoles": present_world_roles,
+        "refsPresentByRole": refs_by_role,
+        "connectedRefsPresentByRole": connected_refs_by_role,
+        "hasProps": "props" in present_world_roles,
+        "hasLocation": "location" in present_world_roles,
+        "hasStyle": "style" in present_world_roles,
     }
     scenes = []
     video = []
@@ -1850,8 +2023,9 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s sceneActiveRoles=%s", scene.scene_id, scene_active_roles)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s refsUsed=%s", scene.scene_id, refs_used_roles)
         logger.debug("[SCENARIO DIRECTOR OUTPUT] scene %s mustAppear=%s", scene.scene_id, must_appear)
+    effective_global_music_prompt = storyboard_out.music_prompt if content_type_policy.get("uses_global_music_prompt", True) else ""
     music = {
-        "globalMusicPrompt": storyboard_out.music_prompt,
+        "globalMusicPrompt": effective_global_music_prompt,
         "mood": str(payload.get("director_controls", {}).get("styleProfile") or "").strip(),
         "style": f"{payload.get('director_controls', {}).get('contentType') or ''} / {payload.get('director_controls', {}).get('styleProfile') or ''}".strip(" /"),
         "pacingHints": "Use the Gemini scene pacing to build intro, escalation, climax, and resolution.",
@@ -1896,12 +2070,20 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         "connectedRefsByRole": connected_refs_by_role,
         "roleTypeByRole": role_type_by_role,
         "connected_context_summary": connected_context_summary,
+        "presentCastRoles": present_cast_roles,
+        "presentWorldRoles": present_world_roles,
+        "refsPresentByRole": refs_by_role,
+        "connectedRefsPresentByRole": connected_refs_by_role,
+        "hasLocation": "location" in present_world_roles,
+        "hasProps": "props" in present_world_roles,
+        "hasStyle": "style" in present_world_roles,
         "heroParticipants": hero_participants,
         "supportingParticipants": supporting_participants,
         "mustAppearRoles": must_appear_roles,
         "context_refs": context_refs,
         "displayLabelByRole": display_label_by_role,
         "refDirectives": ref_directives,
+        "contentTypePolicy": content_type_policy,
         "debugRoleContract": {
             "knownRoles": known_roles,
             "roleTypeByRole": role_type_by_role,
@@ -1922,6 +2104,9 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 or refs_by_role.get("group_faces")
                 or connected_refs_by_role.get("group_faces")
             ),
+            "presentCastRoles": present_cast_roles,
+            "presentWorldRoles": present_world_roles,
+            "contentTypePolicy": content_type_policy,
         },
     }
 
@@ -1932,9 +2117,12 @@ def _build_brain_package(storyboard_out: ScenarioDirectorStoryboardOut, payload:
     summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
     known_roles = _collect_known_roles(payload, storyboard_out.scenes)
     entities = list(known_roles)
+    content_type_policy = _get_content_type_policy(payload)
+    content_type = content_type_policy.get("value") or "story"
+    global_music_prompt = _resolve_effective_global_music_prompt(payload, storyboard_out.music_prompt)
     return {
-        "contentType": controls.get("contentType") or "story",
-        "contentTypeLabel": controls.get("contentType") or "story",
+        "contentType": content_type,
+        "contentTypeLabel": content_type_policy.get("label") or content_type,
         "styleProfile": controls.get("styleProfile") or "realistic",
         "styleLabel": controls.get("styleProfile") or "realistic",
         "sourceMode": str(source.get("source_mode") or "audio").upper(),
@@ -1944,8 +2132,9 @@ def _build_brain_package(storyboard_out: ScenarioDirectorStoryboardOut, payload:
         "connectedContext": summary,
         "entities": entities,
         "sceneLogic": [scene.scene_goal or scene.frame_description or scene.action_in_frame for scene in storyboard_out.scenes],
-        "audioStrategy": storyboard_out.voice_script or storyboard_out.music_prompt,
+        "audioStrategy": storyboard_out.voice_script or global_music_prompt,
         "directorNote": controls.get("directorNote") or "",
+        "contentTypePolicy": content_type_policy,
     }
 
 
@@ -3466,6 +3655,8 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
     storyboard_out = _harden_storyboard_out(storyboard_out, payload)
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
+    content_type_policy = _get_content_type_policy(payload)
+    effective_global_music_prompt = _resolve_effective_global_music_prompt(payload, storyboard_out.music_prompt)
     return {
         "ok": True,
         "transcript": parsed_single.get("transcript") or [],
@@ -3478,7 +3669,7 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
         "directorOutput": director_output,
         "scenario": storyboard_out.full_scenario,
         "voiceScript": storyboard_out.voice_script,
-        "bgMusicPrompt": storyboard_out.music_prompt,
+        "bgMusicPrompt": effective_global_music_prompt,
         "brainPackage": brain_package,
         "meta": {
             "plannerSource": "gemini",
@@ -3486,6 +3677,7 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
             "attemptedModels": attempted_models,
             "audioFirstSingleCall": True,
             "rawGeminiTextPreview": raw_text[:2000],
+            "contentTypePolicy": content_type_policy,
         },
     }
 
@@ -3812,13 +4004,15 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
 
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
+    content_type_policy = _get_content_type_policy(payload)
+    effective_global_music_prompt = _resolve_effective_global_music_prompt(payload, storyboard_out.music_prompt)
     return {
         "ok": True,
         "storyboardOut": storyboard_out.model_dump(mode="json"),
         "directorOutput": director_output,
         "scenario": storyboard_out.full_scenario,
         "voiceScript": storyboard_out.voice_script,
-        "bgMusicPrompt": storyboard_out.music_prompt,
+        "bgMusicPrompt": effective_global_music_prompt,
         "brainPackage": brain_package,
         "meta": {
             "plannerSource": "gemini",
@@ -3875,6 +4069,8 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "fakeAudioFirstSuspected": fake_audio_first_suspected,
             "audioGroundingValidation": audio_grounding_validation,
             "audioGroundingScore": audio_grounding_validation.get("score"),
+            "contentTypePolicy": content_type_policy,
+            "contentTypePolicy": content_type_policy,
             "textHintPresent": text_hint_present,
             "textHintInfluence": text_hint_influence,
             "audioInfluence": audio_influence,
