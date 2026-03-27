@@ -2090,6 +2090,11 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             for explicit_role in ("character_1", "character_2"):
                 if explicit_role not in actor_roles:
                     actor_roles.append(explicit_role)
+        if prefer_explicit_duo_roles and shared_scene_hint:
+            participants = [role for role in participants if role not in {"group", "group_faces"}]
+            for explicit_role in ("character_1", "character_2"):
+                if explicit_role in actor_roles and explicit_role not in participants:
+                    participants.append(explicit_role)
         raw_anchor_roles = _extract_scene_world_anchor_roles(raw_scene, actor_roles, role_lookup=role_lookup)
         scene_anchor_roles: list[str] = list(raw_anchor_roles)
         if str(scene.location or "").strip() and (refs_by_role.get("location") or connected_refs_by_role.get("location")):
