@@ -864,6 +864,25 @@ def _build_hard_identity_lock_block(*, scene_human_visual_anchors: list[str] | N
     return "\n".join(lines).strip()
 
 
+def _build_duet_hardening_block(*, active_roles: list[str] | None = None) -> str:
+    roles = [str(role or "").strip() for role in (active_roles or []) if str(role or "").strip()]
+    has_duet = "character_1" in roles and "character_2" in roles
+    has_multi_humans = has_duet or len([role for role in roles if role.startswith("character_")]) >= 2
+    if not has_multi_humans:
+        return ""
+    lines = [
+        "DUET / MULTI-CHARACTER SEPARATION CONTRACT (HARD):",
+        "- keep character_1 and character_2 as two different human identities",
+        "- never merge or average faces/bodies/clothing",
+        "- preserve distinct face architecture, hair identity, silhouette, outfit silhouette",
+        "- keep both active characters legible in one coherent frame",
+        "- avoid twinization / face averaging / clothing convergence",
+    ]
+    if has_duet:
+        lines.append("- character_2 must not become a softened copy of character_1")
+    return "\n".join(lines)
+
+
 def _compose_video_effective_prompt(
     *,
     video_prompt: str,
@@ -890,7 +909,14 @@ def _compose_video_effective_prompt(
         scene_human_visual_anchors=scene_human_visual_anchors,
     )
     identity_lock_block = _build_hard_identity_lock_block(scene_human_visual_anchors=scene_human_visual_anchors) if has_humans else ""
-    effective_prompt = "\n\n".join(part for part in [base_effective_prompt, identity_lock_block] if str(part or "").strip()).strip()
+    anchor_roles: list[str] = []
+    for anchor in (scene_human_visual_anchors or []):
+        text = str(anchor or "")
+        for role in re.findall(r"\bcharacter_[1-3]\b", text):
+            if role not in anchor_roles:
+                anchor_roles.append(role)
+    duet_hardening_block = _build_duet_hardening_block(active_roles=anchor_roles) if has_humans else ""
+    effective_prompt = "\n\n".join(part for part in [base_effective_prompt, identity_lock_block, duet_hardening_block] if str(part or "").strip()).strip()
     return effective_prompt, {
         "has_humans": has_humans,
         "requestedPromptPreview": _prompt_preview(base_prompt, 500),
@@ -900,6 +926,7 @@ def _compose_video_effective_prompt(
         "transitionActionPromptLength": len(transition_prompt),
         "sceneHumanVisualAnchors": [str(item or "").strip() for item in (scene_human_visual_anchors or []) if str(item or "").strip()],
         "identityLockApplied": bool(identity_lock_block),
+        "duetHardeningApplied": bool(duet_hardening_block),
     }
 
 
@@ -7313,6 +7340,7 @@ def _build_comfy_image_prompt_assembly(
     anatomy_contract_lines: list[str] = []
     forbidden_changes: list[str] = []
     active_roles = [str(r or "").strip() for r in (contract.get("activeRoles") or []) if str(r or "").strip() in COMFY_REF_ROLES]
+    duet_hardening_block = _build_duet_hardening_block(active_roles=active_roles)
     role_type_by_role = _build_role_type_by_role(active_roles, profiles)
     for role in active_roles:
         profile = profiles.get(role) if isinstance(profiles.get(role), dict) else {}
@@ -7602,6 +7630,7 @@ def _build_comfy_image_prompt_assembly(
         role_visual_hierarchy_block,
         role_camera_guidance_block,
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
+        duet_hardening_block if duet_hardening_block else "DUET / MULTI-CHARACTER SEPARATION CONTRACT: not required for this scene.",
         anatomy_lock_block,
         multi_view_lock_block,
         camera_view_consistency_block,
@@ -7659,6 +7688,7 @@ def _build_comfy_image_prompt_assembly(
         "roleVisualHierarchyBlockPreview": role_visual_hierarchy_block,
         "roleCameraGuidanceBlockPreview": role_camera_guidance_block,
         "anatomyLockBlockPreview": anatomy_lock_block,
+        "duetHardeningBlockPreview": duet_hardening_block,
         "multiViewLockBlockPreview": multi_view_lock_block,
         "multiViewReferenceProfile": multi_view_profile,
         "forbiddenChangesBlockPreview": forbidden_changes_block,
