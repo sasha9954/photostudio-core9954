@@ -605,6 +605,10 @@ class ScenarioDirectorConflictAnalysis(BaseModel):
 
 class ScenarioDirectorNarrativeStrategy(BaseModel):
     story_core_source: str = "mixed"
+    story_frame_source: str = ""
+    rhythm_source: str = ""
+    story_frame_source_reason: str = ""
+    rhythm_source_reason: str = ""
     did_audio_remain_primary: bool = False
     did_director_note_override_audio: bool = False
     why: str = ""
@@ -613,6 +617,12 @@ class ScenarioDirectorNarrativeStrategy(BaseModel):
     def _normalize(self) -> "ScenarioDirectorNarrativeStrategy":
         story_core_source = str(self.story_core_source or "mixed").strip().lower() or "mixed"
         self.story_core_source = story_core_source if story_core_source in {"audio", "source_of_truth", "director_note", "mixed", "fallback"} else "mixed"
+        story_frame_source = str(self.story_frame_source or "").strip().lower()
+        self.story_frame_source = story_frame_source if story_frame_source in {"source_of_truth", "director_note"} else ""
+        rhythm_source = str(self.rhythm_source or "").strip().lower()
+        self.rhythm_source = rhythm_source if rhythm_source in {"audio"} else ""
+        self.story_frame_source_reason = str(self.story_frame_source_reason or "").strip()
+        self.rhythm_source_reason = str(self.rhythm_source_reason or "").strip()
         self.did_audio_remain_primary = _coerce_bool(self.did_audio_remain_primary, False)
         self.did_director_note_override_audio = _coerce_bool(self.did_director_note_override_audio, False)
         self.why = str(self.why or "").strip()
@@ -1073,6 +1083,10 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
     if isinstance(repaired.get("narrative_strategy"), dict):
         narrative_strategy = dict(repaired.get("narrative_strategy") or {})
         narrative_strategy.setdefault("story_core_source", narrative_strategy.get("storyCoreSource"))
+        narrative_strategy.setdefault("story_frame_source", narrative_strategy.get("storyFrameSource"))
+        narrative_strategy.setdefault("rhythm_source", narrative_strategy.get("rhythmSource"))
+        narrative_strategy.setdefault("story_frame_source_reason", narrative_strategy.get("storyFrameSourceReason"))
+        narrative_strategy.setdefault("rhythm_source_reason", narrative_strategy.get("rhythmSourceReason"))
         narrative_strategy.setdefault("did_audio_remain_primary", narrative_strategy.get("didAudioRemainPrimary"))
         narrative_strategy.setdefault("did_director_note_override_audio", narrative_strategy.get("didDirectorNoteOverrideAudio"))
         repaired["narrative_strategy"] = narrative_strategy
@@ -1145,6 +1159,18 @@ def _extract_structured_diagnostics(parsed_payload: dict[str, Any]) -> dict[str,
         },
         "narrativeStrategy": {
             "storyCoreSource": str(narrative_strategy_raw.get("story_core_source") or narrative_strategy_raw.get("storyCoreSource") or "").strip().lower() or "mixed",
+            "storyFrameSource": str(narrative_strategy_raw.get("story_frame_source") or narrative_strategy_raw.get("storyFrameSource") or "").strip().lower(),
+            "rhythmSource": str(narrative_strategy_raw.get("rhythm_source") or narrative_strategy_raw.get("rhythmSource") or "").strip().lower(),
+            "storyFrameSourceReason": str(
+                narrative_strategy_raw.get("story_frame_source_reason")
+                or narrative_strategy_raw.get("storyFrameSourceReason")
+                or ""
+            ).strip(),
+            "rhythmSourceReason": str(
+                narrative_strategy_raw.get("rhythm_source_reason")
+                or narrative_strategy_raw.get("rhythmSourceReason")
+                or ""
+            ).strip(),
             "didAudioRemainPrimary": _coerce_bool(
                 narrative_strategy_raw.get("did_audio_remain_primary")
                 if narrative_strategy_raw.get("did_audio_remain_primary") is not None
@@ -3859,6 +3885,10 @@ def _build_request_text(
     is_music_video_mode = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
     director_note_text = str(director_controls.get("directorNote") or director_controls.get("director_note") or "").strip()
     story_core_source = "director_note" if is_music_video_mode and director_note_text else "source_of_truth"
+    story_frame_source = "director_note" if is_music_video_mode and director_note_text else "source_of_truth"
+    rhythm_source = "audio" if is_music_video_mode else ""
+    story_frame_source_reason = "director_note_present" if is_music_video_mode and director_note_text else "director_note_empty_use_source_truth"
+    rhythm_source_reason = "audio_drives_pacing_and_transitions" if is_music_video_mode else ""
     story_core_reason = (
         "music_video_with_director_note_story_frame_plus_audio_rhythm_driver"
         if story_core_source == "director_note"
@@ -3880,6 +3910,8 @@ def _build_request_text(
         (
             "MODE POLICY (music_video):\n"
             f"- storyCoreSource={story_core_source}.\n"
+            f"- storyFrameSource={story_frame_source}.\n"
+            f"- rhythmSource={rhythm_source}.\n"
             "- If storyCoreSource=director_note: use director note as story frame (setting/concept/arc), "
             "while audio remains mandatory for rhythm, emotion, scene timing, energy progression, and transition timing.\n"
             "- If storyCoreSource=source_of_truth: derive story frame from source/audio semantics and transcript.\n"
@@ -4088,6 +4120,10 @@ def _build_request_text(
         "  },\n"
         '  "narrativeStrategy": {\n'
         f'    "storyCoreSource": "{story_core_source}",\n'
+        f'    "storyFrameSource": "{story_frame_source if is_music_video_mode else ""}",\n'
+        f'    "rhythmSource": "{rhythm_source if is_music_video_mode else ""}",\n'
+        f'    "storyFrameSourceReason": "{story_frame_source_reason if is_music_video_mode else ""}",\n'
+        f'    "rhythmSourceReason": "{rhythm_source_reason if is_music_video_mode else ""}",\n'
         '    "didAudioRemainPrimary": true,\n'
         '    "didDirectorNoteOverrideAudio": false,\n'
         '    "why": ""\n'
@@ -4140,7 +4176,7 @@ def _build_request_text(
         '    "howDirectorNoteWasIntegrated": ""\n'
         "  }\n"
         "}\n\n"
-        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'contentType': content_type_policy.get('value'), 'storyCoreSource': story_core_source, 'storyCoreSourceReason': story_core_reason, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'audioSemantics': {'ok': runtime_semantics.get('ok'), 'transcript': str(runtime_semantics.get('transcript') or '')[:2000], 'semanticSummary': str(runtime_semantics.get('semanticSummary') or '')[:1200], 'narrativeCore': str(runtime_semantics.get('narrativeCore') or '')[:600], 'worldContext': str(runtime_semantics.get('worldContext') or '')[:600], 'entities': [str(item).strip() for item in (runtime_semantics.get('entities') or []) if str(item).strip()][:20], 'impliedEvents': [str(item).strip() for item in (runtime_semantics.get('impliedEvents') or []) if str(item).strip()][:20], 'tone': str(runtime_semantics.get('tone') or '')[:200], 'confidence': runtime_semantics.get('confidence'), 'hint': str(runtime_semantics.get('hint') or '')[:120]}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
+        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'contentType': content_type_policy.get('value'), 'storyCoreSource': story_core_source, 'storyCoreSourceReason': story_core_reason, 'storyFrameSource': story_frame_source if is_music_video_mode else None, 'storyFrameSourceReason': story_frame_source_reason if is_music_video_mode else None, 'rhythmSource': rhythm_source if is_music_video_mode else None, 'rhythmSourceReason': rhythm_source_reason if is_music_video_mode else None, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'audioSemantics': {'ok': runtime_semantics.get('ok'), 'transcript': str(runtime_semantics.get('transcript') or '')[:2000], 'semanticSummary': str(runtime_semantics.get('semanticSummary') or '')[:1200], 'narrativeCore': str(runtime_semantics.get('narrativeCore') or '')[:600], 'worldContext': str(runtime_semantics.get('worldContext') or '')[:600], 'entities': [str(item).strip() for item in (runtime_semantics.get('entities') or []) if str(item).strip()][:20], 'impliedEvents': [str(item).strip() for item in (runtime_semantics.get('impliedEvents') or []) if str(item).strip()][:20], 'tone': str(runtime_semantics.get('tone') or '')[:200], 'confidence': runtime_semantics.get('confidence'), 'hint': str(runtime_semantics.get('hint') or '')[:120]}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
     )
     if strict_json_retry:
         request_text += JSON_ONLY_RETRY_SUFFIX
@@ -4902,6 +4938,10 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     content_type_policy = _get_content_type_policy(payload)
     is_music_video_mode = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
     story_core_source = "director_note" if is_music_video_mode and text_hint_present else "source_of_truth"
+    story_frame_source = "director_note" if is_music_video_mode and text_hint_present else "source_of_truth"
+    rhythm_source = "audio" if is_music_video_mode else ""
+    story_frame_source_reason = "director_note_present" if is_music_video_mode and text_hint_present else "director_note_empty_use_source_truth"
+    rhythm_source_reason = "audio_drives_pacing_and_transitions" if is_music_video_mode else ""
     story_core_source_reason = (
         "music_video_director_note_sets_story_frame_audio_drives_rhythm_emotion_timing"
         if story_core_source == "director_note"
@@ -5129,6 +5169,10 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "textHintPresent": text_hint_present,
             "storyCoreSource": story_core_source,
             "storyCoreSourceReason": story_core_source_reason,
+            "storyFrameSource": story_frame_source if is_music_video_mode else None,
+            "rhythmSource": rhythm_source if is_music_video_mode else None,
+            "storyFrameSourceReason": story_frame_source_reason if is_music_video_mode else None,
+            "rhythmSourceReason": rhythm_source_reason if is_music_video_mode else None,
             "textHintInfluence": text_hint_influence,
             "audioInfluence": audio_influence,
             "narrativeBiasEstimate": narrative_bias_estimate,
