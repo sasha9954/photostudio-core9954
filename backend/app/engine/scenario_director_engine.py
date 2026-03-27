@@ -2481,7 +2481,12 @@ def _normalize_scene_timeline(storyboard_out: ScenarioDirectorStoryboardOut) -> 
     return storyboard_out
 
 
-def _limit_lip_sync_usage(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+def _limit_lip_sync_usage(
+    storyboard_out: ScenarioDirectorStoryboardOut,
+    *,
+    content_type_policy: dict[str, Any] | None = None,
+) -> ScenarioDirectorStoryboardOut:
+    content_policy = content_type_policy or {}
     lip_sync_seen = 0
     for scene in storyboard_out.scenes:
         if scene.ltx_mode != "lip_sync":
@@ -2489,18 +2494,29 @@ def _limit_lip_sync_usage(storyboard_out: ScenarioDirectorStoryboardOut) -> Scen
         lip_sync_seen += 1
         if lip_sync_seen <= 3:
             continue
-        scene.ltx_mode = "i2v_as"
-        scene.render_mode = "image_video_sound" if str(scene.sfx or "").strip() else "image_video"
-        scene.resolved_workflow_key = "image-video-golos-zvuk" if scene.render_mode == "image_video_sound" else "image-video"
+        has_sound_cue = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
+        scene.render_mode = "image_video_sound" if has_sound_cue else "image_video"
+        scene.resolved_workflow_key = (
+            str(content_policy.get("clipWorkflowSound") or "image-video-golos-zvuk")
+            if has_sound_cue
+            else str(content_policy.get("clipWorkflowDefault") or "image-video")
+        )
+        scene.ltx_mode = "i2v_as" if has_sound_cue else "i2v"
         scene.lip_sync = False
         scene.send_audio_to_generator = False
         scene.lip_sync_text = ""
         scene.audio_slice_start_sec = 0.0
         scene.audio_slice_end_sec = 0.0
         scene.audio_slice_expected_duration_sec = 0.0
-        original_reason = str(scene.ltx_reason or "").strip()
-        replacement_reason = "Normalized from lip_sync to i2v_as because Scenario Director allows at most 3 lip_sync scenes per output."
-        scene.ltx_reason = f"{original_reason}; {replacement_reason}" if original_reason else replacement_reason
+        scene.audio_slice_decision_reason = "Audio slice disabled after lip-sync limit downgrade."
+        replacement_reason = (
+            "Lip-sync quota reached; downgraded to sound-aware image-video workflow."
+            if has_sound_cue
+            else "Lip-sync quota reached; downgraded to base image-video workflow."
+        )
+        scene.workflow_decision_reason = replacement_reason
+        scene.lip_sync_decision_reason = "Lip-sync disabled because Scenario Director allows at most 3 lip_sync scenes per output."
+        scene.ltx_reason = _normalize_ltx_reason(replacement_reason, scene.ltx_mode, narration_mode=scene.narration_mode)
     return storyboard_out
 
 
@@ -2569,6 +2585,7 @@ def _apply_music_video_mode_policy(
     storyboard_out: ScenarioDirectorStoryboardOut,
     *,
     content_type_policy: dict[str, Any],
+    audio_duration_sec: float | None = None,
 ) -> ScenarioDirectorStoryboardOut:
     scenes = storyboard_out.scenes or []
     if not scenes:
@@ -2621,16 +2638,23 @@ def _apply_music_video_mode_policy(
             lip_sync = True
             send_audio_to_generator = True
             performance_framing = "face_close" if performance_framing == "" else performance_framing
-            start_sec = _safe_float(scene.time_start, 0.0)
-            end_cap = min(_safe_float(scene.time_end, start_sec), start_sec + 5.0)
-            end_sec = max(start_sec + 1.2, end_cap)
+            scene_start = _safe_float(scene.time_start, 0.0)
+            scene_end = max(scene_start, _safe_float(scene.time_end, scene_start))
+            audio_cap = _safe_float(audio_duration_sec, 0.0) if audio_duration_sec is not None else 0.0
+            slice_upper_bound = scene_end
+            if audio_cap > 0:
+                slice_upper_bound = max(scene_start, min(scene_end, audio_cap))
+            start_sec = scene_start
+            end_sec = min(scene_start + 5.0, slice_upper_bound)
+            if end_sec < start_sec:
+                end_sec = start_sec
             scene.audio_slice_start_sec = start_sec
             scene.audio_slice_end_sec = end_sec
             scene.audio_slice_expected_duration_sec = round(max(0.0, end_sec - start_sec), 3)
             scene.lip_sync_text = _extract_lip_sync_text(scene)
             workflow_reason = "Lip-sync workflow selected for close human vocal articulation."
             lip_sync_reason = "Local vocal phrase + human close framing detected."
-            audio_slice_reason = "Slice aligned to scene vocal window with max ~5 seconds."
+            audio_slice_reason = "Slice clamped to scene vocal window (max ~5s) and timeline bounds."
             lip_sync_used += 1
         elif transition_candidate:
             needs_two_frames = True
@@ -2670,15 +2694,19 @@ def _apply_music_video_mode_policy(
         scene.render_mode = render_mode
         scene.resolved_workflow_key = resolved_workflow
         scene.ltx_mode = ltx_mode
-        scene.ltx_reason = _normalize_ltx_reason(scene.ltx_reason or workflow_reason, ltx_mode, narration_mode=scene.narration_mode)
+        previous_reason = str(scene.ltx_reason or "").strip()
+        final_reason = workflow_reason
+        if previous_reason and previous_reason != workflow_reason:
+            final_reason = f"{workflow_reason} Context: {previous_reason}"
+        scene.ltx_reason = _normalize_ltx_reason(final_reason, ltx_mode, narration_mode=scene.narration_mode)
         scene.lip_sync = lip_sync
         scene.send_audio_to_generator = send_audio_to_generator
         scene.performance_framing = performance_framing
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
         scene.clip_decision_reason = scene.clip_decision_reason or f"Purpose={scene.scene_purpose}; shot={scene.shot_type}; render={render_mode}."
-        scene.workflow_decision_reason = scene.workflow_decision_reason or workflow_reason
-        scene.lip_sync_decision_reason = scene.lip_sync_decision_reason or lip_sync_reason
-        scene.audio_slice_decision_reason = scene.audio_slice_decision_reason or audio_slice_reason
+        scene.workflow_decision_reason = workflow_reason
+        scene.lip_sync_decision_reason = lip_sync_reason
+        scene.audio_slice_decision_reason = audio_slice_reason
 
         if not lip_sync:
             scene.lip_sync_text = ""
@@ -3083,6 +3111,7 @@ def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio
 
 def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> ScenarioDirectorStoryboardOut:
     content_type_policy = _get_content_type_policy(payload)
+    audio_duration_sec = _resolve_audio_duration_sec(payload)
     storyboard_out = _apply_scene_count_limit(storyboard_out)
     storyboard_out = _filter_or_repair_weak_scenes(storyboard_out)
     storyboard_out = _enforce_character_lock(payload, storyboard_out)
@@ -3091,9 +3120,13 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     storyboard_out = _rebalance_ltx_modes(storyboard_out)
     storyboard_out = _normalize_scene_timeline(storyboard_out)
     if content_type_policy.get("value") == "music_video":
-        storyboard_out = _apply_music_video_mode_policy(storyboard_out, content_type_policy=content_type_policy)
+        storyboard_out = _apply_music_video_mode_policy(
+            storyboard_out,
+            content_type_policy=content_type_policy,
+            audio_duration_sec=audio_duration_sec,
+        )
         storyboard_out.music_prompt = ""
-    storyboard_out = _limit_lip_sync_usage(storyboard_out)
+    storyboard_out = _limit_lip_sync_usage(storyboard_out, content_type_policy=content_type_policy if content_type_policy.get("value") == "music_video" else None)
     _assert_storyboard_quality(storyboard_out)
     return storyboard_out
 
