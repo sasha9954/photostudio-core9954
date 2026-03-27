@@ -2425,6 +2425,16 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "transitionType": scene.transition_type,
                 "shotType": scene.shot_type,
                 "requestedDurationSec": scene.requested_duration_sec,
+                "sceneActiveRoles": scene_active_roles,
+                "duetLockEnabled": scene.duet_lock_enabled,
+                "duetIdentityContract": scene.duet_identity_contract,
+                "directorGenreIntent": scene.director_genre_intent,
+                "sceneContract": {
+                    "activeRoles": scene_active_roles,
+                    "duetLockEnabled": scene.duet_lock_enabled,
+                    "duetIdentityContract": scene.duet_identity_contract,
+                    "directorGenreIntent": scene.director_genre_intent,
+                },
             }
         )
         sound.append(

@@ -93,6 +93,11 @@ class ClipImageRefsIn(BaseModel):
     identityLock: bool | None = None
     promptSource: str | None = None
     referenceProfiles: dict | None = None
+    directorGenreIntent: str | None = None
+    directorGenreReason: str | None = None
+    directorToneBias: str | None = None
+    duetLockEnabled: bool | None = None
+    duetIdentityContract: str | None = None
 
 
 class AudioSliceIn(BaseModel):
@@ -136,6 +141,11 @@ class ClipVideoIn(BaseModel):
     requiresTwoFrames: bool | None = None
     requiresContinuation: bool | None = None
     requiresAudioSensitiveVideo: bool | None = None
+    sceneContract: dict | None = None
+    sceneActiveRoles: list[str] | None = None
+    duetLockEnabled: bool | None = None
+    duetIdentityContract: str | None = None
+    directorGenreIntent: str | None = None
 
 
 class AssembleSceneIn(BaseModel):
@@ -872,15 +882,110 @@ def _build_duet_hardening_block(*, active_roles: list[str] | None = None) -> str
         return ""
     lines = [
         "DUET / MULTI-CHARACTER SEPARATION CONTRACT (HARD):",
-        "- keep character_1 and character_2 as two different human identities",
-        "- never merge or average faces/bodies/clothing",
-        "- preserve distinct face architecture, hair identity, silhouette, outfit silhouette",
-        "- keep both active characters legible in one coherent frame",
-        "- avoid twinization / face averaging / clothing convergence",
+        "- character_1 and character_2 must remain two different human identities in the same coherent shot",
+        "- do not merge, average, twinize, soften, or visually converge them",
+        "- preserve distinct face structure, hair identity, body silhouette, and outfit silhouette for both simultaneously",
+        "- secondary character must remain visibly legible, not dissolved into background and not a softened echo",
+        "- maintain readable two-person composition when duet contract is active",
     ]
     if has_duet:
         lines.append("- character_2 must not become a softened copy of character_1")
     return "\n".join(lines)
+
+
+def _normalize_genre_intent(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"horror_dread", "tragic_social_drama", "neutral_drama"}:
+        return normalized
+    return ""
+
+
+def _build_genre_hardening_block(*, genre_intent: str) -> str:
+    intent = _normalize_genre_intent(genre_intent)
+    if intent == "horror_dread":
+        return "\n".join([
+            "GENRE HARDENING (HORROR DREAD):",
+            "- sustain escalating dread and latent menace in framing, lighting, and subject behavior",
+            "- keep persistent threat presence and tangible danger cues in the environment",
+            "- preserve unease, uncanny tension, and anticipatory fear rather than generic sadness",
+            "- avoid reducing tone to plain gritty drama or melancholic realism",
+            "- emphasize hostile ambiguity, predatory negative space, and unstable safety cues",
+        ])
+    if intent == "tragic_social_drama":
+        return "\n".join([
+            "GENRE HARDENING (TRAGIC SOCIAL DRAMA):",
+            "- preserve grounded social realism with emotionally heavy consequences",
+            "- emphasize systemic pressure, human vulnerability, and lived-world hardship",
+            "- avoid horror menace signals, monster-like threat cues, or supernatural framing",
+        ])
+    if intent == "neutral_drama":
+        return "\n".join([
+            "GENRE HARDENING (NEUTRAL DRAMA):",
+            "- keep tone observational and emotionally coherent without forced genre stylization",
+            "- avoid injecting horror menace cues or excessive tragic stylization by default",
+        ])
+    return ""
+
+
+def _resolve_genre_hardening_from_sources(
+    *,
+    scene_contract: dict[str, Any] | None = None,
+    planner_meta: dict[str, Any] | None = None,
+    direct_genre_intent: str | None = None,
+) -> tuple[str, str]:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    if _normalize_genre_intent(contract.get("directorGenreIntent")):
+        return _normalize_genre_intent(contract.get("directorGenreIntent")), "scene_contract.directorGenreIntent"
+    if _normalize_genre_intent(contract.get("director_genre_intent")):
+        return _normalize_genre_intent(contract.get("director_genre_intent")), "scene_contract.director_genre_intent"
+    meta = planner_meta if isinstance(planner_meta, dict) else {}
+    if _normalize_genre_intent(meta.get("directorGenreIntent")):
+        return _normalize_genre_intent(meta.get("directorGenreIntent")), "planner_meta.directorGenreIntent"
+    if _normalize_genre_intent(direct_genre_intent):
+        return _normalize_genre_intent(direct_genre_intent), "normalized_field.directorGenreIntent"
+    return "", "none"
+
+
+def _detect_duet_contract_for_video(
+    *,
+    scene_contract: dict[str, Any] | None = None,
+    scene_active_roles: list[str] | None = None,
+    duet_lock_enabled: bool | None = None,
+    duet_identity_contract: str | None = None,
+    anchor_roles: list[str] | None = None,
+) -> tuple[bool, str, dict[str, Any]]:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    contract_roles = [str(role or "").strip() for role in (contract.get("activeRoles") or contract.get("sceneActiveRoles") or []) if str(role or "").strip()]
+    normalized_roles = [str(role or "").strip() for role in (scene_active_roles or []) if str(role or "").strip()]
+    anchor = [str(role or "").strip() for role in (anchor_roles or []) if str(role or "").strip()]
+
+    explicit_duet_lock = bool(contract.get("duetLockEnabled")) or bool(duet_lock_enabled)
+    explicit_duet_identity = bool(str(contract.get("duetIdentityContract") or duet_identity_contract or "").strip())
+    explicit_duet_roles = "character_1" in contract_roles and "character_2" in contract_roles
+    if explicit_duet_lock or explicit_duet_identity or explicit_duet_roles:
+        return True, "scene_contract", {
+            "contractActiveRoles": contract_roles,
+            "duetLockEnabled": explicit_duet_lock,
+            "hasDuetIdentityContract": explicit_duet_identity,
+        }
+
+    normalized_duet_roles = "character_1" in normalized_roles and "character_2" in normalized_roles
+    if normalized_duet_roles:
+        return True, "normalized_scene_active_roles", {
+            "sceneActiveRoles": normalized_roles,
+        }
+
+    anchor_duet_roles = "character_1" in anchor and "character_2" in anchor
+    if anchor_duet_roles:
+        return True, "anchor_regex_fallback", {
+            "anchorRoles": anchor,
+        }
+
+    return False, "none", {
+        "contractActiveRoles": contract_roles,
+        "sceneActiveRoles": normalized_roles,
+        "anchorRoles": anchor,
+    }
 
 
 def _compose_video_effective_prompt(
@@ -892,6 +997,11 @@ def _compose_video_effective_prompt(
     scene_human_visual_anchors: list[str] | None = None,
     scene_type: str | None = None,
     shot_type: str | None = None,
+    scene_contract: dict[str, Any] | None = None,
+    scene_active_roles: list[str] | None = None,
+    duet_lock_enabled: bool | None = None,
+    duet_identity_contract: str | None = None,
+    director_genre_intent: str | None = None,
 ) -> tuple[str, dict]:
     base_prompt = str(video_prompt or "").strip()
     transition_prompt = str(transition_action_prompt or "").strip()
@@ -915,8 +1025,27 @@ def _compose_video_effective_prompt(
         for role in re.findall(r"\bcharacter_[1-3]\b", text):
             if role not in anchor_roles:
                 anchor_roles.append(role)
-    duet_hardening_block = _build_duet_hardening_block(active_roles=anchor_roles) if has_humans else ""
-    effective_prompt = "\n\n".join(part for part in [base_effective_prompt, identity_lock_block, duet_hardening_block] if str(part or "").strip()).strip()
+    duet_contract_detected, duet_hardening_source, duet_contract_preview = _detect_duet_contract_for_video(
+        scene_contract=scene_contract,
+        scene_active_roles=scene_active_roles,
+        duet_lock_enabled=duet_lock_enabled,
+        duet_identity_contract=duet_identity_contract,
+        anchor_roles=anchor_roles,
+    )
+    duet_roles_for_hardening: list[str] = list(anchor_roles)
+    if duet_contract_detected and "character_1" not in duet_roles_for_hardening:
+        duet_roles_for_hardening.append("character_1")
+    if duet_contract_detected and "character_2" not in duet_roles_for_hardening:
+        duet_roles_for_hardening.append("character_2")
+    duet_hardening_block = _build_duet_hardening_block(active_roles=duet_roles_for_hardening) if has_humans and duet_contract_detected else ""
+    genre_intent, genre_source = _resolve_genre_hardening_from_sources(
+        scene_contract=scene_contract,
+        direct_genre_intent=director_genre_intent,
+    )
+    genre_hardening_block = _build_genre_hardening_block(genre_intent=genre_intent) if has_humans else ""
+    effective_prompt = "\n\n".join(
+        part for part in [base_effective_prompt, identity_lock_block, genre_hardening_block, duet_hardening_block] if str(part or "").strip()
+    ).strip()
     return effective_prompt, {
         "has_humans": has_humans,
         "requestedPromptPreview": _prompt_preview(base_prompt, 500),
@@ -926,7 +1055,13 @@ def _compose_video_effective_prompt(
         "transitionActionPromptLength": len(transition_prompt),
         "sceneHumanVisualAnchors": [str(item or "").strip() for item in (scene_human_visual_anchors or []) if str(item or "").strip()],
         "identityLockApplied": bool(identity_lock_block),
+        "genreHardeningApplied": bool(genre_hardening_block),
+        "genreHardeningSource": genre_source,
+        "genreHardeningPreview": _prompt_preview(genre_hardening_block, 320),
         "duetHardeningApplied": bool(duet_hardening_block),
+        "duetHardeningSource": duet_hardening_source,
+        "duetContractDetected": duet_contract_detected,
+        "duetContractPreview": duet_contract_preview,
     }
 
 
@@ -7340,7 +7475,19 @@ def _build_comfy_image_prompt_assembly(
     anatomy_contract_lines: list[str] = []
     forbidden_changes: list[str] = []
     active_roles = [str(r or "").strip() for r in (contract.get("activeRoles") or []) if str(r or "").strip() in COMFY_REF_ROLES]
-    duet_hardening_block = _build_duet_hardening_block(active_roles=active_roles)
+    duet_contract_detected, duet_hardening_source, duet_contract_preview = _detect_duet_contract_for_video(
+        scene_contract=contract,
+        scene_active_roles=active_roles,
+        duet_lock_enabled=contract.get("duetLockEnabled"),
+        duet_identity_contract=contract.get("duetIdentityContract"),
+        anchor_roles=[],
+    )
+    duet_hardening_block = _build_duet_hardening_block(active_roles=active_roles) if duet_contract_detected else ""
+    genre_intent, genre_hardening_source = _resolve_genre_hardening_from_sources(
+        scene_contract=contract,
+        planner_meta=planner_meta,
+    )
+    genre_hardening_block = _build_genre_hardening_block(genre_intent=genre_intent)
     role_type_by_role = _build_role_type_by_role(active_roles, profiles)
     for role in active_roles:
         profile = profiles.get(role) if isinstance(profiles.get(role), dict) else {}
@@ -7625,6 +7772,7 @@ def _build_comfy_image_prompt_assembly(
         anti_collage_block,
         physics_blocks["negativeConstraintsBlock"],
         _comfy_text_rendering_block(allow_designed_text=allow_designed_text),
+        genre_hardening_block if genre_hardening_block else "GENRE HARDENING: not required (neutral or unspecified scene contract).",
         priority_contract_block,
         character_role_priority_block,
         role_visual_hierarchy_block,
@@ -7689,6 +7837,13 @@ def _build_comfy_image_prompt_assembly(
         "roleCameraGuidanceBlockPreview": role_camera_guidance_block,
         "anatomyLockBlockPreview": anatomy_lock_block,
         "duetHardeningBlockPreview": duet_hardening_block,
+        "duetHardeningApplied": bool(duet_hardening_block),
+        "duetHardeningSource": duet_hardening_source,
+        "duetContractDetected": duet_contract_detected,
+        "duetContractPreview": duet_contract_preview,
+        "genreHardeningApplied": bool(genre_hardening_block),
+        "genreHardeningSource": genre_hardening_source,
+        "genreHardeningPreview": genre_hardening_block,
         "multiViewLockBlockPreview": multi_view_lock_block,
         "multiViewReferenceProfile": multi_view_profile,
         "forbiddenChangesBlockPreview": forbidden_changes_block,
@@ -7999,6 +8154,23 @@ def clip_image(payload: ClipImageIn):
     request_prompt_debug = request_prompt_debug if isinstance(request_prompt_debug, dict) else {}
     planner_meta_input = getattr(refs_obj, "plannerMeta", None)
     planner_meta_input = planner_meta_input if isinstance(planner_meta_input, dict) else {}
+    scene_contract["directorGenreIntent"] = (
+        str(getattr(refs_obj, "directorGenreIntent", "") or "").strip()
+        or str((planner_meta_input or {}).get("directorGenreIntent") or "").strip()
+        or str((request_prompt_debug or {}).get("directorGenreIntent") or "").strip()
+    )
+    scene_contract["directorGenreReason"] = (
+        str(getattr(refs_obj, "directorGenreReason", "") or "").strip()
+        or str((planner_meta_input or {}).get("directorGenreReason") or "").strip()
+        or str((request_prompt_debug or {}).get("directorGenreReason") or "").strip()
+    )
+    scene_contract["directorToneBias"] = (
+        str(getattr(refs_obj, "directorToneBias", "") or "").strip()
+        or str((planner_meta_input or {}).get("directorToneBias") or "").strip()
+        or str((request_prompt_debug or {}).get("directorToneBias") or "").strip()
+    )
+    scene_contract["duetLockEnabled"] = bool(getattr(refs_obj, "duetLockEnabled", False) or scene_contract.get("duetLockEnabled"))
+    scene_contract["duetIdentityContract"] = str(getattr(refs_obj, "duetIdentityContract", "") or "").strip() or str(scene_contract.get("duetIdentityContract") or "").strip()
 
     character_images = []
     for ref_url in character_refs:
@@ -9623,6 +9795,11 @@ def clip_video(payload: ClipVideoIn):
             scene_human_visual_anchors=scene_human_visual_anchors,
             scene_type=str(payload.sceneType or "").strip(),
             shot_type=str(payload.shotType or "").strip(),
+            scene_contract=payload.sceneContract if isinstance(payload.sceneContract, dict) else None,
+            scene_active_roles=payload.sceneActiveRoles,
+            duet_lock_enabled=payload.duetLockEnabled,
+            duet_identity_contract=payload.duetIdentityContract,
+            director_genre_intent=payload.directorGenreIntent,
         )
         print(
             "[CLIP VIDEO PROMPT TRANSPORT] "
@@ -9770,6 +9947,13 @@ def clip_video(payload: ClipVideoIn):
                 "requestedPromptPreview": prompt_debug.get("requestedPromptPreview"),
                 "effectivePromptPreview": prompt_debug.get("effectivePromptPreview"),
                 "effectivePromptLength": prompt_debug.get("effectivePromptLength"),
+                "genreHardeningApplied": prompt_debug.get("genreHardeningApplied"),
+                "genreHardeningSource": prompt_debug.get("genreHardeningSource"),
+                "genreHardeningPreview": prompt_debug.get("genreHardeningPreview"),
+                "duetHardeningApplied": prompt_debug.get("duetHardeningApplied"),
+                "duetHardeningSource": prompt_debug.get("duetHardeningSource"),
+                "duetContractDetected": prompt_debug.get("duetContractDetected"),
+                "duetContractPreview": prompt_debug.get("duetContractPreview"),
                 "promptPatchedNodeIds": comfy_debug.get("prompt_patched_node_ids") or [],
             },
         }
@@ -9851,6 +10035,11 @@ def clip_video(payload: ClipVideoIn):
         scene_human_visual_anchors=scene_human_visual_anchors,
         scene_type=str(payload.sceneType or "").strip(),
         shot_type=str(payload.shotType or "").strip(),
+        scene_contract=payload.sceneContract if isinstance(payload.sceneContract, dict) else None,
+        scene_active_roles=payload.sceneActiveRoles,
+        duet_lock_enabled=payload.duetLockEnabled,
+        duet_identity_contract=payload.duetIdentityContract,
+        director_genre_intent=payload.directorGenreIntent,
     )
     if mode == "lipsync":
         effective_prompt = _build_lipsync_avatar_prompt(effective_prompt, str(payload.shotType or ""))
@@ -10169,6 +10358,13 @@ def clip_video(payload: ClipVideoIn):
             "requestedPromptPreview": prompt_debug.get("requestedPromptPreview"),
             "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
             "effectivePromptLength": len(effective_prompt),
+            "genreHardeningApplied": prompt_debug.get("genreHardeningApplied"),
+            "genreHardeningSource": prompt_debug.get("genreHardeningSource"),
+            "genreHardeningPreview": prompt_debug.get("genreHardeningPreview"),
+            "duetHardeningApplied": prompt_debug.get("duetHardeningApplied"),
+            "duetHardeningSource": prompt_debug.get("duetHardeningSource"),
+            "duetContractDetected": prompt_debug.get("duetContractDetected"),
+            "duetContractPreview": prompt_debug.get("duetContractPreview"),
             "promptPatchedNodeIds": [],
         },
     }
