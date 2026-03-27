@@ -501,7 +501,10 @@ export function summarizeNarrativeConnectedContext(state = {}) {
     hasProps: presentWorldRoles.includes("props"),
     hasLocation: presentWorldRoles.includes("location"),
     hasStyle: presentWorldRoles.includes("style"),
-    connectedRoleIds: [...presentCastRoles, ...presentWorldRoles],
+    connectedRoleIds: [
+      ...(Array.isArray(presentCastRoles) ? presentCastRoles : []),
+      ...(Array.isArray(presentWorldRoles) ? presentWorldRoles : []),
+    ],
     presentCastRoles,
     presentWorldRoles,
     refsPresentByRole: connectedRefsByRole,

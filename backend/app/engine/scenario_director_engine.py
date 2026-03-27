@@ -4070,7 +4070,6 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "audioGroundingValidation": audio_grounding_validation,
             "audioGroundingScore": audio_grounding_validation.get("score"),
             "contentTypePolicy": content_type_policy,
-            "contentTypePolicy": content_type_policy,
             "textHintPresent": text_hint_present,
             "textHintInfluence": text_hint_influence,
             "audioInfluence": audio_influence,
