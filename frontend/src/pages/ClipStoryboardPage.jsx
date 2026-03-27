@@ -4034,7 +4034,7 @@ const REF_STATUS_LABELS = {
 const CHARACTER_ROLE_TYPES = new Set(["auto", "hero", "antagonist", "support"]);
 const CHARACTER_ROLE_TYPE_OPTIONS = [
   { value: "auto", label: "Авто" },
-  { value: "hero", label: "Герой" },
+  { value: "hero", label: "Главный" },
   { value: "antagonist", label: "Антагонист" },
   { value: "support", label: "Поддержка" },
 ];

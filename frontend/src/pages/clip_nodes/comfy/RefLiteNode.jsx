@@ -11,10 +11,10 @@ const REF_STATUS_LABELS = {
 };
 
 const ROLE_TYPE_OPTIONS = [
-  { value: "auto", label: "Auto" },
-  { value: "hero", label: "Hero" },
-  { value: "antagonist", label: "Antagonist" },
-  { value: "support", label: "Support" },
+  { value: "auto", label: "Авто" },
+  { value: "hero", label: "Главный" },
+  { value: "antagonist", label: "Антагонист" },
+  { value: "support", label: "Поддержка" },
 ];
 
 export default function RefLiteNode({ id, data, title, className, handleId, showRoleSelector = false }) {
@@ -53,7 +53,7 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
       ) : null}
       {showRoleSelector ? (
         <div style={{ marginBottom: 10 }}>
-          <div className="clipSB_small" style={{ marginBottom: 4 }}>Role:</div>
+          <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип роли:</div>
           <select
             className="clipSB_select"
             value={roleType}

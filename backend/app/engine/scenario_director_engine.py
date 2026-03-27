@@ -2283,6 +2283,24 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "audioSliceExpectedDurationSec": scene.audio_slice_expected_duration_sec,
             "performanceFraming": scene.performance_framing,
             "clipDecisionReason": scene.clip_decision_reason,
+            "roleInfluenceApplied": "roleInfluenceApplied=true" in str(scene.clip_decision_reason or ""),
+            "roleInfluenceReason": (
+                re.search(r"roleInfluenceReason=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""]
+            )[1]
+            if re.search(r"roleInfluenceReason=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+            else "",
+            "sceneRoleDynamics": (
+                re.search(r"sceneRoleDynamics=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""]
+            )[1]
+            if re.search(r"sceneRoleDynamics=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+            else "",
+            "multiCharacterIdentityLock": "multiCharacterIdentityLock=true" in str(scene.clip_decision_reason or ""),
+            "distinctCharacterSeparation": "distinctCharacterSeparation=true" in str(scene.clip_decision_reason or ""),
+            "appearanceDriftRisk": (
+                re.search(r"appearanceDriftRisk=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""]
+            )[1]
+            if re.search(r"appearanceDriftRisk=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+            else "",
             "workflowDecisionReason": scene.workflow_decision_reason,
             "lipSyncDecisionReason": scene.lip_sync_decision_reason,
             "audioSliceDecisionReason": scene.audio_slice_decision_reason,
@@ -3271,6 +3289,180 @@ def _infer_music_video_presence_type(scene: ScenarioDirectorScene) -> str:
     return "environment"
 
 
+def _infer_music_video_style_tone(scene: ScenarioDirectorScene, payload: dict[str, Any]) -> str:
+    texts = [
+        _scene_text_bundle(scene),
+        str(payload.get("source", {}).get("text") or "") if isinstance(payload.get("source"), dict) else "",
+        str(payload.get("director_note") or payload.get("directorNote") or ""),
+    ]
+    normalized = _normalize_lookup_text(" ".join(texts))
+    if any(token in normalized for token in ("thriller", "detective", "chase", "pursuit", "stalker", "surveillance", "suspense", "noir", "триллер", "детектив", "преслед", "слежк", "напряж")):
+        return "thriller_detective"
+    if any(token in normalized for token in ("romance", "romantic", "tender", "love", "couple", "роман", "любов", "нежн")):
+        return "romantic"
+    return "neutral"
+
+
+def _collect_scene_active_character_roles(scene: ScenarioDirectorScene) -> list[str]:
+    return [
+        role
+        for role in list(dict.fromkeys(str(actor or "").strip() for actor in (scene.actors or [])))
+        if role in {"character_1", "character_2", "character_3"}
+    ]
+
+
+def _apply_music_video_role_influence(
+    scene: ScenarioDirectorScene,
+    *,
+    payload: dict[str, Any],
+    index: int,
+    total: int,
+    shot_type: str,
+    scene_purpose: str,
+    presence_type: str,
+    performance_framing: str,
+    transition_candidate: bool,
+) -> dict[str, Any]:
+    role_types, _, _ = _resolve_effective_role_type_by_role(payload)
+    active_roles = _collect_scene_active_character_roles(scene)
+    if not active_roles:
+        return {"applied": False, "reason": "no_active_character_roles", "sceneRoleDynamics": "environment"}
+    heroes = [role for role in active_roles if role_types.get(role) == "hero"]
+    antagonists = [role for role in active_roles if role_types.get(role) == "antagonist"]
+    supports = [role for role in active_roles if role_types.get(role) == "support"]
+    tone = _infer_music_video_style_tone(scene, payload)
+    reason: list[str] = []
+    dynamics: list[str] = []
+    final = {
+        "shot_type": shot_type,
+        "scene_purpose": scene_purpose,
+        "presence_type": presence_type,
+        "performance_framing": performance_framing,
+        "transition_emphasis": "",
+    }
+
+    if len(heroes) >= 2:
+        dynamics.append("shared_hero_duet")
+        reason.append("two_heroes_shared_center")
+        if not transition_candidate and scene_purpose in {"build", "performance"}:
+            final["scene_purpose"] = "performance"
+        if final["presence_type"] in {"duet", "solo"}:
+            final["presence_type"] = "shared_duet"
+        if final["shot_type"] not in {"duet_shared", "close_up"}:
+            final["shot_type"] = "duet_shared"
+        if final["performance_framing"] not in {"duet_frame", "face_close"}:
+            final["performance_framing"] = "duet_frame"
+
+    if heroes:
+        dynamics.append("hero_anchor")
+        if not transition_candidate and scene_purpose in {"build", "performance", "payoff", "ending_hold"}:
+            if index in {1, max(0, total - 2), total - 1}:
+                reason.append("hero_emotional_anchor_priority")
+                if index == total - 1:
+                    final["scene_purpose"] = "ending_hold"
+                elif index == max(0, total - 2):
+                    final["scene_purpose"] = "payoff"
+                else:
+                    final["scene_purpose"] = "performance"
+                if final["shot_type"] in {"wide", "detail_insert"}:
+                    final["shot_type"] = "close_up" if index != max(0, total - 2) else "medium"
+                if final["performance_framing"] in {"non_performance", "wide_performance"}:
+                    final["performance_framing"] = "face_close"
+
+    if antagonists:
+        dynamics.append("asymmetric_counter_presence")
+        reason.append("antagonist_counter_presence")
+        if final["presence_type"] == "duet":
+            final["presence_type"] = "counter_presence"
+        if tone == "thriller_detective":
+            reason.append("thriller_detective_tension_weight")
+            final["transition_emphasis"] = "watcher_pursuit_block"
+            if final["shot_type"] in {"duet_shared", "close_up"}:
+                final["shot_type"] = "medium" if not transition_candidate else final["shot_type"]
+            if final["performance_framing"] == "duet_frame":
+                final["performance_framing"] = "asymmetric_duet"
+            if final["scene_purpose"] == "performance" and heroes and len(heroes) == 1:
+                final["scene_purpose"] = "build"
+        elif tone == "romantic":
+            reason.append("romantic_soft_antagonist_not_neutral")
+            if final["presence_type"] in {"duet", "shared_duet"}:
+                final["presence_type"] = "counter_presence_soft"
+        else:
+            if final["performance_framing"] == "duet_frame":
+                final["performance_framing"] = "asymmetric_duet"
+
+    if supports and heroes:
+        dynamics.append("support_secondary_presence")
+        reason.append("support_kept_secondary_to_hero")
+        if final["presence_type"] == "duet" and not antagonists:
+            final["presence_type"] = "hero_with_support"
+        if final["scene_purpose"] in {"payoff", "ending_hold"} and len(heroes) == 1:
+            final["performance_framing"] = "face_close"
+
+    if "character_2" in active_roles and "character_1" in active_roles:
+        dynamics.append("duet_pair_protected")
+    applied = bool(reason)
+    return {
+        "applied": applied,
+        "reason": ";".join(reason) if reason else "role_defaults",
+        "sceneRoleDynamics": ",".join(dynamics) if dynamics else "neutral",
+        **final,
+    }
+
+
+def _extract_role_identity_markers(role: str, payload: dict[str, Any]) -> dict[str, Any]:
+    texts = _collect_role_hint_texts(role, payload, {})
+    normalized = _normalize_lookup_text(" ".join(texts))
+    body_terms = [term for term in ("slim", "athletic", "curvy", "fuller", "heavy", "lean", "broad", "стройн", "полн", "крупн", "худощ", "атлет") if term in normalized][:3]
+    hair_face_terms = [term for term in ("blonde", "brunette", "redhead", "short hair", "long hair", "curly", "beard", "усы", "борода", "кудр", "коротк", "длинн", "светл", "темн") if term in normalized][:3]
+    outfit_terms = [term for term in ("dress", "jacket", "coat", "hoodie", "armor", "uniform", "suit", "плать", "куртк", "пальто", "форма", "костюм") if term in normalized][:3]
+    display_labels = payload.get("displayLabelByRole") if isinstance(payload.get("displayLabelByRole"), dict) else {}
+    label = str(display_labels.get(role) or role).strip()
+    return {
+        "label": label,
+        "body": body_terms,
+        "hair_face": hair_face_terms,
+        "outfit": outfit_terms,
+    }
+
+
+def _build_multi_character_identity_lock(scene: ScenarioDirectorScene, payload: dict[str, Any]) -> dict[str, Any]:
+    active_roles = _collect_scene_active_character_roles(scene)
+    if len(active_roles) < 2:
+        return {
+            "enabled": False,
+            "distinctCharacterSeparation": False,
+            "identityLockByRole": {},
+            "appearanceDriftRisk": "low_single_character",
+            "contract": "",
+        }
+    lock_by_role = {role: _extract_role_identity_markers(role, payload) for role in active_roles}
+    risk = "high_character2_drift" if "character_2" in active_roles else "medium_multi_character"
+    clauses: list[str] = [
+        "Distinct character separation is mandatory: keep every character visually unique in face, body silhouette, and outfit identity.",
+        "Do not merge faces, do not average body types, do not transfer hairstyle/facial structure, and do not swap outfits between characters.",
+    ]
+    for idx, role in enumerate(active_roles, start=1):
+        markers = lock_by_role.get(role) or {}
+        identity_bits = [f"slot {idx}={role} ({markers.get('label') or role})"]
+        if markers.get("body"):
+            identity_bits.append(f"body:{'/'.join(markers.get('body') or [])}")
+        if markers.get("hair_face"):
+            identity_bits.append(f"face-hair:{'/'.join(markers.get('hair_face') or [])}")
+        if markers.get("outfit"):
+            identity_bits.append(f"outfit:{'/'.join(markers.get('outfit') or [])}")
+        clauses.append(f"Preserve {'; '.join(identity_bits)}.")
+    if "character_1" in active_roles and "character_2" in active_roles:
+        clauses.append("character_2 must remain visibly distinct from character_1 and must never become a softened copy.")
+    return {
+        "enabled": True,
+        "distinctCharacterSeparation": True,
+        "identityLockByRole": lock_by_role,
+        "appearanceDriftRisk": risk,
+        "contract": " ".join(clauses),
+    }
+
+
 def _select_forced_music_video_transition_index(scenes: list[ScenarioDirectorScene]) -> int | None:
     if len(scenes) < 5:
         return None
@@ -3394,6 +3586,21 @@ def _apply_music_video_mode_policy(
             performance_framing=performance_framing,
             performer_presentation=performer_presentation,
         )
+        role_influence = _apply_music_video_role_influence(
+            scene,
+            payload=payload,
+            index=index,
+            total=len(scenes),
+            shot_type=shot_type,
+            scene_purpose=scene.scene_purpose,
+            presence_type=presence_type,
+            performance_framing=performance_framing,
+            transition_candidate=transition_candidate,
+        )
+        shot_type = str(role_influence.get("shot_type") or shot_type)
+        presence_type = str(role_influence.get("presence_type") or presence_type)
+        performance_framing = str(role_influence.get("performance_framing") or performance_framing)
+        scene.scene_purpose = str(role_influence.get("scene_purpose") or scene.scene_purpose)
         close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
         lip_sync_base_candidate = (
             _scene_has_human_performer(scene)
@@ -3501,12 +3708,22 @@ def _apply_music_video_mode_policy(
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
         if forced_transition_scene:
             scene.scene_purpose = "transition"
+        identity_lock = _build_multi_character_identity_lock(scene, payload)
         scene.image_prompt = _build_music_video_image_prompt(scene)
         scene.video_prompt = _build_music_video_video_prompt(scene)
+        identity_contract = str(identity_lock.get("contract") or "").strip()
+        if identity_contract:
+            scene.image_prompt = f"{scene.image_prompt} {identity_contract}".strip()
+            scene.video_prompt = f"{scene.video_prompt} {identity_contract}".strip()
         # Final derived debug layer (must reflect final scene state, not intermediate steps).
         final_shot_type = str(scene.shot_type or shot_type).strip() or shot_type
-        final_presence_type = _infer_music_video_presence_type(scene)
+        final_presence_type = str(role_influence.get("presence_type") or _infer_music_video_presence_type(scene))
         scene.viewer_hook = _build_music_video_viewer_hook(scene, scene.scene_purpose, final_shot_type)
+        if _coerce_bool(role_influence.get("applied"), False):
+            role_reason = str(role_influence.get("reason") or "").strip()
+            scene.viewer_hook = f"{scene.viewer_hook} Role dynamics: {str(role_influence.get('sceneRoleDynamics') or 'active')}."
+            if role_reason:
+                scene.viewer_hook = f"{scene.viewer_hook} Dramaturgic reason: {role_reason}."
         scene.clip_decision_reason = _build_music_video_clip_decision_reason(
             scene,
             shot_type=final_shot_type,
@@ -3517,6 +3734,14 @@ def _apply_music_video_mode_policy(
             lip_sync_compatibility_reason=lip_sync_compatibility_reason,
             forced_transition_scene=forced_transition_scene,
             auto_sound_workflow_enabled=auto_sound_workflow_enabled,
+        )
+        scene.clip_decision_reason = (
+            f"{scene.clip_decision_reason} roleInfluenceApplied={'true' if _coerce_bool(role_influence.get('applied'), False) else 'false'}"
+            f"; roleInfluenceReason={str(role_influence.get('reason') or 'none')}"
+            f"; sceneRoleDynamics={str(role_influence.get('sceneRoleDynamics') or 'neutral')}"
+            f"; multiCharacterIdentityLock={'true' if _coerce_bool(identity_lock.get('enabled'), False) else 'false'}"
+            f"; distinctCharacterSeparation={'true' if _coerce_bool(identity_lock.get('distinctCharacterSeparation'), False) else 'false'}"
+            f"; appearanceDriftRisk={str(identity_lock.get('appearanceDriftRisk') or 'none')}."
         )
         _enhance_music_video_transition_language(scene)
         scene.workflow_decision_reason = workflow_reason
@@ -5338,6 +5563,14 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
     effective_global_music_prompt = _resolve_effective_global_music_prompt(payload, storyboard_out.music_prompt)
+    role_influence_applied_scenes = 0
+    identity_lock_applied_scenes = 0
+    for scene in (storyboard_out.scenes or []):
+        reason = str(scene.clip_decision_reason or "")
+        if "roleInfluenceApplied=true" in reason:
+            role_influence_applied_scenes += 1
+        if "multiCharacterIdentityLock=true" in reason:
+            identity_lock_applied_scenes += 1
     return {
         "ok": True,
         "storyboardOut": storyboard_out.model_dump(mode="json"),
@@ -5429,6 +5662,8 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "effectiveRoleTypeByRole": effective_role_type_by_role,
             "roleAssignmentSource": role_assignment_source,
             "roleOverrideApplied": role_override_applied,
+            "roleInfluenceAppliedScenes": role_influence_applied_scenes if is_music_video_mode else 0,
+            "multiCharacterIdentityLockScenes": identity_lock_applied_scenes if is_music_video_mode else 0,
             "timelineStartSec": coverage.get("timelineStartSec"),
             "timelineEndSec": coverage.get("timelineEndSec"),
             "timelineCoverageSec": coverage.get("timelineCoverageSec"),
