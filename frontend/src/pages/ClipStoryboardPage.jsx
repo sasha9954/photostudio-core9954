@@ -3181,10 +3181,16 @@ function buildIntroScenarioRefsByRole({ directorRefsByRole = {}, graphRefsByRole
 }
 
 function formatIntroRoleLabel(role) {
-  return String(role || "")
-    .replace(/^character_/, "character ")
-    .replace(/_/g, " ")
-    .trim();
+  const canonical = String(role || "").trim().toLowerCase();
+  if (canonical === "character_1") return "Персонаж 1";
+  if (canonical === "character_2") return "Персонаж 2";
+  if (canonical === "character_3") return "Персонаж 3";
+  if (canonical === "animal" || canonical === "animal_1") return "Животное";
+  if (canonical === "group" || canonical === "group_faces") return "Группа / совместный кадр";
+  if (canonical === "props") return "Предметы";
+  if (canonical === "location") return "Локация";
+  if (canonical === "style") return "Стиль";
+  return canonical;
 }
 
 function buildIntroRoleAwareCastSummary(refsByRole = {}) {
@@ -4027,10 +4033,10 @@ const REF_STATUS_LABELS = {
 };
 const CHARACTER_ROLE_TYPES = new Set(["auto", "hero", "antagonist", "support"]);
 const CHARACTER_ROLE_TYPE_OPTIONS = [
-  { value: "auto", label: "Auto" },
-  { value: "hero", label: "Hero" },
-  { value: "antagonist", label: "Antagonist" },
-  { value: "support", label: "Support" },
+  { value: "auto", label: "Авто" },
+  { value: "hero", label: "Герой" },
+  { value: "antagonist", label: "Антагонист" },
+  { value: "support", label: "Поддержка" },
 ];
 
 function normalizeCharacterRoleType(value) {
@@ -5409,7 +5415,7 @@ function RefNode({ id, data }) {
         ) : null}
         {showRoleSelector ? (
           <div style={{ marginBottom: 10 }}>
-            <div className="clipSB_small" style={{ marginBottom: 4 }}>Role:</div>
+            <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип роли:</div>
             <select
               className="clipSB_select"
               value={roleType}

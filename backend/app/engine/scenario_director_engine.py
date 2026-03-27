@@ -1776,6 +1776,33 @@ def _collect_connected_refs_by_role(payload: dict[str, Any], known_roles: list[s
     return {role: list(dict.fromkeys(items)) for role, items in out.items() if items}
 
 
+def _has_connected_ref_for_role(payload: dict[str, Any], role: str) -> bool:
+    normalized_role = _normalize_scenario_role(role)
+    if not normalized_role:
+        return False
+    refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    item = refs.get(normalized_role) if isinstance(refs.get(normalized_role), dict) else {}
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    if _coerce_bool(meta.get("connected"), False):
+        return True
+    if isinstance(item.get("refs"), list) and any(str(ref).strip() for ref in item.get("refs") or []):
+        return True
+    try:
+        if int(item.get("count") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    connected_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
+    for source_map in (
+        payload.get("connectedRefsByRole") if isinstance(payload.get("connectedRefsByRole"), dict) else {},
+        connected_summary.get("refsByRole") if isinstance(connected_summary.get("refsByRole"), dict) else {},
+    ):
+        refs_list = source_map.get(normalized_role)
+        if isinstance(refs_list, list) and any(str(ref).strip() for ref in refs_list):
+            return True
+    return False
+
+
 def _extract_scene_actor_roles(
     scene: ScenarioDirectorScene,
     raw_scene: dict[str, Any],
@@ -1959,6 +1986,12 @@ def _estimate_text_overlap(text: str, anchor: str) -> float:
 
 def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> dict[str, Any]:
     content_type_policy = _get_content_type_policy(payload)
+    is_music_video = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
+    prefer_explicit_duo_roles = (
+        is_music_video
+        and _has_connected_ref_for_role(payload, "character_1")
+        and _has_connected_ref_for_role(payload, "character_2")
+    )
     role_lookup = _build_role_lookup_from_payload(payload)
     known_roles = _collect_known_roles(payload, storyboard_out.scenes)
     display_label_by_role = _build_display_label_by_role(payload, known_roles)
@@ -2052,6 +2085,11 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                     actor_roles.append(normalized)
                 if len(actor_roles) >= 2:
                     break
+        if prefer_explicit_duo_roles and shared_scene_hint:
+            actor_roles = [role for role in actor_roles if role not in {"group", "group_faces"}]
+            for explicit_role in ("character_1", "character_2"):
+                if explicit_role not in actor_roles:
+                    actor_roles.append(explicit_role)
         raw_anchor_roles = _extract_scene_world_anchor_roles(raw_scene, actor_roles, role_lookup=role_lookup)
         scene_anchor_roles: list[str] = list(raw_anchor_roles)
         if str(scene.location or "").strip() and (refs_by_role.get("location") or connected_refs_by_role.get("location")):
@@ -2090,6 +2128,11 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             primary_role=primary_role,
             hero_participants=hero_participants,
         )
+        if prefer_explicit_duo_roles and shared_scene_hint:
+            must_appear = [role for role in must_appear if role not in {"group", "group_faces"}]
+            for explicit_role in ("character_1", "character_2"):
+                if explicit_role in actor_roles and explicit_role not in must_appear:
+                    must_appear.append(explicit_role)
         support_entity_ids = list(secondary_roles)
         scene_item = {
             "sceneId": scene.scene_id,

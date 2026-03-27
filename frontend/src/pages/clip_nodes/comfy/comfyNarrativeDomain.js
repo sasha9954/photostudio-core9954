@@ -187,12 +187,12 @@ export const NARRATIVE_INPUT_HANDLES = [
   { id: "audio_in", labelRu: "Аудио", mode: "AUDIO", kind: "story_source" },
   { id: "video_file_in", labelRu: "Видео файл", mode: "VIDEO_FILE", kind: "story_source" },
   { id: "video_link_in", labelRu: "Ссылка на видео", mode: "VIDEO_LINK", kind: "story_source" },
-  { id: "ref_character_1", labelRu: "Character 1", mode: "CONTEXT", kind: "context", role: "character_1" },
-  { id: "ref_character_2", labelRu: "Character 2", mode: "CONTEXT", kind: "context", role: "character_2" },
-  { id: "ref_character_3", labelRu: "Character 3", mode: "CONTEXT", kind: "context", role: "character_3" },
-  { id: "ref_props", labelRu: "Props", mode: "CONTEXT", kind: "context", role: "props" },
-  { id: "ref_location", labelRu: "Location", mode: "CONTEXT", kind: "context", role: "location" },
-  { id: "ref_style", labelRu: "Style", mode: "CONTEXT", kind: "context", role: "style" },
+  { id: "ref_character_1", labelRu: "Персонаж 1", mode: "CONTEXT", kind: "context", role: "character_1" },
+  { id: "ref_character_2", labelRu: "Персонаж 2", mode: "CONTEXT", kind: "context", role: "character_2" },
+  { id: "ref_character_3", labelRu: "Персонаж 3", mode: "CONTEXT", kind: "context", role: "character_3" },
+  { id: "ref_props", labelRu: "Предметы", mode: "CONTEXT", kind: "context", role: "props" },
+  { id: "ref_location", labelRu: "Локация", mode: "CONTEXT", kind: "context", role: "location" },
+  { id: "ref_style", labelRu: "Стиль", mode: "CONTEXT", kind: "context", role: "style" },
 ];
 
 export const NARRATIVE_SOURCE_INPUT_HANDLES = NARRATIVE_INPUT_HANDLES.filter((item) => item.kind === "story_source");
@@ -747,15 +747,15 @@ function toCanonicalRoleId(value, fallbackIndex = -1) {
 
 function toHumanizedCanonicalRole(roleId) {
   const canonical = normalizeText(roleId).toLowerCase();
-  if (canonical === "character_1") return "Character 1";
-  if (canonical === "character_2") return "Character 2";
-  if (canonical === "character_3") return "Character 3";
-  if (canonical === "animal" || canonical === "animal_1") return "Animal";
-  if (canonical === "group" || canonical === "group_faces") return "Group";
-  if (canonical === "props") return "Props";
-  if (canonical === "location") return "Location";
-  if (canonical === "style") return "Style";
-  return canonical || "Character";
+  if (canonical === "character_1") return "Персонаж 1";
+  if (canonical === "character_2") return "Персонаж 2";
+  if (canonical === "character_3") return "Персонаж 3";
+  if (canonical === "animal" || canonical === "animal_1") return "Животное";
+  if (canonical === "group" || canonical === "group_faces") return "Группа / совместный кадр";
+  if (canonical === "props") return "Предметы";
+  if (canonical === "location") return "Локация";
+  if (canonical === "style") return "Стиль";
+  return canonical || "Персонаж";
 }
 
 export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {}) {
