@@ -372,6 +372,62 @@ PRESENTATION_MIXED_HINTS = (
 )
 NON_PERFORMER_ROLE_TYPE_HINTS = {"animal", "animal_1", "props", "location", "style", "group", "group_faces", "object", "background"}
 MUSIC_VIDEO_SCENE_PURPOSES = {"hook", "build", "performance", "transition", "payoff", "ending_hold"}
+MUSIC_VIDEO_PERFORMANCE_FRAMINGS = {"face_close", "close_performance", "medium_performance", "duet_frame"}
+VOCAL_PRIORITY_KEYS = (
+    "audioSemantics",
+    "audio_semantics",
+    "audioUnderstanding",
+    "audio_understanding",
+    "structuredPlannerDiagnostics",
+    "structured_planner_diagnostics",
+    "sceneAudioEvidence",
+    "scene_audio_evidence",
+    "plannerDebug",
+    "planner_debug",
+    "directorSummary",
+    "director_summary",
+    "storySummary",
+    "story_summary",
+    "transcriptHints",
+    "transcript_hints",
+    "lyrics",
+    "lyricText",
+    "lyric_text",
+    "localPhrase",
+    "local_phrase",
+)
+VOCAL_MALE_HINTS = (
+    "male vocal",
+    "male voice",
+    "man singing",
+    "man vocals",
+    "masculine vocal",
+    "masculine voice",
+    "baritone",
+    "tenor",
+    "deep male vocal",
+    "male singer",
+)
+VOCAL_FEMALE_HINTS = (
+    "female vocal",
+    "female voice",
+    "woman singing",
+    "woman vocals",
+    "feminine vocal",
+    "feminine voice",
+    "alto female",
+    "soprano",
+    "female singer",
+)
+VOCAL_MIXED_HINTS = (
+    "male and female vocals",
+    "duet vocal",
+    "mixed vocals",
+    "two voices",
+    "alternating male female",
+)
+PERFORMER_FEMALE_HINTS = ("girl", "woman", "female", "lady", "девушка", "женщина", "девочка")
+PERFORMER_MALE_HINTS = ("man", "male", "boy", "guy", "мужчина", "парень", "мальчик")
 
 
 class ScenarioDirectorError(RuntimeError):
@@ -2642,26 +2698,22 @@ def _infer_music_video_scene_purpose(
     performance_framing: str = "",
     performer_presentation: str = "unknown",
 ) -> str:
+    continuation = _coerce_bool(scene.continuation_from_previous, False) or scene.ltx_mode == "continuation"
+    render_mode = str(scene.render_mode or "").strip().lower()
+    framing = str(performance_framing or "").strip().lower()
+    has_human_cast = _scene_has_human_performer(scene) or performer_presentation in {"male", "female", "mixed"}
     if index == 0:
         return "hook"
+    if scene.needs_two_frames or render_mode in {"first_last", "first_last_sound"}:
+        return "transition"
+    if transition_candidate or continuation:
+        return "transition"
+    if framing in MUSIC_VIDEO_PERFORMANCE_FRAMINGS and has_human_cast:
+        return "performance"
+    if index == max(0, total - 2):
+        return "payoff"
     if index == total - 1:
         return "ending_hold"
-    bundle = _scene_text_bundle(scene).lower()
-    transition_type = str(scene.transition_type or "").strip().lower()
-    if transition_candidate or scene.needs_two_frames or transition_type not in {"", "cut", "continuation"}:
-        return "transition"
-    if any(token in bundle for token in ("transition", "crossfade", "wipe", "smash cut", "state shift", "morph")):
-        return "transition"
-    if any(token in bundle for token in ("climax", "peak", "payoff", "drop", "final hit", "crescendo")):
-        return "payoff"
-    if index == total - 2:
-        return "payoff"
-    framing = str(performance_framing or "").strip().lower()
-    performer_focused = framing in {"face_close", "close_performance", "medium_performance", "duet_frame"}
-    if performer_focused and performer_presentation in {"male", "female", "mixed"}:
-        return "performance"
-    if any(token in bundle for token in ("sing", "vocal", "lyric", "chorus", "verse", "performance")):
-        return "performance"
     return "build"
 
 
@@ -2731,46 +2783,54 @@ def _collect_text_fragments(value: Any) -> list[str]:
     return out
 
 
+def _normalize_lookup_text(value: str) -> str:
+    lowered = str(value or "").lower()
+    lowered = re.sub(r"[_\-/]+", " ", lowered)
+    lowered = re.sub(r"[^0-9a-zа-яё\s]+", " ", lowered, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def _extract_vocal_signals(texts: list[str]) -> tuple[bool, bool]:
+    normalized = _normalize_lookup_text(" ".join(str(item or "") for item in texts if str(item or "").strip()))
+    if not normalized:
+        return False, False
+    has_mixed = any(hint in normalized for hint in VOCAL_MIXED_HINTS)
+    has_male = has_mixed or any(hint in normalized for hint in VOCAL_MALE_HINTS)
+    has_female = has_mixed or any(hint in normalized for hint in VOCAL_FEMALE_HINTS)
+    return has_male, has_female
+
+
 def _infer_vocal_presentation(scene: ScenarioDirectorScene, payload: dict[str, Any]) -> str:
     audio_context = _normalize_audio_context(payload)
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     source_meta = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
     raw_scene = _find_raw_scene_payload(scene, payload)
-    text_sources: list[str] = [
-        scene.local_phrase or "",
-        scene.what_from_audio_this_scene_uses or "",
-        scene.scene_goal or "",
-        str(metadata.get("transcript") or ""),
-        str(source_meta.get("transcript") or ""),
-        str(payload.get("directorSummary") or payload.get("director_summary") or ""),
-        str(payload.get("storySummary") or payload.get("story_summary") or ""),
-    ]
-    for key in (
-        "audioSemantics",
-        "audio_semantics",
-        "audioUnderstanding",
-        "audio_understanding",
-        "plannerDebug",
-        "planner_debug",
-        "structuredPlannerDiagnostics",
-        "structured_planner_diagnostics",
-        "sceneAudioEvidence",
-        "scene_audio_evidence",
-        "runtime_semantics",
-        "runtime_analysis",
-        "lyrics",
-        "lyricText",
-        "lyric_text",
-        "transcriptHints",
-        "transcript_hints",
-    ):
-        text_sources.extend(_collect_text_fragments(payload.get(key)))
-        text_sources.extend(_collect_text_fragments(metadata.get(key)))
-        text_sources.extend(_collect_text_fragments(source_meta.get(key)))
-    text_sources.extend(_collect_text_fragments(raw_scene))
-    text_sources.extend(_collect_text_fragments(audio_context))
-    return _infer_presentation_from_texts(text_sources)
+    prioritized_sources: list[list[str]] = []
+    for key in VOCAL_PRIORITY_KEYS:
+        bucket: list[str] = []
+        bucket.extend(_collect_text_fragments(payload.get(key)))
+        bucket.extend(_collect_text_fragments(metadata.get(key)))
+        bucket.extend(_collect_text_fragments(source_meta.get(key)))
+        bucket.extend(_collect_text_fragments(raw_scene.get(key)))
+        if bucket:
+            prioritized_sources.append(bucket)
+    prioritized_sources.append(_collect_text_fragments(payload.get("transcriptHints") or payload.get("transcript_hints")))
+    prioritized_sources.append([scene.local_phrase or "", scene.what_from_audio_this_scene_uses or "", scene.scene_goal or ""])
+    prioritized_sources.append(_collect_text_fragments(raw_scene.get("lyricText") or raw_scene.get("lyrics")))
+    prioritized_sources.append([str(metadata.get("transcript") or ""), str(source_meta.get("transcript") or "")])
+    prioritized_sources.append(_collect_text_fragments({"metadata": metadata, "source_meta": source_meta, "raw_scene": raw_scene}))
+    prioritized_sources.append(_collect_text_fragments(audio_context))
+
+    for bucket in prioritized_sources:
+        has_male, has_female = _extract_vocal_signals(bucket)
+        if has_male and has_female:
+            return "mixed"
+        if has_male:
+            return "male"
+        if has_female:
+            return "female"
+    return "unknown"
 
 
 def _role_is_human_performer(role: str) -> bool:
@@ -2787,6 +2847,48 @@ def _infer_role_presentation(role: str, payload: dict[str, Any], *, raw_scene: d
     text_sources.extend(_collect_text_fragments(role_ref))
     text_sources.extend(_collect_text_fragments(refs_used_by_role.get(role)))
     return _infer_presentation_from_texts(text_sources)
+
+
+def _infer_presentations_from_texts(texts: list[str], *, male_hints: tuple[str, ...], female_hints: tuple[str, ...]) -> str:
+    normalized = _normalize_lookup_text(" ".join(str(item or "") for item in texts if str(item or "").strip()))
+    if not normalized:
+        return "unknown"
+    has_male = any(hint in normalized for hint in male_hints)
+    has_female = any(hint in normalized for hint in female_hints)
+    if has_male and has_female:
+        return "mixed"
+    if has_male:
+        return "male"
+    if has_female:
+        return "female"
+    return "unknown"
+
+
+def _collect_role_hint_texts(role: str, payload: dict[str, Any], raw_scene: dict[str, Any]) -> list[str]:
+    refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    display_labels = payload.get("displayLabelByRole") if isinstance(payload.get("displayLabelByRole"), dict) else {}
+    role_type_by_role = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
+    refs_by_role = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
+    connected_refs_by_role = payload.get("connectedRefsByRole") if isinstance(payload.get("connectedRefsByRole"), dict) else {}
+    scene_refs_by_role = raw_scene.get("refsByRole") if isinstance(raw_scene.get("refsByRole"), dict) else {}
+    scene_refs_used_by_role = raw_scene.get("refsUsedByRole") if isinstance(raw_scene.get("refsUsedByRole"), dict) else {}
+    scene_connected_by_role = raw_scene.get("connectedRefsByRole") if isinstance(raw_scene.get("connectedRefsByRole"), dict) else {}
+    role_metadata_by_role = payload.get("roleMetadataByRole") if isinstance(payload.get("roleMetadataByRole"), dict) else {}
+    scene_role_metadata = raw_scene.get("roleMetadataByRole") if isinstance(raw_scene.get("roleMetadataByRole"), dict) else {}
+    profile_by_role = payload.get("profileByRole") if isinstance(payload.get("profileByRole"), dict) else {}
+    identity_by_role = payload.get("identityByRole") if isinstance(payload.get("identityByRole"), dict) else {}
+    texts = [str(display_labels.get(role) or ""), str(role_type_by_role.get(role) or ""), str(role or "")]
+    texts.extend(_collect_text_fragments(refs.get(role)))
+    texts.extend(_collect_text_fragments(refs_by_role.get(role)))
+    texts.extend(_collect_text_fragments(connected_refs_by_role.get(role)))
+    texts.extend(_collect_text_fragments(scene_refs_by_role.get(role)))
+    texts.extend(_collect_text_fragments(scene_refs_used_by_role.get(role)))
+    texts.extend(_collect_text_fragments(scene_connected_by_role.get(role)))
+    texts.extend(_collect_text_fragments(role_metadata_by_role.get(role)))
+    texts.extend(_collect_text_fragments(scene_role_metadata.get(role)))
+    texts.extend(_collect_text_fragments(profile_by_role.get(role)))
+    texts.extend(_collect_text_fragments(identity_by_role.get(role)))
+    return texts
 
 
 def _infer_scene_performer_presentation(scene: ScenarioDirectorScene, payload: dict[str, Any]) -> str:
@@ -2818,13 +2920,25 @@ def _infer_scene_performer_presentation(scene: ScenarioDirectorScene, payload: d
     active_roles = list(dict.fromkeys(active_roles))
     if not active_roles:
         return "unknown"
-    presentations = {_infer_role_presentation(role, payload, raw_scene=raw_scene) for role in active_roles}
-    presentations.discard("unknown")
-    if not presentations:
+    preferred_character_roles = [role for role in ("character_1", "character_2") if role in active_roles]
+    role_set = preferred_character_roles if preferred_character_roles else active_roles
+    role_presentations: list[str] = []
+    for role in role_set:
+        label_based = _infer_presentations_from_texts(
+            _collect_role_hint_texts(role, payload, raw_scene),
+            male_hints=PERFORMER_MALE_HINTS,
+            female_hints=PERFORMER_FEMALE_HINTS,
+        )
+        fallback = _infer_role_presentation(role, payload, raw_scene=raw_scene)
+        chosen = label_based if label_based != "unknown" else fallback
+        if chosen in {"male", "female", "mixed"}:
+            role_presentations.append(chosen)
+    if not role_presentations:
         return "unknown"
-    if len(presentations) > 1:
+    normalized = set(role_presentations)
+    if "mixed" in normalized or len(normalized) > 1:
         return "mixed"
-    return next(iter(presentations))
+    return next(iter(normalized))
 
 
 def _infer_performance_framing(
@@ -2853,17 +2967,17 @@ def _build_music_video_viewer_hook(scene: ScenarioDirectorScene, purpose: str, s
     action = str(scene.action_in_frame or scene.frame_description or scene.scene_goal or "").strip()
     action_tail = f" {action}" if action else ""
     if purpose == "hook":
-        return f"Instant visual grab via silhouette, rhythm, or conflict.{action_tail}".strip()
+        return f"Immediate grab through rhythm, silhouette, or first visual hit.{action_tail}".strip()
     if purpose == "performance":
-        return f"Keep eyes on performer expression and presence in-frame.{action_tail}".strip()
+        return f"Hold attention on performer face, emotion, and presence in frame.{action_tail}".strip()
     if purpose == "transition":
-        return f"Sell a visible state shift that resets viewer attention.{action_tail}".strip()
+        return f"Keep interest through a clear state change and edit pivot.{action_tail}".strip()
     if purpose == "payoff":
-        return f"Deliver an emotional image hit that feels earned by the beat.{action_tail}".strip()
+        return f"Deliver an emotional payoff with a stronger image beat.{action_tail}".strip()
     if purpose == "ending_hold":
-        return f"Land on a final frame worth holding after the music resolves.{action_tail}".strip()
+        return f"Leave a memorable final hold frame after the musical resolve.{action_tail}".strip()
     shot_label = str(shot_type or "").replace("_", " ").strip() or "scene"
-    return f"Build momentum with clear {shot_label} progression and readable motion.{action_tail}".strip()
+    return f"Build momentum with readable {shot_label} progression and motion clarity.{action_tail}".strip()
 
 
 def _is_lipsync_voice_compatible(vocal_presentation: str, performer_presentation: str) -> tuple[bool, str]:
@@ -2904,6 +3018,20 @@ def _apply_music_video_mode_policy(
     scenes = storyboard_out.scenes or []
     if not scenes:
         return storyboard_out
+    has_existing_first_last = any(
+        str(scene.render_mode or "").strip().lower() in {"first_last", "first_last_sound"} or _coerce_bool(scene.needs_two_frames, False)
+        for scene in scenes
+    )
+    forced_first_last_index: int | None = None
+    if len(scenes) >= 5 and not has_existing_first_last:
+        candidate_indices = [idx for idx in range(1, len(scenes) - 1)]
+        for idx in candidate_indices:
+            scene = scenes[idx]
+            if str(_infer_music_video_shot_type(scene)) == "duet_shared":
+                forced_first_last_index = idx
+                break
+        if forced_first_last_index is None and candidate_indices:
+            forced_first_last_index = candidate_indices[0]
     max_lip_sync = max(1, min(3, len(scenes) // 2 if len(scenes) <= 6 else 3))
     lip_sync_used = 0
     prev_lip_sync = False
@@ -2920,6 +3048,9 @@ def _apply_music_video_mode_policy(
         auto_sound_workflow_enabled = False
         has_sound_cue = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
         transition_candidate = _scene_has_transition_evidence(scene) and index > 0 and not prev_two_frames
+        forced_transition_scene = forced_first_last_index is not None and index == forced_first_last_index
+        if forced_transition_scene:
+            transition_candidate = True
         vocal_presentation = _infer_vocal_presentation(scene, payload)
         performer_presentation = _infer_scene_performer_presentation(scene, payload)
         inferred_framing = _infer_performance_framing(
@@ -2929,18 +3060,14 @@ def _apply_music_video_mode_policy(
             transition_candidate=transition_candidate,
         )
         performance_framing = str(scene.performance_framing or "").strip() or inferred_framing
-        existing_purpose = str(scene.scene_purpose or "").strip().lower()
-        if existing_purpose not in MUSIC_VIDEO_SCENE_PURPOSES:
-            scene.scene_purpose = _infer_music_video_scene_purpose(
-                index,
-                len(scenes),
-                scene,
-                transition_candidate=transition_candidate,
-                performance_framing=performance_framing,
-                performer_presentation=performer_presentation,
-            )
-        else:
-            scene.scene_purpose = existing_purpose
+        scene.scene_purpose = _infer_music_video_scene_purpose(
+            index,
+            len(scenes),
+            scene,
+            transition_candidate=transition_candidate,
+            performance_framing=performance_framing,
+            performer_presentation=performer_presentation,
+        )
         scene.viewer_hook = scene.viewer_hook or _build_music_video_viewer_hook(scene, scene.scene_purpose, shot_type)
         close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
         lip_sync_base_candidate = (
@@ -2966,7 +3093,7 @@ def _apply_music_video_mode_policy(
         lip_sync_reason = "Not a lip-sync scene."
         audio_slice_reason = "Audio slice is not required."
 
-        if lip_sync_candidate:
+        if lip_sync_candidate and not forced_transition_scene:
             render_mode = "lip_sync_music"
             resolved_workflow = str(content_type_policy.get("clipWorkflowLipSync") or "image-lipsink-video-music")
             ltx_mode = "lip_sync"
@@ -3047,6 +3174,8 @@ def _apply_music_video_mode_policy(
         scene.send_audio_to_generator = send_audio_to_generator
         scene.performance_framing = performance_framing
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
+        if forced_transition_scene:
+            scene.scene_purpose = "transition"
         scene.clip_decision_reason = scene.clip_decision_reason or (
             f"Purpose={scene.scene_purpose}; shot={scene.shot_type}; render={render_mode}; "
             f"vocalPresentation={vocal_presentation}; performerPresentation={performer_presentation}; "
