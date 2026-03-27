@@ -478,6 +478,12 @@ class ScenarioDirectorScene(BaseModel):
     audio_slice_end_sec: float = 0.0
     audio_slice_expected_duration_sec: float = 0.0
     clip_decision_reason: str = ""
+    role_influence_applied: bool = False
+    role_influence_reason: str = ""
+    scene_role_dynamics: str = ""
+    multi_character_identity_lock: bool = False
+    distinct_character_separation: bool = False
+    appearance_drift_risk: str = ""
     workflow_decision_reason: str = ""
     lip_sync_decision_reason: str = ""
     audio_slice_decision_reason: str = ""
@@ -546,6 +552,12 @@ class ScenarioDirectorScene(BaseModel):
             max(0.0, self.audio_slice_end_sec - self.audio_slice_start_sec),
         )
         self.clip_decision_reason = str(self.clip_decision_reason or "").strip()
+        self.role_influence_applied = _coerce_bool(self.role_influence_applied, False)
+        self.role_influence_reason = str(self.role_influence_reason or "").strip()
+        self.scene_role_dynamics = str(self.scene_role_dynamics or "").strip()
+        self.multi_character_identity_lock = _coerce_bool(self.multi_character_identity_lock, False)
+        self.distinct_character_separation = _coerce_bool(self.distinct_character_separation, False)
+        self.appearance_drift_risk = str(self.appearance_drift_risk or "").strip()
         self.workflow_decision_reason = str(self.workflow_decision_reason or "").strip()
         self.lip_sync_decision_reason = str(self.lip_sync_decision_reason or "").strip()
         self.audio_slice_decision_reason = str(self.audio_slice_decision_reason or "").strip()
@@ -972,6 +984,12 @@ def _normalize_legacy_scene_shape(scene: dict) -> dict:
     normalized.setdefault("audio_slice_end_sec", normalized.get("audioSliceEndSec"))
     normalized.setdefault("audio_slice_expected_duration_sec", normalized.get("audioSliceExpectedDurationSec"))
     normalized.setdefault("clip_decision_reason", normalized.get("clipDecisionReason"))
+    normalized.setdefault("role_influence_applied", normalized.get("roleInfluenceApplied"))
+    normalized.setdefault("role_influence_reason", normalized.get("roleInfluenceReason"))
+    normalized.setdefault("scene_role_dynamics", normalized.get("sceneRoleDynamics"))
+    normalized.setdefault("multi_character_identity_lock", normalized.get("multiCharacterIdentityLock"))
+    normalized.setdefault("distinct_character_separation", normalized.get("distinctCharacterSeparation"))
+    normalized.setdefault("appearance_drift_risk", normalized.get("appearanceDriftRisk"))
     normalized.setdefault("workflow_decision_reason", normalized.get("workflowDecisionReason"))
     normalized.setdefault("lip_sync_decision_reason", normalized.get("lipSyncDecisionReason"))
     normalized.setdefault("audio_slice_decision_reason", normalized.get("audioSliceDecisionReason"))
@@ -2283,24 +2301,27 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "audioSliceExpectedDurationSec": scene.audio_slice_expected_duration_sec,
             "performanceFraming": scene.performance_framing,
             "clipDecisionReason": scene.clip_decision_reason,
-            "roleInfluenceApplied": "roleInfluenceApplied=true" in str(scene.clip_decision_reason or ""),
-            "roleInfluenceReason": (
-                re.search(r"roleInfluenceReason=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""]
-            )[1]
-            if re.search(r"roleInfluenceReason=([^;\\.]+)", str(scene.clip_decision_reason or ""))
-            else "",
-            "sceneRoleDynamics": (
-                re.search(r"sceneRoleDynamics=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""]
-            )[1]
-            if re.search(r"sceneRoleDynamics=([^;\\.]+)", str(scene.clip_decision_reason or ""))
-            else "",
-            "multiCharacterIdentityLock": "multiCharacterIdentityLock=true" in str(scene.clip_decision_reason or ""),
-            "distinctCharacterSeparation": "distinctCharacterSeparation=true" in str(scene.clip_decision_reason or ""),
-            "appearanceDriftRisk": (
-                re.search(r"appearanceDriftRisk=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""]
-            )[1]
-            if re.search(r"appearanceDriftRisk=([^;\\.]+)", str(scene.clip_decision_reason or ""))
-            else "",
+            "roleInfluenceApplied": scene.role_influence_applied or ("roleInfluenceApplied=true" in str(scene.clip_decision_reason or "")),
+            "roleInfluenceReason": scene.role_influence_reason
+            or (
+                (re.search(r"roleInfluenceReason=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""])[1]
+                if re.search(r"roleInfluenceReason=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+                else ""
+            ),
+            "sceneRoleDynamics": scene.scene_role_dynamics
+            or (
+                (re.search(r"sceneRoleDynamics=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""])[1]
+                if re.search(r"sceneRoleDynamics=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+                else ""
+            ),
+            "multiCharacterIdentityLock": scene.multi_character_identity_lock or ("multiCharacterIdentityLock=true" in str(scene.clip_decision_reason or "")),
+            "distinctCharacterSeparation": scene.distinct_character_separation or ("distinctCharacterSeparation=true" in str(scene.clip_decision_reason or "")),
+            "appearanceDriftRisk": scene.appearance_drift_risk
+            or (
+                (re.search(r"appearanceDriftRisk=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""])[1]
+                if re.search(r"appearanceDriftRisk=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+                else ""
+            ),
             "workflowDecisionReason": scene.workflow_decision_reason,
             "lipSyncDecisionReason": scene.lip_sync_decision_reason,
             "audioSliceDecisionReason": scene.audio_slice_decision_reason,
@@ -3544,7 +3565,11 @@ def _build_multi_character_identity_lock(scene: ScenarioDirectorScene, payload: 
     }
 
 
-def _select_forced_music_video_transition_index(scenes: list[ScenarioDirectorScene]) -> int | None:
+def _select_forced_music_video_transition_index(
+    scenes: list[ScenarioDirectorScene],
+    *,
+    payload: dict[str, Any] | None = None,
+) -> int | None:
     if len(scenes) < 5:
         return None
     candidate_indices = [idx for idx in range(1, len(scenes) - 1)]
@@ -3554,7 +3579,8 @@ def _select_forced_music_video_transition_index(scenes: list[ScenarioDirectorSce
     for idx in candidate_indices:
         scene = scenes[idx]
         shot_type = _infer_music_video_shot_type(scene)
-        presence = _infer_music_video_presence_type(scene)
+        raw_scene = _find_raw_scene_payload(scene, payload if isinstance(payload, dict) else {})
+        presence = _infer_music_video_presence_type(scene, payload=payload, raw_scene=raw_scene)
         text_bundle = _scene_text_bundle(scene).lower()
         score = 0
         if shot_type == "duet_shared" or presence == "duet":
@@ -3617,7 +3643,7 @@ def _apply_music_video_mode_policy(
     )
     forced_first_last_index: int | None = None
     if len(scenes) >= 5 and not has_existing_first_last:
-        forced_first_last_index = _select_forced_music_video_transition_index(scenes)
+        forced_first_last_index = _select_forced_music_video_transition_index(scenes, payload=payload)
     max_lip_sync = max(1, min(3, len(scenes) // 2 if len(scenes) <= 6 else 3))
     lip_sync_used = 0
     prev_lip_sync = False
@@ -3828,6 +3854,12 @@ def _apply_music_video_mode_policy(
             f"; distinctCharacterSeparation={'true' if _coerce_bool(identity_lock.get('distinctCharacterSeparation'), False) else 'false'}"
             f"; appearanceDriftRisk={str(identity_lock.get('appearanceDriftRisk') or 'none')}."
         )
+        scene.role_influence_applied = _coerce_bool(role_influence.get("applied"), False)
+        scene.role_influence_reason = str(role_influence.get("reason") or "none")
+        scene.scene_role_dynamics = str(role_influence.get("sceneRoleDynamics") or "neutral")
+        scene.multi_character_identity_lock = _coerce_bool(identity_lock.get("enabled"), False)
+        scene.distinct_character_separation = _coerce_bool(identity_lock.get("distinctCharacterSeparation"), False)
+        scene.appearance_drift_risk = str(identity_lock.get("appearanceDriftRisk") or "none")
         _enhance_music_video_transition_language(scene)
         scene.workflow_decision_reason = workflow_reason
         scene.lip_sync_decision_reason = lip_sync_reason
@@ -5652,9 +5684,9 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     identity_lock_applied_scenes = 0
     for scene in (storyboard_out.scenes or []):
         reason = str(scene.clip_decision_reason or "")
-        if "roleInfluenceApplied=true" in reason:
+        if scene.role_influence_applied or "roleInfluenceApplied=true" in reason:
             role_influence_applied_scenes += 1
-        if "multiCharacterIdentityLock=true" in reason:
+        if scene.multi_character_identity_lock or "multiCharacterIdentityLock=true" in reason:
             identity_lock_applied_scenes += 1
     return {
         "ok": True,

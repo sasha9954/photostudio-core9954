@@ -697,6 +697,10 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
 
 export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = null) {
   const source = scene && typeof scene === "object" ? scene : {};
+  const clipDecisionReason = normalizeText(source.clipDecisionReason ?? source.clip_decision_reason);
+  const roleInfluenceReasonFromClip = ((clipDecisionReason.match(/roleInfluenceReason=([^;\.]+)/) || [null, ""])[1] || "").trim();
+  const sceneRoleDynamicsFromClip = ((clipDecisionReason.match(/sceneRoleDynamics=([^;\.]+)/) || [null, ""])[1] || "").trim();
+  const appearanceDriftRiskFromClip = ((clipDecisionReason.match(/appearanceDriftRisk=([^;\.]+)/) || [null, ""])[1] || "").trim();
   const t0 = toNumber(source.t0 ?? source.time_start ?? source.timeStart, index * 5);
   const durationRaw = toNumber(source.durationSec ?? source.duration, 5);
   const t1 = Math.max(t0, toNumber(source.t1 ?? source.time_end ?? source.timeEnd, t0 + durationRaw));
@@ -846,6 +850,25 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     forbiddenChanges,
     lipSync: source.lipSync ?? source.lip_sync,
     lipSyncText: source.lipSyncText ?? source.lip_sync_text,
+    clipDecisionReason,
+    roleInfluenceApplied: Boolean(
+      source.roleInfluenceApplied
+      ?? source.role_influence_applied
+      ?? (clipDecisionReason.includes("roleInfluenceApplied=true"))
+    ),
+    roleInfluenceReason: normalizeText(source.roleInfluenceReason ?? source.role_influence_reason) || roleInfluenceReasonFromClip,
+    sceneRoleDynamics: normalizeText(source.sceneRoleDynamics ?? source.scene_role_dynamics) || sceneRoleDynamicsFromClip,
+    multiCharacterIdentityLock: Boolean(
+      source.multiCharacterIdentityLock
+      ?? source.multi_character_identity_lock
+      ?? (clipDecisionReason.includes("multiCharacterIdentityLock=true"))
+    ),
+    distinctCharacterSeparation: Boolean(
+      source.distinctCharacterSeparation
+      ?? source.distinct_character_separation
+      ?? (clipDecisionReason.includes("distinctCharacterSeparation=true"))
+    ),
+    appearanceDriftRisk: normalizeText(source.appearanceDriftRisk ?? source.appearance_drift_risk) || appearanceDriftRiskFromClip,
     transitionType: source.transitionType ?? source.transition_type,
     shotType: source.shotType ?? source.shot_type,
     continuity: source.continuity,
