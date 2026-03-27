@@ -354,6 +354,12 @@ function buildScenarioSceneContractPayload(scene = {}) {
     ltxMode: scene?.ltxMode,
     transitionType: scene?.transitionType,
     shotType: scene?.shotType,
+    roleInfluenceApplied: scene?.roleInfluenceApplied,
+    roleInfluenceReason: scene?.roleInfluenceReason,
+    sceneRoleDynamics: scene?.sceneRoleDynamics,
+    multiCharacterIdentityLock: scene?.multiCharacterIdentityLock,
+    distinctCharacterSeparation: scene?.distinctCharacterSeparation,
+    appearanceDriftRisk: scene?.appearanceDriftRisk,
     lipSync: scene?.lipSync,
     lipSyncText: scene?.lipSyncText,
     continuity: scene?.continuity,
@@ -762,6 +768,12 @@ function buildScenarioTransferLogData(scene = {}, contractPayload = {}) {
     primaryRole: String(scene?.primaryRole || contractPayload?.primaryRole || ""),
     secondaryRoles: Array.isArray(scene?.secondaryRoles ?? contractPayload?.secondaryRoles) ? (scene?.secondaryRoles ?? contractPayload?.secondaryRoles) : [],
     refsUsed: Array.isArray(scene?.refsUsed ?? contractPayload?.refsUsed) ? (scene?.refsUsed ?? contractPayload?.refsUsed) : [],
+    roleInfluenceApplied: Boolean(scene?.roleInfluenceApplied ?? contractPayload?.roleInfluenceApplied),
+    roleInfluenceReason: String(scene?.roleInfluenceReason || contractPayload?.roleInfluenceReason || ""),
+    sceneRoleDynamics: String(scene?.sceneRoleDynamics || contractPayload?.sceneRoleDynamics || ""),
+    multiCharacterIdentityLock: Boolean(scene?.multiCharacterIdentityLock ?? contractPayload?.multiCharacterIdentityLock),
+    distinctCharacterSeparation: Boolean(scene?.distinctCharacterSeparation ?? contractPayload?.distinctCharacterSeparation),
+    appearanceDriftRisk: String(scene?.appearanceDriftRisk || contractPayload?.appearanceDriftRisk || ""),
     lipSync: Boolean(scene?.lipSync ?? contractPayload?.lipSync),
     audioSliceStartSec: scene?.audioSliceStartSec ?? contractPayload?.audioSliceStartSec ?? null,
     audioSliceEndSec: scene?.audioSliceEndSec ?? contractPayload?.audioSliceEndSec ?? null,
@@ -15105,6 +15117,12 @@ const hydrate = useCallback((source = "unknown") => {
                         <span>beatAnchor</span><span>{String(scenarioSelected.beatAnchor || "") || "—"}</span>
                         <span>performanceType</span><span>{String(scenarioSelected.performanceType || "") || "—"}</span>
                         <span>shotType</span><span>{String(scenarioSelected.shotType || "") || "—"}</span>
+                        <span>roleInfluenceApplied</span><span>{String(!!scenarioSelected.roleInfluenceApplied)}</span>
+                        <span>roleInfluenceReason</span><span>{String(scenarioSelected.roleInfluenceReason || "") || "—"}</span>
+                        <span>sceneRoleDynamics</span><span>{String(scenarioSelected.sceneRoleDynamics || "") || "—"}</span>
+                        <span>multiCharacterIdentityLock</span><span>{String(!!scenarioSelected.multiCharacterIdentityLock)}</span>
+                        <span>distinctCharacterSeparation</span><span>{String(!!scenarioSelected.distinctCharacterSeparation)}</span>
+                        <span>appearanceDriftRisk</span><span>{String(scenarioSelected.appearanceDriftRisk || "") || "—"}</span>
                         <span>previousSceneImageSource</span><span>{scenarioPreviousSceneImageSource}</span>
                         <span>inheritPreviousEndAsStart</span><span>{String(!!scenarioSelected.inheritPreviousEndAsStart)}</span>
                         <span>startFrameSource</span><span>{scenarioSelectedStartImageSource}</span>

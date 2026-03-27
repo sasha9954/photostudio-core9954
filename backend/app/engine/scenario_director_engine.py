@@ -3280,11 +3280,16 @@ def _build_music_video_clip_decision_reason(
     )
 
 
-def _infer_music_video_presence_type(scene: ScenarioDirectorScene) -> str:
-    actors = {str(actor or "").strip() for actor in (scene.actors or []) if str(actor or "").strip()}
-    if "character_1" in actors and "character_2" in actors:
+def _infer_music_video_presence_type(
+    scene: ScenarioDirectorScene,
+    *,
+    payload: dict[str, Any] | None = None,
+    raw_scene: dict[str, Any] | None = None,
+) -> str:
+    active_roles = _collect_scene_active_character_roles(scene, payload=payload, raw_scene=raw_scene)
+    if "character_1" in active_roles and "character_2" in active_roles:
         return "duet"
-    if "character_1" in actors or "character_2" in actors or any(actor.startswith("character_") for actor in actors):
+    if active_roles:
         return "solo"
     return "environment"
 
@@ -3303,12 +3308,61 @@ def _infer_music_video_style_tone(scene: ScenarioDirectorScene, payload: dict[st
     return "neutral"
 
 
-def _collect_scene_active_character_roles(scene: ScenarioDirectorScene) -> list[str]:
-    return [
-        role
-        for role in list(dict.fromkeys(str(actor or "").strip() for actor in (scene.actors or [])))
-        if role in {"character_1", "character_2", "character_3"}
-    ]
+def _collect_scene_active_character_roles(
+    scene: ScenarioDirectorScene,
+    *,
+    payload: dict[str, Any] | None = None,
+    raw_scene: dict[str, Any] | None = None,
+) -> list[str]:
+    source_payload = payload if isinstance(payload, dict) else {}
+    scene_payload = raw_scene if isinstance(raw_scene, dict) else _find_raw_scene_payload(scene, source_payload)
+
+    def _normalized_character_role(role_value: Any) -> str:
+        role = _normalize_scenario_role(role_value)
+        return role if role in {"character_1", "character_2", "character_3"} else ""
+
+    ordered: list[str] = []
+
+    def _push_role(role_value: Any) -> None:
+        normalized = _normalized_character_role(role_value)
+        if normalized and normalized not in ordered:
+            ordered.append(normalized)
+
+    def _push_list(values: Any) -> None:
+        if not isinstance(values, list):
+            return
+        for role_value in values:
+            _push_role(role_value)
+
+    # priority: primary -> secondary/sceneActive -> explicit scene contracts -> actors/refs
+    for key in ("primaryRole", "primary_role"):
+        _push_role(scene_payload.get(key))
+
+    for key in ("secondaryRoles", "secondary_roles", "sceneActiveRoles", "scene_active_roles"):
+        _push_list(scene_payload.get(key))
+
+    for key in ("mustAppear", "must_appear", "participants"):
+        _push_list(scene_payload.get(key))
+
+    for key in ("refsUsed", "refs_used"):
+        value = scene_payload.get(key)
+        if isinstance(value, dict):
+            for role_key, role_value in value.items():
+                if _coerce_bool(role_value, False) or role_value:
+                    _push_role(role_key)
+        else:
+            _push_list(value)
+
+    for map_key in ("refsUsedByRole", "refs_used_by_role", "refDirectives", "ref_directives"):
+        map_value = scene_payload.get(map_key)
+        if isinstance(map_value, dict):
+            for role_key, role_value in map_value.items():
+                if role_value:
+                    _push_role(role_key)
+
+    _push_list(scene.actors or [])
+
+    return ordered
 
 
 def _apply_music_video_role_influence(
@@ -3324,7 +3378,8 @@ def _apply_music_video_role_influence(
     transition_candidate: bool,
 ) -> dict[str, Any]:
     role_types, _, _ = _resolve_effective_role_type_by_role(payload)
-    active_roles = _collect_scene_active_character_roles(scene)
+    raw_scene = _find_raw_scene_payload(scene, payload)
+    active_roles = _collect_scene_active_character_roles(scene, payload=payload, raw_scene=raw_scene)
     if not active_roles:
         return {"applied": False, "reason": "no_active_character_roles", "sceneRoleDynamics": "environment"}
     heroes = [role for role in active_roles if role_types.get(role) == "hero"]
@@ -3410,24 +3465,43 @@ def _apply_music_video_role_influence(
     }
 
 
-def _extract_role_identity_markers(role: str, payload: dict[str, Any]) -> dict[str, Any]:
-    texts = _collect_role_hint_texts(role, payload, {})
+def _extract_role_identity_markers(
+    role: str,
+    payload: dict[str, Any],
+    *,
+    raw_scene: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    scene_payload = raw_scene if isinstance(raw_scene, dict) else {}
+    texts = _collect_role_hint_texts(role, payload, scene_payload)
+    texts.extend(_collect_text_fragments(scene_payload.get("identityHintsByRole")))
+    texts.extend(_collect_text_fragments(scene_payload.get("identity_hints_by_role")))
+    texts.extend(_collect_text_fragments(scene_payload.get("sceneIdentityHints")))
+    texts.extend(_collect_text_fragments(scene_payload.get("scene_identity_hints")))
     normalized = _normalize_lookup_text(" ".join(texts))
-    body_terms = [term for term in ("slim", "athletic", "curvy", "fuller", "heavy", "lean", "broad", "стройн", "полн", "крупн", "худощ", "атлет") if term in normalized][:3]
-    hair_face_terms = [term for term in ("blonde", "brunette", "redhead", "short hair", "long hair", "curly", "beard", "усы", "борода", "кудр", "коротк", "длинн", "светл", "темн") if term in normalized][:3]
-    outfit_terms = [term for term in ("dress", "jacket", "coat", "hoodie", "armor", "uniform", "suit", "плать", "куртк", "пальто", "форма", "костюм") if term in normalized][:3]
+
+    face_terms = [term for term in ("oval face", "angular", "jawline", "high cheekbone", "круглое лицо", "скулы", "челюст") if term in normalized][:3]
+    hair_face_terms = [term for term in ("blonde", "brunette", "redhead", "short hair", "long hair", "curly", "beard", "mustache", "усы", "борода", "кудр", "коротк", "длинн", "светл", "темн") if term in normalized][:4]
+    body_terms = [term for term in ("slim", "athletic", "curvy", "fuller", "heavy", "lean", "broad", "tall", "petite", "стройн", "полн", "крупн", "худощ", "атлет", "высок", "миниат") if term in normalized][:4]
+    outfit_terms = [term for term in ("dress", "jacket", "coat", "hoodie", "armor", "uniform", "suit", "плать", "куртк", "пальто", "форма", "костюм") if term in normalized][:4]
+    accessory_terms = [term for term in ("glasses", "earring", "necklace", "hat", "ring", "очк", "серьг", "кулон", "шляп", "кольц") if term in normalized][:3]
+    age_gender_terms = [term for term in ("male", "female", "man", "woman", "young", "older", "муж", "жен", "девуш", "парень", "возраст") if term in normalized][:3]
+
     display_labels = payload.get("displayLabelByRole") if isinstance(payload.get("displayLabelByRole"), dict) else {}
     label = str(display_labels.get(role) or role).strip()
     return {
         "label": label,
-        "body": body_terms,
+        "face": face_terms,
         "hair_face": hair_face_terms,
+        "body": body_terms,
         "outfit": outfit_terms,
+        "accessories": accessory_terms,
+        "age_gender": age_gender_terms,
     }
 
 
 def _build_multi_character_identity_lock(scene: ScenarioDirectorScene, payload: dict[str, Any]) -> dict[str, Any]:
-    active_roles = _collect_scene_active_character_roles(scene)
+    raw_scene = _find_raw_scene_payload(scene, payload)
+    active_roles = _collect_scene_active_character_roles(scene, payload=payload, raw_scene=raw_scene)
     if len(active_roles) < 2:
         return {
             "enabled": False,
@@ -3436,21 +3510,28 @@ def _build_multi_character_identity_lock(scene: ScenarioDirectorScene, payload: 
             "appearanceDriftRisk": "low_single_character",
             "contract": "",
         }
-    lock_by_role = {role: _extract_role_identity_markers(role, payload) for role in active_roles}
+    lock_by_role = {role: _extract_role_identity_markers(role, payload, raw_scene=raw_scene) for role in active_roles}
     risk = "high_character2_drift" if "character_2" in active_roles else "medium_multi_character"
     clauses: list[str] = [
         "Distinct character separation is mandatory: keep every character visually unique in face, body silhouette, and outfit identity.",
         "Do not merge faces, do not average body types, do not transfer hairstyle/facial structure, and do not swap outfits between characters.",
+        "Both active characters must stay on-screen when scene contract indicates duet/shared-presence/two-character framing.",
     ]
     for idx, role in enumerate(active_roles, start=1):
         markers = lock_by_role.get(role) or {}
         identity_bits = [f"slot {idx}={role} ({markers.get('label') or role})"]
+        if markers.get("face"):
+            identity_bits.append(f"face:{'/'.join(markers.get('face') or [])}")
         if markers.get("body"):
             identity_bits.append(f"body:{'/'.join(markers.get('body') or [])}")
         if markers.get("hair_face"):
             identity_bits.append(f"face-hair:{'/'.join(markers.get('hair_face') or [])}")
         if markers.get("outfit"):
             identity_bits.append(f"outfit:{'/'.join(markers.get('outfit') or [])}")
+        if markers.get("accessories"):
+            identity_bits.append(f"accessories:{'/'.join(markers.get('accessories') or [])}")
+        if markers.get("age_gender"):
+            identity_bits.append(f"age-gender:{'/'.join(markers.get('age_gender') or [])}")
         clauses.append(f"Preserve {'; '.join(identity_bits)}.")
     if "character_1" in active_roles and "character_2" in active_roles:
         clauses.append("character_2 must remain visibly distinct from character_1 and must never become a softened copy.")
@@ -3544,7 +3625,8 @@ def _apply_music_video_mode_policy(
     prev_shot_type = ""
     for index, scene in enumerate(scenes):
         shot_type = _infer_music_video_shot_type(scene)
-        presence_type = _infer_music_video_presence_type(scene)
+        raw_scene = _find_raw_scene_payload(scene, payload)
+        presence_type = _infer_music_video_presence_type(scene, payload=payload, raw_scene=raw_scene)
         if index == 0 and shot_type not in {"wide"}:
             shot_type = "wide"
         elif index == 1 and shot_type in {"wide"}:
@@ -3601,6 +3683,9 @@ def _apply_music_video_mode_policy(
         presence_type = str(role_influence.get("presence_type") or presence_type)
         performance_framing = str(role_influence.get("performance_framing") or performance_framing)
         scene.scene_purpose = str(role_influence.get("scene_purpose") or scene.scene_purpose)
+        # Persist role-influenced composition back into final scene state.
+        scene.shot_type = shot_type
+        scene.performance_framing = performance_framing
         close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
         lip_sync_base_candidate = (
             _scene_has_human_performer(scene)
@@ -3717,7 +3802,7 @@ def _apply_music_video_mode_policy(
             scene.video_prompt = f"{scene.video_prompt} {identity_contract}".strip()
         # Final derived debug layer (must reflect final scene state, not intermediate steps).
         final_shot_type = str(scene.shot_type or shot_type).strip() or shot_type
-        final_presence_type = str(role_influence.get("presence_type") or _infer_music_video_presence_type(scene))
+        final_presence_type = str(role_influence.get("presence_type") or _infer_music_video_presence_type(scene, payload=payload, raw_scene=raw_scene))
         scene.viewer_hook = _build_music_video_viewer_hook(scene, scene.scene_purpose, final_shot_type)
         if _coerce_bool(role_influence.get("applied"), False):
             role_reason = str(role_influence.get("reason") or "").strip()
@@ -3756,7 +3841,7 @@ def _apply_music_video_mode_policy(
 
         prev_lip_sync = lip_sync
         prev_two_frames = needs_two_frames
-        prev_shot_type = shot_type
+        prev_shot_type = str(scene.shot_type or shot_type)
     return storyboard_out
 
 
