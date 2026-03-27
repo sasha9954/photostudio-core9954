@@ -2678,14 +2678,16 @@ def _limit_lip_sync_usage(
 
 def _infer_music_video_shot_type(scene: ScenarioDirectorScene) -> str:
     bundle = " ".join([scene.camera, scene.frame_description, scene.action_in_frame]).lower()
+    if any(token in bundle for token in ("two-shot", "two shot", "duet", "shared frame", "both in frame", "side by side")):
+        return "duet_shared"
     if any(token in bundle for token in ("extreme close", "ecu", "macro", "insert", "detail")):
         return "detail_insert"
-    if any(token in bundle for token in ("close-up", "close up", "portrait", "face", "frontal")):
+    if any(token in bundle for token in ("close-up", "close up", "portrait", "face", "frontal", "tight")):
         return "close_up"
-    if any(token in bundle for token in ("wide", "establishing", "drone", "aerial", "long shot")):
+    if any(token in bundle for token in ("medium close", "medium shot", "waist-up", "waist up")):
+        return "medium"
+    if any(token in bundle for token in ("wide", "establishing", "drone", "aerial", "long shot", "vast")):
         return "wide"
-    if any(token in bundle for token in ("two-shot", "two shot", "duet", "shared frame")):
-        return "duet_shared"
     return "medium"
 
 
@@ -2704,16 +2706,18 @@ def _infer_music_video_scene_purpose(
     has_human_cast = _scene_has_human_performer(scene) or performer_presentation in {"male", "female", "mixed"}
     if index == 0:
         return "hook"
+    if index == 1 and framing in MUSIC_VIDEO_PERFORMANCE_FRAMINGS and has_human_cast:
+        return "performance"
     if scene.needs_two_frames or render_mode in {"first_last", "first_last_sound"}:
         return "transition"
     if transition_candidate or continuation:
         return "transition"
-    if framing in MUSIC_VIDEO_PERFORMANCE_FRAMINGS and has_human_cast:
-        return "performance"
     if index == max(0, total - 2):
         return "payoff"
     if index == total - 1:
         return "ending_hold"
+    if framing in MUSIC_VIDEO_PERFORMANCE_FRAMINGS and has_human_cast:
+        return "performance"
     return "build"
 
 
@@ -2966,18 +2970,65 @@ def _infer_performance_framing(
 def _build_music_video_viewer_hook(scene: ScenarioDirectorScene, purpose: str, shot_type: str) -> str:
     action = str(scene.action_in_frame or scene.frame_description or scene.scene_goal or "").strip()
     action_tail = f" {action}" if action else ""
+    duet_present = "character_1" in (scene.actors or []) and "character_2" in (scene.actors or [])
+    if purpose == "hook" and shot_type == "wide":
+        return (
+            f"Open on a bold silhouette against scale so the clip starts with instant tension and visual authority.{action_tail}"
+        ).strip()
     if purpose == "hook":
-        return f"Immediate grab through rhythm, silhouette, or first visual hit.{action_tail}".strip()
+        return f"Start with an unmistakable first image that feels like the song already in motion.{action_tail}".strip()
     if purpose == "performance":
-        return f"Hold attention on performer face, emotion, and presence in frame.{action_tail}".strip()
+        if duet_present or shot_type == "duet_shared":
+            return (
+                f"Hold attention on the emotional connection between two performers inside one shared frame beat.{action_tail}"
+            ).strip()
+        return f"Lock the viewer on face, breath, and emotional micro-movement so the performance feels personal.{action_tail}".strip()
     if purpose == "transition":
-        return f"Keep interest through a clear state change and edit pivot.{action_tail}".strip()
+        return f"Create a visible edit pivot where the state changes and the viewer wants the next cut immediately.{action_tail}".strip()
     if purpose == "payoff":
-        return f"Deliver an emotional payoff with a stronger image beat.{action_tail}".strip()
+        return f"Deliver the emotional peak with a stronger image beat that releases built tension.{action_tail}".strip()
     if purpose == "ending_hold":
-        return f"Leave a memorable final hold frame after the musical resolve.{action_tail}".strip()
+        return f"Leave a lingering final image that stays after the music resolves into distance.{action_tail}".strip()
     shot_label = str(shot_type or "").replace("_", " ").strip() or "scene"
-    return f"Build momentum with readable {shot_label} progression and motion clarity.{action_tail}".strip()
+    return f"Keep the clip breathing through contrast in scale, distance, and motion within this {shot_label} beat.{action_tail}".strip()
+
+
+def _infer_music_video_presence_type(scene: ScenarioDirectorScene) -> str:
+    actors = {str(actor or "").strip() for actor in (scene.actors or []) if str(actor or "").strip()}
+    if "character_1" in actors and "character_2" in actors:
+        return "duet"
+    if "character_1" in actors or "character_2" in actors or any(actor.startswith("character_") for actor in actors):
+        return "solo"
+    return "environment"
+
+
+def _select_forced_music_video_transition_index(scenes: list[ScenarioDirectorScene]) -> int | None:
+    if len(scenes) < 5:
+        return None
+    candidate_indices = [idx for idx in range(1, len(scenes) - 1)]
+    if not candidate_indices:
+        return None
+    scored: list[tuple[int, int]] = []
+    for idx in candidate_indices:
+        scene = scenes[idx]
+        shot_type = _infer_music_video_shot_type(scene)
+        presence = _infer_music_video_presence_type(scene)
+        text_bundle = _scene_text_bundle(scene).lower()
+        score = 0
+        if shot_type == "duet_shared" or presence == "duet":
+            score += 5
+        if any(token in text_bundle for token in ("meet", "meeting", "touch", "take hand", "turn to each other", "walk together", "shared horizon")):
+            score += 4
+        if any(token in text_bundle for token in ("road", "highway", "path", "leave", "depart", "horizon", "into distance")):
+            score += 3
+        if "close" in shot_type or shot_type == "detail_insert":
+            score += 1
+        if idx >= len(scenes) // 2:
+            score += 1
+        scored.append((score, idx))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    best_score, best_idx = scored[0]
+    return best_idx if best_score > 0 else candidate_indices[0]
 
 
 def _is_lipsync_voice_compatible(vocal_presentation: str, performer_presentation: str) -> tuple[bool, str]:
@@ -3024,20 +3075,26 @@ def _apply_music_video_mode_policy(
     )
     forced_first_last_index: int | None = None
     if len(scenes) >= 5 and not has_existing_first_last:
-        candidate_indices = [idx for idx in range(1, len(scenes) - 1)]
-        for idx in candidate_indices:
-            scene = scenes[idx]
-            if str(_infer_music_video_shot_type(scene)) == "duet_shared":
-                forced_first_last_index = idx
-                break
-        if forced_first_last_index is None and candidate_indices:
-            forced_first_last_index = candidate_indices[0]
+        forced_first_last_index = _select_forced_music_video_transition_index(scenes)
     max_lip_sync = max(1, min(3, len(scenes) // 2 if len(scenes) <= 6 else 3))
     lip_sync_used = 0
     prev_lip_sync = False
     prev_two_frames = False
+    prev_shot_type = ""
     for index, scene in enumerate(scenes):
         shot_type = _infer_music_video_shot_type(scene)
+        presence_type = _infer_music_video_presence_type(scene)
+        if index == 0 and shot_type not in {"wide"}:
+            shot_type = "wide"
+        elif index == 1 and shot_type in {"wide"}:
+            shot_type = "close_up" if _scene_has_human_performer(scene) else "medium"
+        elif index > 1 and shot_type == prev_shot_type:
+            if shot_type == "wide":
+                shot_type = "close_up" if _scene_has_human_performer(scene) else "medium"
+            elif shot_type in {"close_up", "detail_insert"}:
+                shot_type = "wide" if index % 2 == 0 else "medium"
+            else:
+                shot_type = "duet_shared" if presence_type == "duet" else ("close_up" if index % 2 == 0 else "wide")
         scene.shot_type = shot_type
         duration = max(0.0, _safe_float(scene.duration, scene.time_end - scene.time_start))
         if duration > 0:
@@ -3176,6 +3233,9 @@ def _apply_music_video_mode_policy(
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
         if forced_transition_scene:
             scene.scene_purpose = "transition"
+            scene.viewer_hook = _build_music_video_viewer_hook(scene, scene.scene_purpose, shot_type)
+        elif not str(scene.viewer_hook or "").strip():
+            scene.viewer_hook = _build_music_video_viewer_hook(scene, scene.scene_purpose, shot_type)
         scene.clip_decision_reason = scene.clip_decision_reason or (
             f"Purpose={scene.scene_purpose}; shot={scene.shot_type}; render={render_mode}; "
             f"vocalPresentation={vocal_presentation}; performerPresentation={performer_presentation}; "
@@ -3194,6 +3254,7 @@ def _apply_music_video_mode_policy(
 
         prev_lip_sync = lip_sync
         prev_two_frames = needs_two_frames
+        prev_shot_type = shot_type
     return storyboard_out
 
 
