@@ -483,7 +483,15 @@ class ScenarioDirectorScene(BaseModel):
     scene_role_dynamics: str = ""
     multi_character_identity_lock: bool = False
     distinct_character_separation: bool = False
+    duet_lock_enabled: bool = False
+    duet_composition_mode: str = ""
+    secondary_role_visibility_requirement: str = ""
+    character2_drift_guard: str = ""
+    duet_identity_contract: str = ""
     appearance_drift_risk: str = ""
+    director_genre_intent: str = ""
+    director_genre_reason: str = ""
+    director_tone_bias: str = ""
     workflow_decision_reason: str = ""
     lip_sync_decision_reason: str = ""
     audio_slice_decision_reason: str = ""
@@ -557,7 +565,15 @@ class ScenarioDirectorScene(BaseModel):
         self.scene_role_dynamics = str(self.scene_role_dynamics or "").strip()
         self.multi_character_identity_lock = _coerce_bool(self.multi_character_identity_lock, False)
         self.distinct_character_separation = _coerce_bool(self.distinct_character_separation, False)
+        self.duet_lock_enabled = _coerce_bool(self.duet_lock_enabled, False)
+        self.duet_composition_mode = str(self.duet_composition_mode or "").strip()
+        self.secondary_role_visibility_requirement = str(self.secondary_role_visibility_requirement or "").strip()
+        self.character2_drift_guard = str(self.character2_drift_guard or "").strip()
+        self.duet_identity_contract = str(self.duet_identity_contract or "").strip()
         self.appearance_drift_risk = str(self.appearance_drift_risk or "").strip()
+        self.director_genre_intent = str(self.director_genre_intent or "").strip()
+        self.director_genre_reason = str(self.director_genre_reason or "").strip()
+        self.director_tone_bias = str(self.director_tone_bias or "").strip()
         self.workflow_decision_reason = str(self.workflow_decision_reason or "").strip()
         self.lip_sync_decision_reason = str(self.lip_sync_decision_reason or "").strip()
         self.audio_slice_decision_reason = str(self.audio_slice_decision_reason or "").strip()
@@ -664,6 +680,9 @@ class ScenarioDirectorDiagnostics(BaseModel):
     what_may_be_wrong: str = ""
     planner_mode: str = "text_fallback"
     how_director_note_was_integrated: str = ""
+    no_text_fallback_mode: str = "off"
+    authorial_interpretation_level: str = "balanced"
+    audio_literalness_level: str = "balanced"
 
     @model_validator(mode="after")
     def _normalize(self) -> "ScenarioDirectorDiagnostics":
@@ -675,6 +694,10 @@ class ScenarioDirectorDiagnostics(BaseModel):
         planner_mode = str(self.planner_mode or "text_fallback").strip().lower() or "text_fallback"
         self.planner_mode = planner_mode if planner_mode in {"full_audio_first", "partial_audio_first", "text_fallback"} else "text_fallback"
         self.how_director_note_was_integrated = str(self.how_director_note_was_integrated or "").strip()
+        fallback_mode = str(self.no_text_fallback_mode or "off").strip().lower() or "off"
+        self.no_text_fallback_mode = fallback_mode if fallback_mode in {"off", "neutral_audio_literal"} else "off"
+        self.authorial_interpretation_level = str(self.authorial_interpretation_level or "balanced").strip().lower() or "balanced"
+        self.audio_literalness_level = str(self.audio_literalness_level or "balanced").strip().lower() or "balanced"
         return self
 
 
@@ -989,7 +1012,15 @@ def _normalize_legacy_scene_shape(scene: dict) -> dict:
     normalized.setdefault("scene_role_dynamics", normalized.get("sceneRoleDynamics"))
     normalized.setdefault("multi_character_identity_lock", normalized.get("multiCharacterIdentityLock"))
     normalized.setdefault("distinct_character_separation", normalized.get("distinctCharacterSeparation"))
+    normalized.setdefault("duet_lock_enabled", normalized.get("duetLockEnabled"))
+    normalized.setdefault("duet_composition_mode", normalized.get("duetCompositionMode"))
+    normalized.setdefault("secondary_role_visibility_requirement", normalized.get("secondaryRoleVisibilityRequirement"))
+    normalized.setdefault("character2_drift_guard", normalized.get("character2DriftGuard"))
+    normalized.setdefault("duet_identity_contract", normalized.get("duetIdentityContract"))
     normalized.setdefault("appearance_drift_risk", normalized.get("appearanceDriftRisk"))
+    normalized.setdefault("director_genre_intent", normalized.get("directorGenreIntent"))
+    normalized.setdefault("director_genre_reason", normalized.get("directorGenreReason"))
+    normalized.setdefault("director_tone_bias", normalized.get("directorToneBias"))
     normalized.setdefault("workflow_decision_reason", normalized.get("workflowDecisionReason"))
     normalized.setdefault("lip_sync_decision_reason", normalized.get("lipSyncDecisionReason"))
     normalized.setdefault("audio_slice_decision_reason", normalized.get("audioSliceDecisionReason"))
@@ -1132,6 +1163,9 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
         diagnostics.setdefault("what_may_be_wrong", diagnostics.get("whatMayBeWrong"))
         diagnostics.setdefault("planner_mode", diagnostics.get("plannerMode"))
         diagnostics.setdefault("how_director_note_was_integrated", diagnostics.get("howDirectorNoteWasIntegrated"))
+        diagnostics.setdefault("no_text_fallback_mode", diagnostics.get("noTextFallbackMode"))
+        diagnostics.setdefault("authorial_interpretation_level", diagnostics.get("authorialInterpretationLevel"))
+        diagnostics.setdefault("audio_literalness_level", diagnostics.get("audioLiteralnessLevel"))
         repaired["diagnostics"] = diagnostics
 
     if changed:
@@ -1245,6 +1279,9 @@ def _extract_structured_diagnostics(parsed_payload: dict[str, Any]) -> dict[str,
             "whatMayBeWrong": str(diagnostics_raw.get("what_may_be_wrong") or diagnostics_raw.get("whatMayBeWrong") or "").strip(),
             "plannerMode": str(diagnostics_raw.get("planner_mode") or diagnostics_raw.get("plannerMode") or "").strip().lower() or "text_fallback",
             "howDirectorNoteWasIntegrated": str(diagnostics_raw.get("how_director_note_was_integrated") or diagnostics_raw.get("howDirectorNoteWasIntegrated") or "").strip(),
+            "noTextFallbackMode": str(diagnostics_raw.get("no_text_fallback_mode") or diagnostics_raw.get("noTextFallbackMode") or "").strip().lower() or "off",
+            "authorialInterpretationLevel": str(diagnostics_raw.get("authorial_interpretation_level") or diagnostics_raw.get("authorialInterpretationLevel") or "").strip().lower() or "balanced",
+            "audioLiteralnessLevel": str(diagnostics_raw.get("audio_literalness_level") or diagnostics_raw.get("audioLiteralnessLevel") or "").strip().lower() or "balanced",
         },
     }
 
@@ -2316,10 +2353,43 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             ),
             "multiCharacterIdentityLock": scene.multi_character_identity_lock or ("multiCharacterIdentityLock=true" in str(scene.clip_decision_reason or "")),
             "distinctCharacterSeparation": scene.distinct_character_separation or ("distinctCharacterSeparation=true" in str(scene.clip_decision_reason or "")),
+            "duetLockEnabled": scene.duet_lock_enabled or ("duetLockEnabled=true" in str(scene.clip_decision_reason or "")),
+            "duetCompositionMode": scene.duet_composition_mode
+            or (
+                (re.search(r"duetCompositionMode=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""])[1]
+                if re.search(r"duetCompositionMode=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+                else ""
+            ),
+            "secondaryRoleVisibilityRequirement": scene.secondary_role_visibility_requirement
+            or (
+                (re.search(r"secondaryRoleVisibilityRequirement=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""])[1]
+                if re.search(r"secondaryRoleVisibilityRequirement=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+                else ""
+            ),
+            "character2DriftGuard": scene.character2_drift_guard
+            or (
+                (re.search(r"character2DriftGuard=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""])[1]
+                if re.search(r"character2DriftGuard=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+                else ""
+            ),
+            "duetIdentityContract": scene.duet_identity_contract,
             "appearanceDriftRisk": scene.appearance_drift_risk
             or (
                 (re.search(r"appearanceDriftRisk=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""])[1]
                 if re.search(r"appearanceDriftRisk=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+                else ""
+            ),
+            "directorGenreIntent": scene.director_genre_intent
+            or (
+                (re.search(r"directorGenreIntent=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""])[1]
+                if re.search(r"directorGenreIntent=([^;\\.]+)", str(scene.clip_decision_reason or ""))
+                else ""
+            ),
+            "directorGenreReason": scene.director_genre_reason,
+            "directorToneBias": scene.director_tone_bias
+            or (
+                (re.search(r"directorToneBias=([^;\\.]+)", str(scene.clip_decision_reason or "")) or [None, ""])[1]
+                if re.search(r"directorToneBias=([^;\\.]+)", str(scene.clip_decision_reason or ""))
                 else ""
             ),
             "workflowDecisionReason": scene.workflow_decision_reason,
@@ -3329,6 +3399,30 @@ def _infer_music_video_style_tone(scene: ScenarioDirectorScene, payload: dict[st
     return "neutral"
 
 
+def _resolve_director_genre_intent(payload: dict[str, Any], scene: ScenarioDirectorScene | None = None) -> dict[str, str]:
+    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
+    director_note = str(controls.get("directorNote") or controls.get("director_note") or "").strip()
+    scene_bundle = _scene_text_bundle(scene) if scene is not None else ""
+    normalized = _normalize_lookup_text(f"{director_note} {scene_bundle}")
+    if any(token in normalized for token in ("horror", "страш", "жут", "ужас", "dread", "terror")):
+        return {
+            "directorGenreIntent": "horror_dread",
+            "directorGenreReason": "director_note_horror_dread_tokens_detected",
+            "directorToneBias": "fear_pressure_unease",
+        }
+    if any(token in normalized for token in ("social drama", "социальн", "tragic", "траг", "injustice", "бедност", "потер", "утрат")):
+        return {
+            "directorGenreIntent": "tragic_social_drama",
+            "directorGenreReason": "social_conflict_or_tragic_tokens_detected",
+            "directorToneBias": "human_cost_social_weight",
+        }
+    return {
+        "directorGenreIntent": "neutral_drama",
+        "directorGenreReason": "no_explicit_horror_or_tragic_social_markers",
+        "directorToneBias": "observational_emotional_realism",
+    }
+
+
 def _collect_scene_active_character_roles(
     scene: ScenarioDirectorScene,
     *,
@@ -3529,10 +3623,39 @@ def _build_multi_character_identity_lock(scene: ScenarioDirectorScene, payload: 
             "distinctCharacterSeparation": False,
             "identityLockByRole": {},
             "appearanceDriftRisk": "low_single_character",
+            "duetLockEnabled": False,
+            "duetCompositionMode": "single_focus",
+            "secondaryRoleVisibilityRequirement": "none",
+            "character2DriftGuard": "not_required",
+            "duetIdentityContract": "",
             "contract": "",
         }
     lock_by_role = {role: _extract_role_identity_markers(role, payload, raw_scene=raw_scene) for role in active_roles}
-    risk = "high_character2_drift" if "character_2" in active_roles else "medium_multi_character"
+    is_strict_duet = "character_1" in active_roles and "character_2" in active_roles
+    identity_marker_count = 0
+    for role in active_roles:
+        markers = lock_by_role.get(role) or {}
+        identity_marker_count += sum(len(markers.get(bucket) or []) for bucket in ("face", "hair_face", "body", "outfit", "accessories", "age_gender"))
+    identity_marker_strength = min(1.0, identity_marker_count / max(4.0, len(active_roles) * 6.0))
+    composition_strength = 0.9 if str(scene.shot_type or "") in {"duet_shared", "medium"} else 0.6
+    if str(scene.performance_framing or "") in {"duet_frame", "asymmetric_duet"}:
+        composition_strength = max(composition_strength, 0.95)
+    must_appear = raw_scene.get("mustAppear") or raw_scene.get("must_appear") or raw_scene.get("participants") or []
+    presence_contract_strength = 1.0 if len([r for r in must_appear if _normalize_scenario_role(r) in active_roles]) >= 2 else 0.55
+    duet_lock_strength = 1.0 if is_strict_duet else 0.7
+    active_role_count = len(active_roles)
+    drift_score = (
+        0.25 * min(1.0, active_role_count / 3.0)
+        + 0.75 * (1.0 - (0.35 * duet_lock_strength + 0.25 * identity_marker_strength + 0.2 * composition_strength + 0.2 * presence_contract_strength))
+    )
+    if drift_score >= 0.7:
+        risk = "high_character2_drift" if "character_2" in active_roles and duet_lock_strength < 0.75 else "high_multi_character_drift"
+    elif drift_score >= 0.52:
+        risk = "elevated_character2_drift" if "character_2" in active_roles else "elevated_multi_character_drift"
+    elif drift_score >= 0.35:
+        risk = "medium_multi_character_drift"
+    else:
+        risk = "low_locked_duet" if is_strict_duet else "low_multi_character_drift"
     clauses: list[str] = [
         "Distinct character separation is mandatory: keep every character visually unique in face, body silhouette, and outfit identity.",
         "Do not merge faces, do not average body types, do not transfer hairstyle/facial structure, and do not swap outfits between characters.",
@@ -3556,11 +3679,36 @@ def _build_multi_character_identity_lock(scene: ScenarioDirectorScene, payload: 
         clauses.append(f"Preserve {'; '.join(identity_bits)}.")
     if "character_1" in active_roles and "character_2" in active_roles:
         clauses.append("character_2 must remain visibly distinct from character_1 and must never become a softened copy.")
+    duet_contract = ""
+    if is_strict_duet:
+        duet_contract = (
+            "DUET IDENTITY CONTRACT: keep character_1 and character_2 as two different human identities; "
+            "never merge or average faces/bodies/clothing; preserve distinct face architecture, hair identity, silhouette, body build, and outfit silhouette; "
+            "keep both active characters legible in one coherent frame; avoid twinization, face averaging, and clothing convergence."
+        )
+        clauses.append(duet_contract)
     return {
         "enabled": True,
         "distinctCharacterSeparation": True,
         "identityLockByRole": lock_by_role,
         "appearanceDriftRisk": risk,
+        "duetLockEnabled": is_strict_duet,
+        "duetCompositionMode": "hard_duet_split" if is_strict_duet else "multi_character_separation",
+        "secondaryRoleVisibilityRequirement": "both_roles_legible_same_frame" if is_strict_duet else "secondary_roles_must_be_readable",
+        "character2DriftGuard": (
+            "strict_character2_not_softened_copy_of_character1"
+            if is_strict_duet
+            else ("soft_guard_for_character2" if "character_2" in active_roles else "not_required")
+        ),
+        "duetIdentityContract": duet_contract,
+        "driftRiskInputs": {
+            "activeRoleCount": active_role_count,
+            "duetLockStrength": round(duet_lock_strength, 3),
+            "identityMarkerStrength": round(identity_marker_strength, 3),
+            "compositionStrength": round(composition_strength, 3),
+            "presenceContractStrength": round(presence_contract_strength, 3),
+            "driftScore": round(drift_score, 3),
+        },
         "contract": " ".join(clauses),
     }
 
@@ -3820,6 +3968,7 @@ def _apply_music_video_mode_policy(
         if forced_transition_scene:
             scene.scene_purpose = "transition"
         identity_lock = _build_multi_character_identity_lock(scene, payload)
+        genre_intent = _resolve_director_genre_intent(payload, scene)
         scene.image_prompt = _build_music_video_image_prompt(scene)
         scene.video_prompt = _build_music_video_video_prompt(scene)
         identity_contract = str(identity_lock.get("contract") or "").strip()
@@ -3852,6 +4001,12 @@ def _apply_music_video_mode_policy(
             f"; sceneRoleDynamics={str(role_influence.get('sceneRoleDynamics') or 'neutral')}"
             f"; multiCharacterIdentityLock={'true' if _coerce_bool(identity_lock.get('enabled'), False) else 'false'}"
             f"; distinctCharacterSeparation={'true' if _coerce_bool(identity_lock.get('distinctCharacterSeparation'), False) else 'false'}"
+            f"; duetLockEnabled={'true' if _coerce_bool(identity_lock.get('duetLockEnabled'), False) else 'false'}"
+            f"; duetCompositionMode={str(identity_lock.get('duetCompositionMode') or 'none')}"
+            f"; secondaryRoleVisibilityRequirement={str(identity_lock.get('secondaryRoleVisibilityRequirement') or 'none')}"
+            f"; character2DriftGuard={str(identity_lock.get('character2DriftGuard') or 'none')}"
+            f"; directorGenreIntent={str(genre_intent.get('directorGenreIntent') or 'neutral_drama')}"
+            f"; directorToneBias={str(genre_intent.get('directorToneBias') or 'observational_emotional_realism')}"
             f"; appearanceDriftRisk={str(identity_lock.get('appearanceDriftRisk') or 'none')}."
         )
         scene.role_influence_applied = _coerce_bool(role_influence.get("applied"), False)
@@ -3859,7 +4014,15 @@ def _apply_music_video_mode_policy(
         scene.scene_role_dynamics = str(role_influence.get("sceneRoleDynamics") or "neutral")
         scene.multi_character_identity_lock = _coerce_bool(identity_lock.get("enabled"), False)
         scene.distinct_character_separation = _coerce_bool(identity_lock.get("distinctCharacterSeparation"), False)
+        scene.duet_lock_enabled = _coerce_bool(identity_lock.get("duetLockEnabled"), False)
+        scene.duet_composition_mode = str(identity_lock.get("duetCompositionMode") or "")
+        scene.secondary_role_visibility_requirement = str(identity_lock.get("secondaryRoleVisibilityRequirement") or "")
+        scene.character2_drift_guard = str(identity_lock.get("character2DriftGuard") or "")
+        scene.duet_identity_contract = str(identity_lock.get("duetIdentityContract") or "")
         scene.appearance_drift_risk = str(identity_lock.get("appearanceDriftRisk") or "none")
+        scene.director_genre_intent = str(genre_intent.get("directorGenreIntent") or "neutral_drama")
+        scene.director_genre_reason = str(genre_intent.get("directorGenreReason") or "fallback")
+        scene.director_tone_bias = str(genre_intent.get("directorToneBias") or "observational_emotional_realism")
         _enhance_music_video_transition_language(scene)
         scene.workflow_decision_reason = workflow_reason
         scene.lip_sync_decision_reason = lip_sync_reason
@@ -4437,6 +4600,10 @@ def _build_request_text(
     content_type_policy = _get_content_type_policy(payload)
     is_music_video_mode = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
     director_note_text = str(director_controls.get("directorNote") or director_controls.get("director_note") or "").strip()
+    no_text_fallback_mode = "neutral_audio_literal" if not director_note_text else "off"
+    authorial_interpretation_level = "low" if no_text_fallback_mode == "neutral_audio_literal" else "medium"
+    audio_literalness_level = "high" if no_text_fallback_mode == "neutral_audio_literal" else "balanced"
+    global_genre_intent = _resolve_director_genre_intent(payload, None)
     story_core_source = "director_note" if is_music_video_mode and director_note_text else "source_of_truth"
     story_frame_source = "director_note" if is_music_video_mode and director_note_text else "source_of_truth"
     rhythm_source = "audio" if is_music_video_mode else ""
@@ -4585,6 +4752,15 @@ def _build_request_text(
         "- story.howDirectorNoteWasIntegrated\n"
         "- diagnostics.usedAudioAsContentSource\n"
         "- diagnostics.usedAudioOnlyAsMood\n"
+        "- scenes[*].directorGenreIntent / directorGenreReason / directorToneBias\n"
+        "- diagnostics.noTextFallbackMode / diagnostics.authorialInterpretationLevel / diagnostics.audioLiteralnessLevel\n"
+        "GENRE INTENT RULE:\n"
+        f"- inferred directorGenreIntent={global_genre_intent.get('directorGenreIntent')} (reason={global_genre_intent.get('directorGenreReason')}, toneBias={global_genre_intent.get('directorToneBias')}).\n"
+        "- Distinguish horror_dread vs tragic_social_drama vs neutral_drama explicitly.\n"
+        "- If director note contains horror/страшная/жуткая/ужасная/dread/terror markers, keep horror_dread intent; do not flatten to social drama.\n"
+        "NO-TEXT FALLBACK POLICY:\n"
+        f"- noTextFallbackMode={no_text_fallback_mode}; authorialInterpretationLevel={authorial_interpretation_level}; audioLiteralnessLevel={audio_literalness_level}.\n"
+        "- With empty director note, stay neutral and audio-literal: prioritize observable action/emotion over philosophical reinterpretation.\n"
         f"{planner_modes_policy}"
         "TEXT-ONLY DEGRADE:\n"
         "- If sourceMode is not AUDIO or audio unavailable, use normal text-led planning and set diagnostics/plannerMode accordingly.\n"
@@ -5610,6 +5786,14 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         fallback_reason = "audio_unusable_or_non_audio_source"
         audio_primary_driver_reason = "text_fallback_only"
+    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
+    director_note_text = str(controls.get("directorNote") or controls.get("director_note") or "").strip()
+    no_text_fallback_mode = "neutral_audio_literal" if not director_note_text else "off"
+    authorial_interpretation_level = "low" if no_text_fallback_mode == "neutral_audio_literal" else "medium"
+    audio_literalness_level = "high" if no_text_fallback_mode == "neutral_audio_literal" else "balanced"
+    storyboard_out.diagnostics.no_text_fallback_mode = no_text_fallback_mode
+    storyboard_out.diagnostics.authorial_interpretation_level = authorial_interpretation_level
+    storyboard_out.diagnostics.audio_literalness_level = audio_literalness_level
     planner_narrative_strategy = structured_planner_diagnostics.get("narrativeStrategy") if isinstance(structured_planner_diagnostics.get("narrativeStrategy"), dict) else {}
     planner_diagnostics = structured_planner_diagnostics.get("diagnostics") if isinstance(structured_planner_diagnostics.get("diagnostics"), dict) else {}
     planner_audio_understanding = structured_planner_diagnostics.get("audioUnderstanding") if isinstance(structured_planner_diagnostics.get("audioUnderstanding"), dict) else {}
@@ -5713,6 +5897,9 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "audioPrimaryDriverReason": audio_primary_driver_reason,
             "fallbackMode": fallback_mode,
             "fallbackReason": fallback_reason,
+            "noTextFallbackMode": no_text_fallback_mode,
+            "authorialInterpretationLevel": authorial_interpretation_level,
+            "audioLiteralnessLevel": audio_literalness_level,
             "audioSourceMode": audio_context.get("sourceMode"),
             "sourceOrigin_raw": source_origin_raw or None,
             "sourceOrigin_normalized": source_origin_normalized or None,
