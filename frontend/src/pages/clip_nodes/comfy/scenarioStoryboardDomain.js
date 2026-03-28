@@ -283,6 +283,42 @@ function hasAnyKeyword(value = "", keywords = []) {
   return keywords.some((keyword) => text.includes(String(keyword || "").toLowerCase()));
 }
 
+function buildTransitionPromptPatch(scene = {}, index = 0) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const transitionType = normalizeText(source.transitionType).toLowerCase();
+  const sceneType = normalizeText(source.sceneType).toLowerCase();
+  const imageStrategy = deriveScenarioImageStrategy(source);
+  const isTransition = imageStrategy === "first_last"
+    || transitionType.includes("state_shift")
+    || transitionType.includes("transition")
+    || sceneType.includes("transition")
+    || sceneType.includes("state_shift");
+  if (!isTransition) return null;
+
+  const startPrompt = normalizeText(source.startFramePromptRu || source.startFramePromptEn || source.startFramePrompt);
+  const endPrompt = normalizeText(source.endFramePromptRu || source.endFramePromptEn || source.endFramePrompt);
+  const overlap = tokenOverlapRatio(startPrompt, endPrompt);
+  const shouldStrengthen = !startPrompt || !endPrompt || overlap >= 0.82;
+  if (!shouldStrengthen) return null;
+
+  const sceneGoal = normalizeText(source.sceneGoalRu || source.sceneGoalEn || source.sceneGoal || source.summaryRu || source.summaryEn);
+  const imagePrompt = normalizeText(source.imagePromptRu || source.imagePromptEn || source.imagePrompt || source.frameDescription);
+  const videoPrompt = normalizeText(source.videoPromptRu || source.videoPromptEn || source.videoPrompt || source.transitionActionPrompt);
+  const startBase = startPrompt || imagePrompt || sceneGoal || videoPrompt;
+  const endBase = endPrompt || sceneGoal || videoPrompt || imagePrompt;
+  if (!startBase && !endBase) return null;
+
+  return {
+    startFramePromptRu: [startBase, "Start frame: pre-change state, baseline composition and subject placement."].filter(Boolean).join(" "),
+    endFramePromptRu: [
+      endBase,
+      "End frame: resolved changed state (A→B must be readable).",
+      "Use clear composition and subject-position delta versus start frame.",
+    ].filter(Boolean).join(" "),
+    continuationFromPrevious: index > 0 ? true : Boolean(source.continuationFromPrevious ?? source.continuation_from_previous ?? source.continuation),
+  };
+}
+
 function buildScenarioSceneContractWarnings(scene = {}) {
   const mustAppear = normalizeStringList(scene.mustAppear);
   const actors = normalizeStringList(scene.actors);
@@ -1028,6 +1064,16 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     forceTwoPerson: Boolean(resolvedRoleContract.debug?.forceTwoPerson),
     hasSemanticTwoPerson: Boolean(resolvedRoleContract.debug?.hasSemanticTwoPerson),
   });
+  const transitionPromptPatch = buildTransitionPromptPatch(normalizedScene, index);
+  if (transitionPromptPatch) {
+    normalizedScene.startFramePromptRu = String(transitionPromptPatch.startFramePromptRu || normalizedScene.startFramePromptRu || "").trim();
+    normalizedScene.endFramePromptRu = String(transitionPromptPatch.endFramePromptRu || normalizedScene.endFramePromptRu || "").trim();
+    normalizedScene.startFramePromptEn = normalizedScene.startFramePromptEn || normalizedScene.startFramePromptRu;
+    normalizedScene.endFramePromptEn = normalizedScene.endFramePromptEn || normalizedScene.endFramePromptRu;
+    if (index > 0) {
+      normalizedScene.continuationFromPrevious = Boolean(transitionPromptPatch.continuationFromPrevious);
+    }
+  }
   normalizedScene.contractWarnings = buildScenarioSceneContractWarnings(normalizedScene);
   normalizedScene.contractWarningCodes = normalizedScene.contractWarnings.map((item) => item.code);
   return normalizedScene;

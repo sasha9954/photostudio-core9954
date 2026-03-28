@@ -121,8 +121,13 @@ function deriveFirstLastFramePrompts(scene = {}) {
 
   const start = startExplicit || frameDescription || sceneGoal || imagePrompt || videoPrompt;
   let end = endExplicit || sceneGoal || imagePrompt || frameDescription || videoPrompt;
-  if (end) end = `${end}. Финальное визуально изменённое состояние: ${transitionSemantics}`;
-  if (start && end && start === end) end = `${end}. Финальный кадр должен заметно отличаться от первого.`;
+  if (start) {
+    end = end || start;
+    end = `${end}. Финальное визуально изменённое состояние: ${transitionSemantics}. Обеспечьте читаемый A→B с явной композиционной разницей.`;
+  }
+  if (start && end && start.toLowerCase() === end.toLowerCase()) {
+    end = `${end}. Финальный кадр должен заметно отличаться от первого.`;
+  }
 
   return { start, end, derived: true };
 }
@@ -399,8 +404,19 @@ export default function ScenarioStoryboardEditor({
   const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || derivedFramePrompts.start || "");
   const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
   const sourceImageUrl = String(selectedScene?.imageUrl || "").trim();
-  const startFrameSourceUrl = String(selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl || "").trim();
-  const endFrameSourceUrl = String(selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl || "").trim();
+  const startFrameSourceUrl = String(
+    selectedScene?.startImageUrl
+    || selectedScene?.startFrameImageUrl
+    || selectedScene?.startFramePreviewUrl
+    || selectedScene?.imageUrl
+    || ""
+  ).trim();
+  const endFrameSourceUrl = String(
+    selectedScene?.endImageUrl
+    || selectedScene?.endFrameImageUrl
+    || selectedScene?.endFramePreviewUrl
+    || ""
+  ).trim();
   const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();
   const hasSceneVideo = Boolean(sceneVideoUrl);
   const sceneAudioSliceUrl = String(selectedScene?.audioSliceUrl || selectedScene?.extractedAudioUrl || "").trim();
@@ -1003,13 +1019,13 @@ export default function ScenarioStoryboardEditor({
                             <textarea className="clipSB_textarea" rows={2} value={String(selectedScene?.startFramePromptEn || selectedScene?.startFramePrompt || derivedFramePrompts.start || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptEn: event.target.value })} placeholder="Opening visual state (first frame)" />
                           </details>
                           <div className="clipSB_scenarioEditorFramePreviewWrap">
-                            {selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl ? (
-                              <img className="clipSB_scenarioEditorImagePreview" src={selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl} alt={`scene-${selectedSceneId}-start-frame`} />
+                            {startFrameSourceUrl ? (
+                              <img className="clipSB_scenarioEditorImagePreview" src={startFrameSourceUrl} alt={`scene-${selectedSceneId}-start-frame`} />
                             ) : <div className="clipSB_hint">preview первого кадра отсутствует</div>}
                           </div>
                           <div className="clipSB_scenarioEditorBtnRow">
                             <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "start_frame", generateMeta)} disabled={startFrameStatus === "loading"}>Создать изображение</button>
-                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { startFrameImageUrl: "", startFramePreviewUrl: "", startFrameStatus: "idle" })}>Удалить</button>
+                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { startImageUrl: "", startFrameImageUrl: "", startFramePreviewUrl: "", startFrameStatus: "idle" })}>Удалить</button>
                           </div>
                         </div>
                         <div className="clipSB_scenarioEditorFrameCard">
@@ -1023,13 +1039,13 @@ export default function ScenarioStoryboardEditor({
                             <textarea className="clipSB_textarea" rows={2} value={String(selectedScene?.endFramePromptEn || selectedScene?.endFramePrompt || derivedFramePrompts.end || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptEn: event.target.value })} placeholder="Changed/final visual state (last frame)" />
                           </details>
                           <div className="clipSB_scenarioEditorFramePreviewWrap">
-                            {selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl ? (
-                              <img className="clipSB_scenarioEditorImagePreview" src={selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl} alt={`scene-${selectedSceneId}-end-frame`} />
+                            {endFrameSourceUrl ? (
+                              <img className="clipSB_scenarioEditorImagePreview" src={endFrameSourceUrl} alt={`scene-${selectedSceneId}-end-frame`} />
                             ) : <div className="clipSB_hint">{isFirstLastVideoMode ? "Последний кадр отсутствует" : "Последний кадр не требуется"}</div>}
                           </div>
                           <div className="clipSB_scenarioEditorBtnRow">
                             <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "end_frame", generateMeta)} disabled={endFrameStatus === "loading" || !isFirstLastVideoMode}>Создать изображение</button>
-                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { endFrameImageUrl: "", endFramePreviewUrl: "", endFrameStatus: "idle" })} disabled={!isFirstLastVideoMode}>Удалить</button>
+                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { endImageUrl: "", endFrameImageUrl: "", endFramePreviewUrl: "", endFrameStatus: "idle" })} disabled={!isFirstLastVideoMode}>Удалить</button>
                           </div>
                         </div>
                       </div>
@@ -1140,13 +1156,23 @@ export default function ScenarioStoryboardEditor({
                           className="clipSB_btn"
                           type="button"
                           onClick={() => {
+                            const renderMode = String(selectedScene?.renderMode || "");
+                            const resolvedWorkflowKey = String(selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "");
+                            const whyBlocked = lipSyncAudioMissing ? "lip_sync_audio_missing" : "";
                             console.debug("[SCENARIO EDITOR VIDEO SEND]", {
                               videoSendRouteTriggered: true,
                               selectedSceneId,
                               lipSync: sceneLipSync,
                               audioSlicePresent: Boolean(sceneAudioSliceUrl),
-                              renderMode: String(selectedScene?.renderMode || ""),
-                              workflow: String(selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || ""),
+                              renderMode,
+                              resolvedWorkflowKey,
+                              firstFrameUrl: startFrameSourceUrl,
+                              lastFrameUrl: endFrameSourceUrl,
+                              sourceOfTruthKeys: {
+                                firstFrame: ["scene.startImageUrl", "scene.startFrameImageUrl", "scene.startFramePreviewUrl", "scene.imageUrl"],
+                                lastFrame: ["scene.endImageUrl", "scene.endFrameImageUrl", "scene.endFramePreviewUrl"],
+                              },
+                              whyBlocked,
                             });
                             if (lipSyncAudioMissing) return;
                             onGenerateScene?.(nodeId, selectedSceneId, "video", generateMeta);

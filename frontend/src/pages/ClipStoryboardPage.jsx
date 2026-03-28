@@ -2509,8 +2509,13 @@ function deriveFirstLastFramePrompts(scene = {}) {
 
   const start = explicitStart || frameDescription || sceneGoal || imagePrompt || videoPrompt;
   let end = explicitEnd || sceneGoal || imagePrompt || frameDescription || videoPrompt;
-  if (end) end = `${end}. Final changed state after transition: ${transitionSemantics}`;
-  if (start && end && start === end) end = `${end}. Keep final frame visually different from opening frame.`;
+  if (start) {
+    end = end || start;
+    end = `${end}. Final changed state after transition: ${transitionSemantics}. Enforce clear A→B composition delta and changed subject positions.`;
+  }
+  if (start && end && isNearDuplicateSceneText(start, end)) {
+    end = `${end}. Do not repeat opening composition; make the visual change readable in a single still frame.`;
+  }
   return { start, end, derived: true };
 }
 
@@ -3054,19 +3059,42 @@ function buildAssemblyPayloadSignature(payload, options = {}) {
 function getSceneStartImageSource(scene, previousScene) {
   if (resolveSceneTransitionType(scene) !== "continuous") return "none";
   const inheritPreviousEndAsStart = !!scene?.inheritPreviousEndAsStart;
-  const previousEndImageUrl = String(previousScene?.endImageUrl || "").trim();
-  const manualStartImageUrl = String(scene?.startImageUrl || "").trim();
+  const previousEndImageUrl = String(previousScene?.endImageUrl || previousScene?.endFrameImageUrl || "").trim();
+  const manualStartImageUrl = String(scene?.startImageUrl || scene?.startFrameImageUrl || scene?.startFramePreviewUrl || "").trim();
   if (inheritPreviousEndAsStart && previousEndImageUrl) return "previous_end";
   if (manualStartImageUrl) return "manual";
   return "none";
 }
 
+function resolveSceneFrameUrls(scene, previousScene = null) {
+  const sourceScene = scene && typeof scene === "object" ? scene : {};
+  const sourcePreviousScene = previousScene && typeof previousScene === "object" ? previousScene : {};
+  const previousEndImageUrl = String(sourcePreviousScene?.endImageUrl || sourcePreviousScene?.endFrameImageUrl || "").trim();
+  const startImageUrl = String(sourceScene?.startImageUrl || sourceScene?.startFrameImageUrl || sourceScene?.startFramePreviewUrl || "").trim();
+  const fallbackImageUrl = String(sourceScene?.imageUrl || "").trim();
+  const endImageUrl = String(sourceScene?.endImageUrl || sourceScene?.endFrameImageUrl || sourceScene?.endFramePreviewUrl || "").trim();
+  const startSource = getSceneStartImageSource(sourceScene, sourcePreviousScene);
+  const effectiveStartImageUrl = startSource === "previous_end"
+    ? previousEndImageUrl
+    : (startImageUrl || fallbackImageUrl);
+  return {
+    effectiveStartImageUrl,
+    endImageUrl,
+    fallbackImageUrl,
+    sourceOfTruthKeys: {
+      start: startSource === "previous_end"
+        ? ["previousScene.endImageUrl", "previousScene.endFrameImageUrl"]
+        : ["scene.startImageUrl", "scene.startFrameImageUrl", "scene.startFramePreviewUrl", "scene.imageUrl"],
+      end: ["scene.endImageUrl", "scene.endFrameImageUrl", "scene.endFramePreviewUrl"],
+    },
+  };
+}
+
 function getEffectiveSceneStartImage(scene, previousScene) {
-  if (resolveSceneTransitionType(scene) !== "continuous") return String(scene?.startImageUrl || "").trim();
-  if (getSceneStartImageSource(scene, previousScene) === "previous_end") {
-    return String(previousScene?.endImageUrl || "").trim();
+  if (resolveSceneTransitionType(scene) !== "continuous") {
+    return String(scene?.startImageUrl || scene?.startFrameImageUrl || scene?.startFramePreviewUrl || scene?.imageUrl || "").trim();
   }
-  return String(scene?.startImageUrl || "").trim();
+  return resolveSceneFrameUrls(scene, previousScene).effectiveStartImageUrl;
 }
 
 function getSceneVideoPoster(scene, previousScene = null) {
@@ -6790,10 +6818,12 @@ const scenarioSelectedImageStrategy = String(scenarioSelected?.imageStrategy || 
 const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelected);
 const scenarioSelectedIsLipSync = isLipSyncScene(scenarioSelected);
 const scenarioPreviousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
+const scenarioSelectedFrameUrls = resolveSceneFrameUrls(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedCanInheritPreviousEnd = scenarioSelectedTransitionType === "continuous"
   && !!scenarioPreviousScene
-  && !!String(scenarioPreviousScene?.endImageUrl || "").trim();
+  && !!String(scenarioPreviousScene?.endImageUrl || scenarioPreviousScene?.endFrameImageUrl || "").trim();
 const scenarioSelectedEffectiveStartImageUrl = getEffectiveSceneStartImage(scenarioSelected, scenarioPreviousScene);
+const scenarioSelectedEndImageUrl = String(scenarioSelectedFrameUrls.endImageUrl || "").trim();
 const scenarioSelectedVideoSourceImageUrl = String(scenarioSelected?.videoSourceImageUrl || "").trim();
 const scenarioSelectedVideoPanelActivated = !!scenarioSelected?.videoPanelActivated;
 const scenarioSelectedStartImageSource = getSceneStartImageSource(scenarioSelected, scenarioPreviousScene);
@@ -6828,16 +6858,18 @@ useEffect(() => {
 }, [scenarioSelected]);
 const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   ? "endImageUrl"
+  : scenarioPreviousScene?.endFrameImageUrl
+    ? "endFrameImageUrl"
   : scenarioPreviousScene?.imageUrl
     ? "imageUrl"
     : scenarioPreviousScene?.startImageUrl
       ? "startImageUrl"
       : "none";
 const scenarioHasImageForVideo = scenarioSelectedImageStrategy === "first_last"
-  ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.imageUrl) && !!scenarioSelected?.endImageUrl
+  ? !!(scenarioSelectedFrameUrls.effectiveStartImageUrl || scenarioSelectedFrameUrls.fallbackImageUrl) && !!scenarioSelectedFrameUrls.endImageUrl
   : scenarioSelectedImageStrategy === "continuation"
-    ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.imageUrl)
-    : !!scenarioSelected?.imageUrl;
+    ? !!(scenarioSelectedFrameUrls.effectiveStartImageUrl || scenarioSelectedFrameUrls.fallbackImageUrl)
+    : !!scenarioSelectedFrameUrls.fallbackImageUrl;
 const scenarioCanShowAddToVideoButton = scenarioHasImageForVideo && !scenarioSelectedVideoPanelActivated;
 
 const comfyNode = useMemo(() => {
@@ -9588,15 +9620,30 @@ Aspect ratio: ${imageFormat}`,
     }
     if (!targetScene) return;
     const targetPreviousScene = targetSceneIndex > 0 ? scenarioScenes[targetSceneIndex - 1] : null;
-    const targetEffectiveStartImageUrl = getEffectiveSceneStartImage(targetScene, targetPreviousScene);
+    const { effectiveStartImageUrl, endImageUrl, fallbackImageUrl, sourceOfTruthKeys } = resolveSceneFrameUrls(targetScene, targetPreviousScene);
+    const targetEffectiveStartImageUrl = effectiveStartImageUrl;
     const imageStrategy = String(targetScene?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
     const transitionType = imageStrategy === "continuation" || imageStrategy === "first_last" ? "continuous" : "single";
-    const frameImageUrl = String(targetScene?.imageUrl || "").trim();
-    const effectiveStartImageUrl = String(targetEffectiveStartImageUrl || "").trim();
-    const endImageUrl = String(targetScene?.endImageUrl || "").trim();
+    const frameImageUrl = String(fallbackImageUrl || "").trim();
+    const resolvedFirstFrameUrl = String(targetEffectiveStartImageUrl || "").trim();
+    const resolvedLastFrameUrl = String(endImageUrl || "").trim();
     const hasImageForVideo = imageStrategy === "first_last" || imageStrategy === "continuation"
-      ? !!(effectiveStartImageUrl || frameImageUrl) && (imageStrategy === "continuation" || !!endImageUrl)
+      ? !!(resolvedFirstFrameUrl || frameImageUrl) && (imageStrategy === "continuation" || !!resolvedLastFrameUrl)
       : !!frameImageUrl;
+    if (!hasImageForVideo) {
+      console.debug("[SCENARIO VIDEO BLOCKED]", {
+        renderMode: String(targetScene?.renderMode || ""),
+        resolvedWorkflowKey: normalizeScenarioWorkflowKeyForProduction(
+          resolveScenarioExplicitWorkflowKey(targetScene)
+          || targetScene?.resolvedWorkflowKey
+          || resolveScenarioWorkflowKey(targetScene)
+        ),
+        firstFrameUrl: resolvedFirstFrameUrl,
+        lastFrameUrl: resolvedLastFrameUrl,
+        sourceOfTruthKeys,
+        whyBlocked: "missing_required_frame_assets",
+      });
+    }
 
     if (!hasImageForVideo) return;
     const effectiveLipSync = isLipSyncScene(targetScene);
@@ -9669,7 +9716,7 @@ Aspect ratio: ${imageFormat}`,
     const videoVisualGlueText = buildScenarioVideoVisualGlueText(targetScene);
     const finalVideoPrompt = [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
     const sourceImageUrl = transitionType === "continuous"
-      ? (effectiveStartImageUrl || endImageUrl || frameImageUrl || "")
+      ? (resolvedFirstFrameUrl || resolvedLastFrameUrl || frameImageUrl || "")
       : (frameImageUrl || "");
 
     console.log("[StoryboardVideo] video_loading_on reason=generate_video", { sceneId });
@@ -9694,7 +9741,7 @@ Aspect ratio: ${imageFormat}`,
       requiresAudioSensitiveVideo,
       requestedDurationSec,
       startImagePresent: Boolean(effectiveStartImageUrl),
-      endImagePresent: Boolean(endImageUrl),
+      endImagePresent: Boolean(resolvedLastFrameUrl),
       audioSlicePresent: Boolean(targetScene?.audioSliceUrl),
     });
     console.debug("[SCENARIO LTX SCENE DEBUG]", (Array.isArray(scenarioScenes) ? scenarioScenes : []).map((scene, idx) => ({
@@ -9740,8 +9787,8 @@ Aspect ratio: ${imageFormat}`,
       const videoStartPayload = {
         sceneId,
         imageUrl: sourceImageUrl,
-        startImageUrl: effectiveStartImageUrl,
-        endImageUrl,
+        startImageUrl: resolvedFirstFrameUrl,
+        endImageUrl: resolvedLastFrameUrl,
         audioSliceUrl: shouldAttachAudioSlice ? attachedAudioSliceUrl : "",
         external_audio_used: shouldAttachAudioSlice,
         external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
@@ -9779,6 +9826,11 @@ Aspect ratio: ${imageFormat}`,
         endpoint,
         sceneId,
         effectiveVideoPromptLength: finalVideoPrompt.length,
+        renderMode: String(effectiveRenderMode || ""),
+        resolvedWorkflowKey,
+        firstFrameUrl: resolvedFirstFrameUrl,
+        lastFrameUrl: resolvedLastFrameUrl,
+        sourceOfTruthKeys,
         payload: videoStartPayload,
       });
       console.info("[SCENARIO VIDEO START REQUEST]", {
@@ -9849,8 +9901,8 @@ Aspect ratio: ${imageFormat}`,
       const legacyPayload = {
         sceneId,
         imageUrl: sourceImageUrl,
-        startImageUrl: effectiveStartImageUrl,
-        endImageUrl,
+        startImageUrl: resolvedFirstFrameUrl,
+        endImageUrl: resolvedLastFrameUrl,
         audioSliceUrl: shouldAttachAudioSlice ? attachedAudioSliceUrl : "",
         external_audio_used: shouldAttachAudioSlice,
         external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
@@ -9945,13 +9997,14 @@ Aspect ratio: ${imageFormat}`,
     };
 
     const transitionType = resolveSceneTransitionType(scenarioSelected);
+    const selectedFrameUrls = resolveSceneFrameUrls(scenarioSelected, scenarioPreviousScene);
     const hasImage = transitionType === "continuous"
-      ? !!(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl)
-      : !!scenarioSelected?.imageUrl;
+      ? !!(selectedFrameUrls.effectiveStartImageUrl || selectedFrameUrls.endImageUrl || selectedFrameUrls.fallbackImageUrl)
+      : !!selectedFrameUrls.fallbackImageUrl;
     if (!hasImage) return;
     const videoSourceImageUrl = transitionType === "continuous"
-      ? String(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl || "")
-      : String(scenarioSelected?.imageUrl || "");
+      ? String(selectedFrameUrls.effectiveStartImageUrl || selectedFrameUrls.endImageUrl || selectedFrameUrls.fallbackImageUrl || "")
+      : String(selectedFrameUrls.fallbackImageUrl || "");
     const effectiveVideoProvider = resolveScenarioSceneVideoProvider(scenarioSelected);
 
     const sceneId = String(scenarioSelected?.sceneId || "").trim();
@@ -9985,7 +10038,7 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoFocusPulse(true);
     window.setTimeout(() => setScenarioVideoFocusPulse(false), 1200);
     scrollToVideoBlock();
-  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
+  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioPreviousScene, scenarioSelected, updateScenarioScene]);
 
   const assemblySource = useMemo(() => resolveAssemblySource({ nodes, edges }), [nodes, edges]);
   const assemblyScenesSource = assemblySource.scenesSource;
@@ -15310,12 +15363,12 @@ const hydrate = useCallback((source = "unknown") => {
 
                           <div className="clipSB_hint" style={{ marginBottom: 6 }}>END FRAME IMAGE</div>
                           <div className="clipSB_scenarioPreviewWrap">
-                            {scenarioSelected.endImageUrl ? (
+                            {scenarioSelectedEndImageUrl ? (
                               <img
-                                src={scenarioSelected.endImageUrl}
+                                src={scenarioSelectedEndImageUrl}
                                 alt="end frame preview"
                                 className="clipSB_scenarioPreview"
-                                onClick={(e) => openLightbox(scenarioSelected.endImageUrl, e.currentTarget.getBoundingClientRect())}
+                                onClick={(e) => openLightbox(scenarioSelectedEndImageUrl, e.currentTarget.getBoundingClientRect())}
                               />
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">End preview отсутствует</div>
@@ -15504,12 +15557,12 @@ const hydrate = useCallback((source = "unknown") => {
 
                             <div className="clipSB_videoFrameSmall">
                               <div className="clipSB_hint">END</div>
-                              {scenarioSelected.endImageUrl ? (
+                              {scenarioSelectedEndImageUrl ? (
                                 <img
-                                  src={scenarioSelected.endImageUrl}
+                                  src={scenarioSelectedEndImageUrl}
                                   className="clipSB_videoFrameImg"
                                   alt="end frame"
-                                  onClick={(e) => openLightbox(scenarioSelected.endImageUrl, e.currentTarget.getBoundingClientRect())}
+                                  onClick={(e) => openLightbox(scenarioSelectedEndImageUrl, e.currentTarget.getBoundingClientRect())}
                                 />
                               ) : (
                                 <div className="clipSB_videoFramePlaceholder">END</div>
@@ -15577,7 +15630,7 @@ const hydrate = useCallback((source = "unknown") => {
                           <summary>Детали</summary>
                           <div className="clipSB_videoKv"><span>imageUrl</span><span>{scenarioSelected.imageUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>startImageUrl</span><span>{scenarioSelectedEffectiveStartImageUrl || "—"}</span></div>
-                          <div className="clipSB_videoKv"><span>endImageUrl</span><span>{scenarioSelected.endImageUrl || "—"}</span></div>
+                          <div className="clipSB_videoKv"><span>endImageUrl</span><span>{scenarioSelectedEndImageUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>videoSourceImageUrl</span><span>{scenarioSelected.videoSourceImageUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>transitionActionPrompt</span><span>{scenarioSelected.transitionActionPrompt || scenarioSelected.videoPrompt || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>audioSliceUrl</span><span>{scenarioSelected.audioSliceUrl || "—"}</span></div>
