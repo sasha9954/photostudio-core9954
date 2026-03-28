@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { resolveSceneDisplayTime } from "./scenarioStoryboardDomain";
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 
 const TOP_TABS = [
@@ -20,9 +21,8 @@ function fmtSec(value) {
 function safeSceneDuration(scene = {}) {
   const explicit = Number(scene?.audioSliceExpectedDurationSec ?? scene?.durationSec);
   if (Number.isFinite(explicit) && explicit >= 0) return explicit;
-  const t0 = Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0);
-  const t1 = Number(scene?.audioSliceEndSec ?? scene?.t1 ?? t0);
-  return Math.max(0, t1 - t0);
+  const { startSec, endSec } = resolveSceneDisplayTime(scene);
+  return Math.max(0, Number(endSec) - Number(startSec));
 }
 
 function resolveBlockStatus({ runtimeStatus = "", assetUrl = "" } = {}) {
@@ -247,8 +247,8 @@ export default function ScenarioStoryboardEditor({
     if (Array.isArray(safeAudioData?.phrases) && safeAudioData.phrases.length) return safeAudioData.phrases;
     return normalizedScenes.map((scene, idx) => ({
       sceneId: String(scene?.sceneId || resolveSceneId(scene, idx)),
-      startSec: Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0),
-      endSec: Number(scene?.audioSliceEndSec ?? scene?.t1 ?? scene?.t0 ?? 0),
+      startSec: resolveSceneDisplayTime(scene).startSec,
+      endSec: resolveSceneDisplayTime(scene).endSec,
       text: String(scene?.localPhrase || scene?.summaryRu || "").trim(),
       energy: String(scene?.emotionRu || "").trim(),
       context: String(scene?.locationRu || "").trim(),
@@ -257,6 +257,7 @@ export default function ScenarioStoryboardEditor({
 
   const safeIndex = normalizedScenes.findIndex((scene) => String(scene?.sceneId || "") === activeSelectionId);
   const selectedScene = safeIndex >= 0 ? normalizedScenes[safeIndex] : null;
+  const selectedDisplayTime = resolveSceneDisplayTime(selectedScene);
   const selectedSceneId = String(selectedScene?.sceneId || "").trim();
   const selectedRuntime = safeGeneration[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object" ? safeGeneration[selectedSceneId] : {};
   const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || normalizedScenes[idx]?.sceneId || "").trim();
@@ -307,8 +308,9 @@ export default function ScenarioStoryboardEditor({
   const handleExtractSceneAudio = async (scene) => {
     const sceneId = String(scene?.sceneId || "").trim();
     if (!sceneId) return;
-    const startSec = Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0);
-    const endSec = Number(scene?.audioSliceEndSec ?? scene?.t1 ?? startSec);
+    const displayTime = resolveSceneDisplayTime(scene);
+    const startSec = Number(scene?.audioSliceStartSec ?? displayTime.startSec ?? 0);
+    const endSec = Number(scene?.audioSliceEndSec ?? displayTime.endSec ?? startSec);
     const durationSec = Math.max(0, endSec - startSec);
     onUpdateScene?.(nodeId, sceneId, {
       audioSliceStatus: "loading",
@@ -377,7 +379,11 @@ export default function ScenarioStoryboardEditor({
     ?? selectedScene?.audioSliceActualDurationSec
     ?? selectedScene?.audioSliceExpectedDurationSec
     ?? selectedScene?.extractedAudioDurationSec
-    ?? Math.max(0, Number(selectedScene?.audioSliceEndSec ?? selectedScene?.t1 ?? 0) - Number(selectedScene?.audioSliceStartSec ?? selectedScene?.t0 ?? 0))
+    ?? Math.max(
+      0,
+      Number(selectedScene?.audioSliceEndSec ?? selectedDisplayTime.endSec ?? 0)
+      - Number(selectedScene?.audioSliceStartSec ?? selectedDisplayTime.startSec ?? 0)
+    )
   );
   const sceneLipSync = Boolean(selectedScene?.lipSync);
   const lipSyncAudioMissing = sceneLipSync && !sceneAudioSliceUrl;
@@ -476,8 +482,7 @@ export default function ScenarioStoryboardEditor({
 
   const formatSceneForCopy = (scene = {}, idx = 0) => {
     const sceneId = String(scene?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
-    const t0 = Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0);
-    const t1 = Number(scene?.audioSliceEndSec ?? scene?.t1 ?? t0);
+    const { startSec: t0, endSec: t1 } = resolveSceneDisplayTime(scene);
     const duration = safeSceneDuration(scene);
     const warnings = Array.isArray(scene?.contractWarnings)
       ? scene.contractWarnings.map((warning) => String(warning?.label || warning?.code || "").trim()).filter(Boolean)
@@ -547,6 +552,7 @@ export default function ScenarioStoryboardEditor({
           <div className="clipSB_storyboardKv"><span>Сцен</span><strong>{normalizedScenes.length}</strong></div>
           {normalizedScenes.map((scene, idx) => {
             const sceneId = String(scene?.sceneId || `S${idx + 1}`);
+            const displayTime = resolveSceneDisplayTime(scene);
             return (
               <details key={`contract-${sceneId}-${idx}`} style={{ marginBottom: 10 }}>
                 <summary
@@ -554,10 +560,10 @@ export default function ScenarioStoryboardEditor({
                   onMouseDown={stopNodeDragEvent}
                   onPointerDown={stopNodeDragEvent}
                 >
-                  {sceneId} · {fmtSec(scene?.t0)}–{fmtSec(scene?.t1)}
+                  {sceneId} · {fmtSec(displayTime.startSec)}–{fmtSec(displayTime.endSec)}
                 </summary>
                 <ContractField label="sceneId" value={sceneId} />
-                <ContractField label="t0/t1" value={`${fmtSec(scene?.t0)} / ${fmtSec(scene?.t1)}`} />
+                <ContractField label="t0/t1" value={`${fmtSec(displayTime.startSec)} / ${fmtSec(displayTime.endSec)}`} />
                 {isLongText(scene?.localPhrase || scene?.lyricText)
                   ? <ScenarioReadonlyTextField label="lyric text" value={scene?.localPhrase || scene?.lyricText} minRows={2} />
                   : <ContractField label="lyric text" value={scene?.localPhrase || scene?.lyricText} />}
@@ -757,6 +763,7 @@ export default function ScenarioStoryboardEditor({
 
             {normalizedScenes.map((scene, idx) => {
               const sceneId = String(scene?.sceneId || `S${idx + 1}`);
+              const displayTime = resolveSceneDisplayTime(scene);
               const runtime = safeGeneration[sceneId] && typeof safeGeneration[sceneId] === "object" ? safeGeneration[sceneId] : {};
               const status = resolveBlockStatus({ runtimeStatus: runtime?.status || runtime?.videoStatus || runtime?.imageStatus, assetUrl: scene?.videoUrl || scene?.imageUrl });
               return (
@@ -770,7 +777,7 @@ export default function ScenarioStoryboardEditor({
                   }}
                 >
                   <div className="clipSB_scenarioItemTop">
-                    <div className="clipSB_storyboardSceneId">[ {sceneId} · {fmtSec(scene?.audioSliceStartSec ?? scene?.t0)}–{fmtSec(scene?.audioSliceEndSec ?? scene?.t1)} ]</div>
+                    <div className="clipSB_storyboardSceneId">[ {sceneId} · {fmtSec(displayTime.startSec)}–{fmtSec(displayTime.endSec)} ]</div>
                   </div>
                   <div className="clipSB_scenarioItemText">{scene?.summaryRu || scene?.localPhrase || "—"}</div>
                   <div className="clipSB_scenarioEditorBadgeRow">
@@ -1022,15 +1029,15 @@ export default function ScenarioStoryboardEditor({
                         </div>
                         <div className="clipSB_sceneAudioInfoCard">
                           <span>Начало</span>
-                          <strong>{fmtSec(selectedScene.audioSliceStartSec)} c</strong>
+                          <strong>{fmtSec(selectedDisplayTime.startSec)} c</strong>
                         </div>
                         <div className="clipSB_sceneAudioInfoCard">
                           <span>Конец</span>
-                          <strong>{fmtSec(selectedScene.audioSliceEndSec)} c</strong>
+                          <strong>{fmtSec(selectedDisplayTime.endSec)} c</strong>
                         </div>
                         <div className="clipSB_sceneAudioInfoCard">
                           <span>Длительность</span>
-                          <strong>{fmtSec(Math.max(0, Number(selectedScene.audioSliceEndSec ?? selectedScene?.t1 ?? 0) - Number(selectedScene.audioSliceStartSec ?? selectedScene?.t0 ?? 0)))} c</strong>
+                          <strong>{fmtSec(Math.max(0, Number(selectedDisplayTime.endSec) - Number(selectedDisplayTime.startSec)))} c</strong>
                         </div>
                       </div>
 

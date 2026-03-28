@@ -57,6 +57,7 @@ import {
   detectScenarioAssetType,
   deriveScenarioImageStrategy,
   normalizeScenarioStoryboardPackage,
+  resolveSceneDisplayTime,
   resolveScenarioExplicitModelKey,
   resolveScenarioExplicitWorkflowKey,
   resolveScenarioWorkflowKey,
@@ -1730,6 +1731,60 @@ function buildSceneSignature(scenes, prefix = "scene") {
       return [sceneId, Number.isFinite(t0) ? t0 : "", Number.isFinite(t1) ? t1 : "", imagePrompt].join("|");
     })
     .join("~~");
+}
+
+const SCENARIO_GENERATED_ASSET_FIELDS = [
+  "imageUrl",
+  "startImageUrl",
+  "endImageUrl",
+  "startFrameImageUrl",
+  "endFrameImageUrl",
+  "videoUrl",
+  "imageStatus",
+  "startFrameStatus",
+  "endFrameStatus",
+  "videoStatus",
+  "imageError",
+  "videoError",
+  "videoJobId",
+  "videoSourceImageUrl",
+  "videoPanelActivated",
+];
+
+function stripScenarioGeneratedAssets(scene = {}) {
+  const base = scene && typeof scene === "object" ? { ...scene } : {};
+  SCENARIO_GENERATED_ASSET_FIELDS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(base, key)) delete base[key];
+  });
+  return base;
+}
+
+function buildScenarioScenePackageSignature(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const displayTime = resolveSceneDisplayTime(source);
+  const signaturePayload = {
+    time: [Number(displayTime.startSec || 0), Number(displayTime.endSec || 0)],
+    summaryRu: String(source?.summaryRu || "").trim(),
+    summaryEn: String(source?.summaryEn || "").trim(),
+    sceneGoalRu: String(source?.sceneGoalRu || "").trim(),
+    sceneGoalEn: String(source?.sceneGoalEn || "").trim(),
+    localPhrase: String(source?.localPhrase || "").trim(),
+    lyricText: String(source?.lyricText || "").trim(),
+    imagePromptRu: String(source?.imagePromptRu || "").trim(),
+    imagePromptEn: String(source?.imagePromptEn || "").trim(),
+    videoPromptRu: String(source?.videoPromptRu || "").trim(),
+    videoPromptEn: String(source?.videoPromptEn || "").trim(),
+    actors: Array.isArray(source?.actors) ? source.actors : [],
+    refsUsed: Array.isArray(source?.refsUsed) ? source.refsUsed : [],
+    mustAppear: Array.isArray(source?.mustAppear) ? source.mustAppear : [],
+    props: Array.isArray(source?.props) ? source.props : [],
+    refsByRole: source?.refsByRole && typeof source.refsByRole === "object" ? source.refsByRole : {},
+    resolvedWorkflowKey: String(source?.resolvedWorkflowKey || "").trim(),
+    resolvedModelKey: String(source?.resolvedModelKey || "").trim(),
+    renderMode: String(source?.renderMode || "").trim(),
+    ltxMode: String(source?.ltxMode || "").trim(),
+  };
+  return JSON.stringify(signaturePayload);
 }
 
 function collectSceneVideoStateStats(scenes, prefix = "scene") {
@@ -6634,8 +6689,9 @@ const scenarioSelectedVideoPanelActivated = !!scenarioSelected?.videoPanelActiva
 const scenarioSelectedStartImageSource = getSceneStartImageSource(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedImageFormat = resolvePreferredSceneFormat(scenarioSelected?.format, scenarioSelected?.imageFormat);
 const scenarioSelectedIndexLabel = Number.isFinite(scenarioEditor.selected) ? scenarioEditor.selected + 1 : 0;
-const scenarioSelectedT0 = Number(scenarioSelected?.t0 ?? scenarioSelected?.start ?? 0);
-const scenarioSelectedT1 = Number(scenarioSelected?.t1 ?? scenarioSelected?.end ?? 0);
+const scenarioSelectedDisplayTime = resolveSceneDisplayTime(scenarioSelected);
+const scenarioSelectedT0 = Number(scenarioSelectedDisplayTime.startSec ?? 0);
+const scenarioSelectedT1 = Number(scenarioSelectedDisplayTime.endSec ?? 0);
 const scenarioSelectedExpectedSliceSec = Number(
   scenarioSelected?.audioSliceDurationSec
     ?? scenarioSelected?.audioSliceExpectedDurationSec
@@ -6780,8 +6836,9 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
   const lightboxCloseTimerRef = useRef(null);
 
 const comfySelectedSceneId = String(comfySelectedScene?.sceneId || "").trim();
-const comfySelectedStartSec = Number(comfySelectedScene?.audioSliceStartSec ?? comfySelectedScene?.audioSliceT0 ?? comfySelectedScene?.startSec ?? comfySelectedScene?.start ?? comfySelectedScene?.t0 ?? 0);
-const comfySelectedEndSec = Number(comfySelectedScene?.audioSliceEndSec ?? comfySelectedScene?.audioSliceT1 ?? comfySelectedScene?.endSec ?? comfySelectedScene?.end ?? comfySelectedScene?.t1 ?? comfySelectedStartSec);
+const comfySelectedDisplayTime = resolveSceneDisplayTime(comfySelectedScene);
+const comfySelectedStartSec = Number(comfySelectedDisplayTime.startSec ?? 0);
+const comfySelectedEndSec = Number(comfySelectedDisplayTime.endSec ?? comfySelectedStartSec);
 const comfySelectedExpectedSliceSec = Number(
   comfySelectedScene?.audioSliceDurationSec
     ?? comfySelectedScene?.audioSliceExpectedDurationSec
@@ -11291,34 +11348,27 @@ onClipSec: (nodeId, value) => {
           const previousBySceneId = new Map(
             previousScenes.map((sceneItem, idx) => [String(sceneItem?.sceneId || `S${idx + 1}`), sceneItem])
           );
-          const sceneAssetKeys = [
-            "imageUrl",
-            "startImageUrl",
-            "endImageUrl",
-            "startFrameImageUrl",
-            "endFrameImageUrl",
-            "videoUrl",
-            "imageStatus",
-            "startFrameStatus",
-            "endFrameStatus",
-            "videoStatus",
-            "imageError",
-            "videoError",
-            "videoJobId",
-            "videoSourceImageUrl",
-            "videoPanelActivated",
-          ];
+          const previousSceneSignatureById = new Map(
+            previousScenes.map((sceneItem, idx) => {
+              const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`);
+              return [sceneId, buildScenarioScenePackageSignature(sceneItem)];
+            })
+          );
           const scenes = normalizedScenes.map((sceneItem, idx) => {
             const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`);
+            const cleanedScene = stripScenarioGeneratedAssets(sceneItem);
             const persistedScene = previousBySceneId.get(sceneId);
-            if (!persistedScene || revisionChanged) return sceneItem;
+            if (!persistedScene || revisionChanged) return cleanedScene;
+            const previousSceneSignature = String(previousSceneSignatureById.get(sceneId) || "");
+            const nextSceneSignature = buildScenarioScenePackageSignature(cleanedScene);
+            if (!previousSceneSignature || previousSceneSignature !== nextSceneSignature) return cleanedScene;
             const persistedAssets = {};
-            sceneAssetKeys.forEach((key) => {
+            SCENARIO_GENERATED_ASSET_FIELDS.forEach((key) => {
               if (Object.prototype.hasOwnProperty.call(persistedScene, key)) {
                 persistedAssets[key] = persistedScene[key];
               }
             });
-            return { ...sceneItem, ...persistedAssets };
+            return { ...cleanedScene, ...persistedAssets };
           });
           const uiStateUpdated = revisionChanged || scenes.length !== previousScenes.length;
           console.debug("[SCENARIO APPLY RESPONSE]", {
@@ -11391,8 +11441,8 @@ onClipSec: (nodeId, value) => {
               : "";
           const phraseBreakdown = scenes.map((scene, idx) => ({
             sceneId: String(scene?.sceneId || `S${idx + 1}`),
-            startSec: Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0),
-            endSec: Number(scene?.audioSliceEndSec ?? scene?.t1 ?? scene?.t0 ?? 0),
+            startSec: resolveSceneDisplayTime(scene).startSec,
+            endSec: resolveSceneDisplayTime(scene).endSec,
             text: String(scene?.localPhrase || scene?.summaryRu || "").trim(),
             energy: String(scene?.emotionRu || "").trim(),
             context: String(scene?.locationRu || "").trim(),
