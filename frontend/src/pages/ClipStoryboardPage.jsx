@@ -7605,6 +7605,13 @@ const comfyShowVideoSection = Boolean(
           videoUrl: String(out?.videoUrl || ""),
           error: status === "error" || status === "stopped" ? String(out?.error || out?.hint || "video_job_failed") : "",
         });
+        console.info("[SCENARIO VIDEO RESULT]", {
+          sceneId,
+          ok: status === "done",
+          videoUrl: String(out?.videoUrl || ""),
+          status,
+          provider: String(out?.provider || settledMeta?.provider || ""),
+        });
         console.info("[VIDEO STATUS APPLIED]", {
           scope: "scenario",
           sceneId,
@@ -9322,6 +9329,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const { width, height } = getSceneImageSize(imageFormat);
 
     const sceneDelta = getSceneFramePromptByStrategy(targetScene, normalizedSlot);
+    const continuityContractLines = [
+      "FIRST_LAST CONTINUITY CONTRACT:",
+      "- same characters and same identity",
+      "- same clothing, accessories, hairstyle",
+      "- same environment/location",
+      "- same time, weather, and light family",
+      "- same framing class / lens family / scale",
+      "- no outfit redesign, no hairstyle redesign, no location swap, no extra people",
+      "- change only pose / distance / emotion / body orientation / interaction intensity / scene state",
+    ];
+    const firstLastContinuityClause = continuityContractLines.join("\n");
 
     if (!sceneDelta) {
       console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] missing_scene_delta", {
@@ -9334,7 +9352,8 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       return;
     }
     const visualGlueText = buildScenarioVisualGlueText(targetScene);
-    const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}`.trim();
+    const applyFirstLastContinuityContract = imageStrategy === "first_last" && normalizedSlot === "end";
+    const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}`.trim();
 
     setScenarioImageLoading(true);
     setScenarioImageError("");
@@ -9391,6 +9410,14 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           hasCharacter2InSceneActiveRoles: Array.isArray(derivedRoleContract?.sceneActiveRoles) && derivedRoleContract.sceneActiveRoles.includes("character_2"),
         });
       }
+      const firstFrameReferenceUrlForEnd = applyFirstLastContinuityContract
+        ? String(
+          targetScene?.startImageUrl
+          || targetScene?.startFrameImageUrl
+          || targetScene?.imageUrl
+          || ""
+        ).trim()
+        : "";
       const refsForImageRequest = normalizeClipImageRefsPayload({
         ...scenarioBrainRefs,
         refsByRole: refsByRoleForImage,
@@ -9406,7 +9433,21 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         participants: Array.isArray(targetScene?.actors) ? targetScene.actors : [],
         previousContinuityMemory,
         previousSceneImageUrl,
+        firstFrameReferenceUrl: firstFrameReferenceUrlForEnd,
+        currentSceneStartImageUrl: firstFrameReferenceUrlForEnd,
       });
+      if (applyFirstLastContinuityContract) {
+        console.info("[FIRST_LAST CONSISTENCY CONTRACT]", {
+          sceneId,
+          hasStartFrame: Boolean(firstFrameReferenceUrlForEnd),
+          hasEndFrame: Boolean(String(targetScene?.endImageUrl || targetScene?.endFrameImageUrl || "").trim()),
+          startFrameUsedAsReferenceForEnd: Boolean(firstFrameReferenceUrlForEnd),
+          sameWardrobeLock: true,
+          sameLocationLock: true,
+          sameIdentityLock: true,
+          sameCameraFamilyLock: true,
+        });
+      }
       const refsByRoleCounts = summarizeRefsByRole(refsForImageRequest?.refsByRole || {});
       const sourceRefsCandidates = [
         { label: "scene.refsByRole", value: targetScene?.refsByRole },
@@ -10150,6 +10191,7 @@ Aspect ratio: ${imageFormat}`,
         sourceOfTruthKeys,
         whyBlocked: "missing_required_frame_assets",
       });
+      setScenarioVideoError("Для этой сцены не хватает source-кадров для video flow (см. [SCENARIO VIDEO REQUEST SUMMARY]).");
     }
 
     if (!hasImageForVideo) return;
@@ -10224,6 +10266,24 @@ Aspect ratio: ${imageFormat}`,
     const sourceImageUrl = (requiresContinuation || requiresTwoFrames)
       ? (resolvedFirstFrameUrl || resolvedLastFrameUrl || frameImageUrl || "")
       : (frameImageUrl || "");
+    const sourceImageStrategy = requiresTwoFrames
+      ? "first_last_frames"
+      : (requiresContinuation ? "continuation_previous_frame" : "single_image");
+    const videoRequestSummary = {
+      nodeId: String(scenarioFlowSourceNode?.id || scenarioEditor?.nodeId || ""),
+      sceneId,
+      ltxMode: String(targetScene?.ltxMode || ""),
+      renderMode: String(effectiveRenderMode || ""),
+      resolvedWorkflowKey,
+      transitionType,
+      requestedDurationSec,
+      hasImageUrl: Boolean(frameImageUrl),
+      hasStartImageUrl: Boolean(resolvedFirstFrameUrl),
+      hasEndImageUrl: Boolean(resolvedLastFrameUrl),
+      hasPreviousFrame: Boolean(continuationSourceAssetUrl),
+      sourceImageStrategy,
+    };
+    console.info("[SCENARIO VIDEO REQUEST SUMMARY]", videoRequestSummary);
 
     console.log("[StoryboardVideo] video_loading_on reason=generate_video", { sceneId });
     updateScenarioScene(targetSceneIndex, { videoUrl: "", videoStatus: "queued", videoError: "", videoJobId: "", videoPanelActivated: true });
@@ -10352,6 +10412,13 @@ Aspect ratio: ${imageFormat}`,
         method: "POST",
         body: videoStartPayload,
       });
+      console.info("[SCENARIO VIDEO STARTED]", {
+        sceneId,
+        route: endpoint,
+        workflow: resolvedWorkflowKey,
+        mode: String(effectiveRenderMode || ""),
+        jobId: String(out?.jobId || ""),
+      });
       console.info("[SCENARIO VIDEO START RESULT]", {
         endpoint,
         sceneId,
@@ -10464,6 +10531,13 @@ Aspect ratio: ${imageFormat}`,
         selectedTab: String(options?.selectedTab || options?.activeTab || ""),
       });
       if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || "video_generation_failed");
+      console.info("[SCENARIO VIDEO RESULT]", {
+        sceneId,
+        ok: Boolean(legacyOut?.ok),
+        videoUrl: String(legacyOut?.videoUrl || ""),
+        status: "done",
+        provider: String(legacyOut?.provider || effectiveVideoProvider || ""),
+      });
       updateScenarioScene(targetSceneIndex, {
         videoUrl: String(legacyOut.videoUrl || ""),
         mode: String(legacyOut.mode || ""),

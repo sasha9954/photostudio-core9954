@@ -3507,7 +3507,14 @@ def _derive_first_last_frame_prompts(scene: ScenarioDirectorScene, raw_scene: di
         or scene.end_frame_prompt
         or ""
     ).strip()
+    continuity_contract = (
+        "same people, same identity, same wardrobe and accessories, same hairstyle, same location, same weather/light family, same camera family and framing scale; "
+        "no outfit redesign, no hairstyle redesign, no location swap, no extra people; "
+        "change only pose, distance, orientation, emotion, interaction intensity, and scene state progression"
+    )
     if explicit_start and explicit_end:
+        if continuity_contract.lower() not in explicit_end.lower():
+            explicit_end = f"{explicit_end}. Continuity contract: {continuity_contract}.".strip()
         return explicit_start, explicit_end
 
     base_opening = str(scene.frame_description or scene.scene_goal or scene.image_prompt or scene.video_prompt or "").strip()
@@ -3524,6 +3531,8 @@ def _derive_first_last_frame_prompts(scene: ScenarioDirectorScene, raw_scene: di
             if base_closing
             else f"Final visual state after transition: {transition_semantics}".strip()
         )
+    if continuity_contract.lower() not in explicit_end.lower():
+        explicit_end = f"{explicit_end}. Continuity contract: {continuity_contract}.".strip()
 
     if explicit_start and explicit_end and explicit_start == explicit_end:
         explicit_end = f"{explicit_end} Keep it visually changed relative to the opening frame.".strip()
