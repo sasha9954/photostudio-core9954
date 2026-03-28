@@ -6885,6 +6885,15 @@ useEffect(() => {
     videoStatus: String(scenarioSelected?.videoStatus || "").trim(),
   });
 }, [scenarioSelected]);
+useEffect(() => {
+  if (!CLIP_TRACE_SCENARIO_SCENE_ASSETS) return;
+  console.debug("[SCENARIO PREVIEW SRC FINAL]", {
+    sceneId: String(scenarioSelected?.sceneId || ""),
+    single: resolveAssetUrl(scenarioSelected?.imageUrl),
+    start: resolveAssetUrl(scenarioSelectedEffectiveStartImageUrl),
+    end: resolveAssetUrl(scenarioSelectedEndImageUrl),
+  });
+}, [scenarioSelected?.sceneId, scenarioSelected?.imageUrl, scenarioSelectedEffectiveStartImageUrl, scenarioSelectedEndImageUrl]);
 const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   ? "endImageUrl"
   : scenarioPreviousScene?.endFrameImageUrl
@@ -7158,24 +7167,39 @@ const comfyShowVideoSection = Boolean(
     }
   }, []);
 
-  const updateScenarioScene = useCallback((sceneRef, patch) => {
-    if (!scenarioFlowSourceNode?.id) return;
+  const updateScenarioScene = useCallback((sceneRef, patch, options = {}) => {
+    const explicitTargetNodeId = String(options?.nodeId || "").trim();
+    const targetNodeId = explicitTargetNodeId || String(scenarioFlowSourceNode?.id || "").trim();
+    if (!targetNodeId) return;
     const idx = typeof sceneRef === "string"
       ? scenarioScenes.findIndex((scene) => String(scene?.sceneId || "") === String(sceneRef || ""))
       : sceneRef;
     if (!Number.isInteger(idx) || idx < 0) return;
     if (CLIP_TRACE_SCENARIO_SCENE_ASSETS) {
-      const sceneId = String((scenarioScenes[idx] || {}).sceneId || "");
-      console.debug("[SCENARIO SCENE PATCH]", {
-        nodeId: String(scenarioFlowSourceNode?.id || ""),
-        sceneId,
-        patchedKeys: Object.keys(patch || {}),
+      const sceneAtIdx = scenarioScenes[idx] || {};
+      console.debug("[SCENARIO SCENE PATCH TARGET]", {
+        targetNodeId,
+        scenarioFlowSourceNodeId: String(scenarioFlowSourceNode?.id || ""),
+        sceneRef,
+        resolvedIdx: idx,
+        actualSceneIdAtIdx: String(sceneAtIdx?.sceneId || ""),
+        patchKeys: Object.keys(patch || {}),
       });
     }
     setNodes((prev) => prev.map((n) => {
-      if (n.id !== scenarioFlowSourceNode.id) return n;
+      if (n.id !== targetNodeId) return n;
       const scenes = Array.isArray(n?.data?.scenes) ? n.data.scenes : [];
       if (!scenes[idx]) return n;
+      const sceneAtIdx = scenes[idx] || {};
+      if (CLIP_TRACE_SCENARIO_SCENE_ASSETS) {
+        console.debug("[SCENARIO SCENE PATCH APPLIED]", {
+          targetNodeId,
+          sceneRef,
+          resolvedIdx: idx,
+          actualSceneIdAtIdx: String(sceneAtIdx?.sceneId || ""),
+          patchKeys: Object.keys(patch || {}),
+        });
+      }
       const nextScenes = scenes.map((s, i) => (i === idx ? { ...s, ...patch } : s));
       return { ...n, data: { ...n.data, scenes: nextScenes } };
     }));
@@ -9503,6 +9527,13 @@ Aspect ratio: ${imageFormat}`,
           refs: refsForImageRequest,
         },
       });
+      console.debug("[SCENARIO IMAGE RESPONSE RECEIVED]", {
+        requestedSceneId: sceneId,
+        responseOk: Boolean(out?.ok),
+        responseSceneId: String(out?.sceneId || "").trim(),
+        hasImageUrl: !!String(out?.imageUrl || "").trim(),
+        slot: normalizedSlot,
+      });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
 
       const generatedImageUrl = String(out?.imageUrl || "");
@@ -9529,11 +9560,16 @@ Aspect ratio: ${imageFormat}`,
         responseSceneId: responseSceneId || sceneId,
         applyAccepted,
         reasonIgnored: reasonIgnored.join("|") || "",
-        storyboardRevision: requestStoryboardRevision,
-        storyboardSignature: requestStoryboardSignature,
-        sceneSignature: requestSceneSignature,
+        requestStoryboardRevision,
+        requestStoryboardSignature,
+        requestSceneSignature,
         requestSceneStableSignature,
         liveSceneStableSignature,
+        "liveBinding?.sceneIndex": liveBinding?.sceneIndex,
+        "liveBinding?.scene?.sceneId": String(liveBinding?.scene?.sceneId || "").trim(),
+        "liveBinding?.storyboardRevision": String(liveBinding?.storyboardRevision || "").trim(),
+        "liveBinding?.storyboardSignature": String(liveBinding?.storyboardSignature || "").trim(),
+        "liveBinding?.sceneSignature": String(liveBinding?.sceneSignature || "").trim(),
         imageUrl: generatedImageUrl,
         slot: normalizedSlot,
       });
@@ -9557,7 +9593,7 @@ Aspect ratio: ${imageFormat}`,
           videoJobId: "",
           videoSourceImageUrl: "",
           videoPanelActivated: false,
-        });
+        }, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
         runtimeImagePatch = { startFrameStatus: "done", startFrameError: "" };
       } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
         updateScenarioScene(sceneId, {
@@ -9569,7 +9605,7 @@ Aspect ratio: ${imageFormat}`,
           videoJobId: "",
           videoSourceImageUrl: "",
           videoPanelActivated: false,
-        });
+        }, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
         runtimeImagePatch = { endFrameStatus: "done", endFrameError: "" };
       } else {
         updateScenarioScene(sceneId, {
@@ -9581,10 +9617,16 @@ Aspect ratio: ${imageFormat}`,
           videoJobId: "",
           videoSourceImageUrl: "",
           videoPanelActivated: false,
-        });
+        }, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
         runtimeImagePatch = { imageStatus: "done", imageError: "" };
       }
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch);
+      console.debug("[SCENARIO IMAGE SCENE PATCHED]", {
+        sceneId,
+        slot: normalizedSlot,
+        targetNodeId: String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || ""),
+        patchApplied: true,
+      });
       console.debug("[SCENARIO IMAGE STATUS SYNC]", {
         sceneId,
         slot: normalizedSlot,
@@ -11784,7 +11826,7 @@ onClipSec: (nodeId, value) => {
           );
           const nextStoryboardSignature = String(buildSceneSignature(normalizedScenes, "scene") || "");
           const storyboardSignatureChanged = !!nextStoryboardSignature && previousStoryboardSignature !== nextStoryboardSignature;
-          const storyboardRunChanged = revisionChanged || storyboardSignatureChanged;
+          const storyboardRunChanged = revisionChanged;
           const previousBySceneId = new Map(
             previousScenes.map((sceneItem, idx) => [String(sceneItem?.sceneId || `S${idx + 1}`), sceneItem])
           );
@@ -11798,10 +11840,23 @@ onClipSec: (nodeId, value) => {
             const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`);
             const cleanedScene = stripScenarioGeneratedAssets(sceneItem);
             const persistedScene = previousBySceneId.get(sceneId);
-            if (!persistedScene || storyboardRunChanged) return cleanedScene;
             const previousSceneSignature = String(previousSceneSignatureById.get(sceneId) || "");
             const nextSceneSignature = buildScenarioScenePackageSignature(cleanedScene);
-            if (!previousSceneSignature || previousSceneSignature !== nextSceneSignature) return cleanedScene;
+            const semanticChanged = !previousSceneSignature || previousSceneSignature !== nextSceneSignature;
+            const shouldPreserveAssets = !!persistedScene && !storyboardRunChanged && !semanticChanged;
+            if (CLIP_TRACE_SCENARIO_SCENE_ASSETS) {
+              console.debug("[SCENARIO REBIND ASSET DECISION]", {
+                nodeId: String(n?.id || ""),
+                storyboardRunChanged,
+                revisionChanged,
+                storyboardSignatureChanged,
+                previousSceneSignature,
+                nextSceneSignature,
+                sceneId,
+                preservedAssets: shouldPreserveAssets,
+              });
+            }
+            if (!shouldPreserveAssets) return cleanedScene;
             const persistedAssets = {};
             SCENARIO_GENERATED_ASSET_FIELDS.forEach((key) => {
               if (Object.prototype.hasOwnProperty.call(persistedScene, key)) {
@@ -11834,10 +11889,11 @@ onClipSec: (nodeId, value) => {
           });
           console.debug("[SCENARIO SCENE ASSET SYNC]", {
             revisionChanged,
+            storyboardSignatureChanged,
             storyboardRunChanged,
-            preservedAssets: !storyboardRunChanged,
+            preservedAssetsByDefault: !storyboardRunChanged,
             scenesCount: scenes.length,
-            clearedAssetFieldsOnNewRevision: storyboardRunChanged,
+            clearedAssetFieldsOnNewRun: storyboardRunChanged,
           });
           const previousSceneIds = collectSceneIds(previousScenes);
           const nextSceneIds = collectSceneIds(scenes);
@@ -15738,12 +15794,12 @@ const hydrate = useCallback((source = "unknown") => {
                             ))}
                           </div>
                           <div className="clipSB_scenarioPreviewWrap">
-                            {scenarioSelected.imageUrl ? (
+                            {resolveAssetUrl(scenarioSelected.imageUrl) ? (
                               <img
-                                src={scenarioSelected.imageUrl}
+                                src={resolveAssetUrl(scenarioSelected.imageUrl)}
                                 alt="scene preview"
                                 className="clipSB_scenarioPreview"
-                                onClick={(e) => openLightbox(scenarioSelected.imageUrl, e.currentTarget.getBoundingClientRect())}
+                                onClick={(e) => openLightbox(resolveAssetUrl(scenarioSelected.imageUrl), e.currentTarget.getBoundingClientRect())}
                               />
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Превью отсутствует</div>
