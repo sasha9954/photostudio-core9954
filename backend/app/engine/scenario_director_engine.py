@@ -2129,16 +2129,12 @@ def _resolve_scene_must_appear(
 
     explicit = _normalize_actor_roles(raw_scene.get("mustAppear") if raw_scene.get("mustAppear") is not None else raw_scene.get("must_appear"))
     if "group" in explicit:
-        scene_signal = " ".join(
-            [
-                str(raw_scene.get("sceneType") or raw_scene.get("scene_type") or "").strip().lower(),
-                str(raw_scene.get("shotType") or raw_scene.get("shot_type") or "").strip().lower(),
-                str(raw_scene.get("description") or "").strip().lower(),
-                str(scene.scene_goal or "").strip().lower(),
-                str(scene.action_in_frame or "").strip().lower(),
-            ]
+        group_required = _is_group_narratively_required(
+            scene=scene,
+            raw_scene=raw_scene,
+            ref_directives=raw_scene.get("refDirectives") if isinstance(raw_scene.get("refDirectives"), dict) else {},
+            must_appear_roles=explicit,
         )
-        group_required = any(hint in scene_signal for hint in GROUP_NARRATIVE_REQUIRED_HINTS)
         if not group_required:
             explicit = [role for role in explicit if role != "group"]
     if explicit:
@@ -2234,6 +2230,18 @@ def _is_group_narratively_required(
         ]
     )
     return any(hint in scene_signal for hint in GROUP_NARRATIVE_REQUIRED_HINTS)
+
+
+def _merge_must_not_appear(*role_sets: Any) -> list[str]:
+    merged: list[str] = []
+    for role_set in role_sets:
+        if not isinstance(role_set, list):
+            continue
+        for role in role_set:
+            normalized = str(role or "").strip()
+            if normalized and normalized not in merged:
+                merged.append(normalized)
+    return merged
 
 
 def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2428,6 +2436,9 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             scene.start_frame_prompt = start_frame_prompt
             scene.end_frame_prompt = end_frame_prompt
 
+        scene_must_not_appear = ["character_1", "character_2", "character_3"] if is_environment_only_scene else []
+        if is_environment_only_scene or not group_narratively_required:
+            scene_must_not_appear = _merge_must_not_appear(scene_must_not_appear, ["group"])
         scene_item = {
             "sceneId": scene.scene_id,
             "title": scene.scene_id,
@@ -2540,7 +2551,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "refsUsed": refs_used_roles,
             "refsUsedByRole": refs_used_map,
             "mustAppear": must_appear,
-            "mustNotAppear": ["character_1", "character_2", "character_3", "group"] if is_environment_only_scene else [],
+            "mustNotAppear": scene_must_not_appear,
             "heroEntityId": primary_role if primary_role else "",
             "supportEntityIds": support_entity_ids,
             "refDirectives": {role: ref_directives.get(role, "optional") for role in refs_used_roles},
@@ -4628,24 +4639,144 @@ def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio
     }
 
 
-def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+def _pick_clip_split_boundary(
+    *,
+    scene: ScenarioDirectorScene,
+    duration: float,
+    audio_analysis: dict[str, Any],
+    merged_phrase_risk: bool,
+) -> tuple[float | None, str, str]:
+    start = _safe_float(scene.time_start, 0.0)
+    end = max(start, _safe_float(scene.time_end, start))
+    midpoint = round((start + end) / 2.0, 3)
+    min_chunk = 1.5
+    lower = start + min_chunk
+    upper = end - min_chunk
+    if upper <= lower:
+        return None, "duration_too_short_for_safe_split", "fallback"
+
+    def _valid_boundary(value: Any) -> float | None:
+        point = _safe_float(value, -1.0)
+        if point <= lower or point >= upper:
+            return None
+        return round(point, 3)
+
+    candidates: list[tuple[float, str, int]] = []
+    for phrase in (audio_analysis.get("phrases") or []):
+        if not isinstance(phrase, dict):
+            continue
+        for key in ("end", "boundary", "timeSec", "time"):
+            boundary = _valid_boundary(phrase.get(key))
+            if boundary is not None:
+                candidates.append((boundary, "phrase_boundary", 100))
+                break
+    for pause in (audio_analysis.get("pauseWindows") or []):
+        if not isinstance(pause, dict):
+            continue
+        pause_start = _safe_float(pause.get("start"), -1.0)
+        pause_end = _safe_float(pause.get("end"), -1.0)
+        if pause_start > 0 and pause_end > 0:
+            boundary = _valid_boundary((pause_start + pause_end) / 2.0)
+        else:
+            boundary = _valid_boundary(pause_start if pause_start > 0 else pause_end)
+        if boundary is not None:
+            candidates.append((boundary, "pause_boundary", 80))
+    for transition in (audio_analysis.get("energyTransitions") or []):
+        if not isinstance(transition, dict):
+            continue
+        boundary = _valid_boundary(transition.get("timeSec"))
+        if boundary is not None:
+            candidates.append((boundary, "energy_boundary", 60))
+
+    local_phrase = str(scene.local_phrase or "").strip()
+    semantic_markers = [marker for marker in re.split(r"(?:[|/]+|\n+|[;!?]+)", local_phrase) if str(marker or "").strip()]
+    if len(semantic_markers) >= 2:
+        step = duration / max(1, len(semantic_markers))
+        for idx in range(1, len(semantic_markers)):
+            boundary = _valid_boundary(start + step * idx)
+            if boundary is not None:
+                candidates.append((boundary, "semantic_action_shift", 45))
+
+    text_signal = " ".join(
+        [
+            str(scene.scene_goal or "").lower(),
+            str(scene.action_in_frame or "").lower(),
+            str(scene.frame_description or "").lower(),
+        ]
+    )
+    if any(token in text_signal for token in DUO_SCENE_HINTS | {"looks at", "turns to", "switches focus", "focus on"}):
+        boundary = _valid_boundary(midpoint)
+        if boundary is not None:
+            candidates.append((boundary, "performer_focus_change", 30))
+
+    if candidates:
+        candidates.sort(key=lambda item: (-item[2], abs(item[0] - midpoint)))
+        point, reason, _ = candidates[0]
+        boundary_reason = "phrase" if reason == "phrase_boundary" else ("pause" if reason == "pause_boundary" else ("energy" if reason == "energy_boundary" else "semantic"))
+        return point, reason, boundary_reason
+    return round(max(lower, min(upper, midpoint)), 3), "midpoint_fallback", "fallback"
+
+
+def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any] | None = None) -> ScenarioDirectorStoryboardOut:
     scenes = storyboard_out.scenes or []
     if not scenes:
         return storyboard_out
+    payload_map: dict[str, dict[str, Any]] = {}
+    if isinstance(payload, dict):
+        for item in (payload.get("scenes") or []):
+            if isinstance(item, dict):
+                scene_id = str(item.get("sceneId") or item.get("scene_id") or "").strip()
+                if scene_id:
+                    payload_map[scene_id] = item
+    audio_context = _normalize_audio_context(payload if isinstance(payload, dict) else {})
+    runtime_analysis = payload.get("_runtime_audio_analysis") if isinstance(payload, dict) and isinstance(payload.get("_runtime_audio_analysis"), dict) else {}
+    audio_analysis = runtime_analysis if runtime_analysis else {
+        "phrases": audio_context.get("phrases") or [],
+        "pauseWindows": audio_context.get("pauseWindows") or [],
+        "energyTransitions": audio_context.get("energyTransitions") or [],
+    }
     next_scenes: list[ScenarioDirectorScene] = []
     for scene in scenes:
         duration = max(0.0, _safe_float(scene.duration, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0)))
-        phrase_blob = str(scene.local_phrase or "").strip()
-        phrase_chunks = [chunk.strip() for chunk in re.split(r"(?:\s*[/|]\s*|\n+|(?<=[\.\!\?;])\s+)", phrase_blob) if chunk.strip()]
-        merged_phrase_risk = len(phrase_chunks) >= 2
+        start = _safe_float(scene.time_start, 0.0)
+        end = max(start, _safe_float(scene.time_end, start))
+        raw_scene = payload_map.get(str(scene.scene_id or "").strip(), {})
+        phrase_blob = str(scene.local_phrase or raw_scene.get("localPhrase") or raw_scene.get("local_phrase") or "").strip()
+        lyric_text = str(raw_scene.get("lyricText") or raw_scene.get("lyric_text") or "").strip()
+        audio_anchor = str(scene.audio_anchor_evidence or raw_scene.get("audioAnchorEvidence") or raw_scene.get("audio_anchor_evidence") or "").strip().lower()
+        phrase_chunks = [chunk.strip() for chunk in re.split(r"(?:\s*[/|]\s*|\n+|(?<=[\.\!\?;])\s+)", " ".join([phrase_blob, lyric_text])) if chunk.strip()]
+        phrases_inside = 0
+        for phrase in (audio_analysis.get("phrases") or []):
+            if not isinstance(phrase, dict):
+                continue
+            p_start = _safe_float(phrase.get("start"), -1.0)
+            p_end = _safe_float(phrase.get("end"), -1.0)
+            if p_end <= start or p_start >= end:
+                continue
+            phrases_inside += 1
+        has_pause_boundary_inside = any(
+            isinstance(pause, dict) and _safe_float(pause.get("start"), -1.0) > start + 0.2 and _safe_float(pause.get("start"), -1.0) < end - 0.2
+            for pause in (audio_analysis.get("pauseWindows") or [])
+        )
+        merged_phrase_risk = bool(
+            phrases_inside >= 2
+            or len(phrase_chunks) >= 2
+            or ("phrase" in audio_anchor and ("+" in audio_anchor or "next" in audio_anchor or "adjacent" in audio_anchor))
+            or has_pause_boundary_inside
+        )
         should_split = merged_phrase_risk or duration > 5.5
         if not should_split:
             next_scenes.append(scene)
             continue
-        start = _safe_float(scene.time_start, 0.0)
-        end = max(start, _safe_float(scene.time_end, start))
-        midpoint = round((start + end) / 2.0, 3)
-        split_at = max(start + 1.5, min(end - 1.5, midpoint))
+        split_at, split_reason, split_boundary_reason = _pick_clip_split_boundary(
+            scene=scene,
+            duration=duration,
+            audio_analysis=audio_analysis,
+            merged_phrase_risk=merged_phrase_risk,
+        )
+        if split_at is None:
+            next_scenes.append(scene)
+            continue
         if split_at <= start or split_at >= end:
             next_scenes.append(scene)
             continue
@@ -4657,15 +4788,19 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             pivot = max(1, len(phrase_chunks) // 2)
             left_data["local_phrase"] = " ".join(phrase_chunks[:pivot]).strip() or left_data.get("local_phrase")
             right_data["local_phrase"] = " ".join(phrase_chunks[pivot:]).strip() or right_data.get("local_phrase")
-        reason_value = "phrase_boundary" if merged_phrase_risk else "duration_overflow"
-        left_data["boundary_reason"] = "phrase" if merged_phrase_risk else (left_data.get("boundary_reason") or "fallback")
-        right_data["boundary_reason"] = "phrase" if merged_phrase_risk else (right_data.get("boundary_reason") or "fallback")
+        reason_value = split_reason if merged_phrase_risk else ("duration_overflow" if split_reason == "midpoint_fallback" else split_reason)
+        left_data["boundary_reason"] = split_boundary_reason
+        right_data["boundary_reason"] = split_boundary_reason
+        left_data["audio_anchor_evidence"] = _append_decision_flag(left_data.get("audio_anchor_evidence"), "autoSplitReason", reason_value)
+        right_data["audio_anchor_evidence"] = _append_decision_flag(right_data.get("audio_anchor_evidence"), "autoSplitReason", reason_value)
         for chunk_data in (left_data, right_data):
             chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "mergedPhraseRisk", merged_phrase_risk)
-            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "splitByPhraseBoundary", merged_phrase_risk)
+            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "splitByPhraseBoundary", split_reason == "phrase_boundary")
             chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "lyricalMergeRejected", merged_phrase_risk)
             chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "autoSplitReason", reason_value)
             chunk_data["workflow_decision_reason"] = _append_decision_flag(chunk_data.get("workflow_decision_reason"), "autoSplitReason", reason_value)
+            chunk_data["workflow_decision_reason"] = _append_decision_flag(chunk_data.get("workflow_decision_reason"), "splitByPhraseBoundary", split_reason == "phrase_boundary")
+            chunk_data["workflow_decision_reason"] = _append_decision_flag(chunk_data.get("workflow_decision_reason"), "lyricalMergeRejected", merged_phrase_risk)
         next_scenes.append(ScenarioDirectorScene.model_validate(left_data))
         next_scenes.append(ScenarioDirectorScene.model_validate(right_data))
     storyboard_out.scenes = next_scenes
@@ -4683,7 +4818,7 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     storyboard_out = _rebalance_ltx_modes(storyboard_out)
     storyboard_out = _normalize_scene_timeline(storyboard_out)
     if content_type_policy.get("value") == "music_video":
-        storyboard_out = _enforce_clip_phrase_and_duration_splits(storyboard_out)
+        storyboard_out = _enforce_clip_phrase_and_duration_splits(storyboard_out, payload)
         storyboard_out = _normalize_scene_timeline(storyboard_out)
         storyboard_out = _apply_music_video_mode_policy(
             storyboard_out,

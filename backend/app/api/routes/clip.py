@@ -39,6 +39,7 @@ COMFY_ACTIVE_DIRECTIVES = {"hero", "supporting", "environment_required", "requir
 COMFY_FALLBACK_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "group", "animal", "location", "props", "style"]
 COMFY_CAST_ROLES = {"character_1", "character_2", "character_3", "animal", "group"}
 COMFY_WORLD_ANCHOR_ROLES = {"location", "style"}
+GROUP_NARRATIVE_REQUIRED_HINTS = {"protest", "riot", "mob", "audience", "chorus", "crowd chant", "mass panic", "митинг", "бунт", "толпа", "массов", "хор"}
 
 class ClipImageIn(BaseModel):
     sceneId: str
@@ -7255,6 +7256,11 @@ def _normalize_scene_entity_contract_for_image(
     environment_lock: bool | None,
     style_lock: bool | None,
     identity_lock: bool | None,
+    scene_goal: str | None = None,
+    scene_text: str | None = None,
+    scene_delta: str | None = None,
+    image_prompt: str | None = None,
+    video_prompt: str | None = None,
 ) -> dict[str, Any]:
     def _group_narratively_required() -> bool:
         must_roles = {str(role or "").strip().lower() for role in (must_appear or []) if str(role or "").strip()}
@@ -7264,7 +7270,14 @@ def _normalize_scene_entity_contract_for_image(
         group_directive = str(directives.get("group") or "").strip().lower()
         if group_directive in {"required", "hero"}:
             return True
-        return False
+        scene_signal = " ".join([
+            str(scene_goal or "").strip().lower(),
+            str(scene_text or "").strip().lower(),
+            str(scene_delta or "").strip().lower(),
+            str(image_prompt or "").strip().lower(),
+            str(video_prompt or "").strip().lower(),
+        ])
+        return any(hint in scene_signal for hint in GROUP_NARRATIVE_REQUIRED_HINTS)
 
     group_required = _group_narratively_required()
     refs_used_merged: list[str] | dict | None = refs_used
@@ -8040,6 +8053,11 @@ def clip_image(payload: ClipImageIn):
         environment_lock=getattr(refs_obj, "environmentLock", None),
         style_lock=getattr(refs_obj, "styleLock", None),
         identity_lock=getattr(refs_obj, "identityLock", None),
+        scene_goal=getattr(refs_obj, "sceneGoal", None),
+        scene_text=scene_text,
+        scene_delta=scene_delta,
+        image_prompt=prompt,
+        video_prompt=getattr(refs_obj, "sceneNarrativeStep", None),
     )
     scene_active_roles = [
         str(role or "").strip()
@@ -8061,6 +8079,9 @@ def clip_image(payload: ClipImageIn):
         ]
     scene_contract["activeRoles"] = scene_active_roles
     must_not_appear_roles = set(scene_contract.get("mustNotAppear") or [])
+    if {"character_1", "character_2"}.issubset(set(scene_active_roles)) and "group" not in must_not_appear_roles:
+        must_not_appear_roles.add("group")
+        scene_contract["mustNotAppear"] = list(dict.fromkeys([*(scene_contract.get("mustNotAppear") or []), "group"]))
     if must_not_appear_roles:
         scene_active_roles = [role for role in scene_active_roles if role not in must_not_appear_roles]
         scene_contract["activeRoles"] = scene_active_roles
@@ -8069,6 +8090,10 @@ def clip_image(payload: ClipImageIn):
         for role in ("character_1", "character_2", "character_3", "group"):
             comfy_refs_by_role[role] = []
         scene_active_roles = [role for role in scene_active_roles if role not in {"character_1", "character_2", "character_3", "group"}]
+        scene_contract["activeRoles"] = scene_active_roles
+    if "group" in must_not_appear_roles:
+        comfy_refs_by_role["group"] = []
+        scene_active_roles = [role for role in scene_active_roles if role != "group"]
         scene_contract["activeRoles"] = scene_active_roles
 
     hero_entity_id = str(scene_contract.get("heroEntityId") or "").strip()
@@ -8081,6 +8106,8 @@ def clip_image(payload: ClipImageIn):
         if str(role or "").strip() in scene_active_roles and str(role or "").strip() != hero_entity_id
     ]
     support_entity_ids = list(dict.fromkeys(support_entity_ids))
+    if "group" in must_not_appear_roles:
+        support_entity_ids = [role for role in support_entity_ids if role != "group"]
 
     must_appear_roles = [
         str(role or "").strip()
@@ -8090,6 +8117,8 @@ def clip_image(payload: ClipImageIn):
     if not must_appear_roles:
         must_appear_roles = [hero_entity_id] + support_entity_ids if hero_entity_id else list(scene_active_roles)
     must_appear_roles = list(dict.fromkeys([role for role in must_appear_roles if role in scene_active_roles]))
+    if "group" in must_not_appear_roles:
+        must_appear_roles = [role for role in must_appear_roles if role != "group"]
     if incoming_scene_active_roles and not must_appear_roles:
         must_appear_roles = list(dict.fromkeys([role for role in incoming_scene_active_roles if role in scene_active_roles]))
 

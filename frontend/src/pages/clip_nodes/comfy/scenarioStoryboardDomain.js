@@ -660,8 +660,11 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
   const explicitCrowdNarrativeSignal = [
     source.sceneGoal,
     source.scene_goal,
+    source.summary,
     source.summaryRu,
     source.summaryEn,
+    source.frameDescription,
+    source.actionInFrame,
     source.imagePromptRu,
     source.imagePromptEn,
     source.videoPromptRu,
@@ -672,6 +675,7 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
   const crowdImportantKeywords = ["protest", "riot", "mob", "audience", "chorus", "crowd chant", "mass panic", "митинг", "толпа", "бунт", "хор", "массов"];
   const groupNarrativelyRequired = crowdImportantKeywords.some((keyword) => explicitCrowdNarrativeSignal.includes(keyword))
     || normalizeStringList(source.mustAppear ?? source.must_appear).map((role) => normalizeScenarioRoleId(role)).includes("group")
+    || ["required", "hero"].includes(normalizeText(source?.refDirectives?.group).toLowerCase())
     || normalizeText(packageRefDirectives?.group).toLowerCase() === "required"
     || normalizeText(packageRefDirectives?.group).toLowerCase() === "hero";
 
@@ -988,10 +992,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   normalizedScene.mustNotAppear = resolvedRoleContract.mustNotAppear;
   normalizedScene.supportEntityIds = resolvedRoleContract.supportEntityIds;
   normalizedScene.heroEntityId = normalizedScene.heroEntityId || resolvedRoleContract.primaryRole || "";
-  normalizedScene.refsUsedByRole = {
-    ...normalizeObjectMap(normalizedScene.refsUsedByRole),
-    ...normalizeObjectMap(resolvedRoleContract.refsUsedByRole),
-  };
+  normalizedScene.refsUsedByRole = normalizeObjectMap(resolvedRoleContract.refsUsedByRole);
 
   if (SCENARIO_STORYBOARD_TRACE) {
     console.debug("[SCENARIO TRANSFER] normalized scene", {

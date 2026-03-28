@@ -649,6 +649,16 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
 }
 
 function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {}) {
+  const isGroupNarrativelyRequiredByScene = (sceneSource = {}) => {
+    const mustAppearScene = normalizeRoleList(sceneSource?.mustAppear);
+    if (mustAppearScene.includes("group")) return true;
+    const directives = sceneSource?.refDirectives && typeof sceneSource.refDirectives === "object" ? sceneSource.refDirectives : {};
+    const directive = String(directives?.group || "").trim().toLowerCase();
+    if (["required", "hero"].includes(directive)) return true;
+    const crowdSignal = ["protest", "riot", "mob", "audience", "chorus", "crowd chant", "mass panic", "митинг", "толпа", "бунт", "хор", "массов"]
+      .some((marker) => `${String(sceneSource?.sceneGoal || "")} ${String(sceneSource?.summaryEn || "")} ${String(sceneSource?.summaryRu || "")} ${String(sceneSource?.frameDescription || "")} ${String(sceneSource?.actionInFrame || "")} ${String(sceneSource?.videoPromptEn || "")} ${String(sceneSource?.videoPromptRu || "")} ${String(sceneSource?.imagePromptEn || "")} ${String(sceneSource?.imagePromptRu || "")}`.toLowerCase().includes(marker));
+    return crowdSignal;
+  };
   const castRoles = ["character_1", "character_2", "character_3", "animal", "group"];
   const sceneId = String(scene?.sceneId || "").trim();
   const sceneRoleDynamics = String(scene?.sceneRoleDynamics || "").trim().toLowerCase();
@@ -671,13 +681,8 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
   const actorsRoleSignals = normalizeRoleList(Array.isArray(scene?.actors) ? scene.actors : []);
   const semanticTwoPersonSignal = ["gaze", "shared glance", "look into eyes", "eye contact", "whisper", "hold hand", "embrace", "hug", "looks at", "looking at", "див", "смотр", "взгляд", "шепч", "обнима", "держ"]
     .some((marker) => `${String(scene?.summaryEn || "")} ${String(scene?.summaryRu || "")} ${String(scene?.videoPromptEn || "")} ${String(scene?.videoPromptRu || "")} ${String(scene?.imagePromptEn || "")} ${String(scene?.imagePromptRu || "")}`.toLowerCase().includes(marker));
-  const crowdSignal = ["protest", "riot", "mob", "audience", "chorus", "crowd chant", "mass panic", "митинг", "толпа", "бунт", "хор", "массов"]
-    .some((marker) => `${String(scene?.sceneGoal || "")} ${String(scene?.summaryEn || "")} ${String(scene?.summaryRu || "")} ${String(scene?.videoPromptEn || "")} ${String(scene?.videoPromptRu || "")} ${String(scene?.imagePromptEn || "")} ${String(scene?.imagePromptRu || "")}`.toLowerCase().includes(marker));
   const mustAppear = normalizeRoleList(scene?.mustAppear);
-  const refDirectives = scene?.refDirectives && typeof scene.refDirectives === "object" ? scene.refDirectives : {};
-  const groupNarrativelyRequired = mustAppear.includes("group")
-    || ["required", "hero"].includes(String(refDirectives?.group || "").trim().toLowerCase())
-    || crowdSignal;
+  const groupNarrativelyRequired = isGroupNarrativelyRequiredByScene(scene);
   const hasActiveHumanRoles = [...sceneActiveRoles, ...mustAppear].some((role) => ["character_1", "character_2", "character_3", "group"].includes(role));
   const isEnvironmentOnlyScene = sceneRoleDynamics === "environment" && actorsRoleSignals.length === 0 && !hasActiveHumanRoles;
   const availableTwoPersonRefs = roleWithRefs.includes("character_1") && roleWithRefs.includes("character_2");
@@ -752,8 +757,9 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
     return explicitContract;
   }
   if (roleWithRefs.length >= 2) {
-    const fallbackPrimary = primaryRole || roleWithRefs[0];
-    const fallbackSecondary = roleWithRefs.filter((role) => role !== fallbackPrimary);
+    const fallbackPool = groupNarrativelyRequired ? roleWithRefs : roleWithRefs.filter((role) => role !== "group");
+    const fallbackPrimary = primaryRole || fallbackPool[0] || "";
+    const fallbackSecondary = fallbackPool.filter((role) => role !== fallbackPrimary);
     const fallbackActive = [fallbackPrimary, ...fallbackSecondary];
     const fallbackContract = {
       primaryRole: fallbackPrimary,
@@ -761,6 +767,7 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
       sceneActiveRoles: fallbackActive,
       refsUsed: fallbackActive,
       mustAppear: fallbackActive,
+      mustNotAppear: groupNarrativelyRequired ? [] : ["group"],
     };
     if (shouldTraceRoleContractScene(sceneId)) {
       console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.output.fallback_multi", fallbackContract);
@@ -768,12 +775,14 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
     return fallbackContract;
   }
   if (roleWithRefs.length === 1) {
+    const singleRole = groupNarrativelyRequired ? roleWithRefs[0] : (roleWithRefs[0] === "group" ? "" : roleWithRefs[0]);
     const fallbackSingle = {
-      primaryRole: roleWithRefs[0],
+      primaryRole: singleRole,
       secondaryRoles: [],
-      sceneActiveRoles: [roleWithRefs[0]],
-      refsUsed: [roleWithRefs[0]],
-      mustAppear: [roleWithRefs[0]],
+      sceneActiveRoles: singleRole ? [singleRole] : [],
+      refsUsed: singleRole ? [singleRole] : [],
+      mustAppear: singleRole ? [singleRole] : [],
+      mustNotAppear: groupNarrativelyRequired ? [] : ["group"],
     };
     if (shouldTraceRoleContractScene(sceneId)) {
       console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.output.fallback_single", fallbackSingle);
@@ -1791,6 +1800,9 @@ function buildScenarioScenePackageSignature(scene = {}) {
   const displayTime = resolveSceneDisplayTime(source);
   const signaturePayload = {
     time: [Number(displayTime.startSec || 0), Number(displayTime.endSec || 0)],
+    t0: Number(source?.t0 ?? source?.timeStart ?? source?.time_start ?? displayTime.startSec ?? 0),
+    t1: Number(source?.t1 ?? source?.timeEnd ?? source?.time_end ?? displayTime.endSec ?? 0),
+    duration: Number(source?.duration ?? source?.durationSec ?? Math.max(0, Number(displayTime.endSec || 0) - Number(displayTime.startSec || 0))),
     summaryRu: String(source?.summaryRu || "").trim(),
     summaryEn: String(source?.summaryEn || "").trim(),
     sceneGoalRu: String(source?.sceneGoalRu || "").trim(),
@@ -4395,6 +4407,8 @@ function buildComfySceneRefsPayload({
   styleLock = null,
   identityLock = null,
   sceneRoleDynamics = "",
+  imagePrompt = "",
+  videoPrompt = "",
 } = {}) {
   const normalizeRoleUrls = (items) => (Array.isArray(items)
     ? items
@@ -4423,7 +4437,14 @@ function buildComfySceneRefsPayload({
     && participantsNormalized.length === 0
     && ![...activeRolesNormalized, ...mustAppearNormalized].some((role) => ["character_1", "character_2", "character_3", "group"].includes(role));
   const normalizedMustNotAppear = Array.isArray(mustNotAppear) ? [...mustNotAppear] : [];
-  const groupNarrativelyRequired = Array.isArray(mustAppearNormalized) && mustAppearNormalized.includes("group");
+  const groupNarrativelyRequired = (() => {
+    if (Array.isArray(mustAppearNormalized) && mustAppearNormalized.includes("group")) return true;
+    const directive = String((refDirectives && typeof refDirectives === "object" ? refDirectives.group : "") || "").trim().toLowerCase();
+    if (["required", "hero"].includes(directive)) return true;
+    const crowdSignal = ["protest", "riot", "mob", "audience", "chorus", "crowd chant", "mass panic", "митинг", "толпа", "бунт", "хор", "массов"]
+      .some((marker) => `${String(sceneGoal || "")} ${String(sceneNarrativeStep || "")} ${String(text || "")} ${String(imagePrompt || "")} ${String(videoPrompt || "")}`.toLowerCase().includes(marker));
+    return crowdSignal;
+  })();
   const hasDuet = activeRolesNormalized.includes("character_1") && activeRolesNormalized.includes("character_2");
   if (hasDuet && !groupNarrativelyRequired) {
     normalizedRefsByRole.group = [];
@@ -4473,13 +4494,15 @@ function buildComfySceneRefsPayload({
     plannerMeta: plannerMeta && typeof plannerMeta === 'object' ? plannerMeta : undefined,
     refsUsed: Array.isArray(refsUsed) ? refsUsed : (refsUsed && typeof refsUsed === 'object' ? refsUsed : undefined),
     refDirectives: refDirectives && typeof refDirectives === 'object' ? refDirectives : undefined,
-    refsUsedByRole: refsUsedByRole && typeof refsUsedByRole === 'object' ? refsUsedByRole : undefined,
+    refsUsedByRole: refsUsedByRole && typeof refsUsedByRole === 'object'
+      ? Object.fromEntries(Object.entries(refsUsedByRole).filter(([role]) => groupNarrativelyRequired || role !== "group"))
+      : undefined,
     primaryRole: normalizedPrimaryRole,
     secondaryRoles: Array.isArray(secondaryRoles) ? secondaryRoles : undefined,
     sceneActiveRoles: Array.isArray(sceneActiveRoles) ? sceneActiveRoles : undefined,
     heroEntityId: normalizedHeroEntityId,
-    supportEntityIds: Array.isArray(supportEntityIds) ? supportEntityIds : undefined,
-    mustAppear: Array.isArray(mustAppear) ? mustAppear : undefined,
+    supportEntityIds: Array.isArray(supportEntityIds) ? supportEntityIds.filter((role) => groupNarrativelyRequired || normalizeScenarioRoleName(role) !== "group") : undefined,
+    mustAppear: Array.isArray(mustAppear) ? mustAppear.filter((role) => groupNarrativelyRequired || normalizeScenarioRoleName(role) !== "group") : undefined,
     mustNotAppear: normalizedMustNotAppear.length ? normalizedMustNotAppear : undefined,
     participants: Array.isArray(participants) ? participants : undefined,
     environmentLock: typeof environmentLock === 'boolean' ? environmentLock : undefined,
@@ -8418,6 +8441,8 @@ const comfyShowVideoSection = Boolean(
         styleLock: typeof comfySceneForImageContract?.styleLock === 'boolean' ? comfySceneForImageContract.styleLock : null,
         identityLock: typeof comfySceneForImageContract?.identityLock === 'boolean' ? comfySceneForImageContract.identityLock : null,
         sceneRoleDynamics: comfySceneForImageContract?.sceneRoleDynamics || "",
+        imagePrompt,
+        videoPrompt: comfySceneForImageContract?.videoPromptEn || comfySceneForImageContract?.videoPromptRu || "",
         promptSource,
       };
       const refsForImageRequest = buildComfySceneRefsPayload(refsPayloadForImage);
