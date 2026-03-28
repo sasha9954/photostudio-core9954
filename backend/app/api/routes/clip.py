@@ -8197,6 +8197,33 @@ def clip_image(payload: ClipImageIn):
     scene_contract["mustAppearCastRoles"] = must_appear_roles
     dropped_by_must_not_appear = sorted([role for role in (scene_contract.get("resolvedRoles") or []) if role in must_not_appear_roles])
     connected_refs_by_role = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
+    refs_used_compact = scene_refs_used if isinstance(scene_refs_used, list) else (list((scene_refs_used or {}).keys()) if isinstance(scene_refs_used, dict) else [])
+    refs_by_role_counts_incoming = {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles}
+    print("[SCENARIO IMAGE REQUEST BACKEND SUMMARY] " + json.dumps({
+        "sceneId": scene_id,
+        "refsByRoleCounts": refs_by_role_counts_incoming,
+        "refsUsed": refs_used_compact,
+        "sceneActiveRoles": scene_active_roles,
+        "primaryRole": scene_primary_role,
+        "secondaryRoles": scene_secondary_roles,
+        "mustAppear": must_appear_roles,
+        "mustNotAppear": scene_contract.get("mustNotAppear") or [],
+        "legacyCharacterCount": len(character_refs),
+        "heroEntityIdCandidate": hero_entity_id or None,
+    }, ensure_ascii=False))
+
+    if (
+        (len(comfy_refs_by_role.get("character_1") or []) + len(comfy_refs_by_role.get("character_2") or [])) > 0
+        and not any(role in {"character_1", "character_2"} for role in scene_active_roles)
+    ):
+        print("[SCENARIO IMAGE ROLE-AWARE DEGRADATION] " + json.dumps({
+            "sceneId": scene_id,
+            "reason": "character_role_refs_present_but_scene_active_roles_missing",
+            "refsByRoleCounts": refs_by_role_counts_incoming,
+            "sceneActiveRoles": scene_active_roles,
+            "primaryRole": scene_primary_role,
+            "mustAppear": must_appear_roles,
+        }, ensure_ascii=False))
 
     contract_environment_lock = bool(scene_contract.get("environmentLock"))
     contract_style_lock = bool(scene_contract.get("styleLock"))
