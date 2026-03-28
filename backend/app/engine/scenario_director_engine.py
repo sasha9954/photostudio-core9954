@@ -5717,6 +5717,56 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
         if isinstance(item, dict) and str(item.get("text") or "").strip()
     ]
     voice_script = " ".join(transcript_text_parts).strip()
+    def _overlap_sec(a0: float, a1: float, b0: float, b1: float) -> float:
+        return max(0.0, min(a1, b1) - max(a0, b0))
+
+    def _match_scene_phrases_by_time(scene_start: float, scene_end: float) -> dict[str, Any]:
+        def _collect(rows: list[Any]) -> list[dict[str, Any]]:
+            matches: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                text = str(row.get("text") or "").strip()
+                if not text:
+                    continue
+                t0 = _safe_float(row.get("t0"), 0.0)
+                t1 = _safe_float(row.get("t1"), t0)
+                overlap = _overlap_sec(scene_start, scene_end, t0, t1)
+                if overlap <= 0:
+                    continue
+                matches.append({
+                    "text": text,
+                    "t0": t0,
+                    "t1": t1,
+                    "overlap": overlap,
+                    "emotion": str(row.get("emotion") or "").strip(),
+                    "meaning": str(row.get("meaning") or "").strip(),
+                    "transitionHint": str(row.get("transitionHint") or "").strip(),
+                })
+            return sorted(matches, key=lambda item: float(item.get("overlap") or 0.0), reverse=True)
+
+        transcript_matches = _collect(transcript_rows)
+        semantic_matches = _collect(semantic_timeline)
+        selected = transcript_matches if transcript_matches else semantic_matches
+        unique_texts = list(dict.fromkeys([str(item.get("text") or "").strip() for item in selected if str(item.get("text") or "").strip()]))
+        primary = unique_texts[0] if unique_texts else ""
+        return {
+            "matchedTranscriptPhrases": transcript_matches,
+            "matchedSemanticPhrases": semantic_matches,
+            "matchedPhraseTexts": unique_texts,
+            "phraseCount": len(unique_texts),
+            "primaryPhrase": primary,
+            "combinedPhraseText": " · ".join(unique_texts),
+            "sourceUsed": "transcript" if transcript_matches else ("semanticTimeline" if semantic_matches else "none"),
+            "primarySemantic": semantic_matches[0] if semantic_matches else {},
+        }
+
+    print(
+        "[SCENARIO PHRASE MAP] transcript=%s semanticTimeline=%s scenes=%s",
+        len(transcript_rows),
+        len(semantic_timeline),
+        len(raw_scenes),
+    )
     legacy_scenes: list[dict[str, Any]] = []
     for idx, scene in enumerate(raw_scenes, start=1):
         if not isinstance(scene, dict):
@@ -5724,7 +5774,18 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
         scene_start = _safe_float(scene.get("t0"), 0.0)
         scene_end = _safe_float(scene.get("t1"), scene_start)
         scene_duration = _safe_float(scene.get("duration"), max(0.0, scene_end - scene_start))
-        timeline_hit = semantic_timeline[idx - 1] if idx - 1 < len(semantic_timeline) and isinstance(semantic_timeline[idx - 1], dict) else {}
+        scene_phrase_match = _match_scene_phrases_by_time(scene_start, scene_end)
+        primary_semantic = scene_phrase_match.get("primarySemantic") if isinstance(scene_phrase_match.get("primarySemantic"), dict) else {}
+        print(
+            "[SCENARIO SCENE PHRASES] sceneId=%s t0=%.3f t1=%.3f matched=%s source=%s primary=%s texts=%s",
+            str(scene.get("sceneId") or f"S{idx}").strip() or f"S{idx}",
+            scene_start,
+            scene_end,
+            scene_phrase_match.get("phraseCount"),
+            scene_phrase_match.get("sourceUsed"),
+            scene_phrase_match.get("primaryPhrase"),
+            scene_phrase_match.get("matchedPhraseTexts"),
+        )
         legacy_scenes.append(
             {
                 "scene_id": str(scene.get("sceneId") or f"S{idx}").strip() or f"S{idx}",
@@ -5734,7 +5795,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
                 "actors": [str(actor).strip() for actor in (scene.get("characters") or []) if str(actor).strip()],
                 "location": str(scene.get("environment") or "").strip(),
                 "props": [],
-                "emotion": str(timeline_hit.get("emotion") or "").strip(),
+                "emotion": str(primary_semantic.get("emotion") or "").strip(),
                 "scene_goal": str(scene.get("summary") or "").strip(),
                 "frame_description": str(scene.get("summary") or "").strip(),
                 "action_in_frame": str(scene.get("motion") or "").strip(),
@@ -5749,15 +5810,18 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
                 "needs_two_frames": False,
                 "continuation_from_previous": idx > 1,
                 "narration_mode": "full",
-                "local_phrase": str(timeline_hit.get("text") or "").strip() or None,
+                "local_phrase": str(scene_phrase_match.get("primaryPhrase") or "").strip() or None,
+                "matched_phrase_texts": scene_phrase_match.get("matchedPhraseTexts") or [],
+                "scene_phrase_count": int(scene_phrase_match.get("phraseCount") or 0),
+                "scene_phrase_source": str(scene_phrase_match.get("sourceUsed") or "none"),
                 "sfx": "",
                 "music_mix_hint": "off",
                 "scene_purpose": "hook" if idx == 1 else "build",
                 "viewer_hook": "Immediate rhythmic visual anchor." if idx == 1 else "Beat-matched progression.",
-                "what_from_audio_this_scene_uses": str(timeline_hit.get("meaning") or scene.get("summary") or "").strip(),
+                "what_from_audio_this_scene_uses": str(primary_semantic.get("meaning") or scene.get("summary") or "").strip(),
                 "director_note_layer": "",
                 "boundary_reason": "phrase",
-                "audio_anchor_evidence": str(timeline_hit.get("transitionHint") or "").strip(),
+                "audio_anchor_evidence": str(primary_semantic.get("transitionHint") or "").strip(),
                 "confidence": 0.9,
             }
         )

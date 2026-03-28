@@ -1845,6 +1845,79 @@ function buildScenarioSceneStableSignature(scene = {}) {
   return buildScenarioScenePackageSignature(stripScenarioGeneratedAssets(scene));
 }
 
+function normalizeTimelinePhraseRows(rows = []) {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((row, idx) => {
+      if (!row || typeof row !== "object") return null;
+      const text = String(row?.text || row?.phrase || "").trim();
+      const t0 = Number(row?.t0 ?? row?.startSec ?? row?.start ?? 0);
+      const t1Raw = Number(row?.t1 ?? row?.endSec ?? row?.end ?? t0);
+      const t1 = Number.isFinite(t1Raw) && t1Raw >= t0 ? t1Raw : t0;
+      if (!Number.isFinite(t0) || !Number.isFinite(t1) || !text) return null;
+      return {
+        id: String(row?.id || row?.phraseId || row?.sceneId || `P${idx + 1}`),
+        text,
+        t0,
+        t1,
+        emotion: String(row?.emotion || "").trim(),
+        meaning: String(row?.meaning || "").trim(),
+        transitionHint: String(row?.transitionHint || "").trim(),
+      };
+    })
+    .filter(Boolean);
+}
+
+function overlapDurationSec(a0 = 0, a1 = 0, b0 = 0, b1 = 0) {
+  const start = Math.max(Number(a0) || 0, Number(b0) || 0);
+  const end = Math.min(Number(a1) || 0, Number(b1) || 0);
+  return Math.max(0, end - start);
+}
+
+function getScenePhrasesByTime(scene = {}, transcript = [], semanticTimeline = [], minOverlapSec = 0) {
+  const displayTime = resolveSceneDisplayTime(scene);
+  const sceneStart = Number(displayTime.startSec || 0);
+  const sceneEnd = Number(displayTime.endSec || sceneStart);
+  const matchByTime = (phrases = []) => phrases
+    .map((phrase) => {
+      const overlapSec = overlapDurationSec(sceneStart, sceneEnd, phrase?.t0, phrase?.t1);
+      return overlapSec > minOverlapSec ? { ...phrase, overlapSec } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => (Number(b?.overlapSec || 0) - Number(a?.overlapSec || 0)));
+  const matchedTranscriptPhrases = matchByTime(Array.isArray(transcript) ? transcript : []);
+  const matchedSemanticPhrases = matchByTime(Array.isArray(semanticTimeline) ? semanticTimeline : []);
+  const selected = matchedTranscriptPhrases.length ? matchedTranscriptPhrases : matchedSemanticPhrases;
+  const uniqueTexts = Array.from(new Set(selected.map((item) => String(item?.text || "").trim()).filter(Boolean)));
+  const primaryPhrase = uniqueTexts[0] || "";
+  const combinedPhraseText = uniqueTexts.join(" · ");
+  return {
+    matchedTranscriptPhrases,
+    matchedSemanticPhrases,
+    primaryPhrase,
+    combinedPhraseText,
+    phraseCount: uniqueTexts.length,
+    matchedPhraseTexts: uniqueTexts,
+    sourceUsed: matchedTranscriptPhrases.length ? "transcript" : (matchedSemanticPhrases.length ? "semanticTimeline" : "none"),
+    sceneStart,
+    sceneEnd,
+  };
+}
+
+function mapPhraseToSceneIdByTime(phrase = {}, scenes = []) {
+  const phraseStart = Number(phrase?.t0 ?? phrase?.startSec ?? 0);
+  const phraseEndRaw = Number(phrase?.t1 ?? phrase?.endSec ?? phraseStart);
+  const phraseEnd = Number.isFinite(phraseEndRaw) && phraseEndRaw >= phraseStart ? phraseEndRaw : phraseStart;
+  let best = { sceneId: "", overlapSec: 0 };
+  (Array.isArray(scenes) ? scenes : []).forEach((scene, idx) => {
+    const sceneId = String(scene?.sceneId || `S${idx + 1}`).trim();
+    const displayTime = resolveSceneDisplayTime(scene);
+    const overlapSec = overlapDurationSec(displayTime.startSec, displayTime.endSec, phraseStart, phraseEnd);
+    if (overlapSec > best.overlapSec) best = { sceneId, overlapSec };
+  });
+  return best.sceneId;
+}
+
 function collectSceneVideoStateStats(scenes, prefix = "scene") {
   return normalizeSceneCollectionWithSceneId(scenes, prefix).reduce((acc, scene) => {
     if (String(scene?.videoUrl || "").trim()) acc.videoUrlCount += 1;
@@ -12201,7 +12274,9 @@ onClipSec: (nodeId, value) => {
               return [sceneId, buildScenarioScenePackageSignature(sceneItem)];
             })
           );
-          const scenes = normalizedScenes.map((sceneItem, idx) => {
+          const timelineTranscriptPhrases = normalizeTimelinePhraseRows(storyboardOut?.transcript);
+          const timelineSemanticPhrases = normalizeTimelinePhraseRows(storyboardOut?.semanticTimeline);
+          const baseScenes = normalizedScenes.map((sceneItem, idx) => {
             const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`);
             const cleanedScene = stripScenarioGeneratedAssets(sceneItem);
             const persistedScene = previousBySceneId.get(sceneId);
@@ -12229,6 +12304,28 @@ onClipSec: (nodeId, value) => {
               }
             });
             return { ...cleanedScene, ...persistedAssets };
+          });
+          const scenes = baseScenes.map((sceneItem, idx) => {
+            const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
+            const phraseMatch = getScenePhrasesByTime(sceneItem, timelineTranscriptPhrases, timelineSemanticPhrases, 0);
+            const nextScene = {
+              ...sceneItem,
+              localPhrase: phraseMatch.primaryPhrase || String(sceneItem?.localPhrase || "").trim(),
+              scenePhraseTexts: phraseMatch.matchedPhraseTexts,
+              matchedPhraseTexts: phraseMatch.matchedPhraseTexts,
+              scenePhraseCount: Number(phraseMatch.phraseCount || 0),
+              scenePhraseSource: phraseMatch.sourceUsed,
+            };
+            console.debug("[SCENARIO SCENE PHRASES]", {
+              sceneId,
+              t0: phraseMatch.sceneStart,
+              t1: phraseMatch.sceneEnd,
+              matchedPhraseCount: phraseMatch.phraseCount,
+              matchedPhraseTexts: phraseMatch.matchedPhraseTexts,
+              primaryPhrase: phraseMatch.primaryPhrase,
+              sourceUsed: phraseMatch.sourceUsed,
+            });
+            return nextScene;
           });
           const uiStateUpdated = storyboardRunChanged || scenes.length !== previousScenes.length;
           if (storyboardRunChanged) {
@@ -12325,14 +12422,27 @@ onClipSec: (nodeId, value) => {
             : packageResolvedMusicPromptSourceKind === "fallback"
               ? packageFallbackMusicPrompt
               : "";
-          const phraseBreakdown = scenes.map((scene, idx) => ({
-            sceneId: String(scene?.sceneId || `S${idx + 1}`),
-            startSec: resolveSceneDisplayTime(scene).startSec,
-            endSec: resolveSceneDisplayTime(scene).endSec,
-            text: String(scene?.localPhrase || scene?.summaryRu || "").trim(),
-            energy: String(scene?.emotionRu || "").trim(),
-            context: String(scene?.locationRu || "").trim(),
+          const sourcePhrases = timelineTranscriptPhrases.length ? timelineTranscriptPhrases : timelineSemanticPhrases;
+          const phraseBreakdown = sourcePhrases.map((phrase, idx) => ({
+            sceneId: mapPhraseToSceneIdByTime(phrase, scenes),
+            startSec: Number(phrase?.t0 ?? 0),
+            endSec: Number(phrase?.t1 ?? phrase?.t0 ?? 0),
+            text: String(phrase?.text || "").trim(),
+            energy: String(phrase?.emotion || "").trim(),
+            context: String(phrase?.meaning || phrase?.transitionHint || "").trim(),
           }));
+          console.debug("[SCENARIO PHRASE MAP]", {
+            phraseSourceUsed: timelineTranscriptPhrases.length ? "transcript" : (timelineSemanticPhrases.length ? "semanticTimeline" : "none"),
+            phraseCount: phraseBreakdown.length,
+            sceneCount: scenes.length,
+            phrases: phraseBreakdown.map((item, idx) => ({
+              idx,
+              sceneId: item.sceneId,
+              t0: item.startSec,
+              t1: item.endSec,
+              text: item.text,
+            })),
+          });
           const audioData = {
             ...currentAudioData,
             audioUrl: String(currentAudioData.audioUrl || normalizedPackage?.audioUrl || connectedAudioUrl || "").trim(),
