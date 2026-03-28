@@ -182,6 +182,9 @@ export default function ScenarioStoryboardEditor({
   const [audioSceneOpen, setAudioSceneOpen] = useState(false);
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
+  const phrasePlaybackRef = useRef({ sceneId: "", phraseIndex: -1, t0: 0, t1: 0 });
+  const [playingPhraseIndex, setPlayingPhraseIndex] = useState(-1);
+  const [phrasePlaybackError, setPhrasePlaybackError] = useState("");
   const prevStoryboardRevisionRef = useRef("");
   const stopNodeDragEvent = (event) => event.stopPropagation();
 
@@ -192,7 +195,8 @@ export default function ScenarioStoryboardEditor({
   );
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
   const safeAudioData = audioData && typeof audioData === "object" ? audioData : {};
-  const hasBgAudioAvailable = Boolean(String(safeAudioData?.audioUrl || safeAudioData?.musicUrl || "").trim());
+  const masterAudioUrl = String(safeAudioData?.audioUrl || safeAudioData?.musicUrl || "").trim();
+  const hasBgAudioAvailable = Boolean(masterAudioUrl);
 
   useEffect(() => {
     if (!open) return;
@@ -307,13 +311,63 @@ export default function ScenarioStoryboardEditor({
     setActiveSelectionId(phraseSceneId);
   };
 
-  const jumpToPhrase = (startSec) => {
-    if (!masterAudioRef.current) return;
-    const t0 = Number(startSec);
-    if (!Number.isFinite(t0)) return;
-    masterAudioRef.current.currentTime = Math.max(0, t0);
-    masterAudioRef.current.play().catch(() => {});
+  const jumpToPhrase = (phrase, idx) => {
+    const audio = masterAudioRef.current;
+    if (!audio) {
+      setPhrasePlaybackError("Master audio плеер недоступен.");
+      return;
+    }
+    if (!masterAudioUrl) {
+      setPhrasePlaybackError("Master audio отсутствует: нет audioUrl/musicUrl.");
+      return;
+    }
+    const t0 = Number(phrase?.startSec ?? phrase?.t0);
+    const t1Raw = Number(phrase?.endSec ?? phrase?.t1);
+    if (!Number.isFinite(t0)) {
+      setPhrasePlaybackError("Некорректный start time у фразы.");
+      return;
+    }
+    const t1 = Number.isFinite(t1Raw) && t1Raw > t0 ? t1Raw : t0 + 0.25;
+    const phraseSceneId = resolvePhraseSceneId(phrase, idx);
+    phrasePlaybackRef.current = { sceneId: phraseSceneId, phraseIndex: idx, t0, t1 };
+    setPlayingPhraseIndex(idx);
+    setPhrasePlaybackError("");
+    audio.currentTime = Math.max(0, t0);
+    audio.play().catch((error) => {
+      setPhrasePlaybackError(String(error?.message || "Не удалось запустить воспроизведение фразы."));
+      setPlayingPhraseIndex(-1);
+    });
   };
+
+  useEffect(() => {
+    const audio = masterAudioRef.current;
+    if (!audio) return undefined;
+
+    const onTimeUpdate = () => {
+      const playback = phrasePlaybackRef.current;
+      if (!playback || playback.phraseIndex < 0) return;
+      if (audio.currentTime >= Number(playback.t1 || 0)) {
+        audio.pause();
+        setPlayingPhraseIndex(-1);
+      }
+    };
+    const onEnded = () => {
+      setPlayingPhraseIndex(-1);
+    };
+    const onError = () => {
+      setPlayingPhraseIndex(-1);
+      setPhrasePlaybackError("Ошибка воспроизведения master audio.");
+    };
+
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("ended", onEnded);
+    audio.addEventListener("error", onError);
+    return () => {
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
+    };
+  }, [masterAudioUrl, open]);
 
   const resolveSceneAudioSliceStatus = (scene) => {
     const rawStatus = String(scene?.audioSliceStatus || scene?.extractedAudioStatus || "").trim().toLowerCase();
@@ -659,10 +713,11 @@ export default function ScenarioStoryboardEditor({
           {phrases.map((phrase, idx) => {
             const phraseSceneId = resolvePhraseSceneId(phrase, idx);
             const isActive = idx === selectedPhraseIndex;
+            const isPlaying = idx === playingPhraseIndex;
             return (
               <div
                 key={`${phraseSceneId || idx}-${idx}`}
-                className={`clipSB_scenarioEditorPhraseItem ${isActive ? "isActive" : ""}`}
+                className={`clipSB_scenarioEditorPhraseItem ${isActive ? "isActive" : ""} ${isPlaying ? "isPlaying" : ""}`}
                 role="button"
                 tabIndex={0}
                 onClick={() => handleSelectPhrase(phrase, idx)}
@@ -689,7 +744,7 @@ export default function ScenarioStoryboardEditor({
                   onClick={(event) => {
                     event.stopPropagation();
                     handleSelectPhrase(phrase, idx);
-                    jumpToPhrase(phrase.startSec);
+                    jumpToPhrase(phrase, idx);
                   }}
                 >
                   ▶ Перемотать
@@ -697,6 +752,8 @@ export default function ScenarioStoryboardEditor({
               </div>
             );
           })}
+          {phrasePlaybackError ? <div className="clipSB_hint" style={{ color: "#ffb066" }}>{phrasePlaybackError}</div> : null}
+          {!masterAudioUrl ? <div className="clipSB_hint">Прослушивание фраз недоступно: master audio отсутствует.</div> : null}
         </div>
       );
     }
@@ -747,6 +804,8 @@ export default function ScenarioStoryboardEditor({
           </div>
           <button className="clipSB_iconBtn" onClick={onClose} type="button">×</button>
         </div>
+
+        {masterAudioUrl ? <audio ref={masterAudioRef} src={masterAudioUrl} preload="metadata" style={{ display: "none" }} /> : null}
 
         <div className="clipSB_scenarioEditorTopTabs">
           <div className="clipSB_scenarioEditorTabsRow">
@@ -848,7 +907,7 @@ export default function ScenarioStoryboardEditor({
                   <details>
                     <summary>master audio source</summary>
                     {safeAudioData?.audioUrl ? (
-                      <audio ref={masterAudioRef} controls className="clipSB_audioPlayer" src={safeAudioData.audioUrl} />
+                      <audio controls className="clipSB_audioPlayer" src={safeAudioData.audioUrl} />
                     ) : (
                       <div className="clipSB_hint">Master audio отсутствует.</div>
                     )}

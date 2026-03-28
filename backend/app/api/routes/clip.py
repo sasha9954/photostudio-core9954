@@ -9780,13 +9780,29 @@ def clip_video(payload: ClipVideoIn):
         start_image_url=start_image_url,
         end_image_url=end_image_url,
     )
+    payload_workflow_hint = str(payload.resolvedWorkflowKey or "").strip().lower()
+    ltx_mode_hint = str(payload.ltxMode or "").strip().lower()
+    requires_two_frames_hint = bool(payload.requiresTwoFrames)
+    two_frame_payload_hint = bool(start_image_url and end_image_url)
+    two_frame_workflow_hint = payload_workflow_hint in {"imag-imag-video-bz", "f_l", "first_last"}
+    two_frame_mode_hint = ltx_mode_hint in {"f_l", "first_last"}
+    force_two_frame_mode = bool(
+        final_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS
+        or requires_two_frames_hint
+        or two_frame_payload_hint
+        or two_frame_workflow_hint
+        or two_frame_mode_hint
+    )
+
     continuation_requested = bool(
         payload.requiresContinuation
         or payload.continuation
         or payload.continuationFromPrevious
-        or str(payload.ltxMode or "").strip().lower() == "continuation"
-    )
-    if continuation_requested:
+        or ltx_mode_hint == "continuation"
+    ) and not force_two_frame_mode
+    if force_two_frame_mode:
+        final_workflow_key = "f_l"
+    elif continuation_requested:
         final_workflow_key = "continuation"
 
     resolved_model_key, resolved_model_spec, model_source = _resolve_ltx_model_selection(
@@ -9870,6 +9886,10 @@ def clip_video(payload: ClipVideoIn):
         "continuation_source_asset_url_present": bool(continuation_source_asset_url),
         "continuation_source_scene_id_present": bool(continuation_source_scene_id),
         "provider": provider,
+        "force_two_frame_mode": force_two_frame_mode,
+        "requires_two_frames_hint": requires_two_frames_hint,
+        "two_frame_payload_hint": two_frame_payload_hint,
+        "two_frame_workflow_hint": two_frame_workflow_hint,
     }
     if final_workflow_key == "continuation":
         continuation_validation_code, continuation_validation_hint = _validate_continuation_source(

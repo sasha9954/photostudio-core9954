@@ -7249,6 +7249,7 @@ const comfyShowVideoSection = Boolean(
       continuation: Boolean(jobMeta?.continuation ?? sceneSnapshot?.requiresContinuation ?? sceneSnapshot?.continuationFromPrevious),
       continuationSourceSceneId: String(jobMeta?.continuationSourceSceneId || sceneSnapshot?.continuationSourceSceneId || "").trim(),
       continuationSourceAssetType: String(jobMeta?.continuationSourceAssetType || sceneSnapshot?.continuationSourceAssetType || "").trim(),
+      renderMode: String(jobMeta?.renderMode || sceneSnapshot?.renderMode || "").trim(),
       startedAt: Number(jobMeta?.startedAt) || now,
       updatedAt: Number(jobMeta?.updatedAt) || now,
       status: String(jobMeta?.status || "queued").toLowerCase(),
@@ -7302,6 +7303,8 @@ const comfyShowVideoSection = Boolean(
       continuation: Boolean(startMeta.continuation),
       continuationSourceSceneId: String(startMeta.continuationSourceSceneId || ""),
       continuationSourceAssetType: String(startMeta.continuationSourceAssetType || ""),
+      providerJobId: String(startMeta.providerJobId || ""),
+      renderMode: String(startMeta.renderMode || ""),
     });
 
     const scheduleScenarioPoll = (delayMs, reason) => {
@@ -7353,6 +7356,22 @@ const comfyShowVideoSection = Boolean(
           hasVideoUrl: Boolean(String(out?.videoUrl || "").trim()),
           error: String(out?.error || out?.hint || out?.code || ""),
         });
+        const responseJobId = String(out?.jobId || activeMeta?.jobId || "").trim();
+        const latestMeta = scenarioVideoJobsBySceneRef.current.get(sceneId) || {};
+        const latestJobId = String(latestMeta?.jobId || "").trim();
+        if (!latestJobId || !responseJobId || latestJobId !== responseJobId || String(activeMeta?.jobId || "").trim() !== responseJobId) {
+          console.info("[SCENARIO VIDEO POLL STALE IGNORED]", {
+            sceneId,
+            jobId: String(activeMeta?.jobId || ""),
+            responseJobId,
+            latestJobId,
+            providerJobId: String(out?.providerJobId || latestMeta?.providerJobId || ""),
+            workflowKey: String(latestMeta?.workflowKey || ""),
+            renderMode: String(latestMeta?.renderMode || ""),
+            reasonIgnored: !latestJobId ? "missing_active_binding" : (latestJobId !== responseJobId ? "scene_job_binding_mismatch" : "request_job_changed_during_poll"),
+          });
+          return;
+        }
         const status = String(out?.status || "").toLowerCase() || "running";
         const nextMeta = {
           ...activeMeta,
@@ -7425,6 +7444,9 @@ const comfyShowVideoSection = Boolean(
         console.info("[SCENARIO VIDEO STATUS APPLIED]", {
           sceneId,
           jobId: String(settledMeta?.jobId || ""),
+          providerJobId: String(settledMeta?.providerJobId || ""),
+          workflowKey: String(settledMeta?.workflowKey || ""),
+          renderMode: String(settledMeta?.renderMode || ""),
           status,
           videoUrl: String(out?.videoUrl || ""),
           error: status === "error" || status === "stopped" ? String(out?.error || out?.hint || "video_job_failed") : "",
@@ -7601,6 +7623,7 @@ const comfyShowVideoSection = Boolean(
           continuation: Boolean(meta?.continuation ?? sceneNow?.requiresContinuation ?? sceneNow?.continuationFromPrevious),
           continuationSourceSceneId: String(meta?.continuationSourceSceneId || sceneNow?.continuationSourceSceneId || ""),
           continuationSourceAssetType: String(meta?.continuationSourceAssetType || sceneNow?.continuationSourceAssetType || ""),
+          renderMode: String(meta?.renderMode || sceneNow?.renderMode || ""),
         });
       });
       persistActiveVideoJob(nextPersisted);
@@ -9623,13 +9646,40 @@ Aspect ratio: ${imageFormat}`,
     const { effectiveStartImageUrl, endImageUrl, fallbackImageUrl, sourceOfTruthKeys } = resolveSceneFrameUrls(targetScene, targetPreviousScene);
     const targetEffectiveStartImageUrl = effectiveStartImageUrl;
     const imageStrategy = String(targetScene?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
-    const transitionType = imageStrategy === "continuation" || imageStrategy === "first_last" ? "continuous" : "single";
+    const explicitWorkflow = resolveScenarioExplicitWorkflowKey(targetScene);
+    const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
+      explicitWorkflow
+      || targetScene?.resolvedWorkflowKey
+      || resolveScenarioWorkflowKey(targetScene)
+    );
+    const resolvedWorkflowKeyLower = String(resolvedWorkflowKey || "").trim().toLowerCase();
+    const ltxModeNormalized = String(targetScene?.ltxMode || targetScene?.ltx_mode || "").trim().toLowerCase();
+    const requiresTwoFrames = Boolean(
+      targetScene?.requiresTwoFrames
+      ?? targetScene?.needsTwoFrames
+      ?? imageStrategy === "first_last"
+      || resolvedWorkflowKeyLower === "f_l"
+      || resolvedWorkflowKeyLower === "imag-imag-video-bz"
+      || ltxModeNormalized === "f_l"
+      || ltxModeNormalized === "first_last"
+    );
+    const requiresContinuation = Boolean(
+      targetScene?.requiresContinuation
+      ?? targetScene?.continuationFromPrevious
+      ?? imageStrategy === "continuation"
+      || ltxModeNormalized === "continuation"
+    ) && !requiresTwoFrames;
+    const transitionType = requiresTwoFrames
+      ? "first_last"
+      : (requiresContinuation ? "continuous" : "single");
     const frameImageUrl = String(fallbackImageUrl || "").trim();
     const resolvedFirstFrameUrl = String(targetEffectiveStartImageUrl || "").trim();
     const resolvedLastFrameUrl = String(endImageUrl || "").trim();
-    const hasImageForVideo = imageStrategy === "first_last" || imageStrategy === "continuation"
-      ? !!(resolvedFirstFrameUrl || frameImageUrl) && (imageStrategy === "continuation" || !!resolvedLastFrameUrl)
-      : !!frameImageUrl;
+    const hasImageForVideo = requiresTwoFrames
+      ? !!(resolvedFirstFrameUrl || frameImageUrl) && !!resolvedLastFrameUrl
+      : (requiresContinuation
+        ? !!(resolvedFirstFrameUrl || frameImageUrl)
+        : !!frameImageUrl);
     if (!hasImageForVideo) {
       console.debug("[SCENARIO VIDEO BLOCKED]", {
         renderMode: String(targetScene?.renderMode || ""),
@@ -9658,12 +9708,6 @@ Aspect ratio: ${imageFormat}`,
 
     const sceneId = String(targetScene?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
-    const explicitWorkflow = resolveScenarioExplicitWorkflowKey(targetScene);
-    const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
-      explicitWorkflow
-      || targetScene?.resolvedWorkflowKey
-      || resolveScenarioWorkflowKey(targetScene)
-    );
     const explicitModel = resolveScenarioExplicitModelKey(targetScene);
     const workflowDefaultModelMap = {
       i2v: "ltx23_dev_fp8",
@@ -9681,8 +9725,6 @@ Aspect ratio: ${imageFormat}`,
       ?? targetScene?.durationSec
       ?? Math.max(0, Number(targetScene.t1 ?? targetScene.end ?? 0) - Number(targetScene.t0 ?? targetScene.start ?? 0))
     ) || 0;
-    const requiresTwoFrames = Boolean(targetScene?.requiresTwoFrames ?? targetScene?.needsTwoFrames ?? imageStrategy === "first_last");
-    const requiresContinuation = Boolean(targetScene?.requiresContinuation ?? targetScene?.continuationFromPrevious ?? imageStrategy === "continuation");
     const requiresAudioSensitiveVideo = resolvedWorkflowKey === "lip_sync" || Boolean(effectiveLipSync);
     const shouldAttachAudioSlice = Boolean(attachedAudioSliceUrl) && (requiresAudioSensitiveVideo || Boolean(effectiveLipSync));
     const continuationSourceSceneId = requiresContinuation
@@ -9715,12 +9757,12 @@ Aspect ratio: ${imageFormat}`,
       : "";
     const videoVisualGlueText = buildScenarioVideoVisualGlueText(targetScene);
     const finalVideoPrompt = [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
-    const sourceImageUrl = transitionType === "continuous"
+    const sourceImageUrl = (requiresContinuation || requiresTwoFrames)
       ? (resolvedFirstFrameUrl || resolvedLastFrameUrl || frameImageUrl || "")
       : (frameImageUrl || "");
 
     console.log("[StoryboardVideo] video_loading_on reason=generate_video", { sceneId });
-    updateScenarioScene(targetSceneIndex, { videoStatus: "queued", videoError: "", videoJobId: "", videoPanelActivated: true });
+    updateScenarioScene(targetSceneIndex, { videoUrl: "", videoStatus: "queued", videoError: "", videoJobId: "", videoPanelActivated: true });
     setScenarioVideoError("");
     console.log("[StoryboardVideo] generate", {
       sceneId,
@@ -9892,6 +9934,7 @@ Aspect ratio: ${imageFormat}`,
           continuation: requiresContinuation,
           continuationSourceSceneId,
           continuationSourceAssetType,
+          renderMode: effectiveRenderMode,
           status: "queued",
         });
         return;
