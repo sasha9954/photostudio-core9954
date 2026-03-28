@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { resolveSceneDisplayTime } from "./scenarioStoryboardDomain";
+import { resolveAssetUrl } from "./comfyNodeShared";
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 
 const TOP_TABS = [
@@ -489,20 +490,20 @@ export default function ScenarioStoryboardEditor({
   const derivedFramePrompts = deriveFirstLastFramePrompts(selectedScene || {});
   const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || derivedFramePrompts.start || "");
   const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
-  const sourceImageUrl = String(selectedScene?.imageUrl || "").trim();
-  const startFrameSourceUrl = String(
+  const sourceImageUrl = String(resolveAssetUrl(selectedScene?.imageUrl) || "").trim();
+  const startFrameSourceUrl = String(resolveAssetUrl(
     selectedScene?.startImageUrl
     || selectedScene?.startFrameImageUrl
     || selectedScene?.startFramePreviewUrl
     || selectedScene?.imageUrl
     || ""
-  ).trim();
-  const endFrameSourceUrl = String(
+  ) || "").trim();
+  const endFrameSourceUrl = String(resolveAssetUrl(
     selectedScene?.endImageUrl
     || selectedScene?.endFrameImageUrl
     || selectedScene?.endFramePreviewUrl
     || ""
-  ).trim();
+  ) || "").trim();
   const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();
   const hasSceneVideo = Boolean(sceneVideoUrl);
   const sceneAudioSliceUrl = String(selectedScene?.audioSliceUrl || selectedScene?.extractedAudioUrl || "").trim();
@@ -538,6 +539,15 @@ export default function ScenarioStoryboardEditor({
   const globalMusicPrompt = String(musicPromptSourceText).trim();
   const hasBgMusicPrompt = Boolean(globalMusicPrompt);
   const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
+
+  useEffect(() => {
+    console.debug("[SCENARIO EDITOR PREVIEW SRC FINAL]", {
+      sceneId: selectedSceneId,
+      single: sourceImageUrl,
+      start: startFrameSourceUrl,
+      end: endFrameSourceUrl,
+    });
+  }, [selectedSceneId, sourceImageUrl, startFrameSourceUrl, endFrameSourceUrl]);
   const usesBgMusicInMontage = hasBgMusic && Boolean(safeAudioData?.useInMontage);
   const bgMusicFileName = String(
     safeAudioData?.fileName
@@ -1082,8 +1092,8 @@ export default function ScenarioStoryboardEditor({
                             <h4>IMAGE</h4>
                             <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${imageStatus}`}>{imageStatus}</span>
                           </div>
-                          <div className={`clipSB_scenarioEditorImagePreviewWrap${selectedScene?.imageUrl ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
-                            {selectedScene?.imageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={selectedScene.imageUrl} alt={`scene-${selectedSceneId}-image`} /> : (
+                          <div className={`clipSB_scenarioEditorImagePreviewWrap${sourceImageUrl ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
+                            {sourceImageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={sourceImageUrl} alt={`scene-${selectedSceneId}-image`} /> : (
                               <div className="clipSB_scenarioEditorPreviewPlaceholder" role="status" aria-live="polite">
                                 <div className="clipSB_scenarioEditorPreviewPlaceholderIcon" aria-hidden="true">🖼️</div>
                                 <div>Изображение сцены пока не создано</div>
