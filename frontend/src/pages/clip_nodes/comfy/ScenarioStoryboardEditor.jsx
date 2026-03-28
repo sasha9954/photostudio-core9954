@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { resolveSceneDisplayTime } from "./scenarioStoryboardDomain";
 import { resolveAssetUrl } from "./comfyNodeShared";
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
+const CLIP_TRACE_SCENARIO_EDITOR_DEBUG = false;
 
 const TOP_TABS = [
   { id: "scenario", label: "Сценарий" },
@@ -567,6 +568,7 @@ export default function ScenarioStoryboardEditor({
       : "music prompt not provided";
 
   useEffect(() => {
+    if (!CLIP_TRACE_SCENARIO_EDITOR_DEBUG) return;
     console.debug("[SCENARIO EDITOR DEBUG]", {
       selectionType: activeSelectionType,
       selectionId: activeSelectionId,
@@ -666,7 +668,9 @@ export default function ScenarioStoryboardEditor({
     selectedSceneRuntime: selectedRuntime,
     audioData: safeAudioData,
   }, null, 2);
-  const scenarioRawJson = formatRawForCopy();
+  const scenarioRawJson = useMemo(() => (
+    activeTab === "debug" ? formatRawForCopy() : ""
+  ), [activeTab, normalizedScenes, safeAudioData, selectedRuntime, selectedSceneId]);
 
   const handleCopyRawJson = async () => {
     const didCopy = await copyTextToClipboard(formatRawForCopy());

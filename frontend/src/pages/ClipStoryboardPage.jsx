@@ -6592,6 +6592,7 @@ const [scenarioEditor, setScenarioEditor] = useState({
   open: false,
   nodeId: null,
   selected: 0,
+  selectedSceneId: "",
 });
 const [activeScenarioStoryboardId, setActiveScenarioStoryboardId] = useState(null);
 const [isScenarioStoryboardOpen, setIsScenarioStoryboardOpen] = useState(false);
@@ -6825,28 +6826,40 @@ useEffect(() => {
     sourceNodeIdUsedByFlow: String(scenarioFlowSourceNode?.id || ""),
     scenesCountFromActiveScenarioStoryboard: activeScenes.length,
     scenesCountFromLegacyStoryboard: legacyScenes.length,
-    selectedSceneId: String((scenarioScenes[scenarioEditor.selected] || {}).sceneId || ""),
+    selectedSceneId: String(scenarioEditor?.selectedSceneId || (scenarioScenes[scenarioEditor.selected] || {}).sceneId || ""),
   });
 }, [
   activeScenarioStoryboardNode,
   scenarioEditor?.nodeId,
   scenarioEditor.selected,
+  scenarioEditor?.selectedSceneId,
   scenarioFlowSourceNode?.id,
   scenarioNode,
   scenarioScenes,
 ]);
 
+const scenarioSelectedIndex = useMemo(() => {
+  if (!Array.isArray(scenarioScenes) || scenarioScenes.length === 0) return -1;
+  const selectedSceneId = String(scenarioEditor?.selectedSceneId || "").trim();
+  if (selectedSceneId) {
+    const idxById = scenarioScenes.findIndex((scene) => String(scene?.sceneId || "").trim() === selectedSceneId);
+    if (idxById >= 0) return idxById;
+  }
+  const selectedIdx = Number.isFinite(scenarioEditor?.selected) ? Number(scenarioEditor.selected) : 0;
+  return Math.min(Math.max(selectedIdx, 0), scenarioScenes.length - 1);
+}, [scenarioEditor?.selected, scenarioEditor?.selectedSceneId, scenarioScenes]);
+
 const recommendedNextSceneIndex = useMemo(() => {
   if (!Array.isArray(scenarioScenes) || scenarioScenes.length === 0) return -1;
-  const currentIdx = Number.isFinite(scenarioEditor.selected) ? scenarioEditor.selected : -1;
+  const currentIdx = Number.isFinite(scenarioSelectedIndex) ? scenarioSelectedIndex : -1;
   return scenarioScenes.findIndex((scene, idx) => idx > currentIdx && !String(scene?.videoUrl || "").trim());
-}, [scenarioEditor.selected, scenarioScenes]);
+}, [scenarioScenes, scenarioSelectedIndex]);
 
-const scenarioSelected = scenarioScenes[scenarioEditor.selected] || null;
+const scenarioSelected = scenarioSelectedIndex >= 0 ? (scenarioScenes[scenarioSelectedIndex] || null) : null;
 const scenarioSelectedImageStrategy = String(scenarioSelected?.imageStrategy || deriveScenarioImageStrategy(scenarioSelected)).trim().toLowerCase() || "single";
 const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelected);
 const scenarioSelectedIsLipSync = isLipSyncScene(scenarioSelected);
-const scenarioPreviousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
+const scenarioPreviousScene = scenarioSelectedIndex > 0 ? scenarioScenes[scenarioSelectedIndex - 1] : null;
 const scenarioSelectedFrameUrls = resolveSceneFrameUrls(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedCanInheritPreviousEnd = scenarioSelectedTransitionType === "continuous"
   && !!scenarioPreviousScene
@@ -6857,7 +6870,7 @@ const scenarioSelectedVideoSourceImageUrl = String(scenarioSelected?.videoSource
 const scenarioSelectedVideoPanelActivated = !!scenarioSelected?.videoPanelActivated;
 const scenarioSelectedStartImageSource = getSceneStartImageSource(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedImageFormat = resolvePreferredSceneFormat(scenarioSelected?.format, scenarioSelected?.imageFormat);
-const scenarioSelectedIndexLabel = Number.isFinite(scenarioEditor.selected) ? scenarioEditor.selected + 1 : 0;
+const scenarioSelectedIndexLabel = Number.isFinite(scenarioSelectedIndex) && scenarioSelectedIndex >= 0 ? scenarioSelectedIndex + 1 : 0;
 const scenarioSelectedDisplayTime = resolveSceneDisplayTime(scenarioSelected);
 const scenarioSelectedT0 = Number(scenarioSelectedDisplayTime.startSec ?? 0);
 const scenarioSelectedT1 = Number(scenarioSelectedDisplayTime.endSec ?? 0);
@@ -6914,10 +6927,6 @@ const comfyNode = useMemo(() => {
   if (comfyEditor.nodeId) return nodes.find((n) => n.id === comfyEditor.nodeId && n.type === 'comfyStoryboard') || null;
   return nodes.find((n) => n.type === 'comfyStoryboard') || null;
 }, [nodes, comfyEditor.nodeId]);
-
-useEffect(() => {
-  console.log("[COMFY DEBUG FRONT] comfyStoryboard plannerMeta plannerInput refsByRole", comfyNode?.data?.plannerMeta?.plannerInput?.refsByRole);
-}, [comfyNode]);
 
 const comfyScenes = useMemo(() => {
   const arr = normalizeSceneCollectionWithSceneId(comfyNode?.data?.mockScenes, "comfy_scene");
@@ -7134,27 +7143,37 @@ const comfyShowVideoSection = Boolean(
   useEffect(() => {
     setScenarioVideoOpen(false);
     setScenarioAudioSliceLoading(false);
-  }, [scenarioEditor.selected, scenarioSelected?.sceneId]);
+  }, [scenarioSelected?.sceneId, scenarioSelectedIndex]);
 
   useEffect(() => {
     if (!scenarioEditor.open) return;
     if (!scenarioScenes.length) return;
-    const maxIdx = scenarioScenes.length - 1;
-    if (scenarioEditor.selected < 0 || scenarioEditor.selected > maxIdx) {
-      setScenarioEditor((prev) => ({ ...prev, selected: 0 }));
+    if (scenarioSelectedIndex < 0) {
+      const fallbackSceneId = String(scenarioScenes?.[0]?.sceneId || "").trim();
+      setScenarioEditor((prev) => ({ ...prev, selected: 0, selectedSceneId: fallbackSceneId }));
     }
-  }, [scenarioEditor.open, scenarioEditor.selected, scenarioScenes.length]);
+  }, [scenarioEditor.open, scenarioScenes, scenarioSelectedIndex]);
+
+  useEffect(() => {
+    const selectedSceneId = String(scenarioSelected?.sceneId || "").trim();
+    if (!selectedSceneId) return;
+    if (scenarioEditor.selected === scenarioSelectedIndex && scenarioEditor.selectedSceneId === selectedSceneId) return;
+    setScenarioEditor((prev) => {
+      if (prev.selected === scenarioSelectedIndex && prev.selectedSceneId === selectedSceneId) return prev;
+      return { ...prev, selected: scenarioSelectedIndex, selectedSceneId };
+    });
+  }, [scenarioEditor.selected, scenarioEditor.selectedSceneId, scenarioSelected?.sceneId, scenarioSelectedIndex]);
 
   useEffect(() => {
     if (!scenarioEditor.open) return;
-    const node = scenarioItemRefs.current.get(scenarioEditor.selected);
+    const node = scenarioItemRefs.current.get(scenarioSelectedIndex);
     if (!node) return;
     try {
       node.scrollIntoView({ block: "nearest", behavior: "smooth" });
     } catch {
       node.scrollIntoView();
     }
-  }, [scenarioEditor.open, scenarioEditor.selected]);
+  }, [scenarioEditor.open, scenarioSelectedIndex]);
 
   useEffect(() => () => {
     if (scenarioVideoScrollRafRef.current) {
@@ -7186,15 +7205,13 @@ const comfyShowVideoSection = Boolean(
         resolvedSceneId: String(sceneAtIdx?.sceneId || ""),
         patchKeys: Object.keys(patch || {}),
       });
-      if (CLIP_TRACE_SCENARIO_SCENE_ASSETS) {
-        console.debug("[SCENARIO SCENE PATCH APPLIED]", {
-          targetNodeId,
-          sceneRef,
-          resolvedIdx,
-          actualSceneIdAtIdx: String(sceneAtIdx?.sceneId || ""),
-          patchKeys: Object.keys(patch || {}),
-        });
-      }
+      console.debug("[SCENARIO SCENE PATCH APPLIED]", {
+        targetNodeId,
+        sceneRef,
+        resolvedIdx,
+        actualSceneIdAtIdx: String(sceneAtIdx?.sceneId || ""),
+        patchKeys: Object.keys(patch || {}),
+      });
       const nextScenes = scenes.map((s, i) => (i === resolvedIdx ? { ...s, ...patch } : s));
       return { ...n, data: { ...n.data, scenes: nextScenes } };
     }));
@@ -9582,8 +9599,24 @@ Aspect ratio: ${imageFormat}`,
             ? { endFrameStatus: "idle", endFrameError: "" }
             : { imageStatus: "idle", imageError: "" };
         updateScenarioSceneGenerationRuntime(sceneId, runtimeResetPatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
+        console.debug("[SCENARIO IMAGE E2E TRACE]", {
+          requestedSceneId: sceneId,
+          responseOk: Boolean(out?.ok),
+          applyAccepted,
+          patchedNodeId: String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || ""),
+          patchedSceneId: sceneId,
+          patchedImageUrl: "",
+          selectedNodeId: String(scenarioFlowSourceNode?.id || ""),
+          selectedSceneId: String(scenarioSelected?.sceneId || ""),
+          selectedSceneImageUrl: String(scenarioSelected?.imageUrl || "").trim(),
+          editorPreviewSrc: resolveAssetUrl(scenarioSelected?.imageUrl),
+          mainPreviewSrc: resolveAssetUrl(scenarioSelected?.imageUrl),
+          assetsPreservedAfterRebind: false,
+          finalVisible: false,
+        });
         return;
       }
+      const targetNodeId = String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || "").trim();
       let runtimeImagePatch = {};
       if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
         updateScenarioScene(sceneId, {
@@ -9626,7 +9659,8 @@ Aspect ratio: ${imageFormat}`,
       console.debug("[SCENARIO IMAGE SCENE PATCHED]", {
         sceneId,
         slot: normalizedSlot,
-        targetNodeId: String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || ""),
+        targetNodeId,
+        imageUrl: generatedImageUrl,
         patchApplied: true,
       });
       console.debug("[SCENARIO IMAGE STATUS SYNC]", {
@@ -9642,6 +9676,39 @@ Aspect ratio: ${imageFormat}`,
         sceneId,
         slot: normalizedSlot,
       });
+      window.setTimeout(() => {
+        const nodeNow = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === targetNodeId) || null;
+        const scenesNow = Array.isArray(nodeNow?.data?.scenes) ? nodeNow.data.scenes : [];
+        const selectedSceneIdNow = String(scenarioEditor?.selectedSceneId || scenarioSelected?.sceneId || "").trim();
+        const patchedSceneNow = scenesNow.find((sceneItem) => String(sceneItem?.sceneId || "").trim() === sceneId) || null;
+        const selectedSceneNow = scenesNow.find((sceneItem) => String(sceneItem?.sceneId || "").trim() === selectedSceneIdNow) || null;
+        const patchedImageUrl = String(
+          normalizedSlot === "start"
+            ? (patchedSceneNow?.startImageUrl || "")
+            : normalizedSlot === "end"
+              ? (patchedSceneNow?.endImageUrl || "")
+              : (patchedSceneNow?.imageUrl || "")
+        ).trim();
+        const selectedSceneImageUrl = String(selectedSceneNow?.imageUrl || "").trim();
+        const editorPreviewSrc = resolveAssetUrl(selectedSceneImageUrl);
+        const mainPreviewSrc = resolveAssetUrl(selectedSceneImageUrl);
+        const assetsPreservedAfterRebind = !!patchedImageUrl;
+        console.debug("[SCENARIO IMAGE E2E TRACE]", {
+          requestedSceneId: sceneId,
+          responseOk: Boolean(out?.ok),
+          applyAccepted,
+          patchedNodeId: targetNodeId,
+          patchedSceneId: String(patchedSceneNow?.sceneId || sceneId),
+          patchedImageUrl,
+          selectedNodeId: String(scenarioFlowSourceNode?.id || ""),
+          selectedSceneId: selectedSceneIdNow,
+          selectedSceneImageUrl,
+          editorPreviewSrc,
+          mainPreviewSrc,
+          assetsPreservedAfterRebind,
+          finalVisible: Boolean(editorPreviewSrc || mainPreviewSrc),
+        });
+      }, 0);
       if (imageStrategy === "first_last" && requestedSlot === "single") {
         await handleGenerateScenarioImage("end", { sceneIndex: targetSceneIndex });
       }
@@ -9675,7 +9742,7 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     if (transitionType === "continuous" && normalizedSlot === "start") {
-      updateScenarioScene(scenarioEditor.selected, {
+      updateScenarioScene(scenarioSelectedIndex, {
         startImageUrl: "",
         videoUrl: "",
         videoStatus: "",
@@ -9691,7 +9758,7 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     if (transitionType === "continuous" && normalizedSlot === "end") {
-      updateScenarioScene(scenarioEditor.selected, {
+      updateScenarioScene(scenarioSelectedIndex, {
         endImageUrl: "",
         videoUrl: "",
         videoStatus: "",
@@ -9708,7 +9775,7 @@ Aspect ratio: ${imageFormat}`,
     }
     const sceneId = String(scenarioSelected?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
-    updateScenarioScene(scenarioEditor.selected, {
+    updateScenarioScene(scenarioSelectedIndex, {
       imageUrl: "",
       videoUrl: "",
       videoSourceImageUrl: "",
@@ -9719,7 +9786,7 @@ Aspect ratio: ${imageFormat}`,
     });
     clearActiveVideoJob(sceneId);
     setScenarioVideoOpen(false);
-  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
+  }, [clearActiveVideoJob, scenarioSelected, scenarioSelectedIndex, updateScenarioScene]);
 
   const handleScenarioTakeAudioByIndex = useCallback(async (idx) => {
     const scene = scenarioScenes[idx] || null;
@@ -9863,7 +9930,7 @@ Aspect ratio: ${imageFormat}`,
 
     const nextIdx = scenarioScenes.findIndex((scene, idx) => idx >= startFrom && !String(scene?.videoUrl || "").trim());
     if (nextIdx >= 0) {
-      setScenarioEditor((prev) => ({ ...prev, selected: nextIdx }));
+      setScenarioEditor((prev) => ({ ...prev, selected: nextIdx, selectedSceneId: String((scenarioScenes[nextIdx] || {}).sceneId || "").trim() }));
       return;
     }
 
@@ -12283,7 +12350,7 @@ onClipSec: (nodeId, value) => {
                     const nextSafeSelectedIndex = Number.isFinite(scenarioEditor?.selected)
                       ? Math.min(Math.max(Number(scenarioEditor.selected), 0), normalizedScenes.length - 1)
                       : 0;
-                    setScenarioEditor((prev) => ({ ...prev, selected: nextSafeSelectedIndex }));
+                    setScenarioEditor((prev) => ({ ...prev, selected: nextSafeSelectedIndex, selectedSceneId: String((normalizedScenes[nextSafeSelectedIndex] || {}).sceneId || "").trim() }));
                   }
                   setScenarioImageError("Выбранная сцена не найдена. Обновите выбор сцены и повторите генерацию.");
                   notify({
@@ -12322,6 +12389,11 @@ onClipSec: (nodeId, value) => {
                     sceneCount: normalizedScenes.length,
                   });
                 }
+                setScenarioEditor((prev) => ({
+                  ...prev,
+                  selected: sceneIndex >= 0 ? sceneIndex : prev.selected,
+                  selectedSceneId: resolvedSceneId || prev.selectedSceneId || "",
+                }));
 
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
@@ -15519,14 +15591,14 @@ const hydrate = useCallback((source = "unknown") => {
                         else scenarioItemRefs.current.delete(i);
                       }}
                       className={"clipSB_scenarioItem"
-                        + (i === scenarioEditor.selected ? " isActive" : "")}
+                        + (i === scenarioSelectedIndex ? " isActive" : "")}
                       role="button"
                       tabIndex={0}
-                      onClick={() => setScenarioEditor((x) => ({ ...x, selected: i }))}
+                      onClick={() => setScenarioEditor((x) => ({ ...x, selected: i, selectedSceneId: String(s?.sceneId || "").trim() }))}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          setScenarioEditor((x) => ({ ...x, selected: i }));
+                          setScenarioEditor((x) => ({ ...x, selected: i, selectedSceneId: String(s?.sceneId || "").trim() }));
                         }
                       }}
                     >
