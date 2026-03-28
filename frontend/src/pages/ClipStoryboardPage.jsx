@@ -9654,20 +9654,24 @@ Aspect ratio: ${imageFormat}`,
     );
     const resolvedWorkflowKeyLower = String(resolvedWorkflowKey || "").trim().toLowerCase();
     const ltxModeNormalized = String(targetScene?.ltxMode || targetScene?.ltx_mode || "").trim().toLowerCase();
+    const explicitRequiresTwoFrames = targetScene?.requiresTwoFrames ?? targetScene?.needsTwoFrames;
     const requiresTwoFrames = Boolean(
-      targetScene?.requiresTwoFrames
-      ?? targetScene?.needsTwoFrames
-      ?? imageStrategy === "first_last"
-      || resolvedWorkflowKeyLower === "f_l"
-      || resolvedWorkflowKeyLower === "imag-imag-video-bz"
-      || ltxModeNormalized === "f_l"
-      || ltxModeNormalized === "first_last"
+      explicitRequiresTwoFrames
+      ?? (
+        imageStrategy === "first_last"
+        || resolvedWorkflowKeyLower === "f_l"
+        || resolvedWorkflowKeyLower === "imag-imag-video-bz"
+        || ltxModeNormalized === "f_l"
+        || ltxModeNormalized === "first_last"
+      )
     );
+    const explicitRequiresContinuation = targetScene?.requiresContinuation ?? targetScene?.continuationFromPrevious;
     const requiresContinuation = Boolean(
-      targetScene?.requiresContinuation
-      ?? targetScene?.continuationFromPrevious
-      ?? imageStrategy === "continuation"
-      || ltxModeNormalized === "continuation"
+      explicitRequiresContinuation
+      ?? (
+        imageStrategy === "continuation"
+        || ltxModeNormalized === "continuation"
+      )
     ) && !requiresTwoFrames;
     const transitionType = requiresTwoFrames
       ? "first_last"
