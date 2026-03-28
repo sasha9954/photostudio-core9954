@@ -2197,6 +2197,45 @@ def _estimate_text_overlap(text: str, anchor: str) -> float:
     return round(shared / max(1, len(base)), 4)
 
 
+def _append_decision_flag(reason: str, flag: str, value: Any = True) -> str:
+    base = str(reason or "").strip()
+    token = f"{flag}={str(value).lower() if isinstance(value, bool) else value}"
+    if token in base:
+        return base
+    return f"{base}; {token}".strip("; ").strip()
+
+
+def _is_group_narratively_required(
+    *,
+    scene: ScenarioDirectorScene,
+    raw_scene: dict[str, Any],
+    ref_directives: dict[str, Any] | None = None,
+    must_appear_roles: list[str] | None = None,
+) -> bool:
+    directives = ref_directives if isinstance(ref_directives, dict) else {}
+    must_appear = [str(role or "").strip().lower() for role in (must_appear_roles or []) if str(role or "").strip()]
+    if "group" in must_appear:
+        return True
+    if str(directives.get("group") or "").strip().lower() in {"hero", "required"}:
+        return True
+    scene_signal = " ".join(
+        [
+            str(raw_scene.get("sceneType") or raw_scene.get("scene_type") or "").strip().lower(),
+            str(raw_scene.get("shotType") or raw_scene.get("shot_type") or "").strip().lower(),
+            str(raw_scene.get("summary") or raw_scene.get("description") or "").strip().lower(),
+            str(raw_scene.get("goal") or raw_scene.get("sceneGoal") or raw_scene.get("scene_goal") or "").strip().lower(),
+            str(raw_scene.get("prompt") or raw_scene.get("imagePrompt") or raw_scene.get("videoPrompt") or "").strip().lower(),
+            str(raw_scene.get("action") or raw_scene.get("beat") or "").strip().lower(),
+            str(scene.scene_goal or "").strip().lower(),
+            str(scene.frame_description or "").strip().lower(),
+            str(scene.action_in_frame or "").strip().lower(),
+            str(scene.image_prompt or "").strip().lower(),
+            str(scene.video_prompt or "").strip().lower(),
+        ]
+    )
+    return any(hint in scene_signal for hint in GROUP_NARRATIVE_REQUIRED_HINTS)
+
+
 def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> dict[str, Any]:
     content_type_policy = _get_content_type_policy(payload)
     is_music_video = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
@@ -2279,6 +2318,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     for scene in storyboard_out.scenes:
         scene_index = len(scenes)
         raw_scene = payload_scenes[scene_index] if scene_index < len(payload_scenes) and isinstance(payload_scenes[scene_index], dict) else {}
+        scene_ref_directives = raw_scene.get("refDirectives") if isinstance(raw_scene.get("refDirectives"), dict) else {}
         participants = _scene_participants(scene, role_lookup)
         actor_roles = _extract_scene_actor_roles(
             scene,
@@ -2346,6 +2386,12 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             primary_role=primary_role,
             hero_participants=hero_participants,
         )
+        group_narratively_required = _is_group_narratively_required(
+            scene=scene,
+            raw_scene=raw_scene,
+            ref_directives=scene_ref_directives,
+            must_appear_roles=must_appear,
+        )
         if prefer_explicit_duo_roles and shared_scene_hint:
             must_appear = [role for role in must_appear if role not in {"group", "group_faces"}]
             for explicit_role in ("character_1", "character_2"):
@@ -2360,6 +2406,13 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             refs_used_roles = [role for role in refs_used_roles if role != "group"]
             refs_used_map.pop("group", None)
             must_appear = [role for role in must_appear if role != "group"]
+        if not group_narratively_required:
+            actor_roles = [role for role in actor_roles if role != "group"]
+            participants = [role for role in participants if role != "group"]
+            scene_active_roles = [role for role in scene_active_roles if role != "group"]
+            refs_used_roles = [role for role in refs_used_roles if role != "group"]
+            refs_used_map.pop("group", None)
+            must_appear = [role for role in must_appear if role != "group"]
         if is_environment_only_scene:
             scene_active_roles = [role for role in scene_active_roles if role in {"location", "style", "props"}]
             refs_used_roles = [role for role in refs_used_roles if role in {"location", "style", "props"}]
@@ -2367,7 +2420,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             must_appear = []
         primary_role = primary_role if primary_role in actor_roles else (actor_roles[0] if actor_roles else "")
         secondary_roles = [role for role in actor_roles if role != primary_role]
-        support_entity_ids = list(secondary_roles)
+        support_entity_ids = [role for role in secondary_roles if role != "group" or group_narratively_required]
         start_frame_prompt = ""
         end_frame_prompt = ""
         if _scene_requires_explicit_first_last_prompts(scene):
@@ -2423,7 +2476,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "audioSliceEndSec": scene.audio_slice_end_sec,
             "audioSliceExpectedDurationSec": scene.audio_slice_expected_duration_sec,
             "performanceFraming": scene.performance_framing,
-            "clipDecisionReason": scene.clip_decision_reason,
+            "clipDecisionReason": _append_decision_flag(scene.clip_decision_reason, "groupNarrativelyRequired", group_narratively_required),
             "roleInfluenceApplied": scene.role_influence_applied or ("roleInfluenceApplied=true" in str(scene.clip_decision_reason or "")),
             "roleInfluenceReason": scene.role_influence_reason
             or (
@@ -2478,7 +2531,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 if re.search(r"directorToneBias=([^;\\.]+)", str(scene.clip_decision_reason or ""))
                 else ""
             ),
-            "workflowDecisionReason": scene.workflow_decision_reason,
+            "workflowDecisionReason": _append_decision_flag(scene.workflow_decision_reason, "groupNarrativelyRequired", group_narratively_required),
             "lipSyncDecisionReason": scene.lip_sync_decision_reason,
             "audioSliceDecisionReason": scene.audio_slice_decision_reason,
             "primaryRole": primary_role,
@@ -4575,6 +4628,50 @@ def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio
     }
 
 
+def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    scenes = storyboard_out.scenes or []
+    if not scenes:
+        return storyboard_out
+    next_scenes: list[ScenarioDirectorScene] = []
+    for scene in scenes:
+        duration = max(0.0, _safe_float(scene.duration, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0)))
+        phrase_blob = str(scene.local_phrase or "").strip()
+        phrase_chunks = [chunk.strip() for chunk in re.split(r"(?:\s*[/|]\s*|\n+|(?<=[\.\!\?;])\s+)", phrase_blob) if chunk.strip()]
+        merged_phrase_risk = len(phrase_chunks) >= 2
+        should_split = merged_phrase_risk or duration > 5.5
+        if not should_split:
+            next_scenes.append(scene)
+            continue
+        start = _safe_float(scene.time_start, 0.0)
+        end = max(start, _safe_float(scene.time_end, start))
+        midpoint = round((start + end) / 2.0, 3)
+        split_at = max(start + 1.5, min(end - 1.5, midpoint))
+        if split_at <= start or split_at >= end:
+            next_scenes.append(scene)
+            continue
+
+        base = scene.model_dump(mode="python")
+        left_data = {**base, "scene_id": f"{scene.scene_id}_A", "time_start": start, "time_end": split_at, "duration": round(max(0.0, split_at - start), 3)}
+        right_data = {**base, "scene_id": f"{scene.scene_id}_B", "time_start": split_at, "time_end": end, "duration": round(max(0.0, end - split_at), 3)}
+        if phrase_chunks:
+            pivot = max(1, len(phrase_chunks) // 2)
+            left_data["local_phrase"] = " ".join(phrase_chunks[:pivot]).strip() or left_data.get("local_phrase")
+            right_data["local_phrase"] = " ".join(phrase_chunks[pivot:]).strip() or right_data.get("local_phrase")
+        reason_value = "phrase_boundary" if merged_phrase_risk else "duration_overflow"
+        left_data["boundary_reason"] = "phrase" if merged_phrase_risk else (left_data.get("boundary_reason") or "fallback")
+        right_data["boundary_reason"] = "phrase" if merged_phrase_risk else (right_data.get("boundary_reason") or "fallback")
+        for chunk_data in (left_data, right_data):
+            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "mergedPhraseRisk", merged_phrase_risk)
+            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "splitByPhraseBoundary", merged_phrase_risk)
+            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "lyricalMergeRejected", merged_phrase_risk)
+            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "autoSplitReason", reason_value)
+            chunk_data["workflow_decision_reason"] = _append_decision_flag(chunk_data.get("workflow_decision_reason"), "autoSplitReason", reason_value)
+        next_scenes.append(ScenarioDirectorScene.model_validate(left_data))
+        next_scenes.append(ScenarioDirectorScene.model_validate(right_data))
+    storyboard_out.scenes = next_scenes
+    return storyboard_out
+
+
 def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> ScenarioDirectorStoryboardOut:
     content_type_policy = _get_content_type_policy(payload)
     audio_duration_sec = _resolve_audio_duration_sec(payload)
@@ -4586,6 +4683,8 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     storyboard_out = _rebalance_ltx_modes(storyboard_out)
     storyboard_out = _normalize_scene_timeline(storyboard_out)
     if content_type_policy.get("value") == "music_video":
+        storyboard_out = _enforce_clip_phrase_and_duration_splits(storyboard_out)
+        storyboard_out = _normalize_scene_timeline(storyboard_out)
         storyboard_out = _apply_music_video_mode_policy(
             storyboard_out,
             content_type_policy=content_type_policy,

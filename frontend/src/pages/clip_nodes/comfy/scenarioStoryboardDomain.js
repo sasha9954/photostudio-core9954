@@ -729,18 +729,24 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
     if (sourceRefs.length > 0) acc[role] = sourceRefs;
     return acc;
   }, {});
-  const supportEntityIds = Array.from(new Set([
+  let supportEntityIds = Array.from(new Set([
     ...supportInput.filter((role) => resolvedSecondary.includes(role)),
     ...resolvedSecondary,
   ]));
+  if (!groupNarrativelyRequired) {
+    supportEntityIds = supportEntityIds.filter((role) => role !== "group");
+  }
+  if (!groupNarrativelyRequired) {
+    delete refsUsedByRole.group;
+  }
 
   return {
     primaryRole: resolvedPrimary,
     secondaryRoles: resolvedSecondary,
     sceneActiveRoles: resolvedActive,
-    refsUsed: finalRefsUsed,
-    mustAppear: finalMustAppear,
-    mustNotAppear: isEnvironmentOnlyScene ? ["character_1", "character_2", "character_3", "group"] : [],
+    refsUsed: !groupNarrativelyRequired ? finalRefsUsed.filter((role) => role !== "group") : finalRefsUsed,
+    mustAppear: !groupNarrativelyRequired ? finalMustAppear.filter((role) => role !== "group") : finalMustAppear,
+    mustNotAppear: isEnvironmentOnlyScene ? ["character_1", "character_2", "character_3", "group"] : (!groupNarrativelyRequired ? ["group"] : []),
     supportEntityIds,
     refsUsedByRole,
     debug: {
@@ -979,6 +985,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   normalizedScene.sceneActiveRoles = resolvedRoleContract.sceneActiveRoles;
   normalizedScene.refsUsed = resolvedRoleContract.refsUsed;
   normalizedScene.mustAppear = resolvedRoleContract.mustAppear;
+  normalizedScene.mustNotAppear = resolvedRoleContract.mustNotAppear;
   normalizedScene.supportEntityIds = resolvedRoleContract.supportEntityIds;
   normalizedScene.heroEntityId = normalizedScene.heroEntityId || resolvedRoleContract.primaryRole || "";
   normalizedScene.refsUsedByRole = {

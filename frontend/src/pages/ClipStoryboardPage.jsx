@@ -671,7 +671,13 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
   const actorsRoleSignals = normalizeRoleList(Array.isArray(scene?.actors) ? scene.actors : []);
   const semanticTwoPersonSignal = ["gaze", "shared glance", "look into eyes", "eye contact", "whisper", "hold hand", "embrace", "hug", "looks at", "looking at", "див", "смотр", "взгляд", "шепч", "обнима", "держ"]
     .some((marker) => `${String(scene?.summaryEn || "")} ${String(scene?.summaryRu || "")} ${String(scene?.videoPromptEn || "")} ${String(scene?.videoPromptRu || "")} ${String(scene?.imagePromptEn || "")} ${String(scene?.imagePromptRu || "")}`.toLowerCase().includes(marker));
+  const crowdSignal = ["protest", "riot", "mob", "audience", "chorus", "crowd chant", "mass panic", "митинг", "толпа", "бунт", "хор", "массов"]
+    .some((marker) => `${String(scene?.sceneGoal || "")} ${String(scene?.summaryEn || "")} ${String(scene?.summaryRu || "")} ${String(scene?.videoPromptEn || "")} ${String(scene?.videoPromptRu || "")} ${String(scene?.imagePromptEn || "")} ${String(scene?.imagePromptRu || "")}`.toLowerCase().includes(marker));
   const mustAppear = normalizeRoleList(scene?.mustAppear);
+  const refDirectives = scene?.refDirectives && typeof scene.refDirectives === "object" ? scene.refDirectives : {};
+  const groupNarrativelyRequired = mustAppear.includes("group")
+    || ["required", "hero"].includes(String(refDirectives?.group || "").trim().toLowerCase())
+    || crowdSignal;
   const hasActiveHumanRoles = [...sceneActiveRoles, ...mustAppear].some((role) => ["character_1", "character_2", "character_3", "group"].includes(role));
   const isEnvironmentOnlyScene = sceneRoleDynamics === "environment" && actorsRoleSignals.length === 0 && !hasActiveHumanRoles;
   const availableTwoPersonRefs = roleWithRefs.includes("character_1") && roleWithRefs.includes("character_2");
@@ -709,12 +715,14 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
   const healedActive = shouldForceTwoPerson
     ? normalizeRoleList([...explicitActiveRoles, "character_1", "character_2"])
     : explicitActiveRoles;
-  const healedSecondary = healedActive.filter((role) => role !== healedPrimary);
+  const healedActiveWithoutGroup = groupNarrativelyRequired ? healedActive : healedActive.filter((role) => role !== "group");
+  const healedPrimarySafe = healedActiveWithoutGroup.includes(healedPrimary) ? healedPrimary : (healedActiveWithoutGroup[0] || "");
+  const healedSecondary = healedActiveWithoutGroup.filter((role) => role !== healedPrimarySafe);
   const healedMustAppear = normalizeRoleList([
     ...mustAppear,
-    ...(shouldForceTwoPerson ? ["character_1", "character_2"] : healedActive),
-  ]).filter((role) => healedActive.includes(role));
-  const healedRefsUsed = normalizeRoleList([...refsUsed, ...healedActive]);
+    ...(shouldForceTwoPerson ? ["character_1", "character_2"] : healedActiveWithoutGroup),
+  ]).filter((role) => healedActiveWithoutGroup.includes(role));
+  const healedRefsUsed = normalizeRoleList([...refsUsed, ...healedActiveWithoutGroup]).filter((role) => groupNarrativelyRequired || role !== "group");
   if (shouldTraceRoleContractScene(sceneId)) {
     console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.input", {
       sceneId,
@@ -731,11 +739,12 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
   }
   if (hasExplicitContract) {
     const explicitContract = {
-      primaryRole: healedPrimary,
+      primaryRole: healedPrimarySafe,
       secondaryRoles: healedSecondary,
-      sceneActiveRoles: healedActive,
+      sceneActiveRoles: healedActiveWithoutGroup,
       refsUsed: healedRefsUsed,
-      mustAppear: healedMustAppear.length ? healedMustAppear : healedActive,
+      mustAppear: healedMustAppear.length ? healedMustAppear : healedActiveWithoutGroup,
+      mustNotAppear: groupNarrativelyRequired ? [] : ["group"],
     };
     if (shouldTraceRoleContractScene(sceneId)) {
       console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.output.explicit", explicitContract);
@@ -1797,6 +1806,12 @@ function buildScenarioScenePackageSignature(scene = {}) {
     mustAppear: Array.isArray(source?.mustAppear) ? source.mustAppear : [],
     props: Array.isArray(source?.props) ? source.props : [],
     refsByRole: source?.refsByRole && typeof source.refsByRole === "object" ? source.refsByRole : {},
+    refsUsedByRole: source?.refsUsedByRole && typeof source.refsUsedByRole === "object" ? source.refsUsedByRole : {},
+    supportEntityIds: Array.isArray(source?.supportEntityIds) ? source.supportEntityIds : [],
+    mustNotAppear: Array.isArray(source?.mustNotAppear) ? source.mustNotAppear : [],
+    audioAnchorEvidence: String(source?.audioAnchorEvidence || "").trim(),
+    clipDecisionReason: String(source?.clipDecisionReason || "").trim(),
+    workflowDecisionReason: String(source?.workflowDecisionReason || "").trim(),
     sceneRoleDynamics: String(source?.sceneRoleDynamics || "").trim(),
     primaryRole: String(source?.primaryRole || "").trim(),
     secondaryRoles: Array.isArray(source?.secondaryRoles) ? source.secondaryRoles : [],
@@ -4408,6 +4423,14 @@ function buildComfySceneRefsPayload({
     && participantsNormalized.length === 0
     && ![...activeRolesNormalized, ...mustAppearNormalized].some((role) => ["character_1", "character_2", "character_3", "group"].includes(role));
   const normalizedMustNotAppear = Array.isArray(mustNotAppear) ? [...mustNotAppear] : [];
+  const groupNarrativelyRequired = Array.isArray(mustAppearNormalized) && mustAppearNormalized.includes("group");
+  const hasDuet = activeRolesNormalized.includes("character_1") && activeRolesNormalized.includes("character_2");
+  if (hasDuet && !groupNarrativelyRequired) {
+    normalizedRefsByRole.group = [];
+  }
+  if (!groupNarrativelyRequired && !normalizedMustNotAppear.includes("group")) {
+    normalizedMustNotAppear.push("group");
+  }
   if (isEnvironmentOnlyScene) {
     ["character_1", "character_2", "character_3", "group"].forEach((role) => {
       normalizedRefsByRole[role] = [];
