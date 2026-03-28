@@ -85,6 +85,8 @@ class ClipImageRefsIn(BaseModel):
     entityScaleAnchors: dict | None = None
     previousContinuityMemory: dict | None = None
     previousSceneImageUrl: str | None = None
+    firstFrameReferenceUrl: str | None = None
+    currentSceneStartImageUrl: str | None = None
     heroEntityId: str | None = None
     supportEntityIds: list[str] | None = None
     mustAppear: list[str] | None = None
@@ -8068,6 +8070,12 @@ def clip_image(payload: ClipImageIn):
     previous_continuity_memory = _sanitize_continuity_memory(getattr(refs_obj, "previousContinuityMemory", None))
     previous_scene_image_url = str(getattr(refs_obj, "previousSceneImageUrl", "") or "").strip()
     previous_scene_image_inline = _load_reference_image_inline(previous_scene_image_url) if previous_scene_image_url else None
+    first_frame_reference_url = str(
+        getattr(refs_obj, "firstFrameReferenceUrl", None)
+        or getattr(refs_obj, "currentSceneStartImageUrl", None)
+        or ""
+    ).strip()
+    first_frame_reference_inline = _load_reference_image_inline(first_frame_reference_url) if first_frame_reference_url else None
 
     raw_refs_by_role_incoming = getattr(refs_obj, "refsByRole", None)
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole=" + json.dumps(raw_refs_by_role_incoming, ensure_ascii=False))
@@ -8210,6 +8218,7 @@ def clip_image(payload: ClipImageIn):
         "mustNotAppear": scene_contract.get("mustNotAppear") or [],
         "legacyCharacterCount": len(character_refs),
         "heroEntityIdCandidate": hero_entity_id or None,
+        "hasFirstFrameReference": bool(first_frame_reference_inline),
     }, ensure_ascii=False))
 
     if (
@@ -8816,6 +8825,17 @@ def clip_image(payload: ClipImageIn):
         if previous_scene_image_inline:
             parts.append({"text": "Previous generated scene image (visual continuity reference, do not clone composition):"})
             parts.append(previous_scene_image_inline)
+        if first_frame_reference_inline:
+            parts.append({"text": "Current scene FIRST FRAME anchor (hard continuity reference for END frame generation):"})
+            parts.append(first_frame_reference_inline)
+            parts.append({
+                "text": (
+                    "FIRST→LAST CONTINUITY CONTRACT:\n"
+                    "Keep same people, same identity, same wardrobe/accessories, same hairstyle, same location/environment, same light family, and same camera family.\n"
+                    "Do NOT redesign outfit, hair, location, or add extra people.\n"
+                    "Change only scene state evolution: pose, distance, body orientation, emotion, interaction intensity, and moment progression."
+                )
+            })
 
         if previous_continuity_memory:
             parts.append({
