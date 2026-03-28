@@ -11568,11 +11568,12 @@ onClipSec: (nodeId, value) => {
               onScenarioSceneGenerate: (nodeId, sceneId, assetType = "scene", meta = {}) => {
                 const normalizedAction = String(assetType || "scene").trim().toLowerCase();
                 const normalizedSceneId = String(sceneId || "").trim();
+                const hasExplicitRequestedSceneId = !!normalizedSceneId;
                 const sourceNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === nodeId && nodeItem?.type === "scenarioStoryboard") || null;
                 const rawScenes = Array.isArray(sourceNode?.data?.scenes) ? sourceNode.data.scenes : [];
                 const normalizedScenes = normalizeSceneCollectionWithSceneId(rawScenes, "scene");
                 const sceneIndexById = normalizedSceneId ? resolveScenarioSceneIndex(normalizedSceneId, normalizedScenes) : -1;
-                const fallbackSceneIndex = normalizedScenes.length > 0 ? 0 : -1;
+                const fallbackSceneIndex = !hasExplicitRequestedSceneId && normalizedScenes.length > 0 ? 0 : -1;
                 const sceneIndex = sceneIndexById >= 0 ? sceneIndexById : fallbackSceneIndex;
                 const targetScene = sceneIndex >= 0 ? normalizedScenes[sceneIndex] : null;
                 const resolvedSceneId = String(targetScene?.sceneId || "").trim();
@@ -11592,6 +11593,35 @@ onClipSec: (nodeId, value) => {
                     routedHandler,
                     selectedTab: String(meta?.selectedTab || meta?.activeTab || ""),
                   });
+                }
+                if (hasExplicitRequestedSceneId && sceneIndexById < 0) {
+                  const normalizedSceneIds = normalizedScenes.map((sceneItem, idx) => String(
+                    sceneItem?.sceneId || sceneItem?.scene_id || sceneItem?.id || `S${idx + 1}` || ""
+                  ).trim()).filter(Boolean);
+                  const rawStoryboardSceneIds = rawScenes.map((sceneItem, idx) => String(
+                    sceneItem?.sceneId || sceneItem?.scene_id || sceneItem?.id || `S${idx + 1}` || ""
+                  ).trim()).filter(Boolean);
+                  console.error("[SCENARIO EDITOR GENERATE EARLY RETURN] requested_scene_not_found", {
+                    requestedSceneId: normalizedSceneId,
+                    availableNormalizedSceneIds: normalizedSceneIds,
+                    rawStoryboardSceneIds,
+                    normalizedScenesLength: normalizedScenes.length,
+                    rawScenesLength: rawScenes.length,
+                    actionType: normalizedAction || "scene",
+                  });
+                  if (normalizedScenes.length > 0) {
+                    const nextSafeSelectedIndex = Number.isFinite(scenarioEditor?.selected)
+                      ? Math.min(Math.max(Number(scenarioEditor.selected), 0), normalizedScenes.length - 1)
+                      : 0;
+                    setScenarioEditor((prev) => ({ ...prev, selected: nextSafeSelectedIndex }));
+                  }
+                  setScenarioImageError("Выбранная сцена не найдена. Обновите выбор сцены и повторите генерацию.");
+                  notify({
+                    type: "error",
+                    title: "Scene mismatch",
+                    message: `Сцена ${normalizedSceneId} не найдена. Выберите актуальную сцену и повторите.`,
+                  });
+                  return;
                 }
                 if (sceneIndex < 0 || !targetScene) {
                   const lookupMap = normalizedScenes.map((sceneItem, idx) => ({
@@ -11616,10 +11646,8 @@ onClipSec: (nodeId, value) => {
                   });
                   return;
                 }
-
-                if (sceneIndexById < 0 && fallbackSceneIndex === 0 && normalizedScenes[0]) {
-                  console.warn("[SCENARIO EDITOR] scene fallback to first scene", {
-                    requestedSceneId: normalizedSceneId,
+                if (!hasExplicitRequestedSceneId && sceneIndexById < 0 && fallbackSceneIndex === 0 && normalizedScenes[0]) {
+                  console.warn("[SCENARIO EDITOR] safe default to first scene (no requested sceneId)", {
                     fallbackSceneId: String(normalizedScenes[0]?.sceneId || ""),
                     sceneCount: normalizedScenes.length,
                   });
