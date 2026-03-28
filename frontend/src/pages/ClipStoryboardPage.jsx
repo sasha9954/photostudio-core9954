@@ -1138,6 +1138,12 @@ function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
   }, {});
 }
 
+function collectSceneIds(scenes = []) {
+  return (Array.isArray(scenes) ? scenes : [])
+    .map((scene, idx) => String(scene?.sceneId || scene?.id || `S${idx + 1}`))
+    .filter(Boolean);
+}
+
 function getAssetFileName(value = "") {
   const normalized = String(value || "").trim();
   if (!normalized) return "";
@@ -11332,7 +11338,43 @@ onClipSec: (nodeId, value) => {
             scenesCount: scenes.length,
             clearedAssetFieldsOnNewRevision: revisionChanged,
           });
-          const sceneGeneration = buildStoryboardSceneGenerationMap(scenes, base.data?.sceneGeneration);
+          const previousSceneIds = collectSceneIds(previousScenes);
+          const nextSceneIds = collectSceneIds(scenes);
+          const previousGenerationMap = base?.data?.sceneGeneration && typeof base.data.sceneGeneration === "object"
+            ? base.data.sceneGeneration
+            : {};
+          const generationSeedMap = revisionChanged ? {} : previousGenerationMap;
+          const sceneGeneration = buildStoryboardSceneGenerationMap(scenes, generationSeedMap);
+          const nextSceneIdSet = new Set(nextSceneIds);
+          const staleSceneGenerationKeys = Object.keys(previousGenerationMap).filter((sceneId) => !nextSceneIdSet.has(String(sceneId || "")));
+          console.debug("[SCENARIO STORYBOARD REVISION SYNC]", {
+            nodeId: String(n?.id || ""),
+            previousStoryboardRevision: previousRevision,
+            nextStoryboardRevision: nextRevision,
+            previousSceneIds,
+            nextSceneIds,
+            clearedStaleSceneGenerationKeys: staleSceneGenerationKeys,
+            resetSceneGenerationFromRevisionChange: revisionChanged,
+            recalculatedSummary: {
+              sceneCount: scenes.length,
+              photoCount: scenes.filter((sceneItem, idx) => {
+                const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`);
+                const runtime = sceneGeneration[sceneId] && typeof sceneGeneration[sceneId] === "object" ? sceneGeneration[sceneId] : {};
+                return (
+                  !!String(sceneItem?.imageUrl || sceneItem?.startImageUrl || sceneItem?.endImageUrl || "").trim()
+                  || String(runtime?.imageStatus || "").trim().toLowerCase() === "done"
+                  || String(runtime?.startFrameStatus || "").trim().toLowerCase() === "done"
+                  || String(runtime?.endFrameStatus || "").trim().toLowerCase() === "done"
+                );
+              }).length,
+              videoCount: scenes.filter((sceneItem, idx) => {
+                const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`);
+                const runtime = sceneGeneration[sceneId] && typeof sceneGeneration[sceneId] === "object" ? sceneGeneration[sceneId] : {};
+                return !!String(sceneItem?.videoUrl || "").trim() || String(runtime?.videoStatus || "").trim().toLowerCase() === "done";
+              }).length,
+              status: scenes.length > 0 ? "ready" : "idle",
+            },
+          });
           const currentAudioData = base?.data?.audioData && typeof base.data.audioData === "object" ? base.data.audioData : {};
           const packageMusicPromptSourceKindRaw = String(normalizedPackage?.musicPromptSourceKind || "").trim().toLowerCase();
           const packageMusicPromptSourceText = String(normalizedPackage?.musicPromptSourceText || "").trim();

@@ -23,9 +23,11 @@ function isSceneVideoReady(scene = {}, runtime = {}) {
 }
 
 export default function ScenarioStoryboardNode({ id, data }) {
+  const storyboardRevision = String(data?.storyboardRevision || "");
   const scenes = Array.isArray(data?.scenes) ? data.scenes : [];
-  const totalScenes = scenes.length;
   const generationMap = data?.sceneGeneration && typeof data.sceneGeneration === "object" ? data.sceneGeneration : {};
+  const audioData = data?.audioData && typeof data.audioData === "object" ? data.audioData : {};
+  const totalScenes = scenes.length;
   const generatedImages = scenes.filter((scene, idx) => {
     const key = String(scene?.sceneId || `S${idx + 1}`);
     const runtime = generationMap[key] && typeof generationMap[key] === "object" ? generationMap[key] : {};
@@ -54,7 +56,30 @@ export default function ScenarioStoryboardNode({ id, data }) {
     const runtime = generationMap[key] && typeof generationMap[key] === "object" ? generationMap[key] : {};
     return isSceneVideoReady(scene, runtime);
   }).length;
-  const status = totalScenes > 0 ? "ready" : "idle";
+  const hasGenerationInProgress = scenes.some((scene, idx) => {
+    const key = String(scene?.sceneId || `S${idx + 1}`);
+    const runtime = generationMap[key] && typeof generationMap[key] === "object" ? generationMap[key] : {};
+    return ["generating", "queued", "pending"].includes(String(runtime?.status || runtime?.imageStatus || runtime?.videoStatus || "").trim().toLowerCase());
+  });
+  const status = totalScenes === 0 ? "idle" : (hasGenerationInProgress ? "generating" : "ready");
+
+  if (CLIP_TRACE_SCENARIO_COUNTERS) {
+    console.debug("[SCENARIO STORYBOARD CARD SUMMARY]", {
+      nodeId: String(id || ""),
+      storyboardRevision,
+      sceneIds: scenes.map((scene, idx) => String(scene?.sceneId || `S${idx + 1}`)),
+      summary: {
+        sceneCount: totalScenes,
+        photoCount: generatedImages,
+        videoCount: generatedVideos,
+        status,
+      },
+      audioDataSnapshot: {
+        hasAudioUrl: !!String(audioData?.audioUrl || "").trim(),
+        musicStatus: String(audioData?.musicStatus || "idle"),
+      },
+    });
+  }
 
   return (
     <>
