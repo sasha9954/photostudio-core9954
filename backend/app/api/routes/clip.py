@@ -7408,6 +7408,61 @@ def _comfy_text_rendering_block(*, allow_designed_text: bool = False) -> str:
     ])
 
 
+def _build_solo_character_guard_block(
+    *,
+    contract: dict[str, Any],
+    refs_by_role: dict[str, list[str]],
+    connected_inputs: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    human_roles = ["character_1", "character_2", "character_3"]
+    active_roles = [str(role or "").strip() for role in (contract.get("activeRoles") or []) if str(role or "").strip()]
+    must_appear = [str(role or "").strip() for role in (contract.get("mustAppear") or []) if str(role or "").strip()]
+    hero_entity = str(contract.get("heroEntityId") or "").strip()
+
+    principal_candidates = [role for role in [hero_entity, *must_appear, *active_roles] if role in human_roles]
+    principal_role = principal_candidates[0] if principal_candidates else ""
+    active_human_roles = [role for role in dict.fromkeys([*active_roles, *must_appear]) if role in human_roles]
+    is_solo_human_scene = bool(principal_role) and len(active_human_roles) == 1
+
+    connected_refs_by_role = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
+    connected_human_roles = {
+        role for role in human_roles
+        if bool(refs_by_role.get(role))
+        or bool((isinstance(connected_refs_by_role, dict) and connected_refs_by_role.get(role)))
+    }
+    inactive_human_roles = sorted([role for role in connected_human_roles if role != principal_role and role not in active_human_roles])
+
+    if not is_solo_human_scene:
+        return "", {
+            "applied": False,
+            "reason": "not_single_human_scene",
+            "principalRole": principal_role,
+            "activeHumanRoles": active_human_roles,
+            "inactiveHumanRoles": inactive_human_roles,
+        }
+
+    lines = [
+        "SOLO CHARACTER ENFORCEMENT (STRICT):",
+        f"- only {principal_role} is the principal human subject in this frame",
+        f"- {principal_role} must remain the only readable hero-level foreground person",
+        "- other humans are allowed only as anonymous background extras with no individual readability",
+        "- crowd/background extras must not look like a connected named character",
+        "- do not introduce any inactive connected cast role as a second protagonist",
+        "- do not place a character_2-like (or other inactive-role-like) silhouette in foreground prominence",
+        "- preserve marketplace/crowd realism while keeping hero-subject hierarchy locked",
+    ]
+    if inactive_human_roles:
+        lines.append(f"- inactive connected cast that must stay non-hero/absent: {', '.join(inactive_human_roles)}")
+
+    return "\n".join(lines), {
+        "applied": True,
+        "reason": "single_human_scene",
+        "principalRole": principal_role,
+        "activeHumanRoles": active_human_roles,
+        "inactiveHumanRoles": inactive_human_roles,
+    }
+
+
 def _build_comfy_image_prompt_assembly(
     *,
     scene_delta: str,
@@ -7485,6 +7540,11 @@ def _build_comfy_image_prompt_assembly(
         anchor_roles=[],
     )
     duet_hardening_block = _build_duet_hardening_block(active_roles=active_roles) if duet_contract_detected else ""
+    solo_character_guard_block, solo_character_guard_debug = _build_solo_character_guard_block(
+        contract=contract,
+        refs_by_role=refs_by_role,
+        connected_inputs=connected_inputs,
+    )
     genre_intent, genre_hardening_source = _resolve_genre_hardening_from_sources(
         scene_contract=contract,
         planner_meta=planner_meta,
@@ -7781,6 +7841,7 @@ def _build_comfy_image_prompt_assembly(
         role_camera_guidance_block,
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
         duet_hardening_block if duet_hardening_block else "DUET / MULTI-CHARACTER SEPARATION CONTRACT: not required for this scene.",
+        solo_character_guard_block if solo_character_guard_block else "SOLO CHARACTER ENFORCEMENT: not required for this scene.",
         anatomy_lock_block,
         multi_view_lock_block,
         camera_view_consistency_block,

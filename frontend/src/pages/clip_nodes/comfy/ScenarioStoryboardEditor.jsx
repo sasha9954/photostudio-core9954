@@ -105,6 +105,34 @@ function isFirstLastScene(scene = {}) {
   return ["f_l", "first_last"].includes(ltxMode);
 }
 
+function deriveFirstLastFramePrompts(scene = {}) {
+  const startExplicit = String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || "").trim();
+  const endExplicit = String(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || "").trim();
+  if (startExplicit && endExplicit) {
+    return { start: startExplicit, end: endExplicit, derived: false };
+  }
+
+  const sceneGoal = String(scene?.sceneGoal || "").trim();
+  const frameDescription = String(scene?.frameDescription || "").trim();
+  const imagePrompt = String(scene?.imagePromptRu || scene?.imagePromptEn || scene?.imagePrompt || "").trim();
+  const videoPrompt = String(scene?.videoPromptRu || scene?.videoPromptEn || scene?.videoPrompt || "").trim();
+  const transitionType = String(scene?.transitionType || "state shift").trim().replaceAll("_", " ");
+  const transitionSemantics = videoPrompt || `First→last transition with ${transitionType}.`;
+
+  const start = startExplicit || frameDescription || sceneGoal || imagePrompt || videoPrompt;
+  let end = endExplicit || sceneGoal || imagePrompt || frameDescription || videoPrompt;
+  if (end) end = `${end}. Финальное визуально изменённое состояние: ${transitionSemantics}`;
+  if (start && end && start === end) end = `${end}. Финальный кадр должен заметно отличаться от первого.`;
+
+  return { start, end, derived: true };
+}
+
+function getFramePromptPlaceholder(kind = "start") {
+  return kind === "end"
+    ? "Опишите финальный визуальный state (что изменилось к концу сцены)."
+    : "Опишите стартовый визуальный state (как выглядит первый кадр).";
+}
+
 function resolveMusicSource(audioData = {}) {
   if (String(audioData?.musicSource || "").trim()) return String(audioData.musicSource).trim().toLowerCase();
   if (String(audioData?.fileName || "").trim()) return "uploaded";
@@ -367,6 +395,9 @@ export default function ScenarioStoryboardEditor({
   const isBgAudioSelected = activeSelectionType === "bg_audio";
   const sceneNeedsTwoFrames = isFirstLastScene(selectedScene);
   const isFirstLastVideoMode = sceneNeedsTwoFrames;
+  const derivedFramePrompts = deriveFirstLastFramePrompts(selectedScene || {});
+  const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || derivedFramePrompts.start || "");
+  const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
   const sourceImageUrl = String(selectedScene?.imageUrl || "").trim();
   const startFrameSourceUrl = String(selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl || "").trim();
   const endFrameSourceUrl = String(selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl || "").trim();
@@ -966,10 +997,10 @@ export default function ScenarioStoryboardEditor({
                             <h5>ПЕРВЫЙ КАДР</h5>
                             <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${startFrameStatus}`}>{startFrameStatus}</span>
                           </div>
-                          <textarea className="clipSB_textarea" rows={3} value={String(selectedScene?.startFramePromptRu || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptRu: event.target.value })} placeholder="startFramePromptRu" />
+                          <textarea className="clipSB_textarea" rows={3} value={startFramePromptValue} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptRu: event.target.value })} placeholder={derivedFramePrompts.derived ? "Автоподсказка применена из sceneGoal/frameDescription/image+video prompt" : getFramePromptPlaceholder("start")} />
                           <details>
                             <summary>EN</summary>
-                            <textarea className="clipSB_textarea" rows={2} value={String(selectedScene?.startFramePromptEn || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptEn: event.target.value })} placeholder="startFramePromptEn" />
+                            <textarea className="clipSB_textarea" rows={2} value={String(selectedScene?.startFramePromptEn || selectedScene?.startFramePrompt || derivedFramePrompts.start || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptEn: event.target.value })} placeholder="Opening visual state (first frame)" />
                           </details>
                           <div className="clipSB_scenarioEditorFramePreviewWrap">
                             {selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl ? (
@@ -986,10 +1017,10 @@ export default function ScenarioStoryboardEditor({
                             <h5>ПОСЛЕДНИЙ КАДР</h5>
                             <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${endFrameStatus}`}>{endFrameStatus}</span>
                           </div>
-                          <textarea className="clipSB_textarea" rows={3} value={String(selectedScene?.endFramePromptRu || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptRu: event.target.value })} placeholder="endFramePromptRu" />
+                          <textarea className="clipSB_textarea" rows={3} value={endFramePromptValue} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptRu: event.target.value })} placeholder={derivedFramePrompts.derived ? "Автоподсказка применена из sceneGoal/frameDescription/image+video prompt" : getFramePromptPlaceholder("end")} />
                           <details>
                             <summary>EN</summary>
-                            <textarea className="clipSB_textarea" rows={2} value={String(selectedScene?.endFramePromptEn || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptEn: event.target.value })} placeholder="endFramePromptEn" />
+                            <textarea className="clipSB_textarea" rows={2} value={String(selectedScene?.endFramePromptEn || selectedScene?.endFramePrompt || derivedFramePrompts.end || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptEn: event.target.value })} placeholder="Changed/final visual state (last frame)" />
                           </details>
                           <div className="clipSB_scenarioEditorFramePreviewWrap">
                             {selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl ? (

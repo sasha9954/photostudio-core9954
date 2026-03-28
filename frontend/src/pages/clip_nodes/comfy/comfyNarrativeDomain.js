@@ -251,6 +251,37 @@ function getConnectedInputSignal(input) {
   return normalizeText(getConnectedInputRawSignal(input));
 }
 
+function isFirstLastLikeScene(scene = {}) {
+  const renderMode = normalizeText(scene?.renderMode || scene?.render_mode).toLowerCase();
+  const ltxMode = normalizeText(scene?.ltxMode || scene?.ltx_mode).toLowerCase();
+  return renderMode === "first_last"
+    || renderMode === "first_last_sound"
+    || Boolean(scene?.needsTwoFrames ?? scene?.needs_two_frames)
+    || ltxMode === "f_l"
+    || ltxMode === "first_last";
+}
+
+function deriveFirstLastPrompts(scene = {}) {
+  const explicitStart = normalizeText(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || scene?.start_frame_prompt);
+  const explicitEnd = normalizeText(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || scene?.end_frame_prompt);
+  if (explicitStart && explicitEnd) {
+    return { start: explicitStart, end: explicitEnd, derived: false };
+  }
+
+  const sceneGoal = normalizeText(scene?.sceneGoal || scene?.scene_goal);
+  const frameDescription = normalizeText(scene?.frameDescription || scene?.frame_description);
+  const imagePrompt = normalizeText(scene?.imagePromptRu || scene?.imagePromptEn || scene?.imagePrompt || scene?.image_prompt);
+  const videoPrompt = normalizeText(scene?.videoPromptRu || scene?.videoPromptEn || scene?.videoPrompt || scene?.video_prompt);
+  const transitionType = normalizeText(scene?.transitionType || scene?.transition_type).replaceAll("_", " ") || "state shift";
+  const transitionSemantics = videoPrompt || `First→last transition with ${transitionType}.`;
+
+  const start = explicitStart || frameDescription || sceneGoal || imagePrompt || videoPrompt;
+  let end = explicitEnd || sceneGoal || imagePrompt || frameDescription || videoPrompt;
+  if (end) end = `${end}. Final changed state after transition: ${transitionSemantics}`;
+  if (start && end && start === end) end = `${end}. Keep the final frame visually different from the start frame.`;
+  return { start, end, derived: true };
+}
+
 function normalizeNarrativeSourceMode(mode) {
   const clean = String(mode || "").trim().toUpperCase();
   if (clean === "VIDEO_FILE") return "video_file";
@@ -1161,6 +1192,20 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         ?? responseScene?.requested_duration_sec,
         0
       ),
+      ...(isFirstLastLikeScene({ ...(responseScene || {}), ...(storyboardScene || {}), ...(directorScene || {}) })
+        ? (() => {
+          const mergedScene = { ...(responseScene || {}), ...(storyboardScene || {}), ...(directorScene || {}) };
+          const prompts = deriveFirstLastPrompts(mergedScene);
+          return {
+            startFramePrompt: prompts.start || "",
+            endFramePrompt: prompts.end || "",
+            startFramePromptRu: prompts.start || "",
+            startFramePromptEn: prompts.start || "",
+            endFramePromptRu: prompts.end || "",
+            endFramePromptEn: prompts.end || "",
+          };
+        })()
+        : {}),
       primaryRole: firstNonEmptyText(directorScene?.primaryRole, storyboardScene?.primaryRole, responseScene?.primaryRole),
       secondaryRoles: toUniqueTextList(directorScene?.secondaryRoles, storyboardScene?.secondaryRoles, responseScene?.secondaryRoles),
       sceneActiveRoles: toUniqueTextList(directorScene?.sceneActiveRoles, storyboardScene?.sceneActiveRoles, responseScene?.sceneActiveRoles),

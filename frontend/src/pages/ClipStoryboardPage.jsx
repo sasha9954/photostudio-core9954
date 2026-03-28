@@ -2444,14 +2444,36 @@ function getScenePrimaryFramePrompt(scene) {
   return String(scene?.imagePromptRu || scene?.framePrompt || scene?.imagePrompt || scene?.prompt || "").trim();
 }
 
+function deriveFirstLastFramePrompts(scene = {}) {
+  const explicitStart = String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || "").trim();
+  const explicitEnd = String(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || "").trim();
+  if (explicitStart && explicitEnd) {
+    return { start: explicitStart, end: explicitEnd, derived: false };
+  }
+
+  const sceneGoal = String(scene?.sceneGoal || "").trim();
+  const frameDescription = String(scene?.frameDescription || "").trim();
+  const imagePrompt = String(scene?.imagePromptRu || scene?.imagePromptEn || scene?.imagePrompt || "").trim();
+  const videoPrompt = String(scene?.videoPromptRu || scene?.videoPromptEn || scene?.videoPrompt || "").trim();
+  const transitionType = String(scene?.transitionType || "state shift").trim().replaceAll("_", " ");
+  const transitionSemantics = videoPrompt || `First→last transition with ${transitionType}.`;
+
+  const start = explicitStart || frameDescription || sceneGoal || imagePrompt || videoPrompt;
+  let end = explicitEnd || sceneGoal || imagePrompt || frameDescription || videoPrompt;
+  if (end) end = `${end}. Final changed state after transition: ${transitionSemantics}`;
+  if (start && end && start === end) end = `${end}. Keep final frame visually different from opening frame.`;
+  return { start, end, derived: true };
+}
+
 function getSceneFramePromptByStrategy(scene, slot = "single") {
   const strategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase();
+  const derivedFirstLast = deriveFirstLastFramePrompts(scene || {});
   if (strategy === "first_last") {
-    if (slot === "end") return String(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
-    return String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
+    if (slot === "end") return String(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || derivedFirstLast.end || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
+    return String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || derivedFirstLast.start || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
   }
   if (strategy === "continuation" && slot === "start") {
-    return String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
+    return String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || derivedFirstLast.start || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
   }
   return getScenePrimaryFramePrompt(scene);
 }
@@ -9102,8 +9124,8 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         continuation: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation),
         imageStrategy,
         hasImagePrompt: !!getScenePrimaryFramePrompt(targetScene),
-        hasStartFramePrompt: !!String(targetScene?.startFramePromptRu || targetScene?.startFramePrompt || "").trim(),
-        hasEndFramePrompt: !!String(targetScene?.endFramePromptRu || targetScene?.endFramePrompt || "").trim(),
+        hasStartFramePrompt: !!String(targetScene?.startFramePromptRu || targetScene?.startFramePrompt || deriveFirstLastFramePrompts(targetScene || {}).start || "").trim(),
+        hasEndFramePrompt: !!String(targetScene?.endFramePromptRu || targetScene?.endFramePrompt || deriveFirstLastFramePrompts(targetScene || {}).end || "").trim(),
       });
       if (CLIP_TRACE_VISUAL_LOCK) {
         console.debug("[SCENARIO VISUAL LOCK] image prompt", {

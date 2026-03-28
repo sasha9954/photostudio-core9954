@@ -454,6 +454,8 @@ class ScenarioDirectorScene(BaseModel):
     camera: str = ""
     image_prompt: str = ""
     video_prompt: str = ""
+    start_frame_prompt: str = ""
+    end_frame_prompt: str = ""
     ltx_mode: str = "i2v"
     ltx_reason: str = ""
     start_frame_source: str = "new"
@@ -526,6 +528,8 @@ class ScenarioDirectorScene(BaseModel):
         self.camera = str(self.camera or "").strip()
         self.image_prompt = str(self.image_prompt or "").strip()
         self.video_prompt = str(self.video_prompt or "").strip()
+        self.start_frame_prompt = str(self.start_frame_prompt or "").strip()
+        self.end_frame_prompt = str(self.end_frame_prompt or "").strip()
         self.narration_mode = str(self.narration_mode or "full").strip() or "full"
         self.start_frame_source = _normalize_start_frame_source(self.start_frame_source, continuation=self.continuation_from_previous)
         self.needs_two_frames = _coerce_bool(self.needs_two_frames, False)
@@ -2295,6 +2299,13 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 if explicit_role in actor_roles and explicit_role not in must_appear:
                     must_appear.append(explicit_role)
         support_entity_ids = list(secondary_roles)
+        start_frame_prompt = ""
+        end_frame_prompt = ""
+        if _scene_requires_explicit_first_last_prompts(scene):
+            start_frame_prompt, end_frame_prompt = _derive_first_last_frame_prompts(scene, raw_scene)
+            scene.start_frame_prompt = start_frame_prompt
+            scene.end_frame_prompt = end_frame_prompt
+
         scene_item = {
             "sceneId": scene.scene_id,
             "title": scene.scene_id,
@@ -2312,6 +2323,12 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "cameraIdea": scene.camera,
             "imagePrompt": scene.image_prompt,
             "videoPrompt": scene.video_prompt,
+            "startFramePrompt": start_frame_prompt,
+            "endFramePrompt": end_frame_prompt,
+            "startFramePromptRu": start_frame_prompt,
+            "startFramePromptEn": start_frame_prompt,
+            "endFramePromptRu": end_frame_prompt,
+            "endFramePromptEn": end_frame_prompt,
             "ltxMode": scene.ltx_mode,
             "whyThisMode": scene.ltx_reason,
             "renderMode": scene.render_mode,
@@ -2415,6 +2432,12 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "cameraIdea": scene.camera,
                 "imagePrompt": scene.image_prompt,
                 "videoPrompt": scene.video_prompt,
+                "startFramePrompt": start_frame_prompt,
+                "endFramePrompt": end_frame_prompt,
+                "startFramePromptRu": start_frame_prompt,
+                "startFramePromptEn": start_frame_prompt,
+                "endFramePromptRu": end_frame_prompt,
+                "endFramePromptEn": end_frame_prompt,
                 "ltxMode": scene.ltx_mode,
                 "whyThisMode": scene.ltx_reason,
                 "renderMode": scene.render_mode,
@@ -3329,6 +3352,49 @@ def _build_music_video_video_prompt(scene: ScenarioDirectorScene) -> str:
         motion_parts.append("Temporal feel: preserve beat-synced micro-movements in fabric, hair, gaze, and body weight.")
     motion_parts.append(f"Transition cue: {transition_type or 'cut'}, paced to music accents.")
     return " ".join(motion_parts).strip()
+
+
+def _scene_requires_explicit_first_last_prompts(scene: ScenarioDirectorScene) -> bool:
+    render_mode = str(scene.render_mode or "").strip().lower()
+    ltx_mode = str(scene.ltx_mode or "").strip().lower()
+    return bool(scene.needs_two_frames) or render_mode in {"first_last", "first_last_sound"} or ltx_mode in {"f_l", "first_last"}
+
+
+def _derive_first_last_frame_prompts(scene: ScenarioDirectorScene, raw_scene: dict[str, Any] | None = None) -> tuple[str, str]:
+    raw_scene = raw_scene if isinstance(raw_scene, dict) else {}
+    explicit_start = str(
+        raw_scene.get("startFramePrompt")
+        or raw_scene.get("start_frame_prompt")
+        or scene.start_frame_prompt
+        or ""
+    ).strip()
+    explicit_end = str(
+        raw_scene.get("endFramePrompt")
+        or raw_scene.get("end_frame_prompt")
+        or scene.end_frame_prompt
+        or ""
+    ).strip()
+    if explicit_start and explicit_end:
+        return explicit_start, explicit_end
+
+    base_opening = str(scene.frame_description or scene.scene_goal or scene.image_prompt or scene.video_prompt or "").strip()
+    base_closing = str(scene.scene_goal or scene.action_in_frame or scene.video_prompt or scene.image_prompt or base_opening).strip()
+    transition_prompt = str(scene.video_prompt or "").strip()
+    transition_hint = str(scene.transition_type or "").strip().replace("_", " ") or "state shift"
+    transition_semantics = transition_prompt if transition_prompt else f"Transition semantics: {transition_hint}."
+
+    if not explicit_start:
+        explicit_start = base_opening
+    if not explicit_end:
+        explicit_end = (
+            f"{base_closing}. Final state after transition: {transition_semantics}".strip()
+            if base_closing
+            else f"Final visual state after transition: {transition_semantics}".strip()
+        )
+
+    if explicit_start and explicit_end and explicit_start == explicit_end:
+        explicit_end = f"{explicit_end} Keep it visually changed relative to the opening frame.".strip()
+    return explicit_start, explicit_end
 
 
 def _enhance_music_video_transition_language(scene: ScenarioDirectorScene) -> None:
