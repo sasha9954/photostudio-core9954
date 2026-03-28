@@ -1771,16 +1771,20 @@ function buildSceneSignature(scenes, prefix = "scene") {
 
 const SCENARIO_GENERATED_ASSET_FIELDS = [
   "imageUrl",
+  "imageStatus",
+  "imageError",
   "startImageUrl",
   "endImageUrl",
   "startFrameImageUrl",
   "endFrameImageUrl",
-  "videoUrl",
-  "imageStatus",
+  "startFramePreviewUrl",
+  "endFramePreviewUrl",
   "startFrameStatus",
+  "startFrameError",
   "endFrameStatus",
+  "endFrameError",
+  "videoUrl",
   "videoStatus",
-  "imageError",
   "videoError",
   "videoJobId",
   "videoSourceImageUrl",
@@ -9092,6 +9096,24 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     });
   }, [scenarioScenes]);
 
+  const resolveScenarioLiveBinding = useCallback((sceneIdRaw = "") => {
+    const sceneId = String(sceneIdRaw || "").trim();
+    if (!sceneId) return null;
+    const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === scenarioFlowSourceNode?.id) || scenarioFlowSourceNode || null;
+    const rawScenes = Array.isArray(activeNode?.data?.scenes) ? activeNode.data.scenes : scenarioScenes;
+    const normalizedScenes = normalizeSceneCollectionWithSceneId(rawScenes, "scene");
+    const sceneIndex = resolveScenarioSceneIndex(sceneId, normalizedScenes);
+    const scene = sceneIndex >= 0 ? normalizedScenes[sceneIndex] : null;
+    const storyboardRevision = String(activeNode?.data?.storyboardRevision || "").trim();
+    const storyboardSignature = String(
+      activeNode?.data?.storyboardSignature
+      || buildSceneSignature(normalizedScenes, "scene")
+      || ""
+    ).trim();
+    const sceneSignature = String(buildScenarioScenePackageSignature(scene || {}) || "").trim();
+    return { sceneIndex, scene, storyboardRevision, storyboardSignature, sceneSignature };
+  }, [resolveScenarioSceneIndex, scenarioFlowSourceNode, scenarioScenes]);
+
   const handleGenerateScenarioImage = useCallback(async (slot = "single", options = {}) => {
     const normalizedScenes = Array.isArray(options?.normalizedScenes) ? options.normalizedScenes : scenarioScenes;
     const rawScenes = Array.isArray(options?.rawScenes) ? options.rawScenes : [];
@@ -9169,6 +9191,13 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     }
     const sceneId = String(targetScene?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
+    const requestStoryboardRevision = String(scenarioFlowSourceNode?.data?.storyboardRevision || "").trim();
+    const requestStoryboardSignature = String(
+      scenarioFlowSourceNode?.data?.storyboardSignature
+      || buildSceneSignature(normalizedScenes, "scene")
+      || ""
+    ).trim();
+    const requestSceneSignature = String(buildScenarioScenePackageSignature(targetScene || {}) || "").trim();
     const shouldTraceSelectedScene = shouldTraceRoleContractScene(sceneId);
     const sceneText = String(targetScene.sceneText || targetScene.visualDescription || "").trim();
     const previousScene = targetSceneIndex > 0 ? normalizedScenes[targetSceneIndex - 1] : null;
@@ -9357,6 +9386,27 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           mustAppear: refsForImageRequest?.mustAppear || [],
         });
       }
+      const promptSourceSummary = String(
+        scenarioContractPayload?.promptSource
+        || refsForImageRequest?.promptSource
+        || targetScene?.promptSource
+        || "unknown"
+      ).trim();
+      console.debug("[SCENARIO IMAGE REQUEST CONTEXT]", {
+        nodeId: String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || ""),
+        activeNodeId: String(scenarioFlowSourceNode?.id || ""),
+        sceneId,
+        sceneIndex: targetSceneIndex,
+        storyboardRevision: requestStoryboardRevision,
+        storyboardSignature: requestStoryboardSignature,
+        sceneSignature: requestSceneSignature,
+        slot: normalizedSlot,
+        selectedTab: String(options?.selectedTab || options?.activeTab || ""),
+        promptSourceSummary,
+        hasSceneGoal: !!String(targetScene?.sceneGoalRu || targetScene?.sceneGoalEn || targetScene?.sceneGoal || "").trim(),
+        hasPrompt: !!String(finalSceneDelta || "").trim(),
+        hasRefs: hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {}),
+      });
       if (shouldTraceSelectedScene) {
         console.debug("[SCENARIO ROLE TRACE] refs_payload.before_api_clip_image", {
           sceneId,
@@ -9427,6 +9477,10 @@ Aspect ratio: ${imageFormat}`,
           sceneText,
           width,
           height,
+          storyboardRevision: requestStoryboardRevision,
+          storyboardSignature: requestStoryboardSignature,
+          sceneSignature: requestSceneSignature,
+          slot: normalizedSlot,
           ...scenarioContractPayload,
           primaryRole: scenarioContractPayload?.primaryRole || refsForImageRequest?.primaryRole || "",
           secondaryRoles: (Array.isArray(scenarioContractPayload?.secondaryRoles) && scenarioContractPayload.secondaryRoles.length)
@@ -9446,7 +9500,39 @@ Aspect ratio: ${imageFormat}`,
       });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
 
+      const responseSceneId = String(out?.sceneId || "").trim();
+      const liveBinding = resolveScenarioLiveBinding(sceneId);
+      const reasonIgnored = [];
+      if (responseSceneId && responseSceneId !== sceneId) reasonIgnored.push("response_scene_mismatch");
+      if (!liveBinding || !liveBinding.scene) reasonIgnored.push("scene_missing_in_live_storyboard");
+      if (liveBinding?.storyboardRevision && requestStoryboardRevision && liveBinding.storyboardRevision !== requestStoryboardRevision) {
+        reasonIgnored.push("storyboard_revision_mismatch");
+      }
+      if (liveBinding?.storyboardSignature && requestStoryboardSignature && liveBinding.storyboardSignature !== requestStoryboardSignature) {
+        reasonIgnored.push("storyboard_signature_mismatch");
+      }
+      if (liveBinding?.sceneSignature && requestSceneSignature && liveBinding.sceneSignature !== requestSceneSignature) {
+        reasonIgnored.push("scene_signature_mismatch");
+      }
+      const applyAccepted = reasonIgnored.length === 0;
       const generatedImageUrl = String(out.imageUrl || "");
+      console.debug("[SCENARIO IMAGE RESPONSE APPLY]", {
+        requestedSceneId: sceneId,
+        responseSceneId: responseSceneId || sceneId,
+        applyAccepted,
+        reasonIgnored: reasonIgnored.join("|") || "",
+        imageUrl: generatedImageUrl,
+        slot: normalizedSlot,
+      });
+      if (!applyAccepted) {
+        const runtimeResetPatch = normalizedSlot === "start"
+          ? { startFrameStatus: "idle", startFrameError: "" }
+          : normalizedSlot === "end"
+            ? { endFrameStatus: "idle", endFrameError: "" }
+            : { imageStatus: "idle", imageError: "" };
+        updateScenarioSceneGenerationRuntime(sceneId, runtimeResetPatch);
+        return;
+      }
       let runtimeImagePatch = {};
       if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
         updateScenarioScene(sceneId, {
@@ -9522,7 +9608,7 @@ Aspect ratio: ${imageFormat}`,
     } finally {
       setScenarioImageLoading(false);
     }
-  }, [clearActiveVideoJob, notify, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioScenes, scenarioSelected?.sceneId, scenarioBrainRefs, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
+  }, [clearActiveVideoJob, notify, resolveScenarioLiveBinding, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, scenarioSelected?.sceneId, scenarioBrainRefs, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
 
   const handleClearScenarioImage = useCallback((slot = "single") => {
     setScenarioImageError("");

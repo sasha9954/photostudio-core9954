@@ -294,6 +294,31 @@ export default function ScenarioStoryboardEditor({
       context: String(scene?.locationRu || "").trim(),
     }));
   }, [normalizedScenes, safeAudioData?.phrases]);
+  const phrasesForUi = useMemo(() => {
+    if (!Array.isArray(phrases) || !phrases.length) return [];
+    const firstScene = normalizedScenes?.[0];
+    const secondScene = normalizedScenes?.[1];
+    if (!firstScene || !secondScene) return phrases;
+    const firstSceneId = String(firstScene?.sceneId || "").trim();
+    const firstSceneDuration = safeSceneDuration(firstScene);
+    const firstSceneLocalPhrase = String(firstScene?.localPhrase || "").trim();
+    const firstSceneGoal = String(firstScene?.sceneGoalRu || firstScene?.sceneGoalEn || firstScene?.sceneGoal || "").trim();
+    const firstSceneHasActors = Array.isArray(firstScene?.actors) && firstScene.actors.length > 0;
+    const secondSceneLocalPhrase = String(secondScene?.localPhrase || "").trim();
+    const shouldHideMicroIntro = (
+      !!firstSceneId
+      && firstSceneDuration > 0
+      && firstSceneDuration < 0.8
+      && !firstSceneLocalPhrase
+      && !firstSceneGoal
+      && !firstSceneHasActors
+      && !!secondSceneLocalPhrase
+    );
+    if (!shouldHideMicroIntro) return phrases;
+    const firstPhraseSceneId = String(phrases?.[0]?.sceneId || "").trim();
+    if (firstPhraseSceneId && firstPhraseSceneId !== firstSceneId) return phrases;
+    return phrases.slice(1);
+  }, [normalizedScenes, phrases]);
 
   const safeIndex = normalizedScenes.findIndex((scene) => String(scene?.sceneId || "") === activeSelectionId);
   const selectedScene = safeIndex >= 0 ? normalizedScenes[safeIndex] : null;
@@ -301,7 +326,7 @@ export default function ScenarioStoryboardEditor({
   const selectedSceneId = String(selectedScene?.sceneId || "").trim();
   const selectedRuntime = safeGeneration[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object" ? safeGeneration[selectedSceneId] : {};
   const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || normalizedScenes[idx]?.sceneId || "").trim();
-  const selectedPhraseIndex = phrases.findIndex((phrase, idx) => resolvePhraseSceneId(phrase, idx) === selectedSceneId);
+  const selectedPhraseIndex = phrasesForUi.findIndex((phrase, idx) => resolvePhraseSceneId(phrase, idx) === selectedSceneId);
   const generateMeta = {
     activeTab,
     selectedTab: activeTab,
@@ -713,7 +738,7 @@ export default function ScenarioStoryboardEditor({
     if (activeTab === "phrases") {
       return (
         <div className="clipSB_scenarioEditorPhraseList">
-          {phrases.map((phrase, idx) => {
+          {phrasesForUi.map((phrase, idx) => {
             const phraseSceneId = resolvePhraseSceneId(phrase, idx);
             const isActive = idx === selectedPhraseIndex;
             const isPlaying = idx === playingPhraseIndex;
