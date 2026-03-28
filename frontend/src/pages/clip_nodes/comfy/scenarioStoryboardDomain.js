@@ -226,6 +226,41 @@ function toNumber(value, fallback = 0) {
   return fallback;
 }
 
+function firstFiniteNumber(valueMap = {}, keys = []) {
+  for (const key of keys) {
+    const value = Number(valueMap?.[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+export function resolveSceneDisplayTime(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const timelineStart = firstFiniteNumber(source, ["timeStart", "time_start", "t0", "start", "startSec"]);
+  const timelineEnd = firstFiniteNumber(source, ["timeEnd", "time_end", "t1", "end", "endSec"]);
+  const hasTimeline = timelineStart != null || timelineEnd != null;
+
+  if (hasTimeline) {
+    const startSec = timelineStart != null ? timelineStart : 0;
+    const endSec = timelineEnd != null ? timelineEnd : startSec;
+    return {
+      startSec,
+      endSec: Math.max(startSec, endSec),
+      source: "timeline",
+    };
+  }
+
+  const audioSliceStartSec = firstFiniteNumber(source, ["audioSliceStartSec", "audio_slice_start_sec", "audioSliceT0"]);
+  const audioSliceEndSec = firstFiniteNumber(source, ["audioSliceEndSec", "audio_slice_end_sec", "audioSliceT1"]);
+  const startSec = audioSliceStartSec != null ? audioSliceStartSec : 0;
+  const endSec = audioSliceEndSec != null ? audioSliceEndSec : startSec;
+  return {
+    startSec,
+    endSec: Math.max(startSec, endSec),
+    source: "audio_slice",
+  };
+}
+
 function normalizePromptForCompare(value = "") {
   return String(value || "")
     .toLowerCase()
