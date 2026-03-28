@@ -8076,6 +8076,15 @@ def clip_image(payload: ClipImageIn):
         or ""
     ).strip()
     first_frame_reference_inline = _load_reference_image_inline(first_frame_reference_url) if first_frame_reference_url else None
+    first_last_quality_contract = (
+        "FIRST FRAME IS THE SOURCE OF TRUTH FOR CURRENT SCENE CONTINUITY.\n"
+        "Do not redesign wardrobe, hair, location, or subject scale.\n"
+        "Do not replace the environment.\n"
+        "Do not switch to a different street, alley, or courtyard.\n"
+        "Do not change clothing patterns or garment type.\n"
+        "Preserve same people, same wardrobe/accessories, same hairstyle, same location architecture, same weather/light family, and same framing class/lens family/subject scale.\n"
+        "Change only moment progression: pose, emotion, body orientation, hand placement, distance, and interaction intensity."
+    )
 
     raw_refs_by_role_incoming = getattr(refs_obj, "refsByRole", None)
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole=" + json.dumps(raw_refs_by_role_incoming, ensure_ascii=False))
@@ -8794,6 +8803,19 @@ def clip_image(payload: ClipImageIn):
             multi_view_context_lines=multi_view_context_lines,
         )
         assembled_prompt = comfy_assembled_prompt
+        continuity_contract_injected = False
+        if first_frame_reference_inline:
+            assembled_prompt = f"{first_last_quality_contract}\n\n{assembled_prompt}"
+            continuity_contract_injected = True
+        print("[FIRST_LAST END FRAME QUALITY CONTRACT] " + json.dumps({
+            "sceneId": scene_id,
+            "hasFirstFrameReference": bool(first_frame_reference_inline),
+            "sameWardrobeLock": bool(first_frame_reference_inline),
+            "sameLocationLock": bool(first_frame_reference_inline),
+            "sameIdentityLock": bool(first_frame_reference_inline),
+            "sameCameraFamilyLock": bool(first_frame_reference_inline),
+            "continuityContractInjected": continuity_contract_injected,
+        }, ensure_ascii=False))
         refs_debug["comfyAssemblyDebug"] = comfy_assembly_debug
         print("[COMFY IMAGE ASSEMBLY]", json.dumps(comfy_assembly_debug, ensure_ascii=False))
 
@@ -8829,12 +8851,7 @@ def clip_image(payload: ClipImageIn):
             parts.append({"text": "Current scene FIRST FRAME anchor (hard continuity reference for END frame generation):"})
             parts.append(first_frame_reference_inline)
             parts.append({
-                "text": (
-                    "FIRST→LAST CONTINUITY CONTRACT:\n"
-                    "Keep same people, same identity, same wardrobe/accessories, same hairstyle, same location/environment, same light family, and same camera family.\n"
-                    "Do NOT redesign outfit, hair, location, or add extra people.\n"
-                    "Change only scene state evolution: pose, distance, body orientation, emotion, interaction intensity, and moment progression."
-                )
+                "text": "FIRST→LAST CONTINUITY CONTRACT:\n" + first_last_quality_contract
             })
 
         if previous_continuity_memory:
@@ -9785,9 +9802,47 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "completedAt": time.time() if status == "done" else None,
             })
         if status == "done":
+            debug_payload = out.get("debug") if isinstance(out.get("debug"), dict) else {}
+            second_frame_patch_applied = bool(
+                debug_payload.get("second_frame_patch_applied")
+                or debug_payload.get("end_image_used")
+            )
+            print(
+                "[COMFY FIRST_LAST FINALIZE] "
+                + json.dumps(
+                    {
+                        "sceneId": str(payload.sceneId or "").strip(),
+                        "jobId": job_id,
+                        "status": "done",
+                        "code": "",
+                        "error": "",
+                        "secondFramePatchApplied": second_frame_patch_applied,
+                    },
+                    ensure_ascii=False,
+                )
+            )
             print(f"[CLIP VIDEO JOB WORKER] terminal_transition jobId={job_id} status=done final_video_url={video_url}")
             print(f"[CLIP VIDEO JOB WORKER] status_done jobId={job_id}")
         else:
+            debug_payload = out.get("debug") if isinstance(out.get("debug"), dict) else {}
+            second_frame_patch_applied = bool(
+                debug_payload.get("second_frame_patch_applied")
+                or debug_payload.get("end_image_used")
+            )
+            print(
+                "[COMFY FIRST_LAST FINALIZE] "
+                + json.dumps(
+                    {
+                        "sceneId": str(payload.sceneId or "").strip(),
+                        "jobId": job_id,
+                        "status": "error",
+                        "code": str(out.get("code") or "").strip(),
+                        "error": str(out.get("details") or out.get("hint") or out.get("code") or "")[:300],
+                        "secondFramePatchApplied": second_frame_patch_applied,
+                    },
+                    ensure_ascii=False,
+                )
+            )
             print(
                 "[CLIP VIDEO JOB FINALIZE] "
                 f"jobId={job_id} status=error provider={provider_name} "
@@ -10103,6 +10158,23 @@ def clip_video(payload: ClipVideoIn):
                     status_code=400,
                     content={"ok": False, "code": "VIDEO_SOURCE_IMAGE_REQUIRED", "hint": f"first_last_image_download_failed:{str(exc)[:240]}"},
                 )
+        second_frame_patch_expected = bool(final_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS and start_image_bytes and end_image_bytes)
+        print(
+            "[SCENARIO FIRST_LAST VIDEO PAYLOAD] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "workflow": final_workflow_key,
+                    "firstFrameUrl": start_image_url or source_image_url,
+                    "lastFrameUrl": end_image_url,
+                    "firstFramePresent": bool(start_image_bytes),
+                    "lastFramePresent": bool(end_image_bytes),
+                    "secondFramePatchApplied": second_frame_patch_expected,
+                    "provider": provider,
+                },
+                ensure_ascii=False,
+            )
+        )
         if final_workflow_key == "lip_sync" and not audio_slice_url:
             return JSONResponse(
                 status_code=422,
@@ -10113,6 +10185,19 @@ def clip_video(payload: ClipVideoIn):
         print(
             "[COMFY REMOTE] "
             f"workflow={workflow_path} width={width} height={height} requestedDurationSec={requested_duration}"
+        )
+        print(
+            "[COMFY FIRST_LAST ROUTE] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "workflowPath": workflow_path,
+                    "firstFrameNodePatched": bool(start_image_bytes),
+                    "lastFrameNodePatched": bool(end_image_bytes),
+                    "promptNodePatched": bool(effective_prompt),
+                },
+                ensure_ascii=False,
+            )
         )
 
         comfy_out, comfy_err = run_comfy_image_to_video(
@@ -10142,6 +10227,20 @@ def clip_video(payload: ClipVideoIn):
                 parts = err_text.split(":", 2)
                 capability_code = parts[1] if len(parts) > 1 else "LTX_MODE_NOT_IMPLEMENTED"
                 capability_hint = parts[2] if len(parts) > 2 else "requested_ltx_mode_not_supported_by_comfy_remote"
+                print(
+                    "[COMFY FIRST_LAST FINALIZE] "
+                    + json.dumps(
+                        {
+                            "sceneId": scene_id,
+                            "jobId": "",
+                            "status": "error",
+                            "code": capability_code,
+                            "error": capability_hint[:300],
+                            "secondFramePatchApplied": second_frame_patch_expected,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
                 return JSONResponse(
                     status_code=422,
                     content={"ok": False, "code": capability_code, "hint": capability_hint[:300]},

@@ -10174,7 +10174,7 @@ Aspect ratio: ${imageFormat}`,
     const resolvedFirstFrameUrl = String(targetEffectiveStartImageUrl || "").trim();
     const resolvedLastFrameUrl = String(endImageUrl || "").trim();
     const hasImageForVideo = requiresTwoFrames
-      ? !!(resolvedFirstFrameUrl || frameImageUrl) && !!resolvedLastFrameUrl
+      ? !!resolvedFirstFrameUrl && !!resolvedLastFrameUrl
       : (requiresContinuation
         ? !!(resolvedFirstFrameUrl || frameImageUrl)
         : !!frameImageUrl);
@@ -10263,9 +10263,11 @@ Aspect ratio: ${imageFormat}`,
       : "";
     const videoVisualGlueText = buildScenarioVideoVisualGlueText(targetScene);
     const finalVideoPrompt = [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
-    const sourceImageUrl = (requiresContinuation || requiresTwoFrames)
-      ? (resolvedFirstFrameUrl || resolvedLastFrameUrl || frameImageUrl || "")
-      : (frameImageUrl || "");
+    const sourceImageUrl = requiresTwoFrames
+      ? (resolvedFirstFrameUrl || "")
+      : (requiresContinuation
+        ? (resolvedFirstFrameUrl || resolvedLastFrameUrl || frameImageUrl || "")
+        : (frameImageUrl || ""));
     const sourceImageStrategy = requiresTwoFrames
       ? "first_last_frames"
       : (requiresContinuation ? "continuation_previous_frame" : "single_image");
@@ -10284,6 +10286,18 @@ Aspect ratio: ${imageFormat}`,
       sourceImageStrategy,
     };
     console.info("[SCENARIO VIDEO REQUEST SUMMARY]", videoRequestSummary);
+    if (requiresTwoFrames) {
+      console.info("[SCENARIO FIRST_LAST VIDEO PAYLOAD]", {
+        sceneId,
+        workflow: resolvedWorkflowKey,
+        firstFrameUrl: resolvedFirstFrameUrl,
+        lastFrameUrl: resolvedLastFrameUrl,
+        firstFramePresent: Boolean(resolvedFirstFrameUrl),
+        lastFramePresent: Boolean(resolvedLastFrameUrl),
+        secondFramePatchApplied: Boolean(resolvedFirstFrameUrl && resolvedLastFrameUrl),
+        provider: effectiveVideoProvider,
+      });
+    }
 
     console.log("[StoryboardVideo] video_loading_on reason=generate_video", { sceneId });
     updateScenarioScene(targetSceneIndex, { videoUrl: "", videoStatus: "queued", videoError: "", videoJobId: "", videoPanelActivated: true });

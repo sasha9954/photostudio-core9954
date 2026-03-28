@@ -753,7 +753,85 @@ def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image
         ok, _ = _set_node_input(workflow, image_node_id, image_input_key, start_image_name)
         if ok:
             start_node_ids.append(str(image_node_id))
-    return bool(start_node_ids and end_node_ids), start_node_ids, end_node_ids
+
+    if not end_node_ids:
+        image_to_video_nodes = [
+            str(node_id)
+            for node_id, node in workflow.items()
+            if isinstance(node, dict) and str(node.get("class_type") or "").strip() == "LTXVImgToVideoInplace"
+        ]
+        if len(image_to_video_nodes) >= 2:
+            second_img2video_node_id = image_to_video_nodes[1]
+            second_img2video_inputs = (workflow.get(second_img2video_node_id) or {}).get("inputs")
+            second_image_link = second_img2video_inputs.get("image") if isinstance(second_img2video_inputs, dict) else None
+            if isinstance(second_image_link, list) and second_image_link:
+                upstream_preprocess_node_id = str(second_image_link[0])
+                upstream_preprocess_node = workflow.get(upstream_preprocess_node_id)
+                upstream_preprocess_inputs = (
+                    upstream_preprocess_node.get("inputs")
+                    if isinstance(upstream_preprocess_node, dict)
+                    else None
+                )
+                upstream_image_link = upstream_preprocess_inputs.get("image") if isinstance(upstream_preprocess_inputs, dict) else None
+                upstream_resize_node_id = str(upstream_image_link[0]) if isinstance(upstream_image_link, list) and upstream_image_link else ""
+                upstream_resize_node = workflow.get(upstream_resize_node_id) if upstream_resize_node_id else None
+                upstream_resize_inputs = upstream_resize_node.get("inputs") if isinstance(upstream_resize_node, dict) else None
+                upstream_mask_link = upstream_resize_inputs.get("images") if isinstance(upstream_resize_inputs, dict) else None
+                upstream_mask_node_id = str(upstream_mask_link[0]) if isinstance(upstream_mask_link, list) and upstream_mask_link else ""
+                upstream_mask_node = workflow.get(upstream_mask_node_id) if upstream_mask_node_id else None
+                upstream_mask_inputs = upstream_mask_node.get("inputs") if isinstance(upstream_mask_node, dict) else None
+
+                if (
+                    isinstance(upstream_preprocess_node, dict)
+                    and isinstance(upstream_resize_node, dict)
+                    and isinstance(upstream_mask_node, dict)
+                    and isinstance(upstream_preprocess_inputs, dict)
+                    and isinstance(upstream_resize_inputs, dict)
+                    and isinstance(upstream_mask_inputs, dict)
+                ):
+                    load_image_node_id = "270"
+                    resize_mask_node_id = "267:338"
+                    resize_images_node_id = "267:339"
+                    preprocess_node_id = "267:340"
+
+                    if load_image_node_id not in workflow:
+                        workflow[load_image_node_id] = {
+                            "inputs": {"image": end_image_name},
+                            "class_type": "LoadImage",
+                            "_meta": {"title": "LoadImage End Frame"},
+                        }
+                    else:
+                        load_inputs = workflow.get(load_image_node_id, {}).get("inputs")
+                        if isinstance(load_inputs, dict):
+                            load_inputs["image"] = end_image_name
+
+                    if resize_mask_node_id not in workflow:
+                        workflow[resize_mask_node_id] = copy.deepcopy(upstream_mask_node)
+                    if resize_images_node_id not in workflow:
+                        workflow[resize_images_node_id] = copy.deepcopy(upstream_resize_node)
+                    if preprocess_node_id not in workflow:
+                        workflow[preprocess_node_id] = copy.deepcopy(upstream_preprocess_node)
+
+                    resize_mask_inputs = workflow.get(resize_mask_node_id, {}).get("inputs")
+                    resize_images_inputs = workflow.get(resize_images_node_id, {}).get("inputs")
+                    preprocess_inputs = workflow.get(preprocess_node_id, {}).get("inputs")
+                    second_node_inputs = workflow.get(second_img2video_node_id, {}).get("inputs")
+                    if (
+                        isinstance(resize_mask_inputs, dict)
+                        and isinstance(resize_images_inputs, dict)
+                        and isinstance(preprocess_inputs, dict)
+                        and isinstance(second_node_inputs, dict)
+                    ):
+                        resize_mask_inputs["input"] = [load_image_node_id, 0]
+                        resize_images_inputs["images"] = [resize_mask_node_id, 0]
+                        preprocess_inputs["image"] = [resize_images_node_id, 0]
+                        second_node_inputs["image"] = [preprocess_node_id, 0]
+                        end_node_ids.extend(
+                            [load_image_node_id, resize_mask_node_id, resize_images_node_id, preprocess_node_id, second_img2video_node_id]
+                        )
+
+    second_frame_patch_applied = bool(start_node_ids and end_node_ids)
+    return second_frame_patch_applied, start_node_ids, end_node_ids
 
 
 def _validate_audio_workflow_file(*, workflow_key: str, workflow_source: str) -> tuple[bool, str | None]:
@@ -974,6 +1052,16 @@ def run_comfy_image_to_video(
             start_image_name=uploaded_start_name,
             end_image_name=uploaded_end_name,
         )
+        logger.info(
+            "[COMFY FIRST_LAST ROUTE] %s",
+            {
+                "sceneId": str(scene_id or "").strip(),
+                "workflowPath": workflow_source,
+                "firstFrameNodePatched": bool(first_last_start_node_ids),
+                "lastFrameNodePatched": bool(first_last_end_node_ids),
+                "promptNodePatched": bool(FIXED_PROMPT_PATCH_NODE_IDS),
+            },
+        )
         if not first_last_applied:
             return None, "capability_error:LTX_FIRST_LAST_NOT_IMPLEMENTED:second_frame_patch_not_applied"
     audio_patch_node_ids: list[str] = []
@@ -1098,6 +1186,7 @@ def run_comfy_image_to_video(
             "first_last_end_node_ids": first_last_end_node_ids,
             "start_image_used": bool(first_last_start_node_ids),
             "end_image_used": bool(first_last_end_node_ids),
+            "second_frame_patch_applied": bool(first_last_applied),
             "audio_used": bool(audio_patch_node_ids),
             "continuation_used": continuation_used,
             "continuation_source_asset_type": continuation_asset_type,
