@@ -165,9 +165,12 @@ export default function ScenarioStoryboardEditor({
   open,
   nodeId,
   storyboardRevision,
+  storyboardSignature,
   scenes,
   sceneGeneration,
   audioData,
+  masterAudioUrl: masterAudioUrlProp,
+  musicUrl: musicUrlProp,
   onClose,
   onUpdateScene,
   onGenerateScene,
@@ -195,7 +198,7 @@ export default function ScenarioStoryboardEditor({
   );
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
   const safeAudioData = audioData && typeof audioData === "object" ? audioData : {};
-  const masterAudioUrl = String(safeAudioData?.audioUrl || safeAudioData?.musicUrl || "").trim();
+  const masterAudioUrl = String(masterAudioUrlProp || safeAudioData?.audioUrl || musicUrlProp || safeAudioData?.musicUrl || "").trim();
   const hasBgAudioAvailable = Boolean(masterAudioUrl);
 
   useEffect(() => {
@@ -250,7 +253,7 @@ export default function ScenarioStoryboardEditor({
       selectionId: activeSelectionId,
       isBgAudioSelected: isBgAudioSelectedNow,
     });
-  }, [activeSelectionId, activeSelectionType, hasBgAudioAvailable, normalizedScenes, open, storyboardRevision]);
+  }, [activeSelectionId, activeSelectionType, hasBgAudioAvailable, normalizedScenes, open, storyboardRevision, storyboardSignature]);
 
   useEffect(() => {
     if (!open) return;

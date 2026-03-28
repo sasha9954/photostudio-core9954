@@ -3022,6 +3022,12 @@ function extractGlobalAudioUrlFromNodes(nodes = []) {
   return audioNodeWithUrl?.data?.audioUrl ? String(audioNodeWithUrl.data.audioUrl) : "";
 }
 
+function extractGlobalAudioDurationFromNodes(nodes = []) {
+  const audioNodeWithDuration = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "audioNode" && Number(n?.data?.audioDurationSec) > 0);
+  const durationSec = Number(audioNodeWithDuration?.data?.audioDurationSec || 0);
+  return Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
+}
+
 function buildAssemblyPayloadSignature(payload, options = {}) {
   const introComparable = buildIntroFrameComparablePayload(payload?.intro);
   return JSON.stringify({
@@ -6700,6 +6706,21 @@ const activeScenarioStoryboardNode = useMemo(() => {
   if (activeScenarioStoryboardId) return nodes.find((n) => n.id === activeScenarioStoryboardId && n.type === "scenarioStoryboard") || null;
   return nodes.find((n) => n.type === "scenarioStoryboard") || null;
 }, [activeScenarioStoryboardId, nodes]);
+const activeScenarioAudioData = activeScenarioStoryboardNode?.data?.audioData && typeof activeScenarioStoryboardNode.data.audioData === "object"
+  ? activeScenarioStoryboardNode.data.audioData
+  : {};
+const activeScenarioMasterAudioUrl = String(
+  activeScenarioAudioData?.audioUrl
+  || activeScenarioStoryboardNode?.data?.audioUrl
+  || activeScenarioStoryboardNode?.data?.masterAudioUrl
+  || extractGlobalAudioUrlFromNodes(nodes)
+  || ""
+).trim();
+const activeScenarioMusicUrl = String(
+  activeScenarioAudioData?.musicUrl
+  || activeScenarioStoryboardNode?.data?.musicUrl
+  || ""
+).trim();
 
 const scenarioFlowSourceNode = useMemo(() => {
   if (activeScenarioStoryboardNode?.id) return activeScenarioStoryboardNode;
@@ -7237,6 +7258,22 @@ const comfyShowVideoSection = Boolean(
     const staleTimeoutMs = 20 * 60 * 1000;
     const notFoundRetryLimit = 3;
     const sceneSnapshot = scenarioScenes.find((scene) => String(scene?.sceneId || "") === sceneId) || null;
+    const runtimeStoryboardRevision = String(
+      scenarioFlowSourceNode?.data?.storyboardRevision
+      || jobMeta?.storyboardRevision
+      || ""
+    ).trim();
+    const runtimeStoryboardSignature = String(
+      scenarioFlowSourceNode?.data?.storyboardSignature
+      || buildSceneSignature(scenarioScenes, "scene")
+      || jobMeta?.storyboardSignature
+      || ""
+    ).trim();
+    const runtimeSceneSignature = String(
+      buildScenarioScenePackageSignature(sceneSnapshot || {})
+      || jobMeta?.sceneSignature
+      || ""
+    ).trim();
     const startMeta = {
       ...jobMeta,
       sceneId,
@@ -7250,6 +7287,9 @@ const comfyShowVideoSection = Boolean(
       continuationSourceSceneId: String(jobMeta?.continuationSourceSceneId || sceneSnapshot?.continuationSourceSceneId || "").trim(),
       continuationSourceAssetType: String(jobMeta?.continuationSourceAssetType || sceneSnapshot?.continuationSourceAssetType || "").trim(),
       renderMode: String(jobMeta?.renderMode || sceneSnapshot?.renderMode || "").trim(),
+      storyboardRevision: runtimeStoryboardRevision,
+      storyboardSignature: runtimeStoryboardSignature,
+      sceneSignature: runtimeSceneSignature,
       startedAt: Number(jobMeta?.startedAt) || now,
       updatedAt: Number(jobMeta?.updatedAt) || now,
       status: String(jobMeta?.status || "queued").toLowerCase(),
@@ -7331,6 +7371,41 @@ const comfyShowVideoSection = Boolean(
         status: String(currentMeta?.status || ""),
       });
       const lastUpdatedAt = Number(currentMeta?.updatedAt) || Number(currentMeta?.startedAt) || 0;
+      const liveScene = scenarioScenes.find((scene) => String(scene?.sceneId || "") === sceneId) || null;
+      const liveStoryboardRevision = String(scenarioFlowSourceNode?.data?.storyboardRevision || "").trim();
+      const liveStoryboardSignature = String(
+        scenarioFlowSourceNode?.data?.storyboardSignature
+        || buildSceneSignature(scenarioScenes, "scene")
+        || ""
+      ).trim();
+      const liveSceneSignature = String(buildScenarioScenePackageSignature(liveScene || {}) || "").trim();
+      const bindingMismatchByRun = (
+        !!String(currentMeta?.storyboardRevision || "").trim()
+        && !!liveStoryboardRevision
+        && String(currentMeta?.storyboardRevision || "").trim() !== liveStoryboardRevision
+      ) || (
+        !!String(currentMeta?.storyboardSignature || "").trim()
+        && !!liveStoryboardSignature
+        && String(currentMeta?.storyboardSignature || "").trim() !== liveStoryboardSignature
+      );
+      const bindingMismatchByScene = !!String(currentMeta?.sceneSignature || "").trim()
+        && !!liveSceneSignature
+        && String(currentMeta?.sceneSignature || "").trim() !== liveSceneSignature;
+      if (bindingMismatchByRun || bindingMismatchByScene) {
+        console.info("[SCENARIO VIDEO POLL STALE IGNORED]", {
+          sceneId,
+          jobId: String(currentMeta?.jobId || ""),
+          reasonIgnored: bindingMismatchByRun ? "storyboard_run_binding_mismatch" : "scene_signature_mismatch",
+          persistedStoryboardRevision: String(currentMeta?.storyboardRevision || ""),
+          runtimeStoryboardRevision: liveStoryboardRevision,
+          persistedStoryboardSignature: String(currentMeta?.storyboardSignature || ""),
+          runtimeStoryboardSignature: liveStoryboardSignature,
+          persistedSceneSignature: String(currentMeta?.sceneSignature || ""),
+          runtimeSceneSignature: liveSceneSignature,
+        });
+        clearActiveVideoJob(sceneId, { status: "stale_binding", jobId: String(currentMeta?.jobId || "") });
+        return;
+      }
       if (lastUpdatedAt > 0 && (Date.now() - lastUpdatedAt) > staleTimeoutMs) {
         updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId), {
           videoStatus: "error",
@@ -7537,7 +7612,7 @@ const comfyShowVideoSection = Boolean(
     };
 
     scheduleScenarioPoll(250, "initial_after_start");
-  }, [clearActiveVideoJob, isScenarioVideoJobNotFound, persistActiveVideoJob, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
+  }, [clearActiveVideoJob, isScenarioVideoJobNotFound, persistActiveVideoJob, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
 
   useEffect(() => () => {
     scenarioActivePollingJobIdsRef.current.clear();
@@ -7570,6 +7645,34 @@ const comfyShowVideoSection = Boolean(
         const normalizedSceneId = String(sceneId || "");
         const idx = scenarioScenes.findIndex((x) => String(x?.sceneId || "") === normalizedSceneId);
         const sceneNow = idx >= 0 ? scenarioScenes[idx] : null;
+        const runtimeStoryboardRevision = String(scenarioFlowSourceNode?.data?.storyboardRevision || "").trim();
+        const runtimeStoryboardSignature = String(
+          scenarioFlowSourceNode?.data?.storyboardSignature
+          || buildSceneSignature(scenarioScenes, "scene")
+          || ""
+        ).trim();
+        const runtimeSceneSignature = String(buildScenarioScenePackageSignature(sceneNow || {}) || "").trim();
+        const persistedStoryboardRevision = String(meta?.storyboardRevision || "").trim();
+        const persistedStoryboardSignature = String(meta?.storyboardSignature || "").trim();
+        const persistedSceneSignature = String(meta?.sceneSignature || "").trim();
+        const mismatchByRun = (
+          persistedStoryboardRevision
+          && runtimeStoryboardRevision
+          && persistedStoryboardRevision !== runtimeStoryboardRevision
+        ) || (
+          persistedStoryboardSignature
+          && runtimeStoryboardSignature
+          && persistedStoryboardSignature !== runtimeStoryboardSignature
+        );
+        const mismatchByScene = persistedSceneSignature && runtimeSceneSignature && persistedSceneSignature !== runtimeSceneSignature;
+        if (mismatchByRun || mismatchByScene) {
+          console.info("[SCENARIO VIDEO RESTORE SKIPPED DUPLICATE]", {
+            reason: mismatchByRun ? "storyboard_run_binding_mismatch" : "scene_signature_mismatch",
+            sceneId: normalizedSceneId,
+            jobId: String(meta?.jobId || ""),
+          });
+          return;
+        }
         const sceneVideoUrl = String(sceneNow?.videoUrl || "").trim();
         const sceneVideoJobId = String(sceneNow?.videoJobId || "").trim();
         const sceneVideoStatus = String(sceneNow?.videoStatus || "").toLowerCase();
@@ -7614,6 +7717,9 @@ const comfyShowVideoSection = Boolean(
         startScenarioVideoPolling({
           ...meta,
           sceneId: normalizedSceneId,
+          storyboardRevision: runtimeStoryboardRevision,
+          storyboardSignature: runtimeStoryboardSignature,
+          sceneSignature: runtimeSceneSignature,
       workflowKey: normalizeScenarioWorkflowKeyForProduction(
         String(meta?.workflowKey || sceneNow?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneNow || {}) || "")
       ),
@@ -7632,7 +7738,7 @@ const comfyShowVideoSection = Boolean(
     } finally {
       restoredScenarioVideoJobsRef.current.add(restoreToken);
     }
-  }, [VIDEO_JOB_STORE_KEY, accountKey, persistActiveVideoJob, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
+  }, [VIDEO_JOB_STORE_KEY, accountKey, persistActiveVideoJob, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
 
   const updateComfyScene = useCallback((idx, patch) => {
     if (!comfyNode?.id || idx < 0) return;
@@ -9712,6 +9818,13 @@ Aspect ratio: ${imageFormat}`,
 
     const sceneId = String(targetScene?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
+    const activeStoryboardRevision = String(scenarioFlowSourceNode?.data?.storyboardRevision || "").trim();
+    const activeStoryboardSignature = String(
+      scenarioFlowSourceNode?.data?.storyboardSignature
+      || buildSceneSignature(scenarioScenes, "scene")
+      || ""
+    ).trim();
+    const activeSceneSignature = String(buildScenarioScenePackageSignature(targetScene || {}) || "").trim();
     const explicitModel = resolveScenarioExplicitModelKey(targetScene);
     const workflowDefaultModelMap = {
       i2v: "ltx23_dev_fp8",
@@ -9777,6 +9890,9 @@ Aspect ratio: ${imageFormat}`,
     console.debug("[SCENE VIDEO ROUTE]", {
       sceneId,
       sceneIndex: targetSceneIndex,
+      storyboardRevision: activeStoryboardRevision,
+      storyboardSignature: activeStoryboardSignature,
+      sceneSignature: activeSceneSignature,
       ltxMode: String(targetScene?.ltxMode || ""),
       provider: effectiveVideoProvider,
       imageStrategy,
@@ -9932,6 +10048,9 @@ Aspect ratio: ${imageFormat}`,
           providerJobId: String(out.providerJobId || ""),
           provider: String(out?.provider || effectiveVideoProvider),
           sceneId,
+          storyboardRevision: activeStoryboardRevision,
+          storyboardSignature: activeStoryboardSignature,
+          sceneSignature: activeSceneSignature,
           workflowKey: resolvedWorkflowKey,
           modelKey: resolvedModelKey,
           audioSensitive: requiresAudioSensitiveVideo,
@@ -11559,6 +11678,14 @@ onClipSec: (nodeId, value) => {
           const previousRevision = String(base?.data?.storyboardRevision || "");
           const nextRevision = sourceScenarioRevision || previousRevision;
           const revisionChanged = previousRevision !== nextRevision;
+          const previousStoryboardSignature = String(
+            base?.data?.storyboardSignature
+            || buildSceneSignature(previousScenes, "scene")
+            || ""
+          );
+          const nextStoryboardSignature = String(buildSceneSignature(normalizedScenes, "scene") || "");
+          const storyboardSignatureChanged = !!nextStoryboardSignature && previousStoryboardSignature !== nextStoryboardSignature;
+          const storyboardRunChanged = revisionChanged || storyboardSignatureChanged;
           const previousBySceneId = new Map(
             previousScenes.map((sceneItem, idx) => [String(sceneItem?.sceneId || `S${idx + 1}`), sceneItem])
           );
@@ -11572,7 +11699,7 @@ onClipSec: (nodeId, value) => {
             const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`);
             const cleanedScene = stripScenarioGeneratedAssets(sceneItem);
             const persistedScene = previousBySceneId.get(sceneId);
-            if (!persistedScene || revisionChanged) return cleanedScene;
+            if (!persistedScene || storyboardRunChanged) return cleanedScene;
             const previousSceneSignature = String(previousSceneSignatureById.get(sceneId) || "");
             const nextSceneSignature = buildScenarioScenePackageSignature(cleanedScene);
             if (!previousSceneSignature || previousSceneSignature !== nextSceneSignature) return cleanedScene;
@@ -11584,30 +11711,41 @@ onClipSec: (nodeId, value) => {
             });
             return { ...cleanedScene, ...persistedAssets };
           });
-          const uiStateUpdated = revisionChanged || scenes.length !== previousScenes.length;
+          const uiStateUpdated = storyboardRunChanged || scenes.length !== previousScenes.length;
+          if (storyboardRunChanged) {
+            scenarioActivePollingJobIdsRef.current.clear();
+            scenarioVideoJobsBySceneRef.current.clear();
+            stopScenarioVideoPolling();
+            safeDel(VIDEO_JOB_STORE_KEY);
+          }
           console.debug("[SCENARIO APPLY RESPONSE]", {
             generateSuccess: validScenarioSource && !!sourceScenarioRevision,
             targetNodeId: String(n?.id || ""),
             hadStoryboardOut: !!storyboardOut,
             hadDirectorOutput: !!directorOutput,
             revisionChanged,
+            storyboardSignatureChanged,
+            storyboardRunChanged,
             normalizedScenesCount: scenes.length,
             previousRevision,
             nextRevision,
+            previousStoryboardSignature,
+            nextStoryboardSignature,
             uiStateUpdated,
           });
           console.debug("[SCENARIO SCENE ASSET SYNC]", {
             revisionChanged,
-            preservedAssets: !revisionChanged,
+            storyboardRunChanged,
+            preservedAssets: !storyboardRunChanged,
             scenesCount: scenes.length,
-            clearedAssetFieldsOnNewRevision: revisionChanged,
+            clearedAssetFieldsOnNewRevision: storyboardRunChanged,
           });
           const previousSceneIds = collectSceneIds(previousScenes);
           const nextSceneIds = collectSceneIds(scenes);
           const previousGenerationMap = base?.data?.sceneGeneration && typeof base.data.sceneGeneration === "object"
             ? base.data.sceneGeneration
             : {};
-          const generationSeedMap = revisionChanged ? {} : previousGenerationMap;
+          const generationSeedMap = storyboardRunChanged ? {} : previousGenerationMap;
           const sceneGeneration = buildStoryboardSceneGenerationMap(scenes, generationSeedMap);
           const nextSceneIdSet = new Set(nextSceneIds);
           const staleSceneGenerationKeys = Object.keys(previousGenerationMap).filter((sceneId) => !nextSceneIdSet.has(String(sceneId || "")));
@@ -11618,7 +11756,7 @@ onClipSec: (nodeId, value) => {
             previousSceneIds,
             nextSceneIds,
             clearedStaleSceneGenerationKeys: staleSceneGenerationKeys,
-            resetSceneGenerationFromRevisionChange: revisionChanged,
+            resetSceneGenerationFromRevisionChange: storyboardRunChanged,
             recalculatedSummary: {
               sceneCount: scenes.length,
               photoCount: scenes.filter((sceneItem, idx) => {
@@ -11640,6 +11778,20 @@ onClipSec: (nodeId, value) => {
             },
           });
           const currentAudioData = base?.data?.audioData && typeof base.data.audioData === "object" ? base.data.audioData : {};
+          const connectedAudioUrl = String(
+            sourceNode?.data?.audioUrl
+            || sourceNode?.data?.masterAudioUrl
+            || sourceNode?.data?.plannerMeta?.plannerInput?.audioUrl
+            || extractGlobalAudioUrlFromNodes(nodesRef.current || [])
+            || ""
+          ).trim();
+          const connectedAudioDurationSec = Number(
+            sourceNode?.data?.audioDurationSec
+            || sourceNode?.data?.plannerMeta?.audioDurationSec
+            || sourceNode?.data?.plannerMeta?.plannerInput?.audioDurationSec
+            || extractGlobalAudioDurationFromNodes(nodesRef.current || [])
+            || 0
+          ) || 0;
           const packageMusicPromptSourceKindRaw = String(normalizedPackage?.musicPromptSourceKind || "").trim().toLowerCase();
           const packageMusicPromptSourceText = String(normalizedPackage?.musicPromptSourceText || "").trim();
           const packageFallbackMusicPrompt = String(normalizedPackage?.fallbackMusicPrompt || "").trim();
@@ -11663,8 +11815,13 @@ onClipSec: (nodeId, value) => {
           }));
           const audioData = {
             ...currentAudioData,
-            audioUrl: String(currentAudioData.audioUrl || normalizedPackage?.audioUrl || "").trim(),
-            durationSec: Number(currentAudioData.durationSec ?? normalizedPackage?.audioDurationSec ?? 0) || 0,
+            audioUrl: String(currentAudioData.audioUrl || normalizedPackage?.audioUrl || connectedAudioUrl || "").trim(),
+            durationSec: Number(
+              currentAudioData.durationSec
+              ?? normalizedPackage?.audioDurationSec
+              ?? connectedAudioDurationSec
+              ?? 0
+            ) || 0,
             phrases: phraseBreakdown,
             packageGlobalMusicPrompt: String(normalizedPackage?.musicPromptSourceText || normalizedPackage?.globalMusicPrompt || "").trim(),
             globalMusicPrompt: String(
@@ -11747,6 +11904,24 @@ onClipSec: (nodeId, value) => {
                 : (currentAudioData.musicDuration ?? normalizedPackage?.musicDuration ?? 0)
             ) || 0,
           };
+          const timelineDurationFromScenes = Number(
+            scenes.reduce((maxValue, sceneItem) => {
+              const displayTime = resolveSceneDisplayTime(sceneItem);
+              return Math.max(maxValue, Number(displayTime.endSec || 0));
+            }, 0)
+          ) || 0;
+          console.debug("[SCENARIO AUDIO LENGTH CHECK]", {
+            revisionChanged,
+            storyboardSignatureChanged,
+            scenesCount: scenes.length,
+            timelineDurationFromScenes,
+            packageAudioDurationSec: Number(normalizedPackage?.audioDurationSec || 0) || 0,
+            connectedAudioDurationSec,
+            selectedDurationSec: Number(audioData?.durationSec || 0) || 0,
+            hasConnectedAudioUrl: !!connectedAudioUrl,
+            connectedAudioUrlPreview: connectedAudioUrl ? connectedAudioUrl.slice(0, 160) : "",
+            packageAudioUrlPreview: String(normalizedPackage?.audioUrl || "").slice(0, 160),
+          });
           const storyboardMusicPrompt = String(storyboardOut?.music_prompt || "").trim();
           const packageGlobalMusicPrompt = String(normalizedPackage?.globalMusicPrompt || "").trim();
           const fallbackMusicPrompt = String(normalizedPackage?.fallbackMusicPrompt || "").trim();
@@ -11855,6 +12030,7 @@ onClipSec: (nodeId, value) => {
               storyboardOut,
               directorOutput,
               storyboardRevision: nextRevision,
+              storyboardSignature: nextStoryboardSignature,
               scenesCount: scenes.length,
               status: scenes.length > 0 ? "ready" : "idle",
               audioData,
@@ -15715,9 +15891,12 @@ const hydrate = useCallback((source = "unknown") => {
         open={isScenarioStoryboardOpen}
         nodeId={activeScenarioStoryboardNode?.id || null}
         storyboardRevision={activeScenarioStoryboardNode?.data?.storyboardRevision || ""}
+        storyboardSignature={activeScenarioStoryboardNode?.data?.storyboardSignature || ""}
         scenes={activeScenarioStoryboardNode?.data?.scenes || []}
         sceneGeneration={activeScenarioStoryboardNode?.data?.sceneGeneration || {}}
-        audioData={activeScenarioStoryboardNode?.data?.audioData || {}}
+        audioData={activeScenarioAudioData}
+        masterAudioUrl={activeScenarioMasterAudioUrl}
+        musicUrl={activeScenarioMusicUrl}
         onClose={() => setIsScenarioStoryboardOpen(false)}
         onUpdateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneUpdate}
         onGenerateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneGenerate}
