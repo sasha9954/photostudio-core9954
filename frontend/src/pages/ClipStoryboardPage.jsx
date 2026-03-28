@@ -9303,6 +9303,12 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const normalizedSlot = imageStrategy === "first_last"
       ? (requestedSlot === "end" ? "end" : "start")
       : (imageStrategy === "continuation" ? (requestedSlot === "end" ? "end" : "start") : "single");
+    console.debug("[SCENARIO IMAGE] generation_mode_resolved", {
+      sceneId: String(targetScene?.sceneId || ""),
+      imageStrategy,
+      requestedSlot,
+      normalizedSlot,
+    });
     if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start" && !!targetScene?.inheritPreviousEndAsStart) {
       console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] blocked_by_inherit_previous_end_as_start", {
         sceneId: String(targetScene?.sceneId || ""),
@@ -9425,15 +9431,29 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const currentSceneForEndReference = applyFirstLastContinuityContract
         ? (resolveScenarioLiveBinding(sceneId, { nodeId: targetNodeId })?.scene || targetScene)
         : targetScene;
-      const currentSceneStartImageUrl = applyFirstLastContinuityContract
+      const directCurrentSceneStartImageUrl = applyFirstLastContinuityContract
         ? String(
           currentSceneForEndReference?.startImageUrl
           || currentSceneForEndReference?.startFrameImageUrl
-          || currentSceneForEndReference?.imageUrl
           || ""
         ).trim()
         : "";
+      const effectiveCurrentSceneStartImageUrl = applyFirstLastContinuityContract
+        ? String(getEffectiveSceneStartImage(currentSceneForEndReference, null) || "").trim()
+        : "";
+      const currentSceneStartImageUrl = applyFirstLastContinuityContract
+        ? (directCurrentSceneStartImageUrl || effectiveCurrentSceneStartImageUrl)
+        : "";
       const firstFrameReferenceUrlForEnd = currentSceneStartImageUrl;
+      console.debug("[SCENARIO FIRST_LAST] end_reference_resolved", {
+        sceneId,
+        imageStrategy,
+        normalizedSlot,
+        hasCurrentSceneStartImage: Boolean(currentSceneStartImageUrl),
+        directCurrentSceneStartImageUrl,
+        effectiveCurrentSceneStartImageUrl,
+        firstFrameReferenceUrl: firstFrameReferenceUrlForEnd,
+      });
       const refsForImageRequest = normalizeClipImageRefsPayload({
         ...scenarioBrainRefs,
         refsByRole: refsByRoleForImage,
@@ -9802,6 +9822,7 @@ Aspect ratio: ${imageFormat}`,
       if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
         updateScenarioScene(sceneId, {
           startImageUrl: generatedImageUrl,
+          startFrameImageUrl: generatedImageUrl,
           imageFormat,
           videoUrl: "",
           videoStatus: "",
@@ -9814,6 +9835,7 @@ Aspect ratio: ${imageFormat}`,
       } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
         updateScenarioScene(sceneId, {
           endImageUrl: generatedImageUrl,
+          endFrameImageUrl: generatedImageUrl,
           imageFormat,
           videoUrl: "",
           videoStatus: "",
@@ -11647,6 +11669,7 @@ onClipSec: (nodeId, value) => {
                         t1,
                         prompt,
                         transitionType,
+                        imageStrategy: s.imageStrategy || deriveScenarioImageStrategy(s),
                         sceneText: s.sceneText || "",
                         imagePrompt: s.imagePrompt || "",
                         framePrompt: s.framePrompt || s.imagePrompt || s.prompt || "",
@@ -11659,6 +11682,23 @@ onClipSec: (nodeId, value) => {
                         endImageUrl: s.endImageUrl || "",
                         inheritPreviousEndAsStart: !!s.inheritPreviousEndAsStart,
                         startFrameSource: s.startFrameSource === "previous_end" ? "previous_end" : "manual",
+                        ltxMode: s.ltxMode || s.ltx_mode || "",
+                        needsTwoFrames: Boolean(s.needsTwoFrames ?? s.needs_two_frames),
+                        requiresTwoFrames: Boolean(s.requiresTwoFrames ?? s.needsTwoFrames ?? s.needs_two_frames),
+                        continuation: Boolean(s.continuation),
+                        continuationFromPrevious: Boolean(s.continuationFromPrevious ?? s.continuation_from_previous),
+                        requiresContinuation: Boolean(
+                          s.requiresContinuation
+                          ?? s.continuationFromPrevious
+                          ?? s.continuation
+                          ?? s.continuation_from_previous
+                        ),
+                        resolvedWorkflowKey: s.resolvedWorkflowKey
+                          || resolveScenarioExplicitWorkflowKey(s)
+                          || resolveScenarioWorkflowKey(s),
+                        resolvedModelKey: s.resolvedModelKey || resolveScenarioExplicitModelKey(s) || "",
+                        workflowFileOverride: s.workflowFileOverride || s.workflow_file_override || "",
+                        modelFileOverride: s.modelFileOverride || s.model_file_override || "",
                         imageFormat: normalizeSceneImageFormat(s.imageFormat),
                         audioSliceUrl: s.audioSliceUrl || "",
                         audioSliceStartSec: Number(s.audioSliceStartSec ?? s.audioSliceT0 ?? t0),
