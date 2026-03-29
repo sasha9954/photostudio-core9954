@@ -9216,6 +9216,19 @@ def _clip_audio_slice_response(payload: AudioSliceIn):
     temp_files: list[str] = []
     try:
         path, resolve_error = _resolve_audio_slice_source(payload.audioUrl, temp_files)
+        print(
+            "[AUDIO SLICE SOURCE]",
+            json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "requestedAudioUrl": str(payload.audioUrl or ""),
+                    "resolvedAudioSource": str(path or ""),
+                    "startSec": t0,
+                    "endSec": t1,
+                },
+                ensure_ascii=False,
+            ),
+        )
         if not path:
             _debug_audio_slice(payload.audioUrl, path)
             return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_audioUrl", "hint": resolve_error or "audio_source_not_resolved"})
@@ -9247,6 +9260,18 @@ def _clip_audio_slice_response(payload: AudioSliceIn):
 
         duration = round(t1 - t0, 3)
         asset = _asset_url(filename)
+        print(
+            "[AUDIO SLICE RESULT]",
+            json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "outputUrl": asset,
+                    "outputPath": output_path,
+                    "actualDurationSec": duration,
+                },
+                ensure_ascii=False,
+            ),
+        )
         return {
             "ok": True,
             "sceneId": scene_id,

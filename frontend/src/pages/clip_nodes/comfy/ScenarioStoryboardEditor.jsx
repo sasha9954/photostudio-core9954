@@ -413,6 +413,16 @@ export default function ScenarioStoryboardEditor({
     }
     const t1 = Number.isFinite(t1Raw) && t1Raw > t0 ? t1Raw : t0 + 0.25;
     const phraseSceneId = resolvePhraseSceneId(phrase, idx);
+    console.debug("[SCENARIO PHRASE PREVIEW CLICK]", {
+      sceneId: phraseSceneId,
+      phraseText: String(phrase?.text || "").trim(),
+      sceneAudioSliceStart: t0,
+      sceneAudioSliceEnd: t1,
+      selectedAudioUrl: masterAudioUrl,
+      audioNodeUrl: String(safeAudioData?.audioUrl || "").trim(),
+      scenarioNodeId: String(nodeId || ""),
+      sourceNodeId: "",
+    });
     phrasePlaybackRef.current = { sceneId: phraseSceneId, phraseIndex: idx, t0, t1 };
     setPlayingPhraseIndex(idx);
     setPhrasePlaybackError("");
@@ -452,6 +462,12 @@ export default function ScenarioStoryboardEditor({
       audio.removeEventListener("error", onError);
     };
   }, [masterAudioUrl, open]);
+
+  useEffect(() => {
+    const audio = masterAudioRef.current;
+    if (!audio) return;
+    audio.load();
+  }, [masterAudioUrl]);
 
   const resolveSceneAudioSliceStatus = (scene) => {
     const rawStatus = String(scene?.audioSliceStatus || scene?.extractedAudioStatus || "").trim().toLowerCase();
@@ -916,7 +932,7 @@ export default function ScenarioStoryboardEditor({
           <button className="clipSB_iconBtn" onClick={onClose} type="button">×</button>
         </div>
 
-        {masterAudioUrl ? <audio ref={masterAudioRef} src={masterAudioUrl} preload="metadata" style={{ display: "none" }} /> : null}
+        {masterAudioUrl ? <audio key={masterAudioUrl} ref={masterAudioRef} src={masterAudioUrl} preload="metadata" style={{ display: "none" }} /> : null}
 
         <div className="clipSB_scenarioEditorTopTabs">
           <div className="clipSB_scenarioEditorTabsRow">

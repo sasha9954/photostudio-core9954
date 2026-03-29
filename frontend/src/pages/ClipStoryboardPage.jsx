@@ -3114,6 +3114,18 @@ function extractGlobalAudioUrlFromNodes(nodes = []) {
   return audioNodeWithUrl?.data?.audioUrl ? String(audioNodeWithUrl.data.audioUrl) : "";
 }
 
+function resolveScenarioAudioSourceUrlFromNode(node = null, fallbackNodes = []) {
+  const sourceNode = node && typeof node === "object" ? node : {};
+  const audioData = sourceNode?.data?.audioData && typeof sourceNode.data.audioData === "object" ? sourceNode.data.audioData : {};
+  return String(
+    audioData?.audioUrl
+    || sourceNode?.data?.audioUrl
+    || sourceNode?.data?.masterAudioUrl
+    || extractGlobalAudioUrlFromNodes(fallbackNodes)
+    || ""
+  ).trim();
+}
+
 function extractGlobalAudioDurationFromNodes(nodes = []) {
   const audioNodeWithDuration = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "audioNode" && Number(n?.data?.audioDurationSec) > 0);
   const durationSec = Number(audioNodeWithDuration?.data?.audioDurationSec || 0);
@@ -10197,8 +10209,9 @@ Aspect ratio: ${imageFormat}`,
   const handleScenarioTakeAudioByIndex = useCallback(async (idx) => {
     const scene = scenarioScenes[idx] || null;
     if (!scene) return;
-    if (!globalAudioUrlRaw) {
-      const msg = "Не найден общий audioUrl в Audio node";
+    const scenarioAudioUrl = resolveScenarioAudioSourceUrlFromNode(scenarioFlowSourceNode, nodesRef.current || []);
+    if (!scenarioAudioUrl) {
+      const msg = "Не найден актуальный audioUrl для Scenario";
       updateScenarioScene(idx, {
         audioSliceStatus: "error",
         audioSliceError: msg,
@@ -10231,13 +10244,21 @@ Aspect ratio: ${imageFormat}`,
     });
 
     try {
+      console.debug("[SCENARIO AUDIO SLICE REQUEST]", {
+        endpoint: "/api/clip/audio/slice",
+        sceneId,
+        audioUrl: scenarioAudioUrl,
+        startSec,
+        endSec,
+        expectedDurationSec: Math.max(0, endSec - startSec),
+      });
       const out = await fetchJson("/api/clip/audio/slice", {
         method: "POST",
         body: {
           sceneId,
           startSec,
           endSec,
-          audioUrl: globalAudioUrlRaw,
+          audioUrl: scenarioAudioUrl,
           audioStoryMode: String(scenarioSelected?.audioStoryMode || ""),
         },
       });
@@ -10246,6 +10267,14 @@ Aspect ratio: ${imageFormat}`,
       const outEndSec = Number(out?.endSec ?? out?.t1 ?? endSec);
       const durationSec = normalizeDurationSec(out?.durationSec ?? out?.audioSliceBackendDurationSec ?? out?.duration);
       const expectedDuration = Math.max(0, outEndSec - outStartSec);
+      console.debug("[SCENARIO AUDIO SLICE RESPONSE]", {
+        ok: Boolean(out?.ok),
+        sceneId,
+        sliceUrl: String(out?.audioSliceUrl || out?.sliceUrl || ""),
+        usedAudioUrl: String(out?.audioUrl || scenarioAudioUrl || ""),
+        actualDurationSec: durationSec,
+        error: "",
+      });
       updateScenarioScene(idx, {
         audioSliceUrl: String(out.audioSliceUrl || ""),
         audioSliceStartSec: outStartSec,
@@ -10266,6 +10295,14 @@ Aspect ratio: ${imageFormat}`,
     } catch (e) {
       console.error(e);
       const msg = String(e?.message || e || "audio_slice_failed");
+      console.debug("[SCENARIO AUDIO SLICE RESPONSE]", {
+        ok: false,
+        sceneId,
+        sliceUrl: "",
+        usedAudioUrl: scenarioAudioUrl,
+        actualDurationSec: null,
+        error: msg,
+      });
       updateScenarioScene(idx, {
         audioSliceStatus: "error",
         audioSliceError: msg,
@@ -10275,7 +10312,7 @@ Aspect ratio: ${imageFormat}`,
     } finally {
       if (idx === scenarioEditor.selected) setScenarioAudioSliceLoading(false);
     }
-  }, [globalAudioUrlRaw, scenarioEditor.selected, scenarioScenes, scenarioSelected?.audioStoryMode, updateScenarioScene]);
+  }, [scenarioEditor.selected, scenarioFlowSourceNode, scenarioScenes, scenarioSelected?.audioStoryMode, updateScenarioScene]);
 
   const handleScenarioVideoTakeAudio = useCallback(async () => {
     if (!scenarioSelected) return;
@@ -10290,6 +10327,19 @@ Aspect ratio: ${imageFormat}`,
     const normalizedScenes = normalizeSceneCollectionWithSceneId(rawScenes, "scene");
     const sceneIndex = resolveScenarioSceneIndex(normalizedSceneId, normalizedScenes);
     if (sceneIndex < 0) throw new Error(`scene_not_found:${normalizedSceneId}`);
+    const selectedScene = normalizedScenes[sceneIndex] || {};
+    const selectedAudioUrl = resolveScenarioAudioSourceUrlFromNode(sourceNode, nodesRef.current || []);
+    const audioNodeUrl = extractGlobalAudioUrlFromNodes(nodesRef.current || []);
+    console.debug("[SCENARIO PHRASE PREVIEW CLICK]", {
+      sceneId: normalizedSceneId,
+      phraseText: String(selectedScene?.localPhrase || selectedScene?.sceneText || "").trim(),
+      sceneAudioSliceStart: Number(selectedScene?.audioSliceStartSec ?? selectedScene?.t0 ?? selectedScene?.start ?? 0),
+      sceneAudioSliceEnd: Number(selectedScene?.audioSliceEndSec ?? selectedScene?.t1 ?? selectedScene?.end ?? 0),
+      selectedAudioUrl,
+      audioNodeUrl,
+      scenarioNodeId: String(nodeId || ""),
+      sourceNodeId: String(sourceNode?.id || ""),
+    });
     await handleScenarioTakeAudioByIndex(sceneIndex);
     const refreshedNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === nodeId && nodeItem?.type === "scenarioStoryboard") || null;
     const refreshedScenes = normalizeSceneCollectionWithSceneId(Array.isArray(refreshedNode?.data?.scenes) ? refreshedNode.data.scenes : [], "scene");
