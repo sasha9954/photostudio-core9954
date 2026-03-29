@@ -10206,10 +10206,34 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoOpen(false);
   }, [clearActiveVideoJob, scenarioSelected, scenarioSelectedIndex, updateScenarioScene]);
 
-  const handleScenarioTakeAudioByIndex = useCallback(async (idx) => {
+  const handleScenarioTakeAudioByIndex = useCallback(async (idx, options = {}) => {
     const scene = scenarioScenes[idx] || null;
     if (!scene) return;
-    const scenarioAudioUrl = resolveScenarioAudioSourceUrlFromNode(scenarioFlowSourceNode, nodesRef.current || []);
+    const explicitAudioUrl = String(options?.audioUrl || "").trim();
+    const explicitSourceNode = options?.sourceNode || null;
+    const explicitSourceNodeAudioUrl = explicitSourceNode
+      ? String(resolveScenarioAudioSourceUrlFromNode(explicitSourceNode, nodesRef.current || []) || "").trim()
+      : "";
+    const scenarioFlowAudioUrl = String(resolveScenarioAudioSourceUrlFromNode(scenarioFlowSourceNode, nodesRef.current || []) || "").trim();
+    const globalAudioUrl = String(extractGlobalAudioUrlFromNodes(nodesRef.current || []) || "").trim();
+    const scenarioAudioUrl = explicitAudioUrl || explicitSourceNodeAudioUrl || scenarioFlowAudioUrl || globalAudioUrl;
+    const sourceKind = explicitAudioUrl
+      ? "explicit_audio_url"
+      : explicitSourceNodeAudioUrl
+        ? "explicit_source_node"
+        : scenarioFlowAudioUrl
+          ? "scenario_flow_source_node"
+          : globalAudioUrl
+            ? "global_audio_node"
+            : "missing";
+    const sceneId = String(scene?.sceneId || "").trim();
+    console.debug("[SCENARIO AUDIO SOURCE RESOLVED]", {
+      sceneId,
+      source: sourceKind,
+      resolvedAudioUrl: scenarioAudioUrl,
+      scenarioNodeId: String(scenarioFlowSourceNode?.id || ""),
+      overrideNodeId: String(explicitSourceNode?.id || ""),
+    });
     if (!scenarioAudioUrl) {
       const msg = "Не найден актуальный audioUrl для Scenario";
       updateScenarioScene(idx, {
@@ -10221,7 +10245,6 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
 
-    const sceneId = String(scene?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
     const startSec = Number(scene.t0 ?? scene.start ?? 0);
     const endSec = Number(scene.t1 ?? scene.end ?? 0);
@@ -10340,7 +10363,10 @@ Aspect ratio: ${imageFormat}`,
       scenarioNodeId: String(nodeId || ""),
       sourceNodeId: String(sourceNode?.id || ""),
     });
-    await handleScenarioTakeAudioByIndex(sceneIndex);
+    await handleScenarioTakeAudioByIndex(sceneIndex, {
+      audioUrl: selectedAudioUrl,
+      sourceNode,
+    });
     const refreshedNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === nodeId && nodeItem?.type === "scenarioStoryboard") || null;
     const refreshedScenes = normalizeSceneCollectionWithSceneId(Array.isArray(refreshedNode?.data?.scenes) ? refreshedNode.data.scenes : [], "scene");
     const refreshedScene = refreshedScenes[sceneIndex] || null;
