@@ -4868,9 +4868,32 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
     )
     next_scenes: list[ScenarioDirectorScene] = []
     split_events: list[str] = []
+    split_id_counters: dict[str, int] = {}
     preferred_min = 3.0
     preferred_max = 6.0
     hard_max = 8.0
+
+    def _sync_chunk_timing_fields(chunk_data: dict[str, Any]) -> dict[str, Any]:
+        chunk_start = _safe_float(chunk_data.get("time_start"), 0.0)
+        chunk_end = max(chunk_start, _safe_float(chunk_data.get("time_end"), chunk_start))
+        chunk_duration = round(max(0.0, chunk_end - chunk_start), 3)
+        chunk_data["time_start"] = round(chunk_start, 3)
+        chunk_data["time_end"] = round(chunk_end, 3)
+        chunk_data["duration"] = chunk_duration
+        chunk_data["requested_duration_sec"] = chunk_duration
+        chunk_data["audio_slice_start_sec"] = round(chunk_start, 3)
+        chunk_data["audio_slice_end_sec"] = round(chunk_end, 3)
+        chunk_data["audio_slice_expected_duration_sec"] = chunk_duration
+        return chunk_data
+
+    def _next_split_scene_id(base_scene_id: str) -> str:
+        base = str(base_scene_id or "S").strip() or "S"
+        index = split_id_counters.get(base, 0) + 1
+        split_id_counters[base] = index
+        if index <= 26:
+            return f"{base}_{chr(64 + index)}"
+        return f"{base}_{index}"
+
     for scene in scenes:
         start = _safe_float(scene.time_start, 0.0)
         end = max(start, _safe_float(scene.time_end, start))
@@ -4912,7 +4935,7 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             chunk_duration = max(0.0, chunk_end - chunk_start)
             must_split = chunk_duration > preferred_max or (duration > hard_max and split_idx == 0)
             if not must_split:
-                chunk_data["duration"] = round(chunk_duration, 3)
+                chunk_data = _sync_chunk_timing_fields(chunk_data)
                 scene_chunks.append(ScenarioDirectorScene.model_validate(chunk_data))
                 continue
             split_at, split_kind = _pick_generation_split_point(
@@ -4923,13 +4946,15 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 boundaries=boundaries,
             )
             if split_at is None or split_at <= chunk_start or split_at >= chunk_end:
-                chunk_data["duration"] = round(chunk_duration, 3)
+                chunk_data = _sync_chunk_timing_fields(chunk_data)
                 scene_chunks.append(ScenarioDirectorScene.model_validate(chunk_data))
                 continue
-            left_id = f"{scene.scene_id}_{chr(65 + min(split_idx * 2, 25))}"
-            right_id = f"{scene.scene_id}_{chr(66 + min(split_idx * 2, 24))}"
+            left_id = _next_split_scene_id(scene.scene_id)
+            right_id = _next_split_scene_id(scene.scene_id)
             left_data = {**chunk_data, "scene_id": left_id, "time_start": chunk_start, "time_end": split_at, "duration": round(max(0.0, split_at - chunk_start), 3)}
             right_data = {**chunk_data, "scene_id": right_id, "time_start": split_at, "time_end": chunk_end, "duration": round(max(0.0, chunk_end - split_at), 3)}
+            left_data = _sync_chunk_timing_fields(left_data)
+            right_data = _sync_chunk_timing_fields(right_data)
             if phrase_chunks:
                 pivot = max(1, len(phrase_chunks) // 2)
                 left_data["local_phrase"] = " ".join(phrase_chunks[:pivot]).strip() or left_data.get("local_phrase")
@@ -4947,11 +4972,14 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
     logger.info("[SCENARIO CHUNKING] generation_scenes=%s split_events=%s", len(next_scenes), split_events or ["none"])
     for chunk in next_scenes:
         logger.info(
-            "[SCENARIO CHUNK SPLIT] sceneId=%s start=%.3f end=%.3f duration=%.3f boundary=%s",
+            "[SCENARIO CHUNK SPLIT] sceneId=%s start=%.3f end=%.3f duration=%.3f requested=%.3f audioSlice=[%.3f,%.3f] boundary=%s",
             chunk.scene_id,
             _safe_float(chunk.time_start, 0.0),
             _safe_float(chunk.time_end, 0.0),
-            max(0.0, _safe_float(chunk.time_end, 0.0) - _safe_float(chunk.time_start, 0.0)),
+            _safe_float(chunk.duration, max(0.0, _safe_float(chunk.time_end, 0.0) - _safe_float(chunk.time_start, 0.0))),
+            _safe_float(chunk.requested_duration_sec, 0.0),
+            _safe_float(chunk.audio_slice_start_sec, 0.0),
+            _safe_float(chunk.audio_slice_end_sec, 0.0),
             str(chunk.boundary_reason or ""),
         )
     storyboard_out.scenes = next_scenes
