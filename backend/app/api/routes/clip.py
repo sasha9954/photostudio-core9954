@@ -1392,6 +1392,21 @@ def _normalize_source_image_url_for_kie(source_image_url: str) -> str:
     return _asset_url(filename)
 
 
+def _normalize_clip_video_source_url(source_url: str) -> str:
+    source = str(source_url or "").strip()
+    if not source:
+        return ""
+    if source.startswith("data:") or source.startswith("http://") or source.startswith("https://"):
+        return source
+    if source.startswith("/static/assets/"):
+        filename = os.path.basename(source[len("/static/assets/"):])
+        return _asset_url(filename) if filename else source
+    if source.startswith("static/assets/"):
+        filename = os.path.basename(source[len("static/assets/"):])
+        return _asset_url(filename) if filename else source
+    return source
+
+
 def _prepare_provider_image_url(source_url: str) -> tuple[str, str | None]:
     source = str(source_url or "").strip()
     if not source:
@@ -9968,6 +9983,25 @@ def clip_video(payload: ClipVideoIn):
     image_url = str(payload.imageUrl or "").strip()
     start_image_url = str(payload.startImageUrl or "").strip()
     end_image_url = str(payload.endImageUrl or "").strip()
+    raw_clip_video_source_urls = {
+        "imageUrl": image_url,
+        "startImageUrl": start_image_url,
+        "endImageUrl": end_image_url,
+        "audioSliceUrl": audio_slice_url,
+        "continuationSourceAssetUrl": continuation_source_asset_url,
+    }
+    image_url = _normalize_clip_video_source_url(image_url)
+    start_image_url = _normalize_clip_video_source_url(start_image_url)
+    end_image_url = _normalize_clip_video_source_url(end_image_url)
+    audio_slice_url = _normalize_clip_video_source_url(audio_slice_url)
+    continuation_source_asset_url = _normalize_clip_video_source_url(continuation_source_asset_url)
+    normalized_clip_video_source_urls = {
+        "imageUrl": image_url,
+        "startImageUrl": start_image_url,
+        "endImageUrl": end_image_url,
+        "audioSliceUrl": audio_slice_url,
+        "continuationSourceAssetUrl": continuation_source_asset_url,
+    }
     output_format = str(payload.format or "9:16").strip() or "9:16"
     explicit_model = str(payload.resolvedModelKey or "").strip().lower()
     explicit_model_override = _resolve_model_key_from_override(payload.modelFileOverride)
@@ -10135,6 +10169,20 @@ def clip_video(payload: ClipVideoIn):
 
     if provider == "comfy_remote":
         source_image_url = image_url or start_image_url or end_image_url
+        print(
+            "[CLIP VIDEO SOURCE URL] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "provider": provider,
+                    "renderMode": render_mode,
+                    "resolvedWorkflowKey": final_workflow_key,
+                    "raw": raw_clip_video_source_urls,
+                    "normalized": normalized_clip_video_source_urls,
+                },
+                ensure_ascii=False,
+            )
+        )
         if not source_image_url:
             return JSONResponse(
                 status_code=400,
@@ -10177,8 +10225,51 @@ def clip_video(payload: ClipVideoIn):
         )
 
         try:
+            print(
+                "[CLIP VIDEO DOWNLOAD] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "provider": provider,
+                        "mode": mode,
+                        "stage": "primary",
+                        "sourceUrl": source_image_url,
+                    },
+                    ensure_ascii=False,
+                )
+            )
             image_bytes, image_ext = _download_image_from_source(source_image_url)
+            print(
+                "[CLIP VIDEO DOWNLOAD] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "provider": provider,
+                        "mode": mode,
+                        "stage": "primary",
+                        "sourceUrl": source_image_url,
+                        "status": "success",
+                        "bytes": len(image_bytes or b""),
+                    },
+                    ensure_ascii=False,
+                )
+            )
         except Exception as exc:
+            print(
+                "[CLIP VIDEO DOWNLOAD] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "provider": provider,
+                        "mode": mode,
+                        "stage": "primary",
+                        "sourceUrl": source_image_url,
+                        "status": "fail",
+                        "error": str(exc)[:300],
+                    },
+                    ensure_ascii=False,
+                )
+            )
             return JSONResponse(
                 status_code=400,
                 content={"ok": False, "code": "comfy_upload_failed", "hint": f"image_download_failed:{str(exc)[:240]}"},
@@ -10194,11 +10285,97 @@ def clip_video(payload: ClipVideoIn):
                 )
             try:
                 if start_image_url:
+                    print(
+                        "[CLIP VIDEO DOWNLOAD] "
+                        + json.dumps(
+                            {
+                                "sceneId": scene_id,
+                                "provider": provider,
+                                "mode": mode,
+                                "stage": "first_last_start",
+                                "sourceUrl": start_image_url,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
                     start_image_bytes, _ = _download_image_from_source(start_image_url)
+                    print(
+                        "[CLIP VIDEO DOWNLOAD] "
+                        + json.dumps(
+                            {
+                                "sceneId": scene_id,
+                                "provider": provider,
+                                "mode": mode,
+                                "stage": "first_last_start",
+                                "sourceUrl": start_image_url,
+                                "status": "success",
+                                "bytes": len(start_image_bytes or b""),
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
                 else:
                     start_image_bytes = image_bytes
+                    print(
+                        "[CLIP VIDEO DOWNLOAD] "
+                        + json.dumps(
+                            {
+                                "sceneId": scene_id,
+                                "provider": provider,
+                                "mode": mode,
+                                "stage": "first_last_start",
+                                "sourceUrl": source_image_url,
+                                "status": "reused_primary",
+                                "bytes": len(start_image_bytes or b""),
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                print(
+                    "[CLIP VIDEO DOWNLOAD] "
+                    + json.dumps(
+                        {
+                            "sceneId": scene_id,
+                            "provider": provider,
+                            "mode": mode,
+                            "stage": "first_last_end",
+                            "sourceUrl": end_image_url,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
                 end_image_bytes, _ = _download_image_from_source(end_image_url)
+                print(
+                    "[CLIP VIDEO DOWNLOAD] "
+                    + json.dumps(
+                        {
+                            "sceneId": scene_id,
+                            "provider": provider,
+                            "mode": mode,
+                            "stage": "first_last_end",
+                            "sourceUrl": end_image_url,
+                            "status": "success",
+                            "bytes": len(end_image_bytes or b""),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
             except Exception as exc:
+                print(
+                    "[CLIP VIDEO DOWNLOAD] "
+                    + json.dumps(
+                        {
+                            "sceneId": scene_id,
+                            "provider": provider,
+                            "mode": mode,
+                            "stage": "first_last",
+                            "sourceUrl": start_image_url or end_image_url,
+                            "status": "fail",
+                            "error": str(exc)[:300],
+                        },
+                        ensure_ascii=False,
+                    )
+                )
                 return JSONResponse(
                     status_code=400,
                     content={"ok": False, "code": "VIDEO_SOURCE_IMAGE_REQUIRED", "hint": f"first_last_image_download_failed:{str(exc)[:240]}"},
@@ -10244,6 +10421,23 @@ def clip_video(payload: ClipVideoIn):
                 ensure_ascii=False,
             )
         )
+        print(
+            "[CLIP VIDEO COMFY SUBMIT] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "provider": provider,
+                    "mode": mode,
+                    "resolvedWorkflowKey": final_workflow_key,
+                    "workflowFile": workflow_path,
+                    "stage": "before_upload_prompt_submit",
+                    "hasPrimaryImage": bool(image_bytes),
+                    "hasStartImage": bool(start_image_bytes),
+                    "hasEndImage": bool(end_image_bytes),
+                },
+                ensure_ascii=False,
+            )
+        )
 
         comfy_out, comfy_err = run_comfy_image_to_video(
             image_bytes=image_bytes,
@@ -10266,6 +10460,21 @@ def clip_video(payload: ClipVideoIn):
         )
         if comfy_err or not comfy_out:
             err_text = str(comfy_err or "comfy_remote_failed")
+            print(
+                "[CLIP VIDEO COMFY SUBMIT] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "provider": provider,
+                        "mode": mode,
+                        "resolvedWorkflowKey": final_workflow_key,
+                        "workflowFile": workflow_path,
+                        "stage": "failed",
+                        "error": err_text[:300],
+                    },
+                    ensure_ascii=False,
+                )
+            )
             code = "comfy_unreachable"
             status_code = 500
             if err_text.startswith("capability_error:"):
@@ -10329,6 +10538,23 @@ def clip_video(payload: ClipVideoIn):
             elif "workflow_" in err_text or "missing_node" in err_text or "missing_input" in err_text:
                 code = "comfy_invalid_workflow"
             return JSONResponse(status_code=status_code, content={"ok": False, "code": code, "hint": err_text[:300]})
+        print(
+            "[CLIP VIDEO COMFY SUBMIT] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "provider": provider,
+                    "mode": mode,
+                    "resolvedWorkflowKey": final_workflow_key,
+                    "workflowFile": workflow_path,
+                    "stage": "success",
+                    "uploadReached": True,
+                    "promptSubmitReached": True,
+                    "jobId": str(comfy_out.get("taskId") or ""),
+                },
+                ensure_ascii=False,
+            )
+        )
 
         video_url = str(comfy_out.get("videoUrl") or "").strip()
         prompt_id = str(comfy_out.get("taskId") or "").strip()

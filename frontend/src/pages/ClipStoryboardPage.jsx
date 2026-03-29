@@ -2056,6 +2056,14 @@ function resolveAssetUrl(url) {
   return raw;
 }
 
+function normalizeVideoSourceUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("data:") || /^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("/static/") || raw.startsWith("static/")) return String(resolveAssetUrl(raw) || "").trim();
+  return raw;
+}
+
 const SCENE_IMAGE_FORMATS = ["9:16", "1:1", "16:9"];
 const DEFAULT_SCENE_IMAGE_FORMAT = "9:16";
 const USE_COMFY_MOCK = false;
@@ -8917,11 +8925,36 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         hasExistingVideo: Boolean(String(comfySelectedScene.videoUrl || '').trim()),
         hasActiveSceneJob: comfyHasActiveVideoJobForScene,
       });
+      const rawVideoSourceUrls = {
+        imageUrl: String(comfySceneSnapshot.imageUrl || "").trim(),
+        startImageUrl: String(comfySceneSnapshot.startImageUrl || comfySceneSnapshot.startFrameImageUrl || "").trim(),
+        endImageUrl: String(comfySceneSnapshot.endImageUrl || comfySceneSnapshot.endFrameImageUrl || "").trim(),
+        audioSliceUrl: String(comfySceneSnapshot.audioSliceUrl || "").trim(),
+        continuationSourceAssetUrl: String(comfySceneSnapshot.continuationSourceAssetUrl || "").trim(),
+      };
+      const normalizedVideoSourceUrls = {
+        imageUrl: normalizeVideoSourceUrl(rawVideoSourceUrls.imageUrl),
+        startImageUrl: normalizeVideoSourceUrl(rawVideoSourceUrls.startImageUrl),
+        endImageUrl: normalizeVideoSourceUrl(rawVideoSourceUrls.endImageUrl),
+        audioSliceUrl: normalizeVideoSourceUrl(rawVideoSourceUrls.audioSliceUrl),
+        continuationSourceAssetUrl: normalizeVideoSourceUrl(rawVideoSourceUrls.continuationSourceAssetUrl),
+      };
+      console.debug("[SCENARIO VIDEO URL NORMALIZE]", {
+        sceneId,
+        provider: "comfy_remote",
+        renderMode: "standard_video",
+        original: rawVideoSourceUrls,
+        normalized: normalizedVideoSourceUrls,
+      });
       const out = await fetchJson('/api/clip/video/start', {
         method: 'POST',
         body: {
           sceneId,
-          imageUrl: String(comfySceneSnapshot.imageUrl || ''),
+          imageUrl: normalizedVideoSourceUrls.imageUrl,
+          startImageUrl: normalizedVideoSourceUrls.startImageUrl,
+          endImageUrl: normalizedVideoSourceUrls.endImageUrl,
+          audioSliceUrl: normalizedVideoSourceUrls.audioSliceUrl,
+          continuationSourceAssetUrl: normalizedVideoSourceUrls.continuationSourceAssetUrl,
           videoPrompt: syncedVideoPrompt,
           transitionActionPrompt: contextPrompt,
           requestedDurationSec: Number(comfySceneSnapshot.generationDurationSec) || Math.ceil(Number(comfySceneSnapshot.durationSec) || 3),
@@ -9051,7 +9084,11 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         method: 'POST',
         body: {
           sceneId,
-          imageUrl: String(comfySelectedScene.imageUrl || ''),
+          imageUrl: normalizedVideoSourceUrls.imageUrl,
+          startImageUrl: normalizedVideoSourceUrls.startImageUrl,
+          endImageUrl: normalizedVideoSourceUrls.endImageUrl,
+          audioSliceUrl: normalizedVideoSourceUrls.audioSliceUrl,
+          continuationSourceAssetUrl: normalizedVideoSourceUrls.continuationSourceAssetUrl,
           videoPrompt: syncedVideoPrompt,
           transitionActionPrompt: contextPrompt,
           requestedDurationSec: Number(comfySelectedScene.generationDurationSec) || Math.ceil(Number(comfySelectedScene.durationSec) || 3),
@@ -10391,6 +10428,27 @@ Aspect ratio: ${imageFormat}`,
       : (requiresContinuation
         ? (resolvedFirstFrameUrl || resolvedLastFrameUrl || frameImageUrl || "")
         : (frameImageUrl || ""));
+    const rawScenarioVideoSourceUrls = {
+      imageUrl: String(sourceImageUrl || "").trim(),
+      startImageUrl: String(resolvedFirstFrameUrl || "").trim(),
+      endImageUrl: String(resolvedLastFrameUrl || "").trim(),
+      audioSliceUrl: String(shouldAttachAudioSlice ? attachedAudioSliceUrl : "").trim(),
+      continuationSourceAssetUrl: String(continuationSourceAssetUrl || "").trim(),
+    };
+    const normalizedScenarioVideoSourceUrls = {
+      imageUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.imageUrl),
+      startImageUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.startImageUrl),
+      endImageUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.endImageUrl),
+      audioSliceUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.audioSliceUrl),
+      continuationSourceAssetUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.continuationSourceAssetUrl),
+    };
+    console.debug("[SCENARIO VIDEO URL NORMALIZE]", {
+      sceneId,
+      provider: String(effectiveVideoProvider || ""),
+      renderMode: String(effectiveRenderMode || ""),
+      original: rawScenarioVideoSourceUrls,
+      normalized: normalizedScenarioVideoSourceUrls,
+    });
     const sourceImageStrategy = requiresTwoFrames
       ? "first_last_frames"
       : (requiresContinuation ? "continuation_previous_frame" : "single_image");
@@ -10492,10 +10550,10 @@ Aspect ratio: ${imageFormat}`,
       }
       const videoStartPayload = {
         sceneId,
-        imageUrl: sourceImageUrl,
-        startImageUrl: resolvedFirstFrameUrl,
-        endImageUrl: resolvedLastFrameUrl,
-        audioSliceUrl: shouldAttachAudioSlice ? attachedAudioSliceUrl : "",
+        imageUrl: normalizedScenarioVideoSourceUrls.imageUrl,
+        startImageUrl: normalizedScenarioVideoSourceUrls.startImageUrl,
+        endImageUrl: normalizedScenarioVideoSourceUrls.endImageUrl,
+        audioSliceUrl: normalizedScenarioVideoSourceUrls.audioSliceUrl,
         external_audio_used: shouldAttachAudioSlice,
         external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
         videoPrompt: finalVideoPrompt,
@@ -10516,7 +10574,7 @@ Aspect ratio: ${imageFormat}`,
         requiresAudioSensitiveVideo,
         continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? requiresContinuation),
         continuationSourceSceneId,
-        continuationSourceAssetUrl,
+        continuationSourceAssetUrl: normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl,
         continuationSourceAssetType,
         shotType: targetScene.shotType || "",
         sceneType: targetScene.sceneType || "",
@@ -10617,10 +10675,10 @@ Aspect ratio: ${imageFormat}`,
       // Fallback for environments where async endpoints are not available yet.
       const legacyPayload = {
         sceneId,
-        imageUrl: sourceImageUrl,
-        startImageUrl: resolvedFirstFrameUrl,
-        endImageUrl: resolvedLastFrameUrl,
-        audioSliceUrl: shouldAttachAudioSlice ? attachedAudioSliceUrl : "",
+        imageUrl: normalizedScenarioVideoSourceUrls.imageUrl,
+        startImageUrl: normalizedScenarioVideoSourceUrls.startImageUrl,
+        endImageUrl: normalizedScenarioVideoSourceUrls.endImageUrl,
+        audioSliceUrl: normalizedScenarioVideoSourceUrls.audioSliceUrl,
         external_audio_used: shouldAttachAudioSlice,
         external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
         videoPrompt: finalVideoPrompt,
@@ -10640,7 +10698,7 @@ Aspect ratio: ${imageFormat}`,
         requiresAudioSensitiveVideo,
         continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? requiresContinuation),
         continuationSourceSceneId,
-        continuationSourceAssetUrl,
+        continuationSourceAssetUrl: normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl,
         continuationSourceAssetType,
         shotType: targetScene.shotType || "",
         sceneType: targetScene.sceneType || "",
