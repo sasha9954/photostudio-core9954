@@ -4245,6 +4245,51 @@ def _extract_lip_sync_text(scene: ScenarioDirectorScene) -> str:
     return " ".join(words[:8]).strip()
 
 
+def _scene_has_character_subject(scene: ScenarioDirectorScene) -> bool:
+    actors = {_normalize_scenario_role(actor) for actor in (scene.actors or [])}
+    return any(role in {"character_1", "character_2", "character_3"} for role in actors)
+
+
+def _is_environment_only_scene_contract(scene: ScenarioDirectorScene) -> bool:
+    dynamics = str(scene.scene_role_dynamics or "").strip().lower()
+    reason = str(scene.role_influence_reason or "").strip().lower()
+    has_actors = any(str(actor).strip() for actor in (scene.actors or []))
+    return (not has_actors) and (dynamics == "environment" or reason == "no_active_character_roles")
+
+
+def _detect_music_video_scene_actor_candidates(
+    scene: ScenarioDirectorScene,
+    *,
+    payload: dict[str, Any],
+    raw_scene: dict[str, Any] | None = None,
+) -> list[str]:
+    candidates: list[str] = []
+    for role in _collect_scene_active_character_roles(scene, payload=payload, raw_scene=raw_scene):
+        if role in {"character_1", "character_2", "character_3"} and role not in candidates:
+            candidates.append(role)
+    for role in _detect_expected_character_roles(payload):
+        if role in {"character_1", "character_2", "character_3"} and role not in candidates:
+            candidates.append(role)
+    if "character_1" not in candidates and _has_connected_ref_for_role(payload, "character_1"):
+        candidates.insert(0, "character_1")
+    if "character_1" not in candidates:
+        candidates.insert(0, "character_1")
+    return [role for role in candidates if role]
+
+
+def _downgrade_to_environment_establishing_note(scene: ScenarioDirectorScene) -> None:
+    scene.needs_two_frames = False
+    scene.lip_sync = False
+    scene.send_audio_to_generator = False
+    scene.render_mode = "image_video"
+    scene.resolved_workflow_key = "image-video"
+    scene.ltx_mode = "i2v"
+    scene.continuation_from_previous = False
+    scene.start_frame_source = "new"
+    scene.start_frame_prompt = ""
+    scene.end_frame_prompt = ""
+
+
 def _apply_music_video_mode_policy(
     storyboard_out: ScenarioDirectorStoryboardOut,
     *,
@@ -4268,6 +4313,7 @@ def _apply_music_video_mode_policy(
     prev_lip_sync = False
     prev_two_frames = False
     prev_shot_type = ""
+    kept_scenes: list[ScenarioDirectorScene] = []
     for index, scene in enumerate(scenes):
         shot_type = _infer_music_video_shot_type(scene)
         raw_scene = _find_raw_scene_payload(scene, payload)
@@ -4289,6 +4335,18 @@ def _apply_music_video_mode_policy(
             scene.requested_duration_sec = duration
         else:
             scene.requested_duration_sec = _safe_float(scene.requested_duration_sec, 0.0)
+        is_short_establishing_beat = duration <= 1.0
+        if not _scene_has_character_subject(scene):
+            actor_candidates = _detect_music_video_scene_actor_candidates(scene, payload=payload, raw_scene=raw_scene)
+            if actor_candidates:
+                scene.actors = [actor_candidates[0]]
+            elif not is_short_establishing_beat:
+                logger.warning(
+                    "[SCENARIO_DIRECTOR] dropped renderable music_video scene without subject scene_id=%s duration=%.3f",
+                    scene.scene_id,
+                    duration,
+                )
+                continue
 
         auto_sound_workflow_enabled = False
         has_sound_cue = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
@@ -4457,8 +4515,33 @@ def _apply_music_video_mode_policy(
         scene.send_audio_to_generator = send_audio_to_generator
         scene.performance_framing = performance_framing
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
+        if _is_environment_only_scene_contract(scene):
+            _downgrade_to_environment_establishing_note(scene)
+            workflow_reason = "Environment-only scene cannot use first_last/lip_sync in music_video; downgraded to short establishing note."
+            scene.ltx_reason = _normalize_ltx_reason(workflow_reason, scene.ltx_mode, narration_mode=scene.narration_mode)
         if forced_transition_scene:
             scene.scene_purpose = "transition"
+        renderable_mode = str(scene.ltx_mode or "").strip().lower() in {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync"}
+        if renderable_mode and not _scene_has_character_subject(scene):
+            if is_short_establishing_beat:
+                _downgrade_to_environment_establishing_note(scene)
+                scene.image_prompt = _join_visible_prompt_parts(
+                    [str(scene.location or "").strip(), str(scene.frame_description or scene.scene_goal or "").strip()]
+                )
+                scene.video_prompt = _join_visible_prompt_parts([str(scene.camera or "").strip(), "Short atmospheric establishing beat"])
+                scene.workflow_decision_reason = (
+                    "Short environment establishing beat allowed without actor; render contract blocks first_last/lip_sync."
+                )
+                kept_scenes.append(scene)
+                prev_lip_sync = False
+                prev_two_frames = False
+                prev_shot_type = str(scene.shot_type or shot_type)
+                continue
+            logger.warning(
+                "[SCENARIO_DIRECTOR] dropped music_video scene without character subject after remediation scene_id=%s",
+                scene.scene_id,
+            )
+            continue
         identity_lock = _build_multi_character_identity_lock(scene, payload)
         genre_intent = _resolve_director_genre_intent(payload, scene)
         scene.image_prompt = _build_music_video_image_prompt(scene)
@@ -4542,9 +4625,11 @@ def _apply_music_video_mode_policy(
             scene.audio_slice_end_sec = fallback_end
             scene.audio_slice_expected_duration_sec = round(max(0.0, fallback_end - fallback_start), 3)
 
-        prev_lip_sync = lip_sync
-        prev_two_frames = needs_two_frames
+        prev_lip_sync = bool(scene.lip_sync)
+        prev_two_frames = bool(scene.needs_two_frames)
         prev_shot_type = str(scene.shot_type or shot_type)
+        kept_scenes.append(scene)
+    storyboard_out.scenes = kept_scenes
     return storyboard_out
 
 
