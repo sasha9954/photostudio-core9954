@@ -190,6 +190,8 @@ function shouldTraceRoleContractScene(sceneId = "") {
   return String(sceneId || "").trim() === needle;
 }
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
+const VIDEO_START_TIMEOUT_MS = 25_000;
+const VIDEO_STATUS_TIMEOUT_MS = 15_000;
 const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
   "no change in lighting style",
   "no change in color grading",
@@ -7612,7 +7614,10 @@ const comfyShowVideoSection = Boolean(
           jobId: String(activeMeta.jobId || ""),
           endpoint: `/api/clip/video/status/${encodeURIComponent(activeMeta.jobId)}`,
         });
-        const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(activeMeta.jobId)}`, { method: "GET" });
+        const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(activeMeta.jobId)}`, {
+          method: "GET",
+          timeoutMs: VIDEO_STATUS_TIMEOUT_MS,
+        });
         console.info("[SCENARIO VIDEO POLL RESPONSE]", {
           sceneId,
           jobId: String(activeMeta.jobId || ""),
@@ -8385,7 +8390,10 @@ const comfyShowVideoSection = Boolean(
             status: String(activeMeta?.status || ""),
           });
         }
-        const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(activeMeta.jobId)}`, { method: "GET" });
+        const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(activeMeta.jobId)}`, {
+          method: "GET",
+          timeoutMs: VIDEO_STATUS_TIMEOUT_MS,
+        });
         const activeMetaNow = comfyVideoJobsBySceneRef.current.get(sceneId);
         if (!activeMetaNow?.jobId || String(activeMetaNow.jobId) !== String(activeMeta.jobId)) {
           return;
@@ -8646,7 +8654,10 @@ const comfyShowVideoSection = Boolean(
           videoStatus: normalizedMeta.status,
           videoError: "",
         });
-        fetchJson(`/api/clip/video/status/${encodeURIComponent(persistedJobId)}`, { method: "GET" })
+        fetchJson(`/api/clip/video/status/${encodeURIComponent(persistedJobId)}`, {
+          method: "GET",
+          timeoutMs: VIDEO_STATUS_TIMEOUT_MS,
+        })
           .then((out) => {
             const status = String(out?.status || "").toLowerCase();
             if (status === "done") {
@@ -9001,6 +9012,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       });
       const out = await fetchJson('/api/clip/video/start', {
         method: 'POST',
+        timeoutMs: VIDEO_START_TIMEOUT_MS,
         body: {
           sceneId,
           imageUrl: normalizedVideoSourceUrls.imageUrl,
@@ -9062,7 +9074,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
 
         let shouldStartPolling = true;
         try {
-          const immediateOut = await fetchJson(`/api/clip/video/status/${encodeURIComponent(startedMeta.jobId)}`, { method: "GET" });
+          const immediateOut = await fetchJson(`/api/clip/video/status/${encodeURIComponent(startedMeta.jobId)}`, {
+            method: "GET",
+            timeoutMs: VIDEO_STATUS_TIMEOUT_MS,
+          });
           const immediateStatus = String(immediateOut?.status || "").toLowerCase() || "running";
           if (immediateStatus === "done" && String(immediateOut?.videoUrl || "").trim()) {
             const immediateVideoUrl = String(immediateOut.videoUrl || '').trim();
@@ -10670,9 +10685,25 @@ Aspect ratio: ${imageFormat}`,
         sceneId,
         effectiveVideoPromptLength: finalVideoPrompt.length,
       });
+      console.info("[SCENARIO VIDEO START INFO]", {
+        stage: "before_start_post",
+        sceneId,
+        endpoint,
+        timeoutMs: VIDEO_START_TIMEOUT_MS,
+      });
       const out = await fetchJson(endpoint, {
         method: "POST",
+        timeoutMs: VIDEO_START_TIMEOUT_MS,
         body: videoStartPayload,
+      });
+      console.info("[SCENARIO VIDEO START INFO]", {
+        stage: "after_start_post",
+        sceneId,
+        endpoint,
+        ok: Boolean(out?.ok),
+        jobId: String(out?.jobId || ""),
+        status: String(out?.status || ""),
+        code: String(out?.code || ""),
       });
       console.info("[SCENARIO VIDEO JOB]", {
         stage: "start_response",
@@ -10735,8 +10766,7 @@ Aspect ratio: ${imageFormat}`,
           sceneId,
           jobId: String(out.jobId || ""),
         });
-        updateScenarioScene(targetSceneIndex, { videoJobId: String(out.jobId), videoStatus: "queued", videoError: "" });
-        startScenarioVideoPolling({
+        const startedMeta = {
           jobId: String(out.jobId),
           providerJobId: String(out.providerJobId || ""),
           provider: String(out?.provider || effectiveVideoProvider),
@@ -10752,6 +10782,82 @@ Aspect ratio: ${imageFormat}`,
           continuationSourceAssetType,
           renderMode: effectiveRenderMode,
           status: "queued",
+        };
+        updateScenarioScene(targetSceneIndex, { videoJobId: startedMeta.jobId, videoStatus: "queued", videoError: "" });
+        let shouldStartPolling = true;
+        try {
+          console.info("[SCENARIO VIDEO STATUS INFO]", {
+            stage: "before_immediate_status_get",
+            sceneId,
+            jobId: startedMeta.jobId,
+            timeoutMs: VIDEO_STATUS_TIMEOUT_MS,
+          });
+          const immediateOut = await fetchJson(`/api/clip/video/status/${encodeURIComponent(startedMeta.jobId)}`, {
+            method: "GET",
+            timeoutMs: VIDEO_STATUS_TIMEOUT_MS,
+          });
+          const immediateStatus = String(immediateOut?.status || "").toLowerCase() || "running";
+          console.info("[SCENARIO VIDEO STATUS INFO]", {
+            stage: "after_immediate_status_get",
+            sceneId,
+            jobId: startedMeta.jobId,
+            ok: Boolean(immediateOut?.ok),
+            status: immediateStatus,
+            hasVideoUrl: Boolean(String(immediateOut?.videoUrl || "").trim()),
+            error: String(immediateOut?.error || immediateOut?.hint || immediateOut?.code || ""),
+          });
+          if (immediateStatus === "done" && String(immediateOut?.videoUrl || "").trim()) {
+            updateScenarioScene(targetSceneIndex, {
+              videoUrl: String(immediateOut.videoUrl || ""),
+              mode: String(immediateOut.mode || ""),
+              model: String(immediateOut.model || ""),
+              requestedDurationSec: normalizeDurationSec(immediateOut.requestedDurationSec),
+              providerDurationSec: normalizeDurationSec(immediateOut.providerDurationSec),
+              videoStatus: "done",
+              videoError: "",
+              videoJobId: startedMeta.jobId,
+              videoPanelActivated: false,
+            });
+            clearActiveVideoJob(sceneId, { status: "done", jobId: startedMeta.jobId });
+            console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
+            openNextSceneWithoutVideo(targetSceneIndex);
+            shouldStartPolling = false;
+          } else if (immediateStatus === "error" || immediateStatus === "stopped" || immediateStatus === "not_found") {
+            updateScenarioScene(targetSceneIndex, {
+              videoStatus: immediateStatus,
+              videoError: String(immediateOut?.error || immediateOut?.hint || "video_job_failed"),
+              videoJobId: startedMeta.jobId,
+              videoPanelActivated: false,
+            });
+            clearActiveVideoJob(sceneId, { status: immediateStatus, jobId: startedMeta.jobId });
+            console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: immediateStatus, videoPanelActivatedAfterApply: false });
+            shouldStartPolling = false;
+          } else {
+            updateScenarioScene(targetSceneIndex, {
+              videoStatus: immediateStatus,
+              videoError: "",
+              videoJobId: startedMeta.jobId,
+            });
+          }
+        } catch (immediateStatusError) {
+          const message = String(immediateStatusError?.message || immediateStatusError || "");
+          const statusLogLevel = message.toLowerCase().includes("timeout") ? "timeout" : "status";
+          console.warn("[SCENARIO VIDEO STATUS INFO]", {
+            stage: "immediate_status_error",
+            sceneId,
+            jobId: startedMeta.jobId,
+            type: statusLogLevel,
+            error: message,
+          });
+        }
+        if (!shouldStartPolling) return;
+        console.info("[SCENARIO VIDEO POLLING INFO]", {
+          stage: "start_polling_transition",
+          sceneId,
+          jobId: startedMeta.jobId,
+        });
+        startScenarioVideoPolling({
+          ...startedMeta,
         });
         return;
       }
@@ -10832,11 +10938,19 @@ Aspect ratio: ${imageFormat}`,
       openNextSceneWithoutVideo(targetSceneIndex);
     } catch (e) {
       console.error(e);
+      const errorMessage = String(e?.message || e || "");
+      const errorType = errorMessage.toLowerCase().includes("timeout") ? "timeout" : "start";
+      console.warn("[SCENARIO VIDEO START INFO]", {
+        stage: "start_or_status_error",
+        sceneId,
+        type: errorType,
+        error: errorMessage,
+      });
       setScenarioVideoError(String(e?.message || e));
       updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e), videoPanelActivated: false });
       console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "error", videoPanelActivatedAfterApply: false });
     }
-  }, [openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
+  }, [clearActiveVideoJob, openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");

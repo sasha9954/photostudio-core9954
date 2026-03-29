@@ -20,22 +20,56 @@ function formatApiError(res, data){
 }
 
 export const API_BASE = `http://${window.location.hostname}:8000`;
-export async function fetchJson(path,{method="GET",headers={},body,signal}={}){
-  const res = await fetch(`${API_BASE}${path}`,{
-    credentials: "include",
-    method,
-    signal,
-    headers: {"Content-Type":"application/json",...headers},
-    body: body?JSON.stringify(body):undefined
-  });
-  const text = await res.text();
-  let data=null;
-  try{ data = text?JSON.parse(text):null; }catch{ data={raw:text}; }
-  if(!res.ok){
-    // FastAPI часто возвращает {detail: ...}
-    const msg = formatApiError(res, data);
-    throw new Error(msg);
+export async function fetchJson(path,{method="GET",headers={},body,signal,timeoutMs=0}={}){
+  const timeoutValue = Number(timeoutMs);
+  const hasTimeout = Number.isFinite(timeoutValue) && timeoutValue > 0;
+  const timeoutController = hasTimeout ? new AbortController() : null;
+  const timeoutSignal = timeoutController?.signal;
+  const activeSignal = timeoutSignal || signal;
+  let timeoutId = null;
+  let signalAbortHandler = null;
+
+  if (timeoutController && signal) {
+    if (signal.aborted) {
+      timeoutController.abort(signal.reason);
+    } else {
+      signalAbortHandler = () => timeoutController.abort(signal.reason);
+      signal.addEventListener("abort", signalAbortHandler, { once: true });
+    }
   }
-  return data;
+
+  if (timeoutController && hasTimeout) {
+    timeoutId = window.setTimeout(() => {
+      timeoutController.abort(new Error(`timeout:${timeoutValue}`));
+    }, timeoutValue);
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}${path}`,{
+      credentials: "include",
+      method,
+      signal: activeSignal,
+      headers: {"Content-Type":"application/json",...headers},
+      body: body?JSON.stringify(body):undefined
+    });
+    const text = await res.text();
+    let data=null;
+    try{ data = text?JSON.parse(text):null; }catch{ data={raw:text}; }
+    if(!res.ok){
+      // FastAPI часто возвращает {detail: ...}
+      const msg = formatApiError(res, data);
+      throw new Error(msg);
+    }
+    return data;
+  } catch (error) {
+    const isTimeoutAbort = hasTimeout && (timeoutSignal?.aborted || false);
+    if (isTimeoutAbort) {
+      throw new Error(`Request timeout after ${timeoutValue}ms (${method} ${path})`);
+    }
+    throw error;
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+    if (signal && signalAbortHandler) signal.removeEventListener("abort", signalAbortHandler);
+  }
 }
 export async function health(){ return fetchJson("/api/health"); }

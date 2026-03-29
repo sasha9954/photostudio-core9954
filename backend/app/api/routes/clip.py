@@ -9816,7 +9816,14 @@ def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "out
 
 def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
     source_image_url = str(payload.imageUrl or payload.startImageUrl or payload.endImageUrl or "").strip()
-    print(f"[CLIP VIDEO JOB WORKER] start jobId={job_id} source_image_url={source_image_url}")
+    scene_id = str(payload.sceneId or "").strip() or "scene"
+    provider_name_hint = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
+    resolved_workflow_hint = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()) or "auto"
+    print(
+        "[CLIP VIDEO JOB WORKER] "
+        f"start sceneId={scene_id} jobId={job_id} provider={provider_name_hint} "
+        f"resolvedWorkflow={resolved_workflow_hint} source_image_url={source_image_url}"
+    )
     with CLIP_VIDEO_JOBS_LOCK:
         job = CLIP_VIDEO_JOBS.get(job_id)
         if not job:
@@ -9824,6 +9831,10 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
         job.update({"status": "running", "updatedAt": time.time()})
 
     try:
+        print(
+            "[CLIP VIDEO JOB WORKER] "
+            f"enter_clip_video sceneId={scene_id} jobId={job_id} provider={provider_name_hint} resolvedWorkflow={resolved_workflow_hint}"
+        )
         response_obj = clip_video(payload)
         out, status_code = _normalize_clip_video_response_payload(response_obj)
         status = "done" if status_code < 400 and bool(out.get("ok")) else "error"
@@ -9883,6 +9894,12 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
             )
             print(f"[CLIP VIDEO JOB WORKER] terminal_transition jobId={job_id} status=done final_video_url={video_url}")
             print(f"[CLIP VIDEO JOB WORKER] status_done jobId={job_id}")
+            print(
+                "[CLIP VIDEO JOB FINALIZE] "
+                f"sceneId={scene_id} jobId={job_id} provider={provider_name} "
+                f"resolvedWorkflow={str((out.get('debug') or {}).get('workflow_key') if isinstance(out.get('debug'), dict) else '') or resolved_workflow_hint} "
+                f"result=success"
+            )
         else:
             debug_payload = out.get("debug") if isinstance(out.get("debug"), dict) else {}
             second_frame_patch_applied = bool(
@@ -9905,11 +9922,16 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
             )
             print(
                 "[CLIP VIDEO JOB FINALIZE] "
-                f"jobId={job_id} status=error provider={provider_name} "
+                f"sceneId={scene_id} jobId={job_id} status=error provider={provider_name} "
+                f"resolvedWorkflow={str((out.get('debug') or {}).get('workflow_key') if isinstance(out.get('debug'), dict) else '') or resolved_workflow_hint} "
                 f"code={str(out.get('code') or '').strip()} error={str(out.get('details') or out.get('hint') or out.get('code') or '')[:300]}"
             )
     except Exception as exc:
-        print(f"[CLIP VIDEO JOB WORKER] failed jobId={job_id} error={str(exc)[:300]}")
+        print(
+            "[CLIP VIDEO JOB WORKER] "
+            f"failed sceneId={scene_id} jobId={job_id} provider={provider_name_hint} "
+            f"resolvedWorkflow={resolved_workflow_hint} error={str(exc)[:300]}"
+        )
         with CLIP_VIDEO_JOBS_LOCK:
             job = CLIP_VIDEO_JOBS.get(job_id)
             if not job:
@@ -9922,6 +9944,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
 def clip_video_start(payload: ClipVideoIn):
     scene_id = str(payload.sceneId or "").strip() or "scene"
     provider = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
+    resolved_workflow_hint = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()) or "auto"
     job_id = uuid4().hex
     with CLIP_VIDEO_JOBS_LOCK:
         CLIP_VIDEO_JOBS[job_id] = {
@@ -9946,8 +9969,15 @@ def clip_video_start(payload: ClipVideoIn):
             "completedAt": None,
         }
 
-    print(f"[CLIP VIDEO JOB] created jobId={job_id} sceneId={scene_id} provider={provider}")
+    print(
+        "[CLIP VIDEO JOB] "
+        f"created sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint}"
+    )
 
+    print(
+        "[CLIP VIDEO JOB] "
+        f"worker_start sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint}"
+    )
     threading.Thread(target=_run_clip_video_job, args=(job_id, payload), daemon=True).start()
     return {"ok": True, "jobId": job_id, "sceneId": scene_id, "status": "queued"}
 
@@ -10031,6 +10061,12 @@ def clip_video(payload: ClipVideoIn):
         end_image_url=end_image_url,
     )
     payload_workflow_hint = str(payload.resolvedWorkflowKey or "").strip().lower()
+    print(
+        "[CLIP VIDEO ENTRY] "
+        f"sceneId={scene_id} jobId=n/a provider={str(payload.provider or '').strip().lower() or 'auto'} "
+        f"payloadWorkflow={payload_workflow_hint or str(payload.ltxMode or '').strip().lower() or 'auto'} "
+        f"transitionType={transition_type}"
+    )
     ltx_mode_hint = str(payload.ltxMode or "").strip().lower()
     requires_two_frames_hint = bool(payload.requiresTwoFrames)
     two_frame_payload_hint = bool(start_image_url and end_image_url)
