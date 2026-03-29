@@ -819,9 +819,21 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const renderMode = normalizeText(source.renderMode)
     || (["f_l"].includes(ltxMode) ? "first_last" : "image_to_video");
   const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l"].includes(ltxModeNormalized);
-  const requiresContinuation = continuationRequested || ltxModeNormalized === "continuation" || explicitWorkflowKey === "continuation";
+  const requiresContinuationRaw = continuationRequested || ltxModeNormalized === "continuation" || explicitWorkflowKey === "continuation";
+  const requiresContinuation = false;
+  if (requiresContinuationRaw) {
+    console.warn("[SCENARIO UNSUPPORTED VIDEO MODE]", {
+      sceneId: normalizeText(source.sceneId ?? source.scene_id ?? `S${index + 1}`),
+      originalLtxMode: ltxModeNormalized,
+      originalRenderMode: normalizeText(source.renderMode ?? source.render_mode),
+      fallbackApplied: true,
+      fallbackWorkflowKey: "i2v",
+      reason: "continuation_execution_not_supported_in_backend",
+    });
+  }
   const imageStrategy = deriveScenarioImageStrategy(source);
-  const resolvedWorkflowKey = explicitWorkflowKey || resolveScenarioWorkflowKey(source);
+  const resolvedWorkflowKeyRaw = explicitWorkflowKey || resolveScenarioWorkflowKey(source);
+  const resolvedWorkflowKey = (requiresContinuationRaw && !requiresTwoFrames) ? "i2v" : resolvedWorkflowKeyRaw;
   const requiresAudioSensitiveVideo = resolvedWorkflowKey === "lip_sync" || Boolean(source.lipSync ?? source.lip_sync);
   const resolvedModelKey = resolveScenarioExplicitModelKey(source) || SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY[resolvedWorkflowKey] || "";
   const sceneRenderProvider = resolveScenarioRenderProvider(source, scenarioPackage);
@@ -896,10 +908,10 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     locationRu: locationDual.ru,
     locationEn: locationDual.en,
     renderMode,
-    ltxMode,
+    ltxMode: (requiresContinuationRaw && !requiresTwoFrames) ? "i2v" : ltxMode,
     ltxReason: normalizeText(source.ltxReason ?? source.ltx_reason ?? source.whyThisMode),
     needsTwoFrames: Boolean(source.needsTwoFrames ?? source.needs_two_frames ?? ["first_last"].includes(renderMode)),
-    continuationFromPrevious: Boolean(source.continuationFromPrevious ?? source.continuation_from_previous ?? source.continuation),
+    continuationFromPrevious: false,
     continuationSourceSceneId: normalizeText(source.continuationSourceSceneId ?? source.continuation_source_scene_id),
     continuationSourceAssetUrl: normalizeText(source.continuationSourceAssetUrl ?? source.continuation_source_asset_url),
     continuationSourceAssetType: normalizeText(source.continuationSourceAssetType ?? source.continuation_source_asset_type),
@@ -907,7 +919,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     requiresTwoFrames,
     requiresContinuation,
     requiresAudioSensitiveVideo,
-    resolvedWorkflowKey: resolveScenarioExplicitWorkflowKey(source) || resolvedWorkflowKey,
+    resolvedWorkflowKey,
     resolvedModelKey: resolvedModelKey || normalizeText(source.resolvedModelKey),
     sceneRenderProvider: sceneRenderProvider || normalizeText(source.sceneRenderProvider),
     workflowFileOverride: normalizeText(source.workflowFileOverride ?? source.workflow_file_override),
