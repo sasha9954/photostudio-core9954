@@ -3760,6 +3760,77 @@ def _join_visible_prompt_parts(parts: list[str]) -> str:
     return " ".join(result).strip()
 
 
+def _remove_duplicate_prompt_sentences(text: str) -> str:
+    sentences = [segment.strip(" .") for segment in re.split(r"[.!?]+", str(text or "").strip()) if segment.strip()]
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for sentence in sentences:
+        norm = re.sub(r"\s+", " ", sentence).strip().lower()
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        deduped.append(sentence)
+    return ". ".join(deduped).strip()
+
+
+def _quality_filter_visible_prompt(text: str) -> str:
+    cleaned = _sanitize_visible_prompt_text(text)
+    cleaned = re.sub(
+        r"\b(identity anchor|physical motion|camera movement|world and background motion|visible emotional state)\s*:\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = _remove_duplicate_prompt_sentences(cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip(" .")
+
+
+def _extract_scene_visual_motifs(scene: ScenarioDirectorScene) -> dict[str, str]:
+    raw = " ".join(
+        [
+            str(scene.frame_description or ""),
+            str(scene.action_in_frame or ""),
+            str(scene.scene_goal or ""),
+            str(scene.location or ""),
+            str(scene.transition_type or ""),
+        ]
+    ).lower()
+    motifs: dict[str, str] = {}
+    if any(token in raw for token in ("dress", "fabric", "coat", "veil", "cape", "hem")):
+        motifs["fabric"] = "fabric and hem"
+    if "petal" in raw:
+        motifs["petals"] = "petals"
+    if any(token in raw for token in ("crowd", "audience", "people", "fans")):
+        motifs["crowd"] = "crowd"
+    if any(token in raw for token in ("stage", "neon", "spotlight", "strobe", "light")):
+        motifs["light"] = "stage lights"
+    if any(token in raw for token in ("smoke", "fog", "haze", "dust", "particle", "mist")):
+        motifs["atmosphere"] = "haze and particles"
+    if any(token in raw for token in ("mic", "microphone", "prop", "object", "rose", "mask")):
+        motifs["prop"] = "props"
+    return motifs
+
+
+def _resolve_transition_family(scene: ScenarioDirectorScene) -> str:
+    family = str(scene.transition_family or "").strip().lower()
+    if family in {"transform", "reveal", "escalate", "resolve", "release", "afterimage"}:
+        return family
+    raw = " ".join([str(scene.transition_type or ""), str(scene.action_in_frame or ""), str(scene.scene_goal or "")]).lower()
+    if any(token in raw for token in ("transform", "metamorph", "rose", "vortex", "change")):
+        return "transform"
+    if any(token in raw for token in ("reveal", "unmask", "show")):
+        return "reveal"
+    if any(token in raw for token in ("escalate", "build", "intens", "climax")):
+        return "escalate"
+    if any(token in raw for token in ("resolve", "calm", "settle")):
+        return "resolve"
+    if any(token in raw for token in ("release", "exhale", "drop")):
+        return "release"
+    if any(token in raw for token in ("afterimage", "fade", "residual")):
+        return "afterimage"
+    return "transform"
+
+
 def _is_duet_scene(scene: ScenarioDirectorScene) -> bool:
     roles = {str(actor).strip().lower() for actor in (scene.actors or []) if str(actor).strip()}
     return "character_1" in roles and "character_2" in roles
@@ -3806,10 +3877,11 @@ def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene) -> str:
     props_hint = _build_props_visible_hint(scene)
     if props_hint:
         parts.append(props_hint)
-    if location or emotion:
-        atmosphere = ", ".join(value for value in (location, emotion) if value)
-        parts.append(f"The atmosphere is {atmosphere}")
-    return _join_visible_prompt_parts(parts)
+    if location:
+        parts.append(f"The background clearly reads as {location}")
+    if emotion:
+        parts.append(f"The visible emotion is {emotion}")
+    return _quality_filter_visible_prompt(_join_visible_prompt_parts(parts))
 
 
 def _derive_visual_delta_axes(scene: ScenarioDirectorScene) -> list[str]:
@@ -3877,9 +3949,19 @@ def _ensure_first_last_visual_delta(start_prompt: str, end_prompt: str, scene: S
     end_tokens = _normalize_prompt_tokens(end_norm)
     overlap = len(start_tokens & end_tokens) / max(1, min(len(start_tokens), len(end_tokens)))
     contains = start_norm in end_norm or end_norm in start_norm
-    too_similar = start_norm == end_norm or contains or overlap >= 0.82
+    too_similar = start_norm == end_norm or contains or overlap >= 0.78
     lacks_delta = not _has_visual_change_cues(end_norm)
-    if too_similar or lacks_delta:
+    generic_end = any(
+        phrase in end_norm
+        for phrase in (
+            "same subject in same location",
+            "earlier phase",
+            "later phase",
+            "body tension releases",
+            "silhouette changed",
+        )
+    )
+    if too_similar or lacks_delta or generic_end:
         return ""
     return end_clean
 
@@ -3889,18 +3971,34 @@ def _build_first_last_state_prompts(scene: ScenarioDirectorScene, base_start: st
     scene.delta_axes = axes
     subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip()][:2]).strip() or "lead performer"
     location = str(scene.location or "club stage").strip()
-    action = str(scene.action_in_frame or scene.scene_goal or "").strip()
-    transition_hint = str(scene.transition_type or "").strip().lower()
-    has_transform = any(token in f"{action} {transition_hint}" for token in ("transform", "metamorph", "change outfit", "mask", "reveal"))
-    has_release = any(token in f"{action} {transition_hint}" for token in ("release", "resolve", "afterimage", "calm", "exhale"))
-    start_detail = "Fabric, hair, and props stay close to the body with restrained motion."
-    end_detail = "Fabric, hair, and props open wider in the air while crowd lights pulse brighter."
-    if has_transform:
-        start_detail = "Wardrobe and silhouette still read in the earlier state, with details held tight and minimal flare."
-        end_detail = "Wardrobe and silhouette visibly shift into a new look, with texture, accessories, and hair clearly transformed."
-    elif has_release:
-        start_detail = "Body tension is still visible in shoulders, hands, and face while the crowd remains compressed behind."
-        end_detail = "Body tension releases into a calmer posture as haze thins and the crowd opens into a softer afterglow."
+    family = _resolve_transition_family(scene)
+    motifs = _extract_scene_visual_motifs(scene)
+    fabric = motifs.get("fabric", "fabric")
+    petals = motifs.get("petals", "")
+    crowd = motifs.get("crowd", "crowd")
+    light = motifs.get("light", "lights")
+    atmosphere = motifs.get("atmosphere", "haze")
+    prop = motifs.get("prop", "props")
+    start_detail = f"The body is in an early motion phase, gaze still controlled, with {fabric} close to the body and {light} kept restrained."
+    end_detail = f"The body reaches a later phase, gaze shifts with stronger silhouette spread, while {light} and {atmosphere} become more active."
+    if family == "transform":
+        start_detail = f"The silhouette still reads as the original look, {fabric} mostly intact, and {prop} still in normal form."
+        end_detail = f"The silhouette visibly transforms as {fabric} opens into a new shape, {prop} shifts state, and {petals or atmosphere} fill the lower frame."
+    elif family == "reveal":
+        start_detail = f"The subject is partially hidden by pose and framing, with {crowd} and foreground elements still masking details."
+        end_detail = f"The reveal is complete: the face and torso are unobstructed, the gaze is direct, and the subject dominates center while {crowd} opens around them."
+    elif family == "escalate":
+        start_detail = f"The movement starts contained, with compact posture, controlled gaze, and restrained {light} behind the subject."
+        end_detail = f"The movement peaks with expanded limbs and silhouette, stronger forward dominance, and aggressive {light} and {atmosphere} motion."
+    elif family == "resolve":
+        start_detail = f"The scene still carries momentum: shoulders lifted, breath visible, and background {light} still pulsing."
+        end_detail = f"The scene resolves into stable posture, softened gaze, quieter {light}, and clearer depth separation from background."
+    elif family == "release":
+        start_detail = f"Tension is still present in neck, shoulders, and hands, with compressed spacing between subject and {crowd}."
+        end_detail = f"Tension releases into open chest and longer lines; {crowd} steps back visually, and {atmosphere} drifts into a softer trail."
+    elif family == "afterimage":
+        start_detail = f"The subject remains fully present in frame with a sharp silhouette and active highlights."
+        end_detail = f"The final state leaves an afterimage feel: the silhouette thins or exits, lights fade, residual {atmosphere} hangs, and the stage feels nearly empty."
     start_prompt = _join_visible_prompt_parts(
         [
             f"Cinematic 9:16 vertical frame at {location} with {subject}",
@@ -3915,7 +4013,7 @@ def _build_first_last_state_prompts(scene: ScenarioDirectorScene, base_start: st
             end_detail,
         ]
     )
-    return start_prompt, end_prompt
+    return _quality_filter_visible_prompt(start_prompt), _quality_filter_visible_prompt(end_prompt)
 
 
 def build_ltx_visible_first_last_prompts(scene: ScenarioDirectorScene, raw_scene: dict[str, Any] | None = None) -> tuple[str, str]:
@@ -3949,9 +4047,13 @@ def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene) -> str:
     if subject:
         parts.append(f"with {subject}")
     sentence = " ".join(parts).strip()
-    motion_line = _join_visible_prompt_parts([action, camera])
-    emotion_line = f"The emotional read stays {emotion}." if emotion else ""
-    return _join_visible_prompt_parts([sentence, motion_line, emotion_line])
+    motion_line = action or "The subject keeps flowing motion with readable body mechanics"
+    camera_line = f"The camera {camera}" if camera else "The camera tracks smoothly to preserve clear motion arcs"
+    emotion_line = f"The face reads {emotion}" if emotion else ""
+    lipsync_line = ""
+    if str(scene.resolved_workflow_key or "").strip().lower() == "lip_sync_music" or bool(scene.lip_sync):
+        lipsync_line = "Face readability and mouth continuity stay clear for emotional singing, with transformation delayed until lip motion is established"
+    return _quality_filter_visible_prompt(_join_visible_prompt_parts([sentence, motion_line, camera_line, emotion_line, lipsync_line]))
 
 
 def _build_music_video_image_prompt(scene: ScenarioDirectorScene) -> str:
@@ -3968,25 +4070,26 @@ def _build_music_video_video_prompt(scene: ScenarioDirectorScene) -> str:
     return _join_visible_prompt_parts([f"The performance stays centered on {subject}" if subject else "", build_ltx_visible_video_prompt(scene)])
 
 
-def build_ltx_video_negative_prompt() -> str:
-    return ", ".join(
-        [
-            "morphing artifacts",
-            "slideshow motion",
-            "crossfade transitions",
-            "broken anatomy",
-            "deformed hands",
-            "extra limbs",
-            "jitter",
-            "flicker",
-            "frozen fabric",
-            "static background",
-            "blurry face",
-            "low resolution",
-            "teleporting limbs",
-            "floating objects",
-        ]
-    )
+def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | None = None) -> str:
+    negatives = [
+        "morphing artifacts",
+        "slideshow motion",
+        "crossfade transitions",
+        "broken anatomy",
+        "deformed hands",
+        "extra limbs",
+        "jitter",
+        "flicker",
+        "frozen fabric",
+        "static background",
+        "blurry face",
+        "low resolution",
+        "teleporting limbs",
+        "floating objects",
+    ]
+    if scene and (bool(scene.lip_sync) or str(scene.resolved_workflow_key or "").strip().lower() == "lip_sync_music"):
+        negatives.extend(["closed mouth", "static face", "bad lip-sync", "no expression"])
+    return ", ".join(negatives)
 
 
 def _scene_requires_explicit_first_last_prompts(scene: ScenarioDirectorScene) -> bool:
@@ -4815,7 +4918,7 @@ def _apply_music_video_mode_policy(
         genre_intent = _resolve_director_genre_intent(payload, scene)
         scene.image_prompt = _build_music_video_image_prompt(scene)
         scene.video_prompt = _build_music_video_video_prompt(scene)
-        scene.video_negative_prompt = build_ltx_video_negative_prompt()
+        scene.video_negative_prompt = build_ltx_video_negative_prompt(scene)
         # Final derived debug layer (must reflect final scene state, not intermediate steps).
         final_shot_type = str(scene.shot_type or shot_type).strip() or shot_type
         final_presence_type = str(role_influence.get("presence_type") or _infer_music_video_presence_type(scene, payload=payload, raw_scene=raw_scene))
