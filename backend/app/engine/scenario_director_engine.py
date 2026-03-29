@@ -5304,6 +5304,95 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             idx,
         )
 
+    def _scene_merge_payload(scene: ScenarioDirectorScene) -> dict[str, Any]:
+        return {
+            "sceneId": str(scene.scene_id or "").strip(),
+            "t0": _safe_float(scene.time_start, 0.0),
+            "t1": _safe_float(scene.time_end, _safe_float(scene.time_start, 0.0)),
+            "summary": str(scene.scene_goal or scene.frame_description or "").strip(),
+            "motion": str(scene.action_in_frame or "").strip(),
+            "camera": str(scene.camera or "").strip(),
+            "transitionHint": str(scene.boundary_reason or "").strip(),
+            "environment": str(scene.location or "").strip(),
+            "characters": [str(actor).strip() for actor in (scene.actors or []) if str(actor).strip()],
+        }
+
+    def _is_first_last_scene(scene: ScenarioDirectorScene) -> bool:
+        render_mode = str(scene.render_mode or "").strip().lower()
+        ltx_mode = str(scene.ltx_mode or "").strip().lower()
+        return bool(scene.needs_two_frames) or render_mode in {"first_last", "first_last_sound"} or ltx_mode in {"f_l", "f_l_as", "first_last"}
+
+    def _can_merge_final_scene_pair(left: ScenarioDirectorScene, right: ScenarioDirectorScene) -> tuple[bool, str]:
+        if _is_first_last_scene(left) or _is_first_last_scene(right):
+            return False, "first_last_scene_preserved"
+        transition_tokens = " ".join([
+            str(left.transition_type or "").lower(),
+            str(right.transition_type or "").lower(),
+            str(left.boundary_reason or "").lower(),
+            str(right.boundary_reason or "").lower(),
+        ])
+        if any(token in transition_tokens for token in ("state_shift", "state shift", "transition", "hard_cut")):
+            return False, "explicit_transition_boundary"
+        if str(left.narration_mode or "").strip().lower() == "pause" or str(right.narration_mode or "").strip().lower() == "pause":
+            return False, "micro_beat_pause_preserved"
+        can_merge, reason = _can_merge_short_scene_pair(_scene_merge_payload(left), _scene_merge_payload(right))
+        return can_merge, reason
+
+    def _merge_final_generation_short_scenes(chunks: list[ScenarioDirectorScene]) -> list[ScenarioDirectorScene]:
+        if len(chunks) < 2:
+            return chunks
+        merged_chunks = list(chunks)
+        idx = 0
+        while idx < len(merged_chunks):
+            scene = merged_chunks[idx]
+            duration = max(0.0, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0))
+            if duration >= SCENARIO_CHUNK_PREFERRED_MIN_SEC:
+                idx += 1
+                continue
+            logger.info("[SCENARIO FINAL MIN DURATION] sceneId=%s durationSec=%.3f preferredMinimumSec=%.1f hardMinimumSec=%.1f",
+                        scene.scene_id, duration, SCENARIO_CHUNK_PREFERRED_MIN_SEC, SCENARIO_CHUNK_HARD_MIN_SEC)
+            merged = False
+            for neighbor_idx in (idx + 1, idx - 1):
+                if neighbor_idx < 0 or neighbor_idx >= len(merged_chunks):
+                    continue
+                neighbor = merged_chunks[neighbor_idx]
+                can_merge, reason = _can_merge_final_scene_pair(scene, neighbor)
+                if not can_merge:
+                    logger.info("[SCENARIO FINAL SCENE MERGE] action=kept_separate sceneId=%s neighborSceneId=%s reason=%s durationSec=%.3f",
+                                scene.scene_id, neighbor.scene_id, reason, duration)
+                    continue
+                left_idx, right_idx = sorted([idx, neighbor_idx])
+                left = merged_chunks[left_idx]
+                right = merged_chunks[right_idx]
+                left.time_start = round(_safe_float(left.time_start, 0.0), 3)
+                left.time_end = round(max(_safe_float(left.time_end, 0.0), _safe_float(right.time_end, 0.0)), 3)
+                left.duration = round(max(0.0, left.time_end - left.time_start), 3)
+                left.requested_duration_sec = left.duration
+                left.audio_slice_start_sec = round(min(_safe_float(left.audio_slice_start_sec, left.time_start), _safe_float(right.audio_slice_start_sec, right.time_start)), 3)
+                left.audio_slice_end_sec = round(max(_safe_float(left.audio_slice_end_sec, left.time_end), _safe_float(right.audio_slice_end_sec, right.time_end)), 3)
+                left.audio_slice_expected_duration_sec = round(max(0.0, left.audio_slice_end_sec - left.audio_slice_start_sec), 3)
+                left.actors = list(dict.fromkeys([*(left.actors or []), *(right.actors or [])]))
+                left.local_phrase = " · ".join([text for text in [str(left.local_phrase or "").strip(), str(right.local_phrase or "").strip()] if text]).strip()
+                left.scene_phrase_count = int(_safe_float(left.scene_phrase_count, 0)) + int(_safe_float(right.scene_phrase_count, 0))
+                if str(right.scene_goal or "").strip():
+                    left.scene_goal = " / ".join([part for part in [str(left.scene_goal or "").strip(), str(right.scene_goal or "").strip()] if part])
+                if str(right.frame_description or "").strip():
+                    left.frame_description = " / ".join([part for part in [str(left.frame_description or "").strip(), str(right.frame_description or "").strip()] if part])
+                if str(right.action_in_frame or "").strip():
+                    left.action_in_frame = " / ".join([part for part in [str(left.action_in_frame or "").strip(), str(right.action_in_frame or "").strip()] if part])
+                merged_chunks.pop(right_idx)
+                logger.info("[SCENARIO FINAL SCENE MERGE] action=merged sceneId=%s mergedWithSceneId=%s reason=%s resultDurationSec=%.3f",
+                            left.scene_id, right.scene_id, reason, _safe_float(left.duration, 0.0))
+                merged = True
+                idx = max(0, left_idx - 1)
+                break
+            if not merged:
+                logger.info("[SCENARIO FINAL SCENE MERGE] action=kept_short_scene sceneId=%s durationSec=%.3f reason=no_safe_neighbor_merge",
+                            scene.scene_id, duration)
+                idx += 1
+        return merged_chunks
+
+    next_scenes = _merge_final_generation_short_scenes(next_scenes)
     logger.info("[SCENARIO CHUNKING] generation_scenes=%s split_events=%s", len(next_scenes), split_events or ["none"])
     for chunk in next_scenes:
         logger.info(

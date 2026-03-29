@@ -7424,6 +7424,22 @@ const comfyShowVideoSection = Boolean(
       const message = String(payload?.message || "").trim();
       return error || hint || message || code || "video_job_failed";
     };
+    const applyScenarioVideoPatch = (patch = {}, context = {}) => {
+      const normalizedPatch = patch && typeof patch === "object" ? patch : {};
+      const didPatch = Object.keys(normalizedPatch).length > 0;
+      if (didPatch) updateScenarioScene(sceneId, normalizedPatch);
+      console.info("[SCENARIO VIDEO ERROR PROPAGATION]", {
+        sceneId,
+        jobId: String(context?.jobId || ""),
+        status: String(context?.status || ""),
+        code: String(context?.code || ""),
+        hint: String(context?.hint || ""),
+        message: String(context?.message || ""),
+        runtimeUpdated: didPatch,
+        patchKeys: Object.keys(normalizedPatch),
+      });
+      return didPatch;
+    };
     const sceneSnapshot = scenarioScenes.find((scene) => String(scene?.sceneId || "") === sceneId) || null;
     const runtimeStoryboardRevision = String(
       scenarioFlowSourceNode?.data?.storyboardRevision
@@ -7493,11 +7509,11 @@ const comfyShowVideoSection = Boolean(
     scenarioActivePollingJobIdsRef.current.add(pollingKey);
     scenarioVideoJobsBySceneRef.current.set(sceneId, startMeta);
     persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
-    updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId), {
+    applyScenarioVideoPatch({
       videoJobId: startMeta.jobId,
       videoStatus: startMeta.status,
       videoError: "",
-    });
+    }, { jobId: String(startMeta.jobId || ""), status: String(startMeta.status || "queued"), message: "polling_started" });
     stopScenarioVideoPolling(sceneId);
 
     console.info("[CLIP VIDEO POLLING START]", {
@@ -7581,10 +7597,10 @@ const comfyShowVideoSection = Boolean(
         return;
       }
       if (lastUpdatedAt > 0 && (Date.now() - lastUpdatedAt) > staleTimeoutMs) {
-        updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId), {
+        applyScenarioVideoPatch({
           videoStatus: "error",
           videoError: "video_job_stale_timeout",
-        });
+        }, { jobId: String(currentMeta?.jobId || ""), status: "error", code: "video_job_stale_timeout", message: "polling_stale_timeout" });
         clearActiveVideoJob(sceneId);
         return;
       }
@@ -7642,7 +7658,6 @@ const comfyShowVideoSection = Boolean(
         scenarioVideoJobsBySceneRef.current.set(sceneId, nextMeta);
         persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
 
-        const idx = scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
         const prevNotFoundCount = Number(activeMeta?.notFoundCount) || 0;
         if (!out?.ok && isScenarioVideoJobNotFound(out)) {
           const nextNotFoundCount = prevNotFoundCount + 1;
@@ -7650,20 +7665,20 @@ const comfyShowVideoSection = Boolean(
           scenarioVideoJobsBySceneRef.current.set(sceneId, toleratedMeta);
           persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
           if (nextNotFoundCount < notFoundRetryLimit) {
-            updateScenarioScene(idx, {
+            applyScenarioVideoPatch({
               videoStatus: "running",
               videoError: "",
               videoJobId: toleratedMeta.jobId,
-            });
+            }, { jobId: String(toleratedMeta?.jobId || ""), status: "running", code: String(out?.code || ""), hint: String(out?.hint || ""), message: "status_not_found_retry" });
             scheduleScenarioPoll(2200, "status_not_found_retry");
             return;
           }
-          updateScenarioScene(idx, {
+          applyScenarioVideoPatch({
             videoStatus: "not_found",
             videoError: String(out?.hint || out?.code || "video_job_not_found"),
             videoJobId: toleratedMeta.jobId,
             videoPanelActivated: false,
-          });
+          }, { jobId: String(toleratedMeta?.jobId || ""), status: "not_found", code: String(out?.code || ""), hint: String(out?.hint || ""), message: String(out?.error || out?.message || "video_job_not_found") });
           console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
@@ -7680,29 +7695,35 @@ const comfyShowVideoSection = Boolean(
           scenarioVideoJobsBySceneRef.current.set(sceneId, toleratedMeta);
           persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
           if (nextNotFoundCount < notFoundRetryLimit) {
-            updateScenarioScene(idx, {
+            applyScenarioVideoPatch({
               videoStatus: "running",
               videoJobId: toleratedMeta.jobId,
               videoError: "",
-            });
+            }, { jobId: String(toleratedMeta?.jobId || ""), status: "running", message: "status_not_found_retry" });
             scheduleScenarioPoll(2200, "status_not_found_retry");
             return;
           }
-          updateScenarioScene(idx, {
+          applyScenarioVideoPatch({
             videoStatus: "not_found",
             videoJobId: toleratedMeta.jobId,
             videoError: String(out?.error || out?.hint || "video_job_not_found"),
             videoPanelActivated: false,
-          });
+          }, { jobId: String(toleratedMeta?.jobId || ""), status: "not_found", code: String(out?.code || ""), hint: String(out?.hint || ""), message: String(out?.error || out?.message || "video_job_not_found") });
           console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
 
-        updateScenarioScene(idx, {
+        applyScenarioVideoPatch({
           videoStatus: status,
           videoJobId: settledMeta.jobId,
           videoError: status === "error" || status === "stopped" ? extractScenarioVideoError(out) : "",
+        }, {
+          jobId: String(settledMeta?.jobId || ""),
+          status,
+          code: String(out?.code || ""),
+          hint: String(out?.hint || ""),
+          message: status === "error" || status === "stopped" ? extractScenarioVideoError(out) : "status_update",
         });
         console.info("[SCENARIO VIDEO STATUS APPLIED]", {
           sceneId,
@@ -7730,40 +7751,24 @@ const comfyShowVideoSection = Boolean(
         });
 
         if (status === "done") {
-          if (idx === -1) {
-            console.warn("[CLIP WARN] scene idx not found for done status", {
-              scope: "scenario",
-              sceneId,
-              jobId: String(settledMeta?.jobId || ""),
-            });
-          } else {
-            updateScenarioScene(idx, {
-              videoUrl: String(out?.videoUrl || ""),
-              mode: String(out?.mode || ""),
-              model: String(out?.model || ""),
-              requestedDurationSec: normalizeDurationSec(out?.requestedDurationSec),
-              providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
-              videoRequestedPromptPreview: String(out?.requestedPromptPreview || out?.debug?.requestedPromptPreview || ""),
-              videoEffectivePromptPreview: String(out?.effectivePromptPreview || out?.debug?.effectivePromptPreview || ""),
-              videoEffectivePromptLength: Number(out?.effectivePromptLength || out?.debug?.effectivePromptLength || 0) || 0,
-              videoPromptPatchedNodeIds: Array.isArray(out?.promptPatchedNodeIds)
-                ? out.promptPatchedNodeIds
-                : (Array.isArray(out?.debug?.promptPatchedNodeIds) ? out.debug.promptPatchedNodeIds : []),
-              videoStatus: "done",
-              videoError: "",
-              videoJobId: settledMeta.jobId,
-              videoPanelActivated: false,
-            });
-            console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
-            console.info("[CLIP TRACE] scene updated after done", {
-              scope: "scenario",
-              sceneId,
-              idx,
-              videoUrl: String(out?.videoUrl || ""),
-              videoStatus: "done",
-              videoJobId: String(settledMeta?.jobId || ""),
-            });
-          }
+          applyScenarioVideoPatch({
+            videoUrl: String(out?.videoUrl || ""),
+            mode: String(out?.mode || ""),
+            model: String(out?.model || ""),
+            requestedDurationSec: normalizeDurationSec(out?.requestedDurationSec),
+            providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
+            videoRequestedPromptPreview: String(out?.requestedPromptPreview || out?.debug?.requestedPromptPreview || ""),
+            videoEffectivePromptPreview: String(out?.effectivePromptPreview || out?.debug?.effectivePromptPreview || ""),
+            videoEffectivePromptLength: Number(out?.effectivePromptLength || out?.debug?.effectivePromptLength || 0) || 0,
+            videoPromptPatchedNodeIds: Array.isArray(out?.promptPatchedNodeIds)
+              ? out.promptPatchedNodeIds
+              : (Array.isArray(out?.debug?.promptPatchedNodeIds) ? out.debug.promptPatchedNodeIds : []),
+            videoStatus: "done",
+            videoError: "",
+            videoJobId: settledMeta.jobId,
+            videoPanelActivated: false,
+          }, { jobId: String(settledMeta?.jobId || ""), status: "done", message: "video_ready" });
+          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "done", jobId: settledMeta.jobId });
           return;
         }
@@ -7777,15 +7782,19 @@ const comfyShowVideoSection = Boolean(
             hint: String(out?.hint || ""),
             message: extractScenarioVideoError(out),
           });
-          if (idx >= 0) {
-            updateScenarioScene(idx, {
-              videoPanelActivated: false,
-              videoStatus: "error",
-              videoError: extractScenarioVideoError(out),
-              videoJobId: settledMeta.jobId,
-            });
-            console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status, videoPanelActivatedAfterApply: false });
-          }
+          applyScenarioVideoPatch({
+            videoPanelActivated: false,
+            videoStatus: "error",
+            videoError: extractScenarioVideoError(out),
+            videoJobId: settledMeta.jobId,
+          }, {
+            jobId: String(settledMeta?.jobId || ""),
+            status,
+            code: String(out?.code || ""),
+            hint: String(out?.hint || ""),
+            message: extractScenarioVideoError(out),
+          });
+          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status, videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status, jobId: settledMeta.jobId });
           return;
         }
@@ -7793,7 +7802,6 @@ const comfyShowVideoSection = Boolean(
         scheduleScenarioPoll(1800, "status_running");
       } catch (e) {
         const errMsg = String(e?.message || "").toLowerCase();
-        const idx = scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
         if (errMsg.includes("job_id_not_found_or_expired")) {
           const activeMeta = scenarioVideoJobsBySceneRef.current.get(sceneId) || {};
           const nextNotFoundCount = (Number(activeMeta?.notFoundCount) || 0) + 1;
@@ -7801,20 +7809,20 @@ const comfyShowVideoSection = Boolean(
           scenarioVideoJobsBySceneRef.current.set(sceneId, toleratedMeta);
           persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
           if (nextNotFoundCount < notFoundRetryLimit) {
-            updateScenarioScene(idx, {
+            applyScenarioVideoPatch({
               videoStatus: "running",
               videoError: "",
               videoJobId: String(toleratedMeta?.jobId || ""),
-            });
+            }, { jobId: String(toleratedMeta?.jobId || ""), status: "running", message: "exception_not_found_retry" });
             scheduleScenarioPoll(2400, "exception_not_found_retry");
             return;
           }
-          updateScenarioScene(idx, {
+          applyScenarioVideoPatch({
             videoStatus: "not_found",
             videoError: String(e?.message || e),
             videoJobId: String(toleratedMeta?.jobId || ""),
             videoPanelActivated: false,
-          });
+          }, { jobId: String(toleratedMeta?.jobId || ""), status: "not_found", code: "video_job_not_found", message: String(e?.message || e) });
           console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
@@ -7826,11 +7834,11 @@ const comfyShowVideoSection = Boolean(
           status: "error",
           message: propagatedError,
         });
-        updateScenarioScene(idx, {
+        applyScenarioVideoPatch({
           videoStatus: "error",
           videoError: propagatedError,
           videoPanelActivated: false,
-        });
+        }, { jobId: String((scenarioVideoJobsBySceneRef.current.get(sceneId) || {})?.jobId || ""), status: "error", message: propagatedError });
         clearActiveVideoJob(sceneId, { status: "error", jobId: String((scenarioVideoJobsBySceneRef.current.get(sceneId) || {})?.jobId || "") });
       }
     };
