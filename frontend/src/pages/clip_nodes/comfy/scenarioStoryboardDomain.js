@@ -283,6 +283,126 @@ function hasAnyKeyword(value = "", keywords = []) {
   return keywords.some((keyword) => text.includes(String(keyword || "").toLowerCase()));
 }
 
+const META_BANNED_PHRASES = [
+  "baseline composition",
+  "pre-change state",
+  "resolved changed state",
+  "a→b",
+  "a->b",
+  "must be readable",
+  "subject-position delta",
+  "subject position delta",
+  "visibly evolve",
+  "new state",
+  "represents",
+  "this scene symbolizes",
+  "the cycle begins anew",
+  "dramatic purpose",
+  "beat function",
+  "progression",
+  "transition family",
+  "hero arc",
+  "world arc",
+  "scene purpose",
+];
+
+function sanitizeVisiblePromptText(value = "") {
+  let text = normalizeText(value);
+  if (!text) return "";
+  META_BANNED_PHRASES.forEach((phrase) => {
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text.replace(new RegExp(escaped, "ig"), " ");
+  });
+  text = text
+    .replace(/\s*[-–—]{1,2}>\s*/g, " ")
+    .replace(/\b[A-Za-zА-Яа-яЁё]\s*[→➜]\s*[A-Za-zА-Яа-яЁё]\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+
+  const sentences = text.split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
+  if (sentences.length <= 1) return text;
+  const unique = [];
+  const seen = new Set();
+  sentences.forEach((sentence) => {
+    const key = normalizePromptForCompare(sentence);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    unique.push(sentence);
+  });
+  return unique.join(" ").trim();
+}
+
+function buildVisibleVideoPrompt(scene = {}, fallbackPrompt = "") {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const identity = sanitizeVisiblePromptText(
+    source.focalSubject
+    || source.sceneAction
+    || source.summaryEn
+    || source.summaryRu
+    || source.sceneGoalEn
+    || source.sceneGoalRu
+    || ""
+  );
+  const characterAction = sanitizeVisiblePromptText(source.characterAction || source.motion || source.sceneAction || "");
+  const camera = sanitizeVisiblePromptText(source.cameraMotion || source.cameraIntent || source.cameraEn || "");
+  const atmosphere = sanitizeVisiblePromptText(source.environmentMotion || source.environment || source.locationEn || "");
+  const base = sanitizeVisiblePromptText(fallbackPrompt);
+  const parts = [
+    "Cinematic 9:16 vertical shot",
+    identity,
+    characterAction,
+    camera,
+    atmosphere,
+  ].filter(Boolean);
+  return sanitizeVisiblePromptText(parts.join(", ")) || base;
+}
+
+function translatePlannerMetaToVisiblePrompt(scene = {}, { mode = "image" } = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const visibleInputs = [
+    source.frameDescription,
+    source.visualDescription,
+    source.visualPrompt,
+    source.sceneAction,
+    source.characterAction,
+    source.cameraMotion,
+    source.environmentMotion,
+    source.sceneGoalEn,
+    source.sceneGoalRu,
+  ];
+  const cleaned = visibleInputs.map((item) => sanitizeVisiblePromptText(item)).filter(Boolean).join(", ");
+  if (mode === "video") {
+    return buildVisibleVideoPrompt(source, cleaned);
+  }
+  return cleaned;
+}
+
+function ensureDistinctStartEndPrompts(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const startRaw = sanitizeVisiblePromptText(source.startFramePromptEn || source.startFramePromptRu || "");
+  const endRaw = sanitizeVisiblePromptText(source.endFramePromptEn || source.endFramePromptRu || "");
+  const overlap = tokenOverlapRatio(startRaw, endRaw);
+  const isLipSync = Boolean(source.lipSync || source.requiresAudioSensitiveVideo || source.renderMode === "lip_sync_music");
+  if (startRaw && endRaw && overlap < 0.82) {
+    return { startFramePrompt: startRaw, endFramePrompt: endRaw };
+  }
+
+  const identity = sanitizeVisiblePromptText(source.focalSubject || source.summaryEn || source.summaryRu || "same performer");
+  const composition = sanitizeVisiblePromptText(source.cameraEn || source.cameraRu || "medium close shot");
+  const atmosphere = sanitizeVisiblePromptText(source.locationEn || source.locationRu || source.environmentMotion || "club background with moving lights");
+  const startAction = isLipSync
+    ? "mouth just opening on first sung syllable, face fully readable"
+    : "movement starting, body still compact";
+  const endAction = isLipSync
+    ? "final sung syllable, rotation peak reached, face remains readable"
+    : "movement peak reached, transformed pose clearly visible";
+  return {
+    startFramePrompt: sanitizeVisiblePromptText(`${identity}, ${startAction}, ${composition}, ${atmosphere}`),
+    endFramePrompt: sanitizeVisiblePromptText(`${identity}, ${endAction}, ${composition}, ${atmosphere}, intensified particles and light`),
+  };
+}
+
 function buildTransitionPromptPatch(scene = {}, index = 0) {
   const source = scene && typeof scene === "object" ? scene : {};
   const transitionType = normalizeText(source.transitionType).toLowerCase();
@@ -308,13 +428,15 @@ function buildTransitionPromptPatch(scene = {}, index = 0) {
   const endBase = endPrompt || sceneGoal || videoPrompt || imagePrompt;
   if (!startBase && !endBase) return null;
 
+  const distinct = ensureDistinctStartEndPrompts({
+    ...source,
+    startFramePromptRu: startBase,
+    endFramePromptRu: endBase,
+  });
+
   return {
-    startFramePromptRu: [startBase, "Start frame: pre-change state, baseline composition and subject placement."].filter(Boolean).join(" "),
-    endFramePromptRu: [
-      endBase,
-      "End frame: resolved changed state (A→B must be readable).",
-      "Use clear composition and subject-position delta versus start frame.",
-    ].filter(Boolean).join(" "),
+    startFramePromptRu: distinct.startFramePrompt,
+    endFramePromptRu: distinct.endFramePrompt,
     continuationFromPrevious: index > 0 ? true : Boolean(source.continuationFromPrevious ?? source.continuation_from_previous ?? source.continuation),
   };
 }
@@ -1089,9 +1211,46 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
       normalizedScene.continuationFromPrevious = Boolean(transitionPromptPatch.continuationFromPrevious);
     }
   }
+  normalizedScene.imagePromptRu = sanitizeVisiblePromptText(
+    normalizedScene.imagePromptRu || translatePlannerMetaToVisiblePrompt(normalizedScene, { mode: "image" })
+  );
+  normalizedScene.imagePromptEn = sanitizeVisiblePromptText(normalizedScene.imagePromptEn || normalizedScene.imagePromptRu);
+  normalizedScene.videoPromptRu = sanitizeVisiblePromptText(
+    normalizedScene.videoPromptRu || translatePlannerMetaToVisiblePrompt(normalizedScene, { mode: "video" })
+  );
+  normalizedScene.videoPromptEn = sanitizeVisiblePromptText(normalizedScene.videoPromptEn || normalizedScene.videoPromptRu);
+  const distinctPrompts = ensureDistinctStartEndPrompts(normalizedScene);
+  normalizedScene.startFramePromptRu = sanitizeVisiblePromptText(normalizedScene.startFramePromptRu || distinctPrompts.startFramePrompt);
+  normalizedScene.startFramePromptEn = sanitizeVisiblePromptText(normalizedScene.startFramePromptEn || normalizedScene.startFramePromptRu);
+  normalizedScene.endFramePromptRu = sanitizeVisiblePromptText(normalizedScene.endFramePromptRu || distinctPrompts.endFramePrompt);
+  normalizedScene.endFramePromptEn = sanitizeVisiblePromptText(normalizedScene.endFramePromptEn || normalizedScene.endFramePromptRu);
   normalizedScene.contractWarnings = buildScenarioSceneContractWarnings(normalizedScene);
   normalizedScene.contractWarningCodes = normalizedScene.contractWarnings.map((item) => item.code);
   return normalizedScene;
+}
+
+export function buildPromptSanitizationExamples() {
+  return {
+    first_last_transform_scene: {
+      image_prompt: "dancer in a silver dress, medium shot, club lights and haze, face visible",
+      video_prompt: "Cinematic 9:16 vertical shot, dancer in a silver dress, spin accelerates into a rose-like fabric vortex, camera pushes in with slight orbit, fabric fills lower half of frame, club strobes and haze pulses",
+      start_frame_prompt: "dancer begins turn, dress still reads as a normal dress, face readable, medium close shot, club crowd and lights behind",
+      end_frame_prompt: "spin at peak, dress expanded into a giant rose vortex filling lower half of frame, altered silhouette, brighter club flashes and drifting particles",
+    },
+    lip_sync_music_scene: {
+      image_prompt: "female vocalist at center stage, close-up framing, warm key light, mic in hand, face clean and readable",
+      video_prompt: "Cinematic 9:16 vertical shot, same vocalist, sings into mic with clear mouth articulation and continuous lip movement, slight handheld push-in, hair and sequins react to air movement, backlights sweep through haze",
+      start_frame_prompt: "vocalist takes breath before first phrase, lips just parting, face fully readable, close shot, audience bokeh behind",
+      end_frame_prompt: "vocal phrase ends on sustained note, chin lifted, mouth closing after final syllable, face still clear, rotating backlights and denser haze",
+    },
+    standard_i2v_performance_scene: {
+      image_prompt: "guitarist on rooftop at dusk, three-quarter body framing, neon skyline in background",
+      video_prompt: "Cinematic 9:16 vertical shot, guitarist steps forward while strumming, camera tracks left then settles, jacket fabric and guitar strap move in wind, distant traffic lights shimmer through light fog",
+      start_frame_prompt: "guitarist steady before step, shoulders squared to camera, dusk skyline stable in background",
+      end_frame_prompt: "guitarist finishes forward step with stronger stance, camera closer, wind lifts jacket edge, skyline lights brighter",
+    },
+    meta_language_removed_from: ["image_prompt", "video_prompt", "start_frame_prompt", "end_frame_prompt"],
+  };
 }
 
 function buildGlobalVisualLock(storyboardOut = {}, directorOutput = {}) {
