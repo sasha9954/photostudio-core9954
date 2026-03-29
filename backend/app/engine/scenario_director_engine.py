@@ -4734,6 +4734,7 @@ def _collect_generation_chunk_boundaries(
     boundary_signals: dict[str, list[float]] = {
         "pause": [],
         "phrase": [],
+        "phrase_start": [],
         "transition": [],
         "semantic": [],
     }
@@ -4775,15 +4776,18 @@ def _collect_generation_chunk_boundaries(
         for row in (candidate.get("transcript") or []):
             if not isinstance(row, dict):
                 continue
+            _push("phrase_start", row.get("t0") if row.get("t0") is not None else row.get("start"))
             _push("phrase", row.get("t1") if row.get("t1") is not None else row.get("end"))
         for row in (candidate.get("semanticTimeline") or []):
             if not isinstance(row, dict):
                 continue
+            _push("phrase_start", row.get("t0") if row.get("t0") is not None else row.get("startSec"))
             _push("semantic", row.get("t1") if row.get("t1") is not None else row.get("endSec"))
 
     for phrase in (audio_analysis.get("phrases") or []):
         if not isinstance(phrase, dict):
             continue
+        _push("phrase_start", phrase.get("start"))
         _push("phrase", phrase.get("end") or phrase.get("boundary") or phrase.get("timeSec") or phrase.get("time"))
     for pause in (audio_analysis.get("pauseWindows") or []):
         if not isinstance(pause, dict):
@@ -4803,6 +4807,7 @@ def _collect_generation_chunk_boundaries(
 
 def _pick_generation_split_point(
     *,
+    scene_id: str,
     start: float,
     end: float,
     preferred_min: float,
@@ -4826,7 +4831,33 @@ def _pick_generation_split_point(
         target = in_band if in_band else candidates
         return min(target, key=lambda value: abs(value - midpoint))
 
-    for kind in ("pause", "phrase", "transition", "semantic"):
+    pause_candidate = _best_candidate(boundaries.get("pause") or [])
+    if pause_candidate is not None:
+        logger.info(
+            "[SCENARIO CHUNK PAUSE PICK] sceneId=%s pauseCandidate=%.3f window=[%.3f,%.3f] midpoint=%.3f",
+            scene_id,
+            pause_candidate,
+            lower,
+            upper,
+            midpoint,
+        )
+        return round(pause_candidate, 3), "pause"
+
+    phrase_candidate = _best_candidate(boundaries.get("phrase") or [])
+    if phrase_candidate is not None:
+        return round(phrase_candidate, 3), "phrase"
+
+    safe_gap = 0.15
+    phrase_start_candidates = [p for p in (boundaries.get("phrase_start") or []) if lower < p < upper]
+    next_phrase_start = min([p for p in phrase_start_candidates if p > midpoint], default=None)
+    if next_phrase_start is None:
+        next_phrase_start = min([p for p in phrase_start_candidates if p > lower], default=None)
+    if next_phrase_start is not None:
+        safe_split = round(next_phrase_start - safe_gap, 3)
+        if lower < safe_split < upper:
+            return safe_split, "next_phrase_safe_gap"
+
+    for kind in ("transition", "semantic"):
         candidate = _best_candidate(boundaries.get(kind) or [])
         if candidate is not None:
             return round(candidate, 3), kind
@@ -4941,6 +4972,7 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 scene_chunks.append(ScenarioDirectorScene.model_validate(chunk_data))
                 continue
             split_at, split_kind = _pick_generation_split_point(
+                scene_id=str(chunk_data.get("scene_id") or scene.scene_id or ""),
                 start=chunk_start,
                 end=chunk_end,
                 preferred_min=preferred_min,
@@ -4968,6 +5000,29 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             left_data["audio_anchor_evidence"] = _append_decision_flag(left_data.get("audio_anchor_evidence"), "autoSplitReason", reason_value)
             right_data["audio_anchor_evidence"] = _append_decision_flag(right_data.get("audio_anchor_evidence"), "autoSplitReason", reason_value)
             split_events.append(f"{scene.scene_id}:{chunk_start:.3f}-{chunk_end:.3f}->{split_at:.3f}:{split_kind}")
+            next_phrase_start_candidates = [
+                point for point in (boundaries.get("phrase_start") or [])
+                if point > split_at and point < chunk_end
+            ]
+            next_phrase_start = min(next_phrase_start_candidates) if next_phrase_start_candidates else None
+            applied_safe_gap = round(max(0.0, (next_phrase_start - split_at)), 3) if next_phrase_start is not None and split_kind == "next_phrase_safe_gap" else 0.0
+            logger.info(
+                "[SCENARIO CHUNK BOUNDARY] sceneId=%s candidateBoundaries=%s pickedBoundary=%.3f pickedReason=%s nextPhraseStart=%s appliedSafeGap=%.3f finalChunk=[%.3f,%.3f]",
+                str(chunk_data.get("scene_id") or scene.scene_id or ""),
+                {
+                    "pause": [round(v, 3) for v in (boundaries.get("pause") or []) if chunk_start < v < chunk_end][:6],
+                    "phrase": [round(v, 3) for v in (boundaries.get("phrase") or []) if chunk_start < v < chunk_end][:6],
+                    "phrase_start": [round(v, 3) for v in (boundaries.get("phrase_start") or []) if chunk_start < v < chunk_end][:6],
+                    "transition": [round(v, 3) for v in (boundaries.get("transition") or []) if chunk_start < v < chunk_end][:6],
+                    "semantic": [round(v, 3) for v in (boundaries.get("semantic") or []) if chunk_start < v < chunk_end][:6],
+                },
+                split_at,
+                split_kind,
+                f"{next_phrase_start:.3f}" if next_phrase_start is not None else "none",
+                applied_safe_gap,
+                chunk_start,
+                chunk_end,
+            )
             pending.insert(0, (right_data, split_idx + 1))
             pending.insert(0, (left_data, split_idx + 1))
         next_scenes.extend(scene_chunks)

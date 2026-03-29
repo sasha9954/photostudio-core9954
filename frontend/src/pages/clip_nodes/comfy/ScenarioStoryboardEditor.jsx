@@ -187,6 +187,29 @@ function resolveSceneId(scene = {}, idx = 0) {
   return `S${idx + 1}`;
 }
 
+function resolveScenarioModeBadge(modeValue = "") {
+  const raw = String(modeValue || "").trim().toLowerCase();
+  const normalized = raw === "music_video" ? "clip" : raw === "advertisement" ? "ad" : raw;
+  if (normalized === "clip" || normalized === "music_video") {
+    return { resolvedMode: "clip", displayLabel: "Клип", color: "#14b8a6", background: "rgba(20,184,166,0.18)" };
+  }
+  if (normalized === "story") {
+    return { resolvedMode: "story", displayLabel: "История", color: "#3b82f6", background: "rgba(59,130,246,0.18)" };
+  }
+  if (normalized === "music") {
+    return { resolvedMode: "music", displayLabel: "Музыка", color: "#a855f7", background: "rgba(168,85,247,0.2)" };
+  }
+  if (normalized === "ad") {
+    return { resolvedMode: "ad", displayLabel: "Реклама", color: "#f59e0b", background: "rgba(245,158,11,0.2)" };
+  }
+  return {
+    resolvedMode: normalized || "unknown",
+    displayLabel: String(modeValue || "").trim() || "Неизвестно",
+    color: "#94a3b8",
+    background: "rgba(148,163,184,0.2)",
+  };
+}
+
 export default function ScenarioStoryboardEditor({
   open,
   nodeId,
@@ -195,6 +218,7 @@ export default function ScenarioStoryboardEditor({
   scenes,
   sceneGeneration,
   audioData,
+  scenarioMode,
   masterAudioUrl: masterAudioUrlProp,
   musicUrl: musicUrlProp,
   onClose,
@@ -556,6 +580,16 @@ export default function ScenarioStoryboardEditor({
   const globalMusicPrompt = String(musicPromptSourceText).trim();
   const hasBgMusicPrompt = Boolean(globalMusicPrompt);
   const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
+  const modeBadge = useMemo(() => resolveScenarioModeBadge(scenarioMode), [scenarioMode]);
+
+  useEffect(() => {
+    if (!open) return;
+    console.debug("[SCENARIO MODE BADGE]", {
+      nodeId: String(nodeId || ""),
+      resolvedMode: modeBadge.resolvedMode,
+      displayLabel: modeBadge.displayLabel,
+    });
+  }, [modeBadge.displayLabel, modeBadge.resolvedMode, nodeId, open]);
 
   useEffect(() => {
     if (!CLIP_TRACE_SCENARIO_EDITOR_DEBUG) return;
@@ -863,7 +897,21 @@ export default function ScenarioStoryboardEditor({
         <div className="clipSB_scenarioHeader">
           <div>
             <div className="clipSB_scenarioTitle">Scenario Storyboard Editor</div>
-            <div className="clipSB_scenarioMeta">Сцен: {normalizedScenes.length}</div>
+            <div className="clipSB_scenarioMeta" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>Сцен: {normalizedScenes.length}</span>
+              <span
+                style={{
+                  color: modeBadge.color,
+                  background: modeBadge.background,
+                  border: `1px solid ${modeBadge.color}`,
+                  borderRadius: 999,
+                  padding: "2px 8px",
+                  fontWeight: 700,
+                }}
+              >
+                Режим: {modeBadge.displayLabel}
+              </span>
+            </div>
           </div>
           <button className="clipSB_iconBtn" onClick={onClose} type="button">×</button>
         </div>

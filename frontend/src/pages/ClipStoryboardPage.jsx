@@ -12224,6 +12224,8 @@ onClipSec: (nodeId, value) => {
           const sourceNode = incomingEdge?.source ? (nodesById.get(incomingEdge.source) || null) : null;
           const sourceHandle = String(incomingEdge?.sourceHandle || "");
           const validScenarioSource = sourceNode?.type === "comfyNarrative" && sourceHandle === "storyboard_out";
+          const sourceIsGenerating = validScenarioSource && sourceNode?.data?.isGenerating === true;
+          const hasPendingScenarioOutputs = validScenarioSource && !!sourceNode?.data?.pendingOutputs;
           const storyboardOut = validScenarioSource ? extractNarrativeStoryboardOut({ sourceNode, sourceHandle }) : null;
           const directorOutput = validScenarioSource
             ? (sourceNode?.data?.pendingOutputs?.directorOutput || sourceNode?.data?.outputs?.directorOutput || null)
@@ -12251,9 +12253,10 @@ onClipSec: (nodeId, value) => {
             console.debug("[SCENARIO TRANSFER] normalizeScenarioScene sample", buildScenarioTransferLogData(sampleScene || {}, sampleScene || {}));
           }
           const previousScenes = Array.isArray(base?.data?.scenes) ? base.data.scenes : [];
+          const resetBeforeRequest = sourceIsGenerating && (!hasPendingScenarioOutputs || Boolean(base?.data?.scenarioResetInFlight));
           const normalizedScenes = Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length
             ? normalizedPackage.scenes
-            : previousScenes;
+            : (resetBeforeRequest ? [] : previousScenes);
           const previousRevision = String(base?.data?.storyboardRevision || "");
           const nextRevision = sourceScenarioRevision || previousRevision;
           const revisionChanged = previousRevision !== nextRevision;
@@ -12659,10 +12662,19 @@ onClipSec: (nodeId, value) => {
               rawScenarioResponse,
               storyboardOut,
               directorOutput,
+              scenarioMode: String(
+                sourceNode?.data?.contentType
+                || directorOutput?.contentType
+                || storyboardOut?.contentType
+                || normalizedPackage?.contentType
+                || base?.data?.scenarioMode
+                || "story"
+              ).trim(),
+              scenarioResetInFlight: resetBeforeRequest && scenes.length === 0,
               storyboardRevision: nextRevision,
               storyboardSignature: nextStoryboardSignature,
               scenesCount: scenes.length,
-              status: scenes.length > 0 ? "ready" : "idle",
+              status: resetBeforeRequest ? "generating" : (scenes.length > 0 ? "ready" : "idle"),
               audioData,
               onOpenScenarioStoryboard: onOpenScenarioStoryboard,
               onScenarioSceneUpdate: (nodeId, sceneId, patch = {}) => {
@@ -13232,6 +13244,14 @@ onClipSec: (nodeId, value) => {
               onGenerateScenario: async (nodeId) => {
                 const currentEdges = edgesRef.current || [];
                 const currentNodes = nodesRef.current || [];
+                const scenarioStoryboardTargetIds = currentEdges
+                  .filter((edgeItem) => (
+                    edgeItem.source === nodeId
+                    && String(edgeItem.sourceHandle || "") === "storyboard_out"
+                    && String(edgeItem.targetHandle || "") === "scenario_storyboard_in"
+                  ))
+                  .map((edgeItem) => String(edgeItem.target || "").trim())
+                  .filter(Boolean);
                 const activeNode = currentNodes.find((nodeItem) => nodeItem.id === nodeId);
                 const requestKey = `scenario-generate:${String(nodeId || "")}`;
                 const wasInFlight = narrativeGenerateInFlightRef.current.get(requestKey) === true;
@@ -13271,9 +13291,60 @@ onClipSec: (nodeId, value) => {
                 const controller = new AbortController();
                 narrativeAbortControllersRef.current.set(nodeId, controller);
 
+                let preRequestNodes = currentNodes;
+                if (scenarioStoryboardTargetIds.length > 0) {
+                  const targetIdSet = new Set(scenarioStoryboardTargetIds);
+                  const resetAppliedNodes = currentNodes.map((nodeItem) => {
+                    if (!targetIdSet.has(String(nodeItem?.id || "")) || nodeItem?.type !== "scenarioStoryboard") return nodeItem;
+                    const scenesBeforeReset = Array.isArray(nodeItem?.data?.scenes) ? nodeItem.data.scenes.length : 0;
+                    console.debug("[SCENARIO RESET]", {
+                      nodeId: String(nodeItem?.id || ""),
+                      scenesBeforeReset,
+                      resetBeforeRequest: true,
+                    });
+                    return {
+                      ...nodeItem,
+                      data: {
+                        ...nodeItem.data,
+                        scenes: [],
+                        sceneGeneration: {},
+                        storyboardOut: null,
+                        directorOutput: null,
+                        scenarioPackage: null,
+                        rawScenarioResponse: null,
+                        pendingOutputs: null,
+                        pendingRawResponse: null,
+                        pendingStoryboardOut: null,
+                        pendingDirectorOutput: null,
+                        pendingGeneratedAt: "",
+                        pendingScenarioRevision: "",
+                        activeSceneId: "",
+                        selectedSceneId: "",
+                        scenesCount: 0,
+                        status: "generating",
+                        scenarioResetInFlight: true,
+                        audioData: {
+                          ...(nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {}),
+                          phrases: [],
+                          musicStatus: "loading",
+                          musicUrl: "",
+                          musicError: "",
+                          musicTaskId: "",
+                          musicPreviewUrl: "",
+                          musicFileName: "",
+                          musicSource: "",
+                        },
+                      },
+                    };
+                  });
+                  preRequestNodes = bindHandlers(resetAppliedNodes, { nodesNow: resetAppliedNodes, edgesNow: currentEdges, traceReason: "scenario:reset-before-request" });
+                  nodesRef.current = preRequestNodes;
+                  setNodes(preRequestNodes);
+                }
+
                 const { reboundNodes, requestPayload } = buildNarrativeGenerationState({
                   narrativeNodeId: nodeId,
-                  nodesNow: currentNodes,
+                  nodesNow: preRequestNodes,
                   edgesNow: currentEdges,
                   traceReason: "narrative:generate:pending-confirm",
                 });
@@ -16530,6 +16601,7 @@ const hydrate = useCallback((source = "unknown") => {
         scenes={activeScenarioStoryboardNode?.data?.scenes || []}
         sceneGeneration={activeScenarioStoryboardNode?.data?.sceneGeneration || {}}
         audioData={activeScenarioAudioData}
+        scenarioMode={activeScenarioStoryboardNode?.data?.scenarioMode || ""}
         masterAudioUrl={activeScenarioMasterAudioUrl}
         musicUrl={activeScenarioMusicUrl}
         onClose={() => setIsScenarioStoryboardOpen(false)}

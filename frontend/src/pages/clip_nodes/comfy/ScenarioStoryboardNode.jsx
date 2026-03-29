@@ -22,6 +22,29 @@ function isSceneVideoReady(scene = {}, runtime = {}) {
   return hasVideoUrl || videoStatus === "done";
 }
 
+function resolveScenarioModeBadge(modeValue = "") {
+  const raw = String(modeValue || "").trim().toLowerCase();
+  const normalized = raw === "music_video" ? "clip" : raw === "advertisement" ? "ad" : raw;
+  if (normalized === "clip" || normalized === "music_video") {
+    return { resolvedMode: "clip", displayLabel: "Клип", color: "#14b8a6", background: "rgba(20,184,166,0.18)" };
+  }
+  if (normalized === "story") {
+    return { resolvedMode: "story", displayLabel: "История", color: "#3b82f6", background: "rgba(59,130,246,0.18)" };
+  }
+  if (normalized === "music") {
+    return { resolvedMode: "music", displayLabel: "Музыка", color: "#a855f7", background: "rgba(168,85,247,0.2)" };
+  }
+  if (normalized === "ad") {
+    return { resolvedMode: "ad", displayLabel: "Реклама", color: "#f59e0b", background: "rgba(245,158,11,0.2)" };
+  }
+  return {
+    resolvedMode: normalized || "unknown",
+    displayLabel: String(modeValue || "").trim() || "Неизвестно",
+    color: "#94a3b8",
+    background: "rgba(148,163,184,0.2)",
+  };
+}
+
 export default function ScenarioStoryboardNode({ id, data }) {
   const storyboardRevision = String(data?.storyboardRevision || "");
   const scenes = Array.isArray(data?.scenes) ? data.scenes : [];
@@ -61,7 +84,17 @@ export default function ScenarioStoryboardNode({ id, data }) {
     const runtime = generationMap[key] && typeof generationMap[key] === "object" ? generationMap[key] : {};
     return ["generating", "queued", "pending"].includes(String(runtime?.status || runtime?.imageStatus || runtime?.videoStatus || "").trim().toLowerCase());
   });
-  const status = totalScenes === 0 ? "idle" : (hasGenerationInProgress ? "generating" : "ready");
+  const scenarioModeRaw = data?.scenarioMode || data?.contentType || "";
+  const modeBadge = resolveScenarioModeBadge(scenarioModeRaw);
+  const status = String(data?.status || "").trim().toLowerCase() || (totalScenes === 0 ? "idle" : (hasGenerationInProgress ? "generating" : "ready"));
+
+  React.useEffect(() => {
+    console.debug("[SCENARIO MODE BADGE]", {
+      nodeId: String(id || ""),
+      resolvedMode: modeBadge.resolvedMode,
+      displayLabel: modeBadge.displayLabel,
+    });
+  }, [id, modeBadge.displayLabel, modeBadge.resolvedMode]);
 
   if (CLIP_TRACE_SCENARIO_COUNTERS) {
     console.debug("[SCENARIO STORYBOARD CARD SUMMARY]", {
@@ -87,6 +120,21 @@ export default function ScenarioStoryboardNode({ id, data }) {
       <Handle type="source" position={Position.Right} id="scenario_storyboard_out" className="clipSB_handle" style={handleStyle("scenario_storyboard_out")} />
       <NodeShell title="SCENARIO STORYBOARD" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎞️</span>} className="clipSB_nodeStoryboard">
         <div className="clipSB_assemblyStats" style={{ marginTop: 4 }}>
+          <div className="clipSB_assemblyRow">
+            <span>Режим</span>
+            <strong
+              style={{
+                color: modeBadge.color,
+                background: modeBadge.background,
+                border: `1px solid ${modeBadge.color}`,
+                borderRadius: 999,
+                padding: "2px 8px",
+                fontWeight: 700,
+              }}
+            >
+              {modeBadge.displayLabel}
+            </strong>
+          </div>
           <div className="clipSB_assemblyRow"><span>Сцен</span><strong>{totalScenes}</strong></div>
           <div className="clipSB_assemblyRow"><span>Фото</span><strong>{generatedImages}/{totalScenes || 0}</strong></div>
           <div className="clipSB_assemblyRow"><span>Видео</span><strong>{generatedVideos}/{totalScenes || 0}</strong></div>
