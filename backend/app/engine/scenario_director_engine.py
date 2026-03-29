@@ -477,6 +477,7 @@ class ScenarioDirectorScene(BaseModel):
     continuation_from_previous: bool = False
     narration_mode: str = "full"
     local_phrase: str | None = None
+    scene_phrase_count: int = 0
     sfx: str = ""
     music_mix_hint: str = "off"
     render_mode: str = "image_video"
@@ -5456,8 +5457,19 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 left.audio_slice_end_sec = round(max(_safe_float(left.audio_slice_end_sec, left.time_end), _safe_float(right.audio_slice_end_sec, right.time_end)), 3)
                 left.audio_slice_expected_duration_sec = round(max(0.0, left.audio_slice_end_sec - left.audio_slice_start_sec), 3)
                 left.actors = list(dict.fromkeys([*(left.actors or []), *(right.actors or [])]))
-                left.local_phrase = " · ".join([text for text in [str(left.local_phrase or "").strip(), str(right.local_phrase or "").strip()] if text]).strip()
-                left.scene_phrase_count = int(_safe_float(left.scene_phrase_count, 0)) + int(_safe_float(right.scene_phrase_count, 0))
+                left.local_phrase = " · ".join(
+                    [
+                        text
+                        for text in [
+                            str(getattr(left, "local_phrase", "") or "").strip(),
+                            str(getattr(right, "local_phrase", "") or "").strip(),
+                        ]
+                        if text
+                    ]
+                ).strip()
+                left.scene_phrase_count = int(_safe_float(getattr(left, "scene_phrase_count", 0), 0)) + int(
+                    _safe_float(getattr(right, "scene_phrase_count", 0), 0)
+                )
                 if str(right.scene_goal or "").strip():
                     left.scene_goal = " / ".join([part for part in [str(left.scene_goal or "").strip(), str(right.scene_goal or "").strip()] if part])
                 if str(right.frame_description or "").strip():
