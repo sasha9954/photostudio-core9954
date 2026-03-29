@@ -5934,6 +5934,8 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
 def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> ScenarioDirectorStoryboardOut:
     content_type_policy = _get_content_type_policy(payload)
     audio_duration_sec = _resolve_audio_duration_sec(payload)
+    if content_type_policy.get("value") == "music_video":
+        storyboard_out = _filter_short_music_intro_scenes(storyboard_out)
     storyboard_out = _apply_scene_count_limit(storyboard_out)
     storyboard_out = _filter_or_repair_weak_scenes(storyboard_out)
     storyboard_out = _enforce_character_lock(payload, storyboard_out)
@@ -6927,6 +6929,46 @@ def _merge_generation_short_scenes(raw_scenes: list[dict[str, Any]]) -> list[dic
     return scenes
 
 
+
+
+def _is_short_music_intro_segment(*, text: Any = "", t0: Any = 0.0, t1: Any = 0.0, scene_type: Any = "", actors: Any = None) -> bool:
+    phrase = str(text or "").strip().lower()
+    if not phrase:
+        return False
+    normalized_phrase = re.sub(r"[^a-zа-я0-9]+", " ", phrase).strip()
+    if normalized_phrase not in {"music intro", "instrumental intro"}:
+        return False
+    start_sec = _safe_float(t0, 0.0)
+    end_sec = _safe_float(t1, start_sec)
+    duration_sec = max(0.0, end_sec - start_sec)
+    if start_sec > 0.05 or duration_sec > 1.0:
+        return False
+    scene_type_value = str(scene_type or "").strip().lower()
+    if scene_type_value and scene_type_value not in {"intro", "instrumental", "music_intro", "music-intro"}:
+        return False
+    actor_list = [str(actor).strip() for actor in (actors or []) if str(actor).strip()] if isinstance(actors, (list, tuple, set)) else []
+    if actor_list:
+        return False
+    return True
+
+
+def _filter_short_music_intro_scenes(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    scenes = storyboard_out.scenes or []
+    if not scenes:
+        return storyboard_out
+    first = scenes[0]
+    if _is_short_music_intro_segment(
+        text=first.local_phrase,
+        t0=first.time_start,
+        t1=first.time_end,
+        scene_type=first.scene_purpose,
+        actors=first.actors,
+    ):
+        storyboard_out.scenes = scenes[1:]
+        logger.debug("[SCENARIO_DIRECTOR] filtered short intro scene scene_id=%s t0=%.3f t1=%.3f", first.scene_id, first.time_start, first.time_end)
+    return storyboard_out
+
+
 def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]:
     global_story = result.get("globalStory") if isinstance(result.get("globalStory"), dict) else {}
     debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
@@ -7009,6 +7051,16 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
             scene_phrase_match.get("primaryPhrase"),
             scene_phrase_match.get("matchedPhraseTexts"),
         )
+        primary_phrase = str(scene_phrase_match.get("primaryPhrase") or "").strip()
+        if _is_short_music_intro_segment(
+            text=primary_phrase,
+            t0=scene_start,
+            t1=scene_end,
+            scene_type=scene.get("sceneType") or scene.get("scene_type"),
+            actors=scene.get("characters") or [],
+        ):
+            continue
+        is_first_renderable_scene = len(legacy_scenes) == 0
         legacy_scenes.append(
             {
                 "scene_id": str(scene.get("sceneId") or f"S{idx}").strip() or f"S{idx}",
@@ -7033,14 +7085,14 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
                 "needs_two_frames": False,
                 "continuation_from_previous": False,
                 "narration_mode": "full",
-                "local_phrase": str(scene_phrase_match.get("primaryPhrase") or "").strip() or None,
+                "local_phrase": primary_phrase or None,
                 "matched_phrase_texts": scene_phrase_match.get("matchedPhraseTexts") or [],
                 "scene_phrase_count": int(scene_phrase_match.get("phraseCount") or 0),
                 "scene_phrase_source": str(scene_phrase_match.get("sourceUsed") or "none"),
                 "sfx": "",
                 "music_mix_hint": "off",
-                "scene_purpose": "hook" if idx == 1 else "build",
-                "viewer_hook": "Immediate rhythmic visual anchor." if idx == 1 else "Beat-matched progression.",
+                "scene_purpose": "hook" if is_first_renderable_scene else "build",
+                "viewer_hook": "Immediate rhythmic visual anchor." if is_first_renderable_scene else "Beat-matched progression.",
                 "what_from_audio_this_scene_uses": str(primary_semantic.get("meaning") or scene.get("summary") or "").strip(),
                 "director_note_layer": "",
                 "boundary_reason": "phrase",

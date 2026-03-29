@@ -1847,6 +1847,18 @@ function buildScenarioSceneStableSignature(scene = {}) {
   return buildScenarioScenePackageSignature(stripScenarioGeneratedAssets(scene));
 }
 
+
+function isShortMusicIntroPhraseRow(row = {}) {
+  const text = String(row?.text || row?.phrase || "").trim().toLowerCase();
+  const normalizedText = text.replace(/[^a-z0-9а-я]+/gi, " ").trim();
+  if (!["music intro", "instrumental intro"].includes(normalizedText)) return false;
+  const t0 = Number(row?.t0 ?? row?.startSec ?? row?.start ?? 0);
+  const t1Raw = Number(row?.t1 ?? row?.endSec ?? row?.end ?? t0);
+  const t1 = Number.isFinite(t1Raw) && t1Raw >= t0 ? t1Raw : t0;
+  const durationSec = Math.max(0, t1 - t0);
+  return Number.isFinite(t0) && t0 <= 0.05 && durationSec <= 1.0;
+}
+
 function normalizeTimelinePhraseRows(rows = []) {
   if (!Array.isArray(rows)) return [];
   return rows
@@ -1867,7 +1879,8 @@ function normalizeTimelinePhraseRows(rows = []) {
         transitionHint: String(row?.transitionHint || "").trim(),
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((row) => !isShortMusicIntroPhraseRow(row));
 }
 
 function overlapDurationSec(a0 = 0, a1 = 0, b0 = 0, b1 = 0) {
@@ -12887,7 +12900,9 @@ onClipSec: (nodeId, value) => {
               ? packageFallbackMusicPrompt
               : "";
           const sourcePhrases = timelineTranscriptPhrases.length ? timelineTranscriptPhrases : timelineSemanticPhrases;
-          const phraseBreakdown = sourcePhrases.map((phrase, idx) => ({
+          const phraseBreakdown = sourcePhrases
+            .filter((phrase) => !isShortMusicIntroPhraseRow(phrase))
+            .map((phrase, idx) => ({
             sceneId: mapPhraseToSceneIdByTime(phrase, scenes),
             startSec: Number(phrase?.t0 ?? 0),
             endSec: Number(phrase?.t1 ?? phrase?.t0 ?? 0),

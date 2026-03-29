@@ -164,6 +164,18 @@ function getFramePromptPlaceholder(kind = "start") {
     : "Опишите стартовый визуальный state (как выглядит первый кадр).";
 }
 
+
+
+function isShortMusicIntroPhrase(phrase = {}) {
+  const text = String(phrase?.text || "").trim().toLowerCase();
+  const normalizedText = text.replace(/[^a-z0-9а-я]+/gi, " ").trim();
+  if (!["music intro", "instrumental intro"].includes(normalizedText)) return false;
+  const startSec = Number(phrase?.startSec ?? phrase?.t0 ?? 0);
+  const endRaw = Number(phrase?.endSec ?? phrase?.t1 ?? startSec);
+  const endSec = Number.isFinite(endRaw) && endRaw >= startSec ? endRaw : startSec;
+  const durationSec = Math.max(0, endSec - startSec);
+  return Number.isFinite(startSec) && startSec <= 0.05 && durationSec <= 1.0;
+}
 function resolveMusicSource(audioData = {}) {
   if (String(audioData?.musicSource || "").trim()) return String(audioData.musicSource).trim().toLowerCase();
   if (String(audioData?.fileName || "").trim()) return "uploaded";
@@ -348,33 +360,8 @@ export default function ScenarioStoryboardEditor({
   }, [normalizedScenes, safeAudioData?.phrases]);
   const phrasesForUi = useMemo(() => {
     if (!Array.isArray(phrases) || !phrases.length) return [];
-    const firstScene = normalizedScenes?.[0];
-    const secondScene = normalizedScenes?.[1];
-    if (!firstScene || !secondScene) return phrases;
-    const firstSceneId = String(firstScene?.sceneId || "").trim();
-    const firstSceneDuration = safeSceneDuration(firstScene);
-    const firstSceneLocalPhrase = String(firstScene?.localPhrase || "").trim();
-    const firstSceneGoal = String(firstScene?.sceneGoalRu || firstScene?.sceneGoalEn || firstScene?.sceneGoal || "").trim();
-    const firstSceneFrameDescription = String(firstScene?.frameDescription || firstScene?.frameDescriptionRu || firstScene?.frameDescriptionEn || "").trim();
-    const firstSceneIntroHintText = `${firstSceneGoal} ${firstSceneFrameDescription}`.toLowerCase();
-    const firstSceneLooksLikeIntro = /(establishing|intro|opening|instrumental|skyline|city\s*shot)/i.test(firstSceneIntroHintText);
-    const firstSceneHasEnvironmentVisualContext = !!firstSceneGoal || !!firstSceneFrameDescription;
-    const firstSceneHasActors = Array.isArray(firstScene?.actors) && firstScene.actors.length > 0;
-    const secondSceneLocalPhrase = String(secondScene?.localPhrase || "").trim();
-    const shouldHideMicroIntro = (
-      !!firstSceneId
-      && firstSceneDuration > 0
-      && firstSceneDuration < 0.8
-      && !firstSceneLocalPhrase
-      && !firstSceneHasActors
-      && !!secondSceneLocalPhrase
-      && (firstSceneLooksLikeIntro || firstSceneHasEnvironmentVisualContext)
-    );
-    if (!shouldHideMicroIntro) return phrases;
-    const firstPhraseSceneId = String(phrases?.[0]?.sceneId || "").trim();
-    if (firstPhraseSceneId && firstPhraseSceneId !== firstSceneId) return phrases;
-    return phrases.slice(1);
-  }, [normalizedScenes, phrases]);
+    return phrases.filter((phrase) => !isShortMusicIntroPhrase(phrase));
+  }, [phrases]);
 
   const safeIndex = normalizedScenes.findIndex((scene) => String(scene?.sceneId || "") === activeSelectionId);
   const selectedScene = safeIndex >= 0 ? normalizedScenes[safeIndex] : null;
