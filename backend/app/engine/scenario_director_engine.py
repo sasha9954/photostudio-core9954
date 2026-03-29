@@ -6211,12 +6211,119 @@ def _scale_audio_first_timeline_if_normalized(result: dict[str, Any], audio_dura
     return result
 
 
+SCENARIO_CHUNK_PREFERRED_MIN_SEC = 3.0
+SCENARIO_CHUNK_HARD_MIN_SEC = 2.4
+SCENARIO_CHUNK_MICRO_SEC = 2.0
+
+
+def _normalize_scene_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _scene_has_hard_shift(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    shift_hints = ("hard cut", "time jump", "jump cut", "smash cut", "new location", "state shift", "scene break")
+    blob_a = " ".join([
+        _normalize_scene_text(a.get("summary")),
+        _normalize_scene_text(a.get("motion")),
+        _normalize_scene_text(a.get("camera")),
+        _normalize_scene_text(a.get("transitionHint")),
+    ])
+    blob_b = " ".join([
+        _normalize_scene_text(b.get("summary")),
+        _normalize_scene_text(b.get("motion")),
+        _normalize_scene_text(b.get("camera")),
+        _normalize_scene_text(b.get("transitionHint")),
+    ])
+    return any(hint in blob_a or hint in blob_b for hint in shift_hints)
+
+
+def _can_merge_short_scene_pair(left: dict[str, Any], right: dict[str, Any]) -> tuple[bool, str]:
+    left_env = _normalize_scene_text(left.get("environment"))
+    right_env = _normalize_scene_text(right.get("environment"))
+    left_chars = {str(x).strip().lower() for x in (left.get("characters") or []) if str(x).strip()}
+    right_chars = {str(x).strip().lower() for x in (right.get("characters") or []) if str(x).strip()}
+    has_world_overlap = bool(left_chars & right_chars) or (left_env and right_env and left_env == right_env)
+    if not has_world_overlap:
+        return False, "world_or_cast_mismatch"
+    if _scene_has_hard_shift(left, right):
+        return False, "hard_state_shift_detected"
+    return True, "merge_allowed_shared_continuity"
+
+
+def _merge_generation_short_scenes(raw_scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    scenes = [dict(scene) for scene in raw_scenes if isinstance(scene, dict)]
+    if len(scenes) < 2:
+        return scenes
+    idx = 0
+    while idx < len(scenes):
+        scene = scenes[idx]
+        t0 = _safe_float(scene.get("t0"), 0.0)
+        t1 = _safe_float(scene.get("t1"), t0)
+        dur = max(0.0, t1 - t0)
+        if dur >= SCENARIO_CHUNK_HARD_MIN_SEC:
+            idx += 1
+            continue
+        print("[SCENARIO MIN DURATION] " + json.dumps({
+            "sceneId": str(scene.get("sceneId") or f"S{idx+1}"),
+            "durationSec": round(dur, 3),
+            "preferredMinimumSec": SCENARIO_CHUNK_PREFERRED_MIN_SEC,
+            "hardMinimumSec": SCENARIO_CHUNK_HARD_MIN_SEC,
+            "microScene": dur < SCENARIO_CHUNK_MICRO_SEC,
+        }, ensure_ascii=False))
+        merged = False
+        for neighbor_idx in [idx + 1, idx - 1]:
+            if neighbor_idx < 0 or neighbor_idx >= len(scenes):
+                continue
+            neighbor = scenes[neighbor_idx]
+            can_merge, reason = _can_merge_short_scene_pair(scene, neighbor)
+            if not can_merge:
+                print("[SCENARIO CHUNK MERGE] " + json.dumps({
+                    "action": "kept_separate",
+                    "sceneId": str(scene.get("sceneId") or f"S{idx+1}"),
+                    "neighborSceneId": str(neighbor.get("sceneId") or f"S{neighbor_idx+1}"),
+                    "reason": reason,
+                }, ensure_ascii=False))
+                continue
+            left_idx, right_idx = sorted([idx, neighbor_idx])
+            left = scenes[left_idx]
+            right = scenes[right_idx]
+            left["t0"] = _safe_float(left.get("t0"), 0.0)
+            left["t1"] = _safe_float(right.get("t1"), _safe_float(left.get("t1"), _safe_float(left.get("t0"), 0.0)))
+            left["duration"] = round(max(0.0, _safe_float(left.get("t1"), 0.0) - _safe_float(left.get("t0"), 0.0)), 3)
+            left["summary"] = " / ".join([part for part in [str(left.get("summary") or "").strip(), str(right.get("summary") or "").strip()] if part])
+            left["motion"] = " / ".join([part for part in [str(left.get("motion") or "").strip(), str(right.get("motion") or "").strip()] if part])
+            left_chars = [str(x).strip() for x in (left.get("characters") or []) if str(x).strip()]
+            right_chars = [str(x).strip() for x in (right.get("characters") or []) if str(x).strip()]
+            left["characters"] = list(dict.fromkeys(left_chars + right_chars))
+            scenes.pop(right_idx)
+            print("[SCENARIO CHUNK MERGE] " + json.dumps({
+                "action": "merged",
+                "sceneId": str(left.get("sceneId") or f"S{left_idx+1}"),
+                "mergedWithSceneId": str(right.get("sceneId") or f"S{right_idx+1}"),
+                "reason": reason,
+                "resultDurationSec": left.get("duration"),
+            }, ensure_ascii=False))
+            merged = True
+            idx = max(0, left_idx - 1)
+            break
+        if not merged:
+            print("[SCENARIO CHUNK MERGE] " + json.dumps({
+                "action": "kept_short_scene",
+                "sceneId": str(scene.get("sceneId") or f"S{idx+1}"),
+                "durationSec": round(dur, 3),
+                "reason": "no_safe_neighbor_merge",
+            }, ensure_ascii=False))
+            idx += 1
+    return scenes
+
+
 def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]:
     global_story = result.get("globalStory") if isinstance(result.get("globalStory"), dict) else {}
     debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
     transcript_rows = result.get("transcript") if isinstance(result.get("transcript"), list) else []
     semantic_timeline = result.get("semanticTimeline") if isinstance(result.get("semanticTimeline"), list) else []
     raw_scenes = result.get("scenes") if isinstance(result.get("scenes"), list) else []
+    raw_scenes = _merge_generation_short_scenes(raw_scenes)
     transcript_text_parts = [
         str(item.get("text") or "").strip()
         for item in transcript_rows
@@ -6314,7 +6421,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
                 "resolved_workflow_key": "image-video",
                 "start_frame_source": "new",
                 "needs_two_frames": False,
-                "continuation_from_previous": idx > 1,
+                "continuation_from_previous": False,
                 "narration_mode": "full",
                 "local_phrase": str(scene_phrase_match.get("primaryPhrase") or "").strip() or None,
                 "matched_phrase_texts": scene_phrase_match.get("matchedPhraseTexts") or [],
