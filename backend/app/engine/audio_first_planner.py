@@ -545,6 +545,14 @@ def _select_render_mode(
     return selected_mode, selected_reason, intent_modes, intent_priority, override_applied
 
 
+def _render_mode_to_workflow_family(render_mode: RenderMode) -> str:
+    if render_mode == RenderMode.lip_sync:
+        return "lip_sync_music"
+    if render_mode in {RenderMode.f_l, RenderMode.f_l_as}:
+        return "f_l"
+    return "i2v"
+
+
 def _map_intent_to_motion(intent: str) -> dict[str, str]:
     mapping: dict[str, dict[str, str]] = {
         "pursuit": {"motionStyle": "forward_movement_tracking", "cameraBehavior": "handheld_follow"},
@@ -785,6 +793,10 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
                 "suggestedRenderModes": [mode.value for mode in suggested_modes],
                 "intentRenderPriority": intent_priority,
                 "selectedRenderMode": render_mode.value,
+                "selectedWorkflowFamily": _render_mode_to_workflow_family(render_mode),
+                "music_vocal_lipsync_allowed": bool(lipsync_policy.allowed and has_vocal_rhythm),
+                "sound_dialogue_allowed": bool(audio_segment_type in {AudioSegmentType.local_phrase, AudioSegmentType.narration}),
+                "downgrade_reason": "" if render_mode == RenderMode.lip_sync else str(lipsync_policy.reason or "not_lipsync_or_policy_blocked"),
                 "overrideApplied": override_applied,
                 "roleIntentValidation": role_intent_validation,
                 "motionProfile": motion_profile,
@@ -828,6 +840,10 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             "sceneIntentConfidence": scene_intent_confidence,
             "sceneIntentWarnings": list(dict.fromkeys(scene_intent_warnings)),
             "sceneIntentDiagnostics": scene_intent_diagnostics,
+            "selected_workflow_family": [item.get("selectedWorkflowFamily") for item in scene_intent_diagnostics],
+            "music_vocal_lipsync_allowed": [item.get("music_vocal_lipsync_allowed") for item in scene_intent_diagnostics],
+            "sound_dialogue_allowed": [item.get("sound_dialogue_allowed") for item in scene_intent_diagnostics],
+            "downgrade_reason": [item.get("downgrade_reason") for item in scene_intent_diagnostics],
             "refinementHint": refinement_hint,
         },
     )

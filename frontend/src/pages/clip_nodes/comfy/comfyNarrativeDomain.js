@@ -687,6 +687,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     : "9:16";
 
   const safeContentType = getSafeNarrativeContentType(state?.contentType, "music_video");
+  const isMusicVideo = safeContentType === "music_video";
   const payload = {
     source: {
       source_mode: normalizeNarrativeSourceMode(resolvedSource.mode),
@@ -724,6 +725,13 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       segmentationMode,
       timelineSource,
       useAudioPhraseBoundaries,
+      clipModeCanon: isMusicVideo ? "visual_performance_arc_v1" : "",
+      clipTargetFormula: isMusicVideo ? { lip_sync_music: 2, first_last: 2, i2v: 4 } : undefined,
+      storyConstructionMode: isMusicVideo ? "performance_arc" : "narrative_arc",
+      literalLyricSceneMode: !isMusicVideo,
+      firstLastRequiresVisualDelta: isMusicVideo,
+      musicLipSyncRequiresMusicAndVocal: isMusicVideo,
+      soundDialogueWorkflowsDisabledInClip: isMusicVideo,
     },
     connected_context_summary: connectedContextSummary,
     metadata: {

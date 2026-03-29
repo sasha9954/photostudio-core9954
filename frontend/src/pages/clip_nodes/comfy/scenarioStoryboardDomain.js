@@ -15,18 +15,23 @@ export const SCENARIO_LTX_WORKFLOW_MAP = {
   i2v: "i2v",
   f_l: "f_l",
   continuation: "continuation",
-  lip_sync: "lip_sync",
+  lip_sync: "lip_sync_music",
+  lip_sync_music: "lip_sync_music",
+  i2v_sound: "i2v_sound",
+  f_l_sound: "f_l_sound",
 };
 const SCENARIO_LEGACY_WORKFLOW_ALIASES = {
   i2v_as: "i2v",
   f_l_as: "f_l",
+  lip_sync_music: "lip_sync_music",
+  lip_sync: "lip_sync_music",
 };
 const SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY = {
   "image-video.json": "i2v",
-  "image-video-golos-zvuk.json": "i2v",
+  "image-video-golos-zvuk.json": "i2v_sound",
   "imag-imag-video-bz.json": "f_l",
-  "imag-imag-video-zvuk.json": "f_l",
-  "image-lipsink-video-music.json": "lip_sync",
+  "imag-imag-video-zvuk.json": "f_l_sound",
+  "image-lipsink-video-music.json": "lip_sync_music",
 };
 export const SCENARIO_MODEL_KEY_TO_SPEC = {
   ltx23_dev_fp8: {
@@ -62,7 +67,9 @@ export const SCENARIO_MODEL_KEY_TO_SPEC = {
 };
 const SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY = {
   i2v: "ltx23_dev_fp8",
-  lip_sync: "ltx23_dev_fp8",
+  lip_sync_music: "ltx23_dev_fp8",
+  i2v_sound: "ltx23_dev_fp8",
+  f_l_sound: "ltx23_distilled_fp8",
   f_l: "ltx23_distilled_fp8",
 };
 const SCENARIO_MODEL_KEY_ALIASES = {
@@ -658,7 +665,7 @@ function resolveScenarioRenderProvider(source = {}, scenarioPackage = null) {
     || source.needs_two_frames
     || source.requiresTwoFrames
     || source.requiresContinuation
-    || normalizeText(source.resolvedWorkflowKey || resolveScenarioExplicitWorkflowKey(source) || resolveScenarioWorkflowKey(source)).toLowerCase() === "lip_sync"
+    || ["lip_sync_music", "lip_sync"].includes(normalizeText(source.resolvedWorkflowKey || resolveScenarioExplicitWorkflowKey(source) || resolveScenarioWorkflowKey(source)).toLowerCase())
   );
   for (const candidate of providerCandidates) {
     const normalized = normalizeText(candidate).toLowerCase();
@@ -956,7 +963,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const imageStrategy = deriveScenarioImageStrategy(source);
   const resolvedWorkflowKeyRaw = explicitWorkflowKey || resolveScenarioWorkflowKey(source);
   const resolvedWorkflowKey = (requiresContinuationRaw && !requiresTwoFrames) ? "i2v" : resolvedWorkflowKeyRaw;
-  const requiresAudioSensitiveVideo = resolvedWorkflowKey === "lip_sync" || Boolean(source.lipSync ?? source.lip_sync);
+  const requiresAudioSensitiveVideo = ["lip_sync_music", "lip_sync"].includes(resolvedWorkflowKey) || Boolean(source.lipSync ?? source.lip_sync);
   const resolvedModelKey = resolveScenarioExplicitModelKey(source) || SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY[resolvedWorkflowKey] || "";
   const sceneRenderProvider = resolveScenarioRenderProvider(source, scenarioPackage);
   const requestedDurationSec = normalizeDurationFromScene(source, durationSec);

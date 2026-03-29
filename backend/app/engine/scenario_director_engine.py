@@ -53,6 +53,32 @@ SCENES_JSON_RETRY_SUFFIX = (
 
 logger = logging.getLogger(__name__)
 
+CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY = {
+    "i2v": "image-video.json",
+    "f_l": "imag-imag-video-bz.json",
+    "lip_sync_music": "image-lipsink-video-music.json",
+    "i2v_sound": "image-video-golos-zvuk.json",
+    "f_l_sound": "imag-imag-video-zvuk.json",
+}
+CLIP_CANONICAL_WORKFLOW_KEY_BY_FILE = {
+    value.lower(): key for key, value in CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY.items()
+}
+
+
+def _normalize_workflow_filename(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return raw if raw.endswith(".json") else f"{raw}.json"
+
+
+def _resolve_workflow_key_and_file(value: Any, *, fallback_key: str = "i2v") -> tuple[str, str]:
+    workflow_file = _normalize_workflow_filename(value)
+    workflow_key = CLIP_CANONICAL_WORKFLOW_KEY_BY_FILE.get(workflow_file.lower(), fallback_key)
+    if not workflow_file:
+        workflow_file = CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY.get(workflow_key, CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["i2v"])
+    return workflow_key, workflow_file
+
 SCENARIO_CANONICAL_ROLES = (
     "character_1",
     "character_2",
@@ -468,6 +494,7 @@ class ScenarioDirectorScene(BaseModel):
     camera: str = ""
     image_prompt: str = ""
     video_prompt: str = ""
+    video_negative_prompt: str = ""
     start_frame_prompt: str = ""
     end_frame_prompt: str = ""
     ltx_mode: str = "i2v"
@@ -482,12 +509,23 @@ class ScenarioDirectorScene(BaseModel):
     music_mix_hint: str = "off"
     render_mode: str = "image_video"
     resolved_workflow_key: str = "image-video"
+    resolved_workflow_file: str = ""
     transition_type: str = "cut"
     shot_type: str = "medium"
     requested_duration_sec: float = 0.0
     scene_purpose: str = ""
     viewer_hook: str = ""
     performance_framing: str = ""
+    clip_arc_stage: str = ""
+    beat_function: str = ""
+    progression_reason: str = ""
+    transition_family: str = ""
+    start_visual_state: str = ""
+    end_visual_state: str = ""
+    delta_axes: list[str] = Field(default_factory=list)
+    visual_intensity_level: str = ""
+    crowd_relation_state: str = ""
+    performance_phase: str = ""
     lip_sync: bool = False
     lip_sync_text: str = ""
     send_audio_to_generator: bool = False
@@ -543,6 +581,7 @@ class ScenarioDirectorScene(BaseModel):
         self.camera = str(self.camera or "").strip()
         self.image_prompt = str(self.image_prompt or "").strip()
         self.video_prompt = str(self.video_prompt or "").strip()
+        self.video_negative_prompt = str(self.video_negative_prompt or "").strip()
         self.start_frame_prompt = str(self.start_frame_prompt or "").strip()
         self.end_frame_prompt = str(self.end_frame_prompt or "").strip()
         self.narration_mode = str(self.narration_mode or "full").strip() or "full"
@@ -560,6 +599,11 @@ class ScenarioDirectorScene(BaseModel):
         self.music_mix_hint = str(self.music_mix_hint or "off").strip() or "off"
         self.render_mode = str(self.render_mode or "image_video").strip() or "image_video"
         self.resolved_workflow_key = str(self.resolved_workflow_key or "image-video").strip() or "image-video"
+        self.resolved_workflow_file = str(self.resolved_workflow_file or "").strip()
+        if self.resolved_workflow_key in CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY and not self.resolved_workflow_file:
+            self.resolved_workflow_file = CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY[self.resolved_workflow_key]
+        if self.resolved_workflow_file and self.resolved_workflow_key not in CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY:
+            self.resolved_workflow_key = CLIP_CANONICAL_WORKFLOW_KEY_BY_FILE.get(self.resolved_workflow_file.lower(), self.resolved_workflow_key)
         self.transition_type = str(self.transition_type or "cut").strip() or "cut"
         self.shot_type = str(self.shot_type or "").strip()
         self.requested_duration_sec = _safe_float(
@@ -569,6 +613,16 @@ class ScenarioDirectorScene(BaseModel):
         self.scene_purpose = str(self.scene_purpose or "").strip()
         self.viewer_hook = str(self.viewer_hook or "").strip()
         self.performance_framing = str(self.performance_framing or "").strip()
+        self.clip_arc_stage = str(self.clip_arc_stage or "").strip()
+        self.beat_function = str(self.beat_function or "").strip()
+        self.progression_reason = str(self.progression_reason or "").strip()
+        self.transition_family = str(self.transition_family or "").strip()
+        self.start_visual_state = str(self.start_visual_state or "").strip()
+        self.end_visual_state = str(self.end_visual_state or "").strip()
+        self.delta_axes = [str(item).strip() for item in (self.delta_axes or []) if str(item).strip()]
+        self.visual_intensity_level = str(self.visual_intensity_level or "").strip()
+        self.crowd_relation_state = str(self.crowd_relation_state or "").strip()
+        self.performance_phase = str(self.performance_phase or "").strip()
         self.lip_sync = _coerce_bool(self.lip_sync, self.ltx_mode == "lip_sync")
         self.lip_sync_text = str(self.lip_sync_text or "").strip()
         self.send_audio_to_generator = _coerce_bool(self.send_audio_to_generator, False)
@@ -1013,12 +1067,23 @@ def _normalize_legacy_scene_shape(scene: dict) -> dict:
     normalized.setdefault("confidence", normalized.get("confidence"))
     normalized.setdefault("render_mode", normalized.get("renderMode"))
     normalized.setdefault("resolved_workflow_key", normalized.get("resolvedWorkflowKey"))
+    normalized.setdefault("resolved_workflow_file", normalized.get("resolvedWorkflowFile"))
     normalized.setdefault("transition_type", normalized.get("transitionType"))
     normalized.setdefault("shot_type", normalized.get("shotType"))
     normalized.setdefault("requested_duration_sec", normalized.get("requestedDurationSec"))
     normalized.setdefault("scene_purpose", normalized.get("scenePurpose"))
     normalized.setdefault("viewer_hook", normalized.get("viewerHook"))
     normalized.setdefault("performance_framing", normalized.get("performanceFraming"))
+    normalized.setdefault("clip_arc_stage", normalized.get("clipArcStage"))
+    normalized.setdefault("beat_function", normalized.get("beatFunction"))
+    normalized.setdefault("progression_reason", normalized.get("progressionReason"))
+    normalized.setdefault("transition_family", normalized.get("transitionFamily"))
+    normalized.setdefault("start_visual_state", normalized.get("startVisualState"))
+    normalized.setdefault("end_visual_state", normalized.get("endVisualState"))
+    normalized.setdefault("delta_axes", normalized.get("deltaAxes"))
+    normalized.setdefault("visual_intensity_level", normalized.get("visualIntensityLevel"))
+    normalized.setdefault("crowd_relation_state", normalized.get("crowdRelationState"))
+    normalized.setdefault("performance_phase", normalized.get("performancePhase"))
     normalized.setdefault("lip_sync", normalized.get("lipSync"))
     normalized.setdefault("lip_sync_text", normalized.get("lipSyncText"))
     normalized.setdefault("send_audio_to_generator", normalized.get("sendAudioToGenerator"))
@@ -1043,6 +1108,7 @@ def _normalize_legacy_scene_shape(scene: dict) -> dict:
     normalized.setdefault("workflow_decision_reason", normalized.get("workflowDecisionReason"))
     normalized.setdefault("lip_sync_decision_reason", normalized.get("lipSyncDecisionReason"))
     normalized.setdefault("audio_slice_decision_reason", normalized.get("audioSliceDecisionReason"))
+    normalized.setdefault("video_negative_prompt", normalized.get("videoNegativePrompt"))
 
     if applied:
         logger.debug(
@@ -2457,6 +2523,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "cameraIdea": scene.camera,
             "imagePrompt": scene.image_prompt,
             "videoPrompt": scene.video_prompt,
+            "videoNegativePrompt": scene.video_negative_prompt,
             "startFramePrompt": start_frame_prompt,
             "endFramePrompt": end_frame_prompt,
             "startFramePromptRu": start_frame_prompt,
@@ -2467,7 +2534,18 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "whyThisMode": scene.ltx_reason,
             "renderMode": scene.render_mode,
             "resolvedWorkflowKey": scene.resolved_workflow_key,
+            "resolvedWorkflowFile": scene.resolved_workflow_file,
             "scenePurpose": scene.scene_purpose,
+            "clipArcStage": scene.clip_arc_stage,
+            "beatFunction": scene.beat_function,
+            "progressionReason": scene.progression_reason,
+            "transitionFamily": scene.transition_family,
+            "startVisualState": scene.start_visual_state,
+            "endVisualState": scene.end_visual_state,
+            "deltaAxes": scene.delta_axes,
+            "visualIntensityLevel": scene.visual_intensity_level,
+            "crowdRelationState": scene.crowd_relation_state,
+            "performancePhase": scene.performance_phase,
             "viewerHook": scene.viewer_hook,
             "startFrameSource": scene.start_frame_source,
             "needsTwoFrames": scene.needs_two_frames,
@@ -2566,6 +2644,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "cameraIdea": scene.camera,
                 "imagePrompt": scene.image_prompt,
                 "videoPrompt": scene.video_prompt,
+                "videoNegativePrompt": scene.video_negative_prompt,
                 "startFramePrompt": start_frame_prompt,
                 "endFramePrompt": end_frame_prompt,
                 "startFramePromptRu": start_frame_prompt,
@@ -2576,6 +2655,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "whyThisMode": scene.ltx_reason,
                 "renderMode": scene.render_mode,
                 "resolvedWorkflowKey": scene.resolved_workflow_key,
+                "resolvedWorkflowFile": scene.resolved_workflow_file,
                 "startFrameSource": scene.start_frame_source,
                 "needsTwoFrames": scene.needs_two_frames,
                 "continuation": scene.continuation_from_previous,
@@ -2951,24 +3031,21 @@ def _limit_lip_sync_usage(
 ) -> ScenarioDirectorStoryboardOut:
     content_policy = content_type_policy or {}
     is_music_video = str(content_policy.get("value") or "").strip().lower() == "music_video"
+    duration = max((scene.time_end for scene in storyboard_out.scenes), default=0.0)
+    lip_sync_cap = 2 if is_music_video and 25.0 <= duration <= 35.0 else 3
     lip_sync_seen = 0
     for scene in storyboard_out.scenes:
         if scene.ltx_mode != "lip_sync":
             continue
         lip_sync_seen += 1
-        if lip_sync_seen <= 3:
+        if lip_sync_seen <= lip_sync_cap:
             continue
-        has_sound_cue = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
-        use_sound_workflow = has_sound_cue and not is_music_video
-        scene.render_mode = "image_video_sound" if has_sound_cue else "image_video"
-        if is_music_video:
-            scene.render_mode = "image_video"
-        scene.resolved_workflow_key = (
-            str(content_policy.get("clipWorkflowSound") or "image-video-golos-zvuk")
-            if use_sound_workflow
-            else str(content_policy.get("clipWorkflowDefault") or "image-video")
+        scene.render_mode = "image_video"
+        scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file(
+            str(content_policy.get("clipWorkflowDefault") or "image-video"),
+            fallback_key="i2v",
         )
-        scene.ltx_mode = "i2v_as" if use_sound_workflow else "i2v"
+        scene.ltx_mode = "i2v"
         scene.lip_sync = False
         scene.send_audio_to_generator = False
         scene.lip_sync_text = ""
@@ -2976,17 +3053,9 @@ def _limit_lip_sync_usage(
         scene.audio_slice_end_sec = 0.0
         scene.audio_slice_expected_duration_sec = 0.0
         scene.audio_slice_decision_reason = "Audio slice disabled after lip-sync limit downgrade."
-        replacement_reason = (
-            "Lip-sync quota reached; downgraded to sound-aware image-video workflow."
-            if use_sound_workflow
-            else (
-                "Lip-sync quota reached; downgraded to base image-video workflow with sound workflow auto-disabled for music_video."
-                if has_sound_cue and is_music_video
-                else "Lip-sync quota reached; downgraded to base image-video workflow."
-            )
-        )
+        replacement_reason = "Lip-sync quota reached; downgraded to base image-video workflow."
         scene.workflow_decision_reason = replacement_reason
-        scene.lip_sync_decision_reason = "Lip-sync disabled because Scenario Director allows at most 3 lip_sync scenes per output."
+        scene.lip_sync_decision_reason = f"Lip-sync disabled because Scenario Director allows at most {lip_sync_cap} lip_sync_music scenes for this clip."
         scene.ltx_reason = _normalize_ltx_reason(replacement_reason, scene.ltx_mode, narration_mode=scene.narration_mode)
     return storyboard_out
 
@@ -3602,11 +3671,46 @@ def _strip_ltx_meta_noise(text: str) -> str:
     return " ".join(filtered).strip()
 
 
+VISIBLE_PROMPT_META_BANNED = (
+    "baseline composition",
+    "pre-change state",
+    "resolved changed state",
+    "a→b",
+    "must be readable",
+    "subject-position delta",
+    "visibly evolve",
+    "new state",
+    "represents",
+    "symbolizes",
+    "cycle begins anew",
+    "dramatic purpose",
+    "beat function",
+    "progression",
+    "transition family",
+    "hero arc",
+    "world arc",
+    "scene purpose",
+    "by the end",
+)
+
+
+def _sanitize_visible_prompt_text(text: str) -> str:
+    cleaned = _strip_ltx_meta_noise(text)
+    if not cleaned:
+        return ""
+    lowered = cleaned.lower()
+    if any(phrase in lowered for phrase in VISIBLE_PROMPT_META_BANNED):
+        sentences = [segment.strip() for segment in re.split(r"[.;\n\r]+", cleaned) if segment.strip()]
+        filtered = [item for item in sentences if not any(phrase in item.lower() for phrase in VISIBLE_PROMPT_META_BANNED)]
+        cleaned = ". ".join(filtered).strip()
+    return re.sub(r"\s+", " ", cleaned).strip(" .")
+
+
 def _join_visible_prompt_parts(parts: list[str]) -> str:
     result: list[str] = []
     seen: set[str] = set()
     for raw_part in parts:
-        part = _strip_ltx_meta_noise(raw_part)
+        part = _sanitize_visible_prompt_text(raw_part)
         if not part:
             continue
         normalized = re.sub(r"\s+", " ", part).strip(" .;,:").lower()
@@ -3643,11 +3747,17 @@ def _build_props_visible_hint(scene: ScenarioDirectorScene) -> str:
 
 
 def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene) -> str:
-    lead = str(scene.frame_description or scene.scene_goal or "").strip()
+    lead = str(scene.frame_description or "").strip()
     action = str(scene.action_in_frame or "").strip()
     location = str(scene.location or "").strip()
     emotion = str(scene.emotion or "").strip()
+    shot = str(scene.shot_type or "").replace("_", " ").strip()
+    subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip()][:2]).strip()
     parts: list[str] = []
+    if shot:
+        parts.append(f"Cinematic 9:16 vertical {shot} frame")
+    if subject:
+        parts.append(f"Visible subject: {subject}")
     if lead:
         parts.append(lead)
     if action and action.lower() not in lead.lower():
@@ -3660,38 +3770,28 @@ def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene) -> str:
         parts.append(props_hint)
     if location or emotion:
         atmosphere = ", ".join(value for value in (location, emotion) if value)
-        parts.append(f"Atmosphere: {atmosphere}")
+        parts.append(f"World details: {atmosphere}")
     return _join_visible_prompt_parts(parts)
 
 
-def _build_scene_driven_end_state_delta(scene: ScenarioDirectorScene) -> str:
-    scene_text = " ".join(
-        str(value or "")
-        for value in (
-            scene.scene_goal,
-            scene.frame_description,
-            scene.action_in_frame,
-            scene.camera,
-            scene.emotion,
-            scene.transition_type,
-            scene.shot_type,
-        )
-    ).lower()
-    scene_cues: list[tuple[tuple[str, ...], str]] = [
-        (("whisper", "secret", "ear"), "By the end, they lean closer, head angle shifts, and a soft private smile appears"),
-        (("laugh", "smile", "giggle"), "By the end, laughter opens the posture and gaze, with livelier shoulder movement"),
-        (("twirl", "turn", "spin"), "By the end, the turn opens into a wider motion arc with changed gaze direction"),
-        (("intimate", "tender", "pause"), "By the end, emotional distance closes with subtler eye-line and head-angle changes"),
-        (("approach", "closer", "lean in"), "By the end, body distance is reduced and mutual orientation becomes stronger"),
-    ]
-    for keys, delta in scene_cues:
-        if any(key in scene_text for key in keys):
-            return delta
-    if "close_up" in scene_text:
-        return "By the end, micro-expression shifts and eye-line changes are clearly visible"
-    if "wide" in scene_text:
-        return "By the end, spacing and blocking shift into a visibly different frame geometry"
-    return "By the end, pose, gaze, and interpersonal distance visibly evolve into a new state"
+def _derive_visual_delta_axes(scene: ScenarioDirectorScene) -> list[str]:
+    raw = " ".join([scene.action_in_frame, scene.frame_description, scene.camera, scene.transition_type]).lower()
+    axes: list[str] = []
+    if any(token in raw for token in ("turn", "spin", "twirl", "jump", "drop", "kneel", "rise")):
+        axes.append("pose_phase")
+    if any(token in raw for token in ("look", "gaze", "eye", "stare", "profile", "face")):
+        axes.append("gaze_direction")
+    if any(token in raw for token in ("dress", "fabric", "coat", "hair", "cape", "prop", "mic", "jacket")):
+        axes.append("fabric_or_object_state")
+    if any(token in raw for token in ("close", "wide", "push", "dolly", "crane", "zoom")):
+        axes.append("camera_distance")
+    if any(token in raw for token in ("crowd", "audience", "people", "club", "stage")):
+        axes.append("crowd_spacing")
+    if any(token in raw for token in ("smoke", "haze", "fog", "particle", "strobe", "flash", "light")):
+        axes.append("background_intensity")
+    defaults = ["pose_phase", "gaze_direction", "camera_distance", "background_intensity"]
+    merged = list(dict.fromkeys((scene.delta_axes or []) + axes + defaults))
+    return merged[:6]
 
 
 def _normalize_prompt_tokens(text: str) -> set[str]:
@@ -3733,7 +3833,7 @@ def _ensure_first_last_visual_delta(start_prompt: str, end_prompt: str, scene: S
     start_norm = re.sub(r"\s+", " ", start_clean).strip().lower()
     end_norm = re.sub(r"\s+", " ", end_clean).strip().lower()
     if not end_clean:
-        return _join_visible_prompt_parts([start_clean, _build_scene_driven_end_state_delta(scene)])
+        return ""
 
     start_tokens = _normalize_prompt_tokens(start_norm)
     end_tokens = _normalize_prompt_tokens(end_norm)
@@ -3742,8 +3842,32 @@ def _ensure_first_last_visual_delta(start_prompt: str, end_prompt: str, scene: S
     too_similar = start_norm == end_norm or contains or overlap >= 0.82
     lacks_delta = not _has_visual_change_cues(end_norm)
     if too_similar or lacks_delta:
-        return _join_visible_prompt_parts([end_clean, _build_scene_driven_end_state_delta(scene)])
+        return ""
     return end_clean
+
+
+def _build_first_last_state_prompts(scene: ScenarioDirectorScene, base_start: str, base_end: str) -> tuple[str, str]:
+    axes = _derive_visual_delta_axes(scene)
+    scene.delta_axes = axes
+    subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip()][:2]).strip() or "lead performer"
+    location = str(scene.location or "club stage").strip()
+    start_prompt = _join_visible_prompt_parts(
+        [
+            f"Cinematic 9:16 vertical frame, {subject} at {location}",
+            base_start,
+            "Face readable, body motion just beginning, silhouette compact in center frame",
+            "Background readable with controlled haze and sparse particles",
+        ]
+    )
+    end_prompt = _join_visible_prompt_parts(
+        [
+            f"Cinematic 9:16 vertical frame, same {subject} in the same {location}",
+            base_end,
+            "Motion reaches a later phase with changed pose, gaze, and silhouette size",
+            "Camera distance shifts and background intensity rises with denser particles and brighter flashes",
+        ]
+    )
+    return start_prompt, end_prompt
 
 
 def build_ltx_visible_first_last_prompts(scene: ScenarioDirectorScene, raw_scene: dict[str, Any] | None = None) -> tuple[str, str]:
@@ -3753,25 +3877,36 @@ def build_ltx_visible_first_last_prompts(scene: ScenarioDirectorScene, raw_scene
 
     base_start = explicit_start or str(scene.frame_description or scene.scene_goal or scene.image_prompt or "").strip()
     base_end = explicit_end or str(scene.scene_goal or scene.action_in_frame or scene.frame_description or "").strip()
-    start_prompt = _join_visible_prompt_parts([base_start, _build_duet_visible_hint(scene) if _is_duet_scene(scene) else ""])
-    end_prompt = _join_visible_prompt_parts([base_end, _build_duet_visible_hint(scene) if _is_duet_scene(scene) else ""])
+    start_prompt, end_prompt = _build_first_last_state_prompts(scene, base_start, base_end)
     end_prompt = _ensure_first_last_visual_delta(start_prompt, end_prompt, scene)
+    if not end_prompt:
+        scene.render_mode = "image_video"
+        scene.resolved_workflow_key = "image-video"
+        scene.resolved_workflow_file = CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["i2v"]
+        scene.ltx_mode = "i2v"
+        scene.needs_two_frames = False
+        return "", ""
     return start_prompt, end_prompt
 
 
 def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene) -> str:
     action = str(scene.action_in_frame or scene.scene_goal or "").strip()
     camera = str(scene.camera or "").strip()
+    location = str(scene.location or "").strip()
     emotion = str(scene.emotion or "").strip()
+    subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip()][:2]).strip()
     parts: list[str] = []
+    parts.append("Cinematic 9:16 vertical shot")
+    if subject:
+        parts.append(f"Identity anchor: {subject}")
     if action:
-        parts.append(action)
+        parts.append(f"Physical motion: {action}")
     if camera:
-        parts.append(f"Camera: {camera}")
+        parts.append(f"Camera movement: {camera}")
+    if location:
+        parts.append(f"World and background motion: {location}")
     if emotion:
-        parts.append(f"Atmosphere: {emotion}")
-    if scene.render_mode in {"first_last", "first_last_sound"} or scene.resolved_workflow_key == "imag-imag-video-bz":
-        parts.append(_build_scene_driven_end_state_delta(scene))
+        parts.append(f"Visible emotional state: {emotion}")
     return _join_visible_prompt_parts(parts)
 
 
@@ -3787,6 +3922,27 @@ def _build_music_video_video_prompt(scene: ScenarioDirectorScene) -> str:
         return ""
     subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip().startswith("character_")][:2]).strip()
     return _join_visible_prompt_parts([f"Subject action: {subject}" if subject else "", build_ltx_visible_video_prompt(scene)])
+
+
+def build_ltx_video_negative_prompt() -> str:
+    return ", ".join(
+        [
+            "morphing artifacts",
+            "slideshow motion",
+            "crossfade transitions",
+            "broken anatomy",
+            "deformed hands",
+            "extra limbs",
+            "jitter",
+            "flicker",
+            "frozen fabric",
+            "static background",
+            "blurry face",
+            "low resolution",
+            "teleporting limbs",
+            "floating objects",
+        ]
+    )
 
 
 def _scene_requires_explicit_first_last_prompts(scene: ScenarioDirectorScene) -> bool:
@@ -4323,6 +4479,16 @@ def _apply_music_video_mode_policy(
     payload: dict[str, Any],
     audio_duration_sec: float | None = None,
 ) -> ScenarioDirectorStoryboardOut:
+    clip_arc_stages = [
+        "world_entry",
+        "attention_capture",
+        "center_claim",
+        "inner_turn",
+        "second_rise",
+        "peak_performance",
+        "release",
+        "afterimage",
+    ]
     scenes = storyboard_out.scenes or []
     if not scenes:
         return storyboard_out
@@ -4334,7 +4500,8 @@ def _apply_music_video_mode_policy(
     if len(scenes) >= 5 and not has_existing_first_last:
         forced_first_last_index = _select_forced_music_video_transition_index(scenes, payload=payload)
     repeat_heavy_clip = _is_repeat_heavy_music_clip(scenes)
-    max_lip_sync = max(1, min(3, len(scenes) // 2 if len(scenes) <= 6 else 3))
+    target_lip_sync = 2 if 25.0 <= _safe_float(audio_duration_sec, 0.0) <= 35.0 else max(1, min(3, len(scenes) // 3 or 1))
+    max_lip_sync = max(1, min(target_lip_sync, 3))
     lip_sync_used = 0
     prev_lip_sync = False
     prev_two_frames = False
@@ -4486,20 +4653,14 @@ def _apply_music_video_mode_policy(
         elif transition_candidate:
             needs_two_frames = True
             transition_type = "state_shift"
-            if has_sound_cue and auto_sound_workflow_enabled:
-                render_mode = "first_last_sound"
-                resolved_workflow = str(content_type_policy.get("clipWorkflowFirstLastSound") or "imag-imag-video-zvuk")
-                ltx_mode = "f_l_as"
-                workflow_reason = "First-last + sound workflow for controlled transition with sound cue."
-            else:
-                render_mode = "first_last"
-                resolved_workflow = str(content_type_policy.get("clipWorkflowFirstLast") or "imag-imag-video-bz")
-                ltx_mode = "f_l"
-                workflow_reason = (
-                    "First-last workflow for controlled visual state transition; sound workflow auto-disabled in music_video."
-                    if has_sound_cue and not auto_sound_workflow_enabled
-                    else "First-last workflow for controlled visual state transition."
-                )
+            render_mode = "first_last"
+            resolved_workflow = str(content_type_policy.get("clipWorkflowFirstLast") or "imag-imag-video-bz")
+            ltx_mode = "f_l"
+            workflow_reason = (
+                "First-last workflow for controlled visual state transition; sound workflow auto-disabled in music_video."
+                if has_sound_cue and not auto_sound_workflow_enabled
+                else "First-last workflow for controlled visual state transition."
+            )
         elif not keep_first_last and first_last_guard_reason != "not_transition_candidate":
             workflow_reason = "Single-frame workflow kept because first_last guard found reiterative duet beat without explicit visual transition."
         elif has_sound_cue and auto_sound_workflow_enabled:
@@ -4530,7 +4691,12 @@ def _apply_music_video_mode_policy(
         scene.needs_two_frames = needs_two_frames
         scene.continuation_from_previous = continuation
         scene.render_mode = render_mode
-        scene.resolved_workflow_key = resolved_workflow
+        resolved_workflow_key, resolved_workflow_file = _resolve_workflow_key_and_file(
+            resolved_workflow,
+            fallback_key="lip_sync_music" if lip_sync else ("f_l" if needs_two_frames else "i2v"),
+        )
+        scene.resolved_workflow_key = resolved_workflow_key
+        scene.resolved_workflow_file = resolved_workflow_file
         scene.ltx_mode = ltx_mode
         previous_reason = str(scene.ltx_reason or "").strip()
         final_reason = workflow_reason
@@ -4540,6 +4706,15 @@ def _apply_music_video_mode_policy(
         scene.lip_sync = lip_sync
         scene.send_audio_to_generator = send_audio_to_generator
         scene.performance_framing = performance_framing
+        scene.clip_arc_stage = clip_arc_stages[min(index, len(clip_arc_stages) - 1)]
+        scene.beat_function = str(scene.scene_purpose or "performance_step")
+        scene.progression_reason = "Scene increases performance arc intensity or shifts viewer expectation."
+        scene.transition_family = "state_shift" if needs_two_frames else (transition_type or "cut")
+        scene.start_visual_state = str(scene.frame_description or scene.scene_goal or "").strip()
+        scene.end_visual_state = str(scene.action_in_frame or scene.scene_goal or "").strip()
+        scene.visual_intensity_level = "high" if scene.clip_arc_stage in {"peak_performance", "second_rise"} else ("low" if scene.clip_arc_stage == "world_entry" else "medium")
+        scene.crowd_relation_state = "crowd_dominant" if "crowd" in " ".join([scene.location, scene.frame_description]).lower() else "hero_dominant"
+        scene.performance_phase = scene.clip_arc_stage
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
         if _is_environment_only_scene_contract(scene):
             _downgrade_to_environment_establishing_note(scene)
@@ -4574,6 +4749,7 @@ def _apply_music_video_mode_policy(
         genre_intent = _resolve_director_genre_intent(payload, scene)
         scene.image_prompt = _build_music_video_image_prompt(scene)
         scene.video_prompt = _build_music_video_video_prompt(scene)
+        scene.video_negative_prompt = build_ltx_video_negative_prompt()
         # Final derived debug layer (must reflect final scene state, not intermediate steps).
         final_shot_type = str(scene.shot_type or shot_type).strip() or shot_type
         final_presence_type = str(role_influence.get("presence_type") or _infer_music_video_presence_type(scene, payload=payload, raw_scene=raw_scene))
@@ -4652,6 +4828,15 @@ def _apply_music_video_mode_policy(
             scene.audio_slice_start_sec = fallback_start
             scene.audio_slice_end_sec = fallback_end
             scene.audio_slice_expected_duration_sec = round(max(0.0, fallback_end - fallback_start), 3)
+
+        if scene.render_mode == "lip_sync_music":
+            scene.send_audio_to_generator = True
+        if scene.render_mode in {"image_video_sound", "first_last_sound"}:
+            scene.render_mode = "image_video" if scene.render_mode == "image_video_sound" else "first_last"
+            scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file(
+                "image-video" if scene.render_mode == "image_video" else "imag-imag-video-bz",
+                fallback_key="i2v" if scene.render_mode == "image_video" else "f_l",
+            )
 
         prev_lip_sync = bool(scene.lip_sync)
         prev_two_frames = bool(scene.needs_two_frames)
