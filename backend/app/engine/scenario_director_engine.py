@@ -4924,7 +4924,9 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         )
         should_split = merged_phrase_risk or duration > preferred_max
         if not should_split:
-            next_scenes.append(scene)
+            chunk_data = scene.model_dump(mode="python")
+            chunk_data = _sync_chunk_timing_fields(chunk_data)
+            next_scenes.append(ScenarioDirectorScene.model_validate(chunk_data))
             continue
         pending: list[tuple[dict[str, Any], int]] = [(scene.model_dump(mode="python"), 0)]
         scene_chunks: list[ScenarioDirectorScene] = []
@@ -4972,7 +4974,7 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
     logger.info("[SCENARIO CHUNKING] generation_scenes=%s split_events=%s", len(next_scenes), split_events or ["none"])
     for chunk in next_scenes:
         logger.info(
-            "[SCENARIO CHUNK SPLIT] sceneId=%s start=%.3f end=%.3f duration=%.3f requested=%.3f audioSlice=[%.3f,%.3f] boundary=%s",
+            "[SCENARIO CHUNK SPLIT] sceneId=%s start=%.3f end=%.3f duration=%.3f requested=%.3f audioSlice=[%.3f,%.3f] expected=%.3f boundary=%s",
             chunk.scene_id,
             _safe_float(chunk.time_start, 0.0),
             _safe_float(chunk.time_end, 0.0),
@@ -4980,6 +4982,7 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             _safe_float(chunk.requested_duration_sec, 0.0),
             _safe_float(chunk.audio_slice_start_sec, 0.0),
             _safe_float(chunk.audio_slice_end_sec, 0.0),
+            _safe_float(chunk.audio_slice_expected_duration_sec, 0.0),
             str(chunk.boundary_reason or ""),
         )
     storyboard_out.scenes = next_scenes
