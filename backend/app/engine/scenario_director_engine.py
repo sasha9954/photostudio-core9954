@@ -567,6 +567,16 @@ class ScenarioDirectorScene(BaseModel):
     workflow_decision_reason: str = ""
     lip_sync_decision_reason: str = ""
     audio_slice_decision_reason: str = ""
+    video_ready: bool = True
+    video_block_reason_code: str = ""
+    video_block_reason_message: str = ""
+    video_downgrade_reason_code: str = ""
+    video_downgrade_reason_message: str = ""
+    video_generation_route: str = "i2v"
+    planned_video_generation_route: str = ""
+    identity_lock_applied: bool = False
+    identity_lock_notes: str = ""
+    identity_lock_fields_used: list[str] = Field(default_factory=list)
     what_from_audio_this_scene_uses: str = ""
     director_note_layer: str = ""
     boundary_reason: str = "fallback"
@@ -667,6 +677,17 @@ class ScenarioDirectorScene(BaseModel):
         self.workflow_decision_reason = str(self.workflow_decision_reason or "").strip()
         self.lip_sync_decision_reason = str(self.lip_sync_decision_reason or "").strip()
         self.audio_slice_decision_reason = str(self.audio_slice_decision_reason or "").strip()
+        self.video_ready = _coerce_bool(self.video_ready, True)
+        self.video_block_reason_code = str(self.video_block_reason_code or "").strip()
+        self.video_block_reason_message = str(self.video_block_reason_message or "").strip()
+        self.video_downgrade_reason_code = str(self.video_downgrade_reason_code or "").strip()
+        self.video_downgrade_reason_message = str(self.video_downgrade_reason_message or "").strip()
+        route = str(self.video_generation_route or "").strip().lower()
+        self.video_generation_route = route if route in {"i2v", "f_l", "lip_sync_music", "blocked", "downgraded_to_i2v"} else "i2v"
+        self.planned_video_generation_route = str(self.planned_video_generation_route or "").strip().lower()
+        self.identity_lock_applied = _coerce_bool(self.identity_lock_applied, False)
+        self.identity_lock_notes = str(self.identity_lock_notes or "").strip()
+        self.identity_lock_fields_used = [str(item).strip() for item in (self.identity_lock_fields_used or []) if str(item).strip()]
         self.what_from_audio_this_scene_uses = str(self.what_from_audio_this_scene_uses or "").strip()
         self.director_note_layer = str(self.director_note_layer or "").strip()
         boundary_reason = str(self.boundary_reason or "fallback").strip().lower() or "fallback"
@@ -773,6 +794,14 @@ class ScenarioDirectorDiagnostics(BaseModel):
     no_text_fallback_mode: str = "off"
     authorial_interpretation_level: str = "balanced"
     audio_literalness_level: str = "balanced"
+    no_text_clip_policy: str = "off"
+    no_text_clip_policy_applied: bool = False
+    phrase_loop_prevented: bool = False
+    scene_merge_or_reuse_reason: str = ""
+    clip_formula_target: dict[str, int] = Field(default_factory=dict)
+    clip_formula_actual: dict[str, int] = Field(default_factory=dict)
+    clip_formula_rebalance_applied: bool = False
+    clip_formula_rebalance_notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _normalize(self) -> "ScenarioDirectorDiagnostics":
@@ -788,6 +817,14 @@ class ScenarioDirectorDiagnostics(BaseModel):
         self.no_text_fallback_mode = fallback_mode if fallback_mode in {"off", "neutral_audio_literal"} else "off"
         self.authorial_interpretation_level = str(self.authorial_interpretation_level or "balanced").strip().lower() or "balanced"
         self.audio_literalness_level = str(self.audio_literalness_level or "balanced").strip().lower() or "balanced"
+        self.no_text_clip_policy = str(self.no_text_clip_policy or "off").strip().lower() or "off"
+        self.no_text_clip_policy_applied = _coerce_bool(self.no_text_clip_policy_applied, False)
+        self.phrase_loop_prevented = _coerce_bool(self.phrase_loop_prevented, False)
+        self.scene_merge_or_reuse_reason = str(self.scene_merge_or_reuse_reason or "").strip()
+        self.clip_formula_target = self.clip_formula_target if isinstance(self.clip_formula_target, dict) else {}
+        self.clip_formula_actual = self.clip_formula_actual if isinstance(self.clip_formula_actual, dict) else {}
+        self.clip_formula_rebalance_applied = _coerce_bool(self.clip_formula_rebalance_applied, False)
+        self.clip_formula_rebalance_notes = [str(item).strip() for item in (self.clip_formula_rebalance_notes or []) if str(item).strip()]
         return self
 
 
@@ -1127,6 +1164,16 @@ def _normalize_legacy_scene_shape(scene: dict) -> dict:
     normalized.setdefault("workflow_decision_reason", normalized.get("workflowDecisionReason"))
     normalized.setdefault("lip_sync_decision_reason", normalized.get("lipSyncDecisionReason"))
     normalized.setdefault("audio_slice_decision_reason", normalized.get("audioSliceDecisionReason"))
+    normalized.setdefault("video_ready", normalized.get("videoReady"))
+    normalized.setdefault("video_block_reason_code", normalized.get("videoBlockReasonCode"))
+    normalized.setdefault("video_block_reason_message", normalized.get("videoBlockReasonMessage"))
+    normalized.setdefault("video_downgrade_reason_code", normalized.get("videoDowngradeReasonCode"))
+    normalized.setdefault("video_downgrade_reason_message", normalized.get("videoDowngradeReasonMessage"))
+    normalized.setdefault("video_generation_route", normalized.get("videoGenerationRoute"))
+    normalized.setdefault("planned_video_generation_route", normalized.get("plannedVideoGenerationRoute"))
+    normalized.setdefault("identity_lock_applied", normalized.get("identityLockApplied"))
+    normalized.setdefault("identity_lock_notes", normalized.get("identityLockNotes"))
+    normalized.setdefault("identity_lock_fields_used", normalized.get("identityLockFieldsUsed"))
     normalized.setdefault("video_negative_prompt", normalized.get("videoNegativePrompt"))
 
     if applied:
@@ -2531,7 +2578,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         start_frame_prompt = ""
         end_frame_prompt = ""
         if _scene_requires_explicit_first_last_prompts(scene):
-            start_frame_prompt, end_frame_prompt = _derive_first_last_frame_prompts(scene, raw_scene)
+            start_frame_prompt, end_frame_prompt = _derive_first_last_frame_prompts(scene, raw_scene, payload=payload)
             scene.start_frame_prompt = start_frame_prompt
             scene.end_frame_prompt = end_frame_prompt
 
@@ -2658,6 +2705,16 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "workflowDecisionReason": _append_decision_flag(scene.workflow_decision_reason, "groupNarrativelyRequired", group_narratively_required),
             "lipSyncDecisionReason": scene.lip_sync_decision_reason,
             "audioSliceDecisionReason": scene.audio_slice_decision_reason,
+            "videoReady": scene.video_ready,
+            "videoBlockReasonCode": scene.video_block_reason_code,
+            "videoBlockReasonMessage": scene.video_block_reason_message,
+            "videoDowngradeReasonCode": scene.video_downgrade_reason_code,
+            "videoDowngradeReasonMessage": scene.video_downgrade_reason_message,
+            "videoGenerationRoute": scene.video_generation_route,
+            "plannedVideoGenerationRoute": scene.planned_video_generation_route,
+            "identityLockApplied": scene.identity_lock_applied,
+            "identityLockNotes": scene.identity_lock_notes,
+            "identityLockFieldsUsed": scene.identity_lock_fields_used,
             "primaryRole": primary_role,
             "secondaryRoles": secondary_roles,
             "sceneActiveRoles": scene_active_roles,
@@ -2692,6 +2749,13 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "resolvedWorkflowFile": scene.resolved_workflow_file,
                 "audioSliceKind": scene.audio_slice_kind,
                 "musicVocalLipSyncAllowed": scene.music_vocal_lipsync_allowed,
+                "videoReady": scene.video_ready,
+                "videoBlockReasonCode": scene.video_block_reason_code,
+                "videoBlockReasonMessage": scene.video_block_reason_message,
+                "videoDowngradeReasonCode": scene.video_downgrade_reason_code,
+                "videoDowngradeReasonMessage": scene.video_downgrade_reason_message,
+                "videoGenerationRoute": scene.video_generation_route,
+                "plannedVideoGenerationRoute": scene.planned_video_generation_route,
                 "startFrameSource": scene.start_frame_source,
                 "needsTwoFrames": scene.needs_two_frames,
                 "continuation": scene.continuation_from_previous,
@@ -3855,7 +3919,56 @@ def _build_props_visible_hint(scene: ScenarioDirectorScene) -> str:
     return f"Visual anchors: {', '.join(anchors)}"
 
 
-def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene) -> str:
+def _build_character_identity_visible_lock(
+    scene: ScenarioDirectorScene,
+    payload: dict[str, Any] | None = None,
+    *,
+    role: str = "character_1",
+) -> tuple[str, list[str]]:
+    payload = payload if isinstance(payload, dict) else {}
+    active_roles = {str(actor).strip().lower() for actor in (scene.actors or []) if str(actor).strip()}
+    if role not in active_roles:
+        return "", []
+    role_ctx = ((payload.get("context_refs") or {}).get(role) or {}) if isinstance(payload.get("context_refs"), dict) else {}
+    role_meta = role_ctx.get("meta") if isinstance(role_ctx.get("meta"), dict) else {}
+    role_profile = role_meta.get("profile") if isinstance(role_meta.get("profile"), dict) else {}
+    profile_blob = " ".join(
+        [
+            str(role_ctx.get("label") or ""),
+            str(role_ctx.get("shortLabel") or ""),
+            str(role_meta.get("shortLabel") or ""),
+            str(role_meta.get("hiddenProfile") or ""),
+            str(role_profile.get("summary") or ""),
+            str(role_profile.get("appearance") or ""),
+        ]
+    ).lower()
+    fields_used: list[str] = []
+    locks: list[str] = ["same face identity and age read as reference", "same hairstyle silhouette as reference"]
+    fields_used.extend(["face_identity", "hairstyle_silhouette"])
+    if any(token in profile_blob for token in ("long sleeve", "long-sleeve", "sleeve")):
+        locks.append("long sleeves remain present")
+        fields_used.append("sleeve_type")
+    if any(token in profile_blob for token in ("dress", "gown", "silhouette", "skirt")):
+        locks.append("dress silhouette remains unchanged")
+        fields_used.append("dress_silhouette")
+    if any(token in profile_blob for token in ("rose", "embroider", "ornament", "signature", "trim")):
+        locks.append("signature garment details stay intact")
+        fields_used.append("signature_garment_details")
+    if "boot" in profile_blob:
+        locks.append("boots stay boots")
+        fields_used.append("footwear_category")
+    locks.extend(
+        [
+            "no face ethnicity drift",
+            "no sleeve removal",
+            "no silhouette collapse",
+            "no random outfit redesign",
+        ]
+    )
+    return "; ".join(list(dict.fromkeys(locks))), list(dict.fromkeys(fields_used))
+
+
+def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> str:
     lead = str(scene.frame_description or "").strip()
     action = str(scene.action_in_frame or "").strip()
     location = str(scene.location or "").strip()
@@ -3881,6 +3994,9 @@ def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene) -> str:
         parts.append(f"The background clearly reads as {location}")
     if emotion:
         parts.append(f"The visible emotion is {emotion}")
+    identity_lock, _ = _build_character_identity_visible_lock(scene, payload=payload, role="character_1")
+    if identity_lock:
+        parts.append(identity_lock)
     return _quality_filter_visible_prompt(_join_visible_prompt_parts(parts))
 
 
@@ -4016,13 +4132,21 @@ def _build_first_last_state_prompts(scene: ScenarioDirectorScene, base_start: st
     return _quality_filter_visible_prompt(start_prompt), _quality_filter_visible_prompt(end_prompt)
 
 
-def build_ltx_visible_first_last_prompts(scene: ScenarioDirectorScene, raw_scene: dict[str, Any] | None = None) -> tuple[str, str]:
+def build_ltx_visible_first_last_prompts(
+    scene: ScenarioDirectorScene,
+    raw_scene: dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     raw_scene = raw_scene if isinstance(raw_scene, dict) else {}
     explicit_start = str(raw_scene.get("startFramePrompt") or raw_scene.get("start_frame_prompt") or scene.start_frame_prompt or "").strip()
     explicit_end = str(raw_scene.get("endFramePrompt") or raw_scene.get("end_frame_prompt") or scene.end_frame_prompt or "").strip()
 
     base_start = explicit_start or str(scene.frame_description or scene.scene_goal or scene.image_prompt or "").strip()
     base_end = explicit_end or str(scene.scene_goal or scene.action_in_frame or scene.frame_description or "").strip()
+    identity_lock, _ = _build_character_identity_visible_lock(scene, payload=payload, role="character_1")
+    if identity_lock:
+        base_start = _join_visible_prompt_parts([base_start, identity_lock])
+        base_end = _join_visible_prompt_parts([base_end, identity_lock])
     start_prompt, end_prompt = _build_first_last_state_prompts(scene, base_start, base_end)
     end_prompt = _ensure_first_last_visual_delta(start_prompt, end_prompt, scene)
     if not end_prompt:
@@ -4031,11 +4155,14 @@ def build_ltx_visible_first_last_prompts(scene: ScenarioDirectorScene, raw_scene
         scene.resolved_workflow_file = CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["i2v"]
         scene.ltx_mode = "i2v"
         scene.needs_two_frames = False
+        scene.video_generation_route = "downgraded_to_i2v"
+        scene.video_downgrade_reason_code = "first_last_visual_delta_too_weak"
+        scene.video_downgrade_reason_message = "first_last downgraded to i2v because generated A/B prompts had weak visual delta."
         return "", ""
     return start_prompt, end_prompt
 
 
-def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene) -> str:
+def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> str:
     action = str(scene.action_in_frame or scene.scene_goal or "").strip()
     camera = str(scene.camera or "").strip()
     location = str(scene.location or "").strip()
@@ -4053,21 +4180,22 @@ def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene) -> str:
     lipsync_line = ""
     if str(scene.resolved_workflow_key or "").strip().lower() == "lip_sync_music" or bool(scene.lip_sync):
         lipsync_line = "Face readability and mouth continuity stay clear for emotional singing, with transformation delayed until lip motion is established"
-    return _quality_filter_visible_prompt(_join_visible_prompt_parts([sentence, motion_line, camera_line, emotion_line, lipsync_line]))
+    identity_lock, _ = _build_character_identity_visible_lock(scene, payload=payload, role="character_1")
+    return _quality_filter_visible_prompt(_join_visible_prompt_parts([sentence, motion_line, camera_line, emotion_line, lipsync_line, identity_lock]))
 
 
-def _build_music_video_image_prompt(scene: ScenarioDirectorScene) -> str:
+def _build_music_video_image_prompt(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> str:
     if not _scene_has_character_subject(scene):
         return ""
     subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip().startswith("character_")][:2]).strip()
-    return _join_visible_prompt_parts([f"The frame keeps {subject} readable" if subject else "", build_ltx_visible_image_prompt(scene)])
+    return _join_visible_prompt_parts([f"The frame keeps {subject} readable" if subject else "", build_ltx_visible_image_prompt(scene, payload=payload)])
 
 
-def _build_music_video_video_prompt(scene: ScenarioDirectorScene) -> str:
+def _build_music_video_video_prompt(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> str:
     if not _scene_has_character_subject(scene):
         return ""
     subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip().startswith("character_")][:2]).strip()
-    return _join_visible_prompt_parts([f"The performance stays centered on {subject}" if subject else "", build_ltx_visible_video_prompt(scene)])
+    return _join_visible_prompt_parts([f"The performance stays centered on {subject}" if subject else "", build_ltx_visible_video_prompt(scene, payload=payload)])
 
 
 def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | None = None) -> str:
@@ -4098,8 +4226,12 @@ def _scene_requires_explicit_first_last_prompts(scene: ScenarioDirectorScene) ->
     return bool(scene.needs_two_frames) or render_mode in {"first_last", "first_last_sound"} or ltx_mode in {"f_l", "first_last"}
 
 
-def _derive_first_last_frame_prompts(scene: ScenarioDirectorScene, raw_scene: dict[str, Any] | None = None) -> tuple[str, str]:
-    return build_ltx_visible_first_last_prompts(scene, raw_scene)
+def _derive_first_last_frame_prompts(
+    scene: ScenarioDirectorScene,
+    raw_scene: dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    return build_ltx_visible_first_last_prompts(scene, raw_scene, payload=payload)
 
 
 def _enhance_music_video_transition_language(scene: ScenarioDirectorScene) -> None:
@@ -4620,6 +4752,129 @@ def _downgrade_to_environment_establishing_note(scene: ScenarioDirectorScene) ->
     scene.end_frame_prompt = ""
 
 
+def _assign_video_route(
+    scene: ScenarioDirectorScene,
+    *,
+    route: str,
+    planned_route: str | None = None,
+    block_code: str = "",
+    block_message: str = "",
+    downgrade_code: str = "",
+    downgrade_message: str = "",
+) -> None:
+    scene.video_generation_route = route
+    scene.planned_video_generation_route = str(planned_route or route).strip().lower()
+    scene.video_block_reason_code = block_code
+    scene.video_block_reason_message = block_message
+    scene.video_downgrade_reason_code = downgrade_code
+    scene.video_downgrade_reason_message = downgrade_message
+    scene.video_ready = route != "blocked"
+
+
+def _enforce_music_video_clip_formula(
+    storyboard_out: ScenarioDirectorStoryboardOut,
+    *,
+    audio_duration_sec: float,
+) -> ScenarioDirectorStoryboardOut:
+    scenes = storyboard_out.scenes or []
+    if not scenes:
+        return storyboard_out
+    target = {"lip_sync_music": 2, "f_l": 2, "i2v": 4}
+    diagnostics = storyboard_out.diagnostics
+    diagnostics.clip_formula_target = target
+    if not (25.0 <= _safe_float(audio_duration_sec, 0.0) <= 35.0):
+        diagnostics.clip_formula_actual = {
+            "lip_sync_music": sum(1 for s in scenes if s.resolved_workflow_key == "lip_sync_music"),
+            "f_l": sum(1 for s in scenes if s.resolved_workflow_key == "f_l"),
+            "i2v": sum(1 for s in scenes if s.resolved_workflow_key == "i2v"),
+        }
+        diagnostics.clip_formula_rebalance_applied = False
+        diagnostics.clip_formula_rebalance_notes = ["clip_formula_2_2_4_skipped_outside_25_35_sec_window"]
+        return storyboard_out
+
+    notes: list[str] = []
+    rebalance_applied = False
+
+    def _promote_to_lipsync(scene: ScenarioDirectorScene) -> bool:
+        if scene.resolved_workflow_key != "i2v":
+            return False
+        if str(scene.audio_slice_kind or "").strip().lower() != "music_vocal":
+            return False
+        if not scene.music_vocal_lipsync_allowed:
+            return False
+        if not _scene_has_human_performer(scene):
+            return False
+        if str(scene.shot_type or "").strip().lower() in {"wide"}:
+            return False
+        scene.render_mode = "lip_sync_music"
+        scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("lip_sync_music", fallback_key="lip_sync_music")
+        scene.ltx_mode = "lip_sync"
+        scene.lip_sync = True
+        scene.send_audio_to_generator = True
+        _assign_video_route(scene, route="lip_sync_music")
+        return True
+
+    def _promote_to_first_last(scene: ScenarioDirectorScene) -> bool:
+        if scene.resolved_workflow_key != "i2v":
+            return False
+        if not _scene_has_transition_evidence(scene):
+            return False
+        if not scene.start_visual_state or not scene.end_visual_state:
+            return False
+        if scene.start_visual_state.strip().lower() == scene.end_visual_state.strip().lower():
+            return False
+        scene.render_mode = "first_last"
+        scene.needs_two_frames = True
+        scene.ltx_mode = "f_l"
+        scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("f_l", fallback_key="f_l")
+        _assign_video_route(scene, route="f_l")
+        return True
+
+    lip_candidates = sorted(
+        [s for s in scenes if s.resolved_workflow_key == "i2v"],
+        key=lambda s: (
+            1 if str(s.performance_framing or "").strip().lower() in {"face_close", "close_performance"} else 0,
+            1 if str(s.audio_slice_kind or "").strip().lower() == "music_vocal" else 0,
+            1 if s.music_vocal_lipsync_allowed else 0,
+            _safe_float(s.confidence, 0.5),
+        ),
+        reverse=True,
+    )
+    while sum(1 for s in scenes if s.resolved_workflow_key == "lip_sync_music") < target["lip_sync_music"] and lip_candidates:
+        candidate = lip_candidates.pop(0)
+        if _promote_to_lipsync(candidate):
+            rebalance_applied = True
+            notes.append(f"promoted_to_lip_sync_music:{candidate.scene_id}")
+    if sum(1 for s in scenes if s.resolved_workflow_key == "lip_sync_music") < target["lip_sync_music"]:
+        notes.append("insufficient_lip_sync_music_candidates")
+
+    fl_candidates = sorted(
+        [s for s in scenes if s.resolved_workflow_key == "i2v"],
+        key=lambda s: (
+            1 if _resolve_transition_family(s) in {"transform", "reveal", "release"} else 0,
+            1 if _scene_has_transition_evidence(s) else 0,
+            _safe_float(s.confidence, 0.5),
+        ),
+        reverse=True,
+    )
+    while sum(1 for s in scenes if s.resolved_workflow_key == "f_l") < target["f_l"] and fl_candidates:
+        candidate = fl_candidates.pop(0)
+        if _promote_to_first_last(candidate):
+            rebalance_applied = True
+            notes.append(f"promoted_to_f_l:{candidate.scene_id}")
+    if sum(1 for s in scenes if s.resolved_workflow_key == "f_l") < target["f_l"]:
+        notes.append("insufficient_f_l_candidates_with_visual_delta")
+
+    diagnostics.clip_formula_actual = {
+        "lip_sync_music": sum(1 for s in scenes if s.resolved_workflow_key == "lip_sync_music"),
+        "f_l": sum(1 for s in scenes if s.resolved_workflow_key == "f_l"),
+        "i2v": sum(1 for s in scenes if s.resolved_workflow_key == "i2v"),
+    }
+    diagnostics.clip_formula_rebalance_applied = rebalance_applied
+    diagnostics.clip_formula_rebalance_notes = notes or ["rebalance_not_needed"]
+    return storyboard_out
+
+
 def _apply_music_video_mode_policy(
     storyboard_out: ScenarioDirectorStoryboardOut,
     *,
@@ -4810,6 +5065,7 @@ def _apply_music_video_mode_policy(
             lip_sync_reason = f"Local vocal phrase + human close framing detected; compatibility={lip_sync_compatibility_reason}."
             audio_slice_reason = "Slice clamped to scene vocal window (max ~5s) and timeline bounds."
             lip_sync_used += 1
+            _assign_video_route(scene, route="lip_sync_music")
         elif transition_candidate:
             needs_two_frames = True
             transition_type = "state_shift"
@@ -4821,15 +5077,33 @@ def _apply_music_video_mode_policy(
                 if has_sound_cue and not auto_sound_workflow_enabled
                 else "First-last workflow for controlled visual state transition."
             )
+            _assign_video_route(scene, route="f_l")
         elif not keep_first_last and first_last_guard_reason != "not_transition_candidate":
             workflow_reason = "Single-frame workflow kept because first_last guard found reiterative duet beat without explicit visual transition."
+            _assign_video_route(
+                scene,
+                route="downgraded_to_i2v",
+                planned_route="f_l",
+                downgrade_code="first_last_visual_delta_too_weak",
+                downgrade_message="Planned first_last downgraded to i2v because strong A/B visual delta was not detected.",
+            )
         elif has_sound_cue and auto_sound_workflow_enabled:
             render_mode = "image_video_sound"
             resolved_workflow = str(content_type_policy.get("clipWorkflowSound") or "i2v_sound")
             ltx_mode = "i2v_as"
             workflow_reason = "Sound-aware workflow selected for SFX/short phrase support."
+            _assign_video_route(scene, route="i2v")
         elif has_sound_cue and not auto_sound_workflow_enabled:
             workflow_reason = "Sound cue detected but auto sound workflow is disabled for music_video; using base i2v."
+            _assign_video_route(
+                scene,
+                route="i2v",
+                planned_route="i2v_sound",
+                downgrade_code="sound_workflow_disabled_for_music_video",
+                downgrade_message="Sound workflow is disabled for music_video; canonical i2v route kept.",
+            )
+        else:
+            _assign_video_route(scene, route="i2v")
 
         if lip_sync_base_candidate and not lip_sync_compatible:
             lip_sync_reason = f"Lip-sync candidate rejected by compatibility gate: {lip_sync_compatibility_reason}."
@@ -4837,6 +5111,13 @@ def _apply_music_video_mode_policy(
             lip_sync_candidate = False
             lip_sync_reason = "Lip-sync candidate rejected: audio slice is not marked as music_vocal compatible."
             workflow_reason = "Downgraded to canonical i2v because scene audio slice is not music+vocal compatible for lip_sync_music."
+            _assign_video_route(
+                scene,
+                route="downgraded_to_i2v",
+                planned_route="lip_sync_music",
+                downgrade_code="music_vocal_lipsync_not_allowed",
+                downgrade_message="Scene could not use lip_sync_music because music_vocal_lipsync_allowed is false.",
+            )
 
         if continuation and not needs_two_frames and not lip_sync:
             ltx_mode = "continuation"
@@ -4914,10 +5195,18 @@ def _apply_music_video_mode_policy(
                 scene.scene_id,
             )
             continue
-        identity_lock = _build_multi_character_identity_lock(scene, payload)
+        multi_identity_lock = _build_multi_character_identity_lock(scene, payload)
         genre_intent = _resolve_director_genre_intent(payload, scene)
-        scene.image_prompt = _build_music_video_image_prompt(scene)
-        scene.video_prompt = _build_music_video_video_prompt(scene)
+        visible_identity_lock, identity_fields_used = _build_character_identity_visible_lock(scene, payload=payload, role="character_1")
+        scene.identity_lock_applied = bool(visible_identity_lock)
+        scene.identity_lock_notes = (
+            "character_1 visible identity lock applied"
+            if visible_identity_lock
+            else ("identity_lock_insufficient_source" if "character_1" in {str(actor).strip().lower() for actor in (scene.actors or [])} else "")
+        )
+        scene.identity_lock_fields_used = identity_fields_used
+        scene.image_prompt = _build_music_video_image_prompt(scene, payload=payload)
+        scene.video_prompt = _build_music_video_video_prompt(scene, payload=payload)
         scene.video_negative_prompt = build_ltx_video_negative_prompt(scene)
         # Final derived debug layer (must reflect final scene state, not intermediate steps).
         final_shot_type = str(scene.shot_type or shot_type).strip() or shot_type
@@ -4943,27 +5232,27 @@ def _apply_music_video_mode_policy(
             f"{scene.clip_decision_reason} roleInfluenceApplied={'true' if _coerce_bool(role_influence.get('applied'), False) else 'false'}"
             f"; roleInfluenceReason={str(role_influence.get('reason') or 'none')}"
             f"; sceneRoleDynamics={str(role_influence.get('sceneRoleDynamics') or 'neutral')}"
-            f"; multiCharacterIdentityLock={'true' if _coerce_bool(identity_lock.get('enabled'), False) else 'false'}"
-            f"; distinctCharacterSeparation={'true' if _coerce_bool(identity_lock.get('distinctCharacterSeparation'), False) else 'false'}"
-            f"; duetLockEnabled={'true' if _coerce_bool(identity_lock.get('duetLockEnabled'), False) else 'false'}"
-            f"; duetCompositionMode={str(identity_lock.get('duetCompositionMode') or 'none')}"
-            f"; secondaryRoleVisibilityRequirement={str(identity_lock.get('secondaryRoleVisibilityRequirement') or 'none')}"
-            f"; character2DriftGuard={str(identity_lock.get('character2DriftGuard') or 'none')}"
+            f"; multiCharacterIdentityLock={'true' if _coerce_bool(multi_identity_lock.get('enabled'), False) else 'false'}"
+            f"; distinctCharacterSeparation={'true' if _coerce_bool(multi_identity_lock.get('distinctCharacterSeparation'), False) else 'false'}"
+            f"; duetLockEnabled={'true' if _coerce_bool(multi_identity_lock.get('duetLockEnabled'), False) else 'false'}"
+            f"; duetCompositionMode={str(multi_identity_lock.get('duetCompositionMode') or 'none')}"
+            f"; secondaryRoleVisibilityRequirement={str(multi_identity_lock.get('secondaryRoleVisibilityRequirement') or 'none')}"
+            f"; character2DriftGuard={str(multi_identity_lock.get('character2DriftGuard') or 'none')}"
             f"; directorGenreIntent={str(genre_intent.get('directorGenreIntent') or 'neutral_drama')}"
             f"; directorToneBias={str(genre_intent.get('directorToneBias') or 'observational_emotional_realism')}"
-            f"; appearanceDriftRisk={str(identity_lock.get('appearanceDriftRisk') or 'none')}."
+            f"; appearanceDriftRisk={str(multi_identity_lock.get('appearanceDriftRisk') or 'none')}."
         )
         scene.role_influence_applied = _coerce_bool(role_influence.get("applied"), False)
         scene.role_influence_reason = str(role_influence.get("reason") or "none")
         scene.scene_role_dynamics = str(role_influence.get("sceneRoleDynamics") or "neutral")
-        scene.multi_character_identity_lock = _coerce_bool(identity_lock.get("enabled"), False)
-        scene.distinct_character_separation = _coerce_bool(identity_lock.get("distinctCharacterSeparation"), False)
-        scene.duet_lock_enabled = _coerce_bool(identity_lock.get("duetLockEnabled"), False)
-        scene.duet_composition_mode = str(identity_lock.get("duetCompositionMode") or "")
-        scene.secondary_role_visibility_requirement = str(identity_lock.get("secondaryRoleVisibilityRequirement") or "")
-        scene.character2_drift_guard = str(identity_lock.get("character2DriftGuard") or "")
-        scene.duet_identity_contract = str(identity_lock.get("duetIdentityContract") or "")
-        scene.appearance_drift_risk = str(identity_lock.get("appearanceDriftRisk") or "none")
+        scene.multi_character_identity_lock = _coerce_bool(multi_identity_lock.get("enabled"), False)
+        scene.distinct_character_separation = _coerce_bool(multi_identity_lock.get("distinctCharacterSeparation"), False)
+        scene.duet_lock_enabled = _coerce_bool(multi_identity_lock.get("duetLockEnabled"), False)
+        scene.duet_composition_mode = str(multi_identity_lock.get("duetCompositionMode") or "")
+        scene.secondary_role_visibility_requirement = str(multi_identity_lock.get("secondaryRoleVisibilityRequirement") or "")
+        scene.character2_drift_guard = str(multi_identity_lock.get("character2DriftGuard") or "")
+        scene.duet_identity_contract = str(multi_identity_lock.get("duetIdentityContract") or "")
+        scene.appearance_drift_risk = str(multi_identity_lock.get("appearanceDriftRisk") or "none")
         scene.director_genre_intent = str(genre_intent.get("directorGenreIntent") or "neutral_drama")
         scene.director_genre_reason = str(genre_intent.get("directorGenreReason") or "fallback")
         scene.director_tone_bias = str(genre_intent.get("directorToneBias") or "observational_emotional_realism")
@@ -5013,6 +5302,13 @@ def _apply_music_video_mode_policy(
                 scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("i2v", fallback_key="i2v")
                 scene.music_vocal_lipsync_allowed = False
                 scene.audio_slice_kind = scene.audio_slice_kind or "none"
+                _assign_video_route(
+                    scene,
+                    route="downgraded_to_i2v",
+                    planned_route="lip_sync_music",
+                    downgrade_code="audio_slice_not_music_vocal" if scene.audio_slice_kind != "music_vocal" else "music_vocal_lipsync_not_allowed",
+                    downgrade_message="lip_sync_music blocked because scene audio slice is not music_vocal-compatible.",
+                )
                 continue
             scene.send_audio_to_generator = True
         if scene.render_mode in {"image_video_sound", "first_last_sound"}:
@@ -5020,6 +5316,16 @@ def _apply_music_video_mode_policy(
             scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file(
                 "i2v" if scene.render_mode == "image_video" else "f_l",
                 fallback_key="i2v" if scene.render_mode == "image_video" else "f_l",
+            )
+        if scene.identity_lock_applied is False and "character_1" in {str(actor).strip().lower() for actor in (scene.actors or [])}:
+            _assign_video_route(
+                scene,
+                route=scene.video_generation_route or "i2v",
+                planned_route=scene.planned_video_generation_route or scene.video_generation_route or "i2v",
+                block_code="identity_lock_insufficient_source" if not scene.video_block_reason_code else scene.video_block_reason_code,
+                block_message="character_1 reference profile is insufficient for strong identity lock." if not scene.video_block_reason_message else scene.video_block_reason_message,
+                downgrade_code=scene.video_downgrade_reason_code,
+                downgrade_message=scene.video_downgrade_reason_message,
             )
 
         prev_lip_sync = bool(scene.lip_sync)
@@ -6146,6 +6452,9 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             f"Short first_last scene degraded because duration below {SCENARIO_SHORT_FIRST_LAST_MIN_SEC:.1f}s without strong transition reason."
         )
         scene.ltx_reason = _normalize_ltx_reason(degrade_reason, scene.ltx_mode, narration_mode=scene.narration_mode)
+        scene.video_generation_route = "downgraded_to_i2v"
+        scene.video_downgrade_reason_code = "first_last_visual_delta_too_weak"
+        scene.video_downgrade_reason_message = degrade_reason
         return "degraded_to_single"
 
     def _merge_final_generation_short_scenes(chunks: list[ScenarioDirectorScene]) -> list[ScenarioDirectorScene]:
@@ -6396,6 +6705,16 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         return merged_chunks
 
     next_scenes = _merge_final_generation_short_scenes(next_scenes)
+    no_text_mode = str(storyboard_out.diagnostics.no_text_clip_policy or "").strip().lower() == "visual_arc_over_phrase_loop"
+    if no_text_mode:
+        phrase_loop_before = _is_repeat_heavy_music_clip(storyboard_out.scenes or [])
+        phrase_loop_after = _is_repeat_heavy_music_clip(next_scenes)
+        storyboard_out.diagnostics.phrase_loop_prevented = bool(phrase_loop_before and not phrase_loop_after)
+        storyboard_out.diagnostics.scene_merge_or_reuse_reason = (
+            "visual_arc_progression_merge_guard"
+            if storyboard_out.diagnostics.phrase_loop_prevented
+            else "visual_arc_policy_applied_no_merge_needed"
+        )
     logger.info("[SCENARIO CHUNKING] generation_scenes=%s split_events=%s", len(next_scenes), split_events or ["none"])
     for chunk in next_scenes:
         logger.info(
@@ -6435,6 +6754,7 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             payload=payload,
             audio_duration_sec=audio_duration_sec,
         )
+        storyboard_out = _enforce_music_video_clip_formula(storyboard_out, audio_duration_sec=_safe_float(audio_duration_sec, 0.0))
         storyboard_out.music_prompt = ""
     storyboard_out = _limit_lip_sync_usage(storyboard_out, content_type_policy=content_type_policy if content_type_policy.get("value") == "music_video" else None)
     _assert_storyboard_quality(storyboard_out)
@@ -8030,6 +8350,9 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     authorial_interpretation_level = "low" if no_text_fallback_mode == "neutral_audio_literal" else "medium"
     audio_literalness_level = "high" if no_text_fallback_mode == "neutral_audio_literal" else "balanced"
     storyboard_out.diagnostics.no_text_fallback_mode = no_text_fallback_mode
+    is_music_video_mode = _get_content_type_policy(payload).get("value") == "music_video"
+    storyboard_out.diagnostics.no_text_clip_policy = "visual_arc_over_phrase_loop" if is_music_video_mode and not director_note_text else "off"
+    storyboard_out.diagnostics.no_text_clip_policy_applied = bool(is_music_video_mode and not director_note_text)
     storyboard_out.diagnostics.authorial_interpretation_level = authorial_interpretation_level
     storyboard_out.diagnostics.audio_literalness_level = audio_literalness_level
     planner_narrative_strategy = structured_planner_diagnostics.get("narrativeStrategy") if isinstance(structured_planner_diagnostics.get("narrativeStrategy"), dict) else {}
