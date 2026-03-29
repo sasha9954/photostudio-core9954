@@ -4726,6 +4726,118 @@ def _pick_clip_split_boundary(
     return round(max(lower, min(upper, midpoint)), 3), "midpoint_fallback", "fallback"
 
 
+def _collect_generation_chunk_boundaries(
+    *,
+    payload: dict[str, Any] | None,
+    audio_analysis: dict[str, Any],
+) -> dict[str, list[float]]:
+    boundary_signals: dict[str, list[float]] = {
+        "pause": [],
+        "phrase": [],
+        "transition": [],
+        "semantic": [],
+    }
+    seen: set[tuple[str, float]] = set()
+
+    def _push(kind: str, value: Any) -> None:
+        if kind not in boundary_signals:
+            return
+        point = round(_safe_float(value, -1.0), 3)
+        if point <= 0:
+            return
+        key = (kind, point)
+        if key in seen:
+            return
+        seen.add(key)
+        boundary_signals[kind].append(point)
+
+    root = payload if isinstance(payload, dict) else {}
+    single_call = root.get("_single_call_payload") if isinstance(root.get("_single_call_payload"), dict) else {}
+    candidate_payloads = [single_call, root]
+    for candidate in candidate_payloads:
+        if not isinstance(candidate, dict):
+            continue
+        audio_structure = candidate.get("audioStructure") if isinstance(candidate.get("audioStructure"), dict) else {}
+        for pause in (audio_structure.get("pauses") or []):
+            if not isinstance(pause, dict):
+                continue
+            t0 = _safe_float(pause.get("t0") if pause.get("t0") is not None else pause.get("start"), -1.0)
+            t1 = _safe_float(pause.get("t1") if pause.get("t1") is not None else pause.get("end"), -1.0)
+            if t0 > 0 and t1 > 0:
+                _push("pause", (t0 + t1) / 2.0)
+            else:
+                _push("pause", t0 if t0 > 0 else t1)
+        for transition in (audio_structure.get("transitions") or []):
+            if isinstance(transition, dict):
+                _push("transition", transition.get("timeSec") or transition.get("t") or transition.get("time") or transition.get("t0"))
+            else:
+                _push("transition", transition)
+        for row in (candidate.get("transcript") or []):
+            if not isinstance(row, dict):
+                continue
+            _push("phrase", row.get("t1") if row.get("t1") is not None else row.get("end"))
+        for row in (candidate.get("semanticTimeline") or []):
+            if not isinstance(row, dict):
+                continue
+            _push("semantic", row.get("t1") if row.get("t1") is not None else row.get("endSec"))
+
+    for phrase in (audio_analysis.get("phrases") or []):
+        if not isinstance(phrase, dict):
+            continue
+        _push("phrase", phrase.get("end") or phrase.get("boundary") or phrase.get("timeSec") or phrase.get("time"))
+    for pause in (audio_analysis.get("pauseWindows") or []):
+        if not isinstance(pause, dict):
+            continue
+        start = _safe_float(pause.get("start"), -1.0)
+        end = _safe_float(pause.get("end"), -1.0)
+        _push("pause", (start + end) / 2.0 if start > 0 and end > 0 else (start if start > 0 else end))
+    for transition in (audio_analysis.get("energyTransitions") or []):
+        if not isinstance(transition, dict):
+            continue
+        _push("transition", transition.get("timeSec") or transition.get("time") or transition.get("t"))
+
+    for values in boundary_signals.values():
+        values.sort()
+    return boundary_signals
+
+
+def _pick_generation_split_point(
+    *,
+    start: float,
+    end: float,
+    preferred_min: float,
+    preferred_max: float,
+    boundaries: dict[str, list[float]],
+) -> tuple[float | None, str]:
+    min_chunk = 2.0
+    lower = start + min_chunk
+    upper = end - min_chunk
+    if upper <= lower:
+        return None, "too_short"
+    midpoint = (start + end) / 2.0
+    ideal_low = start + preferred_min
+    ideal_high = min(start + preferred_max, upper)
+
+    def _best_candidate(points: list[float]) -> float | None:
+        candidates = [p for p in points if lower < p < upper]
+        if not candidates:
+            return None
+        in_band = [p for p in candidates if ideal_low <= p <= ideal_high]
+        target = in_band if in_band else candidates
+        return min(target, key=lambda value: abs(value - midpoint))
+
+    for kind in ("pause", "phrase", "transition", "semantic"):
+        candidate = _best_candidate(boundaries.get(kind) or [])
+        if candidate is not None:
+            return round(candidate, 3), kind
+    uniform = round(midpoint, 3)
+    if uniform <= lower:
+        uniform = round(lower, 3)
+    if uniform >= upper:
+        uniform = round(upper, 3)
+    return uniform, "uniform_fallback"
+
+
 def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any] | None = None) -> ScenarioDirectorStoryboardOut:
     scenes = storyboard_out.scenes or []
     if not scenes:
@@ -4744,11 +4856,25 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         "pauseWindows": audio_context.get("pauseWindows") or [],
         "energyTransitions": audio_context.get("energyTransitions") or [],
     }
+    boundaries = _collect_generation_chunk_boundaries(payload=payload if isinstance(payload, dict) else {}, audio_analysis=audio_analysis)
+    logger.info(
+        "[SCENARIO CHUNKING] semantic_blocks=%s raw_scenes=%s boundary_signals={pause:%s,phrase:%s,transition:%s,semantic:%s}",
+        len(((payload or {}).get("_single_call_payload") or {}).get("semanticTimeline") or []),
+        len(scenes),
+        len(boundaries.get("pause") or []),
+        len(boundaries.get("phrase") or []),
+        len(boundaries.get("transition") or []),
+        len(boundaries.get("semantic") or []),
+    )
     next_scenes: list[ScenarioDirectorScene] = []
+    split_events: list[str] = []
+    preferred_min = 3.0
+    preferred_max = 6.0
+    hard_max = 8.0
     for scene in scenes:
-        duration = max(0.0, _safe_float(scene.duration, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0)))
         start = _safe_float(scene.time_start, 0.0)
         end = max(start, _safe_float(scene.time_end, start))
+        duration = max(0.0, _safe_float(scene.duration, end - start))
         raw_scene = payload_map.get(str(scene.scene_id or "").strip(), {})
         phrase_blob = str(scene.local_phrase or raw_scene.get("localPhrase") or raw_scene.get("local_phrase") or "").strip()
         lyric_text = str(raw_scene.get("lyricText") or raw_scene.get("lyric_text") or "").strip()
@@ -4773,45 +4899,61 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             or ("phrase" in audio_anchor and ("+" in audio_anchor or "next" in audio_anchor or "adjacent" in audio_anchor))
             or has_pause_boundary_inside
         )
-        should_split = merged_phrase_risk or duration > 5.5
+        should_split = merged_phrase_risk or duration > preferred_max
         if not should_split:
             next_scenes.append(scene)
             continue
-        split_at, split_reason, split_boundary_reason = _pick_clip_split_boundary(
-            scene=scene,
-            duration=duration,
-            audio_analysis=audio_analysis,
-            merged_phrase_risk=merged_phrase_risk,
+        pending: list[tuple[dict[str, Any], int]] = [(scene.model_dump(mode="python"), 0)]
+        scene_chunks: list[ScenarioDirectorScene] = []
+        while pending:
+            chunk_data, split_idx = pending.pop(0)
+            chunk_start = _safe_float(chunk_data.get("time_start"), start)
+            chunk_end = max(chunk_start, _safe_float(chunk_data.get("time_end"), chunk_start))
+            chunk_duration = max(0.0, chunk_end - chunk_start)
+            must_split = chunk_duration > preferred_max or (duration > hard_max and split_idx == 0)
+            if not must_split:
+                chunk_data["duration"] = round(chunk_duration, 3)
+                scene_chunks.append(ScenarioDirectorScene.model_validate(chunk_data))
+                continue
+            split_at, split_kind = _pick_generation_split_point(
+                start=chunk_start,
+                end=chunk_end,
+                preferred_min=preferred_min,
+                preferred_max=preferred_max,
+                boundaries=boundaries,
+            )
+            if split_at is None or split_at <= chunk_start or split_at >= chunk_end:
+                chunk_data["duration"] = round(chunk_duration, 3)
+                scene_chunks.append(ScenarioDirectorScene.model_validate(chunk_data))
+                continue
+            left_id = f"{scene.scene_id}_{chr(65 + min(split_idx * 2, 25))}"
+            right_id = f"{scene.scene_id}_{chr(66 + min(split_idx * 2, 24))}"
+            left_data = {**chunk_data, "scene_id": left_id, "time_start": chunk_start, "time_end": split_at, "duration": round(max(0.0, split_at - chunk_start), 3)}
+            right_data = {**chunk_data, "scene_id": right_id, "time_start": split_at, "time_end": chunk_end, "duration": round(max(0.0, chunk_end - split_at), 3)}
+            if phrase_chunks:
+                pivot = max(1, len(phrase_chunks) // 2)
+                left_data["local_phrase"] = " ".join(phrase_chunks[:pivot]).strip() or left_data.get("local_phrase")
+                right_data["local_phrase"] = " ".join(phrase_chunks[pivot:]).strip() or right_data.get("local_phrase")
+            boundary_reason = split_kind if split_kind != "uniform_fallback" else "fallback"
+            reason_value = "merged_phrase_risk" if merged_phrase_risk else split_kind
+            left_data["boundary_reason"] = boundary_reason
+            right_data["boundary_reason"] = boundary_reason
+            left_data["audio_anchor_evidence"] = _append_decision_flag(left_data.get("audio_anchor_evidence"), "autoSplitReason", reason_value)
+            right_data["audio_anchor_evidence"] = _append_decision_flag(right_data.get("audio_anchor_evidence"), "autoSplitReason", reason_value)
+            split_events.append(f"{scene.scene_id}:{chunk_start:.3f}-{chunk_end:.3f}->{split_at:.3f}:{split_kind}")
+            pending.insert(0, (right_data, split_idx + 1))
+            pending.insert(0, (left_data, split_idx + 1))
+        next_scenes.extend(scene_chunks)
+    logger.info("[SCENARIO CHUNKING] generation_scenes=%s split_events=%s", len(next_scenes), split_events or ["none"])
+    for chunk in next_scenes:
+        logger.info(
+            "[SCENARIO CHUNK SPLIT] sceneId=%s start=%.3f end=%.3f duration=%.3f boundary=%s",
+            chunk.scene_id,
+            _safe_float(chunk.time_start, 0.0),
+            _safe_float(chunk.time_end, 0.0),
+            max(0.0, _safe_float(chunk.time_end, 0.0) - _safe_float(chunk.time_start, 0.0)),
+            str(chunk.boundary_reason or ""),
         )
-        if split_at is None:
-            next_scenes.append(scene)
-            continue
-        if split_at <= start or split_at >= end:
-            next_scenes.append(scene)
-            continue
-
-        base = scene.model_dump(mode="python")
-        left_data = {**base, "scene_id": f"{scene.scene_id}_A", "time_start": start, "time_end": split_at, "duration": round(max(0.0, split_at - start), 3)}
-        right_data = {**base, "scene_id": f"{scene.scene_id}_B", "time_start": split_at, "time_end": end, "duration": round(max(0.0, end - split_at), 3)}
-        if phrase_chunks:
-            pivot = max(1, len(phrase_chunks) // 2)
-            left_data["local_phrase"] = " ".join(phrase_chunks[:pivot]).strip() or left_data.get("local_phrase")
-            right_data["local_phrase"] = " ".join(phrase_chunks[pivot:]).strip() or right_data.get("local_phrase")
-        reason_value = split_reason if merged_phrase_risk else ("duration_overflow" if split_reason == "midpoint_fallback" else split_reason)
-        left_data["boundary_reason"] = split_boundary_reason
-        right_data["boundary_reason"] = split_boundary_reason
-        left_data["audio_anchor_evidence"] = _append_decision_flag(left_data.get("audio_anchor_evidence"), "autoSplitReason", reason_value)
-        right_data["audio_anchor_evidence"] = _append_decision_flag(right_data.get("audio_anchor_evidence"), "autoSplitReason", reason_value)
-        for chunk_data in (left_data, right_data):
-            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "mergedPhraseRisk", merged_phrase_risk)
-            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "splitByPhraseBoundary", split_reason == "phrase_boundary")
-            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "lyricalMergeRejected", merged_phrase_risk)
-            chunk_data["clip_decision_reason"] = _append_decision_flag(chunk_data.get("clip_decision_reason"), "autoSplitReason", reason_value)
-            chunk_data["workflow_decision_reason"] = _append_decision_flag(chunk_data.get("workflow_decision_reason"), "autoSplitReason", reason_value)
-            chunk_data["workflow_decision_reason"] = _append_decision_flag(chunk_data.get("workflow_decision_reason"), "splitByPhraseBoundary", split_reason == "phrase_boundary")
-            chunk_data["workflow_decision_reason"] = _append_decision_flag(chunk_data.get("workflow_decision_reason"), "lyricalMergeRejected", merged_phrase_risk)
-        next_scenes.append(ScenarioDirectorScene.model_validate(left_data))
-        next_scenes.append(ScenarioDirectorScene.model_validate(right_data))
     storyboard_out.scenes = next_scenes
     return storyboard_out
 
@@ -5921,7 +6063,28 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
     legacy_payload = _map_single_call_to_storyboard_out(parsed_single)
     logger.info("[SCENARIO DIRECTOR] mapped single-call result to legacy storyboardOut")
     storyboard_out = ScenarioDirectorStoryboardOut.model_validate(legacy_payload)
-    storyboard_out = _harden_storyboard_out(storyboard_out, payload)
+    hardening_payload = {**payload, "_single_call_payload": parsed_single}
+    storyboard_out = _harden_storyboard_out(storyboard_out, hardening_payload)
+    generation_scenes = [
+        {
+            "sceneId": str(scene.scene_id or "").strip(),
+            "t0": round(_safe_float(scene.time_start, 0.0), 3),
+            "t1": round(_safe_float(scene.time_end, _safe_float(scene.time_start, 0.0)), 3),
+            "duration": round(max(0.0, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0)), 3),
+            "summary": str(scene.scene_goal or scene.frame_description or "").strip(),
+            "motion": str(scene.action_in_frame or "").strip(),
+            "camera": str(scene.camera or "").strip(),
+            "environment": str(scene.location or "").strip(),
+            "visualPrompt": str(scene.image_prompt or "").strip(),
+            "characters": [str(actor).strip() for actor in (scene.actors or []) if str(actor).strip()],
+        }
+        for scene in (storyboard_out.scenes or [])
+    ]
+    logger.info(
+        "[SCENARIO CHUNKING] response_sync top_level_scenes=%s storyboard_scenes=%s",
+        len(generation_scenes),
+        len(storyboard_out.scenes or []),
+    )
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
     content_type_policy = _get_content_type_policy(payload)
@@ -5931,7 +6094,7 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
         "transcript": parsed_single.get("transcript") or [],
         "audioStructure": parsed_single.get("audioStructure") if isinstance(parsed_single.get("audioStructure"), dict) else {},
         "semanticTimeline": parsed_single.get("semanticTimeline") or [],
-        "scenes": parsed_single.get("scenes") or [],
+        "scenes": generation_scenes,
         "globalStory": parsed_single.get("globalStory") if isinstance(parsed_single.get("globalStory"), dict) else {},
         "debug": parsed_single.get("debug") if isinstance(parsed_single.get("debug"), dict) else {},
         "storyboardOut": storyboard_out.model_dump(mode="json"),
