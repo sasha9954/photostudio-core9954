@@ -3139,6 +3139,49 @@ function resolveScenarioAudioSourceUrlFromNode(node = null, fallbackNodes = []) 
   ).trim();
 }
 
+function resolveScenarioMasterAudioFromGraph({ scenarioNode = null, nodes = [], edges = [] } = {}) {
+  const safeScenarioNode = scenarioNode && typeof scenarioNode === "object" ? scenarioNode : null;
+  const scenarioAudioData = safeScenarioNode?.data?.audioData && typeof safeScenarioNode.data.audioData === "object"
+    ? safeScenarioNode.data.audioData
+    : {};
+  const scenarioNodeAudioDataUrl = String(scenarioAudioData?.audioUrl || "").trim();
+  if (scenarioNodeAudioDataUrl) {
+    return { source: "scenario_node_audioData", url: scenarioNodeAudioDataUrl, connectedSourceAudioUrl: "", globalAudioUrl: extractGlobalAudioUrlFromNodes(nodes) };
+  }
+  const scenarioNodeAudioUrl = String(safeScenarioNode?.data?.audioUrl || "").trim();
+  if (scenarioNodeAudioUrl) {
+    return { source: "scenario_node_audioUrl", url: scenarioNodeAudioUrl, connectedSourceAudioUrl: "", globalAudioUrl: extractGlobalAudioUrlFromNodes(nodes) };
+  }
+  const scenarioNodeMasterAudioUrl = String(safeScenarioNode?.data?.masterAudioUrl || "").trim();
+  if (scenarioNodeMasterAudioUrl) {
+    return { source: "scenario_node_masterAudioUrl", url: scenarioNodeMasterAudioUrl, connectedSourceAudioUrl: "", globalAudioUrl: extractGlobalAudioUrlFromNodes(nodes) };
+  }
+  const nodesById = new Map((Array.isArray(nodes) ? nodes : []).map((nodeItem) => [nodeItem.id, nodeItem]));
+  const incomingEdge = [...(Array.isArray(edges) ? edges : [])]
+    .reverse()
+    .find((edge) => edge?.target === safeScenarioNode?.id && String(edge?.targetHandle || "") === "scenario_storyboard_in") || null;
+  const connectedSourceNode = incomingEdge?.source ? (nodesById.get(incomingEdge.source) || null) : null;
+  const connectedSourceAudioUrl = String(
+    connectedSourceNode?.data?.audioData?.audioUrl
+    || connectedSourceNode?.data?.audioUrl
+    || connectedSourceNode?.data?.masterAudioUrl
+    || ""
+  ).trim();
+  if (connectedSourceAudioUrl) {
+    return {
+      source: "connected_source_node",
+      url: connectedSourceAudioUrl,
+      connectedSourceAudioUrl,
+      globalAudioUrl: extractGlobalAudioUrlFromNodes(nodes),
+    };
+  }
+  const globalAudioUrl = String(extractGlobalAudioUrlFromNodes(nodes) || "").trim();
+  if (globalAudioUrl) {
+    return { source: "global_audio_node", url: globalAudioUrl, connectedSourceAudioUrl: "", globalAudioUrl };
+  }
+  return { source: "missing", url: "", connectedSourceAudioUrl: "", globalAudioUrl: "" };
+}
+
 function extractGlobalAudioDurationFromNodes(nodes = []) {
   const audioNodeWithDuration = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "audioNode" && Number(n?.data?.audioDurationSec) > 0);
   const durationSec = Number(audioNodeWithDuration?.data?.audioDurationSec || 0);
@@ -6846,13 +6889,11 @@ const activeScenarioStoryboardNode = useMemo(() => {
 const activeScenarioAudioData = activeScenarioStoryboardNode?.data?.audioData && typeof activeScenarioStoryboardNode.data.audioData === "object"
   ? activeScenarioStoryboardNode.data.audioData
   : {};
-const activeScenarioMasterAudioUrl = String(
-  activeScenarioAudioData?.audioUrl
-  || activeScenarioStoryboardNode?.data?.audioUrl
-  || activeScenarioStoryboardNode?.data?.masterAudioUrl
-  || extractGlobalAudioUrlFromNodes(nodes)
-  || ""
-).trim();
+const activeScenarioMasterAudioResolution = useMemo(
+  () => resolveScenarioMasterAudioFromGraph({ scenarioNode: activeScenarioStoryboardNode, nodes, edges }),
+  [activeScenarioStoryboardNode, nodes, edges]
+);
+const activeScenarioMasterAudioUrl = String(activeScenarioMasterAudioResolution?.url || "").trim();
 const activeScenarioMusicUrl = String(
   activeScenarioAudioData?.musicUrl
   || activeScenarioStoryboardNode?.data?.musicUrl
@@ -12924,7 +12965,7 @@ onClipSec: (nodeId, value) => {
           });
           const audioData = {
             ...currentAudioData,
-            audioUrl: String(currentAudioData.audioUrl || normalizedPackage?.audioUrl || connectedAudioUrl || "").trim(),
+            audioUrl: String(normalizedPackage?.audioUrl || connectedAudioUrl || currentAudioData.audioUrl || "").trim(),
             durationSec: Number(
               currentAudioData.durationSec
               ?? normalizedPackage?.audioDurationSec
@@ -17147,6 +17188,10 @@ const hydrate = useCallback((source = "unknown") => {
         audioData={activeScenarioAudioData}
         scenarioMode={activeScenarioStoryboardNode?.data?.scenarioMode || ""}
         masterAudioUrl={activeScenarioMasterAudioUrl}
+        scenarioNodeAudioUrl={activeScenarioStoryboardNode?.data?.audioUrl || ""}
+        scenarioNodeMasterAudioUrl={activeScenarioStoryboardNode?.data?.masterAudioUrl || ""}
+        connectedSourceAudioUrl={activeScenarioMasterAudioResolution?.connectedSourceAudioUrl || ""}
+        globalAudioUrl={activeScenarioMasterAudioResolution?.globalAudioUrl || ""}
         musicUrl={activeScenarioMusicUrl}
         onClose={() => setIsScenarioStoryboardOpen(false)}
         onUpdateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneUpdate}

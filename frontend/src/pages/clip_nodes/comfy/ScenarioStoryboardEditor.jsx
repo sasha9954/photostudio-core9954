@@ -232,7 +232,10 @@ export default function ScenarioStoryboardEditor({
   audioData,
   scenarioMode,
   masterAudioUrl: masterAudioUrlProp,
-  musicUrl: musicUrlProp,
+  scenarioNodeAudioUrl = "",
+  scenarioNodeMasterAudioUrl = "",
+  connectedSourceAudioUrl = "",
+  globalAudioUrl = "",
   onClose,
   onUpdateScene,
   onGenerateScene,
@@ -260,8 +263,39 @@ export default function ScenarioStoryboardEditor({
   );
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
   const safeAudioData = audioData && typeof audioData === "object" ? audioData : {};
-  const masterAudioUrl = String(masterAudioUrlProp || safeAudioData?.audioUrl || musicUrlProp || safeAudioData?.musicUrl || "").trim();
+  const masterAudioResolution = useMemo(() => {
+    const scenarioNodeAudioDataUrl = String(safeAudioData?.audioUrl || "").trim();
+    if (scenarioNodeAudioDataUrl) {
+      return { source: "scenario_node_audioData", resolvedMasterAudioUrl: scenarioNodeAudioDataUrl };
+    }
+    const scenarioNodeAudioUrlResolved = String(scenarioNodeAudioUrl || "").trim();
+    if (scenarioNodeAudioUrlResolved) {
+      return { source: "scenario_node_audioUrl", resolvedMasterAudioUrl: scenarioNodeAudioUrlResolved };
+    }
+    const scenarioNodeMasterAudioUrlResolved = String(scenarioNodeMasterAudioUrl || masterAudioUrlProp || "").trim();
+    if (scenarioNodeMasterAudioUrlResolved) {
+      return { source: "scenario_node_masterAudioUrl", resolvedMasterAudioUrl: scenarioNodeMasterAudioUrlResolved };
+    }
+    const connectedSourceAudioUrlResolved = String(connectedSourceAudioUrl || "").trim();
+    if (connectedSourceAudioUrlResolved) {
+      return { source: "connected_source_node", resolvedMasterAudioUrl: connectedSourceAudioUrlResolved };
+    }
+    const globalAudioUrlResolved = String(globalAudioUrl || "").trim();
+    if (globalAudioUrlResolved) {
+      return { source: "global_audio_node", resolvedMasterAudioUrl: globalAudioUrlResolved };
+    }
+    return { source: "missing", resolvedMasterAudioUrl: "" };
+  }, [connectedSourceAudioUrl, globalAudioUrl, masterAudioUrlProp, safeAudioData?.audioUrl, scenarioNodeAudioUrl, scenarioNodeMasterAudioUrl]);
+  const masterAudioUrl = masterAudioResolution.resolvedMasterAudioUrl;
   const hasBgAudioAvailable = Boolean(masterAudioUrl);
+
+  useEffect(() => {
+    console.debug("[SCENARIO MASTER AUDIO RESOLVED]", {
+      nodeId: String(nodeId || ""),
+      source: masterAudioResolution.source,
+      resolvedMasterAudioUrl: masterAudioResolution.resolvedMasterAudioUrl,
+    });
+  }, [masterAudioResolution, nodeId]);
 
   useEffect(() => {
     if (!open) return;
@@ -400,15 +434,13 @@ export default function ScenarioStoryboardEditor({
     }
     const t1 = Number.isFinite(t1Raw) && t1Raw > t0 ? t1Raw : t0 + 0.25;
     const phraseSceneId = resolvePhraseSceneId(phrase, idx);
-    console.debug("[SCENARIO PHRASE PREVIEW CLICK]", {
+    console.debug("[SCENARIO PHRASE JUMP]", {
       sceneId: phraseSceneId,
       phraseText: String(phrase?.text || "").trim(),
-      sceneAudioSliceStart: t0,
-      sceneAudioSliceEnd: t1,
-      selectedAudioUrl: masterAudioUrl,
-      audioNodeUrl: String(safeAudioData?.audioUrl || "").trim(),
-      scenarioNodeId: String(nodeId || ""),
-      sourceNodeId: "",
+      t0,
+      t1,
+      masterAudioUrl,
+      currentSrc: String(audio?.currentSrc || "").trim(),
     });
     phrasePlaybackRef.current = { sceneId: phraseSceneId, phraseIndex: idx, t0, t1 };
     setPlayingPhraseIndex(idx);
@@ -453,7 +485,16 @@ export default function ScenarioStoryboardEditor({
   useEffect(() => {
     const audio = masterAudioRef.current;
     if (!audio) return;
+    if (String(audio.getAttribute("src") || "").trim() !== masterAudioUrl) {
+      audio.pause();
+      audio.setAttribute("src", masterAudioUrl || "");
+    }
     audio.load();
+    console.debug("[SCENARIO MASTER AUDIO PLAYER]", {
+      event: "load",
+      masterAudioUrl,
+      currentSrc: String(audio.currentSrc || "").trim(),
+    });
   }, [masterAudioUrl]);
 
   const resolveSceneAudioSliceStatus = (scene) => {
