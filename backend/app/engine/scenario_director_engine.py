@@ -3776,11 +3776,17 @@ def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene) -> str:
 
 
 def _build_music_video_image_prompt(scene: ScenarioDirectorScene) -> str:
-    return build_ltx_visible_image_prompt(scene)
+    if not _scene_has_character_subject(scene):
+        return ""
+    subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip().startswith("character_")][:2]).strip()
+    return _join_visible_prompt_parts([f"Visible subject: {subject}" if subject else "", build_ltx_visible_image_prompt(scene)])
 
 
 def _build_music_video_video_prompt(scene: ScenarioDirectorScene) -> str:
-    return build_ltx_visible_video_prompt(scene)
+    if not _scene_has_character_subject(scene):
+        return ""
+    subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip().startswith("character_")][:2]).strip()
+    return _join_visible_prompt_parts([f"Subject action: {subject}" if subject else "", build_ltx_visible_video_prompt(scene)])
 
 
 def _scene_requires_explicit_first_last_prompts(scene: ScenarioDirectorScene) -> bool:
@@ -4250,6 +4256,10 @@ def _scene_has_character_subject(scene: ScenarioDirectorScene) -> bool:
     return any(role in {"character_1", "character_2", "character_3"} for role in actors)
 
 
+def _scene_is_renderable_ltx_mode(scene: ScenarioDirectorScene) -> bool:
+    return str(scene.ltx_mode or "").strip().lower() in {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync"}
+
+
 def _is_environment_only_scene_contract(scene: ScenarioDirectorScene) -> bool:
     dynamics = str(scene.scene_role_dynamics or "").strip().lower()
     reason = str(scene.role_influence_reason or "").strip().lower()
@@ -4275,6 +4285,22 @@ def _detect_music_video_scene_actor_candidates(
     if "character_1" not in candidates:
         candidates.insert(0, "character_1")
     return [role for role in candidates if role]
+
+
+def _enforce_music_video_render_subject_contract(
+    scene: ScenarioDirectorScene,
+    *,
+    payload: dict[str, Any],
+    raw_scene: dict[str, Any] | None,
+) -> bool:
+    if not _scene_is_renderable_ltx_mode(scene):
+        return True
+    if _scene_has_character_subject(scene):
+        return True
+    actor_candidates = _detect_music_video_scene_actor_candidates(scene, payload=payload, raw_scene=raw_scene)
+    if actor_candidates:
+        scene.actors = [actor_candidates[0]]
+    return _scene_has_character_subject(scene)
 
 
 def _downgrade_to_environment_establishing_note(scene: ScenarioDirectorScene) -> None:
@@ -4517,26 +4543,28 @@ def _apply_music_video_mode_policy(
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
         if _is_environment_only_scene_contract(scene):
             _downgrade_to_environment_establishing_note(scene)
-            workflow_reason = "Environment-only scene cannot use first_last/lip_sync in music_video; downgraded to short establishing note."
-            scene.ltx_reason = _normalize_ltx_reason(workflow_reason, scene.ltx_mode, narration_mode=scene.narration_mode)
+            if duration > 1.0:
+                if not _enforce_music_video_render_subject_contract(scene, payload=payload, raw_scene=raw_scene):
+                    logger.warning(
+                        "[SCENARIO_DIRECTOR] dropped environment-only music_video scene without hero scene_id=%s duration=%.3f",
+                        scene.scene_id,
+                        duration,
+                    )
+                    continue
+                scene.scene_role_dynamics = "hero_present"
+                scene.role_influence_reason = "music_video_hero_required"
+                scene.workflow_decision_reason = "Environment-only classification remediated by assigning hero subject."
+            else:
+                logger.info(
+                    "[SCENARIO_DIRECTOR] dropped short environment helper beat from final render storyboard scene_id=%s duration=%.3f",
+                    scene.scene_id,
+                    duration,
+                )
+                continue
         if forced_transition_scene:
             scene.scene_purpose = "transition"
-        renderable_mode = str(scene.ltx_mode or "").strip().lower() in {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync"}
-        if renderable_mode and not _scene_has_character_subject(scene):
-            if is_short_establishing_beat:
-                _downgrade_to_environment_establishing_note(scene)
-                scene.image_prompt = _join_visible_prompt_parts(
-                    [str(scene.location or "").strip(), str(scene.frame_description or scene.scene_goal or "").strip()]
-                )
-                scene.video_prompt = _join_visible_prompt_parts([str(scene.camera or "").strip(), "Short atmospheric establishing beat"])
-                scene.workflow_decision_reason = (
-                    "Short environment establishing beat allowed without actor; render contract blocks first_last/lip_sync."
-                )
-                kept_scenes.append(scene)
-                prev_lip_sync = False
-                prev_two_frames = False
-                prev_shot_type = str(scene.shot_type or shot_type)
-                continue
+        renderable_mode = _scene_is_renderable_ltx_mode(scene)
+        if renderable_mode and not _enforce_music_video_render_subject_contract(scene, payload=payload, raw_scene=raw_scene):
             logger.warning(
                 "[SCENARIO_DIRECTOR] dropped music_video scene without character subject after remediation scene_id=%s",
                 scene.scene_id,
