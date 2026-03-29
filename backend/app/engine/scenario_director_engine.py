@@ -5338,6 +5338,52 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         can_merge, reason = _can_merge_short_scene_pair(_scene_merge_payload(left), _scene_merge_payload(right))
         return can_merge, reason
 
+    def _has_strong_first_last_reason(scene: ScenarioDirectorScene) -> tuple[bool, str]:
+        evidence = " ".join(
+            [
+                str(scene.transition_type or "").strip().lower(),
+                str(scene.boundary_reason or "").strip().lower(),
+                str(scene.scene_purpose or "").strip().lower(),
+                str(scene.ltx_reason or "").strip().lower(),
+                str(scene.workflow_decision_reason or "").strip().lower(),
+                str(scene.clip_decision_reason or "").strip().lower(),
+                str(scene.audio_slice_decision_reason or "").strip().lower(),
+            ]
+        )
+        strong_tokens = (
+            "state_shift",
+            "state shift",
+            "before-after",
+            "before after",
+            "a→b",
+            "a->b",
+            "transition beat",
+            "bridge",
+            "cannot merge",
+            "hard_cut",
+            "hard cut",
+            "visual transition",
+            "forced_first_last",
+        )
+        if any(token in evidence for token in strong_tokens):
+            return True, "strong_transition_evidence"
+        return False, "no_strong_transition_evidence"
+
+    def _degrade_short_first_last_scene(scene: ScenarioDirectorScene) -> str:
+        has_sound = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
+        scene.needs_two_frames = False
+        scene.continuation_from_previous = False
+        scene.start_frame_source = "new"
+        scene.render_mode = "image_video_sound" if has_sound else "image_video"
+        scene.ltx_mode = "i2v_as" if has_sound else "i2v"
+        scene.resolved_workflow_key = "image-video-golos-zvuk" if has_sound else "image-video"
+        scene.transition_type = "cut"
+        degrade_reason = (
+            f"Short first_last scene degraded because duration below {SCENARIO_SHORT_FIRST_LAST_MIN_SEC:.1f}s without strong transition reason."
+        )
+        scene.ltx_reason = _normalize_ltx_reason(degrade_reason, scene.ltx_mode, narration_mode=scene.narration_mode)
+        return "degraded_to_mergeable"
+
     def _merge_final_generation_short_scenes(chunks: list[ScenarioDirectorScene]) -> list[ScenarioDirectorScene]:
         if len(chunks) < 2:
             return chunks
@@ -5346,6 +5392,43 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         while idx < len(merged_chunks):
             scene = merged_chunks[idx]
             duration = max(0.0, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0))
+            is_first_last = _is_first_last_scene(scene)
+            strong_reason_detected = False
+            short_first_last_reason = "not_first_last_or_long_enough"
+            if is_first_last and duration < SCENARIO_SHORT_FIRST_LAST_MIN_SEC:
+                strong_reason_detected, short_first_last_reason = _has_strong_first_last_reason(scene)
+                logger.info(
+                    "[SCENARIO SHORT FIRST_LAST] sceneId=%s durationSec=%.3f renderMode=%s ltxMode=%s needsTwoFrames=%s strongReasonDetected=%s reason=%s",
+                    scene.scene_id,
+                    duration,
+                    str(scene.render_mode or ""),
+                    str(scene.ltx_mode or ""),
+                    bool(scene.needs_two_frames),
+                    "yes" if strong_reason_detected else "no",
+                    short_first_last_reason,
+                )
+                if strong_reason_detected:
+                    logger.info(
+                        "[SCENARIO SHORT FIRST_LAST DECISION] sceneId=%s durationSec=%.3f renderMode=%s ltxMode=%s needsTwoFrames=%s strongReasonDetected=yes action=kept_first_last reason=%s",
+                        scene.scene_id,
+                        duration,
+                        str(scene.render_mode or ""),
+                        str(scene.ltx_mode or ""),
+                        bool(scene.needs_two_frames),
+                        short_first_last_reason,
+                    )
+                else:
+                    action = _degrade_short_first_last_scene(scene)
+                    logger.info(
+                        "[SCENARIO SHORT FIRST_LAST DECISION] sceneId=%s durationSec=%.3f renderMode=%s ltxMode=%s needsTwoFrames=%s strongReasonDetected=no action=%s reason=%s",
+                        scene.scene_id,
+                        duration,
+                        str(scene.render_mode or ""),
+                        str(scene.ltx_mode or ""),
+                        bool(scene.needs_two_frames),
+                        action,
+                        short_first_last_reason,
+                    )
             if duration >= SCENARIO_CHUNK_PREFERRED_MIN_SEC:
                 idx += 1
                 continue
@@ -5383,10 +5466,29 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 merged_chunks.pop(right_idx)
                 logger.info("[SCENARIO FINAL SCENE MERGE] action=merged sceneId=%s mergedWithSceneId=%s reason=%s resultDurationSec=%.3f",
                             left.scene_id, right.scene_id, reason, _safe_float(left.duration, 0.0))
+                if not strong_reason_detected and duration < SCENARIO_SHORT_FIRST_LAST_MIN_SEC:
+                    logger.info(
+                        "[SCENARIO SHORT FIRST_LAST DECISION] sceneId=%s durationSec=%.3f renderMode=%s ltxMode=%s needsTwoFrames=%s strongReasonDetected=no action=merged_with_neighbor reason=%s",
+                        left.scene_id,
+                        duration,
+                        str(left.render_mode or ""),
+                        str(left.ltx_mode or ""),
+                        bool(left.needs_two_frames),
+                        reason,
+                    )
                 merged = True
                 idx = max(0, left_idx - 1)
                 break
             if not merged:
+                if is_first_last and duration < SCENARIO_SHORT_FIRST_LAST_MIN_SEC and not strong_reason_detected:
+                    logger.info(
+                        "[SCENARIO SHORT FIRST_LAST DECISION] sceneId=%s durationSec=%.3f renderMode=%s ltxMode=%s needsTwoFrames=%s strongReasonDetected=no action=degraded_to_single reason=no_safe_neighbor_merge",
+                        scene.scene_id,
+                        duration,
+                        str(scene.render_mode or ""),
+                        str(scene.ltx_mode or ""),
+                        bool(scene.needs_two_frames),
+                    )
                 logger.info("[SCENARIO FINAL SCENE MERGE] action=kept_short_scene sceneId=%s durationSec=%.3f reason=no_safe_neighbor_merge",
                             scene.scene_id, duration)
                 idx += 1
@@ -6303,6 +6405,7 @@ def _scale_audio_first_timeline_if_normalized(result: dict[str, Any], audio_dura
 SCENARIO_CHUNK_PREFERRED_MIN_SEC = 3.0
 SCENARIO_CHUNK_HARD_MIN_SEC = 2.4
 SCENARIO_CHUNK_MICRO_SEC = 2.0
+SCENARIO_SHORT_FIRST_LAST_MIN_SEC = 2.8
 
 
 def _normalize_scene_text(value: Any) -> str:
