@@ -5370,19 +5370,20 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         return False, "no_strong_transition_evidence"
 
     def _degrade_short_first_last_scene(scene: ScenarioDirectorScene) -> str:
-        has_sound = bool(str(scene.sfx or "").strip() or str(scene.local_phrase or "").strip())
         scene.needs_two_frames = False
         scene.continuation_from_previous = False
         scene.start_frame_source = "new"
-        scene.render_mode = "image_video_sound" if has_sound else "image_video"
-        scene.ltx_mode = "i2v_as" if has_sound else "i2v"
-        scene.resolved_workflow_key = "image-video-golos-zvuk" if has_sound else "image-video"
+        scene.render_mode = "image_video"
+        scene.ltx_mode = "i2v"
+        scene.resolved_workflow_key = "image-video"
         scene.transition_type = "cut"
+        scene.start_frame_prompt = ""
+        scene.end_frame_prompt = ""
         degrade_reason = (
             f"Short first_last scene degraded because duration below {SCENARIO_SHORT_FIRST_LAST_MIN_SEC:.1f}s without strong transition reason."
         )
         scene.ltx_reason = _normalize_ltx_reason(degrade_reason, scene.ltx_mode, narration_mode=scene.narration_mode)
-        return "degraded_to_mergeable"
+        return "degraded_to_single"
 
     def _merge_final_generation_short_scenes(chunks: list[ScenarioDirectorScene]) -> list[ScenarioDirectorScene]:
         if len(chunks) < 2:
