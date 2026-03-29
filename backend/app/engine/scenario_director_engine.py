@@ -3006,6 +3006,152 @@ def _infer_music_video_shot_type(scene: ScenarioDirectorScene) -> str:
     return "medium"
 
 
+def _normalize_scene_shot_type_from_camera(scene: ScenarioDirectorScene) -> str:
+    shot_type = str(scene.shot_type or "").strip().lower() or "medium"
+    camera_text = " ".join(
+        [
+            str(scene.camera or "").strip().lower(),
+            str(scene.frame_description or "").strip().lower(),
+        ]
+    )
+    if not camera_text:
+        return shot_type
+    has_tight_close = any(token in camera_text for token in ("tight close-up", "tight close up", "extreme close-up", "extreme close up", "ecu"))
+    has_close = any(token in camera_text for token in ("close-up", "close up", "close shot", "face close", "faces close")) or has_tight_close
+    has_medium_close = any(token in camera_text for token in ("medium close-up", "medium close up", "medium shot", "waist-up", "waist up"))
+    has_wide = any(token in camera_text for token in ("wide", "full shot", "full body", "long shot", "distant", "from afar", "establishing"))
+    if has_tight_close and shot_type == "wide":
+        return "close_up"
+    if has_close and shot_type == "wide":
+        return "close_up"
+    if has_medium_close and shot_type in {"wide", "detail_insert"}:
+        return "medium"
+    if has_wide and shot_type in {"close_up", "detail_insert"}:
+        return "medium"
+    return shot_type
+
+
+def _should_keep_first_last_for_scene(
+    scene: ScenarioDirectorScene,
+    *,
+    transition_candidate: bool,
+    forced_transition_scene: bool,
+) -> tuple[bool, str]:
+    if forced_transition_scene:
+        return True, "forced_transition_scene"
+    if not transition_candidate:
+        return True, "not_transition_candidate"
+    duet_signal = (
+        len([str(actor).strip() for actor in (scene.actors or []) if str(actor).strip()]) >= 2
+        or str(scene.scene_role_dynamics or "").strip().lower().startswith("duet")
+        or str(scene.shot_type or "").strip().lower() == "duet_shared"
+    )
+    if not duet_signal:
+        return True, "non_duet_scene"
+    semantic_bundle = " ".join(
+        [
+            str(scene.scene_goal or ""),
+            str(scene.local_phrase or ""),
+            str(scene.what_from_audio_this_scene_uses or ""),
+            str(scene.frame_description or ""),
+            str(scene.action_in_frame or ""),
+            str(scene.boundary_reason or ""),
+            str(scene.transition_type or ""),
+            str(scene.camera or ""),
+        ]
+    ).strip().lower()
+    strong_visual_transition_tokens = (
+        "approach",
+        "lean in",
+        "whisper",
+        "reveal",
+        "shift",
+        "transition",
+        "change of distance",
+        "change of intimacy",
+        "before-after",
+        "before after",
+        "move closer",
+        "step closer",
+        "push in",
+        "pull back",
+    )
+    if any(token in semantic_bundle for token in strong_visual_transition_tokens):
+        return True, "strong_visual_transition_signal"
+    reiteration_tokens = (
+        "reaffirm",
+        "restatement",
+        "restate",
+        "repeated refusal",
+        "refusal",
+        "refuse",
+        "won't disclose",
+        "will not disclose",
+        "won't tell",
+        "will not tell",
+        "repeat",
+        "reiterat",
+        "emphasis",
+        "insist",
+    )
+    if any(token in semantic_bundle for token in reiteration_tokens):
+        return False, "reaffirmation_without_visual_shift"
+    return True, "default_keep_first_last"
+
+
+def _is_repeat_heavy_music_clip(scenes: list[ScenarioDirectorScene]) -> bool:
+    if len(scenes) < 3:
+        return False
+    normalized_phrases: list[str] = []
+    repeated_phrase_scenes = 0
+    for scene in scenes:
+        phrase = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", str(scene.local_phrase or "").lower())).strip()
+        if phrase:
+            normalized_phrases.append(phrase)
+            phrase_parts = [part.strip() for part in re.split(r"(?:\s*[|/·]\s*|\n+|(?<=[\.\!\?;:])\s+)", phrase) if part.strip()]
+            if len(set(phrase_parts)) < len(phrase_parts):
+                repeated_phrase_scenes += 1
+    if not normalized_phrases:
+        return False
+    duplicate_hits = len(normalized_phrases) - len(set(normalized_phrases))
+    multi_phrase_scenes = sum(1 for scene in scenes if int(_safe_float(getattr(scene, "scene_phrase_count", 0), 0)) >= 2)
+    return duplicate_hits >= 1 or repeated_phrase_scenes >= 1 or multi_phrase_scenes >= 2
+
+
+def _maybe_compact_repeat_heavy_ending_hold(
+    scene: ScenarioDirectorScene,
+    *,
+    repeat_heavy_clip: bool,
+) -> tuple[bool, str]:
+    if not repeat_heavy_clip:
+        return False, "not_repeat_heavy_clip"
+    if str(scene.scene_purpose or "").strip().lower() != "ending_hold":
+        return False, "not_ending_hold"
+    duration = max(0.0, _safe_float(scene.duration, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0)))
+    if duration <= 5.0:
+        return False, "already_compact"
+    complexity_bundle = " ".join(
+        [
+            str(scene.scene_goal or ""),
+            str(scene.frame_description or ""),
+            str(scene.action_in_frame or ""),
+            str(scene.camera or ""),
+            str(scene.transition_type or ""),
+        ]
+    ).strip().lower()
+    if any(token in complexity_bundle for token in ("before-after", "state shift", "state_shift", "transition", "approach", "reveal", "enter", "exit", "transform")):
+        return False, "complex_evolution_present"
+    preferred_target = 4.8
+    scene.requested_duration_sec = round(min(_safe_float(scene.requested_duration_sec, duration), preferred_target), 3)
+    slice_start = _safe_float(scene.audio_slice_start_sec, _safe_float(scene.time_start, 0.0))
+    current_slice_end = _safe_float(scene.audio_slice_end_sec, max(slice_start, _safe_float(scene.time_end, slice_start)))
+    compact_slice_end = min(current_slice_end, slice_start + preferred_target)
+    scene.audio_slice_start_sec = round(slice_start, 3)
+    scene.audio_slice_end_sec = round(max(slice_start, compact_slice_end), 3)
+    scene.audio_slice_expected_duration_sec = round(max(0.0, scene.audio_slice_end_sec - scene.audio_slice_start_sec), 3)
+    return True, "repeat_heavy_ending_hold_compacted"
+
+
 def _infer_music_video_scene_purpose(
     index: int,
     total: int,
@@ -4116,6 +4262,7 @@ def _apply_music_video_mode_policy(
     forced_first_last_index: int | None = None
     if len(scenes) >= 5 and not has_existing_first_last:
         forced_first_last_index = _select_forced_music_video_transition_index(scenes, payload=payload)
+    repeat_heavy_clip = _is_repeat_heavy_music_clip(scenes)
     max_lip_sync = max(1, min(3, len(scenes) // 2 if len(scenes) <= 6 else 3))
     lip_sync_used = 0
     prev_lip_sync = False
@@ -4181,8 +4328,25 @@ def _apply_music_video_mode_policy(
         presence_type = str(role_influence.get("presence_type") or presence_type)
         performance_framing = str(role_influence.get("performance_framing") or performance_framing)
         scene.scene_purpose = str(role_influence.get("scene_purpose") or scene.scene_purpose)
+        keep_first_last, first_last_guard_reason = _should_keep_first_last_for_scene(
+            scene,
+            transition_candidate=transition_candidate,
+            forced_transition_scene=forced_transition_scene,
+        )
+        if transition_candidate and not keep_first_last:
+            transition_candidate = False
+            scene.scene_purpose = _infer_music_video_scene_purpose(
+                index,
+                len(scenes),
+                scene,
+                transition_candidate=False,
+                performance_framing=performance_framing,
+                performer_presentation=performer_presentation,
+            )
         # Persist role-influenced composition back into final scene state.
         scene.shot_type = shot_type
+        scene.shot_type = _normalize_scene_shot_type_from_camera(scene)
+        shot_type = str(scene.shot_type or shot_type)
         scene.performance_framing = performance_framing
         close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
         lip_sync_base_candidate = (
@@ -4252,6 +4416,8 @@ def _apply_music_video_mode_policy(
                     if has_sound_cue and not auto_sound_workflow_enabled
                     else "First-last workflow for controlled visual state transition."
                 )
+        elif not keep_first_last and first_last_guard_reason != "not_transition_candidate":
+            workflow_reason = "Single-frame workflow kept because first_last guard found reiterative duet beat without explicit visual transition."
         elif has_sound_cue and auto_sound_workflow_enabled:
             render_mode = "image_video_sound"
             resolved_workflow = str(content_type_policy.get("clipWorkflowSound") or "image-video-golos-zvuk")
@@ -4349,6 +4515,15 @@ def _apply_music_video_mode_policy(
         scene.workflow_decision_reason = workflow_reason
         scene.lip_sync_decision_reason = lip_sync_reason
         scene.audio_slice_decision_reason = audio_slice_reason
+        compacted_ending_hold, ending_hold_reason = _maybe_compact_repeat_heavy_ending_hold(
+            scene,
+            repeat_heavy_clip=repeat_heavy_clip,
+        )
+        if compacted_ending_hold:
+            scene.workflow_decision_reason = f"{scene.workflow_decision_reason} Ending hold compacted for repeat-heavy clip context."
+            scene.audio_slice_decision_reason = f"{scene.audio_slice_decision_reason} Ending hold compacted to keep final beat concise."
+        elif ending_hold_reason == "complex_evolution_present":
+            scene.workflow_decision_reason = f"{scene.workflow_decision_reason} Ending hold kept longer due to internal visual evolution."
 
         if not lip_sync:
             scene.lip_sync_text = ""
