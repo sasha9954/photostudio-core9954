@@ -5042,6 +5042,7 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
     precise_phrase_rows: list[dict[str, Any]] = []
     fallback_phrase_rows: list[dict[str, Any]] = []
     pause_windows: list[dict[str, float]] = []
+    pause_source_stats: dict[str, dict[str, int | bool]] = {}
     precise_phrase_seen: set[tuple[float, float, str]] = set()
     fallback_phrase_seen: set[tuple[float, float, str]] = set()
     pause_seen: set[tuple[float, float]] = set()
@@ -5078,6 +5079,14 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
 
     single_call_payload = (payload or {}).get("_single_call_payload") if isinstance((payload or {}).get("_single_call_payload"), dict) else {}
     for container, source_name in ((single_call_payload, "single_call"), (payload if isinstance(payload, dict) else {}, "payload")):
+        pause_rows = (((container.get("audioStructure") or {}).get("pauses")) or [])
+        pause_source_stats[source_name] = {
+            "count": len(pause_rows) if isinstance(pause_rows, list) else 0,
+            "t0_t1_count": 0,
+            "start_end_count": 0,
+            "supports_t0_t1": False,
+            "supports_start_end": False,
+        }
         for row in (container.get("transcript") or []):
             if isinstance(row, dict):
                 _push_phrase_row(
@@ -5098,9 +5107,32 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                     fallback_phrase_rows,
                     fallback_phrase_seen,
                 )
-        for pause in (((container.get("audioStructure") or {}).get("pauses")) or []):
+        for pause in pause_rows:
             if isinstance(pause, dict):
-                _push_pause_window(pause.get("start"), pause.get("end"), f"{source_name}_audio_structure")
+                has_t0_t1 = pause.get("t0") is not None or pause.get("t1") is not None
+                has_start_end = pause.get("start") is not None or pause.get("end") is not None
+                if has_t0_t1:
+                    pause_source_stats[source_name]["t0_t1_count"] = int(pause_source_stats[source_name]["t0_t1_count"]) + 1
+                    pause_source_stats[source_name]["supports_t0_t1"] = True
+                if has_start_end:
+                    pause_source_stats[source_name]["start_end_count"] = int(pause_source_stats[source_name]["start_end_count"]) + 1
+                    pause_source_stats[source_name]["supports_start_end"] = True
+                _push_pause_window(
+                    pause.get("t0") if pause.get("t0") is not None else pause.get("start"),
+                    pause.get("t1") if pause.get("t1") is not None else pause.get("end"),
+                    f"{source_name}_audio_structure",
+                )
+
+    for source_name, stats in pause_source_stats.items():
+        logger.info(
+            "[SCENARIO AUDIO PAUSE SOURCE] source=%s count=%s t0_t1_count=%s start_end_count=%s supports_t0_t1=%s supports_start_end=%s",
+            source_name,
+            stats.get("count", 0),
+            stats.get("t0_t1_count", 0),
+            stats.get("start_end_count", 0),
+            stats.get("supports_t0_t1", False),
+            stats.get("supports_start_end", False),
+        )
 
     for phrase in (audio_analysis.get("phrases") or []):
         if isinstance(phrase, dict):
