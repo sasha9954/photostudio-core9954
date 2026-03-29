@@ -13255,6 +13255,59 @@ onClipSec: (nodeId, value) => {
                 const activeNode = currentNodes.find((nodeItem) => nodeItem.id === nodeId);
                 const requestKey = `scenario-generate:${String(nodeId || "")}`;
                 const wasInFlight = narrativeGenerateInFlightRef.current.get(requestKey) === true;
+                const activeNodeIsGenerating = activeNode?.data?.isGenerating === true;
+                const liveController = narrativeAbortControllersRef.current.get(nodeId);
+                const hasLiveController = !!liveController && liveController?.signal?.aborted !== true;
+                const staleGeneratingState = activeNodeIsGenerating && !wasInFlight && !hasLiveController;
+                let staleRecovered = false;
+                const syncNarrativeGenerateState = ({
+                  finalIsGenerating = false,
+                  reason = "",
+                  staleRecoveredFlag = false,
+                } = {}) => {
+                  setNodes((prev) => {
+                    const nextNodes = prev.map((x) => {
+                      if (x.id !== nodeId) return x;
+                      const nextStatus = String(x?.data?.status || "").trim().toLowerCase();
+                      const shouldResetStatus = finalIsGenerating === false && (nextStatus === "generating" || nextStatus === "pending" || nextStatus === "loading");
+                      return {
+                        ...x,
+                        data: {
+                          ...x.data,
+                          isGenerating: finalIsGenerating,
+                          ...(shouldResetStatus ? { status: "idle" } : {}),
+                        },
+                      };
+                    });
+                    const rebound = bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: reason || "narrative:scenario-generate:state-sync" });
+                    nodesRef.current = rebound;
+                    return rebound;
+                  });
+                  console.debug("[SCENARIO GENERATE STATE]", {
+                    nodeId: String(nodeId || ""),
+                    requestKey,
+                    wasInFlightRef: wasInFlight,
+                    activeNodeIsGenerating,
+                    staleRecovered: staleRecoveredFlag,
+                    finalIsGenerating,
+                  });
+                };
+                if (staleGeneratingState) {
+                  staleRecovered = true;
+                  syncNarrativeGenerateState({
+                    finalIsGenerating: false,
+                    reason: "narrative:scenario-generate:stale-recovery",
+                    staleRecoveredFlag: true,
+                  });
+                  console.debug("[SCENARIO GENERATE STALE RESET]", {
+                    nodeId: String(nodeId || ""),
+                    requestKey,
+                    wasInFlightRef: wasInFlight,
+                    activeNodeIsGenerating,
+                    staleRecovered: true,
+                    finalIsGenerating: false,
+                  });
+                }
                 if (wasInFlight) {
                   console.debug("[SCENARIO GENERATE REQUEST]", {
                     requestKey,
@@ -13266,7 +13319,7 @@ onClipSec: (nodeId, value) => {
                   });
                   return;
                 }
-                if (activeNode?.data?.isGenerating === true) {
+                if (activeNodeIsGenerating && !staleGeneratingState) {
                   console.debug("[SCENARIO GENERATE REQUEST]", {
                     requestKey,
                     inFlight: true,
@@ -13353,6 +13406,11 @@ onClipSec: (nodeId, value) => {
 
                 if (!requestPayload) {
                   narrativeAbortControllersRef.current.delete(nodeId);
+                  syncNarrativeGenerateState({
+                    finalIsGenerating: false,
+                    reason: "narrative:scenario-generate:missing-request-payload",
+                    staleRecoveredFlag: staleRecovered,
+                  });
                   notify({ type: "warning", title: "Source required", message: "Подключите один active source-of-truth перед генерацией сценария." });
                   return;
                 }
@@ -13461,6 +13519,16 @@ onClipSec: (nodeId, value) => {
                     narrativeAbortControllersRef.current.delete(nodeId);
                   }
                   narrativeGenerateInFlightRef.current.delete(requestKey);
+                  const latestNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
+                  const finalIsGenerating = latestNode?.data?.isGenerating === true;
+                  console.debug("[SCENARIO GENERATE STATE]", {
+                    nodeId: String(nodeId || ""),
+                    requestKey,
+                    wasInFlightRef: wasInFlight,
+                    activeNodeIsGenerating,
+                    staleRecovered,
+                    finalIsGenerating,
+                  });
                 }
               },
               onConfirmScenario: async (nodeId) => {
