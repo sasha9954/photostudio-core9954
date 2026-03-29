@@ -5018,6 +5018,8 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
     preferred_min = 3.0
     preferred_max = 6.0
     hard_max = 8.0
+    repeat_clip_preferred_max = 4.5
+    repeat_clip_merge_guard_max = 6.0
 
     def _sync_chunk_timing_fields(chunk_data: dict[str, Any]) -> dict[str, Any]:
         chunk_start = _safe_float(chunk_data.get("time_start"), 0.0)
@@ -5068,7 +5070,8 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             or ("phrase" in audio_anchor and ("+" in audio_anchor or "next" in audio_anchor or "adjacent" in audio_anchor))
             or has_pause_boundary_inside
         )
-        should_split = merged_phrase_risk or duration > preferred_max
+        scene_preferred_max = repeat_clip_preferred_max if merged_phrase_risk else preferred_max
+        should_split = merged_phrase_risk or duration > scene_preferred_max
         if not should_split:
             chunk_data = scene.model_dump(mode="python")
             chunk_data = _sync_chunk_timing_fields(chunk_data)
@@ -5081,7 +5084,7 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             chunk_start = _safe_float(chunk_data.get("time_start"), start)
             chunk_end = max(chunk_start, _safe_float(chunk_data.get("time_end"), chunk_start))
             chunk_duration = max(0.0, chunk_end - chunk_start)
-            must_split = chunk_duration > preferred_max or (duration > hard_max and split_idx == 0)
+            must_split = chunk_duration > scene_preferred_max or (duration > hard_max and split_idx == 0)
             if not must_split:
                 chunk_data = _sync_chunk_timing_fields(chunk_data)
                 scene_chunks.append(ScenarioDirectorScene.model_validate(chunk_data))
@@ -5488,6 +5491,121 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         return "degraded_to_single"
 
     def _merge_final_generation_short_scenes(chunks: list[ScenarioDirectorScene]) -> list[ScenarioDirectorScene]:
+        def _split_text_parts(value: str) -> list[str]:
+            return [part.strip() for part in re.split(r"(?:\s*[|/·]\s*|\n+|(?<=[\.\!\?;:])\s+)", str(value or "")) if part.strip()]
+
+        def _normalize_text_part(value: str) -> str:
+            text = str(value or "").lower().strip()
+            text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
+            text = re.sub(r"\s+", " ", text).strip()
+            return text
+
+        def _dedupe_repeated_scene_text_parts(scene: ScenarioDirectorScene, field_name: str) -> None:
+            raw_value = str(getattr(scene, field_name, "") or "").strip()
+            if not raw_value:
+                return
+            parts = _split_text_parts(raw_value)
+            if len(parts) <= 1:
+                return
+            deduped: list[str] = []
+            deduped_norm: list[str] = []
+            for part in parts:
+                norm = _normalize_text_part(part)
+                if not norm:
+                    continue
+                near_duplicate = False
+                norm_tokens = set(norm.split())
+                for prev_norm in deduped_norm:
+                    prev_tokens = set(prev_norm.split())
+                    shared = len(norm_tokens.intersection(prev_tokens))
+                    union = max(1, len(norm_tokens.union(prev_tokens)))
+                    jaccard = shared / union
+                    if norm == prev_norm or norm in prev_norm or prev_norm in norm or jaccard >= 0.82:
+                        near_duplicate = True
+                        break
+                if near_duplicate:
+                    continue
+                deduped.append(part)
+                deduped_norm.append(norm)
+            if not deduped:
+                deduped = [parts[0]]
+            if len(deduped) != len(parts):
+                logger.info(
+                    "[SCENARIO TEXT DEDUPE] %s",
+                    {
+                        "sceneId": str(scene.scene_id or "").strip(),
+                        "field": field_name,
+                        "beforeCount": len(parts),
+                        "afterCount": len(deduped),
+                    },
+                )
+            setattr(scene, field_name, " / ".join(deduped))
+
+        def _role_pattern(scene: ScenarioDirectorScene) -> str:
+            dynamics = str(scene.scene_role_dynamics or "").lower()
+            if "solo" in dynamics:
+                return "solo"
+            if "duet" in dynamics:
+                return "duet"
+            actor_count = len([str(actor).strip() for actor in (scene.actors or []) if str(actor).strip()])
+            if actor_count <= 1:
+                return "solo"
+            if actor_count == 2:
+                return "duet"
+            return "group"
+
+        def _contains_repeated_local_phrase(scene: ScenarioDirectorScene) -> bool:
+            parts = [part for part in _split_text_parts(str(scene.local_phrase or "")) if _normalize_text_part(part)]
+            if len(parts) <= 1:
+                return False
+            normalized_parts = [_normalize_text_part(part) for part in parts if _normalize_text_part(part)]
+            return len(set(normalized_parts)) < len(normalized_parts)
+
+        def _has_repeated_text_fields(scene: ScenarioDirectorScene) -> bool:
+            for field_name in ("scene_goal", "frame_description", "action_in_frame"):
+                parts = _split_text_parts(str(getattr(scene, field_name, "") or ""))
+                if len(parts) <= 1:
+                    continue
+                normalized_parts = [_normalize_text_part(part) for part in parts if _normalize_text_part(part)]
+                if len(set(normalized_parts)) < len(normalized_parts):
+                    return True
+            return False
+
+        def _should_block_repeat_merge(left: ScenarioDirectorScene, right: ScenarioDirectorScene) -> tuple[bool, str, dict[str, Any]]:
+            left_duration = max(0.0, _safe_float(left.time_end, 0.0) - _safe_float(left.time_start, 0.0))
+            right_duration = max(0.0, _safe_float(right.time_end, 0.0) - _safe_float(right.time_start, 0.0))
+            merged_duration = left_duration + right_duration
+            merged_phrase_count = int(_safe_float(getattr(left, "scene_phrase_count", 0), 0)) + int(
+                _safe_float(getattr(right, "scene_phrase_count", 0), 0)
+            )
+            local_phrase_repeated = _contains_repeated_local_phrase(left) or _contains_repeated_local_phrase(right)
+            repeated_text = _has_repeated_text_fields(left) or _has_repeated_text_fields(right)
+            role_pattern_changed = _role_pattern(left) != _role_pattern(right)
+            boundary_glue = " ".join([str(left.boundary_reason or "").lower(), str(right.boundary_reason or "").lower()])
+            repeated_boundary = any(token in boundary_glue for token in ("fallback", "pause", "phrase", "glue", "repeat"))
+            reason = ""
+            if role_pattern_changed:
+                reason = "role_pattern_changed"
+            elif merged_phrase_count > 3:
+                reason = "scene_phrase_count_guard"
+            elif merged_duration >= repeat_clip_merge_guard_max and (local_phrase_repeated or repeated_text or repeated_boundary):
+                reason = "repeat_heavy_duration_cap"
+            elif merged_duration >= hard_max and (local_phrase_repeated or repeated_text):
+                reason = "repeat_heavy_hard_cap"
+            debug_payload = {
+                "sceneId": str(left.scene_id or "").strip(),
+                "neighborSceneId": str(right.scene_id or "").strip(),
+                "reason": reason or "none",
+                "currentDurationSec": round(left_duration, 3),
+                "nextDurationSec": round(right_duration, 3),
+                "mergedDurationSec": round(merged_duration, 3),
+                "scenePhraseCount": merged_phrase_count,
+                "repeatedTextDetected": repeated_text,
+                "repeatedLocalPhraseDetected": local_phrase_repeated,
+                "rolePatternChanged": role_pattern_changed,
+            }
+            return bool(reason), reason, debug_payload
+
         if len(chunks) < 2:
             return chunks
         merged_chunks = list(chunks)
@@ -5550,6 +5668,12 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 left_idx, right_idx = sorted([idx, neighbor_idx])
                 left = merged_chunks[left_idx]
                 right = merged_chunks[right_idx]
+                block_merge, block_reason, block_payload = _should_block_repeat_merge(left, right)
+                if block_merge:
+                    logger.info("[SCENARIO REPEAT MERGE BLOCK] %s", block_payload)
+                    logger.info("[SCENARIO FINAL SCENE MERGE] action=kept_separate sceneId=%s neighborSceneId=%s reason=%s durationSec=%.3f",
+                                scene.scene_id, neighbor.scene_id, block_reason, duration)
+                    continue
                 left.time_start = round(_safe_float(left.time_start, 0.0), 3)
                 left.time_end = round(max(_safe_float(left.time_end, 0.0), _safe_float(right.time_end, 0.0)), 3)
                 left.duration = round(max(0.0, left.time_end - left.time_start), 3)
@@ -5577,6 +5701,8 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                     left.frame_description = " / ".join([part for part in [str(left.frame_description or "").strip(), str(right.frame_description or "").strip()] if part])
                 if str(right.action_in_frame or "").strip():
                     left.action_in_frame = " / ".join([part for part in [str(left.action_in_frame or "").strip(), str(right.action_in_frame or "").strip()] if part])
+                for field_name in ("scene_goal", "frame_description", "action_in_frame", "local_phrase"):
+                    _dedupe_repeated_scene_text_parts(left, field_name)
                 merged_chunks.pop(right_idx)
                 logger.info("[SCENARIO FINAL SCENE MERGE] action=merged sceneId=%s mergedWithSceneId=%s reason=%s resultDurationSec=%.3f",
                             left.scene_id, right.scene_id, reason, _safe_float(left.duration, 0.0))
@@ -5606,6 +5732,9 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 logger.info("[SCENARIO FINAL SCENE MERGE] action=kept_short_scene sceneId=%s durationSec=%.3f reason=no_safe_neighbor_merge",
                             scene.scene_id, duration)
                 idx += 1
+        for merged_scene in merged_chunks:
+            for field_name in ("scene_goal", "frame_description", "action_in_frame", "local_phrase"):
+                _dedupe_repeated_scene_text_parts(merged_scene, field_name)
         return merged_chunks
 
     next_scenes = _merge_final_generation_short_scenes(next_scenes)
