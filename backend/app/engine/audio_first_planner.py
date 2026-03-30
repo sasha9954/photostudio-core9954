@@ -847,6 +847,9 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             "sound_dialogue_allowed": [item.get("sound_dialogue_allowed") for item in scene_intent_diagnostics],
             "downgrade_reason": [item.get("downgrade_reason") for item in scene_intent_diagnostics],
             "no_text_clip_policy": "visual_arc_over_phrase_loop" if not _clean_str(project_input.story_text) else "off",
+            "no_text_clip_policy_applied": bool(not _clean_str(project_input.story_text)),
+            "phrase_loop_prevented": False,
+            "scene_merge_or_reuse_reason": "",
             "refinementHint": refinement_hint,
         },
     )
