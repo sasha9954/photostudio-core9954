@@ -5753,25 +5753,25 @@ def _enforce_single_character_music_video_policy(payload: dict[str, Any], storyb
         return storyboard_out
     removed_roles: set[str] = set()
     for scene in storyboard_out.scenes or []:
-        actors_before = list(scene.actors or [])
-        scene.actors = [role for role in actors_before if role != "character_2"]
-        if len(actors_before) != len(scene.actors):
+        actor_roles = [role for role in (scene.actors or []) if str(role).strip()]
+        scene.actors = [role for role in actor_roles if str(role).strip().lower() != "character_2"]
+        if len(actor_roles) != len(scene.actors):
             removed_roles.add("character_2")
-        scene.secondary_roles = [role for role in (scene.secondary_roles or []) if role != "character_2"]
-        scene.scene_active_roles = [role for role in (scene.scene_active_roles or []) if role != "character_2"]
-        scene.must_appear = [role for role in (scene.must_appear or []) if role != "character_2"]
-        scene.refs_used = [role for role in (scene.refs_used or []) if role != "character_2"]
-        scene.support_entity_ids = [role for role in (scene.support_entity_ids or []) if role != "character_2"]
-        if scene.primary_role == "character_2":
-            scene.primary_role = "character_1"
-        scene.scene_role_dynamics = ",".join(
-            token for token in [part.strip() for part in str(scene.scene_role_dynamics or "").split(",") if part.strip()]
-            if token != "duet_pair_protected"
-        )
-        scene.duet_lock_enabled = False
-        scene.duet_identity_contract = ""
-        scene.secondary_role_visibility_requirement = "none"
-        scene.character2_drift_guard = "not_required"
+        actor_roles_after = {str(role).strip().lower() for role in (scene.actors or []) if str(role).strip()}
+        if "character_2" not in actor_roles_after:
+            scene.duet_lock_enabled = False
+            scene.duet_composition_mode = "single_focus"
+            scene.secondary_role_visibility_requirement = "none"
+            scene.character2_drift_guard = "not_required"
+            scene.duet_identity_contract = ""
+            scene.multi_character_identity_lock = False
+            scene.distinct_character_separation = False
+            dynamics_parts = [
+                part.strip()
+                for part in str(scene.scene_role_dynamics or "").split(",")
+                if part.strip() and part.strip() != "duet_pair_protected"
+            ]
+            scene.scene_role_dynamics = ",".join(dynamics_parts) if dynamics_parts else "hero_anchor"
     storyboard_out.story_summary = _remove_single_character_summary_duet_phrases(storyboard_out.story_summary)
     storyboard_out.full_scenario = _remove_single_character_summary_duet_phrases(storyboard_out.full_scenario)
     storyboard_out.director_summary = _remove_single_character_summary_duet_phrases(storyboard_out.director_summary)
