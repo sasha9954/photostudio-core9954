@@ -1100,6 +1100,10 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     forbiddenChanges,
     lipSync: source.lipSync ?? source.lip_sync,
     lipSyncText: source.lipSyncText ?? source.lip_sync_text,
+    performerPresentation: normalizeText(source.performerPresentation ?? source.performer_presentation),
+    vocalPresentation: normalizeText(source.vocalPresentation ?? source.vocal_presentation),
+    lipSyncVoiceCompatibility: normalizeText(source.lipSyncVoiceCompatibility ?? source.lip_sync_voice_compatibility),
+    lipSyncVoiceCompatibilityReason: normalizeText(source.lipSyncVoiceCompatibilityReason ?? source.lip_sync_voice_compatibility_reason),
     clipDecisionReason,
     roleInfluenceApplied: Boolean(
       source.roleInfluenceApplied

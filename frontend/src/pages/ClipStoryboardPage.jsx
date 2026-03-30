@@ -395,6 +395,10 @@ function buildScenarioSceneContractPayload(scene = {}) {
     continuationSourceAssetType: String(scene?.continuationSourceAssetType || "").trim(),
     audioSliceKind: String(scene?.audioSliceKind || scene?.audio_slice_kind || "").trim().toLowerCase(),
     musicVocalLipSyncAllowed: Boolean(scene?.musicVocalLipSyncAllowed ?? scene?.music_vocal_lipsync_allowed),
+    performerPresentation: String(scene?.performerPresentation ?? scene?.performer_presentation || "").trim(),
+    vocalPresentation: String(scene?.vocalPresentation ?? scene?.vocal_presentation || "").trim(),
+    lipSyncVoiceCompatibility: String(scene?.lipSyncVoiceCompatibility ?? scene?.lip_sync_voice_compatibility || "").trim(),
+    lipSyncVoiceCompatibilityReason: String(scene?.lipSyncVoiceCompatibilityReason ?? scene?.lip_sync_voice_compatibility_reason || "").trim(),
     videoReady: Boolean(scene?.videoReady ?? scene?.video_ready ?? false),
     plannedVideoGenerationRoute: String(scene?.plannedVideoGenerationRoute || scene?.planned_video_generation_route || "").trim().toLowerCase(),
     videoGenerationRoute: String(scene?.videoGenerationRoute || scene?.video_generation_route || "").trim().toLowerCase(),
@@ -1820,6 +1824,20 @@ function stripScenarioGeneratedAssets(scene = {}) {
 function buildScenarioScenePackageSignature(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const displayTime = resolveSceneDisplayTime(source);
+  const activeConnectedCharacterRoles = Array.from(new Set(
+    [
+      ...(Array.isArray(source?.activeConnectedCharacterRoles) ? source.activeConnectedCharacterRoles : []),
+      ...(Array.isArray(source?.connectedContextSummary?.active_connected_character_roles)
+        ? source.connectedContextSummary.active_connected_character_roles
+        : []),
+    ].map((value) => String(value || "").trim()).filter(Boolean)
+  )).sort();
+  const connectedRefNodeIdsByRole = source?.connectedRefNodeIdsByRole && typeof source.connectedRefNodeIdsByRole === "object"
+    ? source.connectedRefNodeIdsByRole
+    : {};
+  const connectedRoleTypesByRole = source?.connectedRoleTypesByRole && typeof source.connectedRoleTypesByRole === "object"
+    ? source.connectedRoleTypesByRole
+    : {};
   const signaturePayload = {
     time: [Number(displayTime.startSec || 0), Number(displayTime.endSec || 0)],
     t0: Number(source?.t0 ?? source?.timeStart ?? source?.time_start ?? displayTime.startSec ?? 0),
@@ -1858,6 +1876,10 @@ function buildScenarioScenePackageSignature(scene = {}) {
     resolvedModelKey: String(source?.resolvedModelKey || "").trim(),
     renderMode: String(source?.renderMode || "").trim(),
     ltxMode: String(source?.ltxMode || "").trim(),
+    activeConnectedCharacterRoles,
+    hasConnectedCharacter2: activeConnectedCharacterRoles.includes("character_2"),
+    connectedRefNodeIdsByRole,
+    connectedRoleTypesByRole,
   };
   return JSON.stringify(signaturePayload);
 }
@@ -3937,6 +3959,25 @@ function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(
       : null;
     return acc;
   }, {});
+}
+
+function buildNarrativeConnectedContextFingerprint(connectedInputs = {}) {
+  const entries = Object.entries(connectedInputs && typeof connectedInputs === "object" ? connectedInputs : {})
+    .map(([handleId, value]) => {
+      const refs = Array.isArray(value?.refs)
+        ? value.refs.map((ref) => String(ref?.url || ref || "").trim()).filter(Boolean).sort()
+        : [];
+      const roleType = String(value?.meta?.roleType || "").trim().toLowerCase();
+      return {
+        handleId: String(handleId || ""),
+        sourceNodeId: String(value?.sourceNodeId || ""),
+        sourceHandle: String(value?.sourceHandle || ""),
+        roleType,
+        refs,
+      };
+    })
+    .sort((a, b) => String(a.handleId).localeCompare(String(b.handleId)));
+  return JSON.stringify(entries);
 }
 
 function extractIntroRefUrlsFromNode(node = null, role = "") {
@@ -12796,6 +12837,14 @@ onClipSec: (nodeId, value) => {
           const sourceScenarioRevision = validScenarioSource
             ? String(sourceNode?.data?.pendingScenarioRevision || sourceNode?.data?.scenarioRevision || "")
             : "";
+          const sourceConnectedContextFingerprint = validScenarioSource
+            ? String(sourceNode?.data?.connectedContextFingerprint || "")
+            : "";
+          const previousConnectedContextFingerprint = String(base?.data?.connectedContextFingerprint || "");
+          const connectedContextChanged = !!sourceConnectedContextFingerprint
+            && !!previousConnectedContextFingerprint
+            && sourceConnectedContextFingerprint !== previousConnectedContextFingerprint;
+          const sourceScenarioContextStale = Boolean(sourceNode?.data?.scenarioContextStale);
           const normalizedPackage = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
           if (CLIP_TRACE_SCENARIO_GRAPH) {
             console.debug("[SCENARIO GRAPH STRICT] storyboard source", {
@@ -12816,9 +12865,10 @@ onClipSec: (nodeId, value) => {
           }
           const previousScenes = Array.isArray(base?.data?.scenes) ? base.data.scenes : [];
           const resetBeforeRequest = sourceIsGenerating && (!hasPendingScenarioOutputs || Boolean(base?.data?.scenarioResetInFlight));
+          const resetBecauseConnectedContextChanged = !sourceIsGenerating && (sourceScenarioContextStale || connectedContextChanged);
           const normalizedScenes = Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length
             ? normalizedPackage.scenes
-            : (resetBeforeRequest ? [] : previousScenes);
+            : ((resetBeforeRequest || resetBecauseConnectedContextChanged) ? [] : previousScenes);
           const previousRevision = String(base?.data?.storyboardRevision || "");
           const nextRevision = sourceScenarioRevision || previousRevision;
           const revisionChanged = previousRevision !== nextRevision;
@@ -13235,6 +13285,7 @@ onClipSec: (nodeId, value) => {
                 || "story"
               ).trim(),
               scenarioResetInFlight: resetBeforeRequest && scenes.length === 0,
+              connectedContextFingerprint: sourceConnectedContextFingerprint || previousConnectedContextFingerprint,
               storyboardRevision: nextRevision,
               storyboardSignature: nextStoryboardSignature,
               scenesCount: scenes.length,
@@ -13686,6 +13737,18 @@ onClipSec: (nodeId, value) => {
             ...(base.data || {}),
             connectedInputs,
           });
+          const previousContextFingerprint = String(base?.data?.connectedContextFingerprint || "");
+          const connectedContextFingerprint = buildNarrativeConnectedContextFingerprint(connectedInputs);
+          const connectedContextChanged = previousContextFingerprint !== connectedContextFingerprint;
+          const connectedCharacterRolesNow = ["ref_character_1", "ref_character_2", "ref_character_3"]
+            .filter((handleId) => (Array.isArray(connectedInputs?.[handleId]?.refs) ? connectedInputs[handleId].refs.length > 0 : false))
+            .map((handleId) => handleId.replace("ref_", ""));
+          const connectedCharacterRolesPrev = ["ref_character_1", "ref_character_2", "ref_character_3"]
+            .filter((handleId) => (Array.isArray(base?.data?.connectedInputs?.[handleId]?.refs) ? base.data.connectedInputs[handleId].refs.length > 0 : false))
+            .map((handleId) => handleId.replace("ref_", ""));
+          const rolePresenceChanged = JSON.stringify(connectedCharacterRolesNow) !== JSON.stringify(connectedCharacterRolesPrev);
+          const character2Disconnected = connectedCharacterRolesPrev.includes("character_2") && !connectedCharacterRolesNow.includes("character_2");
+          const shouldInvalidateScenario = connectedContextChanged && (rolePresenceChanged || character2Disconnected);
           const buildNarrativeGenerationState = ({ narrativeNodeId, nodesNow, edgesNow, traceReason = "narrative:generate" }) => {
             const safeNodes = Array.isArray(nodesNow) ? nodesNow : [];
             const safeEdges = Array.isArray(edgesNow) ? edgesNow : [];
@@ -13776,6 +13839,28 @@ onClipSec: (nodeId, value) => {
               ...getDefaultNarrativeNodeData(),
               ...base.data,
               connectedInputs,
+              connectedContextFingerprint,
+              scenarioContextStale: shouldInvalidateScenario,
+              scenarioContextStaleReason: shouldInvalidateScenario
+                ? (character2Disconnected ? "character_2_disconnected" : "connected_role_context_changed")
+                : "",
+              ...(shouldInvalidateScenario ? {
+                outputs: {
+                  storyboardOut: null,
+                  scenario: "",
+                  voiceScript: "",
+                  brainPackage: null,
+                  bgMusicPrompt: "",
+                  directorOutput: null,
+                },
+                pendingOutputs: null,
+                pendingRawResponse: null,
+                pendingStoryboardOut: null,
+                pendingDirectorOutput: null,
+                pendingGeneratedAt: "",
+                pendingScenarioRevision: "",
+                scenarioRevision: "",
+              } : {}),
               sourceOrigin: resolvedSource.origin,
               resolvedSource,
               onFieldChange: (nodeId, patch) => {

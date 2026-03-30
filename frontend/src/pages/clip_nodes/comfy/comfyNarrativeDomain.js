@@ -723,6 +723,9 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       styleProfile: normalizeText(state.styleProfile) || "realistic",
       format,
       directorNote: normalizeText(state.directorNote),
+      no_text_clip_policy: isMusicVideo && !normalizeText(state.directorNote) && !normalizeText(state?.text || state?.storyText)
+        ? "visual_arc_over_phrase_loop"
+        : "off",
       preferAudioOverText,
       segmentationMode,
       timelineSource,

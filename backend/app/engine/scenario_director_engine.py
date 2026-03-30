@@ -546,6 +546,10 @@ class ScenarioDirectorScene(BaseModel):
     send_audio_to_generator: bool = False
     audio_slice_kind: str = ""
     music_vocal_lipsync_allowed: bool = False
+    performer_presentation: str = "unknown"
+    vocal_presentation: str = "unknown"
+    lip_sync_voice_compatibility: str = "unknown"
+    lip_sync_voice_compatibility_reason: str = ""
     audio_slice_start_sec: float = 0.0
     audio_slice_end_sec: float = 0.0
     audio_slice_expected_duration_sec: float = 0.0
@@ -653,6 +657,10 @@ class ScenarioDirectorScene(BaseModel):
         self.send_audio_to_generator = _coerce_bool(self.send_audio_to_generator, False)
         self.audio_slice_kind = str(self.audio_slice_kind or "").strip().lower()
         self.music_vocal_lipsync_allowed = _coerce_bool(self.music_vocal_lipsync_allowed, False)
+        self.performer_presentation = str(self.performer_presentation or "unknown").strip().lower() or "unknown"
+        self.vocal_presentation = str(self.vocal_presentation or "unknown").strip().lower() or "unknown"
+        self.lip_sync_voice_compatibility = str(self.lip_sync_voice_compatibility or "unknown").strip().lower() or "unknown"
+        self.lip_sync_voice_compatibility_reason = str(self.lip_sync_voice_compatibility_reason or "").strip()
         self.audio_slice_start_sec = _safe_float(self.audio_slice_start_sec, self.time_start)
         self.audio_slice_end_sec = _safe_float(self.audio_slice_end_sec, self.time_end)
         self.audio_slice_expected_duration_sec = _safe_float(
@@ -802,6 +810,10 @@ class ScenarioDirectorDiagnostics(BaseModel):
     clip_formula_actual: dict[str, int] = Field(default_factory=dict)
     clip_formula_rebalance_applied: bool = False
     clip_formula_rebalance_notes: list[str] = Field(default_factory=list)
+    chorus_detected: bool = False
+    active_connected_character_roles: list[str] = Field(default_factory=list)
+    single_character_mode_enforced: bool = False
+    removed_inactive_roles: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _normalize(self) -> "ScenarioDirectorDiagnostics":
@@ -825,6 +837,10 @@ class ScenarioDirectorDiagnostics(BaseModel):
         self.clip_formula_actual = self.clip_formula_actual if isinstance(self.clip_formula_actual, dict) else {}
         self.clip_formula_rebalance_applied = _coerce_bool(self.clip_formula_rebalance_applied, False)
         self.clip_formula_rebalance_notes = [str(item).strip() for item in (self.clip_formula_rebalance_notes or []) if str(item).strip()]
+        self.chorus_detected = _coerce_bool(self.chorus_detected, False)
+        self.active_connected_character_roles = [str(item).strip().lower() for item in (self.active_connected_character_roles or []) if str(item).strip()]
+        self.single_character_mode_enforced = _coerce_bool(self.single_character_mode_enforced, False)
+        self.removed_inactive_roles = [str(item).strip().lower() for item in (self.removed_inactive_roles or []) if str(item).strip()]
         return self
 
 
@@ -2643,6 +2659,10 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "sendAudioToGenerator": scene.send_audio_to_generator,
             "audioSliceKind": scene.audio_slice_kind,
             "musicVocalLipSyncAllowed": scene.music_vocal_lipsync_allowed,
+            "performerPresentation": scene.performer_presentation,
+            "vocalPresentation": scene.vocal_presentation,
+            "lipSyncVoiceCompatibility": scene.lip_sync_voice_compatibility,
+            "lipSyncVoiceCompatibilityReason": scene.lip_sync_voice_compatibility_reason,
             "audioSliceStartSec": scene.audio_slice_start_sec,
             "audioSliceEndSec": scene.audio_slice_end_sec,
             "audioSliceExpectedDurationSec": scene.audio_slice_expected_duration_sec,
@@ -2749,6 +2769,10 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "resolvedWorkflowFile": scene.resolved_workflow_file,
                 "audioSliceKind": scene.audio_slice_kind,
                 "musicVocalLipSyncAllowed": scene.music_vocal_lipsync_allowed,
+                "performerPresentation": scene.performer_presentation,
+                "vocalPresentation": scene.vocal_presentation,
+                "lipSyncVoiceCompatibility": scene.lip_sync_voice_compatibility,
+                "lipSyncVoiceCompatibilityReason": scene.lip_sync_voice_compatibility_reason,
                 "videoReady": scene.video_ready,
                 "videoBlockReasonCode": scene.video_block_reason_code,
                 "videoBlockReasonMessage": scene.video_block_reason_message,
@@ -3287,6 +3311,39 @@ def _is_repeat_heavy_music_clip(scenes: list[ScenarioDirectorScene]) -> bool:
     duplicate_hits = len(normalized_phrases) - len(set(normalized_phrases))
     multi_phrase_scenes = sum(1 for scene in scenes if int(_safe_float(getattr(scene, "scene_phrase_count", 0), 0)) >= 2)
     return duplicate_hits >= 1 or repeated_phrase_scenes >= 1 or multi_phrase_scenes >= 2
+
+
+def _collect_active_connected_character_roles(payload: dict[str, Any]) -> list[str]:
+    connected_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
+    refs_present = connected_summary.get("refsPresentByRole") if isinstance(connected_summary.get("refsPresentByRole"), dict) else {}
+    if not refs_present and isinstance(payload.get("context_refs"), dict):
+        refs_present = {
+            role: (value.get("refs") if isinstance(value, dict) else [])
+            for role, value in payload.get("context_refs", {}).items()
+        }
+    active = []
+    for role in ("character_1", "character_2", "character_3"):
+        refs = refs_present.get(role) if isinstance(refs_present, dict) else []
+        if isinstance(refs, list) and any(str(item).strip() for item in refs):
+            active.append(role)
+    return active
+
+
+def _remove_single_character_summary_duet_phrases(text: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+    cleaned = normalized
+    duet_patterns = [
+        r"\bher friend\b",
+        r"\btwo young women\b",
+        r"\btwo girls\b",
+        r"\bboth of them\b",
+        r"\btogether\b",
+    ]
+    for pattern in duet_patterns:
+        cleaned = re.sub(pattern, "the performer", cleaned, flags=re.IGNORECASE)
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
 
 
 def _maybe_compact_repeat_heavy_ending_hold(
@@ -4826,6 +4883,39 @@ def _scene_renderability_guard(scene: ScenarioDirectorScene, *, prior_scene_exis
         )
         return
     if str(scene.render_mode or "").strip().lower() == "lip_sync_music":
+        if str(scene.performer_presentation or "unknown").strip().lower() == "unknown":
+            _assign_video_route(
+                scene,
+                route="blocked",
+                planned_route=scene.planned_video_generation_route or "lip_sync_music",
+                block_code="lip_sync_performer_presentation_unknown",
+                block_message="Lip-sync route requires known performer presentation.",
+                downgrade_code=scene.video_downgrade_reason_code or "lip_sync_performer_presentation_unknown",
+                downgrade_message=scene.video_downgrade_reason_message or "Lip-sync candidate rejected because performer presentation is unknown.",
+            )
+            return
+        if str(scene.vocal_presentation or "unknown").strip().lower() == "unknown":
+            _assign_video_route(
+                scene,
+                route="blocked",
+                planned_route=scene.planned_video_generation_route or "lip_sync_music",
+                block_code="lip_sync_voice_presentation_unknown",
+                block_message="Lip-sync route requires known vocal presentation.",
+                downgrade_code=scene.video_downgrade_reason_code or "lip_sync_voice_presentation_unknown",
+                downgrade_message=scene.video_downgrade_reason_message or "Lip-sync candidate rejected because vocal presentation is unknown.",
+            )
+            return
+        if str(scene.lip_sync_voice_compatibility or "").strip().lower() != "compatible":
+            _assign_video_route(
+                scene,
+                route="blocked",
+                planned_route=scene.planned_video_generation_route or "lip_sync_music",
+                block_code="lip_sync_voice_gender_mismatch",
+                block_message="Lip-sync route blocked by voice/performer presentation mismatch.",
+                downgrade_code=scene.video_downgrade_reason_code or "lip_sync_voice_gender_mismatch",
+                downgrade_message=scene.video_downgrade_reason_message or "Lip-sync candidate rejected by voice/performer presentation mismatch.",
+            )
+            return
         if _safe_float(scene.audio_slice_end_sec, 0.0) <= _safe_float(scene.audio_slice_start_sec, 0.0):
             _assign_video_route(
                 scene,
@@ -4882,11 +4972,27 @@ def _prevent_phrase_loop_in_music_video(storyboard_out: ScenarioDirectorStoryboa
     merged_scenes: list[ScenarioDirectorScene] = [scenes[0]]
     prevented = False
     merge_notes: list[str] = []
+    storyboard_out.diagnostics.chorus_detected = _is_repeat_heavy_music_clip(scenes)
+
+    def _is_near_repeat_phrase(left: str, right: str) -> bool:
+        left_clean = re.sub(r"[^\w\s]", " ", str(left or "").lower())
+        right_clean = re.sub(r"[^\w\s]", " ", str(right or "").lower())
+        left_tokens = [token for token in left_clean.split() if token]
+        right_tokens = [token for token in right_clean.split() if token]
+        if not left_tokens or not right_tokens:
+            return False
+        left_set = set(left_tokens)
+        right_set = set(right_tokens)
+        overlap = len(left_set.intersection(right_set))
+        union = max(1, len(left_set.union(right_set)))
+        prefix_overlap = len([token for token in zip(left_tokens, right_tokens) if token[0] == token[1]])
+        return (overlap / union) >= 0.72 or prefix_overlap >= max(2, min(len(left_tokens), len(right_tokens)) - 1)
+
     for scene in scenes[1:]:
         prev = merged_scenes[-1]
         phrase_prev = re.sub(r"\s+", " ", str(prev.local_phrase or "").strip().lower())
         phrase_cur = re.sub(r"\s+", " ", str(scene.local_phrase or "").strip().lower())
-        repeated_phrase = bool(phrase_prev and phrase_cur and phrase_prev == phrase_cur)
+        repeated_phrase = bool(phrase_prev and phrase_cur and (phrase_prev == phrase_cur or _is_near_repeat_phrase(phrase_prev, phrase_cur)))
         if not repeated_phrase:
             merged_scenes.append(scene)
             continue
@@ -4915,11 +5021,41 @@ def _prevent_phrase_loop_in_music_video(storyboard_out: ScenarioDirectorStoryboa
         prev.video_downgrade_reason_code = prev.video_downgrade_reason_code or "phrase_loop_merged"
         prev.video_downgrade_reason_message = prev.video_downgrade_reason_message or "Repeated lyric phrase merged into previous beat to preserve visual arc progression."
         prevented = True
-        merge_notes.append(f"merged_repeated_phrase:{scene.scene_id}->{prev.scene_id}")
+        merge_notes.append(f"merged_repeated_phrase:{scene.scene_id}->{prev.scene_id}:near_repeat_chorus")
     storyboard_out.scenes = merged_scenes
     storyboard_out.diagnostics.phrase_loop_prevented = prevented
     storyboard_out.diagnostics.scene_merge_or_reuse_reason = "; ".join(merge_notes[:8]) if merge_notes else "visual_arc_policy_applied_no_merge_needed"
     return storyboard_out
+
+
+def _strengthen_first_last_candidate(scene: ScenarioDirectorScene) -> ScenarioDirectorScene:
+    text_blob = " ".join(
+        [
+            str(scene.scene_goal or ""),
+            str(scene.frame_description or ""),
+            str(scene.action_in_frame or ""),
+            str(scene.workflow_decision_reason or ""),
+            str(scene.clip_decision_reason or ""),
+            str(scene.transition_family or ""),
+        ]
+    ).lower()
+    trigger_tokens = ("world shift", "reveal", "release", "afterimage", "scale", "escalat", "emotion", "camera")
+    if not any(token in text_blob for token in trigger_tokens):
+        return scene
+    if not str(scene.start_visual_state or "").strip():
+        scene.start_visual_state = str(scene.frame_description or scene.scene_goal or "phase A: initial visual state").strip()
+    if not str(scene.end_visual_state or "").strip():
+        scene.end_visual_state = f"phase B: {str(scene.action_in_frame or scene.scene_goal or 'resolved visual state').strip()}"
+    if not scene.delta_axes:
+        axes: list[str] = []
+        if any(token in text_blob for token in ("world shift", "reveal", "afterimage")):
+            axes.append("world_context_shift")
+        if any(token in text_blob for token in ("scale", "wide", "close", "camera")):
+            axes.append("camera_language_shift")
+        if any(token in text_blob for token in ("emotion", "release", "escalat")):
+            axes.append("emotion_intensity_shift")
+        scene.delta_axes = axes or ["visual_state_shift"]
+    return scene
 
 
 def _rebalance_music_video_formula(
@@ -5011,12 +5147,27 @@ def _rebalance_music_video_formula(
     )
     while _route_counts()["f_l"] < target["f_l"] and fl_candidates:
         candidate = fl_candidates.pop(0)
+        candidate = _strengthen_first_last_candidate(candidate)
         if not _scene_has_transition_evidence(candidate):
+            _assign_video_route(
+                candidate,
+                route="downgraded_to_i2v",
+                planned_route="f_l",
+                downgrade_code="first_last_visual_delta_too_weak",
+                downgrade_message="Planned first_last downgraded to i2v because strong A/B visual delta was not detected.",
+            )
             notes.append(f"f_l_skip_no_transition_evidence:{candidate.scene_id}")
             continue
         start_state = str(candidate.start_visual_state or "").strip().lower()
         end_state = str(candidate.end_visual_state or "").strip().lower()
         if not start_state or not end_state or start_state == end_state:
+            _assign_video_route(
+                candidate,
+                route="downgraded_to_i2v",
+                planned_route="f_l",
+                downgrade_code="first_last_visual_delta_too_weak",
+                downgrade_message="Planned first_last downgraded to i2v because strong A/B visual delta was not detected.",
+            )
             notes.append(f"f_l_skip_weak_visual_delta:{candidate.scene_id}")
             continue
         candidate.render_mode = "first_last"
@@ -5198,7 +5349,18 @@ def _apply_music_video_mode_policy(
             and lip_sync_used < max_lip_sync
         )
         lip_sync_compatible, lip_sync_compatibility_reason = _is_lipsync_voice_compatible(vocal_presentation, performer_presentation)
+        compatibility_reason_code = ""
+        if lip_sync_compatibility_reason == "unknown_vocal_presentation":
+            compatibility_reason_code = "lip_sync_voice_presentation_unknown"
+        elif lip_sync_compatibility_reason == "unknown_performer_presentation":
+            compatibility_reason_code = "lip_sync_performer_presentation_unknown"
+        elif lip_sync_compatibility_reason in {"male_vocal_female_performer_conflict", "female_vocal_male_performer_conflict", "incompatible_presentation"}:
+            compatibility_reason_code = "lip_sync_voice_gender_mismatch"
         lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible
+        scene.performer_presentation = performer_presentation or "unknown"
+        scene.vocal_presentation = vocal_presentation or "unknown"
+        scene.lip_sync_voice_compatibility = "compatible" if lip_sync_compatible else "incompatible"
+        scene.lip_sync_voice_compatibility_reason = compatibility_reason_code or lip_sync_compatibility_reason
 
         render_mode = "image_video"
         resolved_workflow = str(content_type_policy.get("clipWorkflowDefault") or "i2v")
@@ -5281,6 +5443,14 @@ def _apply_music_video_mode_policy(
 
         if lip_sync_base_candidate and not lip_sync_compatible:
             lip_sync_reason = f"Lip-sync candidate rejected by compatibility gate: {lip_sync_compatibility_reason}."
+            if not scene.video_downgrade_reason_code and compatibility_reason_code:
+                _assign_video_route(
+                    scene,
+                    route="downgraded_to_i2v",
+                    planned_route="lip_sync_music",
+                    downgrade_code=compatibility_reason_code,
+                    downgrade_message=f"Lip-sync candidate rejected by compatibility gate: {lip_sync_compatibility_reason}.",
+                )
         if lip_sync_candidate and not scene.music_vocal_lipsync_allowed:
             lip_sync_candidate = False
             lip_sync_reason = "Lip-sync candidate rejected: audio slice is not marked as music_vocal compatible."
@@ -5572,6 +5742,41 @@ def _enforce_explicit_role_assignments(payload: dict[str, Any], storyboard_out: 
             role_presence[role] = True
             warnings.append(f"explicit_role_repaired:{role}")
     return storyboard_out, warnings
+
+
+def _enforce_single_character_music_video_policy(payload: dict[str, Any], storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    active_roles = _collect_active_connected_character_roles(payload)
+    storyboard_out.diagnostics.active_connected_character_roles = list(active_roles)
+    is_single_character_mode = active_roles == ["character_1"]
+    storyboard_out.diagnostics.single_character_mode_enforced = is_single_character_mode
+    if not is_single_character_mode:
+        return storyboard_out
+    removed_roles: set[str] = set()
+    for scene in storyboard_out.scenes or []:
+        actors_before = list(scene.actors or [])
+        scene.actors = [role for role in actors_before if role != "character_2"]
+        if len(actors_before) != len(scene.actors):
+            removed_roles.add("character_2")
+        scene.secondary_roles = [role for role in (scene.secondary_roles or []) if role != "character_2"]
+        scene.scene_active_roles = [role for role in (scene.scene_active_roles or []) if role != "character_2"]
+        scene.must_appear = [role for role in (scene.must_appear or []) if role != "character_2"]
+        scene.refs_used = [role for role in (scene.refs_used or []) if role != "character_2"]
+        scene.support_entity_ids = [role for role in (scene.support_entity_ids or []) if role != "character_2"]
+        if scene.primary_role == "character_2":
+            scene.primary_role = "character_1"
+        scene.scene_role_dynamics = ",".join(
+            token for token in [part.strip() for part in str(scene.scene_role_dynamics or "").split(",") if part.strip()]
+            if token != "duet_pair_protected"
+        )
+        scene.duet_lock_enabled = False
+        scene.duet_identity_contract = ""
+        scene.secondary_role_visibility_requirement = "none"
+        scene.character2_drift_guard = "not_required"
+    storyboard_out.story_summary = _remove_single_character_summary_duet_phrases(storyboard_out.story_summary)
+    storyboard_out.full_scenario = _remove_single_character_summary_duet_phrases(storyboard_out.full_scenario)
+    storyboard_out.director_summary = _remove_single_character_summary_duet_phrases(storyboard_out.director_summary)
+    storyboard_out.diagnostics.removed_inactive_roles = sorted(removed_roles)
+    return storyboard_out
 
 
 def _character_lock_candidate_score(scene: ScenarioDirectorScene, *, scene_index: int, total_scenes: int, companion_roles: set[str]) -> int:
@@ -6632,6 +6837,7 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         )
         scene.ltx_reason = _normalize_ltx_reason(degrade_reason, scene.ltx_mode, narration_mode=scene.narration_mode)
         scene.video_generation_route = "downgraded_to_i2v"
+        scene.planned_video_generation_route = "f_l"
         scene.video_downgrade_reason_code = "first_last_visual_delta_too_weak"
         scene.video_downgrade_reason_message = degrade_reason
         return "degraded_to_single"
@@ -6888,6 +7094,7 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
     if no_text_mode:
         phrase_loop_before = _is_repeat_heavy_music_clip(storyboard_out.scenes or [])
         phrase_loop_after = _is_repeat_heavy_music_clip(next_scenes)
+        storyboard_out.diagnostics.chorus_detected = bool(phrase_loop_before)
         storyboard_out.diagnostics.phrase_loop_prevented = bool(phrase_loop_before and not phrase_loop_after)
         storyboard_out.diagnostics.scene_merge_or_reuse_reason = (
             "visual_arc_progression_merge_guard"
@@ -6921,6 +7128,8 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     storyboard_out = _filter_or_repair_weak_scenes(storyboard_out)
     storyboard_out = _enforce_character_lock(payload, storyboard_out)
     storyboard_out, _ = _enforce_explicit_role_assignments(payload, storyboard_out)
+    if content_type_policy.get("value") == "music_video":
+        storyboard_out = _enforce_single_character_music_video_policy(payload, storyboard_out)
     storyboard_out = _apply_timing_variation(storyboard_out)
     storyboard_out = _rebalance_ltx_modes(storyboard_out)
     storyboard_out = _normalize_scene_timeline(storyboard_out)
@@ -8527,13 +8736,18 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         audio_primary_driver_reason = "text_fallback_only"
     controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     director_note_text = str(controls.get("directorNote") or controls.get("director_note") or "").strip()
+    source_text_value = str(payload.get("source_text") or payload.get("sourceText") or "").strip()
+    requested_no_text_policy = str(controls.get("no_text_clip_policy") or "").strip().lower()
     no_text_fallback_mode = "neutral_audio_literal" if not director_note_text else "off"
     authorial_interpretation_level = "low" if no_text_fallback_mode == "neutral_audio_literal" else "medium"
     audio_literalness_level = "high" if no_text_fallback_mode == "neutral_audio_literal" else "balanced"
     storyboard_out.diagnostics.no_text_fallback_mode = no_text_fallback_mode
     is_music_video_mode = _get_content_type_policy(payload).get("value") == "music_video"
-    storyboard_out.diagnostics.no_text_clip_policy = "visual_arc_over_phrase_loop" if is_music_video_mode and not director_note_text else "off"
-    storyboard_out.diagnostics.no_text_clip_policy_applied = bool(is_music_video_mode and not director_note_text)
+    apply_no_text_clip_policy = is_music_video_mode and (not director_note_text and not source_text_value)
+    if requested_no_text_policy == "visual_arc_over_phrase_loop":
+        apply_no_text_clip_policy = True
+    storyboard_out.diagnostics.no_text_clip_policy = "visual_arc_over_phrase_loop" if apply_no_text_clip_policy else "off"
+    storyboard_out.diagnostics.no_text_clip_policy_applied = bool(apply_no_text_clip_policy)
     storyboard_out.diagnostics.authorial_interpretation_level = authorial_interpretation_level
     storyboard_out.diagnostics.audio_literalness_level = audio_literalness_level
     planner_narrative_strategy = structured_planner_diagnostics.get("narrativeStrategy") if isinstance(structured_planner_diagnostics.get("narrativeStrategy"), dict) else {}
