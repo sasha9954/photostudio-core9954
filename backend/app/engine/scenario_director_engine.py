@@ -5103,22 +5103,76 @@ def _scene_is_lip_sync_eligible(scene: ScenarioDirectorScene, *, is_clip_single_
         return False, "lip_sync_skip_no_face_framing"
     if str(scene.scene_purpose or "").strip().lower() not in {"performance", "emotional_claim", "chorus_hit", "vocal_emphasis", "hook", "build", "payoff"}:
         return False, "lip_sync_skip_scene_purpose_mismatch"
-    if str(scene.audio_slice_kind or "").strip().lower() != "music_vocal" or not scene.music_vocal_lipsync_allowed:
-        return False, "lip_sync_skip_audio_not_sendable"
     compatible, compatibility_reason = _is_lipsync_voice_compatible(scene.vocal_presentation, scene.performer_presentation)
+    audio_sendable = str(scene.audio_slice_kind or "").strip().lower() == "music_vocal" and scene.music_vocal_lipsync_allowed
+    single_performer_scene = (
+        len([actor for actor in (scene.actors or []) if str(actor).strip().startswith("character_")]) == 1
+        and str(scene.performer_presentation or "").strip().lower() in {"male", "female"}
+    )
     if compatible:
         scene.lip_sync_voice_compatibility = "compatible"
         scene.lip_sync_voice_compatibility_reason = compatibility_reason
-        return True, "lip_sync_eligible"
-    if compatibility_reason == "unknown_vocal_presentation" and is_clip_single_character and str(scene.performer_presentation or "").strip().lower() in {"male", "female"}:
+        if audio_sendable:
+            return True, "lip_sync_eligible"
+        if is_clip_single_character and single_performer_scene:
+            scene.audio_slice_kind = "music_vocal"
+            scene.music_vocal_lipsync_allowed = True
+            scene.audio_slice_decision_reason = "lip_sync_audio_send_enabled_by_clip_fallback"
+            return True, "lip_sync_eligible_single_performer_clip_fallback"
+        return False, "lip_sync_skip_audio_not_sendable"
+    if compatibility_reason == "unknown_vocal_presentation" and is_clip_single_character and single_performer_scene:
         scene.lip_sync_voice_compatibility = "compatible"
         scene.lip_sync_voice_compatibility_reason = "single_performer_clip_fallback"
-        return True, "lip_sync_eligible_single_performer_fallback"
+        scene.audio_slice_kind = "music_vocal"
+        scene.music_vocal_lipsync_allowed = True
+        scene.audio_slice_decision_reason = "lip_sync_audio_send_enabled_by_clip_fallback"
+        return True, "lip_sync_eligible_single_performer_clip_fallback"
     scene.lip_sync_voice_compatibility = "incompatible"
     scene.lip_sync_voice_compatibility_reason = compatibility_reason
     if compatibility_reason == "unknown_vocal_presentation":
         return False, "lip_sync_skip_unknown_and_no_single_performer_fallback"
     return False, "lip_sync_skip_voice_performer_conflict"
+
+
+def _lip_sync_candidate_score(scene: ScenarioDirectorScene) -> int:
+    score = 0
+    if str(scene.local_phrase or "").strip():
+        score += 2
+    if _scene_has_lip_sync_signal(scene):
+        score += 1
+    if str(scene.shot_type or "").strip().lower() in {"close_up", "portrait"}:
+        score += 1
+    if str(scene.performance_framing or "").strip().lower() in {"face_close", "close_performance", "tight_medium", "medium_close"}:
+        score += 1
+    return score
+
+
+def _first_last_candidate_score(scene: ScenarioDirectorScene) -> int:
+    score = 0
+    if _scene_has_transition_evidence(scene):
+        score += 1
+    if str(scene.transition_family or "").strip().lower() in {"transform", "reveal", "release", "afterimage", "state_shift"}:
+        score += 1
+    if scene.delta_axes:
+        score += 1
+    duration = _safe_float(scene.duration, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0))
+    if duration >= 2.4:
+        score += 1
+    return score
+
+
+def _clip_formula_actual_counts(scenes: list[ScenarioDirectorScene], target: dict[str, int]) -> dict[str, Any]:
+    lip = sum(1 for s in scenes if s.resolved_workflow_key == "lip_sync_music")
+    fl = sum(1 for s in scenes if s.resolved_workflow_key == "f_l")
+    i2v = sum(1 for s in scenes if s.resolved_workflow_key == "i2v")
+    i2v_min = int(target.get("i2v_min", 0))
+    i2v_max = int(target.get("i2v_max", 0))
+    return {
+        "lip_sync_music": lip,
+        "f_l": fl,
+        "i2v": i2v,
+        "i2v_in_target_range": i2v_min <= i2v <= i2v_max if i2v_max >= i2v_min else True,
+    }
 
 
 def _apply_scene_route(scene: ScenarioDirectorScene, *, route: str, reason: str) -> None:
@@ -5149,58 +5203,59 @@ def _apply_scene_route(scene: ScenarioDirectorScene, *, route: str, reason: str)
         scene.lip_sync = False
         scene.send_audio_to_generator = False
         scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("i2v", fallback_key="i2v")
-        _assign_video_route(
-            scene,
-            route="i2v",
-            planned_route="i2v",
-            downgrade_code=scene.video_downgrade_reason_code or "reroute_to_i2v_default_clip",
-            downgrade_message=scene.video_downgrade_reason_message or "Scene routed to default i2v because lip_sync and first_last eligibility were not met.",
-        )
+        _assign_video_route(scene, route="i2v", planned_route="i2v")
     scene.workflow_decision_reason = reason
 
 
-def _rebalance_music_video_formula(storyboard_out: ScenarioDirectorStoryboardOut, *, audio_duration_sec: float) -> ScenarioDirectorStoryboardOut:
+def _rebalance_music_video_formula(
+    storyboard_out: ScenarioDirectorStoryboardOut,
+    *,
+    audio_duration_sec: float,
+    lip_sync_candidates: list[ScenarioDirectorScene],
+    first_last_candidates: list[ScenarioDirectorScene],
+) -> ScenarioDirectorStoryboardOut:
     scenes = storyboard_out.scenes or []
     diagnostics = storyboard_out.diagnostics
     target = _get_clip_formula_target(audio_duration_sec)
     diagnostics.clip_formula_target = target
     if not scenes:
-        diagnostics.clip_formula_actual = {"lip_sync_music": 0, "f_l": 0, "i2v": 0}
+        diagnostics.clip_formula_actual = {"lip_sync_music": 0, "f_l": 0, "i2v": 0, "i2v_in_target_range": False}
         diagnostics.clip_formula_rebalance_applied = False
         diagnostics.clip_formula_rebalance_notes = ["no_scenes_for_formula_rebalance"]
         return storyboard_out
     notes: list[str] = []
-    rebalance_applied = False
     lip_target = int(target.get("lip_sync_music", 0))
     fl_target = int(target.get("f_l", 0))
-
-    def _route_counts() -> dict[str, int]:
-        return {
-            "lip_sync_music": sum(1 for s in scenes if s.resolved_workflow_key == "lip_sync_music"),
-            "f_l": sum(1 for s in scenes if s.resolved_workflow_key == "f_l"),
-            "i2v": sum(1 for s in scenes if s.resolved_workflow_key == "i2v"),
-        }
-
-    while _route_counts()["lip_sync_music"] < lip_target:
-        candidate = next((s for s in scenes if s.resolved_workflow_key == "i2v" and "lip_sync_eligible" in str(s.lip_sync_decision_reason or "")), None)
-        if candidate is None:
-            notes.append("insufficient_lip_sync_music_candidates_after_post_pass")
+    sorted_lip = sorted(lip_sync_candidates, key=_lip_sync_candidate_score, reverse=True)
+    sorted_fl = sorted(first_last_candidates, key=_first_last_candidate_score, reverse=True)
+    selected_lip_ids = {scene.scene_id for scene in sorted_lip[:lip_target]}
+    selected_fl_ids: set[str] = set()
+    for scene in sorted_fl:
+        if len(selected_fl_ids) >= fl_target:
             break
-        _apply_scene_route(candidate, route="lip_sync_music", reason="Clip formula rebalance promoted scene to lip_sync_music.")
-        notes.append(f"rebalanced_to_lip_sync_music:{candidate.scene_id}")
-        rebalance_applied = True
+        if scene.scene_id in selected_lip_ids:
+            continue
+        selected_fl_ids.add(scene.scene_id)
 
-    while _route_counts()["f_l"] < fl_target:
-        candidate = next((s for s in scenes if s.resolved_workflow_key == "i2v" and str(s.video_downgrade_reason_code or "") == "strong_first_last_candidate"), None)
-        if candidate is None:
-            notes.append("insufficient_f_l_candidates_with_strong_visual_delta")
-            break
-        _apply_scene_route(candidate, route="f_l", reason="Clip formula rebalance promoted scene to first_last.")
-        notes.append(f"rebalanced_to_f_l:{candidate.scene_id}")
-        rebalance_applied = True
+    if lip_target > len(sorted_lip):
+        notes.append("insufficient_lip_sync_music_candidates_after_eligibility_pass")
+    if fl_target > len(selected_fl_ids):
+        notes.append("insufficient_f_l_candidates_after_eligibility_pass")
 
-    diagnostics.clip_formula_actual = _route_counts()
-    diagnostics.clip_formula_rebalance_applied = rebalance_applied
+    for scene in scenes:
+        if scene.scene_id in selected_lip_ids:
+            _apply_scene_route(scene, route="lip_sync_music", reason="Deterministic clip router selected lip_sync_music after eligibility rebalance.")
+            notes.append(f"selected_lip_sync_music:{scene.scene_id}")
+            continue
+        if scene.scene_id in selected_fl_ids:
+            _apply_scene_route(scene, route="f_l", reason="Deterministic clip router selected first_last after eligibility rebalance.")
+            notes.append(f"selected_f_l:{scene.scene_id}")
+            continue
+        _apply_scene_route(scene, route="i2v", reason="default_clip_i2v_route")
+        notes.append(f"selected_i2v:{scene.scene_id}")
+
+    diagnostics.clip_formula_actual = _clip_formula_actual_counts(scenes, target)
+    diagnostics.clip_formula_rebalance_applied = bool(selected_lip_ids or selected_fl_ids)
     diagnostics.clip_formula_rebalance_notes = notes or ["rebalance_not_needed"]
     return storyboard_out
 
@@ -5215,31 +5270,37 @@ def _route_clip_video_models(
     diagnostics = storyboard_out.diagnostics
     diagnostics.clip_formula_target = _get_clip_formula_target(audio_duration_sec)
     if not scenes:
-        diagnostics.clip_formula_actual = {"lip_sync_music": 0, "f_l": 0, "i2v": 0}
+        diagnostics.clip_formula_actual = {"lip_sync_music": 0, "f_l": 0, "i2v": 0, "i2v_in_target_range": False}
         diagnostics.clip_formula_rebalance_applied = False
         diagnostics.clip_formula_rebalance_notes = ["no_scenes_for_clip_router"]
         return storyboard_out
     active_roles = _collect_active_connected_character_roles(payload)
     is_clip_single_character = len(active_roles) <= 1
+    lip_sync_candidates: list[ScenarioDirectorScene] = []
+    first_last_candidates: list[ScenarioDirectorScene] = []
     for scene in scenes:
         lip_ok, lip_reason = _scene_is_lip_sync_eligible(scene, is_clip_single_character=is_clip_single_character)
+        scene.lip_sync_decision_reason = lip_reason
         if lip_ok:
-            scene.lip_sync_decision_reason = lip_reason
-            _apply_scene_route(scene, route="lip_sync_music", reason="Deterministic clip router selected lip_sync_music by eligibility.")
+            lip_sync_candidates.append(scene)
             continue
         fl_ok, fl_reason = _scene_is_strong_first_last_candidate(scene)
         if fl_ok:
-            scene.lip_sync_decision_reason = lip_reason
-            _apply_scene_route(scene, route="f_l", reason="Deterministic clip router selected first_last by strong visual delta.")
-            scene.video_downgrade_reason_code = "strong_first_last_candidate"
-            scene.video_downgrade_reason_message = "Scene has strong A→B visual transition evidence."
+            first_last_candidates.append(scene)
+            scene.video_downgrade_reason_code = ""
+            scene.video_downgrade_reason_message = ""
+            scene.workflow_decision_reason = fl_reason
             continue
-        scene.lip_sync_decision_reason = lip_reason
-        scene.video_downgrade_reason_code = fl_reason
-        scene.video_downgrade_reason_message = "Scene failed first_last eligibility and was routed to i2v."
-        _apply_scene_route(scene, route="i2v", reason="Deterministic clip router selected default i2v route.")
+        scene.video_downgrade_reason_code = ""
+        scene.video_downgrade_reason_message = ""
+        scene.workflow_decision_reason = fl_reason
     storyboard_out.scenes = scenes
-    return _rebalance_music_video_formula(storyboard_out, audio_duration_sec=audio_duration_sec)
+    return _rebalance_music_video_formula(
+        storyboard_out,
+        audio_duration_sec=audio_duration_sec,
+        lip_sync_candidates=lip_sync_candidates,
+        first_last_candidates=first_last_candidates,
+    )
 
 
 def _enforce_music_video_clip_formula(
@@ -5251,21 +5312,19 @@ def _enforce_music_video_clip_formula(
     source_mode = str(payload.get("sourceMode") or payload.get("source_mode") or "").strip().lower()
     if source_mode and source_mode != "audio":
         storyboard_out.diagnostics.clip_formula_target = _get_clip_formula_target(audio_duration_sec)
-        storyboard_out.diagnostics.clip_formula_actual = {
-            "lip_sync_music": sum(1 for s in (storyboard_out.scenes or []) if s.resolved_workflow_key == "lip_sync_music"),
-            "f_l": sum(1 for s in (storyboard_out.scenes or []) if s.resolved_workflow_key == "f_l"),
-            "i2v": sum(1 for s in (storyboard_out.scenes or []) if s.resolved_workflow_key == "i2v"),
-        }
+        storyboard_out.diagnostics.clip_formula_actual = _clip_formula_actual_counts(
+            storyboard_out.scenes or [],
+            storyboard_out.diagnostics.clip_formula_target,
+        )
         storyboard_out.diagnostics.clip_formula_rebalance_applied = False
         storyboard_out.diagnostics.clip_formula_rebalance_notes = ["clip_router_skipped_non_audio_source_mode"]
         return storyboard_out
     if not (0.0 < _safe_float(audio_duration_sec, 0.0) <= 35.0):
         storyboard_out.diagnostics.clip_formula_target = _get_clip_formula_target(audio_duration_sec)
-        storyboard_out.diagnostics.clip_formula_actual = {
-            "lip_sync_music": sum(1 for s in (storyboard_out.scenes or []) if s.resolved_workflow_key == "lip_sync_music"),
-            "f_l": sum(1 for s in (storyboard_out.scenes or []) if s.resolved_workflow_key == "f_l"),
-            "i2v": sum(1 for s in (storyboard_out.scenes or []) if s.resolved_workflow_key == "i2v"),
-        }
+        storyboard_out.diagnostics.clip_formula_actual = _clip_formula_actual_counts(
+            storyboard_out.scenes or [],
+            storyboard_out.diagnostics.clip_formula_target,
+        )
         storyboard_out.diagnostics.clip_formula_rebalance_applied = False
         storyboard_out.diagnostics.clip_formula_rebalance_notes = ["clip_router_skipped_outside_0_35_sec_window"]
         return storyboard_out
