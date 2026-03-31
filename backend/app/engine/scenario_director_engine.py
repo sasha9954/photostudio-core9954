@@ -5115,17 +5115,11 @@ def _scene_is_lip_sync_eligible(scene: ScenarioDirectorScene, *, is_clip_single_
         if audio_sendable:
             return True, "lip_sync_eligible"
         if is_clip_single_character and single_performer_scene:
-            scene.audio_slice_kind = "music_vocal"
-            scene.music_vocal_lipsync_allowed = True
-            scene.audio_slice_decision_reason = "lip_sync_audio_send_enabled_by_clip_fallback"
             return True, "lip_sync_eligible_single_performer_clip_fallback"
         return False, "lip_sync_skip_audio_not_sendable"
     if compatibility_reason == "unknown_vocal_presentation" and is_clip_single_character and single_performer_scene:
         scene.lip_sync_voice_compatibility = "compatible"
         scene.lip_sync_voice_compatibility_reason = "single_performer_clip_fallback"
-        scene.audio_slice_kind = "music_vocal"
-        scene.music_vocal_lipsync_allowed = True
-        scene.audio_slice_decision_reason = "lip_sync_audio_send_enabled_by_clip_fallback"
         return True, "lip_sync_eligible_single_performer_clip_fallback"
     scene.lip_sync_voice_compatibility = "incompatible"
     scene.lip_sync_voice_compatibility_reason = compatibility_reason
@@ -5176,23 +5170,37 @@ def _clip_formula_actual_counts(scenes: list[ScenarioDirectorScene], target: dic
 
 
 def _apply_scene_route(scene: ScenarioDirectorScene, *, route: str, reason: str) -> None:
+    fallback_audio_send_reason = "lip_sync_audio_send_enabled_by_clip_fallback"
+    lip_sync_selected_reason = "lip_sync_scene_audio_slice_selected"
+    fallback_lip_sync_eligibility = "lip_sync_eligible_single_performer_clip_fallback"
+
     if route == "lip_sync_music":
         scene.render_mode = "lip_sync_music"
         scene.needs_two_frames = False
         scene.ltx_mode = "lip_sync"
         scene.lip_sync = True
         scene.send_audio_to_generator = True
+        if str(scene.lip_sync_decision_reason or "").strip().lower() == fallback_lip_sync_eligibility:
+            scene.audio_slice_kind = "music_vocal"
+            scene.music_vocal_lipsync_allowed = True
+            scene.audio_slice_decision_reason = fallback_audio_send_reason
         scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("lip_sync_music", fallback_key="lip_sync_music")
         scene.lip_sync_text = _extract_lip_sync_text(scene)
         if not str(scene.audio_slice_decision_reason or "").strip():
-            scene.audio_slice_decision_reason = "lip_sync_scene_audio_slice_selected"
+            scene.audio_slice_decision_reason = lip_sync_selected_reason
         _assign_video_route(scene, route="lip_sync_music", planned_route="lip_sync_music")
     elif route == "f_l":
         scene.render_mode = "first_last"
         scene.needs_two_frames = True
         scene.ltx_mode = "f_l"
         scene.lip_sync = False
+        scene.lip_sync_text = ""
         scene.send_audio_to_generator = False
+        if str(scene.lip_sync_decision_reason or "").strip().lower() == fallback_lip_sync_eligibility:
+            scene.audio_slice_kind = ""
+            scene.music_vocal_lipsync_allowed = False
+        if str(scene.audio_slice_decision_reason or "").strip().lower() in {fallback_audio_send_reason, lip_sync_selected_reason}:
+            scene.audio_slice_decision_reason = ""
         scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("f_l", fallback_key="f_l")
         _assign_video_route(scene, route="f_l", planned_route="f_l")
     else:
@@ -5201,7 +5209,13 @@ def _apply_scene_route(scene: ScenarioDirectorScene, *, route: str, reason: str)
         if str(scene.ltx_mode or "").strip().lower() not in {"continuation"}:
             scene.ltx_mode = "i2v"
         scene.lip_sync = False
+        scene.lip_sync_text = ""
         scene.send_audio_to_generator = False
+        if str(scene.lip_sync_decision_reason or "").strip().lower() == fallback_lip_sync_eligibility:
+            scene.audio_slice_kind = ""
+            scene.music_vocal_lipsync_allowed = False
+        if str(scene.audio_slice_decision_reason or "").strip().lower() in {fallback_audio_send_reason, lip_sync_selected_reason}:
+            scene.audio_slice_decision_reason = ""
         scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("i2v", fallback_key="i2v")
         _assign_video_route(scene, route="i2v", planned_route="i2v")
     scene.workflow_decision_reason = reason
