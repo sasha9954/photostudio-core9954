@@ -2598,6 +2598,9 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             start_frame_prompt, end_frame_prompt = _derive_first_last_frame_prompts(scene, raw_scene, payload=payload)
             scene.start_frame_prompt = start_frame_prompt
             scene.end_frame_prompt = end_frame_prompt
+        if _is_lip_sync_music_scene(scene):
+            # Final prompt-level guard: enforce text canon after all per-scene adjustments.
+            _enforce_lip_sync_music_visual_canon(scene)
 
         scene_must_not_appear = ["character_1", "character_2", "character_3"] if is_environment_only_scene else []
         if is_environment_only_scene or not group_narratively_required:
@@ -4285,7 +4288,12 @@ def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene, payload: dict[s
     camera_line = f"The camera {camera}" if camera else "The camera tracks smoothly to preserve clear motion arcs"
     emotion_line = f"The face reads {emotion}" if emotion else ""
     lipsync_line = ""
-    if str(scene.resolved_workflow_key or "").strip().lower() == "lip_sync_music" or bool(scene.lip_sync):
+    if _is_lip_sync_music_scene(scene):
+        camera_line = _lip_sync_safe_camera_line()
+        motion_line = (
+            "Emotional singing performance with clear mouth readability, subtle head motion, subtle body sway, "
+            "micro-expressions, breath detail, and minimal locomotion; no chase/run/stunt action"
+        )
         lipsync_line = "Face readability and mouth continuity stay clear for emotional singing, with transformation delayed until lip motion is established"
     identity_lock, _ = _build_character_identity_visible_lock(scene, payload=payload, role="character_1")
     return _quality_filter_visible_prompt(_join_visible_prompt_parts([sentence, motion_line, camera_line, emotion_line, lipsync_line, identity_lock]))
@@ -4305,6 +4313,18 @@ def _build_music_video_video_prompt(scene: ScenarioDirectorScene, payload: dict[
     return _join_visible_prompt_parts([f"The performance stays centered on {subject}" if subject else "", build_ltx_visible_video_prompt(scene, payload=payload)])
 
 
+def _is_lip_sync_music_scene(scene: ScenarioDirectorScene) -> bool:
+    return str(scene.resolved_workflow_key or "").strip().lower() == "lip_sync_music" or bool(scene.lip_sync)
+
+
+def _lip_sync_safe_camera_line() -> str:
+    return (
+        "Steady close performance camera, static or very slow push-in with minimal drift; soft partial arc only "
+        "(about 90–180°, up to ~270° only when very gentle and performer integrity stays stable), never full 360° camera wrap; "
+        "performer may gently rotate with camera while background shifts behind trajectory."
+    )
+
+
 def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     scene.scene_purpose = "performance"
     scene.transition_type = "cut" if _safe_float(scene.time_start, 0.0) > 0.0 else "cold_open"
@@ -4315,10 +4335,7 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
         "Emotional singing performance with face and mouth clearly readable; subtle head motion, gentle body sway, "
         "micro-expressions and breath detail; minimal locomotion, no running or chase action."
     )
-    scene.camera = (
-        "Steady close performance camera, very slow push-in with minimal drift, soft partial arc only (about 90–180°), "
-        "never a full 360° orbit, no aggressive circular tracking; performer stays readable and stable."
-    )
+    scene.camera = _lip_sync_safe_camera_line()
     scene.viewer_hook = (
         "Immediate face-readable emotional singing beat; keep expression and lyric articulation as the main focus."
     )
@@ -4332,7 +4349,7 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
             "Face and mouth stay cleanly readable for lyric articulation; subtle head motion and gentle body sway only.",
             "Breath detail, micro-expressions, and possible tears carry emotion while environment stays secondary.",
             "No running, chase, stunt motion, or locomotion-first blocking.",
-            "Steady close performance camera, very slow push-in, minimal drift, soft partial arc (about 90–180°, up to ~270° only if very gentle and stable), never full 360° camera wrap.",
+            _lip_sync_safe_camera_line(),
         ]
     )
     scene.video_prompt = _join_visible_prompt_parts(
@@ -4344,6 +4361,8 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
             "Environment remains background support; no running/chasing/spinning as primary action.",
         ]
     )
+    scene.image_prompt = _quality_filter_visible_prompt(scene.image_prompt)
+    scene.video_prompt = _quality_filter_visible_prompt(scene.video_prompt)
 
 
 def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | None = None) -> str:

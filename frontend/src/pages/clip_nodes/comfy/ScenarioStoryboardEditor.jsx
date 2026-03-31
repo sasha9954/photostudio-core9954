@@ -1329,7 +1329,11 @@ export default function ScenarioStoryboardEditor({
                             <div className="clipSB_sceneAudioLipSyncReady">Готово для lip-sync и sound-enabled scene.</div>
                           </div>
                         ) : (
-                          <div className="clipSB_sceneAudioPlaceholder">Аудио-кусок сцены ещё не подготовлен</div>
+                          <div className="clipSB_sceneAudioPlaceholder">
+                            {sceneLipSync
+                              ? "Для lipSync audioSlice будет подготовлен автоматически при «Создать видео» (или можно извлечь вручную здесь)."
+                              : "Аудио-кусок сцены ещё не подготовлен"}
+                          </div>
                         )}
                         {sceneAudioSliceStatus === "error" ? (
                           <div className="clipSB_hint" style={{ color: "#ff8a8a" }}>{String(selectedScene?.audioSliceError || selectedScene?.extractedAudioError || "Ошибка извлечения аудио")}</div>

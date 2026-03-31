@@ -17173,7 +17173,11 @@ const hydrate = useCallback((source = "unknown") => {
                             onError={handleScenarioSliceAudioError}
                           />
                         ) : (
-                          <div className="clipSB_hint">Срез ещё не создан. Нажмите «Взять аудио».</div>
+                          <div className="clipSB_hint">
+                            {scenarioSelectedIsLipSync
+                              ? "Для lipSync audioSlice подготовится автоматически при «Сделать видео». Если авто-извлечение не удастся, появится ошибка."
+                              : "Срез ещё не создан. Нажмите «Взять аудио»."}
+                          </div>
                         )}
                         <div className="clipSB_audioDebugUrl">{scenarioSelectedAudioSliceUrl || "—"}</div>
                       </div>
@@ -17300,7 +17304,8 @@ const hydrate = useCallback((source = "unknown") => {
                           <button
                             className="clipSB_btn clipSB_btnSecondary"
                             onClick={handleScenarioGenerateVideo}
-                            disabled={scenarioVideoLoading || !scenarioHasImageForVideo || (scenarioSelectedIsLipSync && !scenarioSelected.audioSliceUrl)}
+                            disabled={scenarioVideoLoading || !scenarioHasImageForVideo}
+                            title={scenarioSelectedIsLipSync ? "Для lipSync audioSlice будет автоматически подготовлен перед генерацией видео." : ""}
                           >
                             {scenarioVideoLoading ? "Делаю..." : "Сделать видео"}
                           </button>
@@ -17542,7 +17547,11 @@ const hydrate = useCallback((source = "unknown") => {
                           onError={handleComfySliceAudioError}
                         />
                       ) : (
-                        <div className="clipSB_hint">Срез ещё не создан. Нажмите «Взять аудио».</div>
+                        <div className="clipSB_hint">
+                          {(String(comfySelectedScene?.resolvedWorkflowKey || "").trim() === "lip_sync_music" || Boolean(comfySelectedScene?.lipSync))
+                            ? "Для lipSync audioSlice подготовится автоматически при запуске генерации видео. Если авто-извлечение не удастся, появится ошибка."
+                            : "Срез ещё не создан. Нажмите «Взять аудио»."}
+                        </div>
                       )}
                       <div className="clipSB_audioDebugGrid" style={{ marginTop: 8 }}>
                         <div className="clipSB_videoKv"><span>t0</span><span>{fmtSecAndMs(Number(comfySelectedScene.audioSliceT0 ?? comfySelectedStartSec))}</span></div>
