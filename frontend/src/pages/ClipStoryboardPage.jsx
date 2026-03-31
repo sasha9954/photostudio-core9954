@@ -1191,6 +1191,11 @@ function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
       videoPrompt: String(prevValue.videoPrompt || scene?.videoPrompt || ""),
       generatedAssetUrl: String(prevValue.generatedAssetUrl || ""),
       generatedAudioUrl: String(prevValue.generatedAudioUrl || ""),
+      audioSliceStatus: String(prevValue.audioSliceStatus || ""),
+      audioSliceUrl: String(prevValue.audioSliceUrl || ""),
+      audioSliceDurationSec: normalizeDurationSec(prevValue.audioSliceDurationSec),
+      audioSliceError: String(prevValue.audioSliceError || ""),
+      audioSliceLoadError: String(prevValue.audioSliceLoadError || ""),
       montageReady: prevValue.montageReady === true,
     };
     return acc;

@@ -35,6 +35,19 @@ function resolveBlockStatus({ runtimeStatus = "", assetUrl = "" } = {}) {
   return "idle";
 }
 
+function hydrateSceneWithRuntime(scene = {}, runtime = {}) {
+  const safeScene = scene && typeof scene === "object" ? scene : {};
+  const safeRuntime = runtime && typeof runtime === "object" ? runtime : {};
+  return {
+    ...safeScene,
+    audioSliceStatus: String(safeRuntime?.audioSliceStatus || safeScene?.audioSliceStatus || safeScene?.extractedAudioStatus || "").trim(),
+    audioSliceUrl: String(safeRuntime?.audioSliceUrl || safeScene?.audioSliceUrl || safeScene?.extractedAudioUrl || "").trim(),
+    audioSliceDurationSec: Number(safeRuntime?.audioSliceDurationSec ?? safeScene?.audioSliceDurationSec ?? safeScene?.extractedAudioDurationSec),
+    audioSliceError: String(safeRuntime?.audioSliceError || safeScene?.audioSliceError || safeScene?.extractedAudioError || "").trim(),
+    audioSliceLoadError: String(safeRuntime?.audioSliceLoadError || safeScene?.audioSliceLoadError || "").trim(),
+  };
+}
+
 function sceneBadges(scene = {}) {
   const badges = [];
   const finalRoute = resolveScenarioFinalRouteKey(scene);
@@ -257,11 +270,15 @@ export default function ScenarioStoryboardEditor({
   const stopNodeDragEvent = (event) => event.stopPropagation();
 
   const safeScenes = Array.isArray(scenes) ? scenes : [];
-  const normalizedScenes = useMemo(
-    () => safeScenes.map((scene, idx) => ({ ...(scene || {}), sceneId: resolveSceneId(scene, idx) })),
-    [safeScenes]
-  );
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
+  const normalizedScenes = useMemo(
+    () => safeScenes.map((scene, idx) => {
+      const normalized = { ...(scene || {}), sceneId: resolveSceneId(scene, idx) };
+      const runtime = safeGeneration[String(normalized?.sceneId || "").trim()];
+      return hydrateSceneWithRuntime(normalized, runtime);
+    }),
+    [safeGeneration, safeScenes]
+  );
   const safeAudioData = audioData && typeof audioData === "object" ? audioData : {};
   const masterAudioResolution = useMemo(() => {
     const scenarioNodeAudioDataUrl = String(safeAudioData?.audioUrl || "").trim();
@@ -529,6 +546,7 @@ export default function ScenarioStoryboardEditor({
     const durationSec = Math.max(0, endSec - startSec);
     onUpdateScene?.(nodeId, sceneId, {
       audioSliceStatus: "loading",
+      extractedAudioStatus: "extracting",
       audioSliceDurationSec: durationSec,
       audioSliceExpectedDurationSec: durationSec,
       audioSliceError: "",

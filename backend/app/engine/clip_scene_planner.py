@@ -362,6 +362,41 @@ def _split_text_beats(text: str, desired_count: int) -> list[str]:
     return built[:max(1, desired_count)]
 
 
+WHOLE_SONG_ARC_ROLE_SEQUENCE = [
+    "Setup / hook",
+    "World claim / emotional entry",
+    "Escalation / movement",
+    "Inner turn",
+    "Peak / confrontation / confession",
+    "Release / fading / aftermath",
+]
+
+
+def _whole_song_arc_role(scene_idx: int, total: int) -> str:
+    if total <= 1:
+        return WHOLE_SONG_ARC_ROLE_SEQUENCE[0]
+    ratio = scene_idx / max(1, total - 1)
+    role_idx = min(len(WHOLE_SONG_ARC_ROLE_SEQUENCE) - 1, int(round(ratio * (len(WHOLE_SONG_ARC_ROLE_SEQUENCE) - 1))))
+    return WHOLE_SONG_ARC_ROLE_SEQUENCE[role_idx]
+
+
+def _build_whole_song_arc_summary(story_source: str, semantic_text: str, genre: str, spoken_meaning_primary: bool) -> str:
+    core = _compact_text(semantic_text) or "one coherent hero/world progression across the full track"
+    mode = "speech narrative map" if spoken_meaning_primary else "music-video dramatic map"
+    genre_hint = f" Genre mood: {genre}." if _compact_text(genre) else ""
+    return f"{mode}; source={story_source}; global arc: {core[:260]}.{genre_hint}".strip()
+
+
+def _detect_repeated_phrase_semantic_reuse(text_beats: list[str]) -> bool:
+    normalized = [_compact_text(item).lower() for item in (text_beats or []) if _compact_text(item)]
+    if not normalized:
+        return False
+    unique = set(normalized)
+    if len(unique) == len(normalized):
+        return False
+    return True
+
+
 def _tension_genre_weight(genre: str) -> int:
     normalized = str(genre or "").strip().lower()
     if normalized in {"horror", "thriller", "noir", "action"}:
@@ -895,6 +930,17 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
 
     if spoken_meaning_primary:
         story_source = "speech_narrative"
+    clip_like_mode = str(payload.get("mode") or "clip").strip().lower() in {"clip", "music_video"}
+    scene_role_total = max(1, len(boundaries) - 1)
+    scene_arc_roles = [_whole_song_arc_role(idx, scene_role_total) for idx in range(scene_role_total)]
+    repeated_phrase_semantic_reuse_detected = _detect_repeated_phrase_semantic_reuse(text_beats)
+    phrase_loop_prevented = bool(clip_like_mode and repeated_phrase_semantic_reuse_detected)
+    whole_song_arc_summary = _build_whole_song_arc_summary(
+        story_source=story_source,
+        semantic_text=combined_meaning_text or text or semantic_hint,
+        genre=str(payload.get("genre") or "").strip(),
+        spoken_meaning_primary=spoken_meaning_primary,
+    )
 
     prev_scene_type: str | None = None
     genre = str(payload.get("genre") or "").strip()
@@ -931,7 +977,15 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             for p in (analysis.get("vocalPhrases") or [])
         )
         beat_text = text_beats[idx % len(text_beats)] if text_beats else ""
-        semantic_slice = beat_text or (semantic_hint if spoken_meaning_primary else "")
+        scene_arc_role = scene_arc_roles[idx] if idx < len(scene_arc_roles) else _whole_song_arc_role(idx, max(1, len(boundaries) - 1))
+        phrase_anchor_text = beat_text
+        whole_song_first_semantic = f"{whole_song_arc_summary} Arc role: {scene_arc_role}"
+        scene_semantic_text = (
+            f"{whole_song_first_semantic}. Phrase timing anchor: {phrase_anchor_text}"
+            if (clip_like_mode and not spoken_meaning_primary and phrase_anchor_text)
+            else (whole_song_first_semantic if (clip_like_mode and not spoken_meaning_primary) else (beat_text or semantic_hint))
+        )
+        semantic_slice = scene_semantic_text or (semantic_hint if spoken_meaning_primary else "")
         primary, secondary, refs_used, selection_reason = _resolve_scene_roles(
             scene_idx=idx,
             total=len(boundaries) - 1,
@@ -957,9 +1011,9 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 prev_scene_type=prev_scene_type,
             )
 
-        if beat_text:
-            purpose = f"раскрыть сюжетный бит: {beat_text[:140]}"
-            scene_goal = f"визуально и эмоционально донести: {beat_text[:180]}"
+        if scene_semantic_text:
+            purpose = f"arc step ({scene_arc_role}): {scene_semantic_text[:180]}"
+            scene_goal = f"develop whole-song arc via {scene_arc_role}: {scene_semantic_text[:220]}"
             narrative_step = f"{phase}_beat_{idx + 1}"
             lyric_text = beat_text if (not spoken_meaning_primary and scene_type == "SING_CLOSEUP" and exact_lyrics_available) else ""
             spoken_text = beat_text if (spoken_meaning_primary or (scene_type in {"TALK_CLOSEUP", "STORY_ACTION", "EMOTIONAL_REACTION"} and not exact_lyrics_available)) else ""
@@ -1015,7 +1069,7 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 style=str(payload.get("stylePreset") or "realism"),
                 genre=genre,
                 emotion=emotion,
-                beat_text=beat_text,
+                beat_text=scene_semantic_text,
                 continuity_hint=continuity,
                 phase=phase,
                 world_bible=world_bible,
@@ -1045,8 +1099,8 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "styleKey": str(payload.get("stylePreset") or "realism"),
             "futureRenderModel": future_model,
             "sceneText": beat_text or semantic_hint,
-            "sceneMeaning": scene_brief.get("sceneMeaning") or (beat_text or semantic_hint),
-            "visualDescription": scene_brief.get("visualDescription") or beat_text or semantic_hint,
+            "sceneMeaning": scene_brief.get("sceneMeaning") or (scene_semantic_text or semantic_hint),
+            "visualDescription": scene_brief.get("visualDescription") or scene_semantic_text or semantic_hint,
             "cameraPlan": scene_brief.get("cameraPlan") or "",
             "motionPlan": scene_brief.get("motionPlan") or "",
             "sfxPlan": scene_brief.get("sfxPlan") or "",
@@ -1060,6 +1114,12 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "sceneGoal": scene_goal,
             "sceneNarrativeStep": narrative_step,
             "sceneSemanticSource": scene_semantic_source,
+            "sceneArcRole": scene_arc_role,
+            "whySceneNotLiteralToPhrase": (
+                "Phrase is used as timing/cut/lip-sync anchor; scene semantics follow whole-song arc."
+                if (clip_like_mode and not spoken_meaning_primary)
+                else ""
+            ),
             "refsUsed": refs_used,
             "primaryRole": primary,
             "secondaryRoles": secondary,
@@ -1077,7 +1137,8 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         scene_semantic_sources.append({
             "sceneId": scene["sceneId"],
             "sceneSemanticSource": scene_semantic_source,
-            "semanticText": beat_text or semantic_hint,
+            "semanticText": scene_semantic_text or semantic_hint,
+            "sceneArcRole": scene_arc_role,
         })
         prev_scene_type = scene_type
 
@@ -1196,6 +1257,17 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "charactersAllowed": characters_allowed,
             "peopleAutoAddedCount": people_auto_added_count,
             "sceneSemanticSource": scene_semantic_sources,
+            "songArcPlanningMode": "whole_song_first" if clip_like_mode and not spoken_meaning_primary else "default",
+            "phraseSemanticsMode": "secondary_timing_anchor" if clip_like_mode and not spoken_meaning_primary else "default",
+            "repeatedPhraseSemanticReuseDetected": repeated_phrase_semantic_reuse_detected,
+            "phraseLoopPrevented": phrase_loop_prevented,
+            "wholeSongArcSummary": whole_song_arc_summary,
+            "sceneArcRoles": scene_arc_roles,
+            "whySceneNotLiteralToPhrase": (
+                "Scenes are planned from whole-song dramatic arc; phrase meaning remains timing/lip-sync anchor."
+                if clip_like_mode and not spoken_meaning_primary
+                else "n/a"
+            ),
             "usedSemanticFallback": used_semantic_fallback,
             "semanticHintCount": semantic_hint_count,
             "textualBeatCount": len(text_beats),
@@ -1223,6 +1295,17 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 "spokenMeaningPrimary": spoken_meaning_primary,
                 "charactersAllowed": characters_allowed,
                 "sceneSemanticSource": scene_semantic_sources,
+                "song_arc_planning_mode": "whole_song_first" if clip_like_mode and not spoken_meaning_primary else "default",
+                "phrase_semantics_mode": "secondary_timing_anchor" if clip_like_mode and not spoken_meaning_primary else "default",
+                "repeated_phrase_semantic_reuse_detected": repeated_phrase_semantic_reuse_detected,
+                "phrase_loop_prevented": phrase_loop_prevented,
+                "whole_song_arc_summary": whole_song_arc_summary,
+                "scene_arc_roles": scene_arc_roles,
+                "why_scene_not_literal_to_phrase": (
+                    "Phrase windows are cut anchors; scene semantics are constrained by the global song arc."
+                    if clip_like_mode and not spoken_meaning_primary
+                    else "n/a"
+                ),
                 "peopleAutoAddedCount": people_auto_added_count,
                 "usedSemanticFallback": used_semantic_fallback,
                 "semanticHintCount": semantic_hint_count,
