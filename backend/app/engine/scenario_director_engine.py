@@ -5157,9 +5157,9 @@ def _prevent_phrase_loop_in_music_video(storyboard_out: ScenarioDirectorStoryboa
         same_profile = all(str(getattr(prev, key, "") or "").strip().lower() == str(getattr(scene, key, "") or "").strip().lower() for key in compared_fields)
         if not same_profile:
             scene.phrase_loop_action = "reframe"
-            scene.progression_reason = str(scene.progression_reason or "phrase_loop_reframed_progression").strip()
-            scene.clip_arc_stage = str(scene.clip_arc_stage or "progression").strip() or "progression"
-            scene.beat_function = str(scene.beat_function or "progression_beat").strip() or "progression_beat"
+            scene.progression_reason = "phrase_loop_reframed_progression"
+            scene.clip_arc_stage = "progression"
+            scene.beat_function = "progression_beat"
             merge_notes.append(f"repeated_phrase_reframed:{scene.scene_id}:profile_changed")
             prevented = True
             merged_scenes.append(scene)
@@ -5456,7 +5456,7 @@ def _rebalance_music_video_formula(
     fl_target = int(target.get("f_l", 0))
     sorted_lip = sorted(lip_sync_candidates, key=_lip_sync_candidate_score, reverse=True)
     sorted_fl = sorted(first_last_candidates, key=_first_last_candidate_score, reverse=True)
-    diagnostics.strong_first_last_candidate_count = len(sorted_fl)
+    strong_fl_candidate_ids = {scene.scene_id for scene in sorted_fl}
     diagnostics.first_last_shortage_reason = ""
     selected_lip_ids = {scene.scene_id for scene in sorted_lip[:lip_target]}
     selected_fl_ids: set[str] = set()
@@ -5481,7 +5481,14 @@ def _rebalance_music_video_formula(
             eligibility = evaluateFirstLastEligibility(strengthened, context={"rebalance": "strengthen_attempt"})
             if not eligibility.get("eligible"):
                 continue
+            scene.first_last_candidate = True
+            scene.first_last_candidate_score = _safe_float(eligibility.get("score"), 0.0)
+            scene.first_last_candidate_reasons = [str(item).strip() for item in (eligibility.get("reasons") or []) if str(item).strip()]
+            scene.first_last_reject_reasons = [str(item).strip() for item in (eligibility.get("weakReasons") or []) if str(item).strip()]
+            scene.strong_visual_delta = _coerce_bool(eligibility.get("strongVisualDelta"), False)
+            scene.route_before_rebalance = "f_l_candidate_after_strengthen"
             selected_fl_ids.add(scene.scene_id)
+            strong_fl_candidate_ids.add(scene.scene_id)
             notes.append(f"rebalance_strengthened_f_l:{scene.scene_id}")
 
     for scene in scenes:
@@ -5501,6 +5508,11 @@ def _rebalance_music_video_formula(
         notes.append(f"selected_i2v:{scene.scene_id}")
 
     diagnostics.clip_formula_actual = _clip_formula_actual_counts(scenes, target)
+    diagnostics.strong_first_last_candidate_count = len(strong_fl_candidate_ids)
+    if diagnostics.clip_formula_actual.get("f_l", 0) >= fl_target:
+        diagnostics.first_last_shortage_reason = ""
+    elif not diagnostics.first_last_shortage_reason:
+        diagnostics.first_last_shortage_reason = f"strong_first_last_candidates={len(strong_fl_candidate_ids)} target={fl_target}"
     diagnostics.clip_formula_rebalance_applied = bool(selected_lip_ids or selected_fl_ids)
     diagnostics.clip_formula_rebalance_notes = notes or ["rebalance_not_needed"]
     return storyboard_out
