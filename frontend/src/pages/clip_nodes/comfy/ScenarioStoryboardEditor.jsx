@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { resolveSceneDisplayTime } from "./scenarioStoryboardDomain";
+import { resolveScenarioFinalRouteKey, resolveSceneDisplayTime } from "./scenarioStoryboardDomain";
 import { resolveAssetUrl } from "./comfyNodeShared";
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const CLIP_TRACE_SCENARIO_EDITOR_DEBUG = false;
@@ -37,10 +37,10 @@ function resolveBlockStatus({ runtimeStatus = "", assetUrl = "" } = {}) {
 
 function sceneBadges(scene = {}) {
   const badges = [];
-  const mode = String(scene?.renderMode || "image_to_video").trim();
-  if (mode === "lip_sync") badges.push("lip_sync");
-  if (isFirstLastScene(scene)) badges.push("first_last");
-  if (mode === "image_to_video") badges.push("i2v");
+  const finalRoute = resolveScenarioFinalRouteKey(scene);
+  if (finalRoute === "lip_sync_music") badges.push("lipSync");
+  else if (finalRoute === "f_l") badges.push("first+last");
+  else badges.push("i2v");
   const warnings = Array.isArray(scene?.contractWarnings) ? scene.contractWarnings : [];
   if (warnings.length) badges.push(`warnings:${warnings.length}`);
   return badges;
@@ -559,12 +559,17 @@ export default function ScenarioStoryboardEditor({
         audioSliceError: "",
         audioSliceLoadError: "",
       });
+      return {
+        audioSliceUrl,
+        audioSliceDurationSec: Number(result?.audioSliceDurationSec ?? result?.extractedAudioDurationSec ?? durationSec),
+      };
     } catch (error) {
       onUpdateScene?.(nodeId, sceneId, {
         audioSliceStatus: "error",
         audioSliceError: String(error?.message || "Не удалось изъять аудио"),
         audioSliceLoadError: String(error?.message || "Не удалось изъять аудио"),
       });
+      throw error;
     }
   };
 
@@ -604,7 +609,8 @@ export default function ScenarioStoryboardEditor({
       - Number(selectedScene?.audioSliceStartSec ?? selectedDisplayTime.startSec ?? 0)
     )
   );
-  const sceneLipSync = Boolean(selectedScene?.lipSync);
+  const sceneFinalRoute = resolveScenarioFinalRouteKey(selectedScene || {});
+  const sceneLipSync = sceneFinalRoute === "lip_sync_music" || Boolean(selectedScene?.lipSync);
   const lipSyncAudioMissing = sceneLipSync && !sceneAudioSliceUrl;
   const bgMusicSource = resolveMusicSource(safeAudioData);
   const musicPromptSourceKind = String(safeAudioData?.musicPromptSourceKind || "").trim().toLowerCase() || "empty";
@@ -1369,15 +1375,25 @@ export default function ScenarioStoryboardEditor({
                         <button
                           className="clipSB_btn"
                           type="button"
-                          onClick={() => {
+                          onClick={async () => {
                             const renderMode = String(selectedScene?.renderMode || "");
                             const resolvedWorkflowKey = String(selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "");
-                            const whyBlocked = lipSyncAudioMissing ? "lip_sync_audio_missing" : "";
+                            let preparedAudioSliceUrl = String(selectedScene?.audioSliceUrl || "").trim();
+                            const autoPreparedAudio = sceneLipSync && !preparedAudioSliceUrl;
+                            if (autoPreparedAudio) {
+                              try {
+                                const extractResult = await handleExtractSceneAudio(selectedScene);
+                                preparedAudioSliceUrl = String(extractResult?.audioSliceUrl || "").trim();
+                              } catch {
+                                preparedAudioSliceUrl = "";
+                              }
+                            }
+                            const whyBlocked = sceneLipSync && !preparedAudioSliceUrl ? "lip_sync_audio_missing_after_auto_extract" : "";
                             console.debug("[SCENARIO EDITOR VIDEO SEND]", {
                               videoSendRouteTriggered: true,
                               selectedSceneId,
                               lipSync: sceneLipSync,
-                              audioSlicePresent: Boolean(sceneAudioSliceUrl),
+                              audioSlicePresent: Boolean(preparedAudioSliceUrl || sceneAudioSliceUrl),
                               renderMode,
                               resolvedWorkflowKey,
                               firstFrameUrl: startFrameSourceUrl,
@@ -1386,19 +1402,20 @@ export default function ScenarioStoryboardEditor({
                                 firstFrame: ["scene.startImageUrl", "scene.startFrameImageUrl", "scene.startFramePreviewUrl", "scene.imageUrl"],
                                 lastFrame: ["scene.endImageUrl", "scene.endFrameImageUrl", "scene.endFramePreviewUrl"],
                               },
+                              autoPreparedAudio,
                               whyBlocked,
                             });
-                            if (lipSyncAudioMissing) return;
+                            if (sceneLipSync && !preparedAudioSliceUrl) return;
                             onGenerateScene?.(nodeId, selectedSceneId, "video", generateMeta);
                           }}
-                          disabled={videoStatus === "loading" || lipSyncAudioMissing}
-                          title={lipSyncAudioMissing ? "Для lipSync нужен audioSlice" : ""}
+                          disabled={videoStatus === "loading"}
+                          title={sceneLipSync ? "Для lipSync audioSlice подготовится автоматически перед генерацией" : ""}
                         >
                           Создать видео
                         </button>
                         <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { videoUrl: "", videoStatus: "idle", videoError: "", videoJobId: "" })}>Удалить</button>
                       </div>
-                      {lipSyncAudioMissing ? <div className="clipSB_hint" style={{ color: "#ffb066" }}>Для lipSync сцены отсутствует audioSliceUrl — сначала нажмите «Изъять аудио».</div> : null}
+                      {lipSyncAudioMissing ? <div className="clipSB_hint" style={{ color: "#ffb066" }}>Для lipSync сцены audioSlice будет автоматически извлечён при «Создать видео».</div> : null}
                     </div>
                     <div className="clipSB_scenarioEditorVideoRight clipSB_scenarioEditorVideoPreviewCol">
                       <div className={`clipSB_scenarioEditorImagePreviewWrap clipSB_scenarioEditorVideoPreviewBox${hasSceneVideo || isFirstLastVideoMode ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
