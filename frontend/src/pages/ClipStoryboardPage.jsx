@@ -10849,15 +10849,6 @@ Aspect ratio: ${imageFormat}`,
       : { continuationSourceAssetUrl: "", continuationSourceAssetType: "" };
     const continuationSourceAssetUrl = String(continuationSourceSelection.continuationSourceAssetUrl || "").trim();
     const continuationSourceAssetType = String(continuationSourceSelection.continuationSourceAssetType || "").trim();
-    if (effectiveRequiresContinuation && continuationSourceAssetUrl) {
-      updateScenarioScene(targetSceneIndex, {
-        continuationFromPrevious: true,
-        continuationSourceSceneId,
-        continuationSourceAssetUrl,
-        continuationSourceAssetType,
-      });
-    }
-
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
       : "";
@@ -10897,6 +10888,12 @@ Aspect ratio: ${imageFormat}`,
     const safeContinuationSourceSceneId = continuationEnabled ? continuationSourceSceneId : "";
     const safeContinuationSourceAssetUrl = continuationEnabled ? normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl : "";
     const safeContinuationSourceAssetType = continuationEnabled ? continuationSourceAssetType : "";
+    updateScenarioScene(targetSceneIndex, {
+      continuationFromPrevious: continuationEnabled,
+      continuationSourceSceneId: safeContinuationSourceSceneId,
+      continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
+      continuationSourceAssetType: safeContinuationSourceAssetType,
+    });
     console.info("[SCENARIO VIDEO FLOW]", {
       stage: "normalized_urls",
       sceneId,
@@ -10995,6 +10992,14 @@ Aspect ratio: ${imageFormat}`,
         getSceneTransitionPrompt(targetScene),
       ].filter(Boolean).join("\n");
       const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
+      const scenarioContractPayloadSanitized = {
+        ...scenarioContractPayload,
+        requiresContinuation: continuationEnabled,
+        continuationFromPrevious: continuationEnabled,
+        continuationSourceSceneId: safeContinuationSourceSceneId,
+        continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
+        continuationSourceAssetType: safeContinuationSourceAssetType,
+      };
       if (CLIP_TRACE_VISUAL_LOCK) {
         console.debug("[SCENARIO VISUAL LOCK] video prompt", {
           sceneId,
@@ -11046,7 +11051,7 @@ Aspect ratio: ${imageFormat}`,
         ),
         provider: effectiveVideoProvider,
         sceneRenderProvider: effectiveVideoProvider,
-        ...scenarioContractPayload,
+        ...scenarioContractPayloadSanitized,
       };
       console.info("[SCENARIO VIDEO FLOW]", {
         stage: "video_payload_built",
