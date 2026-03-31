@@ -644,6 +644,34 @@ export function resolveScenarioWorkflowKey(scene = {}) {
   return normalizeScenarioWorkflowKeyCandidate(ltxMode) || SCENARIO_LTX_WORKFLOW_MAP.i2v;
 }
 
+export function resolveScenarioFinalRouteKey(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const routeCandidates = [
+    source.resolvedWorkflowKey,
+    source.resolved_workflow_key,
+    source.renderMode,
+    source.render_mode,
+    source.plannedVideoGenerationRoute,
+    source.planned_video_generation_route,
+    source.videoGenerationRoute,
+    source.video_generation_route,
+    source.ltxMode,
+    source.ltx_mode,
+    resolveScenarioExplicitWorkflowKey(source),
+    resolveScenarioWorkflowKey(source),
+  ];
+  for (const candidate of routeCandidates) {
+    const normalized = normalizeText(candidate).toLowerCase();
+    if (!normalized) continue;
+    if (["avatar_lipsync", "lip_sync_music", "lip_sync"].includes(normalized)) return "lip_sync_music";
+    if (["first_last", "f_l", "imag-imag-video-bz", "f_l_as"].includes(normalized)) return "f_l";
+    if (["image_video", "image_to_video", "standard_video", "i2v", "i2v_as"].includes(normalized)) return "i2v";
+    const workflow = normalizeScenarioWorkflowKeyCandidate(normalized);
+    if (workflow) return workflow === "lip_sync" ? "lip_sync_music" : workflow;
+  }
+  return "i2v";
+}
+
 function resolveScenarioRenderProvider(source = {}, scenarioPackage = null) {
   const providerHints = source?.providerHints && typeof source.providerHints === "object" ? source.providerHints : {};
   const packageHints = scenarioPackage?.providerHints && typeof scenarioPackage.providerHints === "object" ? scenarioPackage.providerHints : {};

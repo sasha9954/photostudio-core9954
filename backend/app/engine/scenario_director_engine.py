@@ -382,6 +382,7 @@ TIMELINE_END_TOLERANCE_SEC = 0.75
 TIMELINE_INTERNAL_GAP_WARN_SEC = 1.25
 TIMELINE_TAIL_WARN_SEC = 1.0
 TIMELINE_COVERAGE_RATIO_WARN = 0.95
+CLIP_LEADING_INTRO_GAP_ABSORB_MAX_SEC = 0.8
 MAX_INLINE_AUDIO_BYTES = 15 * 1024 * 1024
 PRESENTATION_MALE_HINTS = (
     "male vocal",
@@ -3150,6 +3151,30 @@ def _normalize_scene_timeline(storyboard_out: ScenarioDirectorStoryboardOut) -> 
     return storyboard_out
 
 
+def _absorb_clip_leading_intro_gap(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    scenes = storyboard_out.scenes or []
+    if not scenes:
+        return storyboard_out
+    first = scenes[0]
+    original_start = _safe_float(first.time_start, 0.0)
+    if original_start <= 0.0 or original_start > CLIP_LEADING_INTRO_GAP_ABSORB_MAX_SEC:
+        return storyboard_out
+    first_end = max(original_start, _safe_float(first.time_end, original_start))
+    first.time_start = 0.0
+    first.time_end = round(max(first_end, 0.0), 3)
+    first.duration = round(max(0.0, first.time_end - first.time_start), 3)
+    first.requested_duration_sec = round(max(_safe_float(first.requested_duration_sec, 0.0), first.duration), 3)
+    first.audio_slice_start_sec = 0.0
+    first.audio_slice_end_sec = round(max(_safe_float(first.audio_slice_end_sec, first.time_end), first.time_end), 3)
+    first.audio_slice_expected_duration_sec = round(max(0.0, first.audio_slice_end_sec - first.audio_slice_start_sec), 3)
+    logger.info(
+        "[SCENARIO_DIRECTOR] absorbed leading intro gap into first scene scene_id=%s original_start=%.3f new_start=0.000",
+        first.scene_id,
+        original_start,
+    )
+    return storyboard_out
+
+
 def _limit_lip_sync_usage(
     storyboard_out: ScenarioDirectorStoryboardOut,
     *,
@@ -4278,6 +4303,28 @@ def _build_music_video_video_prompt(scene: ScenarioDirectorScene, payload: dict[
         return ""
     subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip().startswith("character_")][:2]).strip()
     return _join_visible_prompt_parts([f"The performance stays centered on {subject}" if subject else "", build_ltx_visible_video_prompt(scene, payload=payload)])
+
+
+def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
+    scene.scene_purpose = "performance"
+    scene.transition_type = "cut" if _safe_float(scene.time_start, 0.0) > 0.0 else "cold_open"
+    scene.performance_framing = "tight_medium"
+    scene.shot_type = "medium"
+    location = str(scene.location or "the same world location").strip()
+    scene.action_in_frame = (
+        "Emotional singing performance with face and mouth clearly readable; subtle head motion, gentle body sway, "
+        "micro-expressions and breath detail; minimal locomotion, no running or chase action."
+    )
+    scene.camera = (
+        "Steady close performance camera, very slow push-in with minimal drift, no aggressive tracking."
+    )
+    scene.viewer_hook = (
+        "Immediate face-readable emotional singing beat; keep expression and lyric articulation as the main focus."
+    )
+    if not str(scene.frame_description or "").strip():
+        scene.frame_description = (
+            f"Half-body or medium-close singer performance in {location}; environment supports mood in background."
+        )
 
 
 def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | None = None) -> str:
@@ -5805,6 +5852,7 @@ def _apply_music_video_mode_policy(
                     downgrade_message="lip_sync_music blocked because scene audio slice is not music_vocal-compatible.",
                 )
                 continue
+            _enforce_lip_sync_music_visual_canon(scene)
             scene.send_audio_to_generator = True
         if scene.render_mode in {"image_video_sound", "first_last_sound"}:
             scene.render_mode = "image_video" if scene.render_mode == "image_video_sound" else "first_last"
@@ -7283,6 +7331,7 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     if content_type_policy.get("value") == "music_video":
         storyboard_out = _enforce_clip_phrase_and_duration_splits(storyboard_out, payload)
         storyboard_out = _normalize_scene_timeline(storyboard_out)
+        storyboard_out = _absorb_clip_leading_intro_gap(storyboard_out)
         storyboard_out = _apply_music_video_mode_policy(
             storyboard_out,
             content_type_policy=content_type_policy,

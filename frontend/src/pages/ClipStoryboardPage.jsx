@@ -10697,7 +10697,18 @@ Aspect ratio: ${imageFormat}`,
     });
     const effectiveVideoProvider = resolveScenarioSceneVideoProvider(targetScene);
 
-    const attachedAudioSliceUrl = String(targetScene?.audioSliceUrl || "").trim();
+    let attachedAudioSliceUrl = String(targetScene?.audioSliceUrl || "").trim();
+    if (effectiveWorkflowKey === "lip_sync_music" && !attachedAudioSliceUrl) {
+      try {
+        const extracted = await handleScenarioEditorExtractSceneAudio(targetNodeId, sceneId);
+        attachedAudioSliceUrl = String(extracted?.audioSliceUrl || "").trim();
+      } catch (error) {
+        console.warn("[SCENARIO VIDEO FLOW] auto audio slice extraction failed", {
+          sceneId,
+          reason: String(error?.message || error || "audio_slice_auto_extract_failed"),
+        });
+      }
+    }
     if (effectiveContentType === "music_video" && ["i2v_sound", "f_l_sound"].includes(effectiveWorkflowKey)) {
       logScenarioVideoBlocked("validate_mode", "sound_workflow_blocked_for_clip", {
         sceneId,
@@ -10720,7 +10731,7 @@ Aspect ratio: ${imageFormat}`,
         hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
         selectedIndex: targetSceneIndex,
       });
-      setScenarioVideoError("Для lipSync сначала возьмите аудио");
+      setScenarioVideoError("Для lipSync не удалось автоматически подготовить audio slice.");
       return;
     }
     if (effectiveWorkflowKey === "lip_sync_music" && (!musicVocalLipSyncAllowed || audioSliceKind !== "music_vocal")) {
@@ -11297,7 +11308,7 @@ Aspect ratio: ${imageFormat}`,
       updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e), videoPanelActivated: false });
       console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "error", videoPanelActivatedAfterApply: false });
     }
-  }, [clearActiveVideoJob, openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioSelected?.sceneId, startScenarioVideoPolling, updateScenarioScene]);
+  }, [clearActiveVideoJob, handleScenarioEditorExtractSceneAudio, openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioSelected?.sceneId, startScenarioVideoPolling, updateScenarioScene]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
