@@ -5377,6 +5377,70 @@ def _scene_semantic_guardrail(
     return patched, True
 
 
+def _enforce_music_video_world_continuity(
+    *,
+    scene: dict,
+    established_world_text: str,
+    source_text: str,
+) -> tuple[dict, bool, str]:
+    world_text = " ".join([str(established_world_text or ""), str(source_text or "")]).lower()
+    beach_cues = [
+        "beach", "coast", "coastal", "shore", "shoreline", "seashore", "surf",
+        "open sea edge", "sandy beach", "rocky coastline", "берег", "прибой", "пена", "волна",
+    ]
+    if not any(cue in world_text for cue in beach_cues):
+        return scene, False, ""
+
+    scene_text = " ".join([
+        str(scene.get("sceneGoal") or ""),
+        str(scene.get("sceneNarrative") or ""),
+        str(scene.get("characterAction") or ""),
+        str(scene.get("cameraMotion") or ""),
+        str(scene.get("environment") or ""),
+        str(scene.get("visualDescription") or ""),
+        str(scene.get("visualPrompt") or ""),
+        str(scene.get("reason") or ""),
+    ]).lower()
+    underwater_cues = [
+        "underwater", "submerged", "submersion", "underwater world", "underwater symbolic space",
+        "underwater void", "sinking", "drowning", "утоп", "подвод", "погруж",
+    ]
+    if not any(cue in scene_text for cue in underwater_cues):
+        return scene, False, ""
+
+    catastrophe_cues = [
+        "catastrophe", "catastrophic", "disaster", "ship is sinking", "drowning arc", "submersion arc",
+        "catastrophic immersion", "крушение", "катастроф", "тонет корабль", "утопление",
+    ]
+    if any(cue in world_text for cue in catastrophe_cues):
+        return scene, False, ""
+
+    rewritten = dict(scene)
+    coast_environment = "stormy shoreline with surf, wet sand, sea foam, and breaking waves"
+    rewritten["environment"] = coast_environment
+    rewritten["sceneGoal"] = "Express memory loss and emotional drama while staying in the shoreline world"
+    rewritten["sceneNarrative"] = (
+        "The character remains at the shore near breaking waves, holding a memory object as tide and foam "
+        "wash over wet sand and pull the object away."
+    )
+    rewritten["characterAction"] = (
+        "character stands or falls to knees in shallow surf, clutching a photograph or memory object while "
+        "a wave drags it from their hands"
+    )
+    rewritten["cameraMotion"] = "cinematic handheld-to-dolly move along the shoreline, no underwater submersion"
+    rewritten["visualDescription"] = (
+        "coastline drama at water edge, wind and foam around legs, memory object in hand, tide pulling it away"
+    )
+    rewritten["visualPrompt"] = (
+        "cinematic beach shoreline scene, knee-deep surf and wet sand, emotional memory loss via wave and foam, "
+        "dramatic seascape, no underwater world, no sinking"
+    )
+    rewritten["reason"] = "World continuity guard: keep beach/coast logic; represent loss through tide/foam/wet shore instead of submersion."
+    rewritten["worldContinuityGuardTriggered"] = True
+    rewritten["worldContinuityGuardReason"] = "beach_world_underwater_drift"
+    return rewritten, True, "beach_world_underwater_drift"
+
+
 @router.post("/clip/plan")
 def clip_plan(payload: BrainIn):
     """Gemini-first clip planner: Gemini analyzes audio/text/refs and returns strict JSON storyboard."""
@@ -7130,6 +7194,39 @@ If any of the required descriptive fields are returned in English, the output is
             camera_motion = str(guarded_scene.get("cameraMotion") or camera_motion).strip()
             scene_environment = str(guarded_scene.get("environment") or scene_environment).strip()
 
+        established_world_text = " ".join(
+            [
+                str(text or ""),
+                str((session_world_anchors or {}).get("location") or ""),
+                str((session_world_anchors or {}).get("style") or ""),
+                str((previous_scene or {}).get("environment") or ""),
+                str((previous_scene or {}).get("visualDescription") or ""),
+            ]
+        )
+        continuity_scene, continuity_rewritten, continuity_reason = _enforce_music_video_world_continuity(
+            scene={
+                "sceneGoal": scene_goal,
+                "sceneNarrative": scene_narrative,
+                "characterAction": character_action,
+                "cameraMotion": camera_motion,
+                "environment": scene_environment,
+                "visualDescription": visual_desc,
+                "visualPrompt": visual_prompt,
+                "reason": reason_text,
+            },
+            established_world_text=established_world_text,
+            source_text=text,
+        )
+        if continuity_rewritten:
+            visual_desc = str(continuity_scene.get("visualDescription") or visual_desc).strip()
+            visual_prompt = str(continuity_scene.get("visualPrompt") or visual_prompt).strip()
+            reason_text = str(continuity_scene.get("reason") or reason_text).strip()
+            scene_narrative = str(continuity_scene.get("sceneNarrative") or scene_narrative).strip()
+            scene_goal = str(continuity_scene.get("sceneGoal") or scene_goal).strip()
+            character_action = str(continuity_scene.get("characterAction") or character_action).strip()
+            camera_motion = str(continuity_scene.get("cameraMotion") or camera_motion).strip()
+            scene_environment = str(continuity_scene.get("environment") or scene_environment).strip()
+
         scene_delta = _build_scene_delta(s, previous_scene)
         scene_text_ru = visual_desc or reason_text or lyric_fragment
         scene_obj = {
@@ -7163,6 +7260,7 @@ If any of the required descriptive fields are returned in English, the output is
             "entityScaleAnchors": entity_scale_anchors,
             "productionScale": (session_baseline or {}).get("productionScale") if isinstance(session_baseline, dict) else None,
             "audienceState": (session_baseline or {}).get("audienceState") if isinstance(session_baseline, dict) else None,
+            "worldContinuityGuardReason": continuity_reason or "",
         }
         normalized_scenes.append(scene_obj)
         previous_scene = s

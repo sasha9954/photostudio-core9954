@@ -1664,6 +1664,46 @@ function normalizeDurationSec(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function buildAudioSliceReadyPatch({
+  url = "",
+  startSec = null,
+  endSec = null,
+  durationSec = null,
+  expectedDurationSec = null,
+  backendDurationSec = null,
+  speechSafeAdjusted = false,
+  speechSafeShiftMs = 0,
+  sliceMayCutSpeech = false,
+} = {}) {
+  const normalizedUrl = String(url || "").trim();
+  const normalizedStart = Number.isFinite(Number(startSec)) ? Number(startSec) : null;
+  const normalizedEnd = Number.isFinite(Number(endSec)) ? Number(endSec) : null;
+  const normalizedExpected = Number.isFinite(Number(expectedDurationSec))
+    ? Number(expectedDurationSec)
+    : Math.max(0, Number(normalizedEnd ?? 0) - Number(normalizedStart ?? 0));
+  const normalizedDuration = Number.isFinite(Number(durationSec)) ? Number(durationSec) : normalizedExpected;
+  return {
+    audioSliceUrl: normalizedUrl,
+    audioSliceStatus: "ready",
+    extractedAudioStatus: "ready",
+    extractedAudioUrl: normalizedUrl,
+    audioSliceStartSec: normalizedStart,
+    audioSliceEndSec: normalizedEnd,
+    audioSliceT0: normalizedStart,
+    audioSliceT1: normalizedEnd,
+    audioSliceDurationSec: normalizedDuration,
+    extractedAudioDurationSec: normalizedDuration,
+    audioSliceExpectedDurationSec: normalizedExpected,
+    audioSliceBackendDurationSec: Number.isFinite(Number(backendDurationSec)) ? Number(backendDurationSec) : normalizedDuration,
+    audioSliceActualDurationSec: null,
+    audioSliceError: "",
+    audioSliceLoadError: "",
+    speechSafeAdjusted: Boolean(speechSafeAdjusted),
+    speechSafeShiftMs: Number(speechSafeShiftMs ?? 0),
+    sliceMayCutSpeech: Boolean(sliceMayCutSpeech),
+  };
+}
+
 function isVideoJobInProgress(status) {
   const normalized = String(status || "").toLowerCase();
   return normalized === "queued" || normalized === "running";
@@ -9355,23 +9395,20 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const outEndSec = Number(out?.endSec ?? out?.t1 ?? endSec);
       const durationSec = normalizeDurationSec(out?.durationSec ?? out?.audioSliceBackendDurationSec ?? out?.duration);
       const nextExpectedDuration = Math.max(0, outEndSec - outStartSec);
-      updateComfyScene(comfySafeIndex, {
-        audioSliceUrl: String(out.audioSliceUrl || ""),
-        audioSliceStartSec: outStartSec,
-        audioSliceEndSec: outEndSec,
-        audioSliceDurationSec: durationSec ?? nextExpectedDuration,
-        audioSliceStatus: "ready",
-        audioSliceError: "",
-        audioSliceT0: outStartSec,
-        audioSliceT1: outEndSec,
-        audioSliceExpectedDurationSec: nextExpectedDuration,
-        audioSliceBackendDurationSec: durationSec,
-        audioSliceActualDurationSec: null,
-        audioSliceLoadError: "",
-        speechSafeAdjusted: Boolean(out?.speechSafeAdjusted),
-        speechSafeShiftMs: Number(out?.speechSafeShiftMs ?? 0),
-        sliceMayCutSpeech: Boolean(out?.sliceMayCutSpeech),
-      });
+      updateComfyScene(
+        comfySafeIndex,
+        buildAudioSliceReadyPatch({
+          url: String(out.audioSliceUrl || ""),
+          startSec: outStartSec,
+          endSec: outEndSec,
+          durationSec: durationSec ?? nextExpectedDuration,
+          expectedDurationSec: nextExpectedDuration,
+          backendDurationSec: durationSec,
+          speechSafeAdjusted: out?.speechSafeAdjusted,
+          speechSafeShiftMs: out?.speechSafeShiftMs,
+          sliceMayCutSpeech: out?.sliceMayCutSpeech,
+        })
+      );
     } catch (e) {
       console.error(e);
       const msg = String(e?.message || e || "audio_slice_failed");
@@ -10412,23 +10449,20 @@ Aspect ratio: ${imageFormat}`,
         actualDurationSec: durationSec,
         error: "",
       });
-      updateScenarioScene(idx, {
-        audioSliceUrl: String(out.audioSliceUrl || ""),
-        audioSliceStartSec: outStartSec,
-        audioSliceEndSec: outEndSec,
-        audioSliceDurationSec: durationSec ?? expectedDuration,
-        audioSliceStatus: "ready",
-        audioSliceError: "",
-        audioSliceT0: outStartSec,
-        audioSliceT1: outEndSec,
-        audioSliceExpectedDurationSec: expectedDuration,
-        audioSliceBackendDurationSec: durationSec,
-        audioSliceActualDurationSec: null,
-        audioSliceLoadError: "",
-        speechSafeAdjusted: Boolean(out?.speechSafeAdjusted),
-        speechSafeShiftMs: Number(out?.speechSafeShiftMs ?? 0),
-        sliceMayCutSpeech: Boolean(out?.sliceMayCutSpeech),
-      });
+      updateScenarioScene(
+        idx,
+        buildAudioSliceReadyPatch({
+          url: String(out.audioSliceUrl || ""),
+          startSec: outStartSec,
+          endSec: outEndSec,
+          durationSec: durationSec ?? expectedDuration,
+          expectedDurationSec: expectedDuration,
+          backendDurationSec: durationSec,
+          speechSafeAdjusted: out?.speechSafeAdjusted,
+          speechSafeShiftMs: out?.speechSafeShiftMs,
+          sliceMayCutSpeech: out?.sliceMayCutSpeech,
+        })
+      );
     } catch (e) {
       console.error(e);
       const msg = String(e?.message || e || "audio_slice_failed");
@@ -13328,6 +13362,11 @@ onClipSec: (nodeId, value) => {
                   if (Object.prototype.hasOwnProperty.call(patch, "videoStatus")) runtimePatch.videoStatus = String(patch.videoStatus || "");
                   if (Object.prototype.hasOwnProperty.call(patch, "videoJobId")) runtimePatch.videoJobId = String(patch.videoJobId || "");
                   if (Object.prototype.hasOwnProperty.call(patch, "videoError")) runtimePatch.videoError = String(patch.videoError || "");
+                  if (Object.prototype.hasOwnProperty.call(patch, "audioSliceStatus")) runtimePatch.audioSliceStatus = String(patch.audioSliceStatus || "");
+                  if (Object.prototype.hasOwnProperty.call(patch, "audioSliceUrl")) runtimePatch.audioSliceUrl = String(patch.audioSliceUrl || "");
+                  if (Object.prototype.hasOwnProperty.call(patch, "audioSliceDurationSec")) runtimePatch.audioSliceDurationSec = normalizeDurationSec(patch.audioSliceDurationSec);
+                  if (Object.prototype.hasOwnProperty.call(patch, "audioSliceError")) runtimePatch.audioSliceError = String(patch.audioSliceError || "");
+                  if (Object.prototype.hasOwnProperty.call(patch, "audioSliceLoadError")) runtimePatch.audioSliceLoadError = String(patch.audioSliceLoadError || "");
                   if (!Object.keys(runtimePatch).length) return { ...nodeItem, data: { ...nodeItem.data, scenes: nextScenes } };
                   return {
                     ...nodeItem,
