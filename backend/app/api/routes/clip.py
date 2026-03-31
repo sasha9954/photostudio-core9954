@@ -864,6 +864,11 @@ def _build_hard_identity_lock_block(*, scene_human_visual_anchors: list[str] | N
         "- no identity drift",
         "- no face drift",
         "- no costume drift",
+        "- preserve exact body proportions and exact body silhouette",
+        "- preserve shoulder width, waist-to-hip ratio, torso shape, arm thickness, and leg thickness",
+        "- no body volume drift, no perceived weight drift, no body shape reinterpretation",
+        "- do not widen torso / hips / arms",
+        "- keep the same perceived slimness / build",
         "- woman/man labels may be used as weak descriptors only, never as primary identity ids",
     ]
     if not has_role_anchor:
@@ -10209,6 +10214,12 @@ def clip_video(payload: ClipVideoIn):
         or payload.continuationFromPrevious
         or ltx_mode_hint == "continuation"
     ) and not force_two_frame_mode
+    if continuation_requested and not continuation_source_asset_url:
+        print(
+            "[CLIP VIDEO CONTINUATION GUARD] "
+            f"sceneId={scene_id} disabling_continuation reason=missing_continuation_source_asset_url"
+        )
+        continuation_requested = False
     if force_two_frame_mode:
         final_workflow_key = "f_l"
     elif continuation_requested:

@@ -444,7 +444,7 @@ function buildTransitionPromptPatch(scene = {}, index = 0) {
   return {
     startFramePromptRu: distinct.startFramePrompt,
     endFramePromptRu: distinct.endFramePrompt,
-    continuationFromPrevious: index > 0 ? true : Boolean(source.continuationFromPrevious ?? source.continuation_from_previous ?? source.continuation),
+    continuationFromPrevious: Boolean(source.continuationFromPrevious ?? source.continuation_from_previous ?? source.continuation ?? source.requiresContinuation),
   };
 }
 
@@ -560,7 +560,7 @@ export function deriveScenarioImageStrategy(scene = {}) {
   const ltxModeRaw = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
   const ltxMode = normalizeScenarioWorkflowKeyCandidate(ltxModeRaw) || ltxModeRaw;
   const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l"].includes(ltxMode);
-  const requiresContinuation = Boolean(source.continuation ?? source.continuationFromPrevious ?? source.continuation_from_previous) || ltxMode === "continuation";
+  const requiresContinuation = Boolean(source.continuation ?? source.requiresContinuation ?? source.requires_continuation) || ltxMode === "continuation";
   if (requiresTwoFrames) return "first_last";
   if (requiresContinuation) return "continuation";
   return "single";
@@ -635,9 +635,8 @@ export function resolveScenarioWorkflowKey(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const continuationRequested = Boolean(
     source.continuation
-    ?? source.continuationFromPrevious
-    ?? source.continuation_from_previous
     ?? source.requiresContinuation
+    ?? source.requires_continuation
   );
   if (continuationRequested) return SCENARIO_LTX_WORKFLOW_MAP.continuation;
   const ltxMode = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
@@ -969,7 +968,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const t1 = Math.max(t0, toNumber(source.t1 ?? source.time_end ?? source.timeEnd, t0 + durationRaw));
   const durationSec = Math.max(0, Number((t1 - t0).toFixed(3)));
   const explicitWorkflowKey = resolveScenarioExplicitWorkflowKey(source);
-  const continuationRequested = Boolean(source.continuation ?? source.continuationFromPrevious ?? source.continuation_from_previous);
+  const continuationRequested = Boolean(source.continuation ?? source.requiresContinuation ?? source.requires_continuation);
   const ltxModeFromSource = normalizeText(source.ltxMode ?? source.ltx_mode);
   const ltxMode = normalizeScenarioWorkflowKeyCandidate(ltxModeFromSource) || (ltxModeFromSource.toLowerCase() || (continuationRequested ? "continuation" : "i2v"));
   const ltxModeNormalized = ltxMode.toLowerCase();
@@ -1029,6 +1028,34 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const forbiddenChangesRaw = source.forbiddenChanges ?? source.forbidden_changes;
   const forbiddenInsertions = normalizeStringList(forbiddenInsertionsRaw);
   const forbiddenChanges = normalizeStringList(forbiddenChangesRaw);
+  const marineLiteralKeywords = ["underwater", "submerged", "open sea", "ocean water", "boat", "boats", "ship", "ships", "harbor"];
+  const marinePoeticKeywords = ["salt", "void", "shipwreck", "oceanic", "naufragare", "salty"];
+  const semanticBlob = normalizePromptForCompare([
+    source.world, source.worldRu, source.worldEn,
+    source.location, source.locationRu, source.locationEn,
+    source.summaryRu, source.summaryEn,
+    source.sceneGoalRu, source.sceneGoalEn,
+    source.imagePromptRu, source.imagePromptEn,
+    source.videoPromptRu, source.videoPromptEn,
+  ].filter(Boolean).join(" "));
+  const hasMarinePoeticSignal = marinePoeticKeywords.some((keyword) => semanticBlob.includes(keyword));
+  const hasExplicitMarineLiteralRequirement = marineLiteralKeywords.some((keyword) => semanticBlob.includes(keyword));
+  const marineSafetyInsertions = [
+    "dry environment",
+    "solid ground under subject",
+    "not submerged",
+    "not underwater",
+    "no boats",
+    "no ships",
+    "no harbor",
+    "no unexpected marine objects",
+  ];
+  const marineSafetyChanges = [
+    "no underwater environment",
+    "no standing in water",
+    "no floating subject",
+    "no unexpected marine props",
+  ];
   const inheritedPackageFormat = resolveFormatAlias(
     scenarioPackage?.format,
     scenarioPackage?.aspectRatio,
@@ -1124,8 +1151,12 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     sceneAction: source.sceneAction ?? source.scene_action,
     cameraIntent: source.cameraIntent ?? source.camera_intent,
     environmentMotion: source.environmentMotion ?? source.environment_motion,
-    forbiddenInsertions,
-    forbiddenChanges,
+    forbiddenInsertions: (!hasExplicitMarineLiteralRequirement && hasMarinePoeticSignal)
+      ? Array.from(new Set([...forbiddenInsertions, ...marineSafetyInsertions]))
+      : forbiddenInsertions,
+    forbiddenChanges: (!hasExplicitMarineLiteralRequirement && hasMarinePoeticSignal)
+      ? Array.from(new Set([...forbiddenChanges, ...marineSafetyChanges]))
+      : forbiddenChanges,
     lipSync: source.lipSync ?? source.lip_sync,
     lipSyncText: source.lipSyncText ?? source.lip_sync_text,
     performerPresentation: normalizeText(source.performerPresentation ?? source.performer_presentation),
@@ -1160,7 +1191,15 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     styleLock: source.styleLock ?? source.style_lock,
     identityLock: source.identityLock ?? source.identity_lock,
     mustAppear: normalizeStringList(source.mustAppear ?? source.must_appear),
-    mustNotAppear: normalizeStringList(source.mustNotAppear ?? source.must_not_appear),
+    mustNotAppear: (!hasExplicitMarineLiteralRequirement && hasMarinePoeticSignal)
+      ? Array.from(new Set([
+        ...normalizeStringList(source.mustNotAppear ?? source.must_not_appear),
+        "boats",
+        "ships",
+        "harbor elements",
+        "underwater environment",
+      ]))
+      : normalizeStringList(source.mustNotAppear ?? source.must_not_appear),
     heroEntityId: normalizeText(source.heroEntityId ?? source.hero_entity_id),
     supportEntityIds: normalizeStringList(source.supportEntityIds ?? source.support_entity_ids),
     plannerDebug: source.plannerDebug ?? source.planner_debug,
@@ -1600,6 +1639,8 @@ export function buildScenarioHumanVisualAnchors(scene = {}) {
       : `same subject as source frame ${identityId}`;
     const positionHint = positionHints[index] ? `, ${positionHints[index]}` : "";
     anchors.push(`${identityId}: ${refTarget}${positionHint}, preserve exact face, hair, clothing`);
+    anchors.push(`${identityId}: preserve exact body proportions, exact body silhouette, shoulder width, waist-to-hip ratio, torso shape, arm thickness, leg thickness`);
+    anchors.push(`${identityId}: no body volume drift, no weight drift, no body shape reinterpretation, do not widen torso/hips/arms, keep the same perceived slimness/build`);
   });
   if (primaryIds.length >= 2) {
     anchors.push(`keep ${primaryIds[0]} and ${primaryIds[1]} in the same left/right arrangement from source frame`);

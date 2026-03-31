@@ -10849,7 +10849,7 @@ Aspect ratio: ${imageFormat}`,
       : { continuationSourceAssetUrl: "", continuationSourceAssetType: "" };
     const continuationSourceAssetUrl = String(continuationSourceSelection.continuationSourceAssetUrl || "").trim();
     const continuationSourceAssetType = String(continuationSourceSelection.continuationSourceAssetType || "").trim();
-    if (effectiveRequiresContinuation) {
+    if (effectiveRequiresContinuation && continuationSourceAssetUrl) {
       updateScenarioScene(targetSceneIndex, {
         continuationFromPrevious: true,
         continuationSourceSceneId,
@@ -10890,6 +10890,13 @@ Aspect ratio: ${imageFormat}`,
       audioSliceUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.audioSliceUrl),
       continuationSourceAssetUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.continuationSourceAssetUrl),
     };
+    const continuationEnabled = Boolean(
+      effectiveRequiresContinuation
+      && String(normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl || "").trim()
+    );
+    const safeContinuationSourceSceneId = continuationEnabled ? continuationSourceSceneId : "";
+    const safeContinuationSourceAssetUrl = continuationEnabled ? normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl : "";
+    const safeContinuationSourceAssetType = continuationEnabled ? continuationSourceAssetType : "";
     console.info("[SCENARIO VIDEO FLOW]", {
       stage: "normalized_urls",
       sceneId,
@@ -11025,12 +11032,12 @@ Aspect ratio: ${imageFormat}`,
         workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
         modelFileOverride: String(targetScene?.modelFileOverride || ""),
         requiresTwoFrames,
-        requiresContinuation: effectiveRequiresContinuation,
+        requiresContinuation: continuationEnabled,
         requiresAudioSensitiveVideo,
-        continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? effectiveRequiresContinuation),
-        continuationSourceSceneId,
-        continuationSourceAssetUrl: normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl,
-        continuationSourceAssetType,
+        continuationFromPrevious: continuationEnabled,
+        continuationSourceSceneId: safeContinuationSourceSceneId,
+        continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
+        continuationSourceAssetType: safeContinuationSourceAssetType,
         shotType: targetScene.shotType || "",
         sceneType: targetScene.sceneType || "",
         format: resolvePreferredSceneFormat(
@@ -11302,12 +11309,12 @@ Aspect ratio: ${imageFormat}`,
         workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
         modelFileOverride: String(targetScene?.modelFileOverride || ""),
         requiresTwoFrames,
-        requiresContinuation: effectiveRequiresContinuation,
+        requiresContinuation: continuationEnabled,
         requiresAudioSensitiveVideo,
-        continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? effectiveRequiresContinuation),
-        continuationSourceSceneId,
-        continuationSourceAssetUrl: normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl,
-        continuationSourceAssetType,
+        continuationFromPrevious: continuationEnabled,
+        continuationSourceSceneId: safeContinuationSourceSceneId,
+        continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
+        continuationSourceAssetType: safeContinuationSourceAssetType,
         shotType: targetScene.shotType || "",
         sceneType: targetScene.sceneType || "",
         format: resolvePreferredSceneFormat(
