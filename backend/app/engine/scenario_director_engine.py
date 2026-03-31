@@ -587,6 +587,15 @@ class ScenarioDirectorScene(BaseModel):
     boundary_reason: str = "fallback"
     audio_anchor_evidence: str = ""
     confidence: float = 0.5
+    first_last_candidate: bool = False
+    first_last_candidate_score: float = 0.0
+    first_last_candidate_reasons: list[str] = Field(default_factory=list)
+    first_last_reject_reasons: list[str] = Field(default_factory=list)
+    strong_visual_delta: bool = False
+    phrase_loop_similarity_with_prev: float = 0.0
+    phrase_loop_action: str = "keep"
+    route_before_rebalance: str = ""
+    route_after_rebalance: str = ""
 
     @field_validator("scene_id", mode="before")
     @classmethod
@@ -707,6 +716,17 @@ class ScenarioDirectorScene(BaseModel):
             self.confidence = 0.0
         elif self.confidence > 1:
             self.confidence = 1.0
+        self.first_last_candidate = _coerce_bool(self.first_last_candidate, False)
+        self.first_last_candidate_score = _safe_float(self.first_last_candidate_score, 0.0)
+        self.first_last_candidate_reasons = [str(item).strip() for item in (self.first_last_candidate_reasons or []) if str(item).strip()]
+        self.first_last_reject_reasons = [str(item).strip() for item in (self.first_last_reject_reasons or []) if str(item).strip()]
+        self.strong_visual_delta = _coerce_bool(self.strong_visual_delta, False)
+        similarity = _safe_float(self.phrase_loop_similarity_with_prev, 0.0)
+        self.phrase_loop_similarity_with_prev = 0.0 if similarity < 0.0 else (1.0 if similarity > 1.0 else similarity)
+        phrase_loop_action = str(self.phrase_loop_action or "keep").strip().lower() or "keep"
+        self.phrase_loop_action = phrase_loop_action if phrase_loop_action in {"keep", "merge", "reframe", "reject_duplicate"} else "keep"
+        self.route_before_rebalance = str(self.route_before_rebalance or "").strip().lower()
+        self.route_after_rebalance = str(self.route_after_rebalance or "").strip().lower()
         self.ltx_reason = _normalize_ltx_reason(
             str(self.ltx_reason or "").strip(),
             self.ltx_mode,
@@ -811,6 +831,9 @@ class ScenarioDirectorDiagnostics(BaseModel):
     clip_formula_actual: dict[str, int] = Field(default_factory=dict)
     clip_formula_rebalance_applied: bool = False
     clip_formula_rebalance_notes: list[str] = Field(default_factory=list)
+    phrase_loop_prevented_reason: str = ""
+    strong_first_last_candidate_count: int = 0
+    first_last_shortage_reason: str = ""
     chorus_detected: bool = False
     active_connected_character_roles: list[str] = Field(default_factory=list)
     single_character_mode_enforced: bool = False
@@ -838,6 +861,9 @@ class ScenarioDirectorDiagnostics(BaseModel):
         self.clip_formula_actual = self.clip_formula_actual if isinstance(self.clip_formula_actual, dict) else {}
         self.clip_formula_rebalance_applied = _coerce_bool(self.clip_formula_rebalance_applied, False)
         self.clip_formula_rebalance_notes = [str(item).strip() for item in (self.clip_formula_rebalance_notes or []) if str(item).strip()]
+        self.phrase_loop_prevented_reason = str(self.phrase_loop_prevented_reason or "").strip()
+        self.strong_first_last_candidate_count = max(0, int(_safe_float(self.strong_first_last_candidate_count, 0.0)))
+        self.first_last_shortage_reason = str(self.first_last_shortage_reason or "").strip()
         self.chorus_detected = _coerce_bool(self.chorus_detected, False)
         self.active_connected_character_roles = [str(item).strip().lower() for item in (self.active_connected_character_roles or []) if str(item).strip()]
         self.single_character_mode_enforced = _coerce_bool(self.single_character_mode_enforced, False)
@@ -5052,9 +5078,12 @@ def _prevent_phrase_loop_in_music_video(storyboard_out: ScenarioDirectorStoryboa
     scenes = storyboard_out.scenes or []
     if len(scenes) < 2:
         storyboard_out.diagnostics.phrase_loop_prevented = False
+        storyboard_out.diagnostics.phrase_loop_prevented_reason = "insufficient_scenes_for_phrase_loop_guard"
         storyboard_out.diagnostics.scene_merge_or_reuse_reason = "insufficient_scenes_for_phrase_loop_guard"
         return storyboard_out
     merged_scenes: list[ScenarioDirectorScene] = [scenes[0]]
+    merged_scenes[0].phrase_loop_similarity_with_prev = 0.0
+    merged_scenes[0].phrase_loop_action = "keep"
     prevented = False
     merge_notes: list[str] = []
     storyboard_out.diagnostics.chorus_detected = _is_repeat_heavy_music_clip(scenes)
@@ -5073,12 +5102,45 @@ def _prevent_phrase_loop_in_music_video(storyboard_out: ScenarioDirectorStoryboa
         prefix_overlap = len([token for token in zip(left_tokens, right_tokens) if token[0] == token[1]])
         return (overlap / union) >= 0.72 or prefix_overlap >= max(2, min(len(left_tokens), len(right_tokens)) - 1)
 
+    stop_tokens = {"a", "the", "and", "or", "to", "ti", "di", "e", "la", "il", "non", "mi", "si"}
+
+    def _token_set(value: str) -> set[str]:
+        clean = re.sub(r"[^\w\s]", " ", str(value or "").lower())
+        return {token for token in clean.split() if token and token not in stop_tokens}
+
+    def _jaccard(left: str, right: str) -> float:
+        left_set = _token_set(left)
+        right_set = _token_set(right)
+        if not left_set and not right_set:
+            return 1.0
+        if not left_set or not right_set:
+            return 0.0
+        return len(left_set.intersection(right_set)) / max(1, len(left_set.union(right_set)))
+
+    def _phrase_loop_similarity(left: ScenarioDirectorScene, right: ScenarioDirectorScene) -> float:
+        weighted_pairs = [
+            (str(left.scene_purpose or ""), str(right.scene_purpose or ""), 0.16),
+            (str(left.beat_function or ""), str(right.beat_function or ""), 0.14),
+            (str(left.clip_arc_stage or ""), str(right.clip_arc_stage or ""), 0.13),
+            (str(left.local_phrase or ""), str(right.local_phrase or ""), 0.2),
+            (str(left.visual_intensity_level or "") + " " + str(left.scene_goal or ""), str(right.visual_intensity_level or "") + " " + str(right.scene_goal or ""), 0.15),
+            (str(left.camera or "") + " " + str(left.shot_type or ""), str(right.camera or "") + " " + str(right.shot_type or ""), 0.12),
+            (str(left.location or "") + " " + str(left.frame_description or ""), str(right.location or "") + " " + str(right.frame_description or ""), 0.1),
+        ]
+        total = 0.0
+        for left_value, right_value, weight in weighted_pairs:
+            total += _jaccard(left_value, right_value) * weight
+        return round(max(0.0, min(1.0, total)), 3)
+
     for scene in scenes[1:]:
         prev = merged_scenes[-1]
         phrase_prev = re.sub(r"\s+", " ", str(prev.local_phrase or "").strip().lower())
         phrase_cur = re.sub(r"\s+", " ", str(scene.local_phrase or "").strip().lower())
         repeated_phrase = bool(phrase_prev and phrase_cur and (phrase_prev == phrase_cur or _is_near_repeat_phrase(phrase_prev, phrase_cur)))
-        if not repeated_phrase:
+        similarity = _phrase_loop_similarity(prev, scene)
+        scene.phrase_loop_similarity_with_prev = similarity
+        if not repeated_phrase and similarity < 0.78:
+            scene.phrase_loop_action = "keep"
             merged_scenes.append(scene)
             continue
         compared_fields = [
@@ -5094,9 +5156,15 @@ def _prevent_phrase_loop_in_music_video(storyboard_out: ScenarioDirectorStoryboa
         ]
         same_profile = all(str(getattr(prev, key, "") or "").strip().lower() == str(getattr(scene, key, "") or "").strip().lower() for key in compared_fields)
         if not same_profile:
-            merge_notes.append(f"repeated_phrase_kept:{scene.scene_id}:profile_changed")
+            scene.phrase_loop_action = "reframe"
+            scene.progression_reason = str(scene.progression_reason or "phrase_loop_reframed_progression").strip()
+            scene.clip_arc_stage = str(scene.clip_arc_stage or "progression").strip() or "progression"
+            scene.beat_function = str(scene.beat_function or "progression_beat").strip() or "progression_beat"
+            merge_notes.append(f"repeated_phrase_reframed:{scene.scene_id}:profile_changed")
+            prevented = True
             merged_scenes.append(scene)
             continue
+        scene.phrase_loop_action = "merge"
         prev.time_end = round(max(_safe_float(prev.time_end, 0.0), _safe_float(scene.time_end, 0.0)), 3)
         prev.duration = round(max(0.0, prev.time_end - _safe_float(prev.time_start, 0.0)), 3)
         prev.requested_duration_sec = prev.duration
@@ -5109,6 +5177,9 @@ def _prevent_phrase_loop_in_music_video(storyboard_out: ScenarioDirectorStoryboa
         merge_notes.append(f"merged_repeated_phrase:{scene.scene_id}->{prev.scene_id}:near_repeat_chorus")
     storyboard_out.scenes = merged_scenes
     storyboard_out.diagnostics.phrase_loop_prevented = prevented
+    storyboard_out.diagnostics.phrase_loop_prevented_reason = (
+        "duplicate_lyrical_beats_merged_or_reframed" if prevented else "no_high_overlap_neighbor_duplicates"
+    )
     storyboard_out.diagnostics.scene_merge_or_reuse_reason = "; ".join(merge_notes[:8]) if merge_notes else "visual_arc_policy_applied_no_merge_needed"
     return storyboard_out
 
@@ -5124,7 +5195,7 @@ def _strengthen_first_last_candidate(scene: ScenarioDirectorScene) -> ScenarioDi
             str(scene.transition_family or ""),
         ]
     ).lower()
-    trigger_tokens = ("world shift", "reveal", "release", "afterimage", "scale", "escalat", "emotion", "camera")
+    trigger_tokens = ("world shift", "reveal", "release", "afterimage", "scale", "escalat", "camera distance", "pose shift", "gaze shift", "approach", "exit")
     if not any(token in text_blob for token in trigger_tokens):
         return scene
     if not str(scene.start_visual_state or "").strip():
@@ -5152,26 +5223,92 @@ def _get_clip_formula_target(total_duration_sec: float) -> dict[str, int]:
     return {"lip_sync_music": 2, "f_l": 2, "i2v_min": 3, "i2v_max": 4}
 
 
-def _scene_is_strong_first_last_candidate(scene: ScenarioDirectorScene) -> tuple[bool, str]:
+def evaluateFirstLastEligibility(scene: ScenarioDirectorScene, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    _ = context or {}
     scene = _strengthen_first_last_candidate(scene)
-    if not _scene_has_transition_evidence(scene):
-        return False, "f_l_skip_no_transition_evidence"
-    start_state = str(scene.start_visual_state or "").strip().lower()
-    end_state = str(scene.end_visual_state or "").strip().lower()
-    if not start_state or not end_state or start_state == end_state:
-        return False, "f_l_skip_visual_delta_too_weak"
-    score = 0
-    if _resolve_transition_family(scene) in {"transform", "reveal", "release", "afterimage", "state_shift"}:
-        score += 1
-    if scene.delta_axes and len(scene.delta_axes) >= 1:
-        score += 1
-    if str(scene.scene_purpose or "").strip().lower() in {"transition", "reveal", "transformation", "escalation", "release_bridge"}:
-        score += 1
-    if str(scene.shot_type or "").strip().lower() in {"wide", "medium", "duet_shared"}:
-        score += 1
-    if _safe_float(scene.duration, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0)) >= 2.4:
-        score += 1
-    return score >= 2, ("strong_first_last_candidate" if score >= 2 else "f_l_skip_visual_delta_too_weak")
+    weak_terms = ("emotion grows", "camera moves", "scene continues", "slight change", "same", "continues")
+    reasons: list[str] = []
+    weak_reasons: list[str] = []
+    delta_axes_used: list[str] = []
+    duration = _safe_float(scene.duration, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0))
+    start_state = str(scene.start_visual_state or "").strip()
+    end_state = str(scene.end_visual_state or "").strip()
+    strong_start_state = bool(start_state and len(start_state.split()) >= 4)
+    strong_end_state = bool(end_state and len(end_state.split()) >= 4)
+    if _is_lip_sync_music_scene(scene):
+        weak_reasons.append("scene_is_lip_sync_music")
+    if str(scene.scene_purpose or "").strip().lower() in {"performance", "chorus_hit"} and str(scene.transition_family or "").strip().lower() in {"", "hold", "none", "static"}:
+        weak_reasons.append("pure_static_performance_beat")
+    if duration < 2.2:
+        weak_reasons.append("duration_too_short_for_visible_transition")
+    if not strong_start_state:
+        weak_reasons.append("missing_strong_start_visual_state")
+    if not strong_end_state:
+        weak_reasons.append("missing_strong_end_visual_state")
+
+    start_lower = start_state.lower()
+    end_lower = end_state.lower()
+    if start_lower and end_lower and (start_lower == end_lower or _safe_phrase_overlap(start_lower, end_lower) >= 0.86):
+        weak_reasons.append("start_end_semantically_too_similar")
+    if any(token in start_lower or token in end_lower for token in weak_terms):
+        weak_reasons.append("weak_generic_state_wording")
+
+    axis_hints = {
+        "camera_distance_shift": ("close", "wide", "distance", "push in", "pull back", "camera distance"),
+        "scale_shift": ("scale", "tiny", "vast", "small", "large"),
+        "pose_phase_shift": ("pose", "turns", "kneels", "stands", "falls", "rises"),
+        "gaze_direction_shift": ("gaze", "looks", "stares", "away", "toward"),
+        "movement_state_shift": ("still", "motion", "running", "frozen", "release"),
+        "environment_state_shift": ("room", "street", "rain", "fire", "light", "world", "door"),
+        "silhouette_reveal_shift": ("silhouette", "reveal", "approach", "exit", "afterimage", "open", "close"),
+        "compression_expansion_shift": ("compression", "expansion", "squeeze", "expand"),
+        "solitude_openness_shift": ("alone", "crowd", "open", "empty"),
+        "static_motion_release_shift": ("static", "locked", "burst", "release"),
+    }
+    combined_blob = " ".join(
+        [
+            start_lower,
+            end_lower,
+            str(scene.transition_family or "").strip().lower(),
+            " ".join(str(item).strip().lower() for item in (scene.delta_axes or [])),
+            str(scene.camera or "").strip().lower(),
+            str(scene.frame_description or "").strip().lower(),
+            str(scene.action_in_frame or "").strip().lower(),
+        ]
+    )
+    for axis_name, hints in axis_hints.items():
+        if any(hint in combined_blob for hint in hints):
+            delta_axes_used.append(axis_name)
+    if _scene_has_transition_evidence(scene):
+        reasons.append("transition_evidence_detected")
+    if delta_axes_used:
+        reasons.append("multi_axis_visual_delta")
+    strong_visual_delta = len(set(delta_axes_used)) >= 2 and "start_end_semantically_too_similar" not in weak_reasons
+    if not strong_visual_delta:
+        weak_reasons.append("explicit_visual_delta_not_strong_enough")
+    else:
+        reasons.append("strong_visual_delta_confirmed")
+
+    score = max(0.0, min(1.0, (len(set(delta_axes_used)) * 0.2) + (0.2 if _scene_has_transition_evidence(scene) else 0.0) + (0.2 if strong_start_state and strong_end_state else 0.0) - (0.15 * len(set(weak_reasons)))))
+    eligible = not weak_reasons and strong_visual_delta
+    return {
+        "eligible": eligible,
+        "score": round(score, 3),
+        "reasons": reasons,
+        "weakReasons": weak_reasons,
+        "deltaAxesUsed": sorted(set(delta_axes_used)),
+        "strongStartState": strong_start_state,
+        "strongEndState": strong_end_state,
+        "strongVisualDelta": strong_visual_delta,
+    }
+
+
+def _safe_phrase_overlap(left: str, right: str) -> float:
+    left_tokens = {token for token in re.findall(r"\w+", str(left or "").lower()) if len(token) > 2}
+    right_tokens = {token for token in re.findall(r"\w+", str(right or "").lower()) if len(token) > 2}
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens.intersection(right_tokens)) / max(1, len(left_tokens.union(right_tokens)))
 
 
 def _scene_is_lip_sync_eligible(scene: ScenarioDirectorScene, *, is_clip_single_character: bool) -> tuple[bool, str]:
@@ -5227,17 +5364,7 @@ def _lip_sync_candidate_score(scene: ScenarioDirectorScene) -> int:
 
 
 def _first_last_candidate_score(scene: ScenarioDirectorScene) -> int:
-    score = 0
-    if _scene_has_transition_evidence(scene):
-        score += 1
-    if str(scene.transition_family or "").strip().lower() in {"transform", "reveal", "release", "afterimage", "state_shift"}:
-        score += 1
-    if scene.delta_axes:
-        score += 1
-    duration = _safe_float(scene.duration, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0))
-    if duration >= 2.4:
-        score += 1
-    return score
+    return int(round(max(0.0, min(1.0, _safe_float(scene.first_last_candidate_score, 0.0))) * 100))
 
 
 def _clip_formula_actual_counts(scenes: list[ScenarioDirectorScene], target: dict[str, int]) -> dict[str, Any]:
@@ -5329,6 +5456,8 @@ def _rebalance_music_video_formula(
     fl_target = int(target.get("f_l", 0))
     sorted_lip = sorted(lip_sync_candidates, key=_lip_sync_candidate_score, reverse=True)
     sorted_fl = sorted(first_last_candidates, key=_first_last_candidate_score, reverse=True)
+    diagnostics.strong_first_last_candidate_count = len(sorted_fl)
+    diagnostics.first_last_shortage_reason = ""
     selected_lip_ids = {scene.scene_id for scene in sorted_lip[:lip_target]}
     selected_fl_ids: set[str] = set()
     for scene in sorted_fl:
@@ -5342,17 +5471,33 @@ def _rebalance_music_video_formula(
         notes.append("insufficient_lip_sync_music_candidates_after_eligibility_pass")
     if fl_target > len(selected_fl_ids):
         notes.append("insufficient_f_l_candidates_after_eligibility_pass")
+        diagnostics.first_last_shortage_reason = f"strong_first_last_candidates={len(sorted_fl)} target={fl_target}"
+        for scene in scenes:
+            if len(selected_fl_ids) >= fl_target:
+                break
+            if scene.scene_id in selected_lip_ids or scene.scene_id in selected_fl_ids:
+                continue
+            strengthened = _strengthen_first_last_candidate(scene)
+            eligibility = evaluateFirstLastEligibility(strengthened, context={"rebalance": "strengthen_attempt"})
+            if not eligibility.get("eligible"):
+                continue
+            selected_fl_ids.add(scene.scene_id)
+            notes.append(f"rebalance_strengthened_f_l:{scene.scene_id}")
 
     for scene in scenes:
+        scene.route_after_rebalance = ""
         if scene.scene_id in selected_lip_ids:
             _apply_scene_route(scene, route="lip_sync_music", reason="Deterministic clip router selected lip_sync_music after eligibility rebalance.")
+            scene.route_after_rebalance = "lip_sync_music"
             notes.append(f"selected_lip_sync_music:{scene.scene_id}")
             continue
         if scene.scene_id in selected_fl_ids:
             _apply_scene_route(scene, route="f_l", reason="Deterministic clip router selected first_last after eligibility rebalance.")
+            scene.route_after_rebalance = "f_l"
             notes.append(f"selected_f_l:{scene.scene_id}")
             continue
         _apply_scene_route(scene, route="i2v", reason="default_clip_i2v_route")
+        scene.route_after_rebalance = "i2v"
         notes.append(f"selected_i2v:{scene.scene_id}")
 
     diagnostics.clip_formula_actual = _clip_formula_actual_counts(scenes, target)
@@ -5380,21 +5525,36 @@ def _route_clip_video_models(
     lip_sync_candidates: list[ScenarioDirectorScene] = []
     first_last_candidates: list[ScenarioDirectorScene] = []
     for scene in scenes:
+        scene.route_before_rebalance = "i2v"
+        scene.route_after_rebalance = ""
+        scene.first_last_candidate = False
+        scene.first_last_candidate_score = 0.0
+        scene.first_last_candidate_reasons = []
+        scene.first_last_reject_reasons = []
+        scene.strong_visual_delta = False
         lip_ok, lip_reason = _scene_is_lip_sync_eligible(scene, is_clip_single_character=is_clip_single_character)
         scene.lip_sync_decision_reason = lip_reason
         if lip_ok:
+            scene.route_before_rebalance = "lip_sync_music"
             lip_sync_candidates.append(scene)
             continue
-        fl_ok, fl_reason = _scene_is_strong_first_last_candidate(scene)
-        if fl_ok:
+        fl_eval = evaluateFirstLastEligibility(scene, context={"is_clip_single_character": is_clip_single_character})
+        scene.first_last_candidate = bool(fl_eval.get("eligible"))
+        scene.first_last_candidate_score = _safe_float(fl_eval.get("score"), 0.0)
+        scene.first_last_candidate_reasons = [str(item).strip() for item in (fl_eval.get("reasons") or []) if str(item).strip()]
+        scene.first_last_reject_reasons = [str(item).strip() for item in (fl_eval.get("weakReasons") or []) if str(item).strip()]
+        scene.strong_visual_delta = _coerce_bool(fl_eval.get("strongVisualDelta"), False)
+        if scene.first_last_candidate:
+            scene.route_before_rebalance = "f_l"
             first_last_candidates.append(scene)
             scene.video_downgrade_reason_code = ""
             scene.video_downgrade_reason_message = ""
-            scene.workflow_decision_reason = fl_reason
+            scene.workflow_decision_reason = "strong_first_last_candidate"
             continue
+        scene.route_before_rebalance = "i2v"
         scene.video_downgrade_reason_code = ""
         scene.video_downgrade_reason_message = ""
-        scene.workflow_decision_reason = fl_reason
+        scene.workflow_decision_reason = "f_l_skip_strong_eligibility_failed"
     storyboard_out.scenes = scenes
     return _rebalance_music_video_formula(
         storyboard_out,
@@ -7329,6 +7489,11 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         phrase_loop_after = _is_repeat_heavy_music_clip(next_scenes)
         storyboard_out.diagnostics.chorus_detected = bool(phrase_loop_before)
         storyboard_out.diagnostics.phrase_loop_prevented = bool(phrase_loop_before and not phrase_loop_after)
+        storyboard_out.diagnostics.phrase_loop_prevented_reason = (
+            "repeat_heavy_before_and_resolved_after_merge"
+            if storyboard_out.diagnostics.phrase_loop_prevented
+            else "repeat_pattern_not_resolved_by_chunk_merge"
+        )
         storyboard_out.diagnostics.scene_merge_or_reuse_reason = (
             "visual_arc_progression_merge_guard"
             if storyboard_out.diagnostics.phrase_loop_prevented
