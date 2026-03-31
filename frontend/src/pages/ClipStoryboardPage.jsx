@@ -10849,6 +10849,11 @@ Aspect ratio: ${imageFormat}`,
       : { continuationSourceAssetUrl: "", continuationSourceAssetType: "" };
     const continuationSourceAssetUrl = String(continuationSourceSelection.continuationSourceAssetUrl || "").trim();
     const continuationSourceAssetType = String(continuationSourceSelection.continuationSourceAssetType || "").trim();
+    const normalizedContinuationSourceAssetUrl = normalizeVideoSourceUrl(continuationSourceAssetUrl);
+    const continuationEnabled = Boolean(
+      effectiveRequiresContinuation
+      && String(normalizedContinuationSourceAssetUrl || "").trim()
+    );
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
       : "";
@@ -10864,7 +10869,7 @@ Aspect ratio: ${imageFormat}`,
     const finalVideoPrompt = [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
     const sourceImageUrl = requiresTwoFrames
       ? (resolvedFirstFrameUrl || "")
-      : (effectiveRequiresContinuation
+      : (continuationEnabled
         ? (resolvedFirstFrameUrl || resolvedLastFrameUrl || frameImageUrl || "")
         : (frameImageUrl || ""));
     const rawScenarioVideoSourceUrls = {
@@ -10872,7 +10877,7 @@ Aspect ratio: ${imageFormat}`,
       startImageUrl: String(resolvedFirstFrameUrl || "").trim(),
       endImageUrl: String(resolvedLastFrameUrl || "").trim(),
       audioSliceUrl: String(shouldAttachAudioSlice ? attachedAudioSliceUrl : "").trim(),
-      continuationSourceAssetUrl: String(continuationSourceAssetUrl || "").trim(),
+      continuationSourceAssetUrl: String(normalizedContinuationSourceAssetUrl || "").trim(),
     };
     const normalizedScenarioVideoSourceUrls = {
       imageUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.imageUrl),
@@ -10881,10 +10886,6 @@ Aspect ratio: ${imageFormat}`,
       audioSliceUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.audioSliceUrl),
       continuationSourceAssetUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.continuationSourceAssetUrl),
     };
-    const continuationEnabled = Boolean(
-      effectiveRequiresContinuation
-      && String(normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl || "").trim()
-    );
     const safeContinuationSourceSceneId = continuationEnabled ? continuationSourceSceneId : "";
     const safeContinuationSourceAssetUrl = continuationEnabled ? normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl : "";
     const safeContinuationSourceAssetType = continuationEnabled ? continuationSourceAssetType : "";
@@ -10909,7 +10910,7 @@ Aspect ratio: ${imageFormat}`,
     });
     const sourceImageStrategy = requiresTwoFrames
       ? "first_last_frames"
-      : (effectiveRequiresContinuation ? "continuation_previous_frame" : "single_image");
+      : (continuationEnabled ? "continuation_previous_frame" : "single_image");
     const videoRequestSummary = {
       nodeId: String(scenarioFlowSourceNode?.id || scenarioEditor?.nodeId || ""),
       sceneId,
