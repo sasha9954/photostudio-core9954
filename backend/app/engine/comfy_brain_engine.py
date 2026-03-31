@@ -1606,6 +1606,28 @@ def _normalize_scene_timeline(scenes: list[dict[str, Any]], audio_duration_sec: 
     }
 
 
+def _apply_final_scene_renumber_pass(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    renumbered: list[dict[str, Any]] = []
+    for idx, scene in enumerate(scenes):
+        src = scene if isinstance(scene, dict) else {}
+        next_id = f"S{idx + 1}"
+        patched = dict(src)
+        patched["sceneId"] = next_id
+        if "scene_id" in patched:
+            patched["scene_id"] = next_id
+        if "id" in patched and isinstance(patched.get("id"), str):
+            raw_id = str(patched.get("id") or "").strip()
+            if re.fullmatch(r"(?i)s\d+", raw_id) or re.fullmatch(r"(?i)scene[-_]\d+", raw_id):
+                patched["id"] = next_id
+        title_value = str(patched.get("title") or "").strip()
+        if title_value:
+            title_value = re.sub(r"\bS\d+\b", next_id, title_value)
+            title_value = re.sub(r"\bScene\s+\d+\b", f"Scene {idx + 1}", title_value, flags=re.IGNORECASE)
+            patched["title"] = title_value
+        renumbered.append(patched)
+    return renumbered
+
+
 def _split_speech_text_chunks(text: str, pieces: int) -> list[str]:
     clean = re.sub(r"\s+", " ", str(text or "").strip())
     if pieces <= 1 or not clean:
@@ -4633,6 +4655,8 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     if still_coarse_after_refinement:
         reasons_suffix = f":{','.join(still_coarse_reasons)}" if still_coarse_reasons else ""
         warnings.append(f"segmentation_still_coarse_after_refinement{reasons_suffix}")
+
+    scenes = _apply_final_scene_renumber_pass(scenes)
     logger.info("[COMFY PLAN] normalized scenes count=%s", len(scenes))
 
     parsed_errors = parsed.get("errors") if isinstance(parsed.get("errors"), list) else []

@@ -554,7 +554,10 @@ export default function ScenarioStoryboardEditor({
       onUpdateScene?.(nodeId, sceneId, {
         audioSliceUrl,
         audioSliceStatus: "ready",
+        extractedAudioStatus: "ready",
+        extractedAudioUrl: audioSliceUrl,
         audioSliceDurationSec: Number(result?.audioSliceDurationSec ?? result?.extractedAudioDurationSec ?? durationSec),
+        extractedAudioDurationSec: Number(result?.audioSliceDurationSec ?? result?.extractedAudioDurationSec ?? durationSec),
         audioSliceExpectedDurationSec: durationSec,
         audioSliceError: "",
         audioSliceLoadError: "",
