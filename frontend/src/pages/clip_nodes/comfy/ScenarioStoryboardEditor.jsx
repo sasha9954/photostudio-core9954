@@ -569,6 +569,11 @@ export default function ScenarioStoryboardEditor({
       if (!audioSliceUrl) {
         onUpdateScene?.(nodeId, sceneId, {
           audioSliceStatus: "error",
+          extractedAudioStatus: "error",
+          audioSliceUrl: "",
+          extractedAudioUrl: "",
+          audioSliceActualDurationSec: null,
+          extractedAudioDurationSec: null,
           audioSliceError: "Не найден источник для audio slice",
           audioSliceLoadError: "Не найден источник для audio slice",
         });
@@ -578,6 +583,10 @@ export default function ScenarioStoryboardEditor({
         onUpdateScene?.(nodeId, sceneId, {
           audioSliceStatus: "error",
           extractedAudioStatus: "error",
+          audioSliceUrl: "",
+          extractedAudioUrl: "",
+          audioSliceActualDurationSec: null,
+          extractedAudioDurationSec: null,
           audioSliceError: "audio_slice_resolved_to_full_track",
           audioSliceLoadError: "audio_slice_resolved_to_full_track",
         });
@@ -607,6 +616,11 @@ export default function ScenarioStoryboardEditor({
     } catch (error) {
       onUpdateScene?.(nodeId, sceneId, {
         audioSliceStatus: "error",
+        extractedAudioStatus: "error",
+        audioSliceUrl: "",
+        extractedAudioUrl: "",
+        audioSliceActualDurationSec: null,
+        extractedAudioDurationSec: null,
         audioSliceError: String(error?.message || "Не удалось изъять аудио"),
         audioSliceLoadError: String(error?.message || "Не удалось изъять аудио"),
       });
