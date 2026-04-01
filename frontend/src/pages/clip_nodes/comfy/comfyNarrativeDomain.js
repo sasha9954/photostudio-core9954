@@ -1217,9 +1217,33 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       responseScene?.plannedVideoGenerationRoute,
       responseScene?.planned_video_generation_route
     );
-    const routeNormalized = String(videoGenerationRoute || plannedVideoGenerationRoute || resolvedWorkflowKey || "").trim().toLowerCase();
+    const sourceRoute = firstNonEmptyText(
+      directorScene?.sourceRoute,
+      storyboardScene?.sourceRoute,
+      storyboardScene?.source_route,
+      responseScene?.sourceRoute,
+      responseScene?.source_route
+    );
+    const uiRouteValue = firstNonEmptyText(videoGenerationRoute, plannedVideoGenerationRoute, sourceRoute, resolvedWorkflowKey);
+    const uiRouteSource = videoGenerationRoute
+      ? "videoGenerationRoute"
+      : plannedVideoGenerationRoute
+        ? "plannedVideoGenerationRoute"
+        : sourceRoute
+          ? "sourceRoute"
+          : "legacy";
+    const routeNormalized = String(uiRouteValue || "").trim().toLowerCase();
     const lipSyncFromRoute = routeNormalized === "lip_sync_music";
-    const lipSyncFromState = Boolean(directorScene?.lipSync ?? storyboardScene?.lipSync ?? storyboardScene?.lip_sync ?? responseScene?.lipSync ?? responseScene?.lip_sync);
+    const lipSyncFromState = Boolean(
+      directorScene?.lipSync
+      ?? directorScene?.isLipSync
+      ?? storyboardScene?.lipSync
+      ?? storyboardScene?.isLipSync
+      ?? storyboardScene?.lip_sync
+      ?? responseScene?.lipSync
+      ?? responseScene?.isLipSync
+      ?? responseScene?.lip_sync
+    );
     const uiLipSyncSource = lipSyncFromRoute ? "route" : (lipSyncFromState ? "state" : "legacy");
     return {
       ...(responseScene || {}),
@@ -1227,15 +1251,11 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       ...(directorScene || {}),
       renderMode: firstNonEmptyText(directorScene?.renderMode, storyboardScene?.renderMode, storyboardScene?.render_mode, responseScene?.renderMode, responseScene?.render_mode) || "image_video",
       resolvedWorkflowKey,
-      sourceRoute: firstNonEmptyText(
-        directorScene?.sourceRoute,
-        storyboardScene?.sourceRoute,
-        storyboardScene?.source_route,
-        responseScene?.sourceRoute,
-        responseScene?.source_route
-      ),
+      sourceRoute,
       videoGenerationRoute,
       plannedVideoGenerationRoute,
+      uiRouteSource,
+      uiRouteValue,
       resolvedWorkflowFile: firstNonEmptyText(
         directorScene?.resolvedWorkflowFile,
         storyboardScene?.resolvedWorkflowFile,

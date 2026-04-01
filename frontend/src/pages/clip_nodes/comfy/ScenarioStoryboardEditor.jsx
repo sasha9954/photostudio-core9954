@@ -50,13 +50,31 @@ function hydrateSceneWithRuntime(scene = {}, runtime = {}) {
 
 function sceneBadges(scene = {}) {
   const badges = [];
-  const finalRoute = resolveScenarioFinalRouteKey(scene);
-  if (finalRoute === "lip_sync_music") badges.push("lipSync");
-  else if (finalRoute === "f_l") badges.push("first+last");
+  const { finalRoute } = resolveUiRoute(scene);
+  if (finalRoute === "lip_sync_music") badges.push("lip_sync_music");
+  else if (finalRoute === "f_l") badges.push("first_last");
   else badges.push("i2v");
+  const isLipSyncScene = finalRoute === "lip_sync_music" || Boolean(scene?.isLipSync ?? scene?.lipSync);
+  if (isLipSyncScene && finalRoute !== "lip_sync_music") badges.push("lip_sync_music");
   const warnings = Array.isArray(scene?.contractWarnings) ? scene.contractWarnings : [];
   if (warnings.length) badges.push(`warnings:${warnings.length}`);
   return badges;
+}
+
+function resolveUiRoute(scene = {}) {
+  const directCandidates = [
+    { source: "videoGenerationRoute", value: scene?.videoGenerationRoute ?? scene?.video_generation_route },
+    { source: "plannedVideoGenerationRoute", value: scene?.plannedVideoGenerationRoute ?? scene?.planned_video_generation_route },
+    { source: "sourceRoute", value: scene?.sourceRoute ?? scene?.source_route },
+  ];
+  for (const candidate of directCandidates) {
+    const normalized = String(candidate?.value || "").trim().toLowerCase();
+    if (!normalized) continue;
+    if (["avatar_lipsync", "lip_sync", "lip_sync_music"].includes(normalized)) return { source: candidate.source, value: normalized, finalRoute: "lip_sync_music" };
+    if (["first_last", "f_l", "f_l_as", "imag-imag-video-bz"].includes(normalized)) return { source: candidate.source, value: normalized, finalRoute: "f_l" };
+    return { source: candidate.source, value: normalized, finalRoute: "i2v" };
+  }
+  return { source: "legacy", value: "", finalRoute: resolveScenarioFinalRouteKey(scene) };
 }
 
 function renderContractWarnings(scene = {}) {
@@ -664,8 +682,11 @@ export default function ScenarioStoryboardEditor({
       - Number(selectedScene?.audioSliceStartSec ?? selectedDisplayTime.startSec ?? 0)
     )
   );
-  const sceneFinalRoute = resolveScenarioFinalRouteKey(selectedScene || {});
-  const sceneLipSync = sceneFinalRoute === "lip_sync_music" || Boolean(selectedScene?.lipSync);
+  const uiRouteMeta = resolveUiRoute(selectedScene || {});
+  const sceneFinalRoute = uiRouteMeta.finalRoute;
+  const sceneLipSync = sceneFinalRoute === "lip_sync_music" || Boolean(selectedScene?.isLipSync ?? selectedScene?.lipSync);
+  const uiLipsyncSource = String(selectedScene?.uiLipsyncSource || (sceneFinalRoute === "lip_sync_music" ? "route" : (sceneLipSync ? "state" : "legacy")));
+  const uiLipsyncValue = sceneLipSync ? "true" : "false";
   const lipSyncAudioMissing = sceneLipSync && !sceneAudioSliceUrl;
   const bgMusicSource = resolveMusicSource(safeAudioData);
   const musicPromptSourceKind = String(safeAudioData?.musicPromptSourceKind || "").trim().toLowerCase() || "empty";
@@ -705,6 +726,16 @@ export default function ScenarioStoryboardEditor({
       end: endFrameSourceUrl,
     });
   }, [selectedSceneId, sourceImageUrl, startFrameSourceUrl, endFrameSourceUrl]);
+  useEffect(() => {
+    if (!open || !selectedScene) return;
+    console.debug("[SCENARIO UI ROUTE TRACE]", {
+      sceneId: selectedSceneId,
+      ui_route_source: uiRouteMeta.source || selectedScene?.uiRouteSource || "legacy",
+      ui_route_value: uiRouteMeta.value || selectedScene?.uiRouteValue || sceneFinalRoute,
+      ui_lipsync_source: uiLipsyncSource,
+      ui_lipsync_value: uiLipsyncValue,
+    });
+  }, [open, sceneFinalRoute, selectedScene, selectedSceneId, uiLipsyncSource, uiLipsyncValue, uiRouteMeta.source, uiRouteMeta.value]);
   const usesBgMusicInMontage = hasBgMusic && Boolean(safeAudioData?.useInMontage);
   const bgMusicFileName = String(
     safeAudioData?.fileName
@@ -1425,6 +1456,10 @@ export default function ScenarioStoryboardEditor({
                       <div className="clipSB_sceneVideoMeta">
                         <div className="clipSB_storyboardKv"><span>renderMode</span><strong>{selectedScene?.renderMode || "—"}</strong></div>
                         <div className="clipSB_storyboardKv"><span>workflow</span><strong>{selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "—"}</strong></div>
+                        <div className="clipSB_storyboardKv"><span>ui_route_source</span><strong>{uiRouteMeta.source || selectedScene?.uiRouteSource || "legacy"}</strong></div>
+                        <div className="clipSB_storyboardKv"><span>ui_route_value</span><strong>{uiRouteMeta.value || selectedScene?.uiRouteValue || sceneFinalRoute || "—"}</strong></div>
+                        <div className="clipSB_storyboardKv"><span>ui_lipsync_source</span><strong>{uiLipsyncSource}</strong></div>
+                        <div className="clipSB_storyboardKv"><span>ui_lipsync_value</span><strong>{uiLipsyncValue}</strong></div>
                         <div className="clipSB_storyboardKv"><span>lipSync</span><strong>{sceneLipSync ? "да" : "нет"}</strong></div>
                         <div className="clipSB_storyboardKv"><span>audioSlice</span><strong>{sceneAudioSliceUrl ? "present" : "missing"}</strong></div>
                         {sceneLipSync ? <div className="clipSB_hint clipSB_sceneVideoAudioHint">{sceneAudioSliceUrl ? "Этот audioSlice будет отправлен в video generation." : "Для lipSync audioSlice подготовится автоматически перед генерацией видео."}</div> : null}
