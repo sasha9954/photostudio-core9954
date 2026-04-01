@@ -1649,6 +1649,20 @@ def _resolve_audio_duration_info(payload: dict[str, Any]) -> tuple[float, str]:
     return _safe_float(normalized.get("audioDurationSec"), 0.0), str(normalized.get("audioDurationSource") or "missing")
 
 
+def _resolve_effective_director_note_text(payload: dict[str, Any]) -> str:
+    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
+    for candidate in (
+        controls.get("directorNote"),
+        controls.get("director_note"),
+        payload.get("text"),
+    ):
+        if isinstance(candidate, str):
+            clean = candidate.strip()
+            if clean:
+                return clean
+    return ""
+
+
 def _resolve_audio_asset_path(audio_url: str | None) -> str | None:
     clean = str(audio_url or "").strip()
     if not clean:
@@ -1671,29 +1685,9 @@ def _resolve_audio_source_for_analysis(audio_url: str | None) -> dict[str, Any]:
     if not clean:
         return {"ok": False, "mode": "missing", "path": None, "url": None, "normalized": "", "hint": "audio_url_missing", "reason": "audio_url_missing"}
 
-    def _resolve_local_static_asset(path_value: str) -> str | None:
-        path_clean = str(path_value or "").strip()
-        if not path_clean:
-            return None
-        normalized_path = path_clean.split("?", 1)[0].split("#", 1)[0]
-        normalized_path = normalized_path.lstrip("/")
-        if not normalized_path.startswith("static/assets/"):
-            return None
-        relative_path = normalized_path[len("static/"):].strip("/")
-        if not relative_path:
-            return None
-        candidate = (BACKEND_DIR / "static" / relative_path).resolve()
-        try:
-            candidate.relative_to((BACKEND_DIR / "static").resolve())
-        except ValueError:
-            return None
-        if candidate.is_file():
-            return str(candidate)
-        return None
-
     parsed = urlparse(clean)
     if parsed.scheme in {"http", "https"}:
-        local_static_path = _resolve_local_static_asset(parsed.path or "")
+        local_static_path = _resolve_local_static_asset_path(parsed.path or "")
         if local_static_path:
             return {
                 "ok": True,
@@ -1767,6 +1761,86 @@ def _resolve_audio_source_for_analysis(audio_url: str | None) -> dict[str, Any]:
         }
 
     return {"ok": False, "mode": "missing", "path": None, "url": None, "normalized": clean, "hint": "audio_asset_not_found", "reason": "asset_not_found_locally_and_no_http_fallback"}
+
+
+def _resolve_local_static_asset_path(path_value: Any) -> str | None:
+    path_clean = str(path_value or "").strip()
+    if not path_clean:
+        return None
+    parsed = urlparse(path_clean)
+    candidate_path = parsed.path if parsed.scheme in {"http", "https"} else path_clean
+    normalized_path = str(candidate_path or "").split("?", 1)[0].split("#", 1)[0].lstrip("/")
+    if normalized_path.startswith("backend/static/"):
+        normalized_path = normalized_path[len("backend/"):]
+    if normalized_path.startswith("assets/"):
+        normalized_path = f"static/{normalized_path}"
+    elif not normalized_path.startswith("static/"):
+        normalized_path = f"static/{normalized_path}"
+    if not normalized_path.startswith("static/assets/"):
+        return None
+    relative_path = normalized_path[len("static/"):].strip("/")
+    if not relative_path:
+        return None
+    candidate = (BACKEND_DIR / "static" / relative_path).resolve()
+    try:
+        candidate.relative_to((BACKEND_DIR / "static").resolve())
+    except ValueError:
+        return None
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
+def _build_reference_image_parts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    refs_by_role: dict[str, list[str]] = {}
+    for source_map in (
+        payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {},
+        payload.get("connectedRefsByRole") if isinstance(payload.get("connectedRefsByRole"), dict) else {},
+        (payload.get("connected_context_summary") or {}).get("refsByRole")
+        if isinstance((payload.get("connected_context_summary") or {}).get("refsByRole"), dict)
+        else {},
+    ):
+        for role, refs in source_map.items():
+            normalized_role = _normalize_scenario_role(role)
+            if not normalized_role or not isinstance(refs, list):
+                continue
+            refs_by_role.setdefault(normalized_role, []).extend([str(ref).strip() for ref in refs if str(ref).strip()])
+    context_refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    for role, item in context_refs.items():
+        normalized_role = _normalize_scenario_role(role)
+        if not normalized_role or not isinstance(item, dict):
+            continue
+        refs = item.get("refs") if isinstance(item.get("refs"), list) else []
+        refs_by_role.setdefault(normalized_role, []).extend([str(ref).strip() for ref in refs if str(ref).strip()])
+
+    image_parts: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for role in SCENARIO_CANONICAL_ROLES:
+        for ref in refs_by_role.get(role, []):
+            local_path = _resolve_local_static_asset_path(ref)
+            if not local_path or local_path in seen_paths:
+                continue
+            mime_type = (mimetypes.guess_type(local_path)[0] or "application/octet-stream").strip().lower()
+            if not mime_type.startswith("image/"):
+                continue
+            try:
+                with open(local_path, "rb") as image_file:
+                    raw_image = image_file.read()
+            except OSError:
+                continue
+            if not raw_image:
+                continue
+            image_parts.append({"text": f"Reference image for role {role}:"})
+            image_parts.append(
+                {
+                    "inlineData": {
+                        "mimeType": mime_type,
+                        "data": base64.b64encode(raw_image).decode("utf-8"),
+                    }
+                }
+            )
+            seen_paths.add(local_path)
+    return image_parts
 
 
 def _normalize_audio_context(payload: dict[str, Any]) -> dict[str, Any]:
@@ -7775,19 +7849,19 @@ def _build_request_text(
     prefer_audio_over_text = _coerce_bool(normalized_audio.get("preferAudioOverText"), True)
     content_type_policy = _get_content_type_policy(payload)
     is_music_video_mode = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
-    director_note_text = str(director_controls.get("directorNote") or director_controls.get("director_note") or "").strip()
-    no_text_fallback_mode = "neutral_audio_literal" if not director_note_text else "off"
+    effective_director_note_text = _resolve_effective_director_note_text(payload)
+    no_text_fallback_mode = "neutral_audio_literal" if not effective_director_note_text else "off"
     authorial_interpretation_level = "low" if no_text_fallback_mode == "neutral_audio_literal" else "medium"
     audio_literalness_level = "high" if no_text_fallback_mode == "neutral_audio_literal" else "balanced"
     global_genre_intent = _resolve_director_genre_intent(payload, None)
-    story_core_source = "director_note" if is_music_video_mode and director_note_text else "source_of_truth"
-    story_frame_source = "director_note" if is_music_video_mode and director_note_text else "source_of_truth"
+    story_core_source = "director_note" if is_music_video_mode and effective_director_note_text else "source_of_truth"
+    story_frame_source = "director_note" if is_music_video_mode and effective_director_note_text else "source_of_truth"
     rhythm_source = "audio" if is_music_video_mode else ""
-    story_frame_source_reason = "director_note_present" if is_music_video_mode and director_note_text else "director_note_empty_use_source_truth"
+    story_frame_source_reason = "director_note_present_or_payload_text" if is_music_video_mode and effective_director_note_text else "director_note_empty_use_source_truth"
     rhythm_source_reason = "audio_drives_pacing_and_transitions" if is_music_video_mode else ""
     cast_identity_lock = _build_music_video_cast_identity_lock(payload) if is_music_video_mode else {"enabled": False}
     story_core_reason = (
-        "music_video_with_director_note_story_frame_plus_audio_rhythm_driver"
+        "music_video_with_effective_director_note_story_frame_plus_audio_rhythm_driver"
         if story_core_source == "director_note"
         else "music_video_without_director_note_or_non_music_mode_defaults_to_source_truth"
     )
@@ -7803,13 +7877,11 @@ def _build_request_text(
         normalized_role = _normalize_scenario_role(role)
         if normalized_role:
             role_type_by_role[normalized_role] = str(role_type or "").strip().lower() or "auto"
-    user_text_raw = payload.get("text")
-    user_text = str(user_text_raw).strip() if isinstance(user_text_raw, str) else ""
     runtime_payload = {
         "mode": "oneshot",
         "audioUrl": normalized_audio.get("audioUrl"),
         "audioDurationSec": audio_duration_sec if audio_duration_sec > 0 else None,
-        "text": user_text or None,
+        "text": effective_director_note_text or None,
         "refsByRole": _collect_payload_refs_by_role(payload),
         "context_refs": context_refs,
         "roleTypeByRole": role_type_by_role,
@@ -7846,6 +7918,7 @@ def _build_request_text(
         "Think like a top-tier premium music video director, not a literal lyric illustrator.\n"
         "Prioritize premium, cinematic, stylish, emotionally alive, shootable performance imagery in EVERY scene.\n"
         "Weak/repetitive/poetic lyrics are emotional cues, not mandatory literal world instructions.\n"
+        "If effective director note text exists (including payload.text), treat it as an active story-frame/world-direction instruction.\n"
         "If no location ref is provided, choose a premium performance world yourself with this default hierarchy:\n"
         "1) premium studio/loft/infinity-cove/controlled architectural space;\n"
         "2) stylized fashion-performance interior;\n"
@@ -7992,8 +8065,7 @@ def _parse_storyboard_payload(raw_text: str, *, parse_stage: str = "initial", fi
 
 
 def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
-    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
-    director_note = str(controls.get("directorNote") or controls.get("director_note") or "").strip()
+    director_note = _resolve_effective_director_note_text(payload)
     audio_duration = _safe_float(
         payload.get("audioDurationSec") or payload.get("metadata", {}).get("audio", {}).get("durationSec"),
         0.0,
@@ -8018,8 +8090,10 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "Do not replace core characters with invented ones.\n"
         "Do not contradict provided references.\n"
         "DIRECTOR NOTE CONSTRAINTS:\n"
-        "- The director note may influence tone, lighting, pacing, emotional intensity, and cinematic style.\n"
-        "- The director note MUST NOT change or reinterpret the literal meaning of the audio.\n"
+        "- If effective director note exists (director_controls or payload.text), it is an active directing instruction.\n"
+        "- Director note sets world/story frame bias in music video mode.\n"
+        "- Audio still drives rhythm, segmentation, transitions, and timing.\n"
+        "- Director note must not erase explicit hard facts from audio.\n"
         "STRICT RULES:\n"
         "- Do NOT convert real entities into metaphors.\n"
         "- If the audio mentions military objects (missiles, bunkers, tunnels, doors, satellites, infrastructure), they MUST remain literal and physically present in the scenes.\n"
@@ -8038,9 +8112,9 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "BAD EXAMPLE:\n"
         "- bunker becomes a metaphor for love or emotional connection\n"
         "PRIORITY RULE:\n"
-        "- If there is any conflict between audio content and director note, ALWAYS preserve the literal meaning of the audio.\n"
-        "- The audio is the source of truth.\n"
-        "- The director note is a stylistic modifier only.\n"
+        "- If audio has explicit factual entities/events, keep them intact.\n"
+        "- If director note requests a world/performance framing (e.g. singer in club/stage), allow it to shape world choice.\n"
+        "- Audio remains timing/rhythm driver and phrase alignment source.\n"
         "REAL TIMELINE REQUIREMENTS:\n"
         f"- The audio duration is {audio_duration} seconds.\n"
         "- ALL timestamps (t0, t1) MUST be expressed in REAL seconds of the audio.\n"
@@ -8426,7 +8500,10 @@ def _filter_short_music_intro_scenes(storyboard_out: ScenarioDirectorStoryboardO
     return storyboard_out
 
 
-def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]:
+def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    runtime_payload = payload if isinstance(payload, dict) else {}
+    effective_director_note_text = _resolve_effective_director_note_text(runtime_payload)
+    has_effective_director_note = bool(effective_director_note_text)
     global_story = result.get("globalStory") if isinstance(result.get("globalStory"), dict) else {}
     debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
     transcript_rows = result.get("transcript") if isinstance(result.get("transcript"), list) else []
@@ -8586,19 +8663,23 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
             "resolution_strategy": "",
         },
         "narrative_strategy": {
-            "story_core_source": "audio",
-            "story_frame_source": "source_of_truth",
+            "story_core_source": "director_note" if has_effective_director_note else "audio",
+            "story_frame_source": "director_note" if has_effective_director_note else "source_of_truth",
             "rhythm_source": "audio",
-            "story_frame_source_reason": "single_call_audio_first_no_director_note",
+            "story_frame_source_reason": "single_call_effective_director_note_integrated" if has_effective_director_note else "single_call_audio_first_no_director_note",
             "rhythm_source_reason": "single_call_audio_timeline_drives_pacing",
             "did_audio_remain_primary": True,
-            "did_director_note_override_audio": False,
-            "why": "Audio-first single-call output.",
+            "did_director_note_override_audio": has_effective_director_note,
+            "why": (
+                "Audio-first timing with effective director note driving story frame/world bias."
+                if has_effective_director_note
+                else "Audio-first single-call output."
+            ),
         },
         "story": {
             "title": str(global_story.get("mainTopic") or "").strip(),
             "summary": str(global_story.get("overallNarrative") or "").strip(),
-            "how_director_note_was_integrated": "",
+            "how_director_note_was_integrated": "effective_director_note_story_frame_bias_plus_audio_rhythm_driver" if has_effective_director_note else "",
             "how_romance_exists_inside_audio_world": "",
         },
         "diagnostics": {
@@ -8608,7 +8689,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any]) -> dict[str, Any]
             "biggest_risk": str(debug.get("boundaryLogic") or "").strip(),
             "what_may_be_wrong": str(debug.get("signals") or "").strip(),
             "planner_mode": "full_audio_first",
-            "how_director_note_was_integrated": "",
+            "how_director_note_was_integrated": "effective_director_note_story_frame_bias_plus_audio_rhythm_driver" if has_effective_director_note else "",
         },
         "scenes": legacy_scenes,
     }
@@ -8619,11 +8700,13 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
     prompt = _build_audio_first_single_call_prompt(payload)
     logger.info("[SCENARIO DIRECTOR] sending inline audio to Gemini")
     inline_audio_part = _build_inline_audio_part(audio_context)
+    reference_image_parts = _build_reference_image_parts(payload)
+    request_parts = [{"text": prompt}, *reference_image_parts, inline_audio_part]
     body = {
         "systemInstruction": {
             "parts": [{"text": "Return strict JSON only."}],
         },
-        "contents": [{"role": "user", "parts": [{"text": prompt}, inline_audio_part]}],
+        "contents": [{"role": "user", "parts": request_parts}],
         "generationConfig": {
             "temperature": 0.2,
             "responseMimeType": "application/json",
@@ -8653,7 +8736,7 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
     )
     parsed_single = _scale_audio_first_timeline_if_normalized(parsed_single, audio_duration_sec)
     logger.info("[SCENARIO DIRECTOR] received single-call json keys=%s", list(parsed_single.keys()))
-    legacy_payload = _map_single_call_to_storyboard_out(parsed_single)
+    legacy_payload = _map_single_call_to_storyboard_out(parsed_single, payload=payload)
     logger.info("[SCENARIO DIRECTOR] mapped single-call result to legacy storyboardOut")
     storyboard_out = ScenarioDirectorStoryboardOut.model_validate(legacy_payload)
     hardening_payload = {**payload, "_single_call_payload": parsed_single}
@@ -8780,21 +8863,24 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         audio_guidance=audio_guidance,
         audio_semantics=audio_semantics,
     )
+    reference_image_parts = _build_reference_image_parts(payload)
+    request_parts = [{"text": request_text}, *reference_image_parts]
     body = {
         "systemInstruction": {
             "parts": [
                 {
                     "text": (
                         "You are the production Scenario Director for PhotoStudio COMFY. Return strict JSON only. "
-                        "When sourceMode=AUDIO and sourceOrigin=connected, AUDIO content truth outranks director note/style and must define world/topic/events. "
-                        "Director note is interpretation layer only and must never override clear audio meaning. "
+                        "When sourceMode=AUDIO and sourceOrigin=connected, preserve explicit audio facts/entities/events as truth. "
+                        "If effective director note exists (including payload.text), treat it as active world/story-frame direction in music_video mode. "
+                        "Audio remains rhythm/segmentation/timing driver and should not force world choice when director note requests another performance world. "
                         "If audioDurationSec > 0, timeline must cover full audio from 0.0 to audioDurationSec. "
                         "Every scene must include narration_mode as non-null string (full|duck|pause) and audio usage evidence fields."
                     ),
                 }
             ]
         },
-        "contents": [{"role": "user", "parts": [{"text": request_text}]}],
+        "contents": [{"role": "user", "parts": request_parts}],
         "generationConfig": {
             "temperature": 0.2,
             "responseMimeType": "application/json",
@@ -8828,7 +8914,24 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         retried_for_json = True
         retry_body = {
             **body,
-            "contents": [{"role": "user", "parts": [{"text": _build_request_text(payload, audio_context=audio_context, audio_analysis=audio_analysis, audio_guidance=audio_guidance, audio_semantics=audio_semantics, strict_json_retry=True)}]}],
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": _build_request_text(
+                                payload,
+                                audio_context=audio_context,
+                                audio_analysis=audio_analysis,
+                                audio_guidance=audio_guidance,
+                                audio_semantics=audio_semantics,
+                                strict_json_retry=True,
+                            )
+                        },
+                        *reference_image_parts,
+                    ],
+                }
+            ],
         }
         retry_response, retry_model_used, retry_attempts = _send_director_request(api_key, retry_body)
         attempted_models.extend(model for model in retry_attempts if model not in attempted_models)
@@ -8882,7 +8985,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     )
     controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     prefer_audio_over_text = _coerce_bool(controls.get("preferAudioOverText"), _coerce_bool(audio_context.get("preferAudioOverText"), True))
-    text_hint_present = bool(str(controls.get("directorNote") or "").strip())
+    text_hint_present = bool(_resolve_effective_director_note_text(payload))
     content_type_policy = _get_content_type_policy(payload)
     is_music_video_mode = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
     story_core_source = str(storyboard_out.narrative_strategy.story_core_source or "mixed").strip().lower() or "mixed"
@@ -8938,9 +9041,6 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         fallback_reason = "audio_unusable_or_non_audio_source"
         audio_primary_driver_reason = "text_fallback_only"
-    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
-    director_note_text = str(controls.get("directorNote") or controls.get("director_note") or "").strip()
-    source_text_value = str(payload.get("source_text") or payload.get("sourceText") or "").strip()
     no_text_fallback_mode = "off"
     authorial_interpretation_level = "low" if no_text_fallback_mode == "neutral_audio_literal" else "medium"
     audio_literalness_level = "high" if no_text_fallback_mode == "neutral_audio_literal" else "balanced"
