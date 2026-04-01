@@ -12372,6 +12372,8 @@ onClipSec: (nodeId, value) => {
 
                   const payload = {
                     mode: "oneshot",
+                    directGeminiStoryboardMode: true,
+                    direct_gemini_storyboard_mode: true,
                     audioUrl: audioUrl || "",
                     text: textValue || "",
                     refsByRole: {
@@ -14680,6 +14682,8 @@ onClipSec: (nodeId, value) => {
                 const rawPayload = {
                   mode: freshDerived.modeValue,
                   plannerMode,
+                  directGeminiStoryboardMode: plannerMode === "gemini_only",
+                  direct_gemini_storyboard_mode: plannerMode === "gemini_only",
                   inputMode,
                   projectMode: "narration_first",
                   output: freshDerived.outputValue,

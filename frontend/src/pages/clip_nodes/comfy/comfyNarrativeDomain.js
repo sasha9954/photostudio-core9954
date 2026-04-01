@@ -686,6 +686,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     : "9:16";
 
   const payload = {
+    directGeminiStoryboardMode: true,
+    direct_gemini_storyboard_mode: true,
     source: {
       source_mode: normalizeNarrativeSourceMode(resolvedSource.mode),
       source_value: sourceValue,
@@ -721,6 +723,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     metadata: {
       sourcePreview: normalizeText(resolvedSource.preview) || sourceValue,
       sourceLabel: normalizeText(resolvedSource.sourceLabel) || normalizeText(resolvedSource.label),
+      directGeminiStoryboardMode: true,
+      direct_gemini_storyboard_mode: true,
       fileOrLinkMeta: connectedInputs?.video_file_in?.meta || connectedInputs?.video_link_in?.meta || connectedInputs?.audio_in?.meta || {},
       roleTypeByRole,
       audio: {

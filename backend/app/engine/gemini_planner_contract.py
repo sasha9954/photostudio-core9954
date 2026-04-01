@@ -323,6 +323,8 @@ def build_gemini_planner_input(
         story_mission_summary=_clean_str(normalized.get("storyMissionSummary")) or None,
         planner_rules=project_input.planner_rules,
         planner_overrides=project_input.planner_overrides,
+        direct_gemini_storyboard_mode=bool(normalized.get("direct_gemini_storyboard_mode") or normalized.get("directGeminiStoryboardMode")),
+        directGeminiStoryboardMode=bool(normalized.get("direct_gemini_storyboard_mode") or normalized.get("directGeminiStoryboardMode")),
         production_canon=canon_rules,
         story_context=story_context or {},
         world_lock=world_lock or {},

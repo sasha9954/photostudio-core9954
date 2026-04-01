@@ -72,6 +72,8 @@ class ClipComfyPlanIn(BaseModel):
     audioSemanticSummary: str = ""
     plannerRules: dict[str, Any] = Field(default_factory=dict)
     plannerOverrides: dict[str, Any] = Field(default_factory=dict)
+    directGeminiStoryboardMode: bool | None = None
+    direct_gemini_storyboard_mode: bool | None = None
 
     @field_validator("audioStoryMode", mode="before")
     @classmethod
@@ -166,6 +168,8 @@ class ScenarioDirectorGenerateIn(BaseModel):
     selectedLocationRefUrl: str = ""
     selectedPropsRefUrls: list[str] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
+    directGeminiStoryboardMode: bool | None = None
+    direct_gemini_storyboard_mode: bool | None = None
 
 
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
@@ -184,6 +188,19 @@ def _flag_enabled(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_direct_gemini_storyboard_mode(payload: dict[str, Any] | None = None, *, default: bool = False) -> bool:
+    env_enabled = _flag_enabled(os.getenv("DIRECT_GEMINI_STORYBOARD_MODE"), default=default)
+    payload_map = payload if isinstance(payload, dict) else {}
+    for key in ("direct_gemini_storyboard_mode", "directGeminiStoryboardMode"):
+        if key in payload_map and payload_map.get(key) is not None:
+            return _flag_enabled(payload_map.get(key), default=env_enabled)
+    metadata = payload_map.get("metadata") if isinstance(payload_map.get("metadata"), dict) else {}
+    for key in ("direct_gemini_storyboard_mode", "directGeminiStoryboardMode"):
+        if key in metadata and metadata.get(key) is not None:
+            return _flag_enabled(metadata.get(key), default=env_enabled)
+    return env_enabled
 
 
 def _should_use_scenario_director_fixture(req: dict[str, Any], *, reason: str = "") -> bool:
@@ -580,12 +597,22 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
         bool(req.get("audioSemanticHints")),
         bool(req.get("audioSemanticSummary")),
     )
+    direct_mode_enabled = _resolve_direct_gemini_storyboard_mode(req, default=False)
+    req["directGeminiStoryboardMode"] = direct_mode_enabled
+    req["direct_gemini_storyboard_mode"] = direct_mode_enabled
     return run_comfy_plan(req)
 
 
 @router.post("/clip/comfy/scenario-director/generate")
 async def clip_comfy_scenario_director_generate(payload: ScenarioDirectorGenerateIn) -> dict[str, Any]:
     req = payload.model_dump(mode="json")
+    direct_mode_enabled = _resolve_direct_gemini_storyboard_mode(req, default=False)
+    req["directGeminiStoryboardMode"] = direct_mode_enabled
+    req["direct_gemini_storyboard_mode"] = direct_mode_enabled
+    req.setdefault("metadata", {})
+    if isinstance(req.get("metadata"), dict):
+        req["metadata"]["directGeminiStoryboardMode"] = direct_mode_enabled
+        req["metadata"]["direct_gemini_storyboard_mode"] = direct_mode_enabled
     if not isinstance(req.get("source"), dict):
         source_mode = "audio" if str(req.get("audioUrl") or "").strip() else "audio"
         req["source"] = {

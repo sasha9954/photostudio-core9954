@@ -54,8 +54,6 @@ function sceneBadges(scene = {}) {
   if (finalRoute === "lip_sync_music") badges.push("lip_sync_music");
   else if (finalRoute === "f_l") badges.push("first_last");
   else badges.push("i2v");
-  const isLipSyncScene = finalRoute === "lip_sync_music" || Boolean(scene?.isLipSync ?? scene?.lipSync);
-  if (isLipSyncScene && finalRoute !== "lip_sync_music") badges.push("lip_sync_music");
   const warnings = Array.isArray(scene?.contractWarnings) ? scene.contractWarnings : [];
   if (warnings.length) badges.push(`warnings:${warnings.length}`);
   return badges;

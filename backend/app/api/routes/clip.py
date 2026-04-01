@@ -48,6 +48,22 @@ def _flag_enabled(name: str, default: bool = False) -> bool:
         return default
     return raw in {"1", "true", "yes", "on"}
 
+
+def _resolve_direct_gemini_storyboard_mode_from_payload(payload: Any, *, default: bool = False) -> bool:
+    env_enabled = _flag_enabled("DIRECT_GEMINI_STORYBOARD_MODE", default)
+    if payload is None:
+        return env_enabled
+    payload_map = payload if isinstance(payload, dict) else (
+        payload.model_dump(mode="json") if hasattr(payload, "model_dump") else {}
+    )
+    if not isinstance(payload_map, dict):
+        return env_enabled
+    for key in ("direct_gemini_storyboard_mode", "directGeminiStoryboardMode"):
+        if key in payload_map and payload_map.get(key) is not None:
+            raw = str(payload_map.get(key)).strip().lower()
+            return raw in {"1", "true", "yes", "on"}
+    return env_enabled
+
 class ClipImageIn(BaseModel):
     sceneId: str
     prompt: str | None = None
@@ -3988,6 +4004,8 @@ class BrainIn(BaseModel):
     audioType: str | None = None     # "song" | "bg"
     textType: str | None = None      # "lyrics" | "story" | "notes"
     wantLipSync: bool | None = None
+    directGeminiStoryboardMode: bool | None = None
+    direct_gemini_storyboard_mode: bool | None = None
 
 
 def _build_session_world_anchors(*, text: str, character_refs: list[str], location_refs: list[str], style_refs: list[str], style_key: str) -> dict[str, str]:
@@ -5552,7 +5570,7 @@ def clip_plan(payload: BrainIn):
     """Gemini-first clip planner: Gemini analyzes audio/text/refs and returns strict JSON storyboard."""
     text = (payload.text or "").strip()
     mode = (getattr(payload, "mode", None) or payload.scenarioKey or "clip").strip().lower() or "clip"
-    direct_gemini_storyboard_mode = _flag_enabled("DIRECT_GEMINI_STORYBOARD_MODE", False)
+    direct_gemini_storyboard_mode = _resolve_direct_gemini_storyboard_mode_from_payload(payload, default=False)
 
     duration, audio_bytes, audio_mime, audio_debug = _load_audio_for_planner(payload.audioUrl)
 

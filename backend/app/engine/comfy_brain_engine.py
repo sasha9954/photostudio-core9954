@@ -490,6 +490,13 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     role_selection_source_by_role = _build_role_selection_source_by_role(refs_by_role, role_type_by_role)
     role_mode, role_mode_reason = _derive_role_mode(role_type_by_role, role_selection_source_by_role)
     role_dominance_mode, role_dominance_mode_reason, role_dominance_applied = _derive_role_dominance_mode(data, role_mode)
+    direct_mode_raw = data.get("direct_gemini_storyboard_mode")
+    if direct_mode_raw is None:
+        direct_mode_raw = data.get("directGeminiStoryboardMode")
+    if isinstance(direct_mode_raw, bool):
+        direct_mode_enabled = direct_mode_raw
+    else:
+        direct_mode_enabled = str(direct_mode_raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
     return {
         "mode": mode,
@@ -530,6 +537,8 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "plannerRules": data.get("plannerRules") if isinstance(data.get("plannerRules"), dict) else {},
         "plannerOverrides": data.get("plannerOverrides") if isinstance(data.get("plannerOverrides"), dict) else {},
         "sceneCandidates": data.get("sceneCandidates") if isinstance(data.get("sceneCandidates"), list) else (data.get("scenes") if isinstance(data.get("scenes"), list) else []),
+        "direct_gemini_storyboard_mode": direct_mode_enabled,
+        "directGeminiStoryboardMode": direct_mode_enabled,
     }
 
 
