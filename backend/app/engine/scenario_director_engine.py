@@ -662,7 +662,7 @@ class ScenarioDirectorScene(BaseModel):
         self.visual_intensity_level = str(self.visual_intensity_level or "").strip()
         self.crowd_relation_state = str(self.crowd_relation_state or "").strip()
         self.performance_phase = str(self.performance_phase or "").strip()
-        self.lip_sync = _coerce_bool(self.lip_sync, self.ltx_mode == "lip_sync")
+        self.lip_sync = _coerce_bool(self.lip_sync, self.ltx_mode in {"lip_sync", "lip_sync_music"})
         self.lip_sync_text = str(self.lip_sync_text or "").strip()
         self.send_audio_to_generator = _coerce_bool(self.send_audio_to_generator, False)
         self.audio_slice_kind = str(self.audio_slice_kind or "").strip().lower()
@@ -943,10 +943,8 @@ def _normalize_start_frame_source(value: Any, *, continuation: bool = False) -> 
 
 def _normalize_ltx_mode(value: Any, *, continuation: bool, needs_two_frames: bool, narration_mode: str) -> str:
     clean = str(value or "").strip()
-    if clean == "lip_sync_music":
-        clean = "lip_sync"
     if clean in ALLOWED_LTX_MODES:
-        if clean == "lip_sync" and not _is_music_vocal_mode(narration_mode):
+        if clean in {"lip_sync", "lip_sync_music"} and not _is_music_vocal_mode(narration_mode):
             return "i2v_as"
         return clean
     if continuation:
@@ -958,7 +956,7 @@ def _normalize_ltx_mode(value: Any, *, continuation: bool, needs_two_frames: boo
 
 def _normalize_ltx_reason(reason: str, ltx_mode: str, *, narration_mode: str) -> str:
     if reason:
-        if ltx_mode == "lip_sync" and not _is_music_vocal_mode(narration_mode):
+        if ltx_mode in {"lip_sync", "lip_sync_music"} and not _is_music_vocal_mode(narration_mode):
             return f"{reason}; normalized from lip_sync because narration is not music-vocal driven"
         return reason
     defaults = {
@@ -968,6 +966,7 @@ def _normalize_ltx_reason(reason: str, ltx_mode: str, *, narration_mode: str) ->
         "f_l_as": "Audio-accented A-to-B transition that requires two frames.",
         "continuation": "Direct continuation of the previous shot.",
         "lip_sync": "Music-vocal rhythm shot with visible articulation support.",
+        "lip_sync_music": "Music-vocal rhythm shot with visible articulation support.",
     }
     return defaults.get(ltx_mode, "Production render mode selected by Scenario Director.")
 
@@ -3308,7 +3307,7 @@ def _limit_lip_sync_usage(
     lip_sync_cap = 2 if is_music_video and 25.0 <= duration <= 35.0 else 3
     lip_sync_seen = 0
     for scene in storyboard_out.scenes:
-        if scene.ltx_mode != "lip_sync":
+        if scene.ltx_mode not in {"lip_sync", "lip_sync_music"}:
             continue
         lip_sync_seen += 1
         if lip_sync_seen <= lip_sync_cap:
@@ -5482,7 +5481,7 @@ def _apply_scene_route(scene: ScenarioDirectorScene, *, route: str, reason: str)
     if route == "lip_sync_music":
         scene.render_mode = "lip_sync_music"
         scene.needs_two_frames = False
-        scene.ltx_mode = "lip_sync"
+        scene.ltx_mode = "lip_sync_music"
         scene.lip_sync = True
         scene.send_audio_to_generator = True
         scene.video_downgrade_reason_code = ""
@@ -5874,7 +5873,7 @@ def _apply_music_video_mode_policy(
         if lip_sync_candidate and not forced_transition_scene:
             render_mode = "lip_sync_music"
             resolved_workflow = str(content_type_policy.get("clipWorkflowLipSync") or "image-lipsink-video-music")
-            ltx_mode = "lip_sync"
+            ltx_mode = "lip_sync_music"
             lip_sync = True
             send_audio_to_generator = True
             performance_framing = "face_close" if performance_framing == "" else performance_framing
@@ -6449,7 +6448,7 @@ def _rebalance_ltx_modes(storyboard_out: ScenarioDirectorStoryboardOut) -> Scena
         original_mode = scene.ltx_mode
         target_mode = original_mode
         correction_reason = ""
-        if original_mode == "lip_sync" and not _is_music_vocal_mode(scene.narration_mode):
+        if original_mode in {"lip_sync", "lip_sync_music"} and not _is_music_vocal_mode(scene.narration_mode):
             target_mode = "i2v_as"
             correction_reason = "visible articulation is unsupported by narration mode"
         elif original_mode == "continuation":
