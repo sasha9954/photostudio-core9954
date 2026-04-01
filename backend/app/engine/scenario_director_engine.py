@@ -3644,7 +3644,17 @@ def _scene_has_lip_sync_signal(scene: ScenarioDirectorScene) -> bool:
             scene.frame_description or "",
         ]
     ).lower()
-    return any(token in text for token in ("lyric", "vocal", "chorus", "sing", "verse", "hook line", "line"))
+    lip_sync_signal_patterns = (
+        r"\blip[\s\-]?sync(?:ing)?\b",
+        r"\blyric(?:s|al)?\b",
+        r"\bvocal(?:s| delivery| performance)?\b",
+        r"\bchorus\b",
+        r"\bverse\b",
+        r"\bsing(?:s|ing|er)?\b",
+        r"\bsinging to camera\b",
+        r"\bvisible lyric delivery\b",
+    )
+    return any(re.search(pattern, text) for pattern in lip_sync_signal_patterns)
 
 
 def _evaluate_lipsync_mouth_visibility(scene: ScenarioDirectorScene) -> tuple[bool, str]:
@@ -3660,11 +3670,13 @@ def _evaluate_lipsync_mouth_visibility(scene: ScenarioDirectorScene) -> tuple[bo
         ]
     ).lower()
     distant_shots = {"wide", "extreme_wide", "full_body", "aerial"}
-    close_shots = {"close_up", "portrait", "medium"}
-    close_framings = {"face_close", "close_performance", "tight_medium", "medium_close", "chest_up", "shoulder_up"}
+    close_shots = {"close_up", "portrait", "medium_close", "chest_up", "shoulder_up", "face_close"}
+    close_framings = {"face_close", "close_performance", "medium_close", "chest_up", "shoulder_up"}
+    fallback_framings = {"tight_medium"}
     blocked_visibility_tokens = (
         "silhouette",
         "back view",
+        "back-to-camera",
         "turned away",
         "profile only",
         "mouth hidden",
@@ -3673,26 +3685,50 @@ def _evaluate_lipsync_mouth_visibility(scene: ScenarioDirectorScene) -> tuple[bo
         "hand over mouth",
         "mic covering mouth",
     )
-    if shot in distant_shots:
-        return False, f"distant_primary_shot:{shot}"
-    if shot not in close_shots and framing not in close_framings:
-        return False, "framing_not_close_enough_for_mouth_readability"
+    readability_tokens = (
+        "visible mouth",
+        "mouth clearly visible",
+        "readable mouth",
+        "readable facial articulation",
+        "clear lyric articulation",
+        "visible lyric delivery",
+    )
+    if shot in distant_shots or framing in {"wide_performance", "non_performance"}:
+        return False, "framing_too_wide"
+    if shot not in close_shots and framing not in close_framings and framing not in fallback_framings:
+        return False, "framing_too_wide"
+    if framing in fallback_framings and not any(token in frame_text for token in readability_tokens):
+        return False, "framing_too_wide"
     if any(token in camera_text or token in frame_text for token in blocked_visibility_tokens):
-        return False, "mouth_visibility_blocked_by_pose_or_occlusion"
+        return False, "mouth_occluded"
     if "profile" in camera_text and "3/4" not in camera_text and "three-quarter" not in camera_text:
-        return False, "extreme_profile_reduces_mouth_readability"
+        return False, "profile_too_strong"
     return True, "mouth_visibility_clear_for_lipsync"
 
 
 def _force_lipsync_friendly_composition(scene: ScenarioDirectorScene) -> None:
-    scene.shot_type = "medium"
-    scene.performance_framing = "tight_medium"
+    scene.shot_type = "close_up"
+    scene.performance_framing = "face_close"
     if not str(scene.scene_purpose or "").strip():
         scene.scene_purpose = "performance"
     scene.camera = _lip_sync_safe_camera_line()
     scene.viewer_hook = (
         "Face/mouth readability is primary: near-frontal or 3/4 angle, chest-up/shoulder-up framing, clear lyric articulation."
     )
+    scene.frame_description = (
+        "Close facial performance frame (face-close/chest-up), near-frontal or gentle 3/4 angle, mouth fully visible and unobstructed."
+    )
+    scene.action_in_frame = (
+        "Performer delivers lyrics directly to camera with readable mouth articulation; no back view, no silhouette, no mouth occlusion."
+    )
+    scene.image_prompt = (
+        "Tight performance portrait, near-frontal or 3/4, clear visible mouth, expressive lip articulation, no hand/mic/hair blocking lips."
+    )
+    scene.video_prompt = (
+        "Maintain close lip-sync framing on performer face, stable near-frontal/3-4 angle, preserve readable mouth articulation throughout."
+    )
+    if not str(scene.scene_goal or "").strip() or "lip-sync" not in str(scene.scene_goal or "").strip().lower():
+        scene.scene_goal = "Lip-sync performance with clearly readable mouth articulation in close framing."
 
 
 def _infer_presentation_from_texts(texts: list[str]) -> str:
@@ -5159,6 +5195,27 @@ def _downgrade_to_environment_establishing_note(scene: ScenarioDirectorScene) ->
     scene.end_frame_prompt = ""
 
 
+def _rollback_lipsync_to_i2v(scene: ScenarioDirectorScene, *, reason: str) -> None:
+    scene.lip_sync = False
+    scene.render_mode = "image_video"
+    scene.ltx_mode = "i2v"
+    scene.send_audio_to_generator = False
+    scene.lip_sync_text = ""
+    scene.music_vocal_lipsync_allowed = False
+    if str(scene.audio_slice_kind or "").strip().lower() == "music_vocal":
+        scene.audio_slice_kind = "voice_only" if str(scene.local_phrase or "").strip() else "none"
+    scene.workflow_decision_reason = reason
+    scene.lip_sync_decision_reason = reason
+    scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("i2v", fallback_key="i2v")
+    _assign_video_route(
+        scene,
+        route="downgraded_to_i2v",
+        planned_route="lip_sync_music",
+        downgrade_code="music_vocal_lipsync_not_allowed",
+        downgrade_message=reason,
+    )
+
+
 def _assign_video_route(
     scene: ScenarioDirectorScene,
     *,
@@ -5966,8 +6023,18 @@ def _apply_music_video_mode_policy(
         scene.shot_type = _normalize_scene_shot_type_from_camera(scene)
         shot_type = str(scene.shot_type or shot_type)
         scene.performance_framing = performance_framing
-        close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
+        close_capable = shot_type not in {"wide", "extreme_wide", "aerial", "full_body", "medium"} and performance_framing not in {
+            "non_performance",
+            "wide_performance",
+        }
         lip_sync_signal = _scene_has_lip_sync_signal(scene)
+        lip_sync_failure_reason = ""
+        if not lip_sync_signal:
+            lip_sync_failure_reason = "signal_missing"
+        elif not _scene_has_human_performer(scene):
+            lip_sync_failure_reason = "performer_not_human"
+        elif not close_capable:
+            lip_sync_failure_reason = "framing_too_wide"
         lip_sync_base_candidate = (
             _scene_has_human_performer(scene)
             and close_capable
@@ -5979,11 +6046,11 @@ def _apply_music_video_mode_policy(
         lip_sync_compatible, lip_sync_compatibility_reason = _is_lipsync_voice_compatible(vocal_presentation, performer_presentation)
         compatibility_reason_code = ""
         if lip_sync_compatibility_reason == "unknown_vocal_presentation":
-            compatibility_reason_code = "lip_sync_voice_presentation_unknown"
+            compatibility_reason_code = "vocal_presentation_unknown"
         elif lip_sync_compatibility_reason == "unknown_performer_presentation":
-            compatibility_reason_code = "lip_sync_performer_presentation_unknown"
+            compatibility_reason_code = "performer_presentation_unknown"
         elif lip_sync_compatibility_reason in {"male_vocal_female_performer_conflict", "female_vocal_male_performer_conflict", "incompatible_presentation"}:
-            compatibility_reason_code = "lip_sync_voice_gender_mismatch"
+            compatibility_reason_code = "gender/presentation_mismatch"
         lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible
         scene.performer_presentation = performer_presentation or "unknown"
         scene.vocal_presentation = vocal_presentation or "unknown"
@@ -6003,12 +6070,17 @@ def _apply_music_video_mode_policy(
         audio_slice_reason = "Audio slice is not required."
 
         lip_sync_mouth_visible, lip_sync_visibility_reason = _evaluate_lipsync_mouth_visibility(scene)
+        forced_lipsync_composition_applied = False
         if lip_sync_base_candidate and not lip_sync_mouth_visible and not forced_transition_scene:
             _force_lipsync_friendly_composition(scene)
+            forced_lipsync_composition_applied = True
             shot_type = str(scene.shot_type or shot_type)
             performance_framing = str(scene.performance_framing or performance_framing)
             lip_sync_mouth_visible, lip_sync_visibility_reason = _evaluate_lipsync_mouth_visibility(scene)
-            close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
+            close_capable = shot_type not in {"wide", "extreme_wide", "aerial", "full_body", "medium"} and performance_framing not in {
+                "non_performance",
+                "wide_performance",
+            }
             lip_sync_base_candidate = lip_sync_base_candidate and close_capable
             lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible and lip_sync_mouth_visible
         else:
@@ -6042,6 +6114,8 @@ def _apply_music_video_mode_policy(
                 f"Local vocal phrase + human close framing detected; compatibility={lip_sync_compatibility_reason}; "
                 f"visibility={lip_sync_visibility_reason}."
             )
+            if forced_lipsync_composition_applied:
+                lip_sync_reason = f"{lip_sync_reason} forced_composition_applied"
             audio_slice_reason = "Slice clamped to scene vocal window (max ~5s) and timeline bounds."
             lip_sync_used += 1
             _assign_video_route(scene, route="lip_sync_music")
@@ -6094,19 +6168,31 @@ def _apply_music_video_mode_policy(
                     downgrade_code=compatibility_reason_code,
                     downgrade_message=f"Lip-sync candidate rejected by compatibility gate: {lip_sync_compatibility_reason}.",
                 )
+        if not lip_sync_base_candidate and lip_sync_failure_reason:
+            lip_sync_reason = f"Lip-sync candidate rejected: {lip_sync_failure_reason}."
         if lip_sync_base_candidate and lip_sync_compatible and not lip_sync_mouth_visible:
             lip_sync_reason = f"Lip-sync candidate rejected: {lip_sync_visibility_reason}."
             _assign_video_route(
                 scene,
                 route="downgraded_to_i2v",
                 planned_route="lip_sync_music",
-                downgrade_code="lip_sync_mouth_visibility_poor",
+                downgrade_code=lip_sync_visibility_reason or "lip_sync_mouth_visibility_poor",
                 downgrade_message=f"Lip-sync candidate rejected due to framing/visibility: {lip_sync_visibility_reason}.",
             )
+            if forced_lipsync_composition_applied:
+                lip_sync_reason = f"{lip_sync_reason} forced_composition_failed"
         if lip_sync_candidate and not scene.music_vocal_lipsync_allowed:
             lip_sync_candidate = False
-            lip_sync_reason = "Lip-sync candidate rejected: audio slice is not marked as music_vocal compatible."
+            lip_sync_reason = "Lip-sync candidate rejected: music_vocal_lipsync_not_allowed."
             workflow_reason = "Downgraded to canonical i2v because scene audio slice is not music+vocal compatible for lip_sync_music."
+            render_mode = "image_video"
+            ltx_mode = "i2v"
+            lip_sync = False
+            send_audio_to_generator = False
+            scene.lip_sync_text = ""
+            scene.music_vocal_lipsync_allowed = False
+            scene.audio_slice_kind = "voice_only" if str(scene.local_phrase or "").strip() else "none"
+            resolved_workflow = str(content_type_policy.get("clipWorkflowDefault") or "i2v")
             _assign_video_route(
                 scene,
                 route="downgraded_to_i2v",
@@ -6295,24 +6381,14 @@ def _apply_music_video_mode_policy(
 
         if scene.render_mode == "lip_sync_music":
             if not scene.music_vocal_lipsync_allowed or scene.audio_slice_kind != "music_vocal":
-                scene.render_mode = "image_video"
-                scene.ltx_mode = "i2v"
-                scene.lip_sync = False
-                scene.send_audio_to_generator = False
-                scene.lip_sync_text = ""
-                scene.lip_sync_decision_reason = "lip_sync_music blocked: audio slice is not music_vocal compatible."
-                scene.workflow_decision_reason = (
-                    f"{scene.workflow_decision_reason} Blocked lip_sync_music because audio_slice_kind={scene.audio_slice_kind or 'none'}."
-                ).strip()
-                scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("i2v", fallback_key="i2v")
-                scene.music_vocal_lipsync_allowed = False
-                scene.audio_slice_kind = scene.audio_slice_kind or "none"
-                _assign_video_route(
+                reason = (
+                    "music_vocal_lipsync_not_allowed"
+                    if not scene.music_vocal_lipsync_allowed
+                    else "audio_slice_not_music_vocal"
+                )
+                _rollback_lipsync_to_i2v(
                     scene,
-                    route="downgraded_to_i2v",
-                    planned_route="lip_sync_music",
-                    downgrade_code="audio_slice_not_music_vocal" if scene.audio_slice_kind != "music_vocal" else "music_vocal_lipsync_not_allowed",
-                    downgrade_message="lip_sync_music blocked because scene audio slice is not music_vocal-compatible.",
+                    reason=f"lip_sync_music blocked: {reason}. scene downgraded_to_i2v with full lip-sync state rollback.",
                 )
                 continue
             _enforce_lip_sync_music_visual_canon(scene)
