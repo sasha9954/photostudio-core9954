@@ -8079,42 +8079,48 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         f"Available character references: {available_refs}\n" if available_refs else "Available character references: none\n"
     )
     return (
-        "You are Scenario Director. AUDIO is the primary source of truth.\n"
-        "Do not invent story that contradicts spoken audio.\n"
-        "Scene timing must follow speech phrases, pauses, and energy shifts.\n"
-        "Every scene must be grounded in spoken content.\n"
-        "Character references are identity anchors.\n"
+        "I am attaching audio and character reference images.\n"
+        "Treat them as real inputs for a premium music-video storyboard request.\n"
+        "Do NOT invent hidden assumptions.\n"
+        "First explain exactly what you infer from the inputs.\n"
+        "Then return storyboard JSON.\n"
+        "Think like a premium music video director: cinematic, stylish, emotionally alive, and shootable.\n"
+        "INPUT PRIORITY:\n"
+        "- Audio is primary for timing, rhythm, phrase alignment, and energy transitions.\n"
+        "- Audio is NOT automatically the literal world-building source in all cases.\n"
+        "- If effective director note exists, treat it as active world/story frame instruction and let it bias world choice.\n"
+        "- Director note can steer toward club/stage/performance framing while audio still drives timing/rhythm.\n"
+        "- If effective director note is empty and no location reference is provided, default to performance-oriented premium world.\n"
+        "WORLD CHOICE DEFAULT (when location is not explicitly fixed):\n"
+        "1) premium studio / loft / infinity cove / controlled architectural space\n"
+        "2) stylized fashion-performance interior\n"
+        "3) elegant night urban performance space\n"
+        "4) abstract environment only if strongly justified by the inputs\n"
+        "DO NOT DEFAULT TO:\n"
+        "- salt plains\n"
+        "- barren desert\n"
+        "- cracked wasteland\n"
+        "- literal symbolic emptiness from lyrics alone\n"
+        "MARINE/DESOLATION WORDS:\n"
+        "- Words like salt, void, shipwreck, naufragare are usually metaphorical.\n"
+        "- Use them as emotional tone, lighting mood, or atmosphere by default.\n"
+        "- Use literal marine/desolation world only if explicitly required by inputs.\n"
+        "CHARACTER IDENTITY LOCK (MANDATORY):\n"
+        "- Character reference is the exact identity source.\n"
+        "- Keep same face, same hair, same body silhouette, same body proportions, same outfit identity, same overall styling.\n"
+        "- Use the same character consistently across all scenes unless user explicitly asks otherwise.\n"
+        "LIP SYNC REQUIREMENTS:\n"
+        "- For ~30 second vocal music clip, lip_sync_music is important.\n"
+        "- Include multiple lip_sync_music scenes.\n"
+        "- Minimum 2 scenes must use route=lip_sync_music when vocals are present.\n"
+        "- Do not output all scenes as i2v by default.\n"
+        "SCENE SEGMENTATION:\n"
+        "- Keep phrase-based segmentation aligned to audio phrases.\n"
+        "- Do not reduce scene count artificially.\n"
+        "- Prefer clip-friendly scene durations (about 2-5.5 sec) when phrase timing allows.\n"
+        "- Use route per scene independently (i2v | lip_sync_music | f_l) based on creative and performance needs.\n"
         "IMPORTANT: use ONLY canonical role ids in planning fields (character_1, character_2, character_3, animal, group, location, style, props).\n"
         "Never put filenames or display labels into actors/participants/roles.\n"
-        "Use provided character references when scenes imply people.\n"
-        "Do not replace core characters with invented ones.\n"
-        "Do not contradict provided references.\n"
-        "DIRECTOR NOTE CONSTRAINTS:\n"
-        "- If effective director note exists (director_controls or payload.text), it is an active directing instruction.\n"
-        "- Director note sets world/story frame bias in music video mode.\n"
-        "- Audio still drives rhythm, segmentation, transitions, and timing.\n"
-        "- Director note must not erase explicit hard facts from audio.\n"
-        "STRICT RULES:\n"
-        "- Do NOT convert real entities into metaphors.\n"
-        "- If the audio mentions military objects (missiles, bunkers, tunnels, doors, satellites, infrastructure), they MUST remain literal and physically present in the scenes.\n"
-        "- Do NOT reinterpret threats, weapons, or infrastructure as emotions, relationships, or symbolic concepts.\n"
-        "- Do NOT replace factual events with abstract or poetic meaning.\n"
-        "ALLOWED:\n"
-        "- You may introduce romantic, poetic, or emotional tone ONLY as visual mood, character behavior, lighting, framing, or atmosphere.\n"
-        "- Emotional interpretation must exist INSIDE the literal world defined by the audio, not instead of it.\n"
-        "MARINE METAPHOR SAFETY:\n"
-        "- Terms like salt / void / shipwreck / oceanic / naufragare may be symbolic unless explicit literal water/sea/boat action is requested.\n"
-        "- Do NOT auto-convert such words into underwater/open-sea/ships/harbor scenes.\n"
-        "- Prefer dry grounded interpretation when literals are not explicit (dry salt plain, crusted shoreline feel, barren open ground).\n"
-        "- If not explicitly required, add constraints: not underwater, not submerged, no boats, no ships, no harbor, no floating subject.\n"
-        "GOOD EXAMPLE:\n"
-        "- dark bunker remains a bunker, but lighting, camera, and character interaction can feel intimate or emotional\n"
-        "BAD EXAMPLE:\n"
-        "- bunker becomes a metaphor for love or emotional connection\n"
-        "PRIORITY RULE:\n"
-        "- If audio has explicit factual entities/events, keep them intact.\n"
-        "- If director note requests a world/performance framing (e.g. singer in club/stage), allow it to shape world choice.\n"
-        "- Audio remains timing/rhythm driver and phrase alignment source.\n"
         "REAL TIMELINE REQUIREMENTS:\n"
         f"- The audio duration is {audio_duration} seconds.\n"
         "- ALL timestamps (t0, t1) MUST be expressed in REAL seconds of the audio.\n"
@@ -8133,11 +8139,46 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- t0: 0.0 → t1: 1.0 for full audio\n"
         "GOOD:\n"
         "- t0: 0.0 → t1: 4.2 → t1: 9.8 → ... → ~60.0\n"
-        "Return strict JSON only.\n"
+        "Return ONLY valid JSON. No markdown. No comments. No prose outside JSON.\n"
         f"Director note: {director_note if director_note else 'empty'}\n"
         f"{references_block}"
         "Output JSON contract:\n"
         "{\n"
+        '  "input_understanding": {\n'
+        '    "audio_visual_read": "",\n'
+        '    "character_identity_read": "",\n'
+        '    "location_specification_level": "fully_specified | partially_specified | unspecified",\n'
+        '    "default_world_choice_if_unspecified": "",\n'
+        '    "marine_words_interpretation": "literal | metaphorical | mixed",\n'
+        '    "planned_scene_types": [],\n'
+        '    "lip_sync_importance": "",\n'
+        '    "identity_lock_importance": "",\n'
+        '    "same_character_across_all_scenes": true,\n'
+        '    "can_choose_routes_independently": true,\n'
+        '    "will_avoid": []\n'
+        "  },\n"
+        '  "storyboard": {\n'
+        '    "story_summary": "",\n'
+        '    "full_scenario": "",\n'
+        '    "voice_script": "",\n'
+        '    "director_summary": "",\n'
+        '    "audio_understanding": {},\n'
+        '    "narrative_strategy": {},\n'
+        '    "diagnostics": {\n'
+        '      "total_duration": 0,\n'
+        '      "scene_count": 0\n'
+        "    },\n"
+        '    "scenes": [\n'
+        "      {\n"
+        '        "scene_id": 1,\n'
+        '        "start_time_sec": 0,\n'
+        '        "end_time_sec": 0,\n'
+        '        "route": "i2v | lip_sync_music | f_l",\n'
+        '        "description": "",\n'
+        '        "content_tags": []\n'
+        "      }\n"
+        "    ]\n"
+        "  },\n"
         '  "transcript": [\n'
         '    { "t0": 0.0, "t1": 0.0, "text": "" }\n'
         "  ],\n"
