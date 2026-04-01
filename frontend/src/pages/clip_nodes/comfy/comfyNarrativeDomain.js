@@ -984,7 +984,7 @@ function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
       resolved_workflow_key: resolvedWorkflowKey,
       video_generation_route: resolvedWorkflowKey,
       planned_video_generation_route: resolvedWorkflowKey,
-      ltx_mode: isLipSync ? "lip_sync" : (needsTwoFrames ? "f_l" : "i2v"),
+      ltx_mode: isLipSync ? resolvedWorkflowKey : (needsTwoFrames ? "f_l" : "i2v"),
       lip_sync: isLipSync,
       send_audio_to_generator: isLipSync,
       music_vocal_lipsync_allowed: isLipSync,
@@ -996,6 +996,8 @@ function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
       identity_lock_fields_used: identityFields,
     };
   });
+  const diagnostics = storyboard?.diagnostics && typeof storyboard.diagnostics === "object" ? { ...storyboard.diagnostics } : {};
+  diagnostics.gemini_input_understanding = inputUnderstanding;
   return {
     story_summary: normalizeText(storyboard?.story_summary),
     full_scenario: normalizeText(storyboard?.full_scenario),
@@ -1003,7 +1005,7 @@ function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
     director_summary: normalizeText(storyboard?.director_summary),
     audio_understanding: storyboard?.audio_understanding && typeof storyboard.audio_understanding === "object" ? storyboard.audio_understanding : {},
     narrative_strategy: storyboard?.narrative_strategy && typeof storyboard.narrative_strategy === "object" ? storyboard.narrative_strategy : {},
-    diagnostics: storyboard?.diagnostics && typeof storyboard.diagnostics === "object" ? storyboard.diagnostics : {},
+    diagnostics,
     scenes,
   };
 }

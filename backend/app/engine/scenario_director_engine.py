@@ -25,7 +25,7 @@ from app.engine.audio_analyzer import (
 from app.engine.gemini_rest import post_generate_content
 
 ALLOWED_SOURCE_MODES = {"audio", "video_file", "video_link"}
-ALLOWED_LTX_MODES = {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync"}
+ALLOWED_LTX_MODES = {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync", "lip_sync_music"}
 ALLOWED_NARRATION_MODES = {"full", "duck", "pause"}
 ALLOWED_EXPLICIT_ROLE_TYPES = {"hero", "support", "antagonist", "auto"}
 DEFAULT_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
@@ -943,6 +943,8 @@ def _normalize_start_frame_source(value: Any, *, continuation: bool = False) -> 
 
 def _normalize_ltx_mode(value: Any, *, continuation: bool, needs_two_frames: bool, narration_mode: str) -> str:
     clean = str(value or "").strip()
+    if clean == "lip_sync_music":
+        clean = "lip_sync"
     if clean in ALLOWED_LTX_MODES:
         if clean == "lip_sync" and not _is_music_vocal_mode(narration_mode):
             return "i2v_as"
@@ -1325,7 +1327,7 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
                     "resolved_workflow_key": route,
                     "video_generation_route": route,
                     "planned_video_generation_route": route,
-                    "ltx_mode": "lip_sync" if is_lip_sync else ("f_l" if needs_two_frames else "i2v"),
+                    "ltx_mode": route if is_lip_sync else ("f_l" if needs_two_frames else "i2v"),
                     "needs_two_frames": needs_two_frames,
                     "lip_sync": is_lip_sync,
                     "send_audio_to_generator": is_lip_sync,
@@ -1341,6 +1343,8 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
             )
 
         diagnostics = storyboard.get("diagnostics") if isinstance(storyboard.get("diagnostics"), dict) else {}
+        diagnostics = dict(diagnostics)
+        diagnostics.setdefault("gemini_input_understanding", input_understanding)
         return {
             "story_summary": str(storyboard.get("story_summary") or "").strip(),
             "full_scenario": str(storyboard.get("full_scenario") or "").strip(),
@@ -4974,7 +4978,7 @@ def _scene_has_character_subject(scene: ScenarioDirectorScene) -> bool:
 
 
 def _scene_is_renderable_ltx_mode(scene: ScenarioDirectorScene) -> bool:
-    return str(scene.ltx_mode or "").strip().lower() in {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync"}
+    return str(scene.ltx_mode or "").strip().lower() in {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync", "lip_sync_music"}
 
 
 def _is_environment_only_scene_contract(scene: ScenarioDirectorScene) -> bool:
@@ -7840,282 +7844,6 @@ def _build_request_text(
         f"Raw inputs: {json.dumps(runtime_payload, ensure_ascii=False)}"
         f"{retry_suffix}"
     )
-    source_hierarchy_policy = (
-        (
-            "SOURCE HIERARCHY (music_video, DIRECTOR-NOTE STORY CORE):\n"
-            "1) STORY_FRAME_TRUTH: director note defines concept/setting/scenario bias and narrative frame.\n"
-            "2) AUDIO_TIMELINE_TRUTH: audio defines rhythm, emotion, scene timing, energy progression, and transition timing.\n"
-            "3) CHARACTER_REFS: character refs are cast anchors; location/style/props refs are world anchors.\n"
-            "4) STYLE_TREATMENT: visual treatment enriches, but does not replace explicit refs.\n"
-            "CONFLICT POLICY (music_video, DIRECTOR-NOTE STORY CORE):\n"
-            "- Do NOT force audio semantics to replace director note story topic when storyCoreSource=director_note.\n"
-            "- Audio MUST still drive pacing, rhythmic accents, emotional contour, and cut timing.\n"
-            "- Director note must NOT replace explicit refs (cast/world anchors).\n"
-            "- Never use audio as mood-only; use audio timing and emotional dynamics in every scene.\n"
-            "AUDIO + STORY COUPLING RULE:\n"
-            "- Keep narrative frame from director note while proving concrete audio usage via boundaries and timing evidence.\n"
-            "- audio timing signals define boundaries; audio dynamics define progression.\n"
-            "FORBIDDEN:\n"
-            "- Replacing explicit refs with text-invented cast/world.\n"
-            "- Ignoring audio timing or transition cues.\n"
-            "- Treating director note as permission to detach scenes from the track rhythm.\n"
-        )
-        if is_music_video_mode and story_core_source == "director_note"
-        else (
-            "SOURCE HIERARCHY (music_video, AUDIO STORY CORE):\n"
-            "1) AUDIO_CONTENT_TRUTH: source/audio semantics define story subject, world facts, implied events/context.\n"
-            "2) AUDIO_TIMELINE_TRUTH: audio defines timing anchors (phrases, pauses, energy transitions, sections).\n"
-            "3) CHARACTER_REFS: character refs are cast anchors; location/style/props refs are world anchors.\n"
-            "4) DIRECTOR_NOTE_INTERPRETATION: enriches framing/tone but must not replace explicit refs.\n"
-            "CONFLICT POLICY (music_video, AUDIO STORY CORE):\n"
-            "- If audio semantics and director note conflict, keep narrative core from source/audio semantics.\n"
-            "- Director note can tune cinematic treatment and emotional layer inside that source-defined frame.\n"
-            "- Never replace a clear audio/source topic with unrelated narrative.\n"
-            "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate.\n"
-            "AUDIO CONTENT TRUTH RULE:\n"
-            "- If audioSemantics.ok=true and audioSemantics.semanticSummary/worldContext/narrativeCore are present, they define story subject, world facts, and implied events.\n"
-            "- audio timing signals define boundaries; audio semantics define meaning.\n"
-            "FORBIDDEN:\n"
-            "- unrelated meet-cute/bar/date story when audio/source defines another world.\n"
-            "- inventing unrelated world/location while clear audio/source world exists.\n"
-            "- replacing explicit refs with text-invented cast/world.\n"
-        )
-        if is_music_video_mode
-        else (
-            "SOURCE HIERARCHY (HARD, AUDIO MODE ONLY):\n"
-            "1) AUDIO_CONTENT_TRUTH: defines story subject, world facts, implied events/context.\n"
-            "2) AUDIO_TIMELINE_TRUTH: defines timing anchors (phrases, pauses, energy transitions, sections).\n"
-            "3) DIRECTOR_NOTE_INTERPRETATION: emotional/relational lens only; never a content override.\n"
-            "4) STYLE_TREATMENT: visual treatment only; does not define world facts.\n"
-            "5) CHARACTER_REFS: who appears and role dynamics; does not replace audio world.\n"
-            "CONFLICT POLICY (HARD):\n"
-            "- If AUDIO meaning conflicts with DIRECTOR NOTE, preserve AUDIO meaning/world/events and reinterpret DIRECTOR NOTE inside that world.\n"
-            "- Never replace a clear audio topic with generic romance or unrelated locations.\n"
-            "- Never use audio as mood-only when audio already provides world/content facts.\n"
-            "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate.\n"
-            "AUDIO CONTENT TRUTH RULE:\n"
-            "- If audioSemantics.ok=true and audioSemantics.semanticSummary/worldContext/narrativeCore are present, they define the story subject, world facts, and implied events.\n"
-            "- Director note may only reinterpret emotional/relationship dynamics inside that audio-defined world.\n"
-            "- Director note must NOT replace audioSemantics topic/world.\n"
-            "- audio timing signals define boundaries; audio semantics define meaning.\n"
-            "FORBIDDEN:\n"
-            "- director note as main subject when audio has stronger subject matter.\n"
-            "- unrelated meet-cute/bar/date story when audio defines another world.\n"
-            "- inventing unrelated world/location while clear audio world exists.\n"
-        )
-    )
-    planner_modes_policy = (
-        (
-            "PLANNER MODES:\n"
-            "- full_audio_first: audio meaning understood + usable timeline signals.\n"
-            "- partial_audio_first: audio meaning partial while timing remains primary.\n"
-            "- text_fallback: only when audio truth is unavailable/unusable.\n"
-            "- For music_video with storyCoreSource=director_note, director note sets story frame; audio remains mandatory for rhythm/emotion/pacing.\n"
-        )
-        if is_music_video_mode and story_core_source == "director_note"
-        else (
-            "PLANNER MODES:\n"
-            "- full_audio_first: audio meaning understood + usable timeline signals.\n"
-            "- partial_audio_first: audio meaning partial but still primary world/content anchor.\n"
-            "- text_fallback: only when audio truth is unavailable/unusable.\n"
-            "- For music_video with storyCoreSource=source_of_truth, audio semantics may define narrative core/topic/world.\n"
-        )
-        if is_music_video_mode
-        else (
-            "PLANNER MODES:\n"
-            "- full_audio_first: audio meaning understood + usable timeline signals.\n"
-            "- partial_audio_first: audio meaning partial but still primary world/content anchor.\n"
-            "- text_fallback: only when audio truth is unavailable/unusable.\n"
-            "- If audio world/topic is clear, director note must not capture story core even in partial mode.\n"
-        )
-    )
-    request_text = (
-        "You are Scenario Director for PhotoStudio COMFY.\n"
-        "Gemini is the planning brain. Do not delegate planning to heuristics.\n"
-        "Return a single JSON object only. No markdown, no commentary.\n"
-        "The storyboard_out must be production-usable for downstream Storyboard execution.\n"
-        f"{mode_source_policy}"
-        f"{source_hierarchy_policy}"
-        "TWO-STAGE OUTPUT LOGIC (SINGLE JSON):\n"
-        "- First fill truth analysis blocks: audioUnderstanding -> conflictAnalysis -> narrativeStrategy.\n"
-        "- Then produce story, scenes, diagnostics.\n"
-        "- Every scene MUST prove audio usage with whatFromAudioThisSceneUses + audioAnchorEvidence + boundaryReason.\n"
-        "MUST-USE SELF-CHECKS (REQUIRED IN OUTPUT):\n"
-        "- narrativeStrategy.didAudioRemainPrimary\n"
-        "- narrativeStrategy.didDirectorNoteOverrideAudio\n"
-        "- audioUnderstanding.whatFromAudioDefinesWorld\n"
-        "- story.howDirectorNoteWasIntegrated\n"
-        "- diagnostics.usedAudioAsContentSource\n"
-        "- diagnostics.usedAudioOnlyAsMood\n"
-        "- scenes[*].directorGenreIntent / directorGenreReason / directorToneBias\n"
-        "- diagnostics.noTextFallbackMode / diagnostics.authorialInterpretationLevel / diagnostics.audioLiteralnessLevel\n"
-        "GENRE INTENT RULE:\n"
-        f"- inferred directorGenreIntent={global_genre_intent.get('directorGenreIntent')} (reason={global_genre_intent.get('directorGenreReason')}, toneBias={global_genre_intent.get('directorToneBias')}).\n"
-        "- Distinguish horror_dread vs tragic_social_drama vs neutral_drama explicitly.\n"
-        "- If director note contains horror/страшная/жуткая/ужасная/dread/terror markers, keep horror_dread intent; do not flatten to social drama.\n"
-        "NO-TEXT FALLBACK POLICY:\n"
-        f"- noTextFallbackMode={no_text_fallback_mode}; authorialInterpretationLevel={authorial_interpretation_level}; audioLiteralnessLevel={audio_literalness_level}.\n"
-        "- With empty director note, stay neutral and audio-literal: prioritize observable action/emotion over philosophical reinterpretation.\n"
-        f"{planner_modes_policy}"
-        "TEXT-ONLY DEGRADE:\n"
-        "- If sourceMode is not AUDIO or audio unavailable, use normal text-led planning and set diagnostics/plannerMode accordingly.\n"
-        "AUDIO-FIRST SEGMENTATION:\n"
-        "- Do not build evenly spaced scenes when audio analysis exists.\n"
-        "- Align boundaries to phrase endings first, pause windows second, then section/energy transitions.\n"
-        "ANTI-FAKE AUDIO USAGE RULES:\n"
-        "- whatFromAudioThisSceneUses MUST reference concrete elements (places, objects, events, actions).\n"
-        "- Forbidden: vague words like 'mood', 'tension', 'feeling' without concrete audio-derived detail.\n"
-        "- audioAnchorEvidence MUST reference either phrase meaning, pause, section, or a specific event described in audio.\n"
-        "- If unsure, mark boundaryReason='fallback' and reduce confidence.\n"
-        "ANTI-DRIFT LOCKS:\n"
-        "- Preserve the exact count of core characters implied by the source and refs.\n"
-        "- If two connected refs imply two women, keep two women unless the user explicitly changes that.\n"
-        "- If castIdentityLocked=true in runtime payload, NEVER rewrite locked role presentation or pairing type.\n"
-        "- Do not collapse connected characters into generic operative/target/action archetypes.\n"
-        "- Preserve relationship tension, emotional roles, gender presentation, and visual identity anchors from the refs.\n"
-        "- Identity lock must include body morphology consistency, not only face/hair/clothes: keep body proportions, silhouette, shoulder width, waist-to-hip ratio, torso shape, arm/leg thickness, and perceived body volume/build stable across scenes.\n"
-        "- Add explicit no-drift constraints in scene contracts when humans are present: no body shape drift, no silhouette drift, no anatomy volume drift, no subject proportion change, no perceived weight change.\n"
-        "- Preserve implied genre: horror, claustrophobic tension, industrial dread, surreal unease, emotional darkness, intimacy, mystery.\n"
-        "- Do not flatten unique tone into generic espionage thriller or safe corporate cinematic filler.\n"
-        "- Preserve the environment identity from the source or refs: bunker, abyss, industrial shaft, abandoned corridor, concrete hall, strange facility, ritual room, flooded station, etc.\n"
-        "- Marine-poetic words (salt, void, shipwreck, oceanic, naufragare) are symbolic atmosphere by default unless scene explicitly requires literal water/sea/boats.\n"
-        "- Do not auto-insert underwater/open-sea/boats/ships/harbor visuals from poetic wording alone.\n"
-        "- When marine wording is metaphorical, ground the scene as dry solid terrain (e.g., dry salt flats / crusted shoreline feel / barren open ground), not submersion.\n"
-        "- For non-literal marine scenes include negative constraints: not underwater, not submerged, no standing in water, no boats, no ships, no harbor, no unexpected marine props.\n"
-        "SHORT-FORM DIRECTING RULES:\n"
-        "- Think like a premium short-film director + trailer editor + music-video storyboard artist.\n"
-        "- The first 1-3 seconds must hook immediately with a specific image, not vague mood text.\n"
-        "- Every scene must contain a specific image idea, a physical action, camera intent, and dramatic purpose.\n"
-        "- Every scene must either reveal, intensify, transform, or leave a memorable afterimage.\n"
-        "- Prefer fewer strong scenes over many weak scenes.\n"
-        "- Build escalation: hook -> entry/destabilization -> reveal/complication -> escalation -> peak image/emotional climax -> final image that stays in memory.\n"
-        "- Avoid safe filler and generic thriller language; convert vague mood text into concrete story-specific visuals.\n"
-        "- Preserve horror, intimacy, dread, surreal industrial tension, or other source-implied genre DNA.\n"
-        "- Use the environment as an active dramatic force, not passive background.\n"
-        "- Do not flatten unique story DNA into generic content.\n"
-        "- If connected refs imply two key characters, build interplay, contrast, and relationship energy across the scenario.\n"
-        "TIMING RULES:\n"
-        "- Do not force evenly sliced 5-second blocks.\n"
-        "- For music_video / clip mode: keep phrase-first cadence dense; typical useful scene duration is about 2.0-5.5 seconds.\n"
-        "- Do not merge adjacent lyrical phrases into one scene unless they are semantically identical and continuity demands a single beat.\n"
-        "- If neighboring phrases express different meaning, keep separate scenes.\n"
-        "- Let timing breathe and follow emotional rhythm.\n"
-        "- For longer videos, vary rhythm like short / short / medium / short / medium / peak / final hold.\n"
-        "LTX MODE RULES:\n"
-        "- i2v: strong single-image motion.\n"
-        "- i2v_as: audio-sensitive motion, environmental pulsing, breathing tension, subtle rhythm response, but no literal speech articulation.\n"
-        "- f_l: controlled A-to-B reveal, door opening, object transformation, pose shift, environmental change, or two-state transition.\n"
-        "- f_l_as: transition or reveal that also needs audio-driven hit timing.\n"
-        "- continuation: preserve continuity from the previous scene's visual endpoint when that is the strongest choice. Do not overuse it.\n"
-        "- lip_sync: only if visible vocal articulation is truly required and the narration/audio mode supports it.\n"
-        "- Every scene must include a short concrete ltx_reason that explains the production intent.\n"
-        "Hard constraints:\n"
-        "- Use only real LTX modes: i2v, i2v_as, f_l, f_l_as, continuation, lip_sync.\n"
-        "- Never use fake modes like intro_lock, hero_peak, motion_follow, ending_hold.\n"
-        "- lip_sync is allowed only for music-driven vocal rhythm with visible articulation support.\n"
-        "- Do not use lip_sync for ordinary narration or generic voice-over.\n"
-        "- Scenario Director is the main planning node. Storyboard executes your storyboard_out and should not rethink the plan.\n"
-        "- Build scenes from story meaning, source-of-truth, connected refs, and director controls.\n"
-        "- Keep timing coherent and use floats in seconds.\n"
-        '- If "audioDurationSec" is present and > 0, scene timeline MUST span the full audio duration from 0.0 to audioDurationSec.\n'
-        "- If audioDurationSec > 0: first scene starts at 0.0, final scene reaches near audioDurationSec, and every major audio interval belongs to some scene.\n"
-        "- No large uncovered audio tail at the end. No large silent timeline gap unless explicitly intended as a scene beat.\n"
-        "- If story climax happens early but audio continues, add natural late-stage scenes (aftermath, reaction, realization, escape continuation, tension tail, unresolved closing image, outro suspense).\n"
-        "- Around 60 seconds, 6 scenes can be acceptable only if they truly cover full audio; add scenes when timing is too compressed.\n"
-        "- Every scene must include concise but useful video/audio planning fields.\n"
-        "- Keep the backend-compatible flat scene fields only. Do not output nested visual/audio/ltx blocks in final JSON.\n"
-        "CONTRACT HARD RULE FOR narration_mode:\n"
-        '- Every scene MUST include "narration_mode" explicitly.\n'
-        '- narration_mode MUST always be a string and MUST NEVER be null.\n'
-        '- Allowed values: "full", "duck", "pause".\n'
-        '- If unsure, use "full".\n'
-        '- Never output null for narration_mode and never omit narration_mode.\n'
-        "ROLE HARD RULE:\n"
-        "- If roleTypeByRole explicitly marks a role as hero/support/antagonist, you MUST preserve it in story summary, scene construction, role summary, and dominant scene behavior.\n"
-        "- Do not silently revert to default character_1 hero if explicit roleTypeByRole provides a hero/support/antagonist mapping.\n"
-        "Output contract:\n"
-        "{\n"
-        '  "story_summary": "",\n'
-        '  "full_scenario": "",\n'
-        '  "voice_script": "",\n'
-        '  "music_prompt": "",\n'
-        '  "director_summary": "",\n'
-        '  "audioUnderstanding": {\n'
-        '    "mainTopic": "",\n'
-        '    "worldContext": "",\n'
-        '    "impliedEvents": [],\n'
-        '    "emotionalToneFromAudio": "",\n'
-        '    "confidenceAudioUnderstood": 0.0,\n'
-        '    "whatFromAudioDefinesWorld": ""\n'
-        "  },\n"
-        '  "conflictAnalysis": {\n'
-        '    "audioVsDirectorNoteConflict": false,\n'
-        '    "conflictDescription": "",\n'
-        '    "resolutionStrategy": ""\n'
-        "  },\n"
-        '  "narrativeStrategy": {\n'
-        f'    "storyCoreSource": "{story_core_source}",\n'
-        f'    "storyFrameSource": "{story_frame_source if is_music_video_mode else ""}",\n'
-        f'    "rhythmSource": "{rhythm_source if is_music_video_mode else ""}",\n'
-        f'    "storyFrameSourceReason": "{story_frame_source_reason if is_music_video_mode else ""}",\n'
-        f'    "rhythmSourceReason": "{rhythm_source_reason if is_music_video_mode else ""}",\n'
-        '    "didAudioRemainPrimary": true,\n'
-        '    "didDirectorNoteOverrideAudio": false,\n'
-        '    "why": ""\n'
-        "  },\n"
-        '  "story": {\n'
-        '    "title": "",\n'
-        '    "summary": "",\n'
-        '    "howDirectorNoteWasIntegrated": "",\n'
-        '    "howRomanceExistsInsideAudioWorld": ""\n'
-        "  },\n"
-        '  "scenes": [\n'
-        "    {\n"
-        '      "scene_id": "S1",\n'
-        '      "time_start": 0.0,\n'
-        '      "time_end": 6.0,\n'
-        '      "duration": 6.0,\n'
-        '      "actors": ["character_1"],\n'
-        '      "location": "",\n'
-        '      "props": [],\n'
-        '      "emotion": "",\n'
-        '      "scene_goal": "",\n'
-        '      "frame_description": "",\n'
-        '      "action_in_frame": "",\n'
-        '      "camera": "",\n'
-        '      "image_prompt": "",\n'
-        '      "video_prompt": "",\n'
-        '      "ltx_mode": "i2v",\n'
-        '      "ltx_reason": "",\n'
-        '      "start_frame_source": "new",\n'
-        '      "needs_two_frames": false,\n'
-        '      "continuation_from_previous": false,\n'
-        '      "narration_mode": "full",\n'
-        '      "local_phrase": null,\n'
-        '      "sfx": "",\n'
-        '      "music_mix_hint": "off",\n'
-        '      "whatFromAudioThisSceneUses": "",\n'
-        '      "directorNoteLayer": "",\n'
-        '      "boundaryReason": "phrase",\n'
-        '      "audioAnchorEvidence": "",\n'
-        '      "confidence": 0.0\n'
-        "    }\n"
-        "  ],\n"
-        '  "diagnostics": {\n'
-        '    "usedAudioAsContentSource": true,\n'
-        '    "usedAudioOnlyAsMood": false,\n'
-        '    "didFallbackFromAudioContentTruth": false,\n'
-        '    "biggestRisk": "",\n'
-        '    "whatMayBeWrong": "",\n'
-        '    "plannerMode": "full_audio_first",\n'
-        '    "howDirectorNoteWasIntegrated": ""\n'
-        "  }\n"
-        "}\n\n"
-        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'contentType': content_type_policy.get('value'), 'storyCoreSource': story_core_source, 'storyCoreSourceReason': story_core_reason, 'storyFrameSource': story_frame_source if is_music_video_mode else None, 'storyFrameSourceReason': story_frame_source_reason if is_music_video_mode else None, 'rhythmSource': rhythm_source if is_music_video_mode else None, 'rhythmSourceReason': rhythm_source_reason if is_music_video_mode else None, 'castIdentityLocked': _coerce_bool(cast_identity_lock.get('enabled'), False) if is_music_video_mode else None, 'castIdentityLockReason': str(cast_identity_lock.get('lockReason') or '') if is_music_video_mode else None, 'lockedRolePresentationByRole': cast_identity_lock.get('lockedRolePresentationByRole') if is_music_video_mode else {}, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'audioSemantics': {'ok': runtime_semantics.get('ok'), 'transcript': str(runtime_semantics.get('transcript') or '')[:2000], 'semanticSummary': str(runtime_semantics.get('semanticSummary') or '')[:1200], 'narrativeCore': str(runtime_semantics.get('narrativeCore') or '')[:600], 'worldContext': str(runtime_semantics.get('worldContext') or '')[:600], 'entities': [str(item).strip() for item in (runtime_semantics.get('entities') or []) if str(item).strip()][:20], 'impliedEvents': [str(item).strip() for item in (runtime_semantics.get('impliedEvents') or []) if str(item).strip()][:20], 'tone': str(runtime_semantics.get('tone') or '')[:200], 'confidence': runtime_semantics.get('confidence'), 'hint': str(runtime_semantics.get('hint') or '')[:120]}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
-    )
-    if strict_json_retry:
-        request_text += JSON_ONLY_RETRY_SUFFIX
-    return request_text
 
 
 def _build_audio_coverage_refinement_prompt(payload: dict[str, Any], storyboard_out: ScenarioDirectorStoryboardOut, coverage: dict[str, Any]) -> str:
