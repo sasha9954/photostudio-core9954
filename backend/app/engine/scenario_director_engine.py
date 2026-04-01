@@ -1716,17 +1716,8 @@ def _normalize_audio_context(payload: dict[str, Any]) -> dict[str, Any]:
         or source_audio_meta.get("url")
         or ""
     ).strip()
-    content_type = str(controls.get("contentType") or "story").strip().lower() or "story"
-    is_music_video = content_type == "music_video"
+    content_type = str(controls.get("contentType") or "music_video").strip().lower() or "music_video"
     prefer_audio_over_text = _coerce_bool(controls.get("preferAudioOverText"), source_mode == "audio")
-    timeline_source = str(controls.get("timelineSource") or ("audio" if source_mode == "audio" else "text")).strip().lower() or "text"
-    segmentation_mode = str(
-        controls.get("segmentationMode")
-        or ("performance_arc_audio_timed" if is_music_video and source_mode == "audio" else ("phrase-first" if source_mode == "audio" else "default"))
-    ).strip().lower() or "default"
-    clip_mode_canon = str(controls.get("clipModeCanon") or ("visual_performance_arc_v1" if is_music_video else "")).strip()
-    story_construction_mode = str(controls.get("storyConstructionMode") or ("performance_arc" if is_music_video else "narrative_arc")).strip()
-    literal_lyric_scene_mode = _coerce_bool(controls.get("literalLyricSceneMode"), False if is_music_video else True)
     has_audio = source_mode == "audio" and bool(audio_url)
 
     return {
@@ -1738,12 +1729,9 @@ def _normalize_audio_context(payload: dict[str, Any]) -> dict[str, Any]:
         "sourceOrigin": source_origin or None,
         "sourceOriginRaw": source_origin_raw or None,
         "preferAudioOverText": prefer_audio_over_text,
-        "timelineSource": timeline_source,
-        "segmentationMode": segmentation_mode,
-        "clipModeCanon": clip_mode_canon,
-        "storyConstructionMode": story_construction_mode,
-        "literalLyricSceneMode": literal_lyric_scene_mode,
-        "useAudioPhraseBoundaries": _coerce_bool(controls.get("useAudioPhraseBoundaries"), source_mode == "audio"),
+        "timelineSource": "audio" if source_mode == "audio" else "text",
+        "useAudioPhraseBoundaries": source_mode == "audio",
+        "contentType": content_type,
     }
 
 
@@ -7711,23 +7699,41 @@ def _build_request_text(
         normalized_role = _normalize_scenario_role(role)
         if normalized_role:
             role_type_by_role[normalized_role] = str(role_type or "").strip().lower() or "auto"
-    mode_source_policy = (
-        (
-            "MODE POLICY (music_video):\n"
-            f"- storyCoreSource={story_core_source}.\n"
-            f"- storyFrameSource={story_frame_source}.\n"
-            f"- rhythmSource={rhythm_source}.\n"
-            "- If storyCoreSource=director_note: use director note as story frame (setting/concept/arc), "
-            "while audio remains mandatory for rhythm, emotion, scene timing, energy progression, and transition timing.\n"
-            "- If storyCoreSource=source_of_truth: derive story frame from source/audio semantics and transcript.\n"
-            "- Refs remain identity/world anchors: character refs define cast; location/style/props refs define world and must not be replaced by text.\n"
-            "- CAST IDENTITY LOCK: if explicit character refs already imply role identity/presentation, director note must not rewrite gender presentation or pair composition.\n"
-        )
-        if is_music_video_mode
-        else (
-            "MODE POLICY (non-music_video):\n"
-            "- contentType defines interpretation policy (story/ad/etc); refs remain cast/world anchors.\n"
-        )
+    runtime_payload = {
+        "mode": "oneshot",
+        "audioUrl": normalized_audio.get("audioUrl"),
+        "audioDurationSec": audio_duration_sec if audio_duration_sec > 0 else None,
+        "text": str(payload.get("text") or source.get("source_preview") or "").strip() or None,
+        "refsByRole": _collect_payload_refs_by_role(payload),
+        "context_refs": context_refs,
+        "roleTypeByRole": role_type_by_role,
+        "format": str(director_controls.get("format") or metadata.get("format") or "9:16").strip() or "9:16",
+        "contentType": "music_video",
+        "preferAudioOverText": prefer_audio_over_text,
+        "metadata": {
+            "sourceOrigin": source_origin,
+            "sourceMode": source_mode,
+            "audio": metadata.get("audio") if isinstance(metadata.get("audio"), dict) else {},
+        },
+        "audioAnalysis": {
+            "ok": runtime_analysis.get("ok"),
+            "audioDurationSec": runtime_analysis.get("audioDurationSec"),
+            "phrases": runtime_analysis.get("phrases") or [],
+            "pauseWindows": runtime_analysis.get("pauseWindows") or [],
+            "energyTransitions": runtime_analysis.get("energyTransitions") or [],
+        },
+    }
+    retry_suffix = JSON_ONLY_RETRY_SUFFIX if strict_json_retry else ""
+    return (
+        "You are the ONLY scenario writer/director/router for a music video.\n"
+        "Return ONE JSON object only (no markdown/comments).\n"
+        "Decide independently: scene count, boundaries, timing, routing, lip sync placement, transitions, first/last usage, and world progression.\n"
+        "System will only validate/normalize structure and execute. Do not optimize for old clip formulas.\n"
+        "Required output fields: scenes[].time_start,time_end,local_phrase,render_mode,resolved_workflow_key,lip_sync,lip_sync_text,"
+        "music_vocal_lipsync_allowed,needs_two_frames,identity_lock_applied,identity_lock_fields_used,"
+        "video_generation_route,planned_video_generation_route.\n"
+        f"Raw inputs: {json.dumps(runtime_payload, ensure_ascii=False)}"
+        f"{retry_suffix}"
     )
     source_hierarchy_policy = (
         (
@@ -9074,17 +9080,12 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     director_note_text = str(controls.get("directorNote") or controls.get("director_note") or "").strip()
     source_text_value = str(payload.get("source_text") or payload.get("sourceText") or "").strip()
-    requested_no_text_policy = str(controls.get("no_text_clip_policy") or "").strip().lower()
-    no_text_fallback_mode = "neutral_audio_literal" if not director_note_text else "off"
+    no_text_fallback_mode = "off"
     authorial_interpretation_level = "low" if no_text_fallback_mode == "neutral_audio_literal" else "medium"
     audio_literalness_level = "high" if no_text_fallback_mode == "neutral_audio_literal" else "balanced"
     storyboard_out.diagnostics.no_text_fallback_mode = no_text_fallback_mode
-    is_music_video_mode = _get_content_type_policy(payload).get("value") == "music_video"
-    apply_no_text_clip_policy = is_music_video_mode and (not director_note_text and not source_text_value)
-    if requested_no_text_policy == "visual_arc_over_phrase_loop":
-        apply_no_text_clip_policy = True
-    storyboard_out.diagnostics.no_text_clip_policy = "visual_arc_over_phrase_loop" if apply_no_text_clip_policy else "off"
-    storyboard_out.diagnostics.no_text_clip_policy_applied = bool(apply_no_text_clip_policy)
+    storyboard_out.diagnostics.no_text_clip_policy = "off"
+    storyboard_out.diagnostics.no_text_clip_policy_applied = False
     storyboard_out.diagnostics.authorial_interpretation_level = authorial_interpretation_level
     storyboard_out.diagnostics.audio_literalness_level = audio_literalness_level
     planner_narrative_strategy = structured_planner_diagnostics.get("narrativeStrategy") if isinstance(structured_planner_diagnostics.get("narrativeStrategy"), dict) else {}

@@ -667,11 +667,6 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   const safeContentType = getSafeNarrativeContentType(state?.contentType, "music_video");
   const isMusicVideo = safeContentType === "music_video";
   const preferAudioOverText = audioContext.hasAudioSource;
-  const segmentationMode = isMusicVideo
-    ? (audioContext.hasAudioSource ? "performance_arc_audio_timed" : "performance_arc_default")
-    : (audioContext.hasAudioSource ? "phrase-first" : "default");
-  const timelineSource = audioContext.hasAudioSource ? "audio" : "text";
-  const useAudioPhraseBoundaries = audioContext.hasAudioSource;
   const contextRefs = {
     character_1: buildReferencePayload(connectedInputs?.ref_character_1, "Character 1"),
     character_2: buildReferencePayload(connectedInputs?.ref_character_2, "Character 2"),
@@ -719,24 +714,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     audioDurationSec: audioContext.audioDurationSec,
     director_controls: {
       contentType: safeContentType,
-      narrativeMode: normalizeText(state.narrativeMode) || "cinematic_expand",
-      styleProfile: normalizeText(state.styleProfile) || "realistic",
       format,
-      directorNote: normalizeText(state.directorNote),
-      no_text_clip_policy: isMusicVideo && !normalizeText(state.directorNote) && !normalizeText(state?.text || state?.storyText)
-        ? "visual_arc_over_phrase_loop"
-        : "off",
       preferAudioOverText,
-      segmentationMode,
-      timelineSource,
-      useAudioPhraseBoundaries,
-      clipModeCanon: isMusicVideo ? "visual_performance_arc_v1" : "",
-      clipTargetFormula: isMusicVideo ? { lip_sync_music: 2, f_l: 2, i2v: 4 } : undefined,
-      storyConstructionMode: isMusicVideo ? "performance_arc" : "narrative_arc",
-      literalLyricSceneMode: isMusicVideo ? false : true,
-      firstLastRequiresVisualDelta: isMusicVideo,
-      musicLipSyncRequiresMusicAndVocal: isMusicVideo,
-      soundDialogueWorkflowsDisabledInClip: isMusicVideo,
     },
     connected_context_summary: connectedContextSummary,
     metadata: {
@@ -771,8 +750,6 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       audioDurationSec: audioContext.audioDurationSec,
       wasDurationResolved,
       persistedAudioDurationSec,
-      timelineSource,
-      segmentationMode,
     });
   }
 

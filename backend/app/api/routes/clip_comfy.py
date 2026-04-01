@@ -142,16 +142,9 @@ class ScenarioDirectorSourceIn(BaseModel):
 
 
 class ScenarioDirectorControlsIn(BaseModel):
-    contentType: str = "story"
-    narrativeMode: str = "cinematic_expand"
-    styleProfile: str = "realistic"
-    directorNote: str = ""
+    contentType: str = "music_video"
+    format: str = "9:16"
     preferAudioOverText: bool = True
-    enable_asr: bool = True
-    use_multimodal_audio: bool = False
-    timelineSource: str = "audio"
-    segmentationMode: str = "phrase-first"
-    useAudioPhraseBoundaries: bool = True
 
 
 class ScenarioDirectorGenerateIn(BaseModel):
@@ -164,7 +157,6 @@ class ScenarioDirectorGenerateIn(BaseModel):
     audioDurationSec: float | None = None
     master_output: dict[str, Any] = Field(default_factory=dict)
     timeWindow: dict[str, Any] = Field(default_factory=dict)
-    expectedScenes: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     audioUrl: str = ""
     text: str = ""
