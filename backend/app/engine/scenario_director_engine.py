@@ -7803,11 +7803,13 @@ def _build_request_text(
         normalized_role = _normalize_scenario_role(role)
         if normalized_role:
             role_type_by_role[normalized_role] = str(role_type or "").strip().lower() or "auto"
+    user_text_raw = payload.get("text")
+    user_text = str(user_text_raw).strip() if isinstance(user_text_raw, str) else ""
     runtime_payload = {
         "mode": "oneshot",
         "audioUrl": normalized_audio.get("audioUrl"),
         "audioDurationSec": audio_duration_sec if audio_duration_sec > 0 else None,
-        "text": str(payload.get("text") or source.get("source_preview") or "").strip() or None,
+        "text": user_text or None,
         "refsByRole": _collect_payload_refs_by_role(payload),
         "context_refs": context_refs,
         "roleTypeByRole": role_type_by_role,
@@ -7831,6 +7833,13 @@ def _build_request_text(
     return (
         "You are the ONLY scenario writer/director/router for a music video.\n"
         "Return ONE JSON object only (no markdown/comments).\n"
+        "NO hidden assumptions. First explain how you interpreted the inputs, then return storyboard.\n"
+        "Top-level JSON must stay compact and compatible:\n"
+        "{input_understanding:{audio_visual_read,character_identity_read,location_specification_level,default_world_choice_if_unspecified,marine_words_interpretation,planned_scene_types,lip_sync_importance,identity_lock_importance,same_character_across_all_scenes,can_choose_routes_independently,will_avoid},storyboard:{story_summary,full_scenario,voice_script,director_summary,audio_understanding,narrative_strategy,diagnostics:{total_duration,scene_count},scenes:[{scene_id,start_time_sec,end_time_sec,route,description,content_tags}]}}\n"
+        "location_specification_level allowed values: fully_specified | partially_specified | unspecified.\n"
+        "marine_words_interpretation allowed values: literal | metaphorical | mixed.\n"
+        "Fill input_understanding fields meaningfully from CURRENT inputs (do not leave generic placeholders).\n"
+        "If runtime text is null, treat it as no user text mode (do not infer text from filenames/source labels/previews).\n"
         "Keep phrase/word scene segmentation aligned to audio phrases; do NOT optimize by reducing scene count.\n"
         "Scene count may remain phrase-based and compact-director mapping must stay compatible.\n"
         "Preserve audio-first timing and natural phrase alignment.\n"
@@ -7845,6 +7854,7 @@ def _build_request_text(
         "If location ref exists, treat it as a hard anchor and respect it.\n"
         "Hard negative defaults unless explicitly requested: no salt plains, no barren desert, no cracked wasteland, no repetitive desolate emptiness.\n"
         "Marine/desolation words should usually become lighting mood/atmosphere/emotional tone, not literal ground texture.\n"
+        "Prefer wow-factor performance decisions over low-value literal lyric illustration.\n"
         "Route planning must avoid all-i2v output for vocal-driven clips.\n"
         "For ~30s vocal music clip, lip_sync_music is mandatory in multiple scenes: minimum 2 scenes.\n"
         "Pick strongest hook/vocal lines for lip_sync_music with clear face-readable emotional performance beats.\n"
@@ -7853,9 +7863,9 @@ def _build_request_text(
         "Repeated phrases should escalate visually and cinematically rather than repeating identical actions/environments.\n"
         "If character refs exist, identity lock is mandatory across ALL scenes: same exact face, hair, body silhouette/proportions, outfit identity, and overall styling.\n"
         "Never reinterpret or drift character identity (no face drift, wardrobe drift, body drift, or random restyling).\n"
+        "Do not reduce scenes artificially.\n"
         "Do not optimize for old clip formulas or fixed route quotas.\n"
-        "Return COMPACT director JSON with shape:\n"
-        "{input_understanding:{...},storyboard:{story_summary,full_scenario,voice_script,director_summary,audio_understanding,narrative_strategy,diagnostics:{total_duration,scene_count},scenes:[{scene_id,start_time_sec,end_time_sec,route,description,content_tags}]}}\n"
+        "input_understanding must explicitly state world/location interpretation, literal-vs-metaphorical reading, lip-sync importance, identity-lock importance, route freedom, and what you will avoid.\n"
         "Allowed route values: i2v | lip_sync_music | f_l(first_last).\n"
         "Descriptions and content_tags must encode premium visual intent, performance intent, and wow-factor decisions.\n"
         "System will translate your compact output into production contract and execute it.\n"
