@@ -210,6 +210,25 @@ const normalizeScenarioWorkflowKeyForProduction = (value) => {
   return normalized;
 };
 
+const normalizeDirectRouteToWorkflowKey = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (["first_last", "first-last", "f_l"].includes(normalized)) return "f_l";
+  if (["lip_sync_music", "lip_sync"].includes(normalized)) return "lip_sync_music";
+  if (["i2v", "image_video"].includes(normalized)) return "i2v";
+  return "";
+};
+
+const resolveSceneDirectRouteSource = (scene = {}) => {
+  const sourceRoute = normalizeDirectRouteToWorkflowKey(scene?.sourceRoute || scene?.source_route);
+  if (sourceRoute) return { workflowKey: sourceRoute, source: "sourceRoute" };
+  const videoRoute = normalizeDirectRouteToWorkflowKey(scene?.videoGenerationRoute || scene?.video_generation_route);
+  if (videoRoute) return { workflowKey: videoRoute, source: "video_generation_route" };
+  const plannedRoute = normalizeDirectRouteToWorkflowKey(scene?.plannedVideoGenerationRoute || scene?.planned_video_generation_route);
+  if (plannedRoute) return { workflowKey: plannedRoute, source: "planned_video_generation_route" };
+  return { workflowKey: "", source: "legacy" };
+};
+
 const GLOBAL_FORBIDDEN_INSERTIONS_GUARDS = [
   "do not introduce a different visual style",
   "do not introduce a different lens feel",
@@ -333,7 +352,10 @@ function buildScenarioSceneContractPayload(scene = {}) {
   const forbiddenChanges = mergeScenarioStringLists(scene?.forbiddenChanges, GLOBAL_FORBIDDEN_CHANGES_GUARDS);
   const imageStrategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase() || "single";
   const explicitWorkflow = resolveScenarioExplicitWorkflowKey(scene);
-  const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(scene?.resolvedWorkflowKey || explicitWorkflow || resolveScenarioWorkflowKey(scene));
+  const directRouteInfo = resolveSceneDirectRouteSource(scene);
+  const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
+    directRouteInfo.workflowKey || scene?.resolvedWorkflowKey || explicitWorkflow || resolveScenarioWorkflowKey(scene)
+  );
   const explicitModel = resolveScenarioExplicitModelKey(scene);
   const resolvedModelKey = String(scene?.resolvedModelKey || explicitModel).trim();
   const requestedDurationSec = Number(
@@ -402,6 +424,8 @@ function buildScenarioSceneContractPayload(scene = {}) {
     videoReady: Boolean(scene?.videoReady ?? scene?.video_ready ?? false),
     plannedVideoGenerationRoute: String(scene?.plannedVideoGenerationRoute || scene?.planned_video_generation_route || "").trim().toLowerCase(),
     videoGenerationRoute: String(scene?.videoGenerationRoute || scene?.video_generation_route || "").trim().toLowerCase(),
+    sourceRoute: String(scene?.sourceRoute || scene?.source_route || "").trim().toLowerCase(),
+    uiRouteSource: directRouteInfo.source,
     videoBlockReasonCode: String(scene?.videoBlockReasonCode || scene?.video_block_reason_code || "").trim(),
     videoBlockReasonMessage: String(scene?.videoBlockReasonMessage || scene?.video_block_reason_message || "").trim(),
     videoDowngradeReasonCode: String(scene?.videoDowngradeReasonCode || scene?.video_downgrade_reason_code || "").trim(),
@@ -442,9 +466,11 @@ function resolveContinuationSourceFromPreviousScene(previousScene = null) {
 }
 
 function resolveScenarioSceneVideoProvider(scene = {}) {
+  const directRouteInfo = resolveSceneDirectRouteSource(scene);
   const rawProvider = String(scene?.sceneRenderProvider || "").trim().toLowerCase();
   const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
-    scene?.resolvedWorkflowKey
+    directRouteInfo.workflowKey
+    || scene?.resolvedWorkflowKey
     || resolveScenarioExplicitWorkflowKey(scene)
     || resolveScenarioWorkflowKey(scene)
     || ""

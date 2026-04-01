@@ -501,6 +501,19 @@ class ScenarioDirectorError(RuntimeError):
         self.details = details or {}
 
 
+def _is_direct_gemini_storyboard_mode(payload: dict[str, Any] | None = None) -> bool:
+    payload_map = payload if isinstance(payload, dict) else {}
+    payload_flag = payload_map.get("direct_gemini_storyboard_mode")
+    if payload_flag is None:
+        payload_flag = payload_map.get("directGeminiStoryboardMode")
+    if isinstance(payload_flag, str):
+        payload_flag = payload_flag.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(payload_flag, bool):
+        return payload_flag
+    env_raw = str(os.getenv("DIRECT_GEMINI_STORYBOARD_MODE", "")).strip().lower()
+    return env_raw in {"1", "true", "yes", "on"}
+
+
 def _parse_gemini_scene_route_strict(route_value: Any, *, scene_index: int, parse_stage: str) -> str:
     incoming_route = str(route_value or "").strip()
     route = incoming_route.lower()
@@ -7166,6 +7179,30 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
     scenes = storyboard_out.scenes or []
     if not scenes:
         return storyboard_out
+    direct_gemini_storyboard_mode = _is_direct_gemini_storyboard_mode(payload if isinstance(payload, dict) else None)
+    if direct_gemini_storyboard_mode:
+        payload_map = payload if isinstance(payload, dict) else {}
+        transcript_rows = []
+        if isinstance(payload_map.get("_single_call_payload"), dict):
+            transcript_rows = payload_map.get("_single_call_payload", {}).get("transcript") or []
+        elif isinstance(payload_map.get("transcript"), list):
+            transcript_rows = payload_map.get("transcript") or []
+        for scene in scenes:
+            scene.time_start = round(_safe_float(scene.time_start, 0.0), 3)
+            scene.time_end = round(max(scene.time_start, _safe_float(scene.time_end, scene.time_start)), 3)
+            scene.duration = round(max(0.0, scene.time_end - scene.time_start), 3)
+            scene.requested_duration_sec = scene.duration
+            scene.audio_slice_start_sec = scene.time_start
+            scene.audio_slice_end_sec = scene.time_end
+            scene.audio_slice_expected_duration_sec = scene.duration
+        storyboard_out.scenes = scenes
+        logger.info(
+            "[SCENARIO DIRECT MODE] direct_gemini_storyboard_mode=true scene_merge_applied=false backend_route_override_applied=false transcript_segment_count=%s final_scene_count=%s scene_count_matches_transcript_beats=%s",
+            len([row for row in transcript_rows if isinstance(row, dict)]),
+            len(scenes),
+            len([row for row in transcript_rows if isinstance(row, dict)]) == len(scenes) if transcript_rows else False,
+        )
+        return storyboard_out
     payload_map: dict[str, dict[str, Any]] = {}
     if isinstance(payload, dict):
         for item in (payload.get("scenes") or []):
@@ -7653,6 +7690,9 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         return False, "no_strong_transition_evidence"
 
     def _degrade_short_first_last_scene(scene: ScenarioDirectorScene) -> str:
+        if direct_gemini_storyboard_mode:
+            logger.info("[SCENARIO DIRECT MODE] short first_last preserved sceneId=%s route=%s", scene.scene_id, str(scene.video_generation_route or ""))
+            return "preserved_direct_mode"
         scene.needs_two_frames = False
         scene.continuation_from_previous = False
         scene.start_frame_source = "new"
@@ -7920,7 +7960,10 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 _dedupe_repeated_scene_text_parts(merged_scene, field_name)
         return merged_chunks
 
-    next_scenes = _merge_final_generation_short_scenes(next_scenes)
+    if direct_gemini_storyboard_mode:
+        logger.info("[SCENARIO DIRECT MODE] scene merge disabled direct_gemini_storyboard_mode=true scene_merge_applied=false transcript_segment_count=%s final_scene_count=%s", len([row for row in (payload or {}).get("transcript", []) if isinstance(row, dict)]), len(next_scenes))
+    else:
+        next_scenes = _merge_final_generation_short_scenes(next_scenes)
     no_text_mode = str(storyboard_out.diagnostics.no_text_clip_policy or "").strip().lower() == "visual_arc_over_phrase_loop"
     if no_text_mode:
         phrase_loop_before = _is_repeat_heavy_music_clip(storyboard_out.scenes or [])
@@ -8901,7 +8944,11 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
     transcript_rows = result.get("transcript") if isinstance(result.get("transcript"), list) else []
     semantic_timeline = result.get("semanticTimeline") if isinstance(result.get("semanticTimeline"), list) else []
     raw_scenes = result.get("scenes") if isinstance(result.get("scenes"), list) else []
-    raw_scenes = _merge_generation_short_scenes(raw_scenes)
+    direct_gemini_storyboard_mode = _is_direct_gemini_storyboard_mode(runtime_payload)
+    scene_merge_applied = False
+    if not direct_gemini_storyboard_mode:
+        raw_scenes = _merge_generation_short_scenes(raw_scenes)
+        scene_merge_applied = True
     transcript_text_parts = [
         str(item.get("text") or "").strip()
         for item in transcript_rows
@@ -9032,6 +9079,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "boundary_reason": "phrase",
                 "audio_anchor_evidence": str(primary_semantic.get("transitionHint") or "").strip(),
                 "confidence": 0.9,
+                "sourceRoute": route,
                 "video_generation_route": internal_route,
                 "planned_video_generation_route": route,
             }
@@ -9089,6 +9137,12 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             "what_may_be_wrong": str(debug.get("signals") or "").strip(),
             "planner_mode": "full_audio_first",
             "how_director_note_was_integrated": "effective_director_note_story_frame_bias_plus_audio_rhythm_driver" if has_effective_director_note else "",
+            "direct_gemini_storyboard_mode": direct_gemini_storyboard_mode,
+            "scene_merge_applied": scene_merge_applied,
+            "backend_route_override_applied": False,
+            "transcript_segment_count": len([row for row in transcript_rows if isinstance(row, dict)]),
+            "final_scene_count": len(legacy_scenes),
+            "scene_count_matches_transcript_beats": len(legacy_scenes) == len([row for row in transcript_rows if isinstance(row, dict)]),
         },
         "scenes": legacy_scenes,
     }
