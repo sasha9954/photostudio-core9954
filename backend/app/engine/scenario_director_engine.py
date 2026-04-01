@@ -3647,6 +3647,54 @@ def _scene_has_lip_sync_signal(scene: ScenarioDirectorScene) -> bool:
     return any(token in text for token in ("lyric", "vocal", "chorus", "sing", "verse", "hook line", "line"))
 
 
+def _evaluate_lipsync_mouth_visibility(scene: ScenarioDirectorScene) -> tuple[bool, str]:
+    shot = str(scene.shot_type or "").strip().lower()
+    framing = str(scene.performance_framing or "").strip().lower()
+    camera_text = str(scene.camera or "").strip().lower()
+    frame_text = " ".join(
+        [
+            str(scene.frame_description or ""),
+            str(scene.action_in_frame or ""),
+            str(scene.viewer_hook or ""),
+            str(scene.scene_goal or ""),
+        ]
+    ).lower()
+    distant_shots = {"wide", "extreme_wide", "full_body", "aerial"}
+    close_shots = {"close_up", "portrait", "medium"}
+    close_framings = {"face_close", "close_performance", "tight_medium", "medium_close", "chest_up", "shoulder_up"}
+    blocked_visibility_tokens = (
+        "silhouette",
+        "back view",
+        "turned away",
+        "profile only",
+        "mouth hidden",
+        "covered mouth",
+        "hair over face",
+        "hand over mouth",
+        "mic covering mouth",
+    )
+    if shot in distant_shots:
+        return False, f"distant_primary_shot:{shot}"
+    if shot not in close_shots and framing not in close_framings:
+        return False, "framing_not_close_enough_for_mouth_readability"
+    if any(token in camera_text or token in frame_text for token in blocked_visibility_tokens):
+        return False, "mouth_visibility_blocked_by_pose_or_occlusion"
+    if "profile" in camera_text and "3/4" not in camera_text and "three-quarter" not in camera_text:
+        return False, "extreme_profile_reduces_mouth_readability"
+    return True, "mouth_visibility_clear_for_lipsync"
+
+
+def _force_lipsync_friendly_composition(scene: ScenarioDirectorScene) -> None:
+    scene.shot_type = "medium"
+    scene.performance_framing = "tight_medium"
+    if not str(scene.scene_purpose or "").strip():
+        scene.scene_purpose = "performance"
+    scene.camera = _lip_sync_safe_camera_line()
+    scene.viewer_hook = (
+        "Face/mouth readability is primary: near-frontal or 3/4 angle, chest-up/shoulder-up framing, clear lyric articulation."
+    )
+
+
 def _infer_presentation_from_texts(texts: list[str]) -> str:
     lowered = " ".join(str(item or "").strip().lower() for item in texts if str(item or "").strip())
     if not lowered:
@@ -5323,10 +5371,14 @@ def _prevent_phrase_loop_in_music_video(storyboard_out: ScenarioDirectorStoryboa
         same_profile = all(str(getattr(prev, key, "") or "").strip().lower() == str(getattr(scene, key, "") or "").strip().lower() for key in compared_fields)
         if not same_profile:
             scene.phrase_loop_action = "reframe"
-            scene.progression_reason = "phrase_loop_reframed_progression"
-            scene.clip_arc_stage = "progression"
-            scene.beat_function = "progression_beat"
-            merge_notes.append(f"repeated_phrase_reframed:{scene.scene_id}:profile_changed")
+            scene.progression_reason = "phrase_loop_reframed_progression_changed_camera_or_phase"
+            if str(scene.performance_phase or "").strip().lower() == str(prev.performance_phase or "").strip().lower():
+                scene.performance_phase = "growth" if str(scene.performance_phase or "").strip().lower() != "growth" else "climax"
+            if str(scene.transition_family or "").strip().lower() in {"", "cut"}:
+                scene.transition_family = "contrast_reframe"
+            if str(scene.visual_intensity_level or "").strip().lower() == str(prev.visual_intensity_level or "").strip().lower():
+                scene.visual_intensity_level = "high" if str(prev.visual_intensity_level or "").strip().lower() != "high" else "medium"
+            merge_notes.append(f"repeated_phrase_reframed:{scene.scene_id}:functional_layer_shift")
             prevented = True
             merged_scenes.append(scene)
             continue
@@ -5777,16 +5829,21 @@ def _apply_music_video_mode_policy(
     payload: dict[str, Any],
     audio_duration_sec: float | None = None,
 ) -> ScenarioDirectorStoryboardOut:
-    clip_arc_stages = [
-        "world_entry",
-        "attention_capture",
-        "center_claim",
-        "inner_turn",
-        "second_rise",
-        "peak_performance",
-        "release",
-        "afterimage",
-    ]
+    clip_arc_stages = ["hook_entry", "expansion", "inner_turn", "power_return", "afterimage_release"]
+    beat_function_by_stage = {
+        "hook_entry": "entry_hook",
+        "expansion": "performance_growth",
+        "inner_turn": "emotional_dip_or_suspension",
+        "power_return": "climax_return",
+        "afterimage_release": "release_afterimage",
+    }
+    performance_phase_by_stage = {
+        "hook_entry": "entry",
+        "expansion": "growth",
+        "inner_turn": "dip",
+        "power_return": "climax",
+        "afterimage_release": "release",
+    }
     scenes = storyboard_out.scenes or []
     if not scenes:
         return storyboard_out
@@ -5821,7 +5878,7 @@ def _apply_music_video_mode_policy(
             scene.audio_slice_kind == "music_vocal" and _is_music_vocal_mode(scene.narration_mode),
         )
         presence_type = _infer_music_video_presence_type(scene, payload=payload, raw_scene=raw_scene)
-        if index == 0 and shot_type not in {"wide"}:
+        if index == 0 and shot_type in {"extreme_wide"}:
             shot_type = "wide"
         elif index == 1 and shot_type in {"wide"}:
             shot_type = "close_up" if _scene_has_human_performer(scene) else "medium"
@@ -5910,10 +5967,11 @@ def _apply_music_video_mode_policy(
         shot_type = str(scene.shot_type or shot_type)
         scene.performance_framing = performance_framing
         close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
+        lip_sync_signal = _scene_has_lip_sync_signal(scene)
         lip_sync_base_candidate = (
             _scene_has_human_performer(scene)
             and close_capable
-            and _scene_has_lip_sync_signal(scene)
+            and lip_sync_signal
             and not transition_candidate
             and not prev_lip_sync
             and lip_sync_used < max_lip_sync
@@ -5944,6 +6002,18 @@ def _apply_music_video_mode_policy(
         lip_sync_reason = "Not a lip-sync scene."
         audio_slice_reason = "Audio slice is not required."
 
+        lip_sync_mouth_visible, lip_sync_visibility_reason = _evaluate_lipsync_mouth_visibility(scene)
+        if lip_sync_base_candidate and not lip_sync_mouth_visible and not forced_transition_scene:
+            _force_lipsync_friendly_composition(scene)
+            shot_type = str(scene.shot_type or shot_type)
+            performance_framing = str(scene.performance_framing or performance_framing)
+            lip_sync_mouth_visible, lip_sync_visibility_reason = _evaluate_lipsync_mouth_visibility(scene)
+            close_capable = shot_type not in {"wide"} and performance_framing not in {"non_performance", "wide_performance"}
+            lip_sync_base_candidate = lip_sync_base_candidate and close_capable
+            lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible and lip_sync_mouth_visible
+        else:
+            lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible and lip_sync_mouth_visible
+
         if lip_sync_candidate and not forced_transition_scene:
             render_mode = "lip_sync_music"
             resolved_workflow = str(content_type_policy.get("clipWorkflowLipSync") or "image-lipsink-video-music")
@@ -5968,7 +6038,10 @@ def _apply_music_video_mode_policy(
             scene.audio_slice_expected_duration_sec = round(max(0.0, end_sec - start_sec), 3)
             scene.lip_sync_text = _extract_lip_sync_text(scene)
             workflow_reason = "Lip-sync workflow selected for close human vocal articulation."
-            lip_sync_reason = f"Local vocal phrase + human close framing detected; compatibility={lip_sync_compatibility_reason}."
+            lip_sync_reason = (
+                f"Local vocal phrase + human close framing detected; compatibility={lip_sync_compatibility_reason}; "
+                f"visibility={lip_sync_visibility_reason}."
+            )
             audio_slice_reason = "Slice clamped to scene vocal window (max ~5s) and timeline bounds."
             lip_sync_used += 1
             _assign_video_route(scene, route="lip_sync_music")
@@ -6021,6 +6094,15 @@ def _apply_music_video_mode_policy(
                     downgrade_code=compatibility_reason_code,
                     downgrade_message=f"Lip-sync candidate rejected by compatibility gate: {lip_sync_compatibility_reason}.",
                 )
+        if lip_sync_base_candidate and lip_sync_compatible and not lip_sync_mouth_visible:
+            lip_sync_reason = f"Lip-sync candidate rejected: {lip_sync_visibility_reason}."
+            _assign_video_route(
+                scene,
+                route="downgraded_to_i2v",
+                planned_route="lip_sync_music",
+                downgrade_code="lip_sync_mouth_visibility_poor",
+                downgrade_message=f"Lip-sync candidate rejected due to framing/visibility: {lip_sync_visibility_reason}.",
+            )
         if lip_sync_candidate and not scene.music_vocal_lipsync_allowed:
             lip_sync_candidate = False
             lip_sync_reason = "Lip-sync candidate rejected: audio slice is not marked as music_vocal compatible."
@@ -6070,15 +6152,20 @@ def _apply_music_video_mode_policy(
         elif not str(scene.audio_slice_kind or "").strip():
             scene.audio_slice_kind = "voice_only" if str(scene.local_phrase or "").strip() else "none"
         scene.performance_framing = performance_framing
-        scene.clip_arc_stage = clip_arc_stages[min(index, len(clip_arc_stages) - 1)]
-        scene.beat_function = str(scene.scene_purpose or "performance_step")
-        scene.progression_reason = "Scene increases performance arc intensity or shifts viewer expectation."
+        stage_index = int(round(((index + 1) / max(1, len(scenes))) * (len(clip_arc_stages) - 1)))
+        scene.clip_arc_stage = clip_arc_stages[min(max(0, stage_index), len(clip_arc_stages) - 1)]
+        scene.beat_function = beat_function_by_stage.get(scene.clip_arc_stage, str(scene.scene_purpose or "performance_step"))
+        scene.progression_reason = f"Arc progression follows {scene.clip_arc_stage} stage with audio-first timing anchor."
         scene.transition_family = "state_shift" if needs_two_frames else (transition_type or "cut")
         scene.start_visual_state = str(scene.frame_description or scene.scene_goal or "").strip()
         scene.end_visual_state = str(scene.action_in_frame or scene.scene_goal or "").strip()
-        scene.visual_intensity_level = "high" if scene.clip_arc_stage in {"peak_performance", "second_rise"} else ("low" if scene.clip_arc_stage == "world_entry" else "medium")
+        scene.visual_intensity_level = (
+            "high"
+            if scene.clip_arc_stage == "power_return"
+            else ("low" if scene.clip_arc_stage in {"hook_entry", "afterimage_release"} else "medium")
+        )
         scene.crowd_relation_state = "crowd_dominant" if "crowd" in " ".join([scene.location, scene.frame_description]).lower() else "hero_dominant"
-        scene.performance_phase = scene.clip_arc_stage
+        scene.performance_phase = performance_phase_by_stage.get(scene.clip_arc_stage, scene.clip_arc_stage)
         scene.transition_type = transition_type if not str(scene.transition_type or "").strip() or scene.transition_type == "cut" else scene.transition_type
         if _is_environment_only_scene_contract(scene):
             _downgrade_to_environment_establishing_note(scene)
@@ -6176,7 +6263,7 @@ def _apply_music_video_mode_policy(
         scene.director_tone_bias = str(genre_intent.get("directorToneBias") or "observational_emotional_realism")
         _enhance_music_video_transition_language(scene)
         scene.workflow_decision_reason = workflow_reason
-        scene.lip_sync_decision_reason = lip_sync_reason
+        scene.lip_sync_decision_reason = f"{lip_sync_reason} shot={scene.shot_type}; framing={scene.performance_framing}; route={scene.video_generation_route or scene.resolved_workflow_key}."
         scene.audio_slice_decision_reason = audio_slice_reason
         compacted_ending_hold, ending_hold_reason = _maybe_compact_repeat_heavy_ending_hold(
             scene,
@@ -6253,6 +6340,23 @@ def _apply_music_video_mode_policy(
         prev_shot_type = str(scene.shot_type or shot_type)
         kept_scenes.append(scene)
     storyboard_out.scenes = kept_scenes
+    if kept_scenes:
+        if not str(storyboard_out.story.title or "").strip():
+            storyboard_out.story.title = "Audio-first music video arc"
+        if not str(storyboard_out.story.summary or "").strip():
+            storyboard_out.story.summary = "Performance-driven micro-arc from hook to release, anchored to audio timing."
+        if not str(storyboard_out.story_summary or "").strip():
+            storyboard_out.story_summary = storyboard_out.story.summary
+        if not str(storyboard_out.director_summary or "").strip():
+            storyboard_out.director_summary = "Audio drives timing/energy; visuals interpret mood without literal line-by-line rewrite."
+        if not str(storyboard_out.audio_understanding.main_topic or "").strip():
+            storyboard_out.audio_understanding.main_topic = "music performance arc"
+        if not str(storyboard_out.audio_understanding.world_context or "").strip():
+            storyboard_out.audio_understanding.world_context = "single-performer emotional performance world"
+        if not str(storyboard_out.audio_understanding.emotional_tone_from_audio or "").strip():
+            storyboard_out.audio_understanding.emotional_tone_from_audio = "dynamic: hook confidence -> inner dip -> climax return -> release"
+        if not str(storyboard_out.audio_understanding.what_from_audio_defines_world or "").strip():
+            storyboard_out.audio_understanding.what_from_audio_defines_world = "rhythm pressure, vocal emphasis, and phrase energy shifts define visual world transitions"
     return storyboard_out
 
 
@@ -6343,6 +6447,23 @@ def _enforce_single_character_music_video_policy(payload: dict[str, Any], storyb
                 if part.strip() and part.strip() != "duet_pair_protected"
             ]
             scene.scene_role_dynamics = ",".join(dynamics_parts) if dynamics_parts else "hero_anchor"
+        if str(scene.performer_presentation or "unknown").strip().lower() == "unknown":
+            fallback_performer = _infer_scene_performer_presentation(scene, payload)
+            if fallback_performer in {"male", "female", "mixed"}:
+                scene.performer_presentation = fallback_performer
+                scene.lip_sync_voice_compatibility_reason = (
+                    f"{scene.lip_sync_voice_compatibility_reason}; performer_presentation_single_character_fallback"
+                ).strip("; ")
+        if str(scene.vocal_presentation or "unknown").strip().lower() == "unknown":
+            fallback_vocal = _infer_vocal_presentation(scene, payload)
+            if fallback_vocal in {"male", "female", "mixed"}:
+                scene.vocal_presentation = fallback_vocal
+        if "character_1" in {str(actor).strip().lower() for actor in (scene.actors or [])}:
+            scene.identity_lock_applied = bool(scene.identity_lock_applied or scene.identity_lock_fields_used)
+            if not str(scene.identity_lock_notes or "").strip():
+                scene.identity_lock_notes = "single_character_mode_identity_lock_required_for_character_1"
+            if not scene.identity_lock_fields_used:
+                scene.identity_lock_fields_used = ["character_1_ref_profile"]
     storyboard_out.story_summary = _remove_single_character_summary_duet_phrases(storyboard_out.story_summary)
     storyboard_out.full_scenario = _remove_single_character_summary_duet_phrases(storyboard_out.full_scenario)
     storyboard_out.director_summary = _remove_single_character_summary_duet_phrases(storyboard_out.director_summary)
