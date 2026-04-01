@@ -8185,10 +8185,57 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
 
 def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any]) -> dict[str, Any]:
     storyboard = compact_payload.get("storyboard") if isinstance(compact_payload.get("storyboard"), dict) else {}
+    input_understanding = (
+        compact_payload.get("input_understanding") if isinstance(compact_payload.get("input_understanding"), dict) else {}
+    )
     compact_scenes = storyboard.get("scenes") if isinstance(storyboard.get("scenes"), list) else []
     legacy_scenes: list[dict[str, Any]] = []
     transcript: list[dict[str, Any]] = []
     semantic_timeline: list[dict[str, Any]] = []
+    safe_summary_default = "Premium music-video performance beat."
+    safe_motion_default = "Character performance aligned to the current music phrase."
+    safe_camera_default = "Steady medium shot with music-video framing."
+    safe_environment_default = "Music-video performance environment."
+
+    world_context = str((storyboard.get("audio_understanding") or {}).get("world_context") or "").strip()
+    story_summary = str(storyboard.get("story_summary") or "").strip()
+    director_summary = str(storyboard.get("director_summary") or "").strip()
+    default_world = str(input_understanding.get("default_world_choice_if_unspecified") or "").strip()
+    global_environment = world_context or story_summary or director_summary or default_world or safe_environment_default
+
+    refs = compact_payload.get("refs")
+    has_character_1 = False
+    if isinstance(refs, dict):
+        has_character_1 = "character_1" in refs and bool(refs.get("character_1"))
+    if not has_character_1:
+        has_character_1 = True
+
+    camera_tokens = {
+        "close-up": "Close-up",
+        "closeup": "Close-up",
+        "cu": "Close-up",
+        "medium": "Medium shot",
+        "medium-shot": "Medium shot",
+        "ms": "Medium shot",
+        "wide": "Wide shot",
+        "wide-shot": "Wide shot",
+        "ws": "Wide shot",
+        "push-in": "Push-in",
+        "push in": "Push-in",
+        "dolly-in": "Dolly-in",
+        "tracking": "Tracking move",
+        "tracking-shot": "Tracking move",
+        "orbit": "Orbit move",
+        "low-angle": "Low angle",
+        "low angle": "Low angle",
+        "high-angle": "High angle",
+        "high angle": "High angle",
+        "handheld": "Handheld feel",
+        "crane": "Crane move",
+        "tilt": "Tilt move",
+        "pan": "Pan move",
+    }
+
     for idx, scene in enumerate(compact_scenes, start=1):
         if not isinstance(scene, dict):
             continue
@@ -8197,6 +8244,19 @@ def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any
         if end < start:
             end = start
         description = str(scene.get("description") or "").strip()
+        summary = description or safe_summary_default
+        motion = description or safe_motion_default
+        content_tags = [str(tag).strip() for tag in (scene.get("content_tags") or []) if str(tag).strip()]
+        matched_camera_hints: list[str] = []
+        for tag in content_tags:
+            normalized_tag = tag.lower().replace("_", " ")
+            for key, mapped in camera_tokens.items():
+                if key in normalized_tag and mapped not in matched_camera_hints:
+                    matched_camera_hints.append(mapped)
+        camera = ", ".join(matched_camera_hints[:3]) if matched_camera_hints else safe_camera_default
+
+        scene_environment = str(scene.get("environment") or "").strip() or global_environment
+        characters = ["character_1"] if has_character_1 else []
         route = str(scene.get("route") or "i2v").strip() or "i2v"
         scene_type = str(scene.get("scene_type") or scene.get("sceneType") or "").strip()
         legacy_scenes.append(
@@ -8205,17 +8265,17 @@ def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any
                 "t0": start,
                 "t1": end,
                 "duration": max(0.0, end - start),
-                "summary": description,
-                "visualPrompt": description,
-                "characters": [],
-                "environment": "",
-                "camera": "",
-                "motion": "",
+                "summary": summary,
+                "visualPrompt": description or summary or safe_summary_default,
+                "characters": characters,
+                "environment": scene_environment or safe_environment_default,
+                "camera": camera,
+                "motion": motion,
                 "transitionIn": "",
                 "transitionOut": "",
                 "sceneType": scene_type,
                 "route": route,
-                "content_tags": scene.get("content_tags") if isinstance(scene.get("content_tags"), list) else [],
+                "content_tags": content_tags,
             }
         )
         transcript.append({"t0": start, "t1": end, "text": description})
@@ -8231,8 +8291,6 @@ def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any
                 "transitionHint": "",
             }
         )
-    story_summary = str(storyboard.get("story_summary") or "").strip()
-    director_summary = str(storyboard.get("director_summary") or "").strip()
     return {
         **compact_payload,
         "transcript": transcript,
