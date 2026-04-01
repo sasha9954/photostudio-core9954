@@ -578,6 +578,16 @@ DIRECT_STORYBOARD_ROUTE_TO_WORKFLOW_KEY = {
     "lip_sync_music": "lip_sync",
     "lip_sync": "lip_sync",
 }
+DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE = {
+    "i2v": "image_video",
+    "lip_sync_music": "lip_sync_music",
+    "first_last": "first_last",
+}
+DIRECT_STORYBOARD_WORKFLOW_KEY_TO_PUBLIC_ROUTE = {
+    "i2v": "i2v",
+    "lip_sync": "lip_sync_music",
+    "f_l": "first_last",
+}
 LTX_WORKFLOW_FILE_TO_KEY = {
     "image-video.json": "i2v",
     "image-video-golos-zvuk.json": "i2v",
@@ -653,6 +663,32 @@ def _normalize_ltx_workflow_key(candidate: str | None) -> str:
     if raw in LTX_WORKFLOW_FILE_TO_KEY:
         return LTX_LEGACY_WORKFLOW_ALIASES.get(LTX_WORKFLOW_FILE_TO_KEY[raw], LTX_WORKFLOW_FILE_TO_KEY[raw])
     return ""
+
+
+def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
+    normalized_route = str(source_route or "").strip().lower()
+    workflow_key = DIRECT_STORYBOARD_ROUTE_TO_WORKFLOW_KEY.get(normalized_route, "")
+    public_route = normalized_route if normalized_route in DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE else ""
+    video_generation_route = "f_l" if public_route == "first_last" else public_route
+    render_mode = DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE.get(public_route, "")
+    ltx_mode = "f_l" if public_route == "first_last" else public_route
+    resolved_workflow_file = LTX_WORKFLOW_KEY_TO_FILE.get(workflow_key, "") if workflow_key else ""
+    route_render_mode_consistent = bool(public_route and render_mode == DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE.get(public_route))
+    return {
+        "sourceRoute": public_route,
+        "route": public_route,
+        "video_generation_route": video_generation_route,
+        "planned_video_generation_route": public_route,
+        "resolvedWorkflowKey": workflow_key,
+        "resolved_workflow_key": workflow_key,
+        "resolvedWorkflowFile": resolved_workflow_file,
+        "resolved_workflow_file": resolved_workflow_file,
+        "ltxMode": ltx_mode,
+        "ltx_mode": ltx_mode,
+        "renderMode": render_mode,
+        "render_mode": render_mode,
+        "route_render_mode_consistent": route_render_mode_consistent,
+    }
 
 
 def _resolve_ltx_workflow_selection(
@@ -7133,19 +7169,15 @@ If any of the required descriptive fields are returned in English, the output is
         lyric_fragment = str(s.get("lyricFragment") or lip_sync_text).strip()
         source_route_raw = str(s.get("route") or s.get("renderRoute") or "").strip().lower()
         source_route = source_route_raw if source_route_raw else ""
-        resolved_workflow_key = _normalize_ltx_workflow_key(source_route)
-        if source_route and not resolved_workflow_key:
-            resolved_workflow_key = ""
         if not source_route:
             if str(s.get("transitionType") or "").strip().lower() == "continuous":
                 source_route = "first_last"
-                resolved_workflow_key = "f_l"
             elif lip_sync_text:
                 source_route = "lip_sync_music"
-                resolved_workflow_key = "lip_sync"
             else:
                 source_route = "i2v"
-                resolved_workflow_key = "i2v"
+        contract_fields = _derive_direct_scene_contract_fields(source_route)
+        resolved_workflow_key = str(contract_fields.get("resolvedWorkflowKey") or "")
         video_prompt = str(s.get("videoPrompt") or visual_prompt or visual_desc).strip()
         reason_text = str(s.get("reason") or "").strip()
         if prop_anchor_label:
@@ -7315,6 +7347,15 @@ If any of the required descriptive fields are returned in English, the output is
             "route": source_route,
             "resolvedWorkflowKey": resolved_workflow_key,
             "resolvedWorkflowFile": LTX_WORKFLOW_KEY_TO_FILE.get(resolved_workflow_key, "") if resolved_workflow_key else "",
+            "video_generation_route": contract_fields.get("video_generation_route"),
+            "planned_video_generation_route": contract_fields.get("planned_video_generation_route"),
+            "resolved_workflow_key": contract_fields.get("resolved_workflow_key"),
+            "resolved_workflow_file": contract_fields.get("resolved_workflow_file"),
+            "ltxMode": contract_fields.get("ltxMode"),
+            "ltx_mode": contract_fields.get("ltx_mode"),
+            "renderMode": contract_fields.get("renderMode"),
+            "render_mode": contract_fields.get("render_mode"),
+            "route_render_mode_consistent": bool(contract_fields.get("route_render_mode_consistent")),
             "acceptedAsIs": bool(direct_gemini_storyboard_mode and not semantic_fallback_used and not continuity_rewritten),
         }
         normalized_scenes.append(scene_obj)
@@ -7340,7 +7381,11 @@ If any of the required descriptive fields are returned in English, the output is
     for scene in normalized_scenes:
         if not isinstance(scene, dict):
             continue
-        if bool(scene.get("lipSync") or scene.get("isLipSync") or str(scene.get("renderMode") or "").strip().lower() == "avatar_lipsync"):
+        scene_route = str(scene.get("sourceRoute") or scene.get("route") or "").strip().lower()
+        scene_workflow = _normalize_ltx_workflow_key(str(scene.get("resolvedWorkflowKey") or "").strip())
+        is_route_lipsync = scene_route == "lip_sync_music" or scene_workflow == "lip_sync"
+        is_legacy_lipsync = bool(scene.get("lipSync") or scene.get("isLipSync") or str(scene.get("renderMode") or "").strip().lower() == "avatar_lipsync")
+        if bool(is_route_lipsync or (not direct_gemini_storyboard_mode and is_legacy_lipsync)):
             lip_sync_scenes.append(scene)
 
     return {
@@ -7390,6 +7435,11 @@ If any of the required descriptive fields are returned in English, the output is
                 "sceneRouteMapping": [
                     {
                         "sceneId": str(scene.get("id") or ""),
+                        "source_route": str(scene.get("sourceRoute") or ""),
+                        "internal_route": str(scene.get("video_generation_route") or ""),
+                        "resolved_workflow_key": str(scene.get("resolvedWorkflowKey") or ""),
+                        "render_mode": str(scene.get("renderMode") or ""),
+                        "route_render_mode_consistent": bool(scene.get("route_render_mode_consistent")),
                         "geminiRoute": str(scene.get("sourceRoute") or ""),
                         "mappedWorkflowKey": str(scene.get("resolvedWorkflowKey") or ""),
                         "mappedWorkflowFile": str(scene.get("resolvedWorkflowFile") or ""),
@@ -10208,7 +10258,8 @@ def clip_video(payload: ClipVideoIn):
     direct_gemini_storyboard_mode = _flag_enabled("DIRECT_GEMINI_STORYBOARD_MODE", False)
     transition_type = _normalize_clip_video_transition_type(payload.transitionType)
     render_mode = str(payload.renderMode or "").strip().lower()
-    is_lipsync = bool(payload.lipSync is True or render_mode == "avatar_lipsync")
+    legacy_is_lipsync = bool(payload.lipSync is True or render_mode == "avatar_lipsync")
+    is_lipsync = legacy_is_lipsync
     audio_slice_url = str(payload.audioSliceUrl or "").strip()
     continuation_source_scene_id = str(payload.continuationSourceSceneId or "").strip()
     continuation_source_asset_url = str(payload.continuationSourceAssetUrl or "").strip()
@@ -10259,6 +10310,21 @@ def clip_video(payload: ClipVideoIn):
         workflow_override_candidate = _normalize_ltx_workflow_key(workflow_override_candidate) or workflow_override_candidate
     payload_resolved_workflow_raw = str(payload.resolvedWorkflowKey or "").strip()
     payload_resolved_workflow_normalized = _normalize_ltx_workflow_key(payload_resolved_workflow_raw)
+    if direct_gemini_storyboard_mode and payload_resolved_workflow_normalized:
+        is_lipsync = payload_resolved_workflow_normalized == "lip_sync"
+        mode = "continuous" if payload_resolved_workflow_normalized in (LTX_FIRST_LAST_WORKFLOW_KEYS | LTX_CONTINUATION_WORKFLOW_KEYS) else ("lipsync" if is_lipsync else "single")
+    route_from_workflow = DIRECT_STORYBOARD_WORKFLOW_KEY_TO_PUBLIC_ROUTE.get(payload_resolved_workflow_normalized or "")
+    route_render_mode_consistent = True
+    if direct_gemini_storyboard_mode and route_from_workflow:
+        expected_render_mode = DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE.get(route_from_workflow, "")
+        route_render_mode_consistent = (not expected_render_mode) or (render_mode == expected_render_mode)
+        if not route_render_mode_consistent:
+            print(
+                "[DIRECT_GEMINI_ROUTE_CONTRACT] "
+                f"sceneId={scene_id} source_route={route_from_workflow} internal_route={payload_resolved_workflow_normalized} "
+                f"resolved_workflow_key={payload_resolved_workflow_normalized} render_mode={render_mode or 'empty'} "
+                f"route_render_mode_consistent={route_render_mode_consistent}"
+            )
     if direct_gemini_storyboard_mode and payload_resolved_workflow_raw and not payload_resolved_workflow_normalized:
         return JSONResponse(
             status_code=422,
@@ -10409,6 +10475,7 @@ def clip_video(payload: ClipVideoIn):
         "requires_two_frames_hint": requires_two_frames_hint,
         "two_frame_payload_hint": two_frame_payload_hint,
         "two_frame_workflow_hint": two_frame_workflow_hint,
+        "route_render_mode_consistent": route_render_mode_consistent,
     }
     if final_workflow_key == "continuation":
         continuation_validation_code, continuation_validation_hint = _validate_continuation_source(
@@ -10445,6 +10512,7 @@ def clip_video(payload: ClipVideoIn):
                     "sceneId": scene_id,
                     "provider": provider,
                     "renderMode": render_mode,
+                    "routeRenderModeConsistent": route_render_mode_consistent,
                     "resolvedWorkflowKey": final_workflow_key,
                     "raw": raw_clip_video_source_urls,
                     "normalized": normalized_clip_video_source_urls,
