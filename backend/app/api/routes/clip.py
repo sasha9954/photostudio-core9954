@@ -41,6 +41,13 @@ COMFY_CAST_ROLES = {"character_1", "character_2", "character_3", "animal", "grou
 COMFY_WORLD_ANCHOR_ROLES = {"location", "style"}
 GROUP_NARRATIVE_REQUIRED_HINTS = {"protest", "riot", "mob", "audience", "chorus", "crowd chant", "mass panic", "митинг", "бунт", "толпа", "массов", "хор"}
 
+
+def _flag_enabled(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
 class ClipImageIn(BaseModel):
     sceneId: str
     prompt: str | None = None
@@ -564,6 +571,13 @@ LTX_WORKFLOW_KEY_TO_FILE = {
     "continuation": "image-video.json",
     "lip_sync": "image-lipsink-video-music.json",
 }
+DIRECT_STORYBOARD_ROUTE_TO_WORKFLOW_KEY = {
+    "i2v": "i2v",
+    "first_last": "f_l",
+    "f_l": "f_l",
+    "lip_sync_music": "lip_sync",
+    "lip_sync": "lip_sync",
+}
 LTX_WORKFLOW_FILE_TO_KEY = {
     "image-video.json": "i2v",
     "image-video-golos-zvuk.json": "i2v",
@@ -630,6 +644,8 @@ def _normalize_ltx_workflow_key(candidate: str | None) -> str:
     raw = str(candidate or "").strip().lower()
     if not raw:
         return ""
+    if raw in DIRECT_STORYBOARD_ROUTE_TO_WORKFLOW_KEY:
+        return DIRECT_STORYBOARD_ROUTE_TO_WORKFLOW_KEY[raw]
     if raw in LTX_LEGACY_WORKFLOW_ALIASES:
         return LTX_LEGACY_WORKFLOW_ALIASES[raw]
     if raw in LTX_WORKFLOW_KEY_TO_FILE:
@@ -5451,6 +5467,7 @@ def clip_plan(payload: BrainIn):
     """Gemini-first clip planner: Gemini analyzes audio/text/refs and returns strict JSON storyboard."""
     text = (payload.text or "").strip()
     mode = (getattr(payload, "mode", None) or payload.scenarioKey or "clip").strip().lower() or "clip"
+    direct_gemini_storyboard_mode = _flag_enabled("DIRECT_GEMINI_STORYBOARD_MODE", False)
 
     duration, audio_bytes, audio_mime, audio_debug = _load_audio_for_planner(payload.audioUrl)
 
@@ -7001,6 +7018,9 @@ If any of the required descriptive fields are returned in English, the output is
                 return False, f"scene_{idx}_characterAction_missing"
             if not str(scene.get("cameraMotion") or scene.get("camera") or "").strip():
                 return False, f"scene_{idx}_cameraMotion_missing"
+            route_raw = str(scene.get("route") or scene.get("renderRoute") or "").strip().lower()
+            if route_raw and not _normalize_ltx_workflow_key(route_raw):
+                return False, f"scene_{idx}_unsupported_route"
         return True, None
 
     retry_used = False
@@ -7083,6 +7103,11 @@ If any of the required descriptive fields are returned in English, the output is
     entity_scale_anchor_text = _format_entity_scale_anchors(entity_scale_anchors)
 
     normalized_scenes = []
+    technical_normalizations: list[str] = [
+        "timeline_duration_resolved",
+        "scene_timeline_validated",
+        "scene_timing_numeric_normalized",
+    ]
     previous_scene = None
     previous_continuity_memory = None
     session_baseline = {
@@ -7106,6 +7131,21 @@ If any of the required descriptive fields are returned in English, the output is
         visual_desc = str(s.get("visualDescription") or "").strip()
         lip_sync_text = str(s.get("lipSyncText") or "").strip()
         lyric_fragment = str(s.get("lyricFragment") or lip_sync_text).strip()
+        source_route_raw = str(s.get("route") or s.get("renderRoute") or "").strip().lower()
+        source_route = source_route_raw if source_route_raw else ""
+        resolved_workflow_key = _normalize_ltx_workflow_key(source_route)
+        if source_route and not resolved_workflow_key:
+            resolved_workflow_key = ""
+        if not source_route:
+            if str(s.get("transitionType") or "").strip().lower() == "continuous":
+                source_route = "first_last"
+                resolved_workflow_key = "f_l"
+            elif lip_sync_text:
+                source_route = "lip_sync_music"
+                resolved_workflow_key = "lip_sync"
+            else:
+                source_route = "i2v"
+                resolved_workflow_key = "i2v"
         video_prompt = str(s.get("videoPrompt") or visual_prompt or visual_desc).strip()
         reason_text = str(s.get("reason") or "").strip()
         if prop_anchor_label:
@@ -7175,29 +7215,31 @@ If any of the required descriptive fields are returned in English, the output is
                 session_world_anchors=session_world_anchors,
                 prop_anchor_label=prop_anchor_label,
             )
-        guarded_scene, semantic_fallback_used = _scene_semantic_guardrail(
-            scene={
-                **s,
-                "visualDescription": visual_desc,
-                "visualPrompt": visual_prompt,
-                "reason": reason_text,
-                "sceneNarrative": scene_narrative,
-                "environment": scene_environment,
-            },
-            semantic_whitelist=semantic_whitelist,
-            source_text=text,
-            session_world_anchors=session_world_anchors,
-            prop_anchor_label=prop_anchor_label or "",
-        )
-        if semantic_fallback_used:
-            visual_desc = str(guarded_scene.get("visualDescription") or visual_desc).strip()
-            visual_prompt = str(guarded_scene.get("visualPrompt") or visual_prompt).strip()
-            reason_text = str(guarded_scene.get("reason") or reason_text).strip()
-            scene_narrative = str(guarded_scene.get("sceneNarrative") or scene_narrative).strip()
-            scene_goal = str(guarded_scene.get("sceneGoal") or scene_goal).strip()
-            character_action = str(guarded_scene.get("characterAction") or character_action).strip()
-            camera_motion = str(guarded_scene.get("cameraMotion") or camera_motion).strip()
-            scene_environment = str(guarded_scene.get("environment") or scene_environment).strip()
+        semantic_fallback_used = False
+        if not direct_gemini_storyboard_mode:
+            guarded_scene, semantic_fallback_used = _scene_semantic_guardrail(
+                scene={
+                    **s,
+                    "visualDescription": visual_desc,
+                    "visualPrompt": visual_prompt,
+                    "reason": reason_text,
+                    "sceneNarrative": scene_narrative,
+                    "environment": scene_environment,
+                },
+                semantic_whitelist=semantic_whitelist,
+                source_text=text,
+                session_world_anchors=session_world_anchors,
+                prop_anchor_label=prop_anchor_label or "",
+            )
+            if semantic_fallback_used:
+                visual_desc = str(guarded_scene.get("visualDescription") or visual_desc).strip()
+                visual_prompt = str(guarded_scene.get("visualPrompt") or visual_prompt).strip()
+                reason_text = str(guarded_scene.get("reason") or reason_text).strip()
+                scene_narrative = str(guarded_scene.get("sceneNarrative") or scene_narrative).strip()
+                scene_goal = str(guarded_scene.get("sceneGoal") or scene_goal).strip()
+                character_action = str(guarded_scene.get("characterAction") or character_action).strip()
+                camera_motion = str(guarded_scene.get("cameraMotion") or camera_motion).strip()
+                scene_environment = str(guarded_scene.get("environment") or scene_environment).strip()
 
         established_world_text = " ".join(
             [
@@ -7208,29 +7250,32 @@ If any of the required descriptive fields are returned in English, the output is
                 str((previous_scene or {}).get("visualDescription") or ""),
             ]
         )
-        continuity_scene, continuity_rewritten, continuity_reason = _enforce_music_video_world_continuity(
-            scene={
-                "sceneGoal": scene_goal,
-                "sceneNarrative": scene_narrative,
-                "characterAction": character_action,
-                "cameraMotion": camera_motion,
-                "environment": scene_environment,
-                "visualDescription": visual_desc,
-                "visualPrompt": visual_prompt,
-                "reason": reason_text,
-            },
-            established_world_text=established_world_text,
-            source_text=text,
-        )
-        if continuity_rewritten:
-            visual_desc = str(continuity_scene.get("visualDescription") or visual_desc).strip()
-            visual_prompt = str(continuity_scene.get("visualPrompt") or visual_prompt).strip()
-            reason_text = str(continuity_scene.get("reason") or reason_text).strip()
-            scene_narrative = str(continuity_scene.get("sceneNarrative") or scene_narrative).strip()
-            scene_goal = str(continuity_scene.get("sceneGoal") or scene_goal).strip()
-            character_action = str(continuity_scene.get("characterAction") or character_action).strip()
-            camera_motion = str(continuity_scene.get("cameraMotion") or camera_motion).strip()
-            scene_environment = str(continuity_scene.get("environment") or scene_environment).strip()
+        continuity_rewritten = False
+        continuity_reason = ""
+        if not direct_gemini_storyboard_mode:
+            continuity_scene, continuity_rewritten, continuity_reason = _enforce_music_video_world_continuity(
+                scene={
+                    "sceneGoal": scene_goal,
+                    "sceneNarrative": scene_narrative,
+                    "characterAction": character_action,
+                    "cameraMotion": camera_motion,
+                    "environment": scene_environment,
+                    "visualDescription": visual_desc,
+                    "visualPrompt": visual_prompt,
+                    "reason": reason_text,
+                },
+                established_world_text=established_world_text,
+                source_text=text,
+            )
+            if continuity_rewritten:
+                visual_desc = str(continuity_scene.get("visualDescription") or visual_desc).strip()
+                visual_prompt = str(continuity_scene.get("visualPrompt") or visual_prompt).strip()
+                reason_text = str(continuity_scene.get("reason") or reason_text).strip()
+                scene_narrative = str(continuity_scene.get("sceneNarrative") or scene_narrative).strip()
+                scene_goal = str(continuity_scene.get("sceneGoal") or scene_goal).strip()
+                character_action = str(continuity_scene.get("characterAction") or character_action).strip()
+                camera_motion = str(continuity_scene.get("cameraMotion") or camera_motion).strip()
+                scene_environment = str(continuity_scene.get("environment") or scene_environment).strip()
 
         scene_delta = _build_scene_delta(s, previous_scene)
         scene_text_ru = visual_desc or reason_text or lyric_fragment
@@ -7266,17 +7311,31 @@ If any of the required descriptive fields are returned in English, the output is
             "productionScale": (session_baseline or {}).get("productionScale") if isinstance(session_baseline, dict) else None,
             "audienceState": (session_baseline or {}).get("audienceState") if isinstance(session_baseline, dict) else None,
             "worldContinuityGuardReason": continuity_reason or "",
+            "sourceRoute": source_route,
+            "route": source_route,
+            "resolvedWorkflowKey": resolved_workflow_key,
+            "resolvedWorkflowFile": LTX_WORKFLOW_KEY_TO_FILE.get(resolved_workflow_key, "") if resolved_workflow_key else "",
+            "acceptedAsIs": bool(direct_gemini_storyboard_mode and not semantic_fallback_used and not continuity_rewritten),
         }
         normalized_scenes.append(scene_obj)
         previous_scene = s
         previous_continuity_memory = continuity_memory
 
-    normalized_scenes = _apply_lipsync_performance_rules(
-        scenes=normalized_scenes,
-        duration=float(audio_duration),
-        vocal_phrases=plan.get("vocalPhrases") if isinstance(plan.get("vocalPhrases"), list) else [],
-        want_lipsync=bool(payload.wantLipSync),
-    )
+    if direct_gemini_storyboard_mode:
+        technical_normalizations.extend(
+            [
+                "route_normalized_to_workflow_key",
+                "workflow_file_mapped",
+                "audio_slice_fields_preserved_for_handoff",
+            ]
+        )
+    else:
+        normalized_scenes = _apply_lipsync_performance_rules(
+            scenes=normalized_scenes,
+            duration=float(audio_duration),
+            vocal_phrases=plan.get("vocalPhrases") if isinstance(plan.get("vocalPhrases"), list) else [],
+            want_lipsync=bool(payload.wantLipSync),
+        )
     lip_sync_scenes = []
     for scene in normalized_scenes:
         if not isinstance(scene, dict):
@@ -7320,6 +7379,24 @@ If any of the required descriptive fields are returned in English, the output is
                 "rejectedReason": validation_rejected_reason,
                 "repairRetryUsed": retry_used,
                 "warnings": validation_warnings,
+            },
+            "directGeminiStoryboardMode": {
+                "direct_gemini_storyboard_mode": direct_gemini_storyboard_mode,
+                "gemini_storyboard_used_as_source_of_truth": bool(direct_gemini_storyboard_mode),
+                "backend_creative_override_applied": False if direct_gemini_storyboard_mode else None,
+                "only_technical_validation_applied": bool(direct_gemini_storyboard_mode),
+                "technical_normalizations": technical_normalizations,
+                "technical_warnings": validation_warnings,
+                "sceneRouteMapping": [
+                    {
+                        "sceneId": str(scene.get("id") or ""),
+                        "geminiRoute": str(scene.get("sourceRoute") or ""),
+                        "mappedWorkflowKey": str(scene.get("resolvedWorkflowKey") or ""),
+                        "mappedWorkflowFile": str(scene.get("resolvedWorkflowFile") or ""),
+                        "accepted_as_is": bool(scene.get("acceptedAsIs")),
+                    }
+                    for scene in normalized_scenes
+                ],
             },
             "summary": {
                 "semanticWhitelist": semantic_whitelist,
@@ -10128,6 +10205,7 @@ def clip_video_status(job_id: str):
 @router.post("/clip/video")
 def clip_video(payload: ClipVideoIn):
     scene_id = str(payload.sceneId or "").strip() or "scene"
+    direct_gemini_storyboard_mode = _flag_enabled("DIRECT_GEMINI_STORYBOARD_MODE", False)
     transition_type = _normalize_clip_video_transition_type(payload.transitionType)
     render_mode = str(payload.renderMode or "").strip().lower()
     is_lipsync = bool(payload.lipSync is True or render_mode == "avatar_lipsync")
@@ -10179,8 +10257,24 @@ def clip_video(payload: ClipVideoIn):
     workflow_override_candidate = str(payload.workflowFileOverride or "").strip()
     if workflow_override_candidate:
         workflow_override_candidate = _normalize_ltx_workflow_key(workflow_override_candidate) or workflow_override_candidate
+    payload_resolved_workflow_raw = str(payload.resolvedWorkflowKey or "").strip()
+    payload_resolved_workflow_normalized = _normalize_ltx_workflow_key(payload_resolved_workflow_raw)
+    if direct_gemini_storyboard_mode and payload_resolved_workflow_raw and not payload_resolved_workflow_normalized:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "code": "LTX_UNSUPPORTED_ROUTE",
+                "hint": f"unsupported_route:{payload_resolved_workflow_raw}",
+                "debug": {
+                    "direct_gemini_storyboard_mode": True,
+                    "gemini_route": payload_resolved_workflow_raw,
+                    "backend_creative_override_applied": False,
+                },
+            },
+        )
     final_workflow_key, fallback_workflow_key, workflow_source, workflow_path = _resolve_ltx_workflow_selection(
-        payload_workflow_key=workflow_override_candidate or str(payload.resolvedWorkflowKey or ""),
+        payload_workflow_key=workflow_override_candidate or payload_resolved_workflow_raw,
         ltx_mode=str(payload.ltxMode or ""),
         render_mode=render_mode,
         is_lipsync=is_lipsync,
@@ -10220,7 +10314,12 @@ def clip_video(payload: ClipVideoIn):
             f"sceneId={scene_id} disabling_continuation reason=missing_continuation_source_asset_url"
         )
         continuation_requested = False
-    if force_two_frame_mode:
+    explicit_route_from_storyboard = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or "").strip())
+    if direct_gemini_storyboard_mode and explicit_route_from_storyboard:
+        force_two_frame_mode = False
+        continuation_requested = False
+        final_workflow_key = explicit_route_from_storyboard
+    elif force_two_frame_mode:
         final_workflow_key = "f_l"
     elif continuation_requested:
         final_workflow_key = "continuation"
