@@ -860,6 +860,9 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
       whyThisMode: normalizeText(scene.ltx_reason),
       renderMode: normalizeText(scene.render_mode ?? scene.renderMode) || "image_video",
       resolvedWorkflowKey: normalizeText(scene.resolved_workflow_key ?? scene.resolvedWorkflowKey) || "i2v",
+      sourceRoute: normalizeText(scene.sourceRoute ?? scene.source_route),
+      videoGenerationRoute: normalizeText(scene.video_generation_route ?? scene.videoGenerationRoute),
+      plannedVideoGenerationRoute: normalizeText(scene.planned_video_generation_route ?? scene.plannedVideoGenerationRoute),
       resolvedWorkflowFile: normalizeText(scene.resolved_workflow_file ?? scene.resolvedWorkflowFile),
       audioSliceKind: normalizeText(scene.audio_slice_kind ?? scene.audioSliceKind),
       musicVocalLipSyncAllowed: Boolean(scene.music_vocal_lipsync_allowed ?? scene.musicVocalLipSyncAllowed),
@@ -1205,6 +1208,27 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         responseScene?.resolvedWorkflowKey,
         responseScene?.resolved_workflow_key
       ) || "i2v",
+      sourceRoute: firstNonEmptyText(
+        directorScene?.sourceRoute,
+        storyboardScene?.sourceRoute,
+        storyboardScene?.source_route,
+        responseScene?.sourceRoute,
+        responseScene?.source_route
+      ),
+      videoGenerationRoute: firstNonEmptyText(
+        directorScene?.videoGenerationRoute,
+        storyboardScene?.videoGenerationRoute,
+        storyboardScene?.video_generation_route,
+        responseScene?.videoGenerationRoute,
+        responseScene?.video_generation_route
+      ),
+      plannedVideoGenerationRoute: firstNonEmptyText(
+        directorScene?.plannedVideoGenerationRoute,
+        storyboardScene?.plannedVideoGenerationRoute,
+        storyboardScene?.planned_video_generation_route,
+        responseScene?.plannedVideoGenerationRoute,
+        responseScene?.planned_video_generation_route
+      ),
       resolvedWorkflowFile: firstNonEmptyText(
         directorScene?.resolvedWorkflowFile,
         storyboardScene?.resolvedWorkflowFile,
