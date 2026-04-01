@@ -28,6 +28,12 @@ ALLOWED_SOURCE_MODES = {"audio", "video_file", "video_link"}
 ALLOWED_LTX_MODES = {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync", "lip_sync_music"}
 ALLOWED_NARRATION_MODES = {"full", "duck", "pause"}
 ALLOWED_EXPLICIT_ROLE_TYPES = {"hero", "support", "antagonist", "auto"}
+GEMINI_SCENE_ROUTE_ENUM = ("i2v", "lip_sync_music", "first_last")
+GEMINI_ROUTE_TO_WORKFLOW_KEY = {
+    "i2v": "i2v",
+    "lip_sync_music": "lip_sync",
+    "first_last": "f_l",
+}
 DEFAULT_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 FALLBACK_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC = (1.5, 4.0, 8.0)
@@ -493,6 +499,41 @@ class ScenarioDirectorError(RuntimeError):
         self.message = message
         self.status_code = status_code
         self.details = details or {}
+
+
+def _parse_gemini_scene_route_strict(route_value: Any, *, scene_index: int, parse_stage: str) -> str:
+    incoming_route = str(route_value or "").strip()
+    route = incoming_route.lower()
+    route_valid = route in GEMINI_SCENE_ROUTE_ENUM
+    logger.info(
+        "[SCENARIO_DIRECTOR ROUTE CONTRACT] route_contract_mode=%s allowed_routes=%s incoming_route=%s route_valid=%s mapped_workflow_key=%s route_source=%s backend_route_override_applied=%s parse_stage=%s scene_index=%s",
+        "strict_enum",
+        list(GEMINI_SCENE_ROUTE_ENUM),
+        incoming_route,
+        route_valid,
+        GEMINI_ROUTE_TO_WORKFLOW_KEY.get(route),
+        "gemini_schema_enum",
+        False,
+        parse_stage,
+        scene_index,
+    )
+    if not route_valid:
+        raise ScenarioDirectorError(
+            "invalid_route",
+            "Gemini returned an invalid scene route. Route must be one of: i2v, lip_sync_music, first_last.",
+            status_code=502,
+            details={
+                "routeContractMode": "strict_enum",
+                "allowedRoutes": list(GEMINI_SCENE_ROUTE_ENUM),
+                "incomingRoute": incoming_route,
+                "routeValid": False,
+                "routeSource": "gemini_schema_enum",
+                "backendRouteOverrideApplied": False,
+                "parseStage": parse_stage,
+                "sceneIndex": scene_index,
+            },
+        )
+    return route
 
 
 class ScenarioDirectorScene(BaseModel):
@@ -1255,7 +1296,7 @@ def _normalize_scenario_director_scene_defaults(payload: dict[str, Any]) -> tupl
     return repaired, normalized_fields, list(dict.fromkeys(warnings))
 
 
-def _repair_scenario_director_payload(payload: dict) -> dict:
+def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "initial") -> dict:
     def _is_compact_director_payload(candidate_payload: dict[str, Any]) -> bool:
         if not isinstance(candidate_payload, dict):
             return False
@@ -1268,14 +1309,6 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
             return False
         first_scene = scenes[0] if isinstance(scenes[0], dict) else {}
         return "start_time_sec" in first_scene and "end_time_sec" in first_scene
-
-    def _normalize_compact_route(route_value: Any) -> str:
-        route = str(route_value or "").strip().lower()
-        if route in {"lip_sync_music", "lip_sync", "lipsync_music"}:
-            return "lip_sync_music"
-        if route in {"f_l", "first_last", "first-last"}:
-            return "f_l"
-        return "i2v"
 
     def _map_compact_director_to_legacy(candidate_payload: dict[str, Any]) -> dict[str, Any]:
         storyboard = candidate_payload.get("storyboard") if isinstance(candidate_payload.get("storyboard"), dict) else {}
@@ -1301,13 +1334,15 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
             scene_end = _safe_float(compact_scene.get("end_time_sec"), scene_start)
             if scene_end < scene_start:
                 scene_end = scene_start
-            route = _normalize_compact_route(compact_scene.get("route"))
+            route = _parse_gemini_scene_route_strict(compact_scene.get("route"), scene_index=idx, parse_stage=parse_stage)
+            mapped_workflow_key = GEMINI_ROUTE_TO_WORKFLOW_KEY[route]
             description = str(compact_scene.get("description") or "").strip()
             content_tags = [str(tag).strip() for tag in (compact_scene.get("content_tags") or []) if str(tag).strip()]
             shot_type = content_tags[0] if content_tags else "medium"
             performance_framing = ", ".join(content_tags[:3]) if content_tags else ""
             is_lip_sync = route == "lip_sync_music"
-            needs_two_frames = route == "f_l"
+            needs_two_frames = route == "first_last"
+            internal_route = "f_l" if route == "first_last" else route
             scene_duration = max(0.0, round(scene_end - scene_start, 3))
             mapped_scenes.append(
                 {
@@ -1323,10 +1358,10 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
                     "camera": "medium shot, stable cinematic camera",
                     "what_from_audio_this_scene_uses": description,
                     "render_mode": "image_video",
-                    "resolved_workflow_key": route,
-                    "video_generation_route": route,
+                    "resolved_workflow_key": mapped_workflow_key,
+                    "video_generation_route": internal_route,
                     "planned_video_generation_route": route,
-                    "ltx_mode": route if is_lip_sync else ("f_l" if needs_two_frames else "i2v"),
+                    "ltx_mode": "lip_sync_music" if is_lip_sync else ("f_l" if needs_two_frames else "i2v"),
                     "needs_two_frames": needs_two_frames,
                     "lip_sync": is_lip_sync,
                     "send_audio_to_generator": is_lip_sync,
@@ -8164,7 +8199,7 @@ def _build_request_text(
         "Do not reduce scenes artificially.\n"
         "Do not optimize for old clip formulas or fixed route quotas.\n"
         "input_understanding must explicitly state world/location interpretation, literal-vs-metaphorical reading, lip-sync importance, identity-lock importance, route freedom, and what you will avoid.\n"
-        "Allowed route values: i2v | lip_sync_music | f_l(first_last).\n"
+        "Route is REQUIRED in every scene and must be strict enum: i2v | lip_sync_music | first_last.\n"
         "Descriptions and content_tags must encode premium visual intent, performance intent, and wow-factor decisions.\n"
         "System will translate your compact output into production contract and execute it.\n"
         f"Raw inputs: {json.dumps(runtime_payload, ensure_ascii=False)}"
@@ -8285,7 +8320,7 @@ def _parse_storyboard_payload(raw_text: str, *, parse_stage: str = "initial", fi
             },
         )
     logger.debug("[SCENARIO_DIRECTOR] json extracted keys=%s", ",".join(list(extracted.keys())[:8]))
-    repaired = _repair_scenario_director_payload(extracted)
+    repaired = _repair_scenario_director_payload(extracted, parse_stage=parse_stage)
     return repaired
 
 
@@ -8343,7 +8378,7 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- Keep phrase-based segmentation aligned to audio phrases.\n"
         "- Do not reduce scene count artificially.\n"
         "- Prefer clip-friendly scene durations (about 2-5.5 sec) when phrase timing allows.\n"
-        "- Use route per scene independently (i2v | lip_sync_music | f_l) based on creative and performance needs.\n"
+        "- Use route per scene independently (i2v | lip_sync_music | first_last) based on creative and performance needs.\n"
         "IMPORTANT: use ONLY canonical role ids in planning fields (character_1, character_2, character_3, animal, group, location, style, props).\n"
         "Never put filenames or display labels into actors/participants/roles.\n"
         "REAL TIMELINE REQUIREMENTS:\n"
@@ -8398,7 +8433,7 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         '        "scene_id": 1,\n'
         '        "start_time_sec": 0,\n'
         '        "end_time_sec": 0,\n'
-        '        "route": "i2v | lip_sync_music | f_l",\n'
+        '        "route": "i2v | lip_sync_music | first_last",\n'
         '        "description": "",\n'
         '        "content_tags": []\n'
         "      }\n"
@@ -8408,7 +8443,7 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
     )
 
 
-def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any]) -> dict[str, Any]:
+def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any], *, parse_stage: str = "audio_first_initial") -> dict[str, Any]:
     storyboard = compact_payload.get("storyboard") if isinstance(compact_payload.get("storyboard"), dict) else {}
     input_understanding = (
         compact_payload.get("input_understanding") if isinstance(compact_payload.get("input_understanding"), dict) else {}
@@ -8482,7 +8517,7 @@ def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any
 
         scene_environment = str(scene.get("environment") or "").strip() or global_environment
         characters = ["character_1"] if has_character_1 else []
-        route = str(scene.get("route") or "i2v").strip() or "i2v"
+        route = _parse_gemini_scene_route_strict(scene.get("route"), scene_index=idx - 1, parse_stage=parse_stage)
         scene_type = str(scene.get("scene_type") or scene.get("sceneType") or "").strip()
         legacy_scenes.append(
             {
@@ -8623,7 +8658,7 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
         and isinstance(extracted.get("storyboard"), dict)
         and not any(key in extracted for key in ("transcript", "audioStructure", "semanticTimeline", "scenes"))
     ):
-        extracted = _adapt_audio_first_compact_to_legacy_contract(extracted)
+        extracted = _adapt_audio_first_compact_to_legacy_contract(extracted, parse_stage=parse_stage)
     required = ("transcript", "audioStructure", "semanticTimeline", "scenes")
     missing = [key for key in required if key not in extracted]
     if missing:
@@ -8952,6 +8987,11 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
         ):
             continue
         is_first_renderable_scene = len(legacy_scenes) == 0
+        route = _parse_gemini_scene_route_strict(scene.get("route"), scene_index=idx - 1, parse_stage="audio_first_mapping")
+        mapped_workflow_key = GEMINI_ROUTE_TO_WORKFLOW_KEY[route]
+        is_lip_sync_route = route == "lip_sync_music"
+        is_first_last_route = route == "first_last"
+        internal_route = "f_l" if is_first_last_route else route
         legacy_scenes.append(
             {
                 "scene_id": str(scene.get("sceneId") or f"S{idx}").strip() or f"S{idx}",
@@ -8968,18 +9008,18 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "camera": str(scene.get("camera") or "").strip(),
                 "image_prompt": str(scene.get("visualPrompt") or "").strip(),
                 "video_prompt": str(scene.get("motion") or "").strip() or "Beat-synced camera and subject motion evolving through the scene.",
-                "ltx_mode": "i2v",
-                "ltx_reason": "Audio-first single-call mapped to base clip i2v mode.",
-                "render_mode": "image_video",
-                "resolved_workflow_key": "i2v",
-                "resolved_workflow_file": CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["i2v"],
+                "ltx_mode": "lip_sync_music" if is_lip_sync_route else ("f_l" if is_first_last_route else "i2v"),
+                "ltx_reason": "Audio-first single-call route mapped via strict enum contract.",
+                "render_mode": "lip_sync_music" if is_lip_sync_route else ("first_last" if is_first_last_route else "image_video"),
+                "resolved_workflow_key": mapped_workflow_key,
+                "resolved_workflow_file": CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["lip_sync_music" if is_lip_sync_route else ("f_l" if is_first_last_route else "i2v")],
                 "start_frame_source": "new",
-                "needs_two_frames": False,
+                "needs_two_frames": is_first_last_route,
                 "continuation_from_previous": False,
                 "narration_mode": "full",
                 "local_phrase": primary_phrase or None,
                 "audio_slice_kind": "voice_only" if primary_phrase else "none",
-                "music_vocal_lipsync_allowed": False,
+                "music_vocal_lipsync_allowed": is_lip_sync_route,
                 "matched_phrase_texts": scene_phrase_match.get("matchedPhraseTexts") or [],
                 "scene_phrase_count": int(scene_phrase_match.get("phraseCount") or 0),
                 "scene_phrase_source": str(scene_phrase_match.get("sourceUsed") or "none"),
@@ -8992,6 +9032,8 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "boundary_reason": "phrase",
                 "audio_anchor_evidence": str(primary_semantic.get("transitionHint") or "").strip(),
                 "confidence": 0.9,
+                "video_generation_route": internal_route,
+                "planned_video_generation_route": route,
             }
         )
     director_summary = (
@@ -9086,7 +9128,38 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
         len(str(raw_text or "")),
         finish_reason or "unknown",
     )
-    parsed_single = _parse_audio_first_single_call_payload(raw_text, parse_stage="audio_first_initial", finish_reason=finish_reason)
+    try:
+        parsed_single = _parse_audio_first_single_call_payload(raw_text, parse_stage="audio_first_initial", finish_reason=finish_reason)
+    except ScenarioDirectorError:
+        retry_body = {
+            **body,
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": f"{prompt}\n{JSON_ONLY_RETRY_SUFFIX}"}, *reference_image_parts, inline_audio_part],
+                }
+            ],
+        }
+        retry_response, retry_model_used, retry_attempts = _send_director_request(api_key, retry_body)
+        attempted_models.extend(model for model in retry_attempts if model not in attempted_models)
+        if not isinstance(retry_response, dict):
+            raise
+        if retry_response.get("__http_error__"):
+            raise _build_scenario_director_http_error(
+                retry_response,
+                fallback_code="gemini_request_failed",
+                fallback_message="Gemini audio-first strict JSON retry failed",
+            )
+        raw_text = _extract_gemini_text(retry_response)
+        finish_reason = _extract_gemini_finish_reason(retry_response)
+        model_used = retry_model_used
+        logger.info(
+            "[SCENARIO DIRECTOR] audio-first retry raw response chars=%s finish_reason=%s model=%s",
+            len(str(raw_text or "")),
+            finish_reason or "unknown",
+            model_used,
+        )
+        parsed_single = _parse_audio_first_single_call_payload(raw_text, parse_stage="audio_first_retry", finish_reason=finish_reason)
     audio_duration_sec = _safe_float(
         payload.get("audioDurationSec") or payload.get("metadata", {}).get("audio", {}).get("durationSec"),
         0.0,
