@@ -5195,7 +5195,7 @@ def _downgrade_to_environment_establishing_note(scene: ScenarioDirectorScene) ->
     scene.end_frame_prompt = ""
 
 
-def _rollback_lipsync_to_i2v(scene: ScenarioDirectorScene, *, reason: str) -> None:
+def _rollback_lipsync_to_i2v(scene: ScenarioDirectorScene, *, reason: str, downgrade_code: str) -> None:
     scene.lip_sync = False
     scene.render_mode = "image_video"
     scene.ltx_mode = "i2v"
@@ -5211,7 +5211,7 @@ def _rollback_lipsync_to_i2v(scene: ScenarioDirectorScene, *, reason: str) -> No
         scene,
         route="downgraded_to_i2v",
         planned_route="lip_sync_music",
-        downgrade_code="music_vocal_lipsync_not_allowed",
+        downgrade_code=str(downgrade_code or "music_vocal_lipsync_not_allowed"),
         downgrade_message=reason,
     )
 
@@ -6023,20 +6023,27 @@ def _apply_music_video_mode_policy(
         scene.shot_type = _normalize_scene_shot_type_from_camera(scene)
         shot_type = str(scene.shot_type or shot_type)
         scene.performance_framing = performance_framing
+        lip_sync_signal = _scene_has_lip_sync_signal(scene)
+        human_performer = _scene_has_human_performer(scene)
         close_capable = shot_type not in {"wide", "extreme_wide", "aerial", "full_body", "medium"} and performance_framing not in {
             "non_performance",
             "wide_performance",
         }
-        lip_sync_signal = _scene_has_lip_sync_signal(scene)
         lip_sync_failure_reason = ""
         if not lip_sync_signal:
             lip_sync_failure_reason = "signal_missing"
-        elif not _scene_has_human_performer(scene):
+        elif not human_performer:
             lip_sync_failure_reason = "performer_not_human"
+        elif transition_candidate:
+            lip_sync_failure_reason = "transition_candidate"
+        elif prev_lip_sync:
+            lip_sync_failure_reason = "previous_scene_already_lipsync"
+        elif lip_sync_used >= max_lip_sync:
+            lip_sync_failure_reason = "lipsync_quota_reached"
         elif not close_capable:
             lip_sync_failure_reason = "framing_too_wide"
         lip_sync_base_candidate = (
-            _scene_has_human_performer(scene)
+            human_performer
             and close_capable
             and lip_sync_signal
             and not transition_candidate
@@ -6070,8 +6077,16 @@ def _apply_music_video_mode_policy(
         audio_slice_reason = "Audio slice is not required."
 
         lip_sync_mouth_visible, lip_sync_visibility_reason = _evaluate_lipsync_mouth_visibility(scene)
+        preforce_lipsync_candidate = (
+            human_performer
+            and lip_sync_signal
+            and not transition_candidate
+            and not prev_lip_sync
+            and lip_sync_used < max_lip_sync
+            and not forced_transition_scene
+        )
         forced_lipsync_composition_applied = False
-        if lip_sync_base_candidate and not lip_sync_mouth_visible and not forced_transition_scene:
+        if preforce_lipsync_candidate and (not close_capable or not lip_sync_mouth_visible):
             _force_lipsync_friendly_composition(scene)
             forced_lipsync_composition_applied = True
             shot_type = str(scene.shot_type or shot_type)
@@ -6081,10 +6096,22 @@ def _apply_music_video_mode_policy(
                 "non_performance",
                 "wide_performance",
             }
-            lip_sync_base_candidate = lip_sync_base_candidate and close_capable
-            lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible and lip_sync_mouth_visible
+            lip_sync_base_candidate = preforce_lipsync_candidate and close_capable
+        lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible and lip_sync_mouth_visible
+        if not lip_sync_signal:
+            lip_sync_failure_reason = "signal_missing"
+        elif not human_performer:
+            lip_sync_failure_reason = "performer_not_human"
+        elif transition_candidate:
+            lip_sync_failure_reason = "transition_candidate"
+        elif prev_lip_sync:
+            lip_sync_failure_reason = "previous_scene_already_lipsync"
+        elif lip_sync_used >= max_lip_sync:
+            lip_sync_failure_reason = "lipsync_quota_reached"
+        elif not close_capable:
+            lip_sync_failure_reason = "framing_too_wide"
         else:
-            lip_sync_candidate = lip_sync_base_candidate and lip_sync_compatible and lip_sync_mouth_visible
+            lip_sync_failure_reason = ""
 
         if lip_sync_candidate and not forced_transition_scene:
             render_mode = "lip_sync_music"
@@ -6389,6 +6416,7 @@ def _apply_music_video_mode_policy(
                 _rollback_lipsync_to_i2v(
                     scene,
                     reason=f"lip_sync_music blocked: {reason}. scene downgraded_to_i2v with full lip-sync state rollback.",
+                    downgrade_code=reason,
                 )
                 continue
             _enforce_lip_sync_music_visual_canon(scene)
