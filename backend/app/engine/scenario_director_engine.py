@@ -3070,6 +3070,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "continuation": scene.continuation_from_previous,
                 "transitionType": scene.transition_type,
                 "shotType": scene.shot_type,
+                "performanceFraming": scene.performance_framing,
                 "requestedDurationSec": scene.requested_duration_sec,
                 "sceneActiveRoles": scene_active_roles,
                 "duetLockEnabled": scene.duet_lock_enabled,
@@ -3496,6 +3497,17 @@ def _limit_lip_sync_usage(
 
 
 def _infer_music_video_shot_type(scene: ScenarioDirectorScene) -> str:
+    explicit_framing = str(scene.performance_framing or "").strip().lower()
+    if explicit_framing in {"wide_action", "wide_performance"}:
+        return "wide"
+    if explicit_framing in {"full_body_action", "three_quarter"}:
+        return "medium"
+    if explicit_framing in {"close_emotional", "face_close", "close_performance", "medium_close"}:
+        return "close_up"
+    if explicit_framing in {"tight_medium", "medium_performance"}:
+        return "medium"
+    if explicit_framing in {"duet_frame", "asymmetric_duet"}:
+        return "duet_shared"
     bundle = " ".join([scene.camera, scene.frame_description, scene.action_in_frame]).lower()
     if any(token in bundle for token in ("two-shot", "two shot", "duet", "shared frame", "both in frame", "side by side")):
         return "duet_shared"
@@ -3511,6 +3523,15 @@ def _infer_music_video_shot_type(scene: ScenarioDirectorScene) -> str:
 
 
 def _normalize_scene_shot_type_from_camera(scene: ScenarioDirectorScene) -> str:
+    explicit_framing = str(scene.performance_framing or "").strip().lower()
+    if explicit_framing in {"wide_action", "wide_performance"}:
+        return "wide"
+    if explicit_framing in {"full_body_action", "three_quarter", "tight_medium", "medium_performance"}:
+        return "medium"
+    if explicit_framing in {"close_emotional", "face_close", "close_performance", "medium_close"}:
+        return "close_up"
+    if explicit_framing in {"duet_frame", "asymmetric_duet"}:
+        return "duet_shared"
     shot_type = str(scene.shot_type or "").strip().lower() or "medium"
     camera_text = " ".join(
         [
@@ -4791,8 +4812,9 @@ def _strip_video_only_semantics_from_image_prompt(text: str) -> str:
 def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     scene.scene_purpose = "performance"
     scene.transition_type = "cut" if _safe_float(scene.time_start, 0.0) > 0.0 else "cold_open"
-    scene.performance_framing = "tight_medium"
-    scene.shot_type = "medium"
+    if not str(scene.performance_framing or "").strip():
+        scene.performance_framing = "tight_medium"
+    scene.shot_type = _normalize_scene_shot_type_from_camera(scene)
     location = str(scene.location or "the same world location").strip()
     if not str(scene.action_in_frame or "").strip():
         scene.action_in_frame = (
@@ -9507,6 +9529,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
         mapped_workflow_key = GEMINI_ROUTE_TO_WORKFLOW_KEY[route]
         is_lip_sync_route = route == "lip_sync_music"
         is_first_last_route = route == "first_last"
+        performance_framing = str(scene.get("performance_framing") or scene.get("performanceFraming") or "").strip()
         is_environment_establishing = _scene_is_environment_establishing(scene)
         if scene_duration <= DIRECT_GEMINI_ESTABLISHING_SCENE_MAX_SEC and is_environment_establishing and not is_lip_sync_route:
             scene.setdefault("characters", [])
@@ -9556,6 +9579,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "music_mix_hint": "off",
                 "scene_purpose": "hook" if is_first_renderable_scene else "build",
                 "viewer_hook": "Immediate rhythmic visual anchor." if is_first_renderable_scene else "Beat-matched progression.",
+                "performance_framing": performance_framing,
                 "story_function": str(scene.get("storyFunction") or scene.get("story_function") or "").strip() or ("opening" if is_first_renderable_scene else "development"),
                 "absorbed_story_functions": [str(item).strip() for item in (scene.get("absorbedStoryFunctions") or []) if str(item).strip()],
                 "what_from_audio_this_scene_uses": str(primary_semantic.get("meaning") or scene.get("summary") or "").strip(),
@@ -9738,6 +9762,7 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
             "summary": str(scene.scene_goal or scene.frame_description or "").strip(),
             "motion": str(scene.action_in_frame or "").strip(),
             "camera": str(scene.camera or "").strip(),
+            "performanceFraming": str(scene.performance_framing or "").strip(),
             "environment": str(scene.location or "").strip(),
             "visualPrompt": str(scene.image_prompt or "").strip(),
             "characters": [str(actor).strip() for actor in (scene.actors or []) if str(actor).strip()],
