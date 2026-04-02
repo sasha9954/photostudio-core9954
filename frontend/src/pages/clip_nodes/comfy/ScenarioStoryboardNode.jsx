@@ -11,9 +11,18 @@ function isSceneImageReady(scene = {}, runtime = {}) {
   const imageStatus = String(runtime?.imageStatus || scene?.imageStatus || "").trim().toLowerCase();
   const startFrameStatus = String(runtime?.startFrameStatus || scene?.startFrameStatus || "").trim().toLowerCase();
   const endFrameStatus = String(runtime?.endFrameStatus || scene?.endFrameStatus || "").trim().toLowerCase();
-  if (imageStrategy === "first_last") return (hasStartFrameImageUrl && hasEndFrameImageUrl) || (startFrameStatus === "done" && endFrameStatus === "done");
-  if (imageStrategy === "continuation") return hasStartFrameImageUrl || hasImageUrl || startFrameStatus === "done" || imageStatus === "done";
-  return hasImageUrl || imageStatus === "done";
+  const imageIsDegraded = Boolean(
+    ["degraded", "mock", "fallback"].includes(imageStatus)
+    || scene?.imageDegraded
+    || runtime?.imageDegraded
+  );
+  const degradedStatuses = new Set(["degraded", "mock", "fallback"]);
+  const imageDone = imageStatus === "done" && !degradedStatuses.has(imageStatus);
+  const startDone = startFrameStatus === "done" && !degradedStatuses.has(startFrameStatus);
+  const endDone = endFrameStatus === "done" && !degradedStatuses.has(endFrameStatus);
+  if (imageStrategy === "first_last") return (hasStartFrameImageUrl && hasEndFrameImageUrl) || (startDone && endDone);
+  if (imageStrategy === "continuation") return !imageIsDegraded && (hasStartFrameImageUrl || hasImageUrl || startDone || imageDone);
+  return !imageIsDegraded && (hasImageUrl || imageDone);
 }
 
 function isSceneVideoReady(scene = {}, runtime = {}) {

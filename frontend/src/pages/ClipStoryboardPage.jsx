@@ -10073,12 +10073,20 @@ Aspect ratio: ${imageFormat}`,
           responseOk: Boolean(out?.ok),
           responseSceneId: String(out?.sceneId || "").trim(),
           hasImageUrl: !!String(out?.imageUrl || "").trim(),
+          resultStatus: String(out?.resultStatus || "").trim(),
+          degraded: Boolean(out?.degraded || String(out?.engine || "").trim().toLowerCase() === "mock"),
           slot: normalizedSlot,
         });
       }
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
 
       const generatedImageUrl = String(out?.imageUrl || "");
+      const imageDegraded = Boolean(
+        out?.degraded
+        || String(out?.resultStatus || "").trim().toLowerCase() === "degraded"
+        || String(out?.engine || "").trim().toLowerCase() === "mock"
+      );
+      const imageDegradeReason = String(out?.degradeReason || out?.hint || "").trim();
       const responseSceneId = String(out?.sceneId || "").trim();
       const liveBinding = resolveScenarioLiveBinding(sceneId, { nodeId: targetNodeId });
       const liveSceneStableSignature = String(buildScenarioSceneStableSignature(liveBinding?.scene || {}) || "").trim();
@@ -10169,6 +10177,9 @@ Aspect ratio: ${imageFormat}`,
         updateScenarioScene(sceneId, {
           startImageUrl: generatedImageUrl,
           startFrameImageUrl: generatedImageUrl,
+          imageDegraded,
+          imageDegradeReason,
+          imageHint: String(out?.hint || "").trim(),
           imageFormat,
           videoUrl: "",
           videoStatus: "",
@@ -10177,11 +10188,18 @@ Aspect ratio: ${imageFormat}`,
           videoSourceImageUrl: "",
           videoPanelActivated: false,
         }, { nodeId: targetNodeId });
-        runtimeImagePatch = { startFrameStatus: "done", startFrameError: "" };
+        runtimeImagePatch = {
+          startFrameStatus: imageDegraded ? "degraded" : "done",
+          startFrameError: imageDegraded ? imageDegradeReason : "",
+          imageDegraded,
+        };
       } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
         updateScenarioScene(sceneId, {
           endImageUrl: generatedImageUrl,
           endFrameImageUrl: generatedImageUrl,
+          imageDegraded,
+          imageDegradeReason,
+          imageHint: String(out?.hint || "").trim(),
           imageFormat,
           videoUrl: "",
           videoStatus: "",
@@ -10190,10 +10208,18 @@ Aspect ratio: ${imageFormat}`,
           videoSourceImageUrl: "",
           videoPanelActivated: false,
         }, { nodeId: targetNodeId });
-        runtimeImagePatch = { endFrameStatus: "done", endFrameError: "" };
+        runtimeImagePatch = {
+          endFrameStatus: imageDegraded ? "degraded" : "done",
+          endFrameError: imageDegraded ? imageDegradeReason : "",
+          imageDegraded,
+        };
       } else {
         updateScenarioScene(sceneId, {
           imageUrl: generatedImageUrl,
+          imageStatus: imageDegraded ? "degraded" : "done",
+          imageDegraded,
+          imageDegradeReason,
+          imageHint: String(out?.hint || "").trim(),
           imageFormat,
           videoUrl: "",
           videoStatus: "",
@@ -10202,7 +10228,11 @@ Aspect ratio: ${imageFormat}`,
           videoSourceImageUrl: "",
           videoPanelActivated: false,
         }, { nodeId: targetNodeId });
-        runtimeImagePatch = { imageStatus: "done", imageError: "" };
+        runtimeImagePatch = {
+          imageStatus: imageDegraded ? "degraded" : "done",
+          imageError: imageDegraded ? imageDegradeReason : "",
+          imageDegraded,
+        };
       }
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
@@ -11052,6 +11082,7 @@ Aspect ratio: ${imageFormat}`,
         ),
         provider: effectiveVideoProvider,
         sceneRenderProvider: effectiveVideoProvider,
+        sceneContract: scenarioContractPayloadSanitized,
         ...scenarioContractPayloadSanitized,
       };
       console.info("[SCENARIO VIDEO FLOW]", {
