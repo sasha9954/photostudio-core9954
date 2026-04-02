@@ -178,6 +178,11 @@ def build_clip_video_motion_prompt(
         "CLIP VIDEO MOTION:",
         f"- scene action over time: {scene_motion or 'physically grounded motion within one continuous real world'}",
         f"- camera motion: {camera_text}",
+        "- keep camera orientation upright and physically readable with stable horizon/vertical axis",
+        "- allow cinematic motion (slow push-in/pull-back, subtle drift, gentle side move, small parallax, partial side arc) but keep it grounded",
+        "- low-angle or overhead views are allowed only when camera remains upright and physically readable",
+        "- subject may spin/turn/dance, but camera must not flip/roll with the subject",
+        "- forbid upside-down framing, full frame inversion, vertical roll, barrel-roll, top-over flip, tumbling, and uncontrolled axial rotation",
         "- subject motion: natural breathing, realistic posture shifts, believable weight transfer, and grounded inertia",
         "- environment motion: fabric and hair respond to air, particles and background elements move naturally, shadows shift consistently with camera angle and scene light",
         "- lighting continuity: keep one-world lighting continuity and coherent shadow direction through the shot",
@@ -218,6 +223,7 @@ def build_ltx_video_canon_block(*, lip_sync: bool) -> str:
         "- slow push-in or slow pull-back",
         "- subtle left-right drift, gentle side move, small cinematic parallax",
         "- partial arc around performer with soft orbit only around the left/right side of the subject",
+        "- low-angle or overhead framing is allowed only when camera orientation stays upright and physically readable",
         "- cinematic camera movement should feel controlled, professional, and grounded",
     ]
     forbidden_camera_motion_rules = [
