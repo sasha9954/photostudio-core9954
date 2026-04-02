@@ -1381,7 +1381,9 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
             description = str(compact_scene.get("description") or "").strip()
             content_tags = [str(tag).strip() for tag in (compact_scene.get("content_tags") or []) if str(tag).strip()]
             shot_type = content_tags[0] if content_tags else "medium"
-            performance_framing = ", ".join(content_tags[:3]) if content_tags else ""
+            performance_framing = str(compact_scene.get("performance_framing") or compact_scene.get("performanceFraming") or "").strip()
+            if not performance_framing:
+                performance_framing = ", ".join(content_tags[:3]) if content_tags else ""
             is_lip_sync = route == "lip_sync_music"
             needs_two_frames = route == "first_last"
             internal_route = "f_l" if route == "first_last" else route
@@ -8404,7 +8406,7 @@ def _build_request_text(
         "Return ONE JSON object only (no markdown/comments).\n"
         "NO hidden assumptions. First explain how you interpreted the inputs, then return storyboard.\n"
         "Top-level JSON must stay compact and compatible:\n"
-        "{input_understanding:{audio_visual_read,character_identity_read,location_specification_level,default_world_choice_if_unspecified,marine_words_interpretation,planned_scene_types,lip_sync_importance,identity_lock_importance,same_character_across_all_scenes,can_choose_routes_independently,will_avoid},storyboard:{story_summary,full_scenario,voice_script,director_summary,audio_understanding,narrative_strategy,diagnostics:{total_duration,scene_count},scenes:[{scene_id,start_time_sec,end_time_sec,route,description,content_tags}]}}\n"
+        "{input_understanding:{audio_visual_read,character_identity_read,location_specification_level,default_world_choice_if_unspecified,marine_words_interpretation,planned_scene_types,lip_sync_importance,identity_lock_importance,same_character_across_all_scenes,can_choose_routes_independently,will_avoid},storyboard:{story_summary,full_scenario,voice_script,director_summary,audio_understanding,narrative_strategy,diagnostics:{total_duration,scene_count},scenes:[{scene_id,start_time_sec,end_time_sec,route,performance_framing,description,content_tags}]}}\n"
         "location_specification_level allowed values: fully_specified | partially_specified | unspecified.\n"
         "marine_words_interpretation allowed values: literal | metaphorical | mixed.\n"
         "Fill input_understanding fields meaningfully from CURRENT inputs (do not leave generic placeholders).\n"
@@ -8438,10 +8440,15 @@ def _build_request_text(
         "Route planning must avoid all-i2v output for vocal-driven clips.\n"
         "For ~30s vocal music clip, lip_sync_music is mandatory in multiple scenes: minimum 2 scenes.\n"
         "Pick strongest hook/vocal lines for lip_sync_music with clear face-readable emotional performance beats.\n"
-        "For lip-sync image bases, prefer tight medium / medium / 3/4 body framing as a default readability baseline.\n"
-        "If the strongest beat is better served by close-up or full-body framing, keep that intentional framing choice.\n"
-        "For lip_sync_music scenes, keep face/mouth/neck/shoulders/upper torso clearly readable with waist-up to upper-thigh framing when possible.\n"
+        "For lip_sync_music scenes, source-of-truth framing must be decided and written by you directly in scene description (not left for downstream correction).\n"
+        "For lip_sync_music scenes, default framing is tight medium / medium / 3/4 body performance framing.\n"
+        "For lip_sync_music scenes, keep lower frame boundary around slightly below waist up to upper thigh when possible.\n"
+        "For lip_sync_music scenes, keep face/mouth/neck/shoulders/upper torso clearly readable; include hands when performance helps expression.\n"
+        "Do NOT describe lip_sync_music scenes primarily as face-only close-up by default.\n"
+        "Avoid pure close-up face framing for lip_sync_music unless the strongest beat explicitly requires that close emotional intent.\n"
+        "If the strongest beat is better served by close-up or full-body framing, keep that intentional framing choice and make the reason explicit in description.\n"
         "For non-lip scenes, do NOT inherit lip-sync portrait defaults; prioritize action blocking, spatial progression, and venue zone readability.\n"
+        "For non-lip scenes, preserve intended camera diversity (wide, low-angle, overhead, tracking, crowd/action staging) instead of collapsing to portrait framing.\n"
         "Concert/festival scenes must keep physically plausible performer placement: never standing on audience heads, never floating over crowd, never impossible support planes.\n"
         "Inside one venue, prefer different connected sub-zones across scenes (barricade, side aisle, walkway gap, platform edge, stage-side rail, backstage side entry, merch/bar alley).\n"
         "Each scene must include at least one of: vocal performance, body performance, camera performance, emotional performance.\n"
@@ -8454,6 +8461,7 @@ def _build_request_text(
         "input_understanding must explicitly state world/location interpretation, literal-vs-metaphorical reading, lip-sync importance, identity-lock importance, route freedom, and what you will avoid.\n"
         "Route is REQUIRED in every scene and must be strict enum: i2v | lip_sync_music | first_last.\n"
         "Descriptions and content_tags must encode grounded photoreal visual intent, performance intent, and wow-factor decisions.\n"
+        "performance_framing should be explicit per scene when possible using compact values (tight_medium | medium | three_quarter | close_emotional | wide_action | full_body_action).\n"
         "System will translate your compact output into production contract and execute it.\n"
         f"Raw inputs: {json.dumps(runtime_payload, ensure_ascii=False)}"
         f"{retry_suffix}"
@@ -8659,10 +8667,15 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- Include multiple lip_sync_music scenes.\n"
         "- Minimum 2 scenes must use route=lip_sync_music when vocals are present.\n"
         "- Do not output all scenes as i2v by default.\n"
+        "- For lip_sync_music scenes, you must write the intended performance framing directly in scene description (source-of-truth), not rely on downstream correction.\n"
+        "- For lip_sync_music scenes, default to tight medium / medium / 3/4 body with lower frame boundary around slightly-below-waist to upper-thigh when possible.\n"
+        "- Keep mouth/face/neck/shoulders/upper torso readable for articulation and emotion; include hands when useful for performance readability.\n"
+        "- Avoid face-only close-up lip_sync_music framing unless a strongest beat explicitly requires close emotional framing.\n"
         "- lip_sync_music framing preference applies only to lip-sync scenes; non-lip scenes should stay action/staging driven.\n"
         "- short opening atmosphere beats (<1.6s) should be merged or treated as non-renderable establishing transitions, not standalone hero shots.\n"
         "- environment-first establishing reveal may intentionally have no active character subject.\n"
         "- in concert/crowd worlds, character placement must be physically grounded in valid venue zones.\n"
+        "- For non-lip scenes, preserve action/staging camera diversity (wide/low-angle/overhead/tracking/crowd dynamics); do not collapse into portrait defaults.\n"
         "SCENE SEGMENTATION:\n"
         "- Keep phrase-based segmentation aligned to audio phrases.\n"
         "- End scenes at natural phrase ends or just before safe post-phrase spill.\n"
@@ -8738,6 +8751,7 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         '        "start_time_sec": 0,\n'
         '        "end_time_sec": 0,\n'
         '        "route": "i2v | lip_sync_music | first_last",\n'
+        '        "performance_framing": "tight_medium | medium | three_quarter | close_emotional | wide_action | full_body_action",\n'
         f'        "story_function": "{arc_story_function_hint}",\n'
         '        "description": "",\n'
         '        "content_tags": []\n'
@@ -9213,15 +9227,11 @@ def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> 
                 absorbed = list(next_scene.get("absorbedStoryFunctions") or [])
                 absorbed.append(absorbed_function)
                 next_scene["absorbedStoryFunctions"] = list(dict.fromkeys([str(item).strip() for item in absorbed if str(item).strip()]))
-                prev_summary = str(scene.get("summary") or "").strip()
-                next_summary = str(next_scene.get("summary") or "").strip()
-                if prev_summary and prev_summary.lower() not in next_summary.lower():
-                    next_scene["summary"] = f"{prev_summary}. {next_summary}".strip(". ")
                 hidden_story_beats.append(
                     {
                         "sceneId": scene_id,
                         "storyFunction": absorbed_function,
-                        "resolution": "merged_into_next_renderable_scene",
+                        "resolution": "merged_into_next_renderable_scene_without_visual_prompt_blend",
                     }
                 )
                 scenes[idx + 1]["t0"] = round(min(_safe_float(scenes[idx + 1].get("t0"), start), start), 3)
