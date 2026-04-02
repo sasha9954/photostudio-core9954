@@ -30,6 +30,7 @@ function safeSceneDuration(scene = {}) {
 function resolveBlockStatus({ runtimeStatus = "", assetUrl = "" } = {}) {
   const status = String(runtimeStatus || "").trim().toLowerCase();
   if (["loading", "queued", "running", "generating"].includes(status)) return "loading";
+  if (["degraded", "mock", "fallback"].includes(status)) return "degraded";
   if (status === "error" || status === "not_found") return "error";
   if (status === "done" || String(assetUrl || "").trim()) return "done";
   return "idle";
@@ -1303,6 +1304,11 @@ export default function ScenarioStoryboardEditor({
                               </div>
                             )}
                           </div>
+                          {imageStatus === "degraded" ? (
+                            <div className="clipSB_hint" style={{ color: "#ffb066", marginTop: 8 }}>
+                              Получен fallback/mock image. Проверьте hint/degradeReason: {String(selectedScene?.imageHint || selectedScene?.imageDegradeReason || "gemini_no_image")}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </>

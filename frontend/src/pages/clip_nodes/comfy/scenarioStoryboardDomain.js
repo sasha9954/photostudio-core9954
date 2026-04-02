@@ -646,6 +646,10 @@ export function resolveScenarioWorkflowKey(scene = {}) {
 export function resolveScenarioFinalRouteKey(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const routeCandidates = [
+    source.finalRoute,
+    source.sourceRoute,
+    source.source_route,
+    source.route,
     source.resolvedWorkflowKey,
     source.resolved_workflow_key,
     source.plannedVideoGenerationRoute,
@@ -1186,6 +1190,9 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     environmentLock: source.environmentLock ?? source.environment_lock,
     styleLock: source.styleLock ?? source.style_lock,
     identityLock: source.identityLock ?? source.identity_lock,
+    identityLockApplied: Boolean(source.identityLockApplied ?? source.identity_lock_applied),
+    identityLockFieldsUsed: normalizeStringList(source.identityLockFieldsUsed ?? source.identity_lock_fields_used),
+    identityLockNotes: normalizeText(source.identityLockNotes ?? source.identity_lock_notes),
     mustAppear: normalizeStringList(source.mustAppear ?? source.must_appear),
     mustNotAppear: (!hasExplicitMarineLiteralRequirement && hasMarinePoeticSignal)
       ? Array.from(new Set([
@@ -1240,6 +1247,22 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   normalizedScene.supportEntityIds = resolvedRoleContract.supportEntityIds;
   normalizedScene.heroEntityId = normalizedScene.heroEntityId || resolvedRoleContract.primaryRole || "";
   normalizedScene.refsUsedByRole = normalizeObjectMap(resolvedRoleContract.refsUsedByRole);
+  const hasCastRefsForScene = (normalizedScene.sceneActiveRoles || []).some((role) => {
+    if (!SCENARIO_CAST_ROLE_KEYS.includes(role)) return false;
+    const sceneRefs = Array.isArray(normalizedScene.refsUsedByRole?.[role]) ? normalizedScene.refsUsedByRole[role] : [];
+    const packageRefs = Array.isArray(normalizedScene.refsByRole?.[role]) ? normalizedScene.refsByRole[role] : [];
+    const connectedRefs = Array.isArray(normalizedScene.connectedRefsByRole?.[role]) ? normalizedScene.connectedRefsByRole[role] : [];
+    return sceneRefs.length > 0 || packageRefs.length > 0 || connectedRefs.length > 0;
+  });
+  if (!normalizedScene.identityLockApplied && hasCastRefsForScene && normalizedScene.sceneActiveRoles.some((role) => SCENARIO_CAST_ROLE_KEYS.includes(role))) {
+    normalizedScene.identityLockApplied = true;
+  }
+  if (normalizedScene.identityLockApplied && !(Array.isArray(normalizedScene.identityLockFieldsUsed) && normalizedScene.identityLockFieldsUsed.length)) {
+    normalizedScene.identityLockFieldsUsed = ["face_identity", "outfit_identity", "world_identity"];
+  }
+  if (normalizedScene.identityLockApplied && !normalizeText(normalizedScene.identityLockNotes)) {
+    normalizedScene.identityLockNotes = "Lock character face/outfit and world/location continuity from connected refs.";
+  }
 
   if (SCENARIO_STORYBOARD_TRACE) {
     console.debug("[SCENARIO TRANSFER] normalized scene", {
@@ -1382,62 +1405,78 @@ function buildGlobalCameraProfile(storyboardOut = {}, directorOutput = {}) {
 }
 
 export function normalizeScenarioStoryboardPackage({ storyboardOut = null, directorOutput = null } = {}) {
-  const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, {});
-  const globalCameraProfile = buildGlobalCameraProfile(storyboardOut || {}, {});
+  const canonicalScenesRaw = Array.isArray(directorOutput?.scenes) && directorOutput.scenes.length
+    ? directorOutput.scenes
+    : (Array.isArray(storyboardOut?.scenes) ? storyboardOut.scenes : []);
+  const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
+  const globalCameraProfile = buildGlobalCameraProfile(storyboardOut || {}, directorOutput || {});
   const format = resolveFormatAlias(
+    directorOutput?.format,
+    directorOutput?.aspectRatio,
+    directorOutput?.aspect_ratio,
+    directorOutput?.canvas,
     storyboardOut?.format,
     storyboardOut?.aspectRatio,
     storyboardOut?.aspect_ratio,
     storyboardOut?.canvas
   );
   const refsByRole = mergeObjectMapsPreferNonEmpty(
+    directorOutput?.refsByRole ?? directorOutput?.refs_by_role,
     storyboardOut?.refsByRole ?? storyboardOut?.refs_by_role,
-    {}
+    directorOutput?.context_refs?.refsByRole ?? {}
   );
   const connectedRefsByRole = mergeObjectMapsPreferNonEmpty(
+    directorOutput?.connectedRefsByRole ?? directorOutput?.connected_refs_by_role,
     storyboardOut?.connectedRefsByRole ?? storyboardOut?.connected_refs_by_role,
-    {}
+    directorOutput?.context_refs?.connectedRefsByRole ?? {}
   );
   const roleTypeByRole = mergeObjectMapsPreferNonEmpty(
+    directorOutput?.roleTypeByRole ?? directorOutput?.role_type_by_role,
     storyboardOut?.roleTypeByRole ?? storyboardOut?.role_type_by_role,
     {}
   );
   const connectedContextSummary = mergeStructuredPreferNonEmpty(
+    directorOutput?.connectedContextSummary ?? directorOutput?.connected_context_summary,
     storyboardOut?.connectedContextSummary ?? storyboardOut?.connected_context_summary,
     "",
     ""
   );
   const heroParticipants = mergeStringListsPreferNonEmpty(
+    directorOutput?.heroParticipants ?? directorOutput?.hero_participants,
     storyboardOut?.heroParticipants ?? storyboardOut?.hero_participants,
     []
   );
   const supportingParticipants = mergeStringListsPreferNonEmpty(
+    directorOutput?.supportingParticipants ?? directorOutput?.supporting_participants,
     storyboardOut?.supportingParticipants ?? storyboardOut?.supporting_participants,
     []
   );
   const mustAppearRoles = mergeStringListsPreferNonEmpty(
+    directorOutput?.mustAppearRoles ?? directorOutput?.must_appear_roles,
     storyboardOut?.mustAppearRoles ?? storyboardOut?.must_appear_roles,
     []
   );
   const contextRefs = mergeStructuredPreferNonEmpty(
+    directorOutput?.contextRefs ?? directorOutput?.context_refs,
     storyboardOut?.contextRefs ?? storyboardOut?.context_refs,
     {},
     {}
   );
   const refDirectives = mergeObjectMapsPreferNonEmpty(
+    directorOutput?.refDirectives ?? directorOutput?.ref_directives,
     storyboardOut?.refDirectives ?? storyboardOut?.ref_directives,
     {}
   );
 
-  const scenesRaw = Array.isArray(storyboardOut?.scenes) ? storyboardOut.scenes : [];
-  const scenes = scenesRaw.map((scene, idx) => {
+  const scenes = canonicalScenesRaw.map((scene, idx) => {
     const tracedSceneId = normalizeText(scene?.sceneId ?? scene?.scene_id) || `S${idx + 1}`;
     if (shouldTraceScenarioRoleScene(tracedSceneId)) {
       const plannerSceneRaw = Array.isArray(storyboardOut?.scenes) ? (storyboardOut.scenes[idx] || null) : null;
+      const directorSceneRaw = Array.isArray(directorOutput?.scenes) ? (directorOutput.scenes[idx] || null) : null;
       console.debug("[SCENARIO ROLE TRACE] raw planner/director scene", {
         sceneId: tracedSceneId,
         plannerSceneRaw,
-        directorSceneRaw: null,
+        directorSceneRaw,
       });
     }
     return normalizeScenarioScene(scene, idx, {
@@ -1484,6 +1523,9 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   );
 
   const normalizedPackage = {
+    canonicalSceneContract: scenes,
+    sceneContractVersion: "v1",
+    sceneContractSource: Array.isArray(directorOutput?.scenes) && directorOutput.scenes.length ? "directorOutput.scenes" : "storyboardOut.scenes",
     scenes,
     format,
     storySummaryRu: storySummary.ru,

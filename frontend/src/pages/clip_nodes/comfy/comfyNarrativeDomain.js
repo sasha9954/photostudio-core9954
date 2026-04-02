@@ -1024,8 +1024,21 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     : response?.storyboard_out && typeof response.storyboard_out === "object"
       ? response.storyboard_out
       : compactStoryboardOut;
-  const directorOutputFromResponse = response?.directorOutput && typeof response.directorOutput === "object"
+  const canonicalSceneContract = Array.isArray(response?.canonicalSceneContract)
+    ? response.canonicalSceneContract
+    : Array.isArray(response?.finalSceneContract)
+      ? response.finalSceneContract
+      : [];
+  const directorOutputFromResponseRaw = response?.directorOutput && typeof response.directorOutput === "object"
     ? response.directorOutput
+    : null;
+  const directorOutputFromResponse = directorOutputFromResponseRaw
+    ? {
+      ...directorOutputFromResponseRaw,
+      scenes: canonicalSceneContract.length
+        ? canonicalSceneContract
+        : (Array.isArray(directorOutputFromResponseRaw?.scenes) ? directorOutputFromResponseRaw.scenes : []),
+    }
     : null;
   const packageRoleAwareKeys = [
     "refsByRole",
@@ -1123,8 +1136,8 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     });
     return merged;
   };
-  const responseScenes = extractScenes(response);
-  const storyboardScenes = extractScenes(storyboardOut);
+  const responseScenes = canonicalSceneContract.length ? [] : extractScenes(response);
+  const storyboardScenes = canonicalSceneContract.length ? [] : extractScenes(storyboardOut);
   const directorScenes = extractScenes(directorOutputFromResponse);
   const hadDirectorOutput = !!directorOutputFromResponse;
   const hadStoryboardOut = !!storyboardOut;
