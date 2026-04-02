@@ -4439,6 +4439,38 @@ def _build_character_identity_visible_lock(
     return "; ".join([part for part in dict.fromkeys(locks) if part]), fields_used
 
 
+CLUB_VENUE_RELEVANCE_HINTS = (
+    "club",
+    "nightclub",
+    "dance floor",
+    "bar",
+    "booth",
+    "corridor",
+    "lounge",
+    "neon",
+    "vip",
+    "dj",
+    "stage",
+)
+
+
+def _is_club_world_relevant_scene(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> bool:
+    payload = payload if isinstance(payload, dict) else {}
+    raw = " ".join(
+        [
+            str(scene.location or ""),
+            str(scene.frame_description or ""),
+            str(scene.action_in_frame or ""),
+            str(scene.scene_goal or ""),
+            str(payload.get("environment") or ""),
+            str(payload.get("story_summary") or ""),
+            str(payload.get("director_summary") or ""),
+            str(payload.get("full_scenario") or ""),
+        ]
+    ).lower()
+    return any(token in raw for token in CLUB_VENUE_RELEVANCE_HINTS)
+
+
 def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> str:
     lead = str(scene.frame_description or "").strip()
     action = str(scene.action_in_frame or "").strip()
@@ -4471,10 +4503,12 @@ def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[s
     parts.append(
         "World continuity lock: keep one coherent real venue across scenes; only zone/angle/distance/mood may vary while architecture/material palette/lighting system stay consistent."
     )
+    apply_club_venue_bible = _is_lip_sync_music_scene(scene) or _is_club_world_relevant_scene(scene, payload=payload)
     if _is_lip_sync_music_scene(scene):
         parts.append(
             "Still-photo canon: prioritize a single frozen photographic moment with scene-specific composition, gaze, pose, and body orientation."
         )
+    if apply_club_venue_bible:
         parts.append(
             "Club venue bible (photo continuity): this is one real club, not different clubs; dance floor, bar, corridor, booth, and window zone must read as connected zones of the same interior."
         )
