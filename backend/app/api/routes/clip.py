@@ -611,17 +611,30 @@ DIRECT_STORYBOARD_WORKFLOW_KEY_TO_PUBLIC_ROUTE = {
     "f_l": "first_last",
 }
 DIRECT_ROUTE_RISKY_ROTATION_MARKERS = (
+    "spin",
+    "spinning",
     "spin-first",
     "spin first",
+    "twirl",
+    "twirling",
+    "swirl",
+    "swirling dress",
+    "flowing dress",
+    "dramatic sweep",
+    "dress sweep",
+    "full-body silhouette",
     "full-body spin",
     "full body spin",
     "aggressive twirl",
     "twirl-first",
     "twirl first",
+    "whip-turn",
+    "whip turn",
     "fast whip-turn",
     "fast whip turn",
     "rotation-first choreography",
     "rotation first choreography",
+    "risky rotation",
     "dramatic dress-sweep",
     "dramatic dress sweep",
     "overhead dance spectacle",
@@ -7711,6 +7724,7 @@ If any of the required descriptive fields are returned in English, the output is
         else:
             prompt_value = frame_prompt or visual_prompt or visual_desc
             image_prompt_value = frame_prompt or visual_prompt or visual_desc
+        image_prompt_normalized = False
 
         route_is_lipsync = source_route == "lip_sync_music"
         route_is_non_lip = source_route in {"i2v", "first_last"}
@@ -7743,6 +7757,7 @@ If any of the required descriptive fields are returned in English, the output is
                     image_prompt=image_prompt_value or visual_prompt or visual_desc,
                     fallback_text=character_action,
                 )
+                image_prompt_normalized = True
         elif route_is_non_lip:
             non_lip_safe_motion = (
                 "Beat-led progression through action space with safe step/pivot/gesture, evolving head/shoulder/body angles, "
@@ -7763,13 +7778,15 @@ If any of the required descriptive fields are returned in English, the output is
                     image_prompt=image_prompt_value or visual_prompt or visual_desc,
                     fallback_text=character_action,
                 )
+                image_prompt_normalized = True
         elif risky_rotation_bias:
             image_prompt_value = _normalize_image_prompt_by_route(
                 route=source_route,
                 image_prompt=image_prompt_value or visual_prompt or visual_desc,
                 fallback_text=character_action or video_prompt,
             )
-        if route_is_lipsync or route_is_non_lip:
+            image_prompt_normalized = True
+        if (route_is_lipsync or route_is_non_lip) and not image_prompt_normalized:
             image_prompt_value = _normalize_image_prompt_by_route(
                 route=source_route,
                 image_prompt=image_prompt_value,
@@ -7784,7 +7801,7 @@ If any of the required descriptive fields are returned in English, the output is
                     "worldScaleContext": world_scale_context,
                     "entityScaleAnchors": entity_scale_anchor_text,
                     "sceneText": visual_desc,
-                    "imagePrompt": visual_prompt,
+                    "imagePrompt": image_prompt_value or visual_prompt,
                     "why": reason_text,
                 },
                 session_world_anchors=session_world_anchors,
