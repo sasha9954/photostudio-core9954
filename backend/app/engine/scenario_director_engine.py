@@ -4469,14 +4469,17 @@ def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[s
     if identity_lock:
         parts.append(identity_lock)
     parts.append(
-        "World continuity lock: maintain one coherent venue family across storyboard scenes; zone can change (dance floor, bar, corridor, window area) but architecture/materials/palette/light rig stay recognizably the same venue."
+        "World continuity lock: keep one coherent real venue across scenes; only zone/angle/distance/mood may vary while architecture/material palette/lighting system stay consistent."
     )
     if _is_lip_sync_music_scene(scene):
         parts.append(
             "Still-photo canon: prioritize a single frozen photographic moment with scene-specific composition, gaze, pose, and body orientation."
         )
         parts.append(
-            "One-venue world lock: keep the same real club venue family across all scenes with coherent architecture, material palette, and lighting rig."
+            "Club venue bible (photo continuity): this is one real club, not different clubs; dance floor, bar, corridor, booth, and window zone must read as connected zones of the same interior."
+        )
+        parts.append(
+            "Keep one interior language across scenes: same wall/ceiling logic, bar/furniture design, floor material, neon palette, haze-light rig, and crowd styling; no venue hopping or interior redesign."
         )
     return _quality_filter_visible_prompt(_join_visible_prompt_parts(parts))
 
@@ -4711,14 +4714,18 @@ def _strip_video_only_semantics_from_image_prompt(text: str) -> str:
         "subtle head motion",
         "body sway",
         "partial arc",
+        "orbit",
         "no 360",
         "360",
+        "360°",
         "push-in",
         "camera",
         "locomotion",
         "ltx",
+        "motion canon",
         "live-session",
         "live session",
+        "animation",
     )
     cleaned = [line for line in lines if not any(marker in line.lower() for marker in banned_markers)]
     return ". ".join(cleaned).strip()
@@ -6441,7 +6448,7 @@ def _apply_music_video_mode_policy(
             else ("identity_lock_insufficient_source" if "character_1" in {str(actor).strip().lower() for actor in (scene.actors or [])} else "")
         )
         if scene.identity_lock_applied:
-            required_lock_fields = ["face_identity", "hair_identity", "outfit_identity", "body_identity", "age_presentation"]
+            required_lock_fields = ["face_identity", "hair_identity", "garment_identity", "body_identity", "makeup_identity"]
             normalized_fields = [str(field or "").strip() for field in (identity_fields_used or []) if str(field or "").strip()]
             for required in required_lock_fields:
                 if required not in normalized_fields:
@@ -6700,7 +6707,8 @@ def _enforce_single_character_music_video_policy(payload: dict[str, Any], storyb
                     "hair_identity",
                     "body_identity",
                     "silhouette_identity",
-                    "outfit_identity",
+                    "garment_identity",
+                    "makeup_identity",
                     "footwear_identity",
                     "accessory_identity",
                     "world_identity",
