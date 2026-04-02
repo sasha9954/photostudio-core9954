@@ -41,6 +41,7 @@ LIP_SYNC_SPIN_RISK_MARKERS = (
     "spin",
     "spinning",
     "twirl",
+    "twirling",
     "swirl",
     "swirling dress",
     "flowing dress",
@@ -48,6 +49,11 @@ LIP_SYNC_SPIN_RISK_MARKERS = (
     "dress sweep",
     "full-body silhouette",
     "overhead dance spectacle",
+    "whip-turn",
+    "whip turn",
+    "full-body spin",
+    "rotation-first choreography",
+    "risky rotation",
 )
 LIP_SYNC_PERFORMANCE_MARKERS = (
     "sing",
@@ -81,6 +87,21 @@ NON_LIP_ACTION_MARKERS = (
     "atmosphere",
     "crowd",
     "environment",
+)
+NON_LIP_RISKY_ROTATION_MARKERS = (
+    "spin-first",
+    "spin first",
+    "full-body spin",
+    "full body spin",
+    "aggressive twirl",
+    "twirl-first",
+    "twirl first",
+    "fast whip-turn",
+    "fast whip turn",
+    "rotation-first choreography",
+    "rotation first choreography",
+    "dramatic dress-sweep",
+    "dramatic dress sweep",
 )
 DEFAULT_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 FALLBACK_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
@@ -160,6 +181,8 @@ def _normalize_scene_canon_by_route(
     framing = str(performance_framing or "").strip().lower()
     tags_text = " ".join([str(tag).strip().lower() for tag in (content_tags or []) if str(tag).strip()])
     descriptor_text = f"{normalized_description.lower()} {tags_text}".strip()
+    is_empty_description = not normalized_description
+    has_risky_rotation_bias = any(marker in descriptor_text for marker in (*LIP_SYNC_SPIN_RISK_MARKERS, *NON_LIP_RISKY_ROTATION_MARKERS))
     if route == "lip_sync_music":
         spin_risk_count = sum(1 for marker in LIP_SYNC_SPIN_RISK_MARKERS if marker in descriptor_text)
         performance_signal_count = sum(1 for marker in LIP_SYNC_PERFORMANCE_MARKERS if marker in descriptor_text)
@@ -168,20 +191,43 @@ def _normalize_scene_canon_by_route(
                 "Singer performs emotionally to camera with clear lyric articulation; face, mouth, neck, shoulders, and upper torso "
                 "stay readable, expressive hands support meaning, and camera motion stays controlled with gentle push/pull or side arc."
             )
+        elif is_empty_description:
+            normalized_description = (
+                "Singer-performance-first moment: emotion is delivered through singing, with readable face/mouth/neck/shoulders/upper torso, "
+                "expressive hands, subtle sway, and beat-driven emotional intensity escalation."
+            )
         elif performance_signal_count == 0:
             normalized_description = (
                 f"{normalized_description}. Singer remains camera-readable with emotional lyric delivery and clear mouth articulation."
+            ).strip(". ")
+        if normalized_description and "beat-driven emotional intensity" not in normalized_description.lower():
+            normalized_description = (
+                f"{normalized_description}. Beat progression drives emotional intensity and performance energy."
             ).strip(". ")
         if framing not in LIP_SYNC_PERFORMANCE_FRAMINGS:
             framing = "tight_medium"
     elif route in {"i2v", "first_last"}:
         portrait_signal = any(marker in descriptor_text for marker in NON_LIP_PORTRAIT_MARKERS)
         action_signal = any(marker in descriptor_text for marker in NON_LIP_ACTION_MARKERS)
-        if portrait_signal and not action_signal:
+        if has_risky_rotation_bias:
+            normalized_description = (
+                f"{normalized_description}. Keep motion progression safe and spatial: favor travel through zones, controlled step/pivot/gesture, "
+                "and camera-led reveal/tracking/parallax over sharp spins or rotation-first choreography."
+            ).strip(". ")
+        elif portrait_signal and not action_signal:
             normalized_description = (
                 "Action-driven beat in a readable venue zone: performer moves through space with safe walking/pivot/gesture progression, "
                 "camera builds dynamics with tracking/angle changes, and atmosphere evolves with light and environment."
             )
+        elif is_empty_description:
+            normalized_description = (
+                "Beat-led non-lip scene with movement through space, safe step/pivot/gesture progression, evolving body angles, and camera-led "
+                "reveal/tracking/parallax; beat shapes mood, intensity, and energy progression."
+            )
+        elif normalized_description and "beat shapes mood" not in normalized_description.lower():
+            normalized_description = (
+                f"{normalized_description}. Beat shapes mood, intensity, and energy progression."
+            ).strip(". ")
         if framing not in NON_LIP_ACTION_FRAMINGS:
             framing = "wide_action"
     return normalized_description.strip(), framing
@@ -1478,6 +1524,34 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
                 performance_framing=performance_framing,
                 content_tags=content_tags,
             )
+            route_lc_description = str(description or "").strip().lower()
+            description_is_risky = any(
+                marker in route_lc_description for marker in (*LIP_SYNC_SPIN_RISK_MARKERS, *NON_LIP_RISKY_ROTATION_MARKERS)
+            )
+            if is_lip_sync:
+                action_in_frame = (
+                    description
+                    or "Singer-performance-first shot with emotional lyric delivery and beat-driven energy escalation."
+                )
+                if description_is_risky:
+                    action_in_frame = (
+                        "Singer-performance-first shot: emotional lyric delivery with expressive hands, subtle sway, and gentle body pulse; "
+                        "avoid spin-first/full-body spectacle as the main idea."
+                    )
+                camera_text = (
+                    "gentle push/pull or side arc, maintain close readability of face/mouth/neck/shoulders/upper torso"
+                )
+            else:
+                action_in_frame = (
+                    description
+                    or "Beat-led scene progression through space with safe step/pivot/gesture and camera-led reveal."
+                )
+                if description_is_risky:
+                    action_in_frame = (
+                        "Beat-led spatial progression through venue zones with safe step/pivot/gesture and evolving body angles; "
+                        "avoid sharp spins/twirls/whip-turns as primary choreography."
+                    )
+                camera_text = "tracking/reveal/parallax progression that follows scene action-space development"
             scene_duration = max(0.0, round(scene_end - scene_start, 3))
             mapped_scenes.append(
                 {
@@ -1489,8 +1563,8 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
                     "local_phrase": description,
                     "scene_goal": description,
                     "frame_description": description or "Performance-led visual beat aligned with audio timing.",
-                    "action_in_frame": description or "Performer expresses the current music beat.",
-                    "camera": "medium shot, stable cinematic camera",
+                    "action_in_frame": action_in_frame,
+                    "camera": camera_text,
                     "what_from_audio_this_scene_uses": description,
                     "render_mode": "image_video",
                     "resolved_workflow_key": mapped_workflow_key,
@@ -1505,6 +1579,8 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
                     "audio_slice_end_sec": scene_end if is_lip_sync else 0.0,
                     "audio_slice_expected_duration_sec": scene_duration if is_lip_sync else 0.0,
                     "shot_type": shot_type,
+                    "image_prompt": description,
+                    "video_prompt": action_in_frame,
                     "performance_framing": performance_framing,
                     "identity_lock_applied": same_character,
                     "identity_lock_fields_used": continuity_lock_fields if same_character else [],
@@ -9656,17 +9732,28 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
         )
         if normalized_route_description and not summary_text:
             summary_text = normalized_route_description
-        if is_lip_sync_route and normalized_route_description:
-            motion_text = (
-                "Emotional singer-to-camera lyric performance with clear articulation, expressive hands, subtle sway, and controlled camera motion."
-            )
-            camera_text = "Slow push-in/pull-back or gentle side arc; maintain stable horizon and readable face framing."
-        elif route in {"i2v", "first_last"} and normalized_route_description:
-            motion_text = (
-                "Action/space beat with safe movement through venue zones, gesture-led progression, and camera-driven dynamism."
-            )
-            if not camera_text:
-                camera_text = "Tracking or angled move that reveals space progression and preserves readable body motion."
+        motion_text_lc = motion_text.lower()
+        camera_text_lc = camera_text.lower()
+        motion_is_risky = any(marker in motion_text_lc for marker in (*LIP_SYNC_SPIN_RISK_MARKERS, *NON_LIP_RISKY_ROTATION_MARKERS))
+        camera_is_risky = any(marker in camera_text_lc for marker in (*LIP_SYNC_SPIN_RISK_MARKERS, *NON_LIP_RISKY_ROTATION_MARKERS))
+        if is_lip_sync_route:
+            if not motion_text or motion_is_risky:
+                motion_text = (
+                    "Singer-performance-first: emotional lyric delivery with readable mouth/neck/shoulders/upper torso, expressive hands, subtle sway, "
+                    "small step or gentle torso shift; beat drives emotional intensity and performance energy."
+                )
+            if not camera_text or camera_is_risky:
+                camera_text = (
+                    "Camera supports song immersion with gentle push/pull, drift, or side arc while preserving close facial readability."
+                )
+        elif route in {"i2v", "first_last"}:
+            if not motion_text or motion_is_risky:
+                motion_text = (
+                    "Action-space progression through venue zones with safe step/pivot/gesture and evolving shoulder/head/body angles; "
+                    "avoid sharp full-body spins as primary motion while keeping scene-specific narrative development."
+                )
+            if not camera_text or camera_is_risky:
+                camera_text = "Tracking or angled reveal/parallax move that keeps readable progression through space."
         is_environment_establishing = _scene_is_environment_establishing(scene)
         if scene_duration <= DIRECT_GEMINI_ESTABLISHING_SCENE_MAX_SEC and is_environment_establishing and not is_lip_sync_route:
             scene.setdefault("characters", [])

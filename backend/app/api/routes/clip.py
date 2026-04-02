@@ -610,6 +610,22 @@ DIRECT_STORYBOARD_WORKFLOW_KEY_TO_PUBLIC_ROUTE = {
     "lip_sync": "lip_sync_music",
     "f_l": "first_last",
 }
+DIRECT_ROUTE_RISKY_ROTATION_MARKERS = (
+    "spin-first",
+    "spin first",
+    "full-body spin",
+    "full body spin",
+    "aggressive twirl",
+    "twirl-first",
+    "twirl first",
+    "fast whip-turn",
+    "fast whip turn",
+    "rotation-first choreography",
+    "rotation first choreography",
+    "dramatic dress-sweep",
+    "dramatic dress sweep",
+    "overhead dance spectacle",
+)
 LTX_WORKFLOW_FILE_TO_KEY = {
     "image-video.json": "i2v",
     "image-video-golos-zvuk.json": "i2v",
@@ -747,6 +763,11 @@ def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
         "music_vocal_lipsync_allowed": is_lip_sync_route,
         "route_flags_consistent": route_flags_consistent,
     }
+
+
+def _route_has_risky_rotation_bias(*values: str) -> bool:
+    text = " ".join(str(v or "").strip().lower() for v in values if str(v or "").strip())
+    return any(marker in text for marker in DIRECT_ROUTE_RISKY_ROTATION_MARKERS)
 
 
 def _coerce_optional_bool(value: Any) -> bool | None:
@@ -7653,6 +7674,50 @@ If any of the required descriptive fields are returned in English, the output is
         else:
             prompt_value = frame_prompt or visual_prompt or visual_desc
             image_prompt_value = frame_prompt or visual_prompt or visual_desc
+
+        route_is_lipsync = source_route == "lip_sync_music"
+        route_is_non_lip = source_route in {"i2v", "first_last"}
+        risky_rotation_bias = _route_has_risky_rotation_bias(
+            visual_prompt,
+            visual_desc,
+            video_prompt,
+            character_action,
+            camera_motion,
+            prompt_value,
+            image_prompt_value,
+        )
+        if route_is_lipsync:
+            lip_sync_safe_motion = (
+                "Singer-performance-first: emotional delivery through singing with readable face/mouth/neck/shoulders/upper torso, "
+                "expressive hands, subtle sway, gentle body pulse, and beat-driven emotional intensity progression."
+            )
+            lip_sync_safe_camera = (
+                "Camera amplifies song feeling via gentle push/pull, drift, or side arc while preserving close readability."
+            )
+            if not character_action or risky_rotation_bias:
+                character_action = lip_sync_safe_motion
+            if not camera_motion or risky_rotation_bias:
+                camera_motion = lip_sync_safe_camera
+            if not video_prompt or risky_rotation_bias:
+                video_prompt = character_action
+            if not image_prompt_value:
+                image_prompt_value = visual_prompt or visual_desc or character_action
+        elif route_is_non_lip:
+            non_lip_safe_motion = (
+                "Beat-led progression through action space with safe step/pivot/gesture, evolving head/shoulder/body angles, "
+                "and zone progression; avoid spin-first spectacle and keep narrative intent."
+            )
+            non_lip_safe_camera = (
+                "Camera-led dynamism with reveal/tracking/parallax that supports movement through space and beat-shaped mood/intensity."
+            )
+            if not character_action or risky_rotation_bias:
+                character_action = non_lip_safe_motion
+            if not camera_motion or risky_rotation_bias:
+                camera_motion = non_lip_safe_camera
+            if not video_prompt or risky_rotation_bias:
+                video_prompt = character_action
+            if not image_prompt_value or risky_rotation_bias:
+                image_prompt_value = visual_prompt or visual_desc or character_action
 
         continuity_memory = _sanitize_continuity_memory(s.get("continuityMemory"))
         if not continuity_memory:
