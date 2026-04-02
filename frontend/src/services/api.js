@@ -2,9 +2,12 @@
 // are on different "sites" (e.g. localhost vs 127.0.0.1). Поэтому подстраиваемся под
 // текущий hostname, чтобы API_BASE совпадал со "сайтом" фронта.
 
-function formatApiError(res, data){
+function normalizeApiErrorMessage(res, data){
   // FastAPI validation: {detail: [{loc: [...], msg: "...", type: "..."}]}
   const d = data?.detail ?? data?.message ?? data?.error ?? null;
+  const hint = typeof data?.hint === "string" ? data.hint.trim() : "";
+  const code = typeof data?.code === "string" ? data.code.trim() : "";
+  if (hint) return code ? `${hint} (${code})` : hint;
   if(Array.isArray(d)){
     const parts = d.map(it=>{
       if(typeof it === "string") return it;
@@ -12,11 +15,35 @@ function formatApiError(res, data){
       const msg = it?.msg ?? JSON.stringify(it);
       return loc ? `${loc}: ${msg}` : msg;
     });
-    return parts.join(" | ");
+    const base = parts.join(" | ");
+    return code ? `${base} (${code})` : base;
   }
-  if(typeof d === "string") return d;
-  if(d && typeof d === "object") return d.message || JSON.stringify(d);
-  return `HTTP ${res.status}`;
+  if(typeof d === "string") return code ? `${d} (${code})` : d;
+  if(d && typeof d === "object") {
+    const base = d.message || JSON.stringify(d);
+    return code ? `${base} (${code})` : base;
+  }
+  return code ? `HTTP ${res.status} (${code})` : `HTTP ${res.status}`;
+}
+
+function createApiError({
+  message = "Request failed",
+  status = null,
+  code = "",
+  hint = "",
+  payload = null,
+  path = "",
+  method = "GET",
+} = {}){
+  const error = new Error(String(message || "Request failed"));
+  error.name = "ApiError";
+  error.status = Number.isFinite(Number(status)) ? Number(status) : null;
+  error.code = String(code || "").trim();
+  error.hint = String(hint || "").trim();
+  error.payload = payload ?? null;
+  error.path = String(path || "");
+  error.method = String(method || "GET");
+  return error;
 }
 
 export const API_BASE = `http://${window.location.hostname}:8000`;
@@ -59,16 +86,41 @@ export async function fetchJson(path,{method="GET",headers={},body,signal,timeou
     try{ data = text?JSON.parse(text):null; }catch{ data={raw:text}; }
     if(!res.ok){
       // FastAPI часто возвращает {detail: ...}
-      const msg = formatApiError(res, data);
-      throw new Error(msg);
+      const msg = normalizeApiErrorMessage(res, data);
+      throw createApiError({
+        message: msg,
+        status: res.status,
+        code: data?.code,
+        hint: data?.hint,
+        payload: data,
+        path,
+        method,
+      });
     }
     return data;
   } catch (error) {
     const isTimeoutAbort = hasTimeout && didTimeout;
     if (isTimeoutAbort) {
-      throw new Error(`Request timeout after ${timeoutValue}ms (${method} ${path})`);
+      throw createApiError({
+        message: `Request timeout after ${timeoutValue}ms (${method} ${path})`,
+        status: 0,
+        code: "REQUEST_TIMEOUT",
+        hint: "Попробуйте повторить запрос",
+        payload: null,
+        path,
+        method,
+      });
     }
-    throw error;
+    if (error && typeof error === "object" && "status" in error && "payload" in error) throw error;
+    throw createApiError({
+      message: String(error?.message || error || "Request failed"),
+      status: Number.isFinite(Number(error?.status)) ? Number(error.status) : null,
+      code: error?.code,
+      hint: error?.hint,
+      payload: error?.payload ?? null,
+      path,
+      method,
+    });
   } finally {
     if (timeoutId) window.clearTimeout(timeoutId);
     if (signal && signalAbortHandler) signal.removeEventListener("abort", signalAbortHandler);

@@ -41,6 +41,12 @@ function hydrateSceneWithRuntime(scene = {}, runtime = {}) {
   const safeRuntime = runtime && typeof runtime === "object" ? runtime : {};
   return {
     ...safeScene,
+    imageStatus: String(safeRuntime?.imageStatus || safeScene?.imageStatus || "").trim(),
+    imageError: String(safeRuntime?.imageError || safeScene?.imageError || "").trim(),
+    startFrameStatus: String(safeRuntime?.startFrameStatus || safeScene?.startFrameStatus || safeRuntime?.imageStatus || safeScene?.imageStatus || "").trim(),
+    startFrameError: String(safeRuntime?.startFrameError || safeScene?.startFrameError || safeRuntime?.imageError || safeScene?.imageError || "").trim(),
+    endFrameStatus: String(safeRuntime?.endFrameStatus || safeScene?.endFrameStatus || safeRuntime?.imageStatus || safeScene?.imageStatus || "").trim(),
+    endFrameError: String(safeRuntime?.endFrameError || safeScene?.endFrameError || safeRuntime?.imageError || safeScene?.imageError || "").trim(),
     audioSliceStatus: String(safeRuntime?.audioSliceStatus || safeScene?.audioSliceStatus || safeScene?.extractedAudioStatus || "").trim(),
     audioSliceUrl: String(safeRuntime?.audioSliceUrl || safeScene?.audioSliceUrl || safeScene?.extractedAudioUrl || "").trim(),
     audioSliceDurationSec: Number(safeRuntime?.audioSliceDurationSec ?? safeScene?.audioSliceDurationSec ?? safeScene?.extractedAudioDurationSec),
@@ -654,6 +660,9 @@ export default function ScenarioStoryboardEditor({
     runtimeStatus: selectedRuntime?.endFrameStatus || selectedScene?.endFrameStatus || selectedRuntime?.imageStatus || selectedScene?.imageStatus,
     assetUrl: selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
   });
+  const imageErrorText = String(selectedScene?.imageError || selectedRuntime?.imageError || "").trim();
+  const startFrameErrorText = String(selectedScene?.startFrameError || selectedRuntime?.startFrameError || selectedRuntime?.imageError || "").trim();
+  const endFrameErrorText = String(selectedScene?.endFrameError || selectedRuntime?.endFrameError || selectedRuntime?.imageError || "").trim();
   const videoStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.videoStatus || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
   const musicStatus = resolveBlockStatus({ runtimeStatus: safeAudioData?.musicStatus, assetUrl: safeAudioData?.musicUrl });
   const isBgAudioSelected = activeSelectionType === "bg_audio";
@@ -1309,6 +1318,11 @@ export default function ScenarioStoryboardEditor({
                               Получен fallback/mock image. Проверьте hint/degradeReason: {String(selectedScene?.imageHint || selectedScene?.imageDegradeReason || "gemini_no_image")}
                             </div>
                           ) : null}
+                          {imageErrorText ? (
+                            <div className="clipSB_hint" style={{ color: "#ff6b6b", marginTop: 8 }}>
+                              Ошибка генерации изображения: {imageErrorText}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </>
@@ -1333,6 +1347,11 @@ export default function ScenarioStoryboardEditor({
                               <img className="clipSB_scenarioEditorImagePreview" src={startFrameSourceUrl} alt={`scene-${selectedSceneId}-start-frame`} />
                             ) : <div className="clipSB_hint">preview первого кадра отсутствует</div>}
                           </div>
+                          {startFrameErrorText ? (
+                            <div className="clipSB_hint" style={{ color: "#ff6b6b", marginTop: 8 }}>
+                              Ошибка первого кадра: {startFrameErrorText}
+                            </div>
+                          ) : null}
                           <div className="clipSB_scenarioEditorBtnRow">
                             <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "start_frame", generateMeta)} disabled={startFrameStatus === "loading"}>Создать изображение</button>
                             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { startImageUrl: "", startFrameImageUrl: "", startFramePreviewUrl: "", startFrameStatus: "idle" })}>Удалить</button>
@@ -1353,6 +1372,11 @@ export default function ScenarioStoryboardEditor({
                               <img className="clipSB_scenarioEditorImagePreview" src={endFrameSourceUrl} alt={`scene-${selectedSceneId}-end-frame`} />
                             ) : <div className="clipSB_hint">{isFirstLastVideoMode ? "Последний кадр отсутствует" : "Последний кадр не требуется"}</div>}
                           </div>
+                          {endFrameErrorText ? (
+                            <div className="clipSB_hint" style={{ color: "#ff6b6b", marginTop: 8 }}>
+                              Ошибка последнего кадра: {endFrameErrorText}
+                            </div>
+                          ) : null}
                           <div className="clipSB_scenarioEditorBtnRow">
                             <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "end_frame", generateMeta)} disabled={endFrameStatus === "loading" || !isFirstLastVideoMode}>Создать изображение</button>
                             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { endImageUrl: "", endFrameImageUrl: "", endFramePreviewUrl: "", endFrameStatus: "idle" })} disabled={!isFirstLastVideoMode}>Удалить</button>

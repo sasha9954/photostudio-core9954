@@ -10080,7 +10080,14 @@ Aspect ratio: ${imageFormat}`,
           slot: normalizedSlot,
         });
       }
-      if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
+      if (!out?.ok || !out?.imageUrl) {
+        const responseError = new Error(String(out?.hint || out?.message || out?.code || "image_generation_failed"));
+        responseError.code = String(out?.code || "").trim();
+        responseError.hint = String(out?.hint || "").trim();
+        responseError.status = Number(out?.status) || null;
+        responseError.payload = out;
+        throw responseError;
+      }
 
       const generatedImageUrl = String(out?.imageUrl || "");
       const imageDegraded = Boolean(
@@ -10318,7 +10325,13 @@ Aspect ratio: ${imageFormat}`,
       }
     } catch (e) {
       console.error(e);
-      const imageErrorMessage = String(e?.message || e);
+      const errorHint = String(e?.hint || e?.payload?.hint || "").trim();
+      const errorCode = String(e?.code || e?.payload?.code || "").trim();
+      const errorStatus = Number(e?.status ?? e?.payload?.status);
+      const baseMessage = String(e?.message || e?.payload?.detail || e?.payload?.error || e || "").trim();
+      const imageErrorMessage = errorHint
+        || [baseMessage, errorCode && !baseMessage.includes(errorCode) ? `(${errorCode})` : ""].filter(Boolean).join(" ")
+        || (Number.isFinite(errorStatus) ? `HTTP ${errorStatus}` : "Image generation failed");
       const runtimeErrorPatch = normalizedSlot === "start"
         ? { startFrameStatus: "error", startFrameError: imageErrorMessage }
         : normalizedSlot === "end"
