@@ -9724,6 +9724,9 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     setScenarioImageError("");
     try {
       const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
+      const scenarioContractPayloadSanitized = {
+        ...scenarioContractPayload,
+      };
       const scenarioPackageForImage = targetNode?.data?.scenarioPackage && typeof targetNode.data.scenarioPackage === "object"
         ? targetNode.data.scenarioPackage
         : {};
