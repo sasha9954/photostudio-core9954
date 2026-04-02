@@ -986,6 +986,43 @@ def _build_hard_identity_lock_block(*, scene_human_visual_anchors: list[str] | N
     return "\n".join(lines).strip()
 
 
+def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | None, opening_shot: bool) -> str:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    identity_fields = [
+        str(item or "").strip()
+        for item in (contract.get("identityLockFieldsUsed") or [])
+        if str(item or "").strip()
+    ]
+    if not identity_fields:
+        identity_fields = [
+            "face_identity",
+            "hair_identity",
+            "body_identity",
+            "silhouette_identity",
+            "outfit_identity",
+            "footwear_identity",
+            "accessory_identity",
+            "world_identity",
+        ]
+    lines = [
+        "HARD CONTINUITY EXECUTION CONTRACT (NON-NEGOTIABLE):",
+        f"- identityLockApplied={bool(contract.get('identityLockApplied', contract.get('identityLock')))}",
+        f"- identityLockFieldsUsed={', '.join(identity_fields)}",
+        f"- environmentLock={bool(contract.get('environmentLock'))}",
+        f"- styleLock={bool(contract.get('styleLock'))}",
+        f"- outfitLock={bool(contract.get('outfitLock', True))}",
+        "- character references are actor references: same face, hair, body/silhouette, and full outfit continuity across scenes",
+        "- outfit lock is strict: preserve garment type, cut, fabric feel, color family, footwear, accessories, and decorative details unless explicit wardrobe change is requested",
+        "- scene progression must be new angles/zones/sub-locations of the same venue/world unless explicitly changed",
+        "- keep one world identity and one lighting/shadow/color family across the full clip",
+        "- photoreal cinematic realism is mandatory by default",
+        "- forbid cartoon, illustrative, glossy editorial, concept-art, or over-designed AI render drift",
+    ]
+    if opening_shot:
+        lines.append("- opening shot must establish a stable photoreal baseline for all subsequent scenes")
+    return "\n".join(lines)
+
+
 def _build_duet_hardening_block(*, active_roles: list[str] | None = None) -> str:
     roles = [str(role or "").strip() for role in (active_roles or []) if str(role or "").strip()]
     has_duet = "character_1" in roles and "character_2" in roles
@@ -1130,7 +1167,10 @@ def _compose_video_effective_prompt(
         shot_type,
         scene_human_visual_anchors=scene_human_visual_anchors,
     )
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
     identity_lock_block = _build_hard_identity_lock_block(scene_human_visual_anchors=scene_human_visual_anchors) if has_humans else ""
+    opening_shot = not bool(contract.get("previousContinuityMemory"))
+    hard_continuity_contract_block = _build_hard_continuity_contract_block(scene_contract=contract, opening_shot=opening_shot)
     anchor_roles: list[str] = []
     for anchor in (scene_human_visual_anchors or []):
         text = str(anchor or "")
@@ -1158,7 +1198,7 @@ def _compose_video_effective_prompt(
     # location-only / threat-presence shots still preserve intended directing tone.
     genre_hardening_block = _build_genre_hardening_block(genre_intent=genre_intent)
     effective_prompt = "\n\n".join(
-        part for part in [base_effective_prompt, identity_lock_block, genre_hardening_block, duet_hardening_block] if str(part or "").strip()
+        part for part in [base_effective_prompt, hard_continuity_contract_block, identity_lock_block, genre_hardening_block, duet_hardening_block] if str(part or "").strip()
     ).strip()
     return effective_prompt, {
         "has_humans": has_humans,
@@ -1168,6 +1208,8 @@ def _compose_video_effective_prompt(
         "videoPromptLength": len(base_prompt),
         "transitionActionPromptLength": len(transition_prompt),
         "sceneHumanVisualAnchors": [str(item or "").strip() for item in (scene_human_visual_anchors or []) if str(item or "").strip()],
+        "hardContinuityContractApplied": True,
+        "openingShot": opening_shot,
         "identityLockApplied": bool(identity_lock_block),
         "genreHardeningApplied": bool(genre_hardening_block),
         "genreHardeningSource": genre_source,
@@ -4077,20 +4119,90 @@ def _build_session_world_anchors(*, text: str, character_refs: list[str], locati
         else:
             character_anchor = "a solitary man in his early 30s with short dark hair and a trimmed beard, wearing a dark winter coat"
 
+    world_style_packs: list[dict[str, Any]] = [
+        {
+            "key": "cinematic_realistic_club",
+            "keywords": ["club", "nightlife", "dancefloor", "dj"],
+            "location": "one cohesive cinematic realistic club venue with linked spaces (main floor, bar, corridor, backstage)",
+            "style": "photoreal cinematic club realism, controlled contrast, coherent neon/practical mix, consistent haze and shadow behavior",
+        },
+        {
+            "key": "underground_neon_club_realism",
+            "keywords": ["underground", "neon", "rave"],
+            "location": "one underground club venue with raw architecture and connected sub-areas",
+            "style": "photoreal underground neon realism with stable color family and atmospheric density",
+        },
+        {
+            "key": "luxury_nightlife_interior",
+            "keywords": ["luxury", "vip", "cocktail", "premium lounge"],
+            "location": "one luxury nightlife interior with coherent premium materials and spatial continuity",
+            "style": "photoreal luxury nightlife realism with polished practical lighting and stable cinematic grade",
+        },
+        {
+            "key": "minimalist_architectural_club_realism",
+            "keywords": ["minimalist club", "architectural club", "minimal techno"],
+            "location": "one minimalist architectural club world with consistent geometry and material palette",
+            "style": "photoreal minimalist nightlife realism with disciplined lighting and restrained palette",
+        },
+        {
+            "key": "urban_night_realism",
+            "keywords": ["city", "street", "urban", "alley", "downtown"],
+            "location": "one coherent urban night district with connected streets/interiors from the same area",
+            "style": "photoreal urban night realism with consistent practical lighting and cinematic contrast",
+        },
+        {
+            "key": "industrial_hall_realism",
+            "keywords": ["industrial", "factory", "warehouse", "hangar"],
+            "location": "one industrial hall world with connected zones and consistent structural language",
+            "style": "photoreal industrial realism with stable hard-soft light mix, grounded texture response, and atmospheric particulate continuity",
+        },
+        {
+            "key": "theater_bar_realism",
+            "keywords": ["theater", "bar", "cabaret", "stage"],
+            "location": "one theater/bar venue with coherent stage, hall, and backstage continuity",
+            "style": "photoreal theatrical realism with consistent stage-house light family and filmic color grading",
+        },
+        {
+            "key": "desert_realism",
+            "keywords": ["desert", "dune", "arid"],
+            "location": "one desert world with coherent terrain and contiguous zones",
+            "style": "photoreal desert realism with stable atmospheric perspective and sunlight/shadow regime",
+        },
+        {
+            "key": "coastal_realism",
+            "keywords": ["beach", "coast", "shore", "ocean"],
+            "location": "one coastal world with coherent shoreline geography and nearby zones",
+            "style": "photoreal coastal realism with consistent marine atmosphere, sky behavior, and color family",
+        },
+        {
+            "key": "forest_realism",
+            "keywords": ["forest", "woods", "jungle"],
+            "location": "one forest world with coherent vegetation family and contiguous terrain",
+            "style": "photoreal forest realism with stable canopy light behavior and atmospheric depth continuity",
+        },
+    ]
+    selected_pack = world_style_packs[0]
+    for pack in world_style_packs:
+        if any(keyword in text_l for keyword in (pack.get("keywords") or [])):
+            selected_pack = pack
+            break
+
     if location_refs:
         location_anchor = "same exact world/location identity as location reference images"
     else:
-        location_anchor = text_world_anchor or "a narrow European winter street with old brick buildings and wet cobblestone pavement"
+        location_anchor = text_world_anchor or str(selected_pack.get("location") or "")
 
     if style_refs:
         style_anchor = "same exact style identity from style reference images: weather, season, palette, atmosphere, and lighting mood"
     else:
-        style_anchor = text_style_anchor or style_hint or "cold cinematic realism, muted winter palette, overcast sky, wet reflective pavement, atmospheric haze"
+        style_anchor = text_style_anchor or style_hint or str(selected_pack.get("style") or "")
 
     return {
         "character": character_anchor,
         "location": location_anchor,
         "style": style_anchor,
+        "defaultWorldStylePackKey": str(selected_pack.get("key") or ""),
+        "defaultWorldStylePackApplied": bool(not location_refs and not style_refs),
     }
 
 
@@ -7234,10 +7346,17 @@ If any of the required descriptive fields are returned in English, the output is
         "character": session_world_anchors["character"],
         "location": session_world_anchors["location"],
         "style": session_world_anchors["style"],
+        "defaultWorldStylePackKey": str(session_world_anchors.get("defaultWorldStylePackKey") or ""),
+        "defaultWorldStylePackApplied": bool(session_world_anchors.get("defaultWorldStylePackApplied")),
         "lighting": lighting_anchor,
         "environment": environment_anchor,
         "weather": weather_anchor,
         "surface": surface_anchor,
+        "environmentLock": True,
+        "styleLock": True,
+        "sessionBaseline": True,
+        "realismMode": "photoreal_cinematic_realism",
+        "sceneProgressionRule": "different parts/angles of the same venue/world unless explicitly changed",
         "propAnchorLabel": prop_anchor_label or None,
         "worldScaleContext": world_scale_context,
         "entityScaleAnchors": entity_scale_anchors,
@@ -7395,6 +7514,26 @@ If any of the required descriptive fields are returned in English, the output is
 
         scene_delta = _build_scene_delta(s, previous_scene)
         scene_text_ru = visual_desc or reason_text or lyric_fragment
+        scene_role_tokens = {
+            str(role or "").strip().lower()
+            for role in (
+                (s.get("actors") if isinstance(s.get("actors"), list) else [])
+                + (s.get("mustAppear") if isinstance(s.get("mustAppear"), list) else [])
+                + (s.get("refsUsed") if isinstance(s.get("refsUsed"), list) else [])
+            )
+            if str(role or "").strip()
+        }
+        actor_identity_lock_required = bool(scene_role_tokens.intersection({"character_1", "character_2", "character_3"})) or bool(character_refs)
+        identity_lock_fields_used = [
+            "face_identity",
+            "hair_identity",
+            "body_identity",
+            "silhouette_identity",
+            "outfit_identity",
+            "footwear_identity",
+            "accessory_identity",
+            "world_identity",
+        ] if actor_identity_lock_required else []
         route_flags_consistent = bool(contract_fields.get("route_flags_consistent"))
         accepted_as_is = bool(
             direct_gemini_storyboard_mode
@@ -7429,6 +7568,13 @@ If any of the required descriptive fields are returned in English, the output is
             "lyricFragment": lyric_fragment,
             "continuityMemory": continuity_memory,
             "previousContinuityMemory": previous_continuity_memory,
+            "environmentLock": True,
+            "styleLock": True,
+            "sessionBaseline": True,
+            "previousContinuityMemoryActive": bool(previous_continuity_memory),
+            "sceneProgressionRule": "different parts/angles of the same venue/world unless explicitly changed",
+            "openingShotPhotorealBaseline": idx == 0,
+            "realismMode": "photoreal_cinematic_realism",
             "worldScaleContext": world_scale_context,
             "entityScaleAnchors": entity_scale_anchors,
             "productionScale": (session_baseline or {}).get("productionScale") if isinstance(session_baseline, dict) else None,
@@ -7448,6 +7594,9 @@ If any of the required descriptive fields are returned in English, the output is
             "render_mode": contract_fields.get("render_mode"),
             "route_render_mode_consistent": bool(contract_fields.get("route_render_mode_consistent")),
             "route_flags_consistent": route_flags_consistent,
+            "identityLockApplied": actor_identity_lock_required,
+            "identityLockFieldsUsed": identity_lock_fields_used,
+            "outfitLock": actor_identity_lock_required,
             "acceptedAsIs": accepted_as_is,
             "accepted_as_is": accepted_as_is,
         }
@@ -7772,6 +7921,21 @@ def _normalize_scene_entity_contract_for_image(
         if role in COMFY_REF_ROLES and len(available_refs_by_role.get(role) or []) == 0 and role not in degraded_roles:
             degraded_roles.append(role)
 
+    has_actor_refs = any(len(available_refs_by_role.get(role) or []) > 0 for role in ["character_1", "character_2", "character_3"])
+    identity_lock_applied = bool(
+        identity_lock if identity_lock is not None else (has_actor_refs and any(role in active_roles for role in ["character_1", "character_2", "character_3"]))
+    )
+    identity_lock_fields_used = [
+        "face_identity",
+        "hair_identity",
+        "body_identity",
+        "silhouette_identity",
+        "outfit_identity",
+        "footwear_identity",
+        "accessory_identity",
+        "world_identity",
+    ] if identity_lock_applied else []
+
     return {
         "activeRoles": active_roles,
         "heroEntityId": hero,
@@ -7780,7 +7944,10 @@ def _normalize_scene_entity_contract_for_image(
         "mustNotAppear": must_not,
         "environmentLock": bool(environment_lock if environment_lock is not None else "location" in must),
         "styleLock": bool(style_lock if style_lock is not None else "style" in active_roles),
-        "identityLock": bool(identity_lock if identity_lock is not None else any(r in active_roles for r in ["character_1","character_2","character_3","group","animal","props"])),
+        "identityLock": bool(identity_lock_applied),
+        "identityLockApplied": bool(identity_lock_applied),
+        "identityLockFieldsUsed": identity_lock_fields_used,
+        "outfitLock": bool(identity_lock_applied),
         "degradedRoles": degraded_roles,
         "resolvedRoles": resolved_roles,
     }
@@ -8160,6 +8327,8 @@ def _build_comfy_image_prompt_assembly(
         "timelineSource": str((planner_meta or {}).get("timelineSource") or "").strip(),
         "narrativeSource": str((planner_meta or {}).get("narrativeSource") or "").strip(),
     }
+    opening_shot = not bool(contract.get("previousContinuityMemory"))
+    hard_continuity_contract_block = _build_hard_continuity_contract_block(scene_contract=contract, opening_shot=opening_shot)
 
     identity_layer_block = "\n".join([
         "IDENTITY LAYER (PRIORITY 1):",
@@ -8296,6 +8465,7 @@ def _build_comfy_image_prompt_assembly(
     )
 
     assembled_prompt = "\n\n".join([
+        hard_continuity_contract_block,
         identity_layer_block,
         physics_blocks["lightWorldBlock"],
         physics_blocks["subjectIdentityBlock"],
@@ -8539,6 +8709,26 @@ def clip_image(payload: ClipImageIn):
         image_prompt=prompt,
         video_prompt=getattr(refs_obj, "sceneNarrativeStep", None),
     )
+    identity_lock_fields_min = [
+        "face_identity",
+        "hair_identity",
+        "body_identity",
+        "silhouette_identity",
+        "outfit_identity",
+        "footwear_identity",
+        "accessory_identity",
+        "world_identity",
+    ]
+    scene_contract.setdefault("identityLockFieldsUsed", identity_lock_fields_min if scene_contract.get("identityLock") else [])
+    scene_contract["identityLockApplied"] = bool(scene_contract.get("identityLock"))
+    scene_contract["outfitLock"] = bool(scene_contract.get("identityLock"))
+    scene_contract["environmentLock"] = True
+    scene_contract["styleLock"] = True
+    scene_contract["sessionBaseline"] = bool(isinstance(session_baseline, dict) and session_baseline)
+    scene_contract["previousContinuityMemory"] = previous_continuity_memory if isinstance(previous_continuity_memory, dict) else {}
+    scene_contract["sceneProgressionRule"] = "different parts/angles of the same venue/world unless explicitly changed"
+    scene_contract["realismMode"] = "photoreal_cinematic_realism"
+    scene_contract["openingShot"] = not bool(previous_continuity_memory)
     scene_active_roles = [
         str(role or "").strip()
         for role in (scene_contract.get("activeRoles") or [])

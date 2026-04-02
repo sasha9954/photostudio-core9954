@@ -1351,9 +1351,12 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
         continuity_lock_fields = [
             "face_identity",
             "hair_identity",
-            "clothing_identity",
-            "body_proportions",
-            "body_silhouette",
+            "body_identity",
+            "silhouette_identity",
+            "outfit_identity",
+            "footwear_identity",
+            "accessory_identity",
+            "world_identity",
         ]
         mapped_scenes: list[dict[str, Any]] = []
         for idx, compact_scene in enumerate(compact_scenes):
@@ -6638,7 +6641,16 @@ def _enforce_single_character_music_video_policy(payload: dict[str, Any], storyb
             if not str(scene.identity_lock_notes or "").strip():
                 scene.identity_lock_notes = "single_character_mode_identity_lock_required_for_character_1"
             if not scene.identity_lock_fields_used:
-                scene.identity_lock_fields_used = ["character_1_ref_profile"]
+                scene.identity_lock_fields_used = [
+                    "face_identity",
+                    "hair_identity",
+                    "body_identity",
+                    "silhouette_identity",
+                    "outfit_identity",
+                    "footwear_identity",
+                    "accessory_identity",
+                    "world_identity",
+                ]
     storyboard_out.story_summary = _remove_single_character_summary_duet_phrases(storyboard_out.story_summary)
     storyboard_out.full_scenario = _remove_single_character_summary_duet_phrases(storyboard_out.full_scenario)
     storyboard_out.director_summary = _remove_single_character_summary_duet_phrases(storyboard_out.director_summary)
