@@ -8424,6 +8424,10 @@ def _build_request_text(
         "Pick strongest hook/vocal lines for lip_sync_music with clear face-readable emotional performance beats.\n"
         "For lip-sync image bases, prefer tight medium / medium / 3/4 body framing as a default readability baseline.\n"
         "If the strongest beat is better served by close-up or full-body framing, keep that intentional framing choice.\n"
+        "For lip_sync_music scenes, keep face/mouth/neck/shoulders/upper torso clearly readable with waist-up to upper-thigh framing when possible.\n"
+        "For non-lip scenes, do NOT inherit lip-sync portrait defaults; prioritize action blocking, spatial progression, and venue zone readability.\n"
+        "Concert/festival scenes must keep physically plausible performer placement: never standing on audience heads, never floating over crowd, never impossible support planes.\n"
+        "Inside one venue, prefer different connected sub-zones across scenes (barricade, side aisle, walkway gap, platform edge, stage-side rail, backstage side entry, merch/bar alley).\n"
         "Each scene must include at least one of: vocal performance, body performance, camera performance, emotional performance.\n"
         "Avoid generic standing, repetitive looking-around, endless spinning, bland symbolic walking, mannequin stiffness.\n"
         "Repeated phrases should usually escalate visually and cinematically; keep intentional repetition when it is the stronger dramatic/music choice.\n"
@@ -8638,6 +8642,10 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- Include multiple lip_sync_music scenes.\n"
         "- Minimum 2 scenes must use route=lip_sync_music when vocals are present.\n"
         "- Do not output all scenes as i2v by default.\n"
+        "- lip_sync_music framing preference applies only to lip-sync scenes; non-lip scenes should stay action/staging driven.\n"
+        "- short opening atmosphere beats (<1.6s) should be merged or treated as non-renderable establishing transitions, not standalone hero shots.\n"
+        "- environment-first establishing reveal may intentionally have no active character subject.\n"
+        "- in concert/crowd worlds, character placement must be physically grounded in valid venue zones.\n"
         "SCENE SEGMENTATION:\n"
         "- Keep phrase-based segmentation aligned to audio phrases.\n"
         "- End scenes at natural phrase ends or just before safe post-phrase spill.\n"
@@ -9019,6 +9027,8 @@ SCENARIO_CHUNK_PREFERRED_MIN_SEC = 3.0
 SCENARIO_CHUNK_HARD_MIN_SEC = 2.4
 SCENARIO_CHUNK_MICRO_SEC = 2.0
 SCENARIO_SHORT_FIRST_LAST_MIN_SEC = 2.8
+DIRECT_GEMINI_MIN_RENDERABLE_SCENE_SEC = 1.6
+DIRECT_GEMINI_ESTABLISHING_SCENE_MAX_SEC = 1.2
 
 
 def _normalize_scene_text(value: Any) -> str:
@@ -9122,6 +9132,76 @@ def _merge_generation_short_scenes(raw_scenes: list[dict[str, Any]]) -> list[dic
     return scenes
 
 
+def _scene_is_environment_establishing(raw_scene: dict[str, Any]) -> bool:
+    text_bundle = " ".join([
+        str(raw_scene.get("summary") or ""),
+        str(raw_scene.get("motion") or ""),
+        str(raw_scene.get("camera") or ""),
+        str(raw_scene.get("environment") or ""),
+        str(raw_scene.get("sceneType") or raw_scene.get("scene_type") or ""),
+    ]).lower()
+    establishing_tokens = (
+        "establish",
+        "wide",
+        "venue reveal",
+        "stage reveal",
+        "crowd scale",
+        "atmosphere",
+        "laser",
+        "lights",
+        "concert",
+        "festival",
+        "audience",
+        "opening",
+        "intro",
+    )
+    return any(token in text_bundle for token in establishing_tokens)
+
+
+def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    scenes = [dict(scene) for scene in raw_scenes if isinstance(scene, dict)]
+    if not scenes:
+        return [], {"direct_short_scene_min_sec": DIRECT_GEMINI_MIN_RENDERABLE_SCENE_SEC}
+    prepared: list[dict[str, Any]] = []
+    dropped_scene_ids: list[str] = []
+    merged_scene_ids: list[str] = []
+    for idx, scene in enumerate(scenes):
+        start = _safe_float(scene.get("t0"), 0.0)
+        end = _safe_float(scene.get("t1"), start)
+        duration = max(0.0, end - start)
+        scene_id = str(scene.get("sceneId") or f"S{idx + 1}").strip() or f"S{idx + 1}"
+        is_short = duration < DIRECT_GEMINI_MIN_RENDERABLE_SCENE_SEC
+        is_short_establishing = duration <= DIRECT_GEMINI_ESTABLISHING_SCENE_MAX_SEC and _scene_is_environment_establishing(scene)
+        if not is_short:
+            prepared.append(scene)
+            continue
+        if is_short_establishing:
+            dropped_scene_ids.append(scene_id)
+            if idx + 1 < len(scenes):
+                scenes[idx + 1]["t0"] = round(min(_safe_float(scenes[idx + 1].get("t0"), start), start), 3)
+            continue
+        if idx + 1 < len(scenes):
+            scenes[idx + 1]["t0"] = round(min(_safe_float(scenes[idx + 1].get("t0"), start), start), 3)
+            prev_summary = str(scene.get("summary") or "").strip()
+            next_summary = str(scenes[idx + 1].get("summary") or "").strip()
+            if prev_summary and prev_summary.lower() not in next_summary.lower():
+                scenes[idx + 1]["summary"] = f"{prev_summary}. {next_summary}".strip(". ")
+            merged_scene_ids.append(scene_id)
+            continue
+        if prepared:
+            prepared[-1]["t1"] = round(max(_safe_float(prepared[-1].get("t1"), 0.0), end), 3)
+            merged_scene_ids.append(scene_id)
+            continue
+        prepared.append(scene)
+    return prepared, {
+        "direct_short_scene_min_sec": DIRECT_GEMINI_MIN_RENDERABLE_SCENE_SEC,
+        "droppedEnvironmentEstablishingSceneIds": dropped_scene_ids,
+        "mergedShortSceneIds": merged_scene_ids,
+    }
+
+
+
+
 
 
 def _is_short_music_intro_segment(*, text: Any = "", t0: Any = 0.0, t1: Any = 0.0, scene_type: Any = "", actors: Any = None) -> bool:
@@ -9173,7 +9253,10 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
     raw_scenes = result.get("scenes") if isinstance(result.get("scenes"), list) else []
     direct_gemini_storyboard_mode = _is_direct_gemini_storyboard_mode(runtime_payload)
     scene_merge_applied = False
-    if not direct_gemini_storyboard_mode:
+    direct_short_scene_policy_debug: dict[str, Any] = {}
+    if direct_gemini_storyboard_mode:
+        raw_scenes, direct_short_scene_policy_debug = _preprocess_direct_gemini_short_scenes(raw_scenes)
+    else:
         raw_scenes = _merge_generation_short_scenes(raw_scenes)
         scene_merge_applied = True
     transcript_text_parts = [
@@ -9294,6 +9377,9 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
         mapped_workflow_key = GEMINI_ROUTE_TO_WORKFLOW_KEY[route]
         is_lip_sync_route = route == "lip_sync_music"
         is_first_last_route = route == "first_last"
+        is_environment_establishing = _scene_is_environment_establishing(scene)
+        if scene_duration <= DIRECT_GEMINI_ESTABLISHING_SCENE_MAX_SEC and is_environment_establishing and not is_lip_sync_route:
+            scene.setdefault("characters", [])
         internal_route = "f_l" if is_first_last_route else route
         lip_sync_route_state_consistent = is_lip_sync_route
         legacy_scenes.append(
@@ -9353,6 +9439,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "trimmed_scene_end": scene_end,
                 "lip_sync_route_state_consistent": lip_sync_route_state_consistent,
                 "audio_slice_bounds_filled_from_scene": is_lip_sync_route,
+                "environment_only_establishing": bool(scene_duration <= DIRECT_GEMINI_ESTABLISHING_SCENE_MAX_SEC and is_environment_establishing),
             }
         )
     director_summary = (
@@ -9411,6 +9498,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             "direct_gemini_storyboard_mode": direct_gemini_storyboard_mode,
             "intro_logic_applied": False if direct_gemini_storyboard_mode else True,
             "scene_merge_applied": scene_merge_applied,
+            "direct_short_scene_policy": direct_short_scene_policy_debug,
             "backend_route_override_applied": False,
             "transcript_segment_count": len([row for row in transcript_rows if isinstance(row, dict)]),
             "final_scene_count": len(legacy_scenes),

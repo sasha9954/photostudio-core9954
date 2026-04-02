@@ -8327,6 +8327,74 @@ def _build_solo_character_guard_block(
     }
 
 
+
+
+def _is_concert_world_scene(*values: Any) -> bool:
+    bundle = " ".join(str(v or "").strip().lower() for v in values if str(v or "").strip())
+    if not bundle:
+        return False
+    return any(token in bundle for token in ("concert", "festival", "stage", "crowd", "audience", "barricade", "laser", "venue", "catwalk"))
+
+
+def _is_environment_only_establishing_scene(*, contract: dict[str, Any], scene_delta: str, scene_text: str) -> bool:
+    active_roles = {str(role or "").strip() for role in (contract.get("activeRoles") or []) if str(role or "").strip()}
+    if any(role in {"character_1", "character_2", "character_3"} for role in active_roles):
+        return False
+    bundle = f"{scene_delta} {scene_text} {contract.get('scenePurpose') or ''}".lower()
+    return any(token in bundle for token in ("establish", "wide", "opening", "atmosphere", "venue reveal", "stage reveal", "crowd scale"))
+
+
+def _build_scene_framing_and_concert_staging_block(
+    *,
+    contract: dict[str, Any],
+    scene_delta: str,
+    scene_text: str,
+    location_anchor: str,
+    environment_anchor: str,
+) -> str:
+    route_hint = " ".join([
+        str(contract.get("route") or ""),
+        str(contract.get("video_generation_route") or ""),
+        str(contract.get("planned_video_generation_route") or ""),
+        str(contract.get("render_mode") or ""),
+        str(contract.get("ltx_mode") or ""),
+    ]).lower()
+    is_lip_sync_scene = "lip_sync" in route_hint or bool(contract.get("lipSync"))
+    is_concert_scene = _is_concert_world_scene(scene_delta, scene_text, location_anchor, environment_anchor)
+    lines = ["SCENE FRAMING + STAGING POLICY (STRICT):"]
+    if is_lip_sync_scene:
+        lines.extend([
+            "- lip-sync scene framing priority: tight medium / medium / 3-4 body",
+            "- lower frame boundary should stay around below-waist to upper-thigh when possible",
+            "- face, mouth, jawline, neck, shoulders, and upper torso must stay clearly readable",
+            "- preserve singing emotion readability and include hands when composition allows",
+        ])
+    else:
+        lines.extend([
+            "- non-lip scene: DO NOT inherit lip-sync portrait defaults",
+            "- prioritize action staging, spatial progression, and environment readability over emotional portrait framing",
+            "- allow wide/full-body/environmental-medium framing when it better serves action",
+            "- same venue continuity must be kept while camera zone and staging should progress",
+        ])
+    if is_concert_scene:
+        lines.extend([
+            "CONCERT VENUE PHYSICAL PLACEMENT (HARD):",
+            "- if a character is visible, ground them on a physically valid support plane inside the venue",
+            "- never place character on top of audience heads",
+            "- never float character above crowd without structural support",
+            "- never composite performer into impossible crowd geometry",
+            "- prefer connected sub-zones for scene-to-scene progression: front barricade, side aisle, crowd walkway gap, raised viewing platform, side catwalk, rail zone, stage-side edge, backstage side entry, merch/bar alley, elevated deck",
+            "- keep same venue identity while moving between recognizable connected zones",
+        ])
+    if _is_environment_only_establishing_scene(contract=contract, scene_delta=scene_delta, scene_text=scene_text):
+        lines.extend([
+            "ENVIRONMENT-ONLY ESTABLISHING MODE:",
+            "- world-first wide reveal is allowed with no active hero subject",
+            "- do not force character_1 as inserted foreground full figure",
+            "- if character appears, keep them naturally embedded at realistic scale and distance",
+        ])
+    return "\n".join(lines)
+
 def _build_comfy_image_prompt_assembly(
     *,
     scene_delta: str,
@@ -8549,6 +8617,13 @@ def _build_comfy_image_prompt_assembly(
     }
     opening_shot = not bool(contract.get("previousContinuityMemory"))
     hard_continuity_contract_block = _build_hard_continuity_contract_block(scene_contract=contract, opening_shot=opening_shot)
+    framing_and_staging_block = _build_scene_framing_and_concert_staging_block(
+        contract=contract,
+        scene_delta=scene_delta,
+        scene_text=scene_text,
+        location_anchor=location_anchor,
+        environment_anchor=environment_anchor,
+    )
     opening_shot_realism_block = ""
     if opening_shot:
         opening_shot_realism_block = "\n".join([
@@ -8696,6 +8771,7 @@ def _build_comfy_image_prompt_assembly(
     assembled_prompt = "\n\n".join([
         hard_continuity_contract_block,
         opening_shot_realism_block,
+        framing_and_staging_block,
         identity_layer_block,
         physics_blocks["lightWorldBlock"],
         physics_blocks["subjectIdentityBlock"],
@@ -8771,6 +8847,7 @@ def _build_comfy_image_prompt_assembly(
         "refsByRole": refs_by_role,
         "rolesActive": connected_summary["activeRoles"],
         "identityLockBlockPreview": identity_lock_block,
+        "framingAndStagingBlockPreview": framing_and_staging_block,
         "priorityContractBlockPreview": priority_contract_block,
         "characterRolePriorityBlockPreview": character_role_priority_block,
         "roleVisualHierarchyBlockPreview": role_visual_hierarchy_block,
@@ -9036,6 +9113,16 @@ def clip_image(payload: ClipImageIn):
         scene_active_roles = [role for role in scene_active_roles if role not in must_not_appear_roles]
         scene_contract["activeRoles"] = scene_active_roles
     is_environment_only_scene = {"character_1", "character_2", "character_3", "group"}.issubset(must_not_appear_roles)
+    scene_duration_hint = _safe_float(raw_scene_contract.get("duration") or raw_scene_contract.get("requested_duration_sec"), 0.0)
+    auto_environment_establishing = (
+        scene_duration_hint > 0 and scene_duration_hint < 1.6
+        and _is_environment_only_establishing_scene(contract=scene_contract, scene_delta=scene_delta, scene_text=scene_text)
+        and not bool(scene_contract.get("lipSync"))
+    )
+    if auto_environment_establishing:
+        must_not_appear_roles.update({"character_1", "character_2", "character_3", "group"})
+        scene_contract["mustNotAppear"] = list(dict.fromkeys([*(scene_contract.get("mustNotAppear") or []), "character_1", "character_2", "character_3", "group"]))
+        is_environment_only_scene = True
     if is_environment_only_scene:
         for role in ("character_1", "character_2", "character_3", "group"):
             comfy_refs_by_role[role] = []
@@ -9092,6 +9179,7 @@ def clip_image(payload: ClipImageIn):
         "legacyCharacterCount": len(character_refs),
         "heroEntityIdCandidate": hero_entity_id or None,
         "hasFirstFrameReference": bool(first_frame_reference_inline),
+        "autoEnvironmentEstablishing": auto_environment_establishing,
     }, ensure_ascii=False))
 
     if (
