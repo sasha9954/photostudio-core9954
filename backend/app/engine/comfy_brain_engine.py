@@ -1398,6 +1398,7 @@ def _build_world_lock(payload: dict[str, Any], reference_profiles: dict[str, Any
         "Keep one continuous world unless narration explicitly transitions elsewhere.",
         "Do not change location family, time of day, lighting logic, or material language without a story cue.",
         "References constrain world identity; audio/text drive semantic scene selection inside that world.",
+        "For venue-like worlds keep the same venue identity, but vary staging across coherent connected sub-zones instead of repeating one exact corner.",
     ]
     world_continuity_rules = [
         "environment must remain consistent unless explicit transition",
@@ -1405,6 +1406,7 @@ def _build_world_lock(payload: dict[str, Any], reference_profiles: dict[str, Any
         "materials must not change randomly",
         "vegetation type must not change (oak ≠ pine)",
         "architecture style must remain stable",
+        "for consecutive scenes in the same venue prefer different local placement or camera angle unless storyboard explicitly holds the same setup",
     ]
     forbidden_world_changes = [
         "changing forest type without transition",
@@ -1472,12 +1474,17 @@ def _build_entity_locks(payload: dict[str, Any], reference_profiles: dict[str, A
                 "gender_presentation": _summarize_profile_value(visual_profile.get("genderPresentation")) or "locked_from_reference",
                 "body_type": _summarize_profile_value(visual_profile.get("bodyType")) or "locked_from_reference",
                 "hair": _summarize_profile_value(visual_profile.get("hair")) or "locked_from_reference",
+                "apparent_age": _summarize_profile_value(visual_profile.get("apparentAge") or visual_profile.get("age")) or "locked_from_reference",
+                "face_structure": _summarize_profile_value(visual_profile.get("faceStructure") or visual_profile.get("face")) or "locked_from_reference",
+                "cheek_jaw_fullness": _summarize_profile_value(visual_profile.get("cheekJawFullness") or visual_profile.get("jawline")) or "locked_from_reference",
+                "neck_shoulder_build": _summarize_profile_value(visual_profile.get("neckShoulderBuild") or visual_profile.get("shoulderLine")) or "locked_from_reference",
                 "outfit": {
                     "top": _summarize_profile_value(visual_profile.get("outfitTop") or visual_profile.get("outfit")) or "locked_from_reference",
                     "bottom": _summarize_profile_value(visual_profile.get("outfitBottom") or visual_profile.get("outfit")) or "locked_from_reference",
                     "shoes": _summarize_profile_value(visual_profile.get("shoes") or visual_profile.get("footwear")) or "locked_from_reference",
                 },
                 "silhouette": _summarize_profile_value(visual_profile.get("silhouette") or visual_profile.get("bodyType")) or "locked_from_reference",
+                "torso_waist_hip_silhouette": _summarize_profile_value(visual_profile.get("torsoWaistHipSilhouette") or visual_profile.get("silhouette")) or "locked_from_reference",
                 "accessories": _summarize_profile_value(visual_profile.get("accessories")) or "locked_from_reference",
             }
         elif normalized_entity_type == "animal":
@@ -1503,6 +1510,10 @@ def _build_entity_locks(payload: dict[str, Any], reference_profiles: dict[str, A
                 "do not change outfit",
                 "do not change hair",
                 "do not change body type",
+                "do not drift apparent age younger or older",
+                "do not change cheek or jaw fullness",
+                "do not change neck or shoulder build",
+                "do not drift waist/hip/torso silhouette",
                 "do not replace object",
                 "do not change material",
             ],
@@ -1924,6 +1935,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- For every scene explicitly decide which roles appear and which roles do not appear.\n"
         "- If a role has reference images, do not reinterpret that entity freely.\n"
         "- Human references must preserve identity, hair, face, outfit and body signature.\n"
+        "- Human continuity hardening: keep same apparent age and same body read across all scenes; no younger/older drift, no fuller/thinner drift, preserve cheek/jaw fullness, neck/shoulder build, and waist/hip/torso silhouette.\n"
         "- Never substitute selected human refs with a generic human.\n"
         "- Animal references must preserve species, breed-like appearance, coat color/pattern and body type.\n"
         "- Never substitute selected animal refs with different species/breed/coat identity.\n"
@@ -1937,12 +1949,16 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- HARD NO-CHARACTERS RULE: if there are no character refs and the transcript/text does not explicitly require people, charactersAllowed=false and you must not invent humans, women, men, crowds, portraits, or lifestyle extras. Use environment-only, infrastructure-only, archive-only, map-only, machinery-only, or object-only visuals instead.\n"
         "- Style references define visual language only and cannot cancel identity contracts.\n"
         "- Location references define world/environment identity anchors for the scene.\n"
+        "- SAME VENUE / DIFFERENT ZONES (photo-side): keep the same venue identity, architecture/material/light family, but for consecutive scenes prefer different recognizable sub-zones and/or background compositions (for example: railing edge, open deck, bar counter area, lounge seating zone, skyline-facing corner, walkway, side wall, entry/stair zone).\n"
+        "- Do not venue-hop unless the story explicitly transitions to another location.\n"
+        "- Avoid repeating the exact same corner/background composition in consecutive scenes unless storyboard explicitly requests to hold the same setup.\n"
         "- If a role is chosen as hero, that role must dominate shot semantics.\n"
         "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
         "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed,refDirectives,sceneSemanticSource,focalSubject,sceneAction,visualClue,cameraIntent,environmentMotion,forbiddenInsertions,"
         "heroEntityId,supportEntityIds,mustAppear,mustNotAppear,environmentLock,styleLock,identityLock,roleSelectionReason,intent.\n"
         "For speech_narrative scenes also include: sceneText,sceneMeaning,visualDescription,cameraPlan,motionPlan,sfxPlan.\n"
         "LANGUAGE CONTRACT (MANDATORY): imagePromptRu MUST be Russian; imagePromptEn MUST be English; videoPromptRu MUST be Russian; videoPromptEn MUST be English. Non-compliance is an error.\n"
+        "LIP-SYNC PHOTO FRAMING CONTRACT (IMAGE SIDE ONLY): for lip_sync_music scenes prefer still-photo framing priority tight medium -> medium -> 3/4 body with lower frame boundary slightly below waist up to upper thigh; keep face, mouth, neck, shoulders, upper torso clearly readable and include hands when possible for natural body-language anchoring; avoid extreme close-up and distant full-body framing as default unless scene meaning explicitly requires it.\n"
         "VIDEO PROMPT CONTRACT (MANDATORY): videoPromptRu/videoPromptEn must be temporal and cannot be a copy of image prompts. They must explicitly include beginning, middle, and end progression; camera motion progression; micro-actions over time; and continuity from previous moment. When two characters must appear, include second-character reaction.\n"
         "Treat every scene as a narrative beat, not a generic landscape description. Specify the focal subject, the exact action/event happening now, the visual clue that carries narration meaning, and the camera intent.\n"
         "Avoid generic establishing-shot filler unless the scene is explicitly an establishing scene.\n"
