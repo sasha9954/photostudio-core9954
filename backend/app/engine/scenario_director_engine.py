@@ -35,6 +35,53 @@ GEMINI_ROUTE_TO_WORKFLOW_KEY = {
     "lip_sync_music": "lip_sync",
     "first_last": "f_l",
 }
+LIP_SYNC_PERFORMANCE_FRAMINGS = {"tight_medium", "medium", "three_quarter", "close_emotional"}
+NON_LIP_ACTION_FRAMINGS = {"wide_action", "full_body_action", "medium"}
+LIP_SYNC_SPIN_RISK_MARKERS = (
+    "spin",
+    "spinning",
+    "twirl",
+    "swirl",
+    "swirling dress",
+    "flowing dress",
+    "dramatic sweep",
+    "dress sweep",
+    "full-body silhouette",
+    "overhead dance spectacle",
+)
+LIP_SYNC_PERFORMANCE_MARKERS = (
+    "sing",
+    "singer",
+    "lyric",
+    "mouth",
+    "articulation",
+    "eye contact",
+    "to camera",
+    "performance",
+)
+NON_LIP_PORTRAIT_MARKERS = (
+    "portrait",
+    "face close",
+    "face-only",
+    "upper torso",
+    "close-up",
+    "close up",
+    "headshot",
+)
+NON_LIP_ACTION_MARKERS = (
+    "walk",
+    "step",
+    "move",
+    "zone",
+    "space",
+    "turn",
+    "pivot",
+    "gesture",
+    "track",
+    "atmosphere",
+    "crowd",
+    "environment",
+)
 DEFAULT_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 FALLBACK_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC = (1.5, 4.0, 8.0)
@@ -100,6 +147,44 @@ def _resolve_workflow_key_and_file(value: Any, *, fallback_key: str = "i2v") -> 
     if not workflow_file:
         workflow_file = CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY.get(workflow_key, CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["i2v"])
     return workflow_key, workflow_file
+
+
+def _normalize_scene_canon_by_route(
+    *,
+    route: str,
+    description: str,
+    performance_framing: str,
+    content_tags: list[str] | None = None,
+) -> tuple[str, str]:
+    normalized_description = str(description or "").strip()
+    framing = str(performance_framing or "").strip().lower()
+    tags_text = " ".join([str(tag).strip().lower() for tag in (content_tags or []) if str(tag).strip()])
+    descriptor_text = f"{normalized_description.lower()} {tags_text}".strip()
+    if route == "lip_sync_music":
+        spin_risk_count = sum(1 for marker in LIP_SYNC_SPIN_RISK_MARKERS if marker in descriptor_text)
+        performance_signal_count = sum(1 for marker in LIP_SYNC_PERFORMANCE_MARKERS if marker in descriptor_text)
+        if spin_risk_count >= 2 or (spin_risk_count >= 1 and performance_signal_count == 0):
+            normalized_description = (
+                "Singer performs emotionally to camera with clear lyric articulation; face, mouth, neck, shoulders, and upper torso "
+                "stay readable, expressive hands support meaning, and camera motion stays controlled with gentle push/pull or side arc."
+            )
+        elif performance_signal_count == 0:
+            normalized_description = (
+                f"{normalized_description}. Singer remains camera-readable with emotional lyric delivery and clear mouth articulation."
+            ).strip(". ")
+        if framing not in LIP_SYNC_PERFORMANCE_FRAMINGS:
+            framing = "tight_medium"
+    elif route in {"i2v", "first_last"}:
+        portrait_signal = any(marker in descriptor_text for marker in NON_LIP_PORTRAIT_MARKERS)
+        action_signal = any(marker in descriptor_text for marker in NON_LIP_ACTION_MARKERS)
+        if portrait_signal and not action_signal:
+            normalized_description = (
+                "Action-driven beat in a readable venue zone: performer moves through space with safe walking/pivot/gesture progression, "
+                "camera builds dynamics with tracking/angle changes, and atmosphere evolves with light and environment."
+            )
+        if framing not in NON_LIP_ACTION_FRAMINGS:
+            framing = "wide_action"
+    return normalized_description.strip(), framing
 
 SCENARIO_CANONICAL_ROLES = (
     "character_1",
@@ -1387,6 +1472,12 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
             is_lip_sync = route == "lip_sync_music"
             needs_two_frames = route == "first_last"
             internal_route = "f_l" if route == "first_last" else route
+            description, performance_framing = _normalize_scene_canon_by_route(
+                route=route,
+                description=description,
+                performance_framing=performance_framing,
+                content_tags=content_tags,
+            )
             scene_duration = max(0.0, round(scene_end - scene_start, 3))
             mapped_scenes.append(
                 {
@@ -8452,6 +8543,7 @@ def _build_request_text(
         "Scene count may remain phrase-based and compact-director mapping must stay compatible.\n"
         "Preserve audio-first timing and natural phrase alignment.\n"
         "Story arc canon is mandatory even in compact mode: build ENTRY -> DEVELOPMENT/EVENT -> ENDING/RESOLUTION.\n"
+        "Meaning canon: reveal meaning through emotional progression, performance progression, and environment/zone progression; do not rely on repeating one spin/dress motif.\n"
         "Short clips still require complete mini-arc feeling (entry, progression, ending), not random excerpt feel.\n"
         "Long clips keep opening/development/ending macro-arc and may include sub-arcs, refrain returns, and secondary turns in the middle.\n"
         "Performance-first clips should not force literal plot, but must still communicate beginning/middle/ending emotional flow.\n"
@@ -8475,10 +8567,15 @@ def _build_request_text(
         "For lip_sync_music scenes, default framing is tight medium / medium / 3/4 body performance framing.\n"
         "For lip_sync_music scenes, keep lower frame boundary around slightly below waist up to upper thigh when possible.\n"
         "For lip_sync_music scenes, keep face/mouth/neck/shoulders/upper torso clearly readable; include hands when performance helps expression.\n"
+        "For lip_sync_music scenes, stage singer-performance-first: performer stays camera-readable, direct eye contact is preferred on strong lines, subtle sway/head-turn/hand-gesture are allowed.\n"
+        "For lip_sync_music scenes, do NOT use spin-first/twirl-first/full-body dance silhouette/overhead dance spectacle as the primary idea.\n"
+        "For lip_sync_music scenes, camera can move but performer motion stays safe and articulation-first (no risky body-spin choreography as main event).\n"
         "Do NOT describe lip_sync_music scenes primarily as face-only close-up by default.\n"
         "Avoid pure close-up face framing for lip_sync_music unless the strongest beat explicitly requires that close emotional intent.\n"
         "If the strongest beat is better served by close-up or full-body framing, keep that intentional framing choice and make the reason explicit in description.\n"
         "For non-lip scenes, do NOT inherit lip-sync portrait defaults; prioritize action blocking, spatial progression, and venue zone readability.\n"
+        "For non-lip i2v scenes, write ACTION/SPACE/BEAT-first (movement, zone progression, gesture, atmosphere), not portrait-only reads.\n"
+        "For non-lip i2v scenes, avoid violent spins/repeated twirls/aggressive fabric sweeps as primary action; prefer camera-led energy with safer body motion.\n"
         "For non-lip scenes, preserve intended camera diversity (wide, low-angle, overhead, tracking, crowd/action staging) instead of collapsing to portrait framing.\n"
         "Concert/festival scenes must keep physically plausible performer placement: never standing on audience heads, never floating over crowd, never impossible support planes.\n"
         "Inside one venue, prefer different connected sub-zones across scenes (barricade, side aisle, walkway gap, platform edge, stage-side rail, backstage side entry, merch/bar alley).\n"
@@ -8493,6 +8590,7 @@ def _build_request_text(
         "Route is REQUIRED in every scene and must be strict enum: i2v | lip_sync_music | first_last.\n"
         "Descriptions and content_tags must encode grounded photoreal visual intent, performance intent, and wow-factor decisions.\n"
         "performance_framing should be explicit per scene when possible using compact values (tight_medium | medium | three_quarter | close_emotional | wide_action | full_body_action).\n"
+        "If route=lip_sync_music and performance_framing is missing, treat output as incomplete and repair before returning JSON.\n"
         "System will translate your compact output into production contract and execute it.\n"
         f"Raw inputs: {json.dumps(runtime_payload, ensure_ascii=False)}"
         f"{retry_suffix}"
@@ -8701,12 +8799,17 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- For lip_sync_music scenes, you must write the intended performance framing directly in scene description (source-of-truth), not rely on downstream correction.\n"
         "- For lip_sync_music scenes, default to tight medium / medium / 3/4 body with lower frame boundary around slightly-below-waist to upper-thigh when possible.\n"
         "- Keep mouth/face/neck/shoulders/upper torso readable for articulation and emotion; include hands when useful for performance readability.\n"
+        "- For lip_sync_music scenes, singer-performance-first: camera-readable to-camera delivery, direct gaze preferred on strong lines, subtle sway/head-turn/hand gestures only.\n"
+        "- For lip_sync_music scenes, avoid spin-first/twirl-first/full-body dance silhouette/overhead dance spectacle as primary composition.\n"
+        "- For lip_sync_music scenes, keep body action LTX-safe: no risky rotational choreography as main event.\n"
         "- Avoid face-only close-up lip_sync_music framing unless a strongest beat explicitly requires close emotional framing.\n"
         "- lip_sync_music framing preference applies only to lip-sync scenes; non-lip scenes should stay action/staging driven.\n"
         "- short opening atmosphere beats (<1.6s) should be merged or treated as non-renderable establishing transitions, not standalone hero shots.\n"
         "- environment-first establishing reveal may intentionally have no active character subject.\n"
         "- in concert/crowd worlds, character placement must be physically grounded in valid venue zones.\n"
         "- For non-lip scenes, preserve action/staging camera diversity (wide/low-angle/overhead/tracking/crowd dynamics); do not collapse into portrait defaults.\n"
+        "- For non-lip i2v scenes, write ACTION/SPACE/BEAT-first with movement + zone progression + atmosphere, not portrait-only face/upper-torso beats.\n"
+        "- For non-lip i2v scenes, avoid violent spins/repeated twirls/aggressive fabric sweep loops as primary action; use camera-led energy with safe body motion.\n"
         "SCENE SEGMENTATION:\n"
         "- Keep phrase-based segmentation aligned to audio phrases.\n"
         "- End scenes at natural phrase ends or just before safe post-phrase spill.\n"
@@ -8718,8 +8821,10 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- Do not reduce scene count artificially.\n"
         "- Prefer clip-friendly scene durations (about 2-5.5 sec) when phrase timing allows.\n"
         "- Use route per scene independently (i2v | lip_sync_music | first_last) based on creative and performance needs.\n"
+        "- performance_framing must be explicit per scene; if route=lip_sync_music and framing is missing, repair before final JSON.\n"
         "STORY ARC CANON (MANDATORY, WITHOUT BREAKING AUDIO-FIRST):\n"
         "- Build a complete mini-arc for every clip: ENTRY → DEVELOPMENT/EVENT → ENDING/RESOLUTION.\n"
+        "- Reveal meaning through emotional progression + zone progression + performance progression; do not reuse one spinning-dress motif as default metaphor.\n"
         "- Keep phrase-based scene boundaries from audio; arc is scene PURPOSE, not timing override.\n"
         "- Opening beat must establish world/hero/starting emotional state.\n"
         "- Middle beats must progress (escalation, turn, energy cycle, reflective reset, or payoff setup).\n"
@@ -9539,6 +9644,29 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
         is_lip_sync_route = route == "lip_sync_music"
         is_first_last_route = route == "first_last"
         performance_framing = str(scene.get("performance_framing") or scene.get("performanceFraming") or "").strip()
+        summary_text = str(scene.get("summary") or "").strip()
+        motion_text = str(scene.get("motion") or "").strip()
+        camera_text = str(scene.get("camera") or "").strip()
+        route_description = " ".join(part for part in (summary_text, motion_text, camera_text) if part).strip()
+        normalized_route_description, performance_framing = _normalize_scene_canon_by_route(
+            route=route,
+            description=route_description,
+            performance_framing=performance_framing,
+            content_tags=[str(scene.get("sceneType") or "").strip(), str(scene.get("storyFunction") or "").strip()],
+        )
+        if normalized_route_description and not summary_text:
+            summary_text = normalized_route_description
+        if is_lip_sync_route and normalized_route_description:
+            motion_text = (
+                "Emotional singer-to-camera lyric performance with clear articulation, expressive hands, subtle sway, and controlled camera motion."
+            )
+            camera_text = "Slow push-in/pull-back or gentle side arc; maintain stable horizon and readable face framing."
+        elif route in {"i2v", "first_last"} and normalized_route_description:
+            motion_text = (
+                "Action/space beat with safe movement through venue zones, gesture-led progression, and camera-driven dynamism."
+            )
+            if not camera_text:
+                camera_text = "Tracking or angled move that reveals space progression and preserves readable body motion."
         is_environment_establishing = _scene_is_environment_establishing(scene)
         if scene_duration <= DIRECT_GEMINI_ESTABLISHING_SCENE_MAX_SEC and is_environment_establishing and not is_lip_sync_route:
             scene.setdefault("characters", [])
@@ -9555,12 +9683,12 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "location": str(scene.get("environment") or "").strip(),
                 "props": [],
                 "emotion": str(primary_semantic.get("emotion") or "").strip(),
-                "scene_goal": str(scene.get("summary") or "").strip(),
-                "frame_description": str(scene.get("summary") or "").strip(),
-                "action_in_frame": str(scene.get("motion") or "").strip(),
-                "camera": str(scene.get("camera") or "").strip(),
+                "scene_goal": summary_text,
+                "frame_description": summary_text,
+                "action_in_frame": motion_text,
+                "camera": camera_text,
                 "image_prompt": str(scene.get("visualPrompt") or "").strip(),
-                "video_prompt": str(scene.get("motion") or "").strip() or "Beat-synced camera and subject motion evolving through the scene.",
+                "video_prompt": motion_text or "Beat-synced camera and subject motion evolving through the scene.",
                 "ltx_mode": "lip_sync_music" if is_lip_sync_route else ("f_l" if is_first_last_route else "i2v"),
                 "ltx_reason": "Audio-first single-call route mapped via strict enum contract.",
                 "render_mode": "lip_sync_music" if is_lip_sync_route else ("first_last" if is_first_last_route else "image_video"),
