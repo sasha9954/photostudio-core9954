@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import requests
 from requests import RequestException
 import tempfile
@@ -69,6 +69,7 @@ def _resolve_direct_gemini_storyboard_mode_from_payload(payload: Any, *, default
     return env_enabled
 
 class ClipImageIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
     sceneId: str
     prompt: str | None = None
     sceneDelta: str | None = None
@@ -78,6 +79,7 @@ class ClipImageIn(BaseModel):
     refs: "ClipImageRefsIn | None" = None
     sceneText: str | None = None
     promptDebug: dict | None = None
+    sceneContract: dict | None = None
 
 
 class ClipImageRefsIn(BaseModel):
@@ -745,6 +747,101 @@ def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
         "music_vocal_lipsync_allowed": is_lip_sync_route,
         "route_flags_consistent": route_flags_consistent,
     }
+
+
+def _coerce_optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = None) -> dict[str, Any]:
+    payload_map = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else {}
+    payload_map = payload_map if isinstance(payload_map, dict) else {}
+    incoming_contract = payload.sceneContract if isinstance(getattr(payload, "sceneContract", None), dict) else {}
+    contract: dict[str, Any] = dict(incoming_contract)
+
+    passthrough_keys = [
+        "primaryRole",
+        "secondaryRoles",
+        "sceneActiveRoles",
+        "refsUsed",
+        "mustAppear",
+        "mustNotAppear",
+        "heroEntityId",
+        "supportEntityIds",
+        "environmentLock",
+        "styleLock",
+        "identityLock",
+        "identityLockApplied",
+        "identityLockFieldsUsed",
+        "outfitLock",
+        "video_generation_route",
+        "planned_video_generation_route",
+        "resolved_workflow_key",
+        "resolved_workflow_file",
+        "lip_sync_route_state_consistent",
+        "lipSync",
+        "lip_sync",
+        "isLipSync",
+    ]
+    for key in passthrough_keys:
+        if key not in contract and payload_map.get(key) is not None:
+            contract[key] = payload_map.get(key)
+
+    aliases = {
+        "videoGenerationRoute": "video_generation_route",
+        "plannedVideoGenerationRoute": "planned_video_generation_route",
+        "resolvedWorkflowKey": "resolved_workflow_key",
+        "resolvedWorkflowFile": "resolved_workflow_file",
+        "lipSyncRouteStateConsistent": "lip_sync_route_state_consistent",
+        "sceneActiveRoles": "sceneActiveRoles",
+        "identityLockApplied": "identityLockApplied",
+    }
+    for source_key, target_key in aliases.items():
+        source_value = payload_map.get(source_key)
+        if target_key not in contract and source_value is not None:
+            contract[target_key] = source_value
+
+    route_hint = str(
+        contract.get("route")
+        or contract.get("sourceRoute")
+        or contract.get("planned_video_generation_route")
+        or contract.get("plannedVideoGenerationRoute")
+        or ""
+    ).strip().lower()
+    if not route_hint:
+        route_internal = str(
+            contract.get("video_generation_route")
+            or contract.get("videoGenerationRoute")
+            or contract.get("resolved_workflow_key")
+            or contract.get("resolvedWorkflowKey")
+            or ""
+        ).strip().lower()
+        if route_internal == "f_l":
+            route_hint = "first_last"
+        elif route_internal == "lip_sync":
+            route_hint = "lip_sync_music"
+        elif route_internal in {"i2v", "lip_sync_music", "first_last"}:
+            route_hint = route_internal
+    if route_hint in {"i2v", "lip_sync_music", "first_last"}:
+        contract.update(_derive_direct_scene_contract_fields(route_hint))
+
+    if not contract.get("sceneActiveRoles") and isinstance(refs_obj, BaseModel):
+        fallback_roles = getattr(refs_obj, "sceneActiveRoles", None)
+        if isinstance(fallback_roles, list):
+            contract["sceneActiveRoles"] = fallback_roles
+
+    return contract
 
 
 def _resolve_ltx_workflow_selection(
@@ -8726,7 +8823,7 @@ def clip_image(payload: ClipImageIn):
     session_location_anchor = str(getattr(refs_obj, "sessionLocationAnchor", "") or "").strip()
     session_style_anchor = str(getattr(refs_obj, "sessionStyleAnchor", "") or "").strip()
     session_baseline = getattr(refs_obj, "sessionBaseline", None)
-    raw_scene_contract = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+    raw_scene_contract = _extract_clip_image_scene_contract(payload, refs_obj=refs_obj)
     world_scale_context_source = "none"
     world_scale_context_reason = "unset"
     world_scale_context = _normalize_world_scale_context(getattr(refs_obj, "worldScaleContext", None))
@@ -8860,6 +8957,31 @@ def clip_image(payload: ClipImageIn):
         image_prompt=prompt,
         video_prompt=getattr(refs_obj, "sceneNarrativeStep", None),
     )
+    incoming_identity_lock = (
+        _coerce_optional_bool(raw_scene_contract.get("identityLockApplied"))
+        if isinstance(raw_scene_contract, dict)
+        else None
+    )
+    if incoming_identity_lock is None and isinstance(raw_scene_contract, dict):
+        incoming_identity_lock = _coerce_optional_bool(
+            raw_scene_contract.get("identityLock")
+            if raw_scene_contract.get("identityLock") is not None
+            else raw_scene_contract.get("identity_lock")
+        )
+    if incoming_identity_lock is not None:
+        scene_contract["identityLock"] = bool(incoming_identity_lock)
+        scene_contract["identityLockApplied"] = bool(incoming_identity_lock)
+        scene_contract["outfitLock"] = bool(incoming_identity_lock)
+    route_hint = str(
+        raw_scene_contract.get("route")
+        or raw_scene_contract.get("sourceRoute")
+        or raw_scene_contract.get("planned_video_generation_route")
+        or raw_scene_contract.get("plannedVideoGenerationRoute")
+        or ""
+    ).strip().lower()
+    if route_hint in {"i2v", "lip_sync_music", "first_last"}:
+        scene_contract.update(_derive_direct_scene_contract_fields(route_hint))
+        scene_contract["lip_sync_route_state_consistent"] = True
     identity_lock_fields_min = [
         "face_identity",
         "hair_identity",
