@@ -588,6 +588,9 @@ class ScenarioDirectorScene(BaseModel):
     viewer_hook: str = ""
     performance_framing: str = ""
     clip_arc_stage: str = ""
+    story_function: str = ""
+    display_index: int = 0
+    absorbed_story_functions: list[str] = Field(default_factory=list)
     beat_function: str = ""
     progression_reason: str = ""
     transition_family: str = ""
@@ -714,6 +717,9 @@ class ScenarioDirectorScene(BaseModel):
         self.viewer_hook = str(self.viewer_hook or "").strip()
         self.performance_framing = str(self.performance_framing or "").strip()
         self.clip_arc_stage = str(self.clip_arc_stage or "").strip()
+        self.story_function = str(self.story_function or "").strip()
+        self.display_index = max(0, int(_safe_float(self.display_index, 0)))
+        self.absorbed_story_functions = [str(item).strip() for item in (self.absorbed_story_functions or []) if str(item).strip()]
         self.beat_function = str(self.beat_function or "").strip()
         self.progression_reason = str(self.progression_reason or "").strip()
         self.transition_family = str(self.transition_family or "").strip()
@@ -1244,6 +1250,9 @@ def _normalize_legacy_scene_shape(scene: dict) -> dict:
     normalized.setdefault("viewer_hook", normalized.get("viewerHook"))
     normalized.setdefault("performance_framing", normalized.get("performanceFraming"))
     normalized.setdefault("clip_arc_stage", normalized.get("clipArcStage"))
+    normalized.setdefault("story_function", normalized.get("storyFunction"))
+    normalized.setdefault("display_index", normalized.get("displayIndex"))
+    normalized.setdefault("absorbed_story_functions", normalized.get("absorbedStoryFunctions"))
     normalized.setdefault("beat_function", normalized.get("beatFunction"))
     normalized.setdefault("progression_reason", normalized.get("progressionReason"))
     normalized.setdefault("transition_family", normalized.get("transitionFamily"))
@@ -2868,6 +2877,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         scene_item = {
             "sceneId": scene.scene_id,
             "title": scene.scene_id,
+            "displayIndex": scene.display_index or (scene_index + 1),
             "timeStart": scene.time_start,
             "timeEnd": scene.time_end,
             "duration": scene.duration,
@@ -2896,6 +2906,8 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "resolvedWorkflowFile": scene.resolved_workflow_file,
             "scenePurpose": scene.scene_purpose,
             "clipArcStage": scene.clip_arc_stage,
+            "storyFunction": scene.story_function or scene.clip_arc_stage,
+            "absorbedStoryFunctions": scene.absorbed_story_functions,
             "beatFunction": scene.beat_function,
             "progressionReason": scene.progression_reason,
             "transitionFamily": scene.transition_family,
@@ -9165,6 +9177,7 @@ def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> 
     prepared: list[dict[str, Any]] = []
     dropped_scene_ids: list[str] = []
     merged_scene_ids: list[str] = []
+    hidden_story_beats: list[dict[str, Any]] = []
     for idx, scene in enumerate(scenes):
         start = _safe_float(scene.get("t0"), 0.0)
         end = _safe_float(scene.get("t1"), start)
@@ -9178,6 +9191,21 @@ def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> 
         if is_short_establishing:
             dropped_scene_ids.append(scene_id)
             if idx + 1 < len(scenes):
+                next_scene = scenes[idx + 1]
+                absorbed = list(next_scene.get("absorbedStoryFunctions") or [])
+                absorbed.append("entry")
+                next_scene["absorbedStoryFunctions"] = list(dict.fromkeys([str(item).strip() for item in absorbed if str(item).strip()]))
+                prev_summary = str(scene.get("summary") or "").strip()
+                next_summary = str(next_scene.get("summary") or "").strip()
+                if prev_summary and prev_summary.lower() not in next_summary.lower():
+                    next_scene["summary"] = f"{prev_summary}. {next_summary}".strip(". ")
+                hidden_story_beats.append(
+                    {
+                        "sceneId": scene_id,
+                        "storyFunction": "entry",
+                        "resolution": "merged_into_next_renderable_scene",
+                    }
+                )
                 scenes[idx + 1]["t0"] = round(min(_safe_float(scenes[idx + 1].get("t0"), start), start), 3)
             continue
         if idx + 1 < len(scenes):
@@ -9187,17 +9215,65 @@ def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> 
             if prev_summary and prev_summary.lower() not in next_summary.lower():
                 scenes[idx + 1]["summary"] = f"{prev_summary}. {next_summary}".strip(". ")
             merged_scene_ids.append(scene_id)
+            hidden_story_beats.append(
+                {
+                    "sceneId": scene_id,
+                    "storyFunction": "transition",
+                    "resolution": "merged_into_next_renderable_scene",
+                }
+            )
             continue
         if prepared:
             prepared[-1]["t1"] = round(max(_safe_float(prepared[-1].get("t1"), 0.0), end), 3)
             merged_scene_ids.append(scene_id)
+            hidden_story_beats.append(
+                {
+                    "sceneId": scene_id,
+                    "storyFunction": "transition",
+                    "resolution": "merged_into_previous_renderable_scene",
+                }
+            )
             continue
         prepared.append(scene)
     return prepared, {
         "direct_short_scene_min_sec": DIRECT_GEMINI_MIN_RENDERABLE_SCENE_SEC,
         "droppedEnvironmentEstablishingSceneIds": dropped_scene_ids,
         "mergedShortSceneIds": merged_scene_ids,
+        "hiddenStoryBeats": hidden_story_beats,
     }
+
+
+def _apply_story_arc_canon_to_legacy_scenes(legacy_scenes: list[dict[str, Any]]) -> None:
+    total = len(legacy_scenes)
+    if total <= 0:
+        return
+    for idx, scene in enumerate(legacy_scenes):
+        if total == 1:
+            stage = "opening_to_ending"
+            purpose = "ending_hold"
+            hook = "Single-scene mini-arc: establish world/hero and finish with deliberate closure."
+            progression = "entry_and_resolution_compacted_for_short_audio"
+        elif idx == 0:
+            stage = "opening"
+            purpose = "hook"
+            hook = "Opening beat establishes world, hero presence, and emotional starting point."
+            progression = "entry_anchor_for_story_arc"
+        elif idx == total - 1:
+            stage = "ending"
+            purpose = "ending_hold"
+            hook = "Final beat lands emotional resolution/afterglow instead of abrupt cut."
+            progression = "outro_resolution_for_story_arc"
+        else:
+            stage = "development"
+            purpose = "build"
+            hook = "Development beat advances action, energy, or emotional turn."
+            progression = "middle_progression_event"
+        scene["clip_arc_stage"] = stage
+        scene["scene_purpose"] = purpose
+        scene["viewer_hook"] = str(scene.get("viewer_hook") or "").strip() or hook
+        scene["progression_reason"] = progression
+        scene["display_index"] = idx + 1
+        scene["story_function"] = stage
 
 
 
@@ -9385,6 +9461,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
         legacy_scenes.append(
             {
                 "scene_id": str(scene.get("sceneId") or f"S{idx}").strip() or f"S{idx}",
+                "display_index": len(legacy_scenes) + 1,
                 "time_start": scene_start,
                 "time_end": scene_end,
                 "duration": scene_duration,
@@ -9425,6 +9502,8 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "music_mix_hint": "off",
                 "scene_purpose": "hook" if is_first_renderable_scene else "build",
                 "viewer_hook": "Immediate rhythmic visual anchor." if is_first_renderable_scene else "Beat-matched progression.",
+                "story_function": "opening" if is_first_renderable_scene else "development",
+                "absorbed_story_functions": [str(item).strip() for item in (scene.get("absorbedStoryFunctions") or []) if str(item).strip()],
                 "what_from_audio_this_scene_uses": str(primary_semantic.get("meaning") or scene.get("summary") or "").strip(),
                 "director_note_layer": "",
                 "boundary_reason": "phrase",
@@ -9442,6 +9521,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "environment_only_establishing": bool(scene_duration <= DIRECT_GEMINI_ESTABLISHING_SCENE_MAX_SEC and is_environment_establishing),
             }
         )
+    _apply_story_arc_canon_to_legacy_scenes(legacy_scenes)
     director_summary = (
         str(debug.get("alignment") or "").strip()
         or str(global_story.get("overallNarrative") or "").strip()
@@ -9499,6 +9579,16 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             "intro_logic_applied": False if direct_gemini_storyboard_mode else True,
             "scene_merge_applied": scene_merge_applied,
             "direct_short_scene_policy": direct_short_scene_policy_debug,
+            "story_arc_canon_applied": True,
+            "story_arc_stages_present": list(
+                dict.fromkeys(
+                    [
+                        str(scene.get("clip_arc_stage") or "").strip()
+                        for scene in legacy_scenes
+                        if isinstance(scene, dict) and str(scene.get("clip_arc_stage") or "").strip()
+                    ]
+                )
+            ),
             "backend_route_override_applied": False,
             "transcript_segment_count": len([row for row in transcript_rows if isinstance(row, dict)]),
             "final_scene_count": len(legacy_scenes),
