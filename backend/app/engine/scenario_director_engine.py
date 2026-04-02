@@ -8418,6 +8418,10 @@ def _build_request_text(
         "Keep segmentation tight around real vocal phrase boundaries.\n"
         "Scene count may remain phrase-based and compact-director mapping must stay compatible.\n"
         "Preserve audio-first timing and natural phrase alignment.\n"
+        "Story arc canon is mandatory even in compact mode: build ENTRY -> DEVELOPMENT/EVENT -> ENDING/RESOLUTION.\n"
+        "Short clips still require complete mini-arc feeling (entry, progression, ending), not random excerpt feel.\n"
+        "Long clips keep opening/development/ending macro-arc and may include sub-arcs, refrain returns, and secondary turns in the middle.\n"
+        "Performance-first clips should not force literal plot, but must still communicate beginning/middle/ending emotional flow.\n"
         "Think like a top-tier cinematic music video director, not a literal lyric illustrator.\n"
         "Prioritize photoreal cinematic, emotionally alive, shootable performance imagery in EVERY scene.\n"
         "Weak/repetitive/poetic lyrics are emotional cues, not mandatory literal world instructions.\n"
@@ -8617,6 +8621,7 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
     references_block = (
         f"Available character references: {available_refs}\n" if available_refs else "Available character references: none\n"
     )
+    arc_story_function_hint = "entry | development | transition | peak | ending | outro"
     return (
         "I am attaching audio and character reference images.\n"
         "Treat them as real inputs for a grounded photoreal music-video storyboard request.\n"
@@ -8669,6 +8674,15 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- Do not reduce scene count artificially.\n"
         "- Prefer clip-friendly scene durations (about 2-5.5 sec) when phrase timing allows.\n"
         "- Use route per scene independently (i2v | lip_sync_music | first_last) based on creative and performance needs.\n"
+        "STORY ARC CANON (MANDATORY, WITHOUT BREAKING AUDIO-FIRST):\n"
+        "- Build a complete mini-arc for every clip: ENTRY → DEVELOPMENT/EVENT → ENDING/RESOLUTION.\n"
+        "- Keep phrase-based scene boundaries from audio; arc is scene PURPOSE, not timing override.\n"
+        "- Opening beat must establish world/hero/starting emotional state.\n"
+        "- Middle beats must progress (escalation, turn, energy cycle, reflective reset, or payoff setup).\n"
+        "- Ending beat must feel intentionally finished (release, closure, afterglow, final statement), never abrupt random excerpt.\n"
+        "- For short audio (~20-40s): include entry beat, several development beats, and ending/outro beat.\n"
+        "- For long audio (1-5+ min): keep opening-development-ending macro arc, and allow middle sub-arcs, refrain returns, secondary turns, and late climax/release.\n"
+        "- Performance-first clips still need beginning feeling, middle progression feeling, and ending feeling; do not force literal plot.\n"
         "IMPORTANT: use ONLY canonical role ids in planning fields (character_1, character_2, character_3, animal, group, location, style, props).\n"
         "Never put filenames or display labels into actors/participants/roles.\n"
         "REAL TIMELINE REQUIREMENTS:\n"
@@ -8724,6 +8738,7 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         '        "start_time_sec": 0,\n'
         '        "end_time_sec": 0,\n'
         '        "route": "i2v | lip_sync_music | first_last",\n'
+        f'        "story_function": "{arc_story_function_hint}",\n'
         '        "description": "",\n'
         '        "content_tags": []\n'
         "      }\n"
@@ -8824,6 +8839,7 @@ def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any
                 "transitionIn": "",
                 "transitionOut": "",
                 "sceneType": scene_type,
+                "storyFunction": str(scene.get("story_function") or scene.get("storyFunction") or "").strip(),
                 "route": route,
                 "content_tags": content_tags,
             }
@@ -9183,6 +9199,8 @@ def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> 
         end = _safe_float(scene.get("t1"), start)
         duration = max(0.0, end - start)
         scene_id = str(scene.get("sceneId") or f"S{idx + 1}").strip() or f"S{idx + 1}"
+        scene_story_function = str(scene.get("storyFunction") or scene.get("story_function") or "").strip().lower()
+        absorbed_function = scene_story_function or ("entry" if _scene_is_environment_establishing(scene) else "transition")
         is_short = duration < DIRECT_GEMINI_MIN_RENDERABLE_SCENE_SEC
         is_short_establishing = duration <= DIRECT_GEMINI_ESTABLISHING_SCENE_MAX_SEC and _scene_is_environment_establishing(scene)
         if not is_short:
@@ -9193,7 +9211,7 @@ def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> 
             if idx + 1 < len(scenes):
                 next_scene = scenes[idx + 1]
                 absorbed = list(next_scene.get("absorbedStoryFunctions") or [])
-                absorbed.append("entry")
+                absorbed.append(absorbed_function)
                 next_scene["absorbedStoryFunctions"] = list(dict.fromkeys([str(item).strip() for item in absorbed if str(item).strip()]))
                 prev_summary = str(scene.get("summary") or "").strip()
                 next_summary = str(next_scene.get("summary") or "").strip()
@@ -9202,7 +9220,7 @@ def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> 
                 hidden_story_beats.append(
                     {
                         "sceneId": scene_id,
-                        "storyFunction": "entry",
+                        "storyFunction": absorbed_function,
                         "resolution": "merged_into_next_renderable_scene",
                     }
                 )
@@ -9215,10 +9233,13 @@ def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> 
             if prev_summary and prev_summary.lower() not in next_summary.lower():
                 scenes[idx + 1]["summary"] = f"{prev_summary}. {next_summary}".strip(". ")
             merged_scene_ids.append(scene_id)
+            absorbed = list(scenes[idx + 1].get("absorbedStoryFunctions") or [])
+            absorbed.append(absorbed_function)
+            scenes[idx + 1]["absorbedStoryFunctions"] = list(dict.fromkeys([str(item).strip() for item in absorbed if str(item).strip()]))
             hidden_story_beats.append(
                 {
                     "sceneId": scene_id,
-                    "storyFunction": "transition",
+                    "storyFunction": absorbed_function,
                     "resolution": "merged_into_next_renderable_scene",
                 }
             )
@@ -9226,10 +9247,13 @@ def _preprocess_direct_gemini_short_scenes(raw_scenes: list[dict[str, Any]]) -> 
         if prepared:
             prepared[-1]["t1"] = round(max(_safe_float(prepared[-1].get("t1"), 0.0), end), 3)
             merged_scene_ids.append(scene_id)
+            absorbed = list(prepared[-1].get("absorbedStoryFunctions") or [])
+            absorbed.append(absorbed_function)
+            prepared[-1]["absorbedStoryFunctions"] = list(dict.fromkeys([str(item).strip() for item in absorbed if str(item).strip()]))
             hidden_story_beats.append(
                 {
                     "sceneId": scene_id,
-                    "storyFunction": "transition",
+                    "storyFunction": absorbed_function,
                     "resolution": "merged_into_previous_renderable_scene",
                 }
             )
@@ -9248,6 +9272,19 @@ def _apply_story_arc_canon_to_legacy_scenes(legacy_scenes: list[dict[str, Any]])
     if total <= 0:
         return
     for idx, scene in enumerate(legacy_scenes):
+        explicit_story_function = str(scene.get("story_function") or scene.get("storyFunction") or "").strip().lower()
+        absorbed_story_functions = [
+            str(item).strip().lower()
+            for item in (scene.get("absorbed_story_functions") or scene.get("absorbedStoryFunctions") or [])
+            if str(item).strip()
+        ]
+        explicit_stage = ""
+        if explicit_story_function in {"entry", "opening"}:
+            explicit_stage = "opening"
+        elif explicit_story_function in {"ending", "outro"}:
+            explicit_stage = "ending"
+        elif explicit_story_function in {"development", "transition", "peak"}:
+            explicit_stage = "development"
         if total == 1:
             stage = "opening_to_ending"
             purpose = "ending_hold"
@@ -9268,12 +9305,19 @@ def _apply_story_arc_canon_to_legacy_scenes(legacy_scenes: list[dict[str, Any]])
             purpose = "build"
             hook = "Development beat advances action, energy, or emotional turn."
             progression = "middle_progression_event"
+        if explicit_stage and stage != "opening_to_ending":
+            stage = explicit_stage
+        absorbed_hint = ", ".join(absorbed_story_functions)
+        if absorbed_hint:
+            progression = f"{progression}; absorbed_hidden_beats={absorbed_hint}"
+            if "hidden beat" not in hook.lower():
+                hook = f"{hook} Carries hidden beat(s): {absorbed_hint}."
         scene["clip_arc_stage"] = stage
         scene["scene_purpose"] = purpose
         scene["viewer_hook"] = str(scene.get("viewer_hook") or "").strip() or hook
         scene["progression_reason"] = progression
         scene["display_index"] = idx + 1
-        scene["story_function"] = stage
+        scene["story_function"] = explicit_story_function or stage
 
 
 
@@ -9502,7 +9546,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "music_mix_hint": "off",
                 "scene_purpose": "hook" if is_first_renderable_scene else "build",
                 "viewer_hook": "Immediate rhythmic visual anchor." if is_first_renderable_scene else "Beat-matched progression.",
-                "story_function": "opening" if is_first_renderable_scene else "development",
+                "story_function": str(scene.get("storyFunction") or scene.get("story_function") or "").strip() or ("opening" if is_first_renderable_scene else "development"),
                 "absorbed_story_functions": [str(item).strip() for item in (scene.get("absorbedStoryFunctions") or []) if str(item).strip()],
                 "what_from_audio_this_scene_uses": str(primary_semantic.get("meaning") or scene.get("summary") or "").strip(),
                 "director_note_layer": "",

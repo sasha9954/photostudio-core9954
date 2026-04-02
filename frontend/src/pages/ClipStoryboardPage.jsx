@@ -1151,9 +1151,12 @@ function normalizeStoryboardOutScene(scene, index) {
   const t1 = Math.max(t0, toStoryboardTimeSec(source.time_end, t0 + duration));
   const ltxMode = String(source.ltx_mode || "").trim();
   const sceneId = String(source.scene_id || `S${index + 1}`);
+  const displayIndexRaw = Number(source.display_index ?? source.displayIndex);
+  const displayIndex = Number.isFinite(displayIndexRaw) && displayIndexRaw > 0 ? Math.floor(displayIndexRaw) : (index + 1);
   return {
     id: `storyboard-scene-${index + 1}`,
     sceneId,
+    displayIndex,
     t0,
     t1,
     start: t0,
@@ -6057,7 +6060,7 @@ function StoryboardPlanNode({ id, data }) {
                 <article key={getScenarioSceneStableKey(s, idx)} className="clipSB_storyboardSceneCard">
                   <div className="clipSB_storyboardSceneHeader">
                     <div>
-                      <div className="clipSB_storyboardSceneId">{s.sceneId || `S${idx + 1}`}</div>
+                      <div className="clipSB_storyboardSceneId">{`Scene ${s.displayIndex || (idx + 1)}`}</div>
                       <div className="clipSB_storyboardSceneTime">
                         {s.t0}s → {s.t1}s • {Number(s.durationSec || Math.max(0, (s.t1 || 0) - (s.t0 || 0))).toFixed(1)}s
                       </div>
