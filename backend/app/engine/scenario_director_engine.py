@@ -4410,7 +4410,14 @@ def _build_character_identity_visible_lock(
     active_roles = {str(actor).strip().lower() for actor in (scene.actors or []) if str(actor).strip()}
     if role not in active_roles:
         return "", []
+    has_explicit_refs = _role_has_explicit_refs(payload, role)
     cues = _extract_character_identity_cues(payload, role=role)
+    if has_explicit_refs:
+        cues.setdefault("face_identity", "same woman as character_1 reference across all scenes; no face redesign")
+        cues.setdefault("hair_identity", "no hairstyle redesign across scenes unless explicitly requested")
+        cues.setdefault("garment_identity", "wardrobe remains identical across scenes unless storyboard explicitly requests costume change")
+        cues.setdefault("body_identity", "body type and age presentation stay consistent with the reference identity")
+        cues.setdefault("makeup_identity", "makeup style remains stable across scenes; no spontaneous redesign")
     fields_used = [key for key, value in cues.items() if str(value).strip()]
     if not cues:
         return "", []
@@ -4422,7 +4429,10 @@ def _build_character_identity_visible_lock(
         str(cues.get("garment_identity") or ""),
         str(cues.get("signature_details") or ""),
         str(cues.get("footwear_identity") or ""),
+        str(cues.get("body_identity") or ""),
+        str(cues.get("makeup_identity") or ""),
         "no ethnicity drift, no silent wardrobe redesign, no sleeve removal, no silhouette change",
+        "no jewelry/accessory invention unless the scene explicitly requests it",
     ]
     if is_first_scene:
         locks.append("first scene lock: hold face, hair, sleeves, dress silhouette, signature details, and boots exactly as reference")
@@ -4443,7 +4453,7 @@ def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[s
     parts.append(opener)
     if lead:
         parts.append(lead)
-    if action and action.lower() not in lead.lower():
+    if action and action.lower() not in lead.lower() and not _is_lip_sync_music_scene(scene):
         parts.append(action)
     duet_hint = _build_duet_visible_hint(scene)
     if duet_hint:
@@ -4458,6 +4468,16 @@ def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[s
     identity_lock, _ = _build_character_identity_visible_lock(scene, payload=payload, role="character_1")
     if identity_lock:
         parts.append(identity_lock)
+    parts.append(
+        "World continuity lock: maintain one coherent venue family across storyboard scenes; zone can change (dance floor, bar, corridor, window area) but architecture/materials/palette/light rig stay recognizably the same venue."
+    )
+    if _is_lip_sync_music_scene(scene):
+        parts.append(
+            "Still-photo canon: prioritize a single frozen photographic moment with scene-specific composition, gaze, pose, and body orientation."
+        )
+        parts.append(
+            "One-venue world lock: keep the same real club venue family across all scenes with coherent architecture, material palette, and lighting rig."
+        )
     return _quality_filter_visible_prompt(_join_visible_prompt_parts(parts))
 
 
@@ -4657,7 +4677,8 @@ def _build_music_video_image_prompt(scene: ScenarioDirectorScene, payload: dict[
     if not _scene_has_character_subject(scene):
         return ""
     subject = ", ".join([actor for actor in (scene.actors or []) if str(actor).strip().startswith("character_")][:2]).strip()
-    return _join_visible_prompt_parts([f"The frame keeps {subject} readable" if subject else "", build_ltx_visible_image_prompt(scene, payload=payload)])
+    prompt = _join_visible_prompt_parts([f"The frame keeps {subject} readable" if subject else "", build_ltx_visible_image_prompt(scene, payload=payload)])
+    return _quality_filter_visible_prompt(_strip_video_only_semantics_from_image_prompt(prompt))
 
 
 def _build_music_video_video_prompt(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> str:
@@ -4679,33 +4700,51 @@ def _lip_sync_safe_camera_line() -> str:
     )
 
 
+def _strip_video_only_semantics_from_image_prompt(text: str) -> str:
+    lines = [segment.strip() for segment in re.split(r"[.\n]+", str(text or "").strip()) if segment.strip()]
+    banned_markers = (
+        "lyric articulation",
+        "mouth readability",
+        "lip articulation",
+        "lip-sync",
+        "lip sync",
+        "subtle head motion",
+        "body sway",
+        "partial arc",
+        "no 360",
+        "360",
+        "push-in",
+        "camera",
+        "locomotion",
+        "ltx",
+        "live-session",
+        "live session",
+    )
+    cleaned = [line for line in lines if not any(marker in line.lower() for marker in banned_markers)]
+    return ". ".join(cleaned).strip()
+
+
 def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     scene.scene_purpose = "performance"
     scene.transition_type = "cut" if _safe_float(scene.time_start, 0.0) > 0.0 else "cold_open"
     scene.performance_framing = "tight_medium"
     scene.shot_type = "medium"
     location = str(scene.location or "the same world location").strip()
-    scene.action_in_frame = (
-        "Emotional singing performance with face and mouth clearly readable; subtle head motion, gentle body sway, "
-        "micro-expressions and breath detail; minimal locomotion, no running or chase action."
-    )
-    scene.camera = _lip_sync_safe_camera_line()
-    scene.viewer_hook = (
-        "Immediate face-readable emotional singing beat; keep expression and lyric articulation as the main focus."
-    )
+    if not str(scene.action_in_frame or "").strip():
+        scene.action_in_frame = (
+            "Emotional singing performance with face and mouth clearly readable; subtle head motion, gentle body sway, "
+            "micro-expressions and breath detail; minimal locomotion, no running or chase action."
+        )
+    if not str(scene.camera or "").strip():
+        scene.camera = _lip_sync_safe_camera_line()
+    if not str(scene.viewer_hook or "").strip():
+        scene.viewer_hook = (
+            "Immediate face-readable emotional singing beat; keep expression and lyric articulation as the main focus."
+        )
     if not str(scene.frame_description or "").strip():
         scene.frame_description = (
             f"Half-body or medium-close singer performance in {location}; environment supports mood in background."
         )
-    scene.image_prompt = _join_visible_prompt_parts(
-        [
-            f"Cinematic 9:16 half-body/medium-close singing portrait in {location}.",
-            "Face and mouth stay cleanly readable for lyric articulation; subtle head motion and gentle body sway only.",
-            "Breath detail, micro-expressions, and possible tears carry emotion while environment stays secondary.",
-            "No running, chase, stunt motion, or locomotion-first blocking.",
-            _lip_sync_safe_camera_line(),
-        ]
-    )
     scene.video_prompt = _join_visible_prompt_parts(
         [
             "Emotional singing performance in tight medium framing with persistent face/mouth readability.",
@@ -4716,7 +4755,7 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
             build_ltx_video_canon_block(lip_sync=True),
         ]
     )
-    scene.image_prompt = _quality_filter_visible_prompt(scene.image_prompt)
+    scene.image_prompt = _quality_filter_visible_prompt(_strip_video_only_semantics_from_image_prompt(build_ltx_visible_image_prompt(scene)))
     scene.video_prompt = _quality_filter_visible_prompt(scene.video_prompt)
 
 
@@ -6401,7 +6440,15 @@ def _apply_music_video_mode_policy(
             if visible_identity_lock
             else ("identity_lock_insufficient_source" if "character_1" in {str(actor).strip().lower() for actor in (scene.actors or [])} else "")
         )
-        scene.identity_lock_fields_used = identity_fields_used
+        if scene.identity_lock_applied:
+            required_lock_fields = ["face_identity", "hair_identity", "outfit_identity", "body_identity", "age_presentation"]
+            normalized_fields = [str(field or "").strip() for field in (identity_fields_used or []) if str(field or "").strip()]
+            for required in required_lock_fields:
+                if required not in normalized_fields:
+                    normalized_fields.append(required)
+            scene.identity_lock_fields_used = normalized_fields
+        else:
+            scene.identity_lock_fields_used = identity_fields_used
         scene.image_prompt = _build_music_video_image_prompt(scene, payload=payload)
         scene.video_prompt = _build_music_video_video_prompt(scene, payload=payload)
         scene.video_negative_prompt = build_ltx_video_negative_prompt(scene)
@@ -6450,6 +6497,8 @@ def _apply_music_video_mode_policy(
         scene.character2_drift_guard = str(multi_identity_lock.get("character2DriftGuard") or "")
         scene.duet_identity_contract = str(multi_identity_lock.get("duetIdentityContract") or "")
         scene.appearance_drift_risk = str(multi_identity_lock.get("appearanceDriftRisk") or "none")
+        if scene.identity_lock_applied and scene.appearance_drift_risk in {"", "none"}:
+            scene.appearance_drift_risk = "low_locked_by_character_reference"
         scene.director_genre_intent = str(genre_intent.get("directorGenreIntent") or "neutral_drama")
         scene.director_genre_reason = str(genre_intent.get("directorGenreReason") or "fallback")
         scene.director_tone_bias = str(genre_intent.get("directorToneBias") or "observational_emotional_realism")
