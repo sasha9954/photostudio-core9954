@@ -4433,7 +4433,34 @@ def _detect_world_scale_context(*, text: str, scenes: list[dict], session_world_
     explicit_non_human_signals = bool(
         triggered["space_scale"] or triggered["mythic_world"] or triggered["hero_vs_giant"] or triggered["animal_scale"]
     )
-    fallback_to_human_world = bool(has_active_human_roles and not triggered["micro_world"] and not explicit_non_human_signals)
+    performance_human_signals = bool(
+        has_active_human_roles
+        or any(
+            re.search(pattern, tokens)
+            for pattern in [
+                r"\blip[\s-]?sync\b",
+                r"\bvocal(?:ist)?\b",
+                r"\bsing(?:er|ing)?\b",
+                r"\bperform(?:er|ance)?\b",
+                r"\bwoman\b",
+                r"\bgirl\b",
+                r"\bman\b",
+                r"\bperson\b",
+                r"\bhuman\b",
+            ]
+        )
+    )
+    strong_micro_signal = bool(
+        any(re.search(pattern, tokens) for pattern in [r"\bmicroscopic\b", r"\bdollhouse\b", r"\bant[-\s]?size\b", r"\btiny human\b", r"\btiny person\b"])
+    )
+    micro_signal_suppressed_for_human_performance = bool(
+        triggered["micro_world"] and performance_human_signals and not strong_micro_signal and not explicit_non_human_signals
+    )
+    fallback_to_human_world = bool(
+        performance_human_signals
+        and (micro_signal_suppressed_for_human_performance or not triggered["micro_world"])
+        and not explicit_non_human_signals
+    )
     if triggered["space_scale"]:
         context = "space_scale"
         reason = "space_signal"
@@ -4454,7 +4481,7 @@ def _detect_world_scale_context(*, text: str, scenes: list[dict], session_world_
         reason = "default_human_world"
     if fallback_to_human_world:
         context = "human_world"
-        reason = "human_roles_fallback"
+        reason = "human_performance_fallback" if micro_signal_suppressed_for_human_performance else "human_roles_fallback"
 
     print(
         "[WORLD SCALE DEBUG] "
@@ -4464,7 +4491,10 @@ def _detect_world_scale_context(*, text: str, scenes: list[dict], session_world_
                 "reason": reason,
                 "triggeredSignals": {k: v for k, v in triggered.items() if v},
                 "hasActiveHumanRoles": has_active_human_roles,
-                "humanWorldFallbackApplied": bool(fallback_to_human_world and reason in {"default_human_world", "human_roles_fallback"}),
+                "hasPerformanceHumanSignals": performance_human_signals,
+                "strongMicroSignal": strong_micro_signal,
+                "microSignalSuppressedForHumanPerformance": micro_signal_suppressed_for_human_performance,
+                "humanWorldFallbackApplied": bool(fallback_to_human_world and reason in {"default_human_world", "human_roles_fallback", "human_performance_fallback"}),
             },
             ensure_ascii=False,
         )
@@ -8696,9 +8726,18 @@ def clip_image(payload: ClipImageIn):
     session_location_anchor = str(getattr(refs_obj, "sessionLocationAnchor", "") or "").strip()
     session_style_anchor = str(getattr(refs_obj, "sessionStyleAnchor", "") or "").strip()
     session_baseline = getattr(refs_obj, "sessionBaseline", None)
+    raw_scene_contract = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+    world_scale_context_source = "none"
+    world_scale_context_reason = "unset"
     world_scale_context = _normalize_world_scale_context(getattr(refs_obj, "worldScaleContext", None))
+    if world_scale_context:
+        world_scale_context_source = "refs.worldScaleContext"
+        world_scale_context_reason = "explicit_request_value"
     if not world_scale_context and isinstance(session_baseline, dict):
         world_scale_context = _normalize_world_scale_context((session_baseline or {}).get("worldScaleContext"))
+        if world_scale_context:
+            world_scale_context_source = "refs.sessionBaseline.worldScaleContext"
+            world_scale_context_reason = "session_baseline_fallback"
     entity_scale_anchors = _extract_entity_scale_anchors(getattr(refs_obj, "entityScaleAnchors", None))
     if not entity_scale_anchors and isinstance(session_baseline, dict):
         entity_scale_anchors = _extract_entity_scale_anchors((session_baseline or {}).get("entityScaleAnchors"))
@@ -8708,6 +8747,22 @@ def clip_image(payload: ClipImageIn):
             scenes=[],
             session_world_anchors={"location": session_location_anchor, "style": session_style_anchor},
         )
+        world_scale_context_source = "detected_from_scene_text"
+        world_scale_context_reason = "detector_fallback"
+    must_appear_roles = raw_scene_contract.get("mustAppear") if isinstance(raw_scene_contract.get("mustAppear"), list) else []
+    active_roles_hint = raw_scene_contract.get("sceneActiveRoles") if isinstance(raw_scene_contract.get("sceneActiveRoles"), list) else []
+    human_roles_present = bool(any(role in {"character_1", "character_2", "character_3"} for role in (must_appear_roles + active_roles_hint)))
+    is_human_performance_scene = bool(
+        human_roles_present
+        or bool(raw_scene_contract.get("lipSync") is True)
+        or str(raw_scene_contract.get("videoGenerationRoute") or raw_scene_contract.get("plannedVideoGenerationRoute") or "").strip().lower() == "lip_sync_music"
+        or bool(re.search(r"\blip[\s-]?sync\b|\bvocal(?:ist)?\b|\bperform(?:er|ance)?\b|\bhuman\b|\bwoman\b|\bgirl\b|\bman\b", f"{scene_text} {scene_delta}".lower()))
+    )
+    if world_scale_context == "micro_world" and is_human_performance_scene:
+        world_scale_context = "human_world"
+        world_scale_context_source = "human_performance_guard_override"
+        world_scale_context_reason = "micro_world_rejected_for_human_performance_scene"
+        logger.info("[WORLD SCALE OVERRIDE] sceneId=%s forcedContext=human_world reason=%s", scene_id, world_scale_context_reason)
     if not entity_scale_anchors:
         entity_scale_anchors = _default_entity_scale_anchors(world_scale_context)
     entity_scale_anchor_text = _format_entity_scale_anchors(entity_scale_anchors)
@@ -9145,6 +9200,9 @@ def clip_image(payload: ClipImageIn):
         "sessionLocationAnchor": session_location_anchor or None,
         "sessionStyleAnchor": session_style_anchor or None,
         "worldScaleContext": world_scale_context or None,
+        "worldScaleContextSource": world_scale_context_source,
+        "worldScaleContextReason": world_scale_context_reason,
+        "worldScaleContextExplicit": world_scale_context_source in {"refs.worldScaleContext", "refs.sessionBaseline.worldScaleContext"},
         "entityScaleAnchors": entity_scale_anchors,
         "hasSessionBaseline": bool(isinstance(session_baseline, dict) and session_baseline),
         "hasPreviousContinuityMemory": bool(previous_continuity_memory),
@@ -9698,13 +9756,57 @@ def clip_image(payload: ClipImageIn):
         resp = post_generate_content(api_key, model, body, timeout=120)
         resp_dict = resp if isinstance(resp, dict) else {}
         response_summary = _summarize_gemini_image_response(resp_dict)
+        http_error_text = str(resp_dict.get("text") or "")[:800] if response_summary.get("httpError") else ""
+        http_error_category = ""
+        if response_summary.get("httpError"):
+            status_code = int(response_summary.get("status") or 0)
+            if status_code in {400, 404, 422}:
+                http_error_category = "request_validation_or_model_contract"
+            elif status_code in {401, 403}:
+                http_error_category = "auth_or_permissions"
+            elif status_code in {408, 429}:
+                http_error_category = "timeout_or_rate_limit"
+            elif 500 <= status_code < 600:
+                http_error_category = "provider_server_error"
+            else:
+                http_error_category = "unknown_http_error"
         print("[CLIP IMAGE GEMINI] response summary=" + json.dumps(response_summary, ensure_ascii=False))
         if response_summary.get("httpError"):
-            print("[CLIP IMAGE GEMINI] response error text=" + str((resp_dict.get("text") or "")[:500]))
+            print("[CLIP IMAGE GEMINI] response error text=" + http_error_text)
 
         decoded = _decode_gemini_image(resp_dict)
         image_found = bool(decoded)
         print("[CLIP IMAGE GEMINI] decoded image found=" + json.dumps({"found": image_found}, ensure_ascii=False))
+        fallback_debug = {
+            "httpStatus": response_summary.get("status"),
+            "httpError": bool(response_summary.get("httpError")),
+            "httpErrorCategory": http_error_category or None,
+            "httpErrorTextPreview": http_error_text or None,
+            "candidateCount": response_summary.get("candidateCount"),
+            "imagePartCount": response_summary.get("imagePartCount"),
+            "textPartCount": response_summary.get("textPartCount"),
+            "filePartCount": response_summary.get("filePartCount"),
+            "finishReasons": response_summary.get("finishReasons") or [],
+            "returnedInlineImageParts": bool((response_summary.get("imagePartCount") or 0) > 0),
+            "decodedImageFound": image_found,
+            "promptLooksSane": bool(len(str(assembled_prompt or "")) >= 120 and len(str(assembled_prompt or "").splitlines()) >= 4),
+            "promptAssembly": {
+                "assembledPromptLength": len(str(assembled_prompt or "")),
+                "assembledPromptLineCount": len(str(assembled_prompt or "").splitlines()),
+                "continuityLockApplied": bool(first_frame_reference_inline),
+                "continuitySignalsUsed": (comfy_assembly_debug.get("continuitySignalsUsed") if isinstance(comfy_assembly_debug, dict) else []) or [],
+            },
+            "worldScaleContext": world_scale_context,
+            "worldScaleContextSource": world_scale_context_source,
+            "worldScaleContextReason": world_scale_context_reason,
+            "entityScaleAnchors": entity_scale_anchors,
+            "identityLock": bool(scene_contract.get("identityLock")),
+            "environmentLock": bool(scene_contract.get("environmentLock")),
+            "styleLock": bool(scene_contract.get("styleLock")),
+            "heroEntityId": scene_contract.get("heroEntityId") or None,
+            "mustAppear": scene_contract.get("mustAppear") or [],
+            "hasPreviousSceneImage": bool(previous_scene_image_inline),
+        }
         if decoded:
             raw, ext = decoded
             image_url = _save_bytes_as_asset(raw, ext)
@@ -9715,11 +9817,13 @@ def clip_image(payload: ClipImageIn):
                 "engine": "gemini",
                 "modelUsed": model,
                 "refsDebug": refs_debug,
+                "fallbackDebug": fallback_debug,
                 "generationMode": generation_mode,
             }
 
         fallback_reason = "gemini_http_error" if response_summary.get("httpError") else "gemini_no_image_part"
         print("[CLIP IMAGE GEMINI] fallback chosen=" + json.dumps({"reason": fallback_reason, "sceneId": scene_id}, ensure_ascii=False))
+        print("[CLIP IMAGE GEMINI] fallback debug=" + json.dumps(fallback_debug, ensure_ascii=False))
         image_url = _mock_scene_image(scene_id, width, height)
         return {
             "ok": True,
@@ -9733,6 +9837,7 @@ def clip_image(payload: ClipImageIn):
             "mockFallback": True,
             "modelUsed": model,
             "refsDebug": refs_debug,
+            "fallbackDebug": fallback_debug,
             "generationMode": generation_mode,
         }
     except ValueError as e:

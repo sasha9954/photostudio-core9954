@@ -6527,15 +6527,15 @@ def _apply_music_video_mode_policy(
         if not str(storyboard_out.story.title or "").strip():
             storyboard_out.story.title = "Audio-first music video arc"
         if not str(storyboard_out.story.summary or "").strip():
-            storyboard_out.story.summary = "Performance-driven micro-arc from hook to release, anchored to audio timing."
+            storyboard_out.story.summary = "Performance-driven arc inside one coherent real venue, anchored to audio timing."
         if not str(storyboard_out.story_summary or "").strip():
             storyboard_out.story_summary = storyboard_out.story.summary
         if not str(storyboard_out.director_summary or "").strip():
-            storyboard_out.director_summary = "Audio drives timing/energy; visuals interpret mood without literal line-by-line rewrite."
+            storyboard_out.director_summary = "Audio drives timing/energy; visuals stay grounded in one coherent photoreal venue without literal line-by-line rewrite."
         if not str(storyboard_out.audio_understanding.main_topic or "").strip():
             storyboard_out.audio_understanding.main_topic = "music performance arc"
         if not str(storyboard_out.audio_understanding.world_context or "").strip():
-            storyboard_out.audio_understanding.world_context = "single-performer emotional performance world"
+            storyboard_out.audio_understanding.world_context = "single coherent real-world performance venue with stable geography across scenes"
         if not str(storyboard_out.audio_understanding.emotional_tone_from_audio or "").strip():
             storyboard_out.audio_understanding.emotional_tone_from_audio = "dynamic: hook confidence -> inner dip -> climax return -> release"
         if not str(storyboard_out.audio_understanding.what_from_audio_defines_world or "").strip():
@@ -7235,6 +7235,9 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             route_value = str(scene.video_generation_route or scene.planned_video_generation_route or scene.resolved_workflow_key or "").strip().lower()
             is_lip_sync_route = route_value == "lip_sync_music"
             if is_lip_sync_route:
+                scene.video_generation_route = "lip_sync_music"
+                scene.planned_video_generation_route = "lip_sync_music"
+                scene.resolved_workflow_key = "lip_sync_music"
                 scene.render_mode = "lip_sync_music"
                 scene.ltx_mode = "lip_sync_music"
                 scene.lip_sync = True
@@ -7247,6 +7250,19 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 scene.audio_slice_bounds_filled_from_scene = True
                 scene.lip_sync_route_state_consistent = True
             else:
+                normalized_route = route_value if route_value in {"i2v", "f_l", "blocked", "downgraded_to_i2v"} else "i2v"
+                scene.video_generation_route = normalized_route
+                scene.planned_video_generation_route = normalized_route
+                scene.resolved_workflow_key = normalized_route if normalized_route in {"i2v", "f_l"} else (scene.resolved_workflow_key or "i2v")
+                if scene.ltx_mode == "lip_sync_music":
+                    scene.ltx_mode = normalized_route
+                if scene.render_mode == "lip_sync_music":
+                    scene.render_mode = "first_last" if normalized_route == "f_l" else "image_video"
+                scene.lip_sync = False
+                scene.send_audio_to_generator = False
+                if str(scene.audio_slice_kind or "").strip().lower() == "music_vocal":
+                    scene.audio_slice_kind = "voice_only" if str(scene.local_phrase or "").strip() else "none"
+                scene.music_vocal_lipsync_allowed = False
                 scene.audio_slice_start_sec = scene.time_start
                 scene.audio_slice_end_sec = scene.time_end
                 scene.audio_slice_expected_duration_sec = scene.duration
@@ -8281,15 +8297,14 @@ def _build_request_text(
         "Keep segmentation tight around real vocal phrase boundaries.\n"
         "Scene count may remain phrase-based and compact-director mapping must stay compatible.\n"
         "Preserve audio-first timing and natural phrase alignment.\n"
-        "Think like a top-tier premium music video director, not a literal lyric illustrator.\n"
-        "Prioritize premium, cinematic, stylish, emotionally alive, shootable performance imagery in EVERY scene.\n"
+        "Think like a top-tier cinematic music video director, not a literal lyric illustrator.\n"
+        "Prioritize photoreal cinematic, emotionally alive, shootable performance imagery in EVERY scene.\n"
         "Weak/repetitive/poetic lyrics are emotional cues, not mandatory literal world instructions.\n"
         "If effective director note text exists (including payload.text), treat it as an active story-frame/world-direction instruction.\n"
-        "If no location ref is provided, choose a premium performance world yourself with this default hierarchy:\n"
-        "1) premium studio/loft/infinity-cove/controlled architectural space;\n"
-        "2) stylized fashion-performance interior;\n"
-        "3) elegant night urban performance space;\n"
-        "4) abstract environment only if strongly justified.\n"
+        "The clip must live in ONE coherent real-world venue family across all scenes (same world, different zones/angles only).\n"
+        "Opening scene must establish this grounded photoreal baseline immediately (no editorial/fashion abstraction baseline).\n"
+        "If no location ref is provided, choose one production-friendly real venue and keep it stable across the whole clip.\n"
+        "Allowed variation is camera, blocking, and lighting mood INSIDE the same venue family, not world switching per scene.\n"
         "If location ref exists, treat it as a hard anchor and respect it.\n"
         "Hard negative defaults unless explicitly requested: no salt plains, no barren desert, no cracked wasteland, no repetitive desolate emptiness.\n"
         "Marine/desolation words should usually become lighting mood/atmosphere/emotional tone, not literal ground texture.\n"
