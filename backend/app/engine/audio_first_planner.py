@@ -824,6 +824,15 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
     validation.warnings.extend(scene_intent_warnings)
     validation.warnings = list(dict.fromkeys(validation.warnings))
     validation.valid = len(validation.errors) == 0
+    durations = [float(scene.duration_sec or 0.0) for scene in planned_scenes]
+    duration_span = (max(durations) - min(durations)) if durations else 0.0
+    phrase_loop_prevented = len({
+        str(scene.summary or "").strip().lower()
+        for scene in planned_scenes
+        if str(scene.summary or "").strip()
+    }) < len([scene for scene in planned_scenes if str(scene.summary or "").strip()])
+    clip_formula_rebalance_applied = bool(len(durations) >= 4 and duration_span > 2.0)
+    arc_progression = ["entry", "build", "peak", "release_afterimage"] if len(planned_scenes) >= 4 else ["entry", "build", "release_afterimage"]
 
     return AudioFirstPlannerOutput(
         input_mode=project_input.input_mode,
@@ -848,7 +857,17 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             "downgrade_reason": [item.get("downgrade_reason") for item in scene_intent_diagnostics],
             "no_text_clip_policy": "visual_arc_over_phrase_loop" if not _clean_str(project_input.story_text) else "off",
             "no_text_clip_policy_applied": bool(not _clean_str(project_input.story_text)),
-            "phrase_loop_prevented": False,
+            "phrase_loop_prevented": bool(phrase_loop_prevented),
+            "clip_formula_rebalance_applied": bool(clip_formula_rebalance_applied),
+            "phrase_boundary_priority_order": [
+                "end_of_vocal_phrase",
+                "clear_energy_change",
+                "emotional_turn",
+                "arrangement_shift",
+                "beat_accent_group_ending",
+                "micro_action_completion",
+            ],
+            "target_arc_progression": arc_progression,
             "scene_merge_or_reuse_reason": "",
             "refinementHint": refinement_hint,
         },

@@ -706,8 +706,11 @@ LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY = {
 
 UNIVERSAL_PERSON_IDENTITY_FIELDS = [
     "face_identity",
+    "face_shape",
     "hair_identity",
     "body_identity",
+    "body_fullness_identity",
+    "height_impression_identity",
     "age_consistency",
     "skin_hair_base_color_identity",
     "accessory_identity",
@@ -715,6 +718,8 @@ UNIVERSAL_PERSON_IDENTITY_FIELDS = [
 
 UNIVERSAL_GENERIC_OUTFIT_FIELDS = [
     "garment_category",
+    "garment_top_identity",
+    "neckline_identity",
     "coverage_identity",
     "construction_identity",
     "silhouette_identity",
@@ -1717,6 +1722,27 @@ def _build_identity_contract(scene_contract: dict[str, Any] | None) -> dict[str,
         "motion_constraints": material_motion_profile,
         "confidence_scores": confidence_scores,
         "outfit_lock_policy": lock_policy,
+    }
+
+
+def _build_hero_appearance_contract(scene_contract: dict[str, Any] | None) -> dict[str, str]:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    outfit = contract.get("effectiveOutfitProfile") if isinstance(contract.get("effectiveOutfitProfile"), dict) else {}
+    return {
+        "face_identity": "same hero face identity from character_1 reference",
+        "face_shape": "same face shape and proportions as reference",
+        "hair_identity": "same hair color and structure as reference",
+        "body_identity": "same body identity and proportions as reference",
+        "body_fullness_identity": "do not slim down or compress body fullness",
+        "height_impression_identity": "same apparent height impression as reference",
+        "garment_top_identity": str(outfit.get("garment_category") or "same garment top/category as reference"),
+        "neckline_identity": "same neckline identity as reference",
+        "silhouette_identity": str(outfit.get("silhouette_identity") or "same silhouette identity as reference"),
+        "color_identity": str(outfit.get("color_identity") or "same color identity as reference"),
+        "material_identity": str(outfit.get("material_identity") or "same material identity as reference"),
+        "accessory_identity": str(outfit.get("accessory_identity") or "same accessory identity as reference"),
+        "footwear_identity": str(outfit.get("footwear_identity") or "same footwear identity as reference"),
+        "signature_details_identity": str(outfit.get("signature_details_identity") or "same signature details as reference"),
     }
 
 
@@ -8916,8 +8942,13 @@ def _normalize_scene_entity_contract_for_image(
     )
     identity_lock_fields_used = [
         "face_identity",
+        "face_shape",
         "hair_identity",
         "body_identity",
+        "body_fullness_identity",
+        "height_impression_identity",
+        "garment_top_identity",
+        "neckline_identity",
         "garment_identity",
         "makeup_identity",
         "accessory_identity",
@@ -9501,6 +9532,17 @@ def _build_comfy_image_prompt_assembly(
                 ])
         if forb:
             forbidden_changes.extend([f"{role}:{str(x)}" for x in forb])
+    if bool(contract.get("identityLock")) and ("character_1" in active_roles or bool(contract.get("heroAppearanceContract"))):
+        forbidden_changes.extend([
+            "do not change face identity",
+            "do not slim down or compress body",
+            "do not change hair color or hair structure",
+            "do not replace garment category",
+            "do not change neckline/silhouette/color/signature details",
+            "do not replace accessories or shoes",
+            "do not beautify into a different woman",
+            "do not convert into generic singer portrait",
+        ])
 
     identity_lock_block = "\n".join([
         "IDENTITY CONTRACT (STRICT):",
@@ -10214,6 +10256,7 @@ def clip_image(payload: ClipImageIn):
     )
     scene_contract["outfitProfile"] = scene_contract.get("targetOutfitProfile") if should_replace_source_outfit else scene_contract.get("sourceOutfitProfile")
     scene_contract["effectiveOutfitProfile"] = scene_contract.get("outfitProfile")
+    scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
     scene_contract["previousSceneIdentityMemory"] = str((previous_continuity_memory or {}).get("characterState") or "").strip()
     scene_contract["previousSceneOutfitMemory"] = _summarize_outfit_memory_for_rescue(scene_contract.get("sourceOutfitProfile"))
     resolved_stable_anchor = _select_previous_stable_scene_anchor(scene_contract)
@@ -10332,6 +10375,7 @@ def clip_image(payload: ClipImageIn):
             "footwear_identity",
         ])
         scene_contract["identityLockFieldsUsed"] = list(dict.fromkeys(fields))
+        scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
     scene_contract["active_connected_character_roles"] = [
         role for role in ("character_1", "character_2", "character_3")
         if bool(comfy_refs_by_role.get(role)) and (role in scene_active_roles or role in must_appear_roles)
@@ -10358,6 +10402,27 @@ def clip_image(payload: ClipImageIn):
             scene_contract["lipSyncOutfitRescueApplied"] = True
             scene_contract["lipSyncOutfitRescueFields"] = sorted(list(lip_sync_rescue.keys()))
             scene_contract["identityContract"] = _build_identity_contract(scene_contract)
+            scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
+    if has_character_1_ref and (character_1_is_active or is_lip_sync_route) and _is_weak_outfit_profile(scene_contract.get("effectiveOutfitProfile")):
+        fallback_outfit = _normalize_outfit_profile(
+            _merge_outfit_profile(
+                scene_contract.get("effectiveOutfitProfile"),
+                {
+                    "garment_category": "reference_locked",
+                    "neckline_identity": "reference_locked_neckline",
+                    "silhouette_identity": "reference_locked_silhouette",
+                    "color_identity": "reference_locked_color",
+                    "signature_details_identity": "reference_locked_signature_details",
+                    "footwear_identity": "reference_locked_footwear",
+                    "accessory_identity": "reference_locked_accessory",
+                },
+            ),
+            confidence_scores=scene_contract.get("confidenceScores"),
+        )
+        scene_contract["effectiveOutfitProfile"] = fallback_outfit
+        scene_contract["outfitProfile"] = fallback_outfit
+        scene_contract["sourceOutfitProfile"] = fallback_outfit if not should_replace_source_outfit else scene_contract.get("sourceOutfitProfile")
+        scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
     if is_lip_sync_route and scene_contract["active_connected_character_roles"] == ["character_1"]:
         scene_contract["single_character_mode_enforced"] = True
     dropped_by_must_not_appear = sorted([role for role in (scene_contract.get("resolvedRoles") or []) if role in must_not_appear_roles])
@@ -10647,6 +10712,7 @@ def clip_image(payload: ClipImageIn):
         "sourceOutfitProfile": scene_contract.get("sourceOutfitProfile") if isinstance(scene_contract.get("sourceOutfitProfile"), dict) else {},
         "targetOutfitProfile": scene_contract.get("targetOutfitProfile") if isinstance(scene_contract.get("targetOutfitProfile"), dict) else {},
         "effectiveOutfitProfile": scene_contract.get("effectiveOutfitProfile") if isinstance(scene_contract.get("effectiveOutfitProfile"), dict) else {},
+        "heroAppearanceContract": scene_contract.get("heroAppearanceContract") if isinstance(scene_contract.get("heroAppearanceContract"), dict) else {},
         "outfitIdentitySource": scene_contract.get("outfitIdentitySource") or "sourceOutfitProfile",
         "lipSyncOutfitRescueApplied": bool(scene_contract.get("lipSyncOutfitRescueApplied")),
         "lipSyncOutfitRescueFields": scene_contract.get("lipSyncOutfitRescueFields") if isinstance(scene_contract.get("lipSyncOutfitRescueFields"), list) else [],

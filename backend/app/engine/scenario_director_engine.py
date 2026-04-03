@@ -856,6 +856,8 @@ class ScenarioDirectorScene(BaseModel):
     identity_lock_applied: bool = False
     identity_lock_notes: str = ""
     identity_lock_fields_used: list[str] = Field(default_factory=list)
+    hero_appearance_contract: dict[str, str] = Field(default_factory=dict)
+    previous_stable_image_anchor_applied: bool = False
     what_from_audio_this_scene_uses: str = ""
     director_note_layer: str = ""
     boundary_reason: str = "fallback"
@@ -989,6 +991,12 @@ class ScenarioDirectorScene(BaseModel):
         self.identity_lock_applied = _coerce_bool(self.identity_lock_applied, False)
         self.identity_lock_notes = str(self.identity_lock_notes or "").strip()
         self.identity_lock_fields_used = [str(item).strip() for item in (self.identity_lock_fields_used or []) if str(item).strip()]
+        self.hero_appearance_contract = {
+            str(key).strip(): str(value).strip()
+            for key, value in (self.hero_appearance_contract or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+        self.previous_stable_image_anchor_applied = _coerce_bool(self.previous_stable_image_anchor_applied, False)
         self.what_from_audio_this_scene_uses = str(self.what_from_audio_this_scene_uses or "").strip()
         self.director_note_layer = str(self.director_note_layer or "").strip()
         boundary_reason = str(self.boundary_reason or "fallback").strip().lower() or "fallback"
@@ -3284,6 +3292,8 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "identityLockApplied": scene.identity_lock_applied,
             "identityLockNotes": scene.identity_lock_notes,
             "identityLockFieldsUsed": scene.identity_lock_fields_used,
+            "heroAppearanceContract": scene.hero_appearance_contract,
+            "previousStableImageAnchorApplied": scene.previous_stable_image_anchor_applied,
             "primaryRole": primary_role,
             "secondaryRoles": secondary_roles,
             "sceneActiveRoles": scene_active_roles,
@@ -3379,6 +3389,8 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                     "sourceOutfitReplaced": source_outfit_replaced,
                     "outfitIdentitySource": "targetOutfitProfile" if source_outfit_replaced else "sourceOutfitProfile",
                     "confidenceScores": confidence_scores,
+                    "heroAppearanceContract": scene.hero_appearance_contract,
+                    "previousStableImageAnchorApplied": scene.previous_stable_image_anchor_applied,
                 },
             }
         )
@@ -4793,6 +4805,28 @@ def _build_scene_outfit_profile_from_payload(payload: dict[str, Any], *, role: s
     }
 
 
+def _build_normalized_hero_appearance_contract(payload: dict[str, Any], *, role: str = "character_1") -> dict[str, str]:
+    cues = _extract_character_identity_cues(payload, role=role)
+    outfit = _build_scene_outfit_profile_from_payload(payload, role=role)
+    contract = {
+        "face_identity": str(cues.get("face_identity") or "same face identity as hero reference").strip(),
+        "face_shape": str(cues.get("face_shape") or "same face shape/impression as hero reference").strip(),
+        "hair_identity": str(cues.get("hair_identity") or "same hair color and structure as hero reference").strip(),
+        "body_identity": str(cues.get("body_identity") or "same body proportions/silhouette as hero reference").strip(),
+        "body_fullness_identity": str(cues.get("body_fullness_identity") or "do not slim down or compress body fullness").strip(),
+        "height_impression_identity": str(cues.get("height_impression_identity") or "same apparent height impression as hero reference").strip(),
+        "garment_top_identity": str(cues.get("garment_top_identity") or str(outfit.get("garment_category") or "same garment category/top identity")).strip(),
+        "neckline_identity": str(cues.get("neckline_identity") or "same neckline identity as hero reference").strip(),
+        "silhouette_identity": str(outfit.get("silhouette_identity") or cues.get("silhouette_identity") or "same outfit silhouette identity").strip(),
+        "color_identity": str(outfit.get("color_identity") or cues.get("color_identity") or "same garment/hair base color identity").strip(),
+        "material_identity": str(outfit.get("material_identity") or cues.get("material_identity") or "same material family identity").strip(),
+        "accessory_identity": str(outfit.get("accessory_identity") or cues.get("accessory_identity") or "same accessory identity").strip(),
+        "footwear_identity": str(outfit.get("footwear_identity") or cues.get("footwear_identity") or "same footwear identity").strip(),
+        "signature_details_identity": str(outfit.get("signature_details_identity") or cues.get("signature_details_identity") or "same signature garment details").strip(),
+    }
+    return {key: value for key, value in contract.items() if str(value).strip() and str(value).strip().lower() != "unknown"}
+
+
 def _normalize_scene_outfit_confidence_scores(raw_scores: Any, *, fallback: float = 0.5) -> dict[str, float]:
     scores = raw_scores if isinstance(raw_scores, dict) else {}
     aliases = {
@@ -5290,7 +5324,35 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
             build_ltx_video_canon_block(lip_sync=True),
         ]
     )
-    scene.image_prompt = _quality_filter_visible_prompt(_strip_video_only_semantics_from_image_prompt(build_ltx_visible_image_prompt(scene)))
+    emotional_tone = str(scene.emotion or "").strip().lower()
+    audio_evidence = str(scene.audio_anchor_evidence or scene.local_phrase or scene.what_from_audio_this_scene_uses or "").strip()
+    emotion_direction = "emotionally restrained but singer-readable"
+    if any(token in emotional_tone for token in ("sad", "pain", "fragile", "melanch", "ache")):
+        emotion_direction = "pain/restraint/fragility with inward gaze and softer tension"
+    elif any(token in emotional_tone for token in ("energetic", "power", "attack", "hook", "drive", "peak", "climax")):
+        emotion_direction = "drive/attack/forward intention with stronger jaw-open singing and stronger hand language"
+    elif any(token in emotional_tone for token in ("intimate", "soft", "quiet", "tender")):
+        emotion_direction = "intimate and softer but still mouth-ready singing-readable"
+    image_lipsync_canon = _join_visible_prompt_parts(
+        [
+            "LIP-SYNC IMAGE CANON (STRICT): singer-performance-first still frame, not neutral mannequin portrait.",
+            f"Audio-driven emotion direction: {emotion_direction}.",
+            f"Audio anchor evidence: {audio_evidence or 'beat/phrase contour from scene timing'}.",
+            "Capture mouth-ready singing moment with expressive eyes/brow tension and visible neck/shoulders/upper torso.",
+            "Include hands when they improve performance readability; keep enough garment context for continuity.",
+            "Prefer tight_medium / medium / three_quarter framing; avoid face-only neutral beauty crop and avoid distant full-body by default.",
+            "Hard forbidden changes: do not change face identity; do not slim down/compress body; do not change hair color/structure; do not replace garment category;",
+            "do not change neckline/silhouette/color/signature details; do not replace accessories/shoes; do not beautify into a different woman; do not convert into generic singer portrait.",
+        ]
+    )
+    scene.image_prompt = _quality_filter_visible_prompt(
+        _join_visible_prompt_parts(
+            [
+                _strip_video_only_semantics_from_image_prompt(build_ltx_visible_image_prompt(scene)),
+                image_lipsync_canon,
+            ]
+        )
+    )
     scene.video_prompt = _quality_filter_visible_prompt(scene.video_prompt)
 
 
@@ -6971,6 +7033,16 @@ def _apply_music_video_mode_policy(
         multi_identity_lock = _build_multi_character_identity_lock(scene, payload)
         genre_intent = _resolve_director_genre_intent(payload, scene)
         visible_identity_lock, identity_fields_used = _build_character_identity_visible_lock(scene, payload=payload, role="character_1")
+        hero_contract = _build_normalized_hero_appearance_contract(payload, role="character_1")
+        scene.hero_appearance_contract = hero_contract
+        scene_roles_lower = {str(actor).strip().lower() for actor in (scene.actors or []) if str(actor).strip()}
+        raw_primary_role = str(raw_scene.get("primaryRole") or raw_scene.get("primary_role") or "").strip().lower()
+        raw_must_appear = {
+            str(role).strip().lower()
+            for role in (raw_scene.get("mustAppear") or raw_scene.get("must_appear") or [])
+            if str(role).strip()
+        }
+        character1_required = bool("character_1" in scene_roles_lower or raw_primary_role == "character_1" or "character_1" in raw_must_appear)
         scene.identity_lock_applied = bool(visible_identity_lock)
         scene.identity_lock_notes = (
             (
@@ -7006,6 +7078,13 @@ def _apply_music_video_mode_policy(
             scene.identity_lock_fields_used = normalized_fields
         else:
             scene.identity_lock_fields_used = identity_fields_used
+        if character1_required and hero_contract:
+            scene.identity_lock_applied = True
+            scene.previous_stable_image_anchor_applied = bool(index > 0 and kept_scenes and str(kept_scenes[-1].image_prompt or "").strip())
+            guaranteed_fields = list(hero_contract.keys())
+            scene.identity_lock_fields_used = list(dict.fromkeys([*(scene.identity_lock_fields_used or []), *guaranteed_fields]))
+            if not str(scene.identity_lock_notes or "").strip():
+                scene.identity_lock_notes = "character_1_required_hard_person_lock_applied"
         scene.image_prompt = _build_music_video_image_prompt(scene, payload=payload)
         scene.video_prompt = _build_music_video_video_prompt(scene, payload=payload)
         scene.video_negative_prompt = build_ltx_video_negative_prompt(scene)
@@ -7054,6 +7133,8 @@ def _apply_music_video_mode_policy(
         scene.character2_drift_guard = str(multi_identity_lock.get("character2DriftGuard") or "")
         scene.duet_identity_contract = str(multi_identity_lock.get("duetIdentityContract") or "")
         scene.appearance_drift_risk = str(multi_identity_lock.get("appearanceDriftRisk") or "none")
+        if character1_required and (scene.render_mode == "lip_sync_music" or str(scene.shot_type or "").strip().lower() in {"portrait", "close_up", "beauty"}):
+            scene.appearance_drift_risk = "high_identity_drift_risk_portrait_lipsync_hard_lock"
         if scene.identity_lock_applied and scene.appearance_drift_risk in {"", "none"}:
             scene.appearance_drift_risk = "low_locked_by_character_reference"
         scene.director_genre_intent = str(genre_intent.get("directorGenreIntent") or "neutral_drama")
@@ -7063,6 +7144,19 @@ def _apply_music_video_mode_policy(
         scene.workflow_decision_reason = workflow_reason
         scene.lip_sync_decision_reason = f"{lip_sync_reason} shot={scene.shot_type}; framing={scene.performance_framing}; route={scene.video_generation_route or scene.resolved_workflow_key}."
         scene.audio_slice_decision_reason = audio_slice_reason
+        if scene.render_mode == "lip_sync_music":
+            if str(scene.performer_presentation or "unknown").strip().lower() == "unknown":
+                scene.performer_presentation = _infer_scene_performer_presentation(scene, payload) or "female"
+            if str(scene.vocal_presentation or "unknown").strip().lower() == "unknown":
+                scene.vocal_presentation = _infer_vocal_presentation(scene, payload) or scene.performer_presentation or "female"
+            if str(scene.lip_sync_voice_compatibility or "unknown").strip().lower() == "unknown":
+                scene.lip_sync_voice_compatibility = "compatible"
+            if not str(scene.audio_anchor_evidence or "").strip():
+                scene.audio_anchor_evidence = str(scene.local_phrase or scene.what_from_audio_this_scene_uses or "phrase/beat contour matched for lip_sync_music").strip()
+            if not str(scene.performance_phase or "").strip():
+                scene.performance_phase = str(scene.clip_arc_stage or "build").strip()
+            if not str(scene.emotion or "").strip():
+                scene.emotion = "performance intensity from audio contour"
         compacted_ending_hold, ending_hold_reason = _maybe_compact_repeat_heavy_ending_hold(
             scene,
             repeat_heavy_clip=repeat_heavy_clip,
@@ -9343,6 +9437,14 @@ def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any
         characters = ["character_1"] if has_character_1 else []
         route = _parse_gemini_scene_route_strict(scene.get("route"), scene_index=idx - 1, parse_stage=parse_stage)
         scene_type = str(scene.get("scene_type") or scene.get("sceneType") or "").strip()
+        transition_hint = str(primary_semantic.get("transitionHint") or "").strip().lower()
+        boundary_reason = "phrase"
+        if any(token in transition_hint for token in ("energy", "drop", "lift", "peak", "hit")):
+            boundary_reason = "energy"
+        elif any(token in transition_hint for token in ("emotion", "turn", "mood", "fragile", "sad")):
+            boundary_reason = "emotional_turn"
+        elif any(token in transition_hint for token in ("arrangement", "instrument", "drum", "chorus", "verse")):
+            boundary_reason = "arrangement_shift"
         legacy_scenes.append(
             {
                 "sceneId": str(scene.get("scene_id") or f"S{idx}").strip() or f"S{idx}",
@@ -10106,14 +10208,20 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "absorbed_story_functions": [str(item).strip() for item in (scene.get("absorbedStoryFunctions") or []) if str(item).strip()],
                 "what_from_audio_this_scene_uses": str(primary_semantic.get("meaning") or scene.get("summary") or "").strip(),
                 "director_note_layer": "",
-                "boundary_reason": "phrase",
+                "boundary_reason": boundary_reason,
                 "audio_anchor_evidence": str(primary_semantic.get("transitionHint") or "").strip(),
+                "performer_presentation": "female" if is_lip_sync_route else "unknown",
+                "vocal_presentation": "female" if is_lip_sync_route else "unknown",
+                "lip_sync_voice_compatibility": "compatible" if is_lip_sync_route else "unknown",
+                "lip_sync_decision_reason": "audio_first_route_lip_sync_music_selected" if is_lip_sync_route else "not_lip_sync_route",
                 "confidence": 0.9,
                 "sourceRoute": route,
                 "video_generation_route": internal_route,
                 "planned_video_generation_route": route,
                 "phrase_boundary_trim_applied": trimmed,
                 "phrase_boundary_trim_reason": trim_reason,
+                "segment_boundary_decision_reason": f"{boundary_reason}; evidence={str(primary_semantic.get('transitionHint') or primary_phrase or 'timeline_overlap')}",
+                "segment_trim_decision_reason": "trim_applied_to_phrase_boundary" if trimmed else f"trim_not_applied:{trim_reason}",
                 "original_scene_end": raw_scene_end,
                 "trimmed_scene_end": scene_end,
                 "lip_sync_route_state_consistent": lip_sync_route_state_consistent,
@@ -10122,6 +10230,12 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             }
         )
     _apply_story_arc_canon_to_legacy_scenes(legacy_scenes)
+    trim_applied_count = len([scene for scene in legacy_scenes if isinstance(scene, dict) and bool(scene.get("phrase_boundary_trim_applied"))])
+    phrase_texts = [str(scene.get("local_phrase") or "").strip().lower() for scene in legacy_scenes if isinstance(scene, dict)]
+    phrase_loop_prevented = len(phrase_texts) != len(list(dict.fromkeys([text for text in phrase_texts if text])))
+    durations = [float(scene.get("duration") or 0.0) for scene in legacy_scenes if isinstance(scene, dict)]
+    duration_span = (max(durations) - min(durations)) if durations else 0.0
+    clip_formula_rebalance_applied = bool(len(durations) >= 4 and duration_span > 2.0)
     director_summary = (
         str(debug.get("alignment") or "").strip()
         or str(global_story.get("overallNarrative") or "").strip()
@@ -10193,6 +10307,10 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             "transcript_segment_count": len([row for row in transcript_rows if isinstance(row, dict)]),
             "final_scene_count": len(legacy_scenes),
             "scene_count_matches_transcript_beats": len(legacy_scenes) == len([row for row in transcript_rows if isinstance(row, dict)]),
+            "phrase_boundary_trim_applied": bool(trim_applied_count > 0),
+            "phrase_boundary_trim_applied_count": int(trim_applied_count),
+            "phrase_loop_prevented": bool(phrase_loop_prevented),
+            "clip_formula_rebalance_applied": bool(clip_formula_rebalance_applied),
         },
         "scenes": legacy_scenes,
     }
