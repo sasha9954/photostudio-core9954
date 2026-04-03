@@ -363,6 +363,10 @@ function buildScenarioSceneContractPayload(scene = {}) {
       ?? scene?.durationSec
       ?? Math.max(0, Number(scene?.t1 ?? 0) - Number(scene?.t0 ?? 0))
   );
+  const rawSceneIndex = Number(scene?.sceneIndex ?? scene?.scene_index ?? scene?.index);
+  const resolvedSceneIndex = Number.isFinite(rawSceneIndex) && rawSceneIndex > 0
+    ? Math.floor(rawSceneIndex)
+    : null;
   const identityContractPassthrough = {
     taskMode: scene?.taskMode,
     task_mode: scene?.task_mode,
@@ -386,6 +390,9 @@ function buildScenarioSceneContractPayload(scene = {}) {
   };
   return {
     sceneId: scene?.sceneId || "",
+    sceneIndex: resolvedSceneIndex,
+    scene_index: resolvedSceneIndex,
+    index: resolvedSceneIndex,
     sceneType: scene?.sceneType,
     primaryRole: scene?.primaryRole,
     secondaryRoles: scene?.secondaryRoles,

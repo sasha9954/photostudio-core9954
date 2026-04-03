@@ -959,6 +959,10 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
 
 export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = null) {
   const source = scene && typeof scene === "object" ? scene : {};
+  const normalizedSceneIndexRaw = Number(source.sceneIndex ?? source.scene_index ?? source.index);
+  const normalizedSceneIndex = Number.isFinite(normalizedSceneIndexRaw) && normalizedSceneIndexRaw > 0
+    ? Math.floor(normalizedSceneIndexRaw)
+    : (index + 1);
   const clipDecisionReason = normalizeText(source.clipDecisionReason ?? source.clip_decision_reason);
   const roleInfluenceReasonFromClip = ((clipDecisionReason.match(/roleInfluenceReason=([^;\.]+)/) || [null, ""])[1] || "").trim();
   const sceneRoleDynamicsFromClip = ((clipDecisionReason.match(/sceneRoleDynamics=([^;\.]+)/) || [null, ""])[1] || "").trim();
@@ -1077,6 +1081,9 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const mergedSceneContractSource = { ...nestedSceneContract, ...source };
   const normalizedScene = {
     sceneId: normalizeText(source.sceneId ?? source.scene_id) || `S${index + 1}`,
+    sceneIndex: normalizedSceneIndex,
+    scene_index: normalizedSceneIndex,
+    index: normalizedSceneIndex,
     t0,
     t1,
     durationSec,

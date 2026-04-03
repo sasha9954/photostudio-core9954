@@ -1417,6 +1417,32 @@ def _coerce_optional_bool(value: Any) -> bool | None:
     return None
 
 
+def _parse_scene_index_candidate(value: Any) -> int | None:
+    try:
+        parsed = int(float(value))
+    except Exception:
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _extract_scene_index_from_scene_id(scene_id: Any) -> int | None:
+    raw = str(scene_id or "").strip()
+    if not raw:
+        return None
+    match = re.match(r"^[sS]?(\d+)$", raw)
+    if not match:
+        return None
+    try:
+        parsed = int(match.group(1))
+    except Exception:
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
 def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = None) -> dict[str, Any]:
     payload_map = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else {}
     payload_map = payload_map if isinstance(payload_map, dict) else {}
@@ -1466,6 +1492,9 @@ def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = Non
         "previousStableImageAnchorUsed",
         "previousStableImageAnchorReason",
         "audioEmotionDirection",
+        "sceneIndex",
+        "scene_index",
+        "index",
     ]
     for key in passthrough_keys:
         if key not in contract and payload_map.get(key) is not None:
@@ -1479,6 +1508,9 @@ def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = Non
         "lipSyncRouteStateConsistent": "lip_sync_route_state_consistent",
         "sceneActiveRoles": "sceneActiveRoles",
         "identityLockApplied": "identityLockApplied",
+        "sceneIndex": "sceneIndex",
+        "scene_index": "scene_index",
+        "index": "index",
     }
     for source_key, target_key in aliases.items():
         source_value = payload_map.get(source_key)
@@ -1508,6 +1540,20 @@ def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = Non
             route_hint = route_internal
     if route_hint in {"i2v", "lip_sync_music", "first_last"}:
         contract.update(_derive_direct_scene_contract_fields(route_hint))
+
+    if not contract.get("sceneId") and payload_map.get("sceneId") is not None:
+        contract["sceneId"] = payload_map.get("sceneId")
+    resolved_scene_index = (
+        _parse_scene_index_candidate(contract.get("sceneIndex"))
+        or _parse_scene_index_candidate(contract.get("scene_index"))
+        or _parse_scene_index_candidate(contract.get("index"))
+        or _extract_scene_index_from_scene_id(contract.get("sceneId") or payload_map.get("sceneId"))
+    )
+    if resolved_scene_index is not None:
+        contract["sceneIndex"] = resolved_scene_index
+        contract["scene_index"] = resolved_scene_index
+        contract["index"] = resolved_scene_index
+
     contract["taskMode"] = _normalize_task_mode(contract.get("taskMode") or contract.get("task_mode") or payload_map.get("taskMode") or payload_map.get("task_mode"))
     contract["task_mode"] = contract["taskMode"]
     raw_outfit_profile = _merge_outfit_profile(
@@ -9508,40 +9554,50 @@ def _detect_high_identity_risk_scene(
     has_outfit_contract = isinstance(contract.get("sourceOutfitProfile"), dict) and bool(contract.get("sourceOutfitProfile")) or isinstance(contract.get("effectiveOutfitProfile"), dict) and bool(contract.get("effectiveOutfitProfile"))
     has_location_contract = bool(contract.get("locationContinuityContract") or contract.get("worldContinuityContract"))
     has_strong_contracts = has_hero_contract or has_outfit_contract or has_location_contract
-    risk_reasons: list[str] = []
+    strong_risk_reasons: list[str] = []
+    weak_risk_reasons: list[str] = []
     if is_lip_sync_route:
-        risk_reasons.append("lip_sync_scene")
+        strong_risk_reasons.append("lip_sync_scene")
     if has_perf_framing_risk:
-        risk_reasons.append("performance_framing_medium_tight")
+        strong_risk_reasons.append("performance_framing_medium_tight")
     if has_camera_motion_risk:
-        risk_reasons.append("camera_orbit_tracking_walk_motion")
+        strong_risk_reasons.append("camera_orbit_tracking_walk_motion")
     if scene_index >= 5:
-        risk_reasons.append("late_scene_index_5_plus")
+        strong_risk_reasons.append("late_scene_index_5_plus")
     if has_appearance_drift_risk:
-        risk_reasons.append("appearance_drift_risk_present")
-    if has_summary_risk:
-        risk_reasons.append("scene_text_motion_or_final_lines")
+        strong_risk_reasons.append("appearance_drift_risk_present")
     if requested_duration >= 3.0:
-        risk_reasons.append("duration_3s_plus")
+        weak_risk_reasons.append("duration_3s_plus")
     if route_perf_risk:
-        risk_reasons.append("route_performer_facing_camera_readable")
+        strong_risk_reasons.append("route_performer_facing_camera_readable")
     if weak_outfit_profile:
-        risk_reasons.append("weak_outfit_or_body_anchor")
+        weak_risk_reasons.append("weak_outfit_or_body_anchor")
     if weak_identity_lock or weak_identity_state:
-        risk_reasons.append("weak_identity_continuity_state")
+        weak_risk_reasons.append("weak_identity_continuity_state")
     if weak_anchor:
-        risk_reasons.append("weak_previous_anchor_state")
+        weak_risk_reasons.append("weak_previous_anchor_state")
     if known_drift_prone:
-        risk_reasons.append("repeated_instability_context")
+        weak_risk_reasons.append("repeated_instability_context")
     if has_strong_contracts and not bool(contract.get("identityLockApplied")):
-        risk_reasons.append("contracts_present_without_identity_lock_applied")
-    risk_reasons = list(dict.fromkeys(risk_reasons))
-    risk_score = len(risk_reasons)
-    rescue_applied = bool(risk_reasons)
+        weak_risk_reasons.append("contracts_present_without_identity_lock_applied")
+    if has_summary_risk:
+        weak_risk_reasons.append("scene_text_motion_or_final_lines")
+    strong_risk_reasons = list(dict.fromkeys(strong_risk_reasons))
+    weak_risk_reasons = list(dict.fromkeys(weak_risk_reasons))
+    risk_reasons = list(dict.fromkeys(strong_risk_reasons + weak_risk_reasons))
+    strong_risk_count = len(strong_risk_reasons)
+    weak_risk_count = len(weak_risk_reasons)
+    risk_score = (strong_risk_count * 2) + weak_risk_count
+    rescue_threshold_passed = bool(risk_score >= 3 or (strong_risk_count >= 1 and weak_risk_count >= 1))
+    rescue_applied = rescue_threshold_passed
     return {
         "highIdentityRiskRescueApplied": rescue_applied,
         "highIdentityRiskScore": risk_score,
         "highIdentityRiskReasons": risk_reasons,
+        "riskScore": risk_score,
+        "strongRiskCount": strong_risk_count,
+        "weakRiskCount": weak_risk_count,
+        "rescueThresholdPassed": rescue_threshold_passed,
         "stableSceneAnchorUsed": bool(anchor.get("identity_memory") or anchor.get("outfit_memory") or anchor.get("image_url")),
         "stableSceneAnchorSource": str(anchor.get("source") or "none"),
         "previousConfirmedStableIdentityUsed": bool(anchor.get("identity_memory")),
@@ -9561,6 +9617,68 @@ def _detect_high_identity_risk_scene(
         "hasOutfitProfile": has_outfit_contract,
         "hasLocationContinuityContract": has_location_contract,
     }
+
+
+def _build_outfit_continuity_target_summary(
+    *,
+    hero_appearance_contract: dict[str, Any],
+    effective_outfit_profile: dict[str, Any],
+    source_outfit_profile: dict[str, Any],
+    fallback_outfit_profile: dict[str, Any],
+) -> str:
+    neutral_fallback = "preserve the same upper-body garment identity and lower-body outfit identity from the hero reference"
+
+    def _clean(value: Any) -> str:
+        raw = re.sub(r"\s+", " ", str(value or "").strip())
+        if not raw:
+            return ""
+        lowered = raw.lower()
+        generic_markers = ("same ", "unknown", "reference", "none", "n/a")
+        if lowered in {"same", "unknown"}:
+            return ""
+        if any(marker in lowered for marker in generic_markers):
+            return ""
+        return raw
+
+    outfit_sources = [effective_outfit_profile, source_outfit_profile, fallback_outfit_profile]
+    top_identity = ""
+    bottom_identity = ""
+    neckline_identity = ""
+    silhouette_identity = ""
+    for source in outfit_sources:
+        if not isinstance(source, dict):
+            continue
+        if not top_identity:
+            top_identity = _clean(source.get("garment_top_identity") or source.get("garment_category"))
+        if not bottom_identity:
+            bottom_identity = _clean(source.get("garment_bottom_identity"))
+        if not neckline_identity:
+            neckline_identity = _clean(source.get("neckline_identity"))
+        if not silhouette_identity:
+            silhouette_identity = _clean(source.get("silhouette_identity"))
+
+    if isinstance(hero_appearance_contract, dict):
+        if not top_identity:
+            top_identity = _clean(hero_appearance_contract.get("garment_top_identity"))
+        if not neckline_identity:
+            neckline_identity = _clean(hero_appearance_contract.get("neckline_identity"))
+        if not silhouette_identity:
+            silhouette_identity = _clean(hero_appearance_contract.get("silhouette_identity"))
+        if not bottom_identity:
+            bottom_identity = _clean(hero_appearance_contract.get("garment_bottom_identity"))
+
+    parts: list[str] = []
+    if top_identity:
+        parts.append(f"upper-body garment: {top_identity}")
+    if bottom_identity:
+        parts.append(f"lower-body outfit: {bottom_identity}")
+    if neckline_identity:
+        parts.append(f"neckline: {neckline_identity}")
+    if silhouette_identity:
+        parts.append(f"silhouette: {silhouette_identity}")
+    if not parts:
+        return neutral_fallback
+    return "; ".join(parts)
 
 
 def _build_high_identity_risk_rescue_block(rescue: dict[str, Any]) -> str:
@@ -9659,6 +9777,12 @@ def _build_comfy_image_prompt_assembly(
         or outfit_profile.get("garment_top_identity")
         or ""
     ).strip().lower()
+    outfit_continuity_target_summary = _build_outfit_continuity_target_summary(
+        hero_appearance_contract=hero_appearance_contract,
+        effective_outfit_profile=effective_outfit_profile,
+        source_outfit_profile=source_outfit_profile,
+        fallback_outfit_profile=outfit_profile,
+    )
     is_casual_separates = garment_top_identity in {"top_with_jeans", "crop_top", "tank_or_cami_top", "t_shirt_top"}
     has_hair_identity = bool(
         hero_appearance_contract.get("hair_identity")
@@ -9871,7 +9995,7 @@ def _build_comfy_image_prompt_assembly(
         "- keep same strap width logic and same hem/crop length impression",
         "- keep same jeans silhouette / rise / wash family when jeans are present",
         "- preserve outfit read continuity across all scenes",
-        "- reference continuity target: beige ribbed sleeveless fitted crop top + light blue jeans",
+        f"- reference continuity target: {outfit_continuity_target_summary}",
         f"- garment_top_identity={garment_top_identity or 'unknown'}",
     ])
     if is_casual_separates:
