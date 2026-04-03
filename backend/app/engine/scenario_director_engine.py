@@ -1577,16 +1577,15 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
         continuity_lock_fields = [
             "face_identity",
             "hair_identity",
-            "garment_silhouette_identity",
-            "sleeve_identity",
-            "bodice_identity",
-            "neckline_identity",
-            "skirt_volume_identity",
-            "rose_applique_identity",
-            "lining_color_identity",
             "body_identity",
+            "age_consistency",
+            "garment_category",
+            "coverage_identity",
+            "construction_identity",
             "silhouette_identity",
-            "outfit_identity",
+            "material_identity",
+            "signature_details_identity",
+            "color_identity",
             "footwear_identity",
             "accessory_identity",
             "world_identity",
@@ -4676,30 +4675,43 @@ def _extract_character_identity_cues(payload: dict[str, Any], *, role: str = "ch
     blob = " ".join(candidates).lower()
 
     cues: dict[str, str] = {}
+    garment_category = "unknown"
+    if any(token in blob for token in ("swimwear", "swimsuit", "bikini")):
+        garment_category = "swimwear"
+    elif any(token in blob for token in ("coat", "outerwear", "fur", "parka", "jacket")):
+        garment_category = "outerwear"
+    elif any(token in blob for token in ("suit", "blazer", "lapel", "trouser", "tuxedo")):
+        garment_category = "suit"
+    elif any(token in blob for token in ("armor", "armour", "plate", "metal cuirass")):
+        garment_category = "armor"
+    elif any(token in blob for token in ("dress", "gown", "skirt")):
+        garment_category = "dress"
+    elif any(token in blob for token in ("casual", "streetwear", "layered", "hoodie", "denim")):
+        garment_category = "casual_layered"
     if any(token in blob for token in ("face", "woman", "girl", "female", "ethnic", "age", "same person")):
         cues["face_identity"] = "the same woman with the same face identity, ethnicity read, and age read"
     if any(token in blob for token in ("bun", "ponytail", "braid", "curl", "hair", "hairstyle")):
         cues["hair_identity"] = "the same hairstyle silhouette stays consistent"
         if "bun" in blob:
             cues["hair_identity"] = "the same hairstyle silhouette with the same bun shape stays consistent"
-    if any(token in blob for token in ("long sleeve", "long-sleeve", "sleeve")):
-        cues["sleeve_identity"] = "long sleeves remain present in every beat"
-    if any(token in blob for token in ("dress", "gown", "silhouette", "skirt", "black dress")):
-        cues["garment_identity"] = "the same dress silhouette and overall outfit identity remain unchanged"
-        if "black dress" in blob:
-            cues["garment_identity"] = "the same black dress silhouette and overall outfit identity remain unchanged"
-        cues.setdefault("garment_silhouette_identity", "garment silhouette identity remains unchanged from reference")
-        cues.setdefault("bodice_identity", "bodice construction and cut remain exactly the same")
-        cues.setdefault("neckline_identity", "neckline family remains exactly the same")
-        cues.setdefault("skirt_volume_identity", "skirt volume/fullness and long-dress silhouette remain the same")
+    if garment_category != "unknown":
+        cues["garment_category"] = garment_category
+    if any(token in blob for token in ("long sleeve", "long-sleeve", "sleeveless", "strapless", "cropped", "full length")):
+        cues["coverage_identity"] = "coverage identity remains consistent with the reference garment"
+    if any(token in blob for token in ("collar", "hood", "closure", "strap", "panel", "cuff", "waist", "bodice", "neckline")):
+        cues["construction_identity"] = "construction identity remains consistent with reference cut/closure/paneling details"
+    if any(token in blob for token in ("silhouette", "oversized", "fitted", "bodycon", "layered", "long", "short", "volume")):
+        cues["silhouette_identity"] = "outfit silhouette identity remains unchanged from the reference"
+    if any(token in blob for token in ("satin", "leather", "denim", "fur", "knit", "chiffon", "metallic", "sheer", "armor")):
+        cues["material_identity"] = "material family identity remains stable"
     if any(token in blob for token in ("boot", "heels", "footwear", "chunky boots")):
         cues["footwear_identity"] = "footwear category stays fixed, with boots remaining boots"
     signature_parts: list[str] = []
     if any(token in blob for token in ("rose", "floral", "petal")):
         signature_parts.append("rose/floral garment details stay visible")
-        cues["rose_applique_identity"] = "rose applique count/placement/relative scale remain unchanged"
+        cues["signature_details_identity"] = "signature floral/applique detail identity remains unchanged"
     if any(token in blob for token in ("magenta", "lining", "inner lining", "colored lining", "pink trim")):
-        cues["lining_color_identity"] = "magenta lining color family and visibility logic remain unchanged"
+        cues["color_identity"] = "base garment/accent color family remains unchanged"
     if any(token in blob for token in ("pink detail", "pink trim", "accent", "embroid", "trim", "ornament", "signature")):
         signature_parts.append("signature accents and trims remain intact")
     if signature_parts:
@@ -4723,13 +4735,13 @@ def _build_character_identity_visible_lock(
         cues.setdefault("face_identity", "same woman as character_1 reference across all scenes; no face redesign")
         cues.setdefault("hair_identity", "no hairstyle redesign across scenes; keep same hair color, cut/length, parting, and volume unless explicitly requested")
         cues.setdefault("garment_identity", "wardrobe remains identical across scenes unless storyboard explicitly requests costume change")
-        cues.setdefault("garment_silhouette_identity", "same exact dress silhouette and construction as reference; no redesign")
-        cues.setdefault("sleeve_identity", "same sleeve length and sleeve volume as reference; no sleeve removal")
-        cues.setdefault("bodice_identity", "same bodice cut and structure as reference")
-        cues.setdefault("neckline_identity", "same neckline family as reference")
-        cues.setdefault("skirt_volume_identity", "same skirt fullness/volume/silhouette as reference")
-        cues.setdefault("rose_applique_identity", "same rose applique count/placement/relative scale as reference")
-        cues.setdefault("lining_color_identity", "same magenta lining logic and visibility behavior as reference")
+        cues.setdefault("garment_category", "same garment category as reference unless task mode explicitly allows costume change")
+        cues.setdefault("coverage_identity", "same outfit coverage identity as reference")
+        cues.setdefault("construction_identity", "same outfit construction identity as reference")
+        cues.setdefault("silhouette_identity", "same outfit silhouette identity as reference")
+        cues.setdefault("material_identity", "same material family identity as reference")
+        cues.setdefault("signature_details_identity", "same signature detail identity as reference")
+        cues.setdefault("color_identity", "same base garment and accent color identity as reference")
         cues.setdefault("footwear_identity", "same footwear identity and category as reference")
         cues.setdefault("body_identity", "same body shape, proportions, silhouette, height/build read across all scenes; no fuller/thinner drift")
         cues.setdefault("makeup_identity", "makeup style remains stable across scenes; no spontaneous redesign")
@@ -4743,13 +4755,13 @@ def _build_character_identity_visible_lock(
     locks: list[str] = [
         str(cues.get("face_identity") or ""),
         str(cues.get("hair_identity") or ""),
-        str(cues.get("garment_silhouette_identity") or ""),
-        str(cues.get("sleeve_identity") or ""),
-        str(cues.get("bodice_identity") or ""),
-        str(cues.get("neckline_identity") or ""),
-        str(cues.get("skirt_volume_identity") or ""),
-        str(cues.get("rose_applique_identity") or ""),
-        str(cues.get("lining_color_identity") or ""),
+        str(cues.get("garment_category") or ""),
+        str(cues.get("coverage_identity") or ""),
+        str(cues.get("construction_identity") or ""),
+        str(cues.get("silhouette_identity") or ""),
+        str(cues.get("material_identity") or ""),
+        str(cues.get("signature_details_identity") or ""),
+        str(cues.get("color_identity") or ""),
         str(cues.get("garment_identity") or ""),
         str(cues.get("signature_details") or ""),
         str(cues.get("footwear_identity") or ""),
@@ -4758,16 +4770,16 @@ def _build_character_identity_visible_lock(
         str(cues.get("accessory_identity") or ""),
         str(cues.get("age_consistency") or ""),
         str(cues.get("color_identity") or ""),
-        "no ethnicity drift, no silent wardrobe redesign, no sleeve removal, no silhouette change",
+        "no ethnicity drift, no silent wardrobe redesign, no garment-category reinterpretation, no silhouette change",
         "no jewelry/accessory invention unless the scene explicitly requests it",
         "same apparent age and same body silhouette/proportions across all scenes",
         "hairstyle, accessories, and visible styling remain stable unless explicitly changed by storyboard",
         "skin tone, hair color, and garment colors remain consistent across scenes",
         "face/hair identity lock and garment lock are separate and both must hold",
-        "do not redesign sleeves, shoulders, bodice, neckline, waist, skirt construction, rose layout, lining behavior, or footwear identity",
+        "do not redesign outfit construction, coverage, silhouette, material family, signature details, or footwear identity",
     ]
     if is_first_scene:
-        locks.append("first scene lock: hold face, hair, sleeves, dress silhouette, signature details, and boots exactly as reference")
+        locks.append("first scene lock: hold face, hair, outfit category/coverage/construction/silhouette/signature details, and footwear exactly as reference")
     return "; ".join([part for part in dict.fromkeys(locks) if part]), fields_used
 
 
@@ -6835,20 +6847,19 @@ def _apply_music_video_mode_policy(
             required_lock_fields = [
                 "face_identity",
                 "hair_identity",
-                "garment_silhouette_identity",
-                "sleeve_identity",
-                "bodice_identity",
-                "neckline_identity",
-                "skirt_volume_identity",
-                "rose_applique_identity",
-                "lining_color_identity",
-                "garment_identity",
                 "body_identity",
+                "age_consistency",
+                "garment_category",
+                "coverage_identity",
+                "construction_identity",
+                "silhouette_identity",
+                "material_identity",
+                "signature_details_identity",
+                "color_identity",
+                "garment_identity",
                 "makeup_identity",
                 "accessory_identity",
                 "footwear_identity",
-                "age_consistency",
-                "color_identity",
             ]
             normalized_fields = [str(field or "").strip() for field in (identity_fields_used or []) if str(field or "").strip()]
             for required in required_lock_fields:
@@ -7106,15 +7117,15 @@ def _enforce_single_character_music_video_policy(payload: dict[str, Any], storyb
                 scene.identity_lock_fields_used = [
                     "face_identity",
                     "hair_identity",
-                    "garment_silhouette_identity",
-                    "sleeve_identity",
-                    "bodice_identity",
-                    "neckline_identity",
-                    "skirt_volume_identity",
-                    "rose_applique_identity",
-                    "lining_color_identity",
                     "body_identity",
                     "silhouette_identity",
+                    "age_consistency",
+                    "garment_category",
+                    "coverage_identity",
+                    "construction_identity",
+                    "material_identity",
+                    "signature_details_identity",
+                    "color_identity",
                     "garment_identity",
                     "makeup_identity",
                     "footwear_identity",
