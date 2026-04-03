@@ -757,6 +757,16 @@ UNIVERSAL_OUTFIT_CONFIDENCE_KEYS = [
     "accessory_identity",
 ]
 
+LIP_SYNC_OUTFIT_RESCUE_FIELDS = [
+    "garment_category",
+    "coverage_identity",
+    "construction_identity",
+    "silhouette_identity",
+    "signature_details_identity",
+    "color_identity",
+    "footwear_identity",
+]
+
 OUTFIT_PROFILE_ALIASES: dict[str, str] = {
     "garmentCategory": "garment_category",
     "garment_category": "garment_category",
@@ -959,6 +969,73 @@ def _normalize_outfit_profile(
     }
     normalized["confidence"] = confidence
     return normalized
+
+
+def _is_known_outfit_value(value: Any) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized not in {"", "unknown", "n/a", "none", "null"}
+
+
+def _is_weak_outfit_profile(profile: dict[str, Any] | None) -> bool:
+    data = profile if isinstance(profile, dict) else {}
+    known = sum(1 for key in LIP_SYNC_OUTFIT_RESCUE_FIELDS if _is_known_outfit_value(data.get(key)))
+    garment_known = _is_known_outfit_value(data.get("garment_category"))
+    return (not garment_known) or known < 3
+
+
+def _extract_lip_sync_outfit_rescue(
+    *,
+    reference_profiles: dict[str, Any] | None,
+    active_roles: list[str] | None,
+) -> dict[str, str]:
+    profiles = reference_profiles if isinstance(reference_profiles, dict) else {}
+    role_order = [str(role or "").strip() for role in (active_roles or []) if str(role or "").strip()]
+    role_order.extend(["character_1", "character_2", "character_3"])
+    deduped_roles = [role for role in dict.fromkeys(role_order) if role.startswith("character_")]
+    if not deduped_roles:
+        deduped_roles = ["character_1"]
+    rescue: dict[str, str] = {}
+    for role in deduped_roles:
+        profile = profiles.get(role) if isinstance(profiles.get(role), dict) else {}
+        visual_profile = profile.get("visualProfile") if isinstance(profile.get("visualProfile"), dict) else {}
+        invariants = profile.get("invariants") if isinstance(profile.get("invariants"), list) else []
+        forbidden = profile.get("forbiddenChanges") if isinstance(profile.get("forbiddenChanges"), list) else []
+        merged_text = " ".join([
+            str(visual_profile.get("outfit") or ""),
+            str(visual_profile.get("dominantColors") or ""),
+            " ".join(str(x or "") for x in invariants),
+            " ".join(str(x or "") for x in forbidden),
+        ]).lower()
+        if "dress" in merged_text or "gown" in merged_text:
+            rescue.setdefault("garment_category", "dress")
+        elif "jacket" in merged_text or "coat" in merged_text:
+            rescue.setdefault("garment_category", "outerwear")
+        elif "hoodie" in merged_text:
+            rescue.setdefault("garment_category", "hoodie")
+        elif "suit" in merged_text:
+            rescue.setdefault("garment_category", "suit")
+        elif "swim" in merged_text or "bikini" in merged_text:
+            rescue.setdefault("garment_category", "swimwear")
+        if "long sleeve" in merged_text or "long-sleeve" in merged_text:
+            rescue.setdefault("coverage_identity", "long_sleeve_coverage")
+        elif "sleeveless" in merged_text or "strapless" in merged_text:
+            rescue.setdefault("coverage_identity", "sleeveless_or_strapless")
+        if any(token in merged_text for token in ("structured", "tailored", "corset", "bodice", "seam")):
+            rescue.setdefault("construction_identity", "structured_construction")
+        if any(token in merged_text for token in ("a-line", "fitted", "form-fitting", "flowing", "voluminous")):
+            rescue.setdefault("silhouette_identity", "stable_reference_silhouette")
+        if any(token in merged_text for token in ("rose", "lace", "embroidery", "applique", "sequin", "logo", "ruffle", "bow")):
+            rescue.setdefault("signature_details_identity", "reference_signature_details_locked")
+        if any(token in merged_text for token in ("heels", "boots", "sneakers", "sandals", "shoes")):
+            rescue.setdefault("footwear_identity", "reference_footwear_locked")
+        colors = visual_profile.get("dominantColors")
+        if isinstance(colors, list):
+            clean_colors = [str(x or "").strip() for x in colors if str(x or "").strip()]
+            if clean_colors:
+                rescue.setdefault("color_identity", ", ".join(clean_colors[:3]))
+        elif isinstance(colors, str) and colors.strip():
+            rescue.setdefault("color_identity", colors.strip())
+    return rescue
 
 
 def _resolve_task_mode_execution(task_mode: str, contract: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -9423,6 +9500,7 @@ def _build_comfy_image_prompt_assembly(
     scene_meaning_block = "\n".join(scene_meaning_lines)
     non_lip_identity_first_block = ""
     non_lip_lyric_guard_block = ""
+    lip_sync_outfit_safety_block = ""
     task_mode_runtime_block = "\n".join([
         "TASK MODE EXECUTION (RUNTIME):",
         f"- taskMode={task_mode}",
@@ -9444,6 +9522,20 @@ def _build_comfy_image_prompt_assembly(
         *material_motion_application["negative_lines"],
     ])
     global_garment_lock_block = _build_universal_outfit_lock_block(scene_contract=contract, is_lip_sync_route=is_lip_sync_route)
+    if is_lip_sync_route:
+        lip_sync_outfit_safety_block = "\n".join([
+            "LIP-SYNC OUTFIT CONTINUITY SAFETY (STRICT):",
+            "- preserve garment category",
+            "- preserve coverage identity",
+            "- preserve construction identity",
+            "- preserve silhouette identity",
+            "- preserve signature details identity",
+            "- preserve footwear identity",
+            "- do not simplify garment during upper-body performance",
+            "- tighter lip-sync framing must NOT reinterpret sleeves/coverage/construction",
+            "- emotional intensity and phrase-driven hand acting must remain outfit-safe",
+            "- performance expressiveness is required, but garment continuity is non-negotiable",
+        ])
     if is_non_lip_route:
         non_lip_identity_first_block = "\n".join([
             "NON-LIP IDENTITY-OUTFIT LOCK (PRIORITY 0, STRICT):",
@@ -9546,6 +9638,7 @@ def _build_comfy_image_prompt_assembly(
         framing_and_staging_block,
         identity_layer_block,
         global_garment_lock_block,
+        lip_sync_outfit_safety_block,
         task_mode_runtime_block,
         material_motion_runtime_block,
         physics_blocks["lightWorldBlock"],
@@ -9647,6 +9740,7 @@ def _build_comfy_image_prompt_assembly(
         "subjectIdentityBlockPreview": physics_blocks["subjectIdentityBlock"],
         "sceneMeaningBlockPreview": scene_meaning_block,
         "globalGarmentLockBlockPreview": global_garment_lock_block,
+        "lipSyncOutfitSafetyBlockPreview": lip_sync_outfit_safety_block,
         "taskModeRuntimeBlockPreview": task_mode_runtime_block,
         "materialMotionRuntimeBlockPreview": material_motion_runtime_block,
         "taskModeNegativeBlockPreview": task_mode_negative_block,
@@ -9902,6 +9996,8 @@ def clip_image(payload: ClipImageIn):
     scene_contract["effectiveOutfitProfile"] = scene_contract.get("outfitProfile")
     scene_contract["sourceOutfitReplaced"] = bool(should_replace_source_outfit)
     scene_contract["outfitIdentitySource"] = "targetOutfitProfile" if should_replace_source_outfit else "sourceOutfitProfile"
+    scene_contract["lipSyncOutfitRescueApplied"] = False
+    scene_contract["lipSyncOutfitRescueFields"] = []
     scene_contract["identityContract"] = _build_identity_contract(scene_contract)
     scene_active_roles = [
         str(role or "").strip()
@@ -9988,7 +10084,8 @@ def clip_image(payload: ClipImageIn):
     route_hint_lower = str(route_hint or scene_contract.get("sourceRoute") or "").strip().lower()
     has_character_1_ref = bool(comfy_refs_by_role.get("character_1"))
     character_1_is_active = "character_1" in scene_active_roles or "character_1" in must_appear_roles
-    if has_character_1_ref and character_1_is_active:
+    is_lip_sync_route = route_hint_lower in {"lip_sync", "lip_sync_music"}
+    if has_character_1_ref and (character_1_is_active or is_lip_sync_route):
         scene_contract["identityLock"] = True
         scene_contract["identityLockApplied"] = True
         scene_contract["outfitLock"] = True
@@ -10010,13 +10107,34 @@ def clip_image(payload: ClipImageIn):
             "footwear_identity",
         ])
         scene_contract["identityLockFieldsUsed"] = list(dict.fromkeys(fields))
-    non_lip_route = route_hint_lower in {"i2v", "first_last", "f_l"}
-    if non_lip_route:
-        scene_contract["active_connected_character_roles"] = [
-            role for role in ("character_1", "character_2", "character_3")
-            if bool(comfy_refs_by_role.get(role)) and (role in scene_active_roles or role in must_appear_roles)
-        ]
-        scene_contract["single_character_mode_enforced"] = bool(scene_contract["active_connected_character_roles"] == ["character_1"])
+    scene_contract["active_connected_character_roles"] = [
+        role for role in ("character_1", "character_2", "character_3")
+        if bool(comfy_refs_by_role.get(role)) and (role in scene_active_roles or role in must_appear_roles)
+    ]
+    scene_contract["single_character_mode_enforced"] = bool(scene_contract["active_connected_character_roles"] == ["character_1"])
+    if is_lip_sync_route and _is_weak_outfit_profile(scene_contract.get("effectiveOutfitProfile")):
+        lip_sync_rescue = _extract_lip_sync_outfit_rescue(
+            reference_profiles=reference_profiles,
+            active_roles=scene_active_roles,
+        )
+        if lip_sync_rescue:
+            rescued = _normalize_outfit_profile(
+                _merge_outfit_profile(scene_contract.get("effectiveOutfitProfile"), lip_sync_rescue),
+                garment_category_hint=(scene_contract.get("effectiveOutfitProfile") or {}).get("garment_category")
+                or raw_scene_contract.get("garmentCategory")
+                or scene_contract.get("garmentCategory"),
+                confidence_scores=scene_contract.get("confidenceScores"),
+            )
+            scene_contract["effectiveOutfitProfile"] = rescued
+            scene_contract["outfitProfile"] = rescued
+            if not should_replace_source_outfit:
+                scene_contract["sourceOutfitProfile"] = rescued
+            scene_contract["outfitIdentitySource"] = "referenceProfileRescue"
+            scene_contract["lipSyncOutfitRescueApplied"] = True
+            scene_contract["lipSyncOutfitRescueFields"] = sorted(list(lip_sync_rescue.keys()))
+            scene_contract["identityContract"] = _build_identity_contract(scene_contract)
+    if is_lip_sync_route and scene_contract["active_connected_character_roles"] == ["character_1"]:
+        scene_contract["single_character_mode_enforced"] = True
     dropped_by_must_not_appear = sorted([role for role in (scene_contract.get("resolvedRoles") or []) if role in must_not_appear_roles])
     connected_refs_by_role = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
     refs_used_compact = scene_refs_used if isinstance(scene_refs_used, list) else (list((scene_refs_used or {}).keys()) if isinstance(scene_refs_used, dict) else [])
@@ -10296,6 +10414,8 @@ def clip_image(payload: ClipImageIn):
         "mustAppearCastRoles": scene_contract.get("mustAppearCastRoles") or [],
         "mustNotAppear": scene_contract.get("mustNotAppear") or [],
         "identityLock": bool(scene_contract.get("identityLock")),
+        "identityLockApplied": bool(scene_contract.get("identityLockApplied", scene_contract.get("identityLock"))),
+        "identityLockFieldsUsed": scene_contract.get("identityLockFieldsUsed") if isinstance(scene_contract.get("identityLockFieldsUsed"), list) else [],
         "taskMode": scene_contract.get("taskMode") or "keep_identity",
         "identityContract": identity_contract,
         "outfitProfile": scene_contract.get("outfitProfile") if isinstance(scene_contract.get("outfitProfile"), dict) else {},
@@ -10303,6 +10423,8 @@ def clip_image(payload: ClipImageIn):
         "targetOutfitProfile": scene_contract.get("targetOutfitProfile") if isinstance(scene_contract.get("targetOutfitProfile"), dict) else {},
         "effectiveOutfitProfile": scene_contract.get("effectiveOutfitProfile") if isinstance(scene_contract.get("effectiveOutfitProfile"), dict) else {},
         "outfitIdentitySource": scene_contract.get("outfitIdentitySource") or "sourceOutfitProfile",
+        "lipSyncOutfitRescueApplied": bool(scene_contract.get("lipSyncOutfitRescueApplied")),
+        "lipSyncOutfitRescueFields": scene_contract.get("lipSyncOutfitRescueFields") if isinstance(scene_contract.get("lipSyncOutfitRescueFields"), list) else [],
         "confidenceScores": scene_contract.get("confidenceScores") if isinstance(scene_contract.get("confidenceScores"), dict) else {},
         "familyModule": ((scene_contract.get("outfitProfile") or {}).get("family_module") if isinstance(scene_contract.get("outfitProfile"), dict) else "unknown") or "unknown",
         "familyFields": ((scene_contract.get("outfitProfile") or {}).get("family_fields") if isinstance(scene_contract.get("outfitProfile"), dict) else []) or [],
