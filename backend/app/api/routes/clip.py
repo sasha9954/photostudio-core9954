@@ -13346,9 +13346,15 @@ def clip_video(payload: ClipVideoIn):
     requested_provider = str(payload.provider or "").strip().lower()
     provider = requested_provider or str(settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
     provider_reason = "payload_or_default"
+    forced_provider_override = False
+    override_reason = "none"
     if final_workflow_key in {"lip_sync", "lip_sync_music"}:
         provider = requested_provider or "kie"
         provider_reason = "dedicated_lipsync_provider_strategy"
+        if provider == "comfy_remote":
+            provider = "kie"
+            forced_provider_override = True
+            override_reason = "lipsync_route_disallows_comfy_remote"
     raw_workflow_key_for_compat = str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()
     normalized_workflow_key_for_compat = _normalize_ltx_workflow_key(raw_workflow_key_for_compat)
     is_lipsync_provider_route = (
@@ -13377,6 +13383,16 @@ def clip_video(payload: ClipVideoIn):
         f"sceneId={scene_id} ltxMode={str(payload.ltxMode or '').strip()} "
         f"provider={provider} reason={provider_reason} mode={mode} transitionType={transition_type} format={output_format} "
         f"resolvedWorkflowKey={final_workflow_key} resolvedModelKey={resolved_model_key}"
+    )
+    print(
+        "[CLIP VIDEO PROVIDER ROUTE DEBUG] "
+        f"sceneId={scene_id} requested_provider={requested_provider or 'auto'} "
+        f"final_provider={provider} rawWorkflowKey={raw_workflow_key_for_compat or 'empty'} "
+        f"normalizedWorkflowKey={normalized_workflow_key_for_compat or 'empty'} "
+        f"finalWorkflowKey={final_workflow_key or 'empty'} mode={mode} "
+        f"is_lipsync_provider_route={'true' if is_lipsync_provider_route else 'false'} "
+        f"forced_provider_override={'true' if forced_provider_override else 'false'} "
+        f"override_reason={override_reason}"
     )
     print(
         "[LTX ROUTER] "
