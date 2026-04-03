@@ -10505,16 +10505,15 @@ def clip_image(payload: ClipImageIn):
         confidence_scores=scene_contract.get("confidenceScores"),
     )
     scene_contract["effectiveOutfitProfile"] = scene_contract.get("outfitProfile")
-    upstream_hero_contract = _normalize_hero_appearance_contract(
-        raw_scene_contract.get("heroAppearanceContract")
-        if isinstance(raw_scene_contract, dict)
-        else None
-    ) or _normalize_hero_appearance_contract(
-        raw_scene_contract.get("hero_appearance_contract")
-        if isinstance(raw_scene_contract, dict)
-        else None
-    ) or _normalize_hero_appearance_contract(scene_contract.get("heroAppearanceContract"))
-    scene_contract["heroAppearanceContract"] = upstream_hero_contract or _build_hero_appearance_contract(scene_contract)
+    upstream_hero_contract = _normalize_hero_appearance_contract(scene_contract.get("heroAppearanceContract"))
+    if not upstream_hero_contract and isinstance(raw_scene_contract, dict):
+        upstream_hero_contract = _normalize_hero_appearance_contract(raw_scene_contract.get("heroAppearanceContract"))
+    if not upstream_hero_contract and isinstance(raw_scene_contract, dict):
+        upstream_hero_contract = _normalize_hero_appearance_contract(raw_scene_contract.get("hero_appearance_contract"))
+    if upstream_hero_contract:
+        scene_contract["heroAppearanceContract"] = upstream_hero_contract
+    else:
+        scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
     scene_contract["previousSceneIdentityMemory"] = str((previous_continuity_memory or {}).get("characterState") or "").strip()
     scene_contract["previousSceneOutfitMemory"] = _summarize_outfit_memory_for_rescue(scene_contract.get("sourceOutfitProfile"))
     resolved_stable_anchor = _select_previous_stable_scene_anchor(scene_contract)

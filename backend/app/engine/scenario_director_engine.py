@@ -5146,6 +5146,8 @@ def _build_scene_outfit_profile_from_payload(payload: dict[str, Any], *, role: s
     }
     return {
         "garment_category": garment_category,
+        "garment_top_identity": str(cues.get("garment_top_identity") or "unknown").strip() or "unknown",
+        "neckline_identity": str(cues.get("neckline_identity") or "unknown").strip() or "unknown",
         "coverage_identity": str(cues.get("coverage_identity") or "unknown").strip() or "unknown",
         "construction_identity": str(cues.get("construction_identity") or "unknown").strip() or "unknown",
         "silhouette_identity": str(cues.get("silhouette_identity") or "unknown").strip() or "unknown",
