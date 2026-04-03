@@ -65,6 +65,33 @@ LIP_SYNC_PERFORMANCE_MARKERS = (
     "to camera",
     "performance",
 )
+FINAL_LINE_MARKERS = (
+    "final line",
+    "final lines",
+    "last line",
+    "last lines",
+    "final phrase",
+    "last phrase",
+    "closing line",
+    "ending lyric",
+    "final lyric",
+    "final vocal",
+    "last vocal",
+)
+DIRECT_PERFORMANCE_MARKERS = (
+    "direct to camera",
+    "to camera",
+    "looks into camera",
+    "eye contact",
+    "performance",
+    "performs",
+    "performing",
+    "sing",
+    "sings",
+    "singing",
+    "vocal delivery",
+    "lyric articulation",
+)
 NON_LIP_PORTRAIT_MARKERS = (
     "portrait",
     "face close",
@@ -1154,6 +1181,11 @@ class ScenarioDirectorDiagnostics(BaseModel):
     removed_inactive_roles: list[str] = Field(default_factory=list)
     direct_gemini_storyboard_mode: bool = False
     intro_logic_applied: bool = False
+    final_scene_split_applied: bool = False
+    final_scene_split_reason: str = ""
+    final_scene_split_source_scene_id: str = ""
+    final_scene_split_created_ids: list[str] = Field(default_factory=list)
+    final_scene_split_strategy: str = ""
 
     @model_validator(mode="after")
     def _normalize(self) -> "ScenarioDirectorDiagnostics":
@@ -1193,6 +1225,11 @@ class ScenarioDirectorDiagnostics(BaseModel):
         self.removed_inactive_roles = [str(item).strip().lower() for item in (self.removed_inactive_roles or []) if str(item).strip()]
         self.direct_gemini_storyboard_mode = _coerce_bool(self.direct_gemini_storyboard_mode, False)
         self.intro_logic_applied = _coerce_bool(self.intro_logic_applied, False)
+        self.final_scene_split_applied = _coerce_bool(self.final_scene_split_applied, False)
+        self.final_scene_split_reason = str(self.final_scene_split_reason or "").strip()
+        self.final_scene_split_source_scene_id = str(self.final_scene_split_source_scene_id or "").strip()
+        self.final_scene_split_created_ids = [str(item).strip() for item in (self.final_scene_split_created_ids or []) if str(item).strip()]
+        self.final_scene_split_strategy = str(self.final_scene_split_strategy or "").strip()
         return self
 
 
@@ -4110,6 +4147,199 @@ def _scene_has_lip_sync_signal(scene: ScenarioDirectorScene) -> bool:
         r"\bvisible lyric delivery\b",
     )
     return any(re.search(pattern, text) for pattern in lip_sync_signal_patterns)
+
+
+def _scene_text_blob(scene: ScenarioDirectorScene) -> str:
+    return " ".join(
+        [
+            str(scene.scene_goal or ""),
+            str(scene.frame_description or ""),
+            str(scene.action_in_frame or ""),
+            str(scene.camera or ""),
+            str(scene.local_phrase or ""),
+            str(scene.what_from_audio_this_scene_uses or ""),
+            str(scene.story_function or ""),
+            str(scene.scene_purpose or ""),
+        ]
+    ).strip().lower()
+
+
+def _scene_has_final_line_performance_intent(scene: ScenarioDirectorScene) -> bool:
+    text = _scene_text_blob(scene)
+    has_final_line = any(marker in text for marker in FINAL_LINE_MARKERS)
+    has_direct_perf = any(marker in text for marker in DIRECT_PERFORMANCE_MARKERS)
+    return has_final_line and has_direct_perf
+
+
+def _scene_has_ending_intent(scene: ScenarioDirectorScene) -> bool:
+    purpose = str(scene.scene_purpose or "").strip().lower()
+    story_function = str(scene.story_function or "").strip().lower()
+    clip_arc_stage = str(scene.clip_arc_stage or "").strip().lower()
+    combined = " ".join([purpose, story_function, clip_arc_stage, _scene_text_blob(scene)])
+    if purpose in {"ending_hold", "payoff"}:
+        return True
+    return any(token in combined for token in ("ending", "outro", "resolution", "release", "afterimage", "final beat"))
+
+
+def _build_afterimage_text(scene: ScenarioDirectorScene) -> tuple[str, str, str, str]:
+    emotion = str(scene.emotion or "").strip() or "quiet emotional residue"
+    scene_goal = "Holding the meaning after the final line with a lingering gaze, final breath, and emotional release."
+    frame_description = (
+        "No active singing; the performer stays present in a gentle ending hold, carrying emotional residue after the vocal climax."
+    )
+    action_in_frame = (
+        f"She keeps eye contact briefly, breath settles, shoulders soften, and the feeling lingers without lyric articulation ({emotion})."
+    )
+    camera = "Slow subtle pull-back and hold to preserve afterimage and continuation feeling."
+    return scene_goal, frame_description, action_in_frame, camera
+
+
+def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    scenes = storyboard_out.scenes or []
+    diagnostics = storyboard_out.diagnostics
+    diagnostics.final_scene_split_applied = False
+    diagnostics.final_scene_split_reason = "not_evaluated"
+    diagnostics.final_scene_split_source_scene_id = ""
+    diagnostics.final_scene_split_created_ids = []
+    diagnostics.final_scene_split_strategy = ""
+    if not scenes:
+        diagnostics.final_scene_split_reason = "no_scenes"
+        return storyboard_out
+    last_scene = scenes[-1]
+    diagnostics.final_scene_split_source_scene_id = str(last_scene.scene_id or "").strip()
+    duration = max(0.0, _safe_float(last_scene.duration, _safe_float(last_scene.time_end, 0.0) - _safe_float(last_scene.time_start, 0.0)))
+    route = str(last_scene.video_generation_route or last_scene.render_mode or last_scene.resolved_workflow_key or "").strip().lower()
+    is_non_lip_route = route in {"i2v", "f_l", "image_video", "first_last", "downgraded_to_i2v", "blocked"}
+    has_final_performance = _scene_has_final_line_performance_intent(last_scene)
+    has_ending_intent = _scene_has_ending_intent(last_scene)
+    long_duration = duration >= 5.6
+    if not is_non_lip_route:
+        diagnostics.final_scene_split_reason = "route_not_non_lip"
+        return storyboard_out
+    if not has_final_performance:
+        diagnostics.final_scene_split_reason = "missing_final_performance_intent"
+        return storyboard_out
+    if not has_ending_intent:
+        diagnostics.final_scene_split_reason = "missing_ending_intent"
+        return storyboard_out
+    if not long_duration:
+        diagnostics.final_scene_split_reason = "duration_not_long_enough"
+        return storyboard_out
+
+    existing_ids = {str(scene.scene_id or "").strip() for scene in scenes}
+    base_id = str(last_scene.scene_id or "S").strip() or "S"
+
+    def _unique_split_id(suffix: str) -> str:
+        candidate = f"{base_id}_{suffix}"
+        if candidate not in existing_ids:
+            existing_ids.add(candidate)
+            return candidate
+        idx = 2
+        while f"{candidate}_{idx}" in existing_ids:
+            idx += 1
+        unique = f"{candidate}_{idx}"
+        existing_ids.add(unique)
+        return unique
+
+    lip_scene_id = _unique_split_id("A")
+    hold_scene_id = _unique_split_id("B")
+    start = _safe_float(last_scene.time_start, 0.0)
+    end = max(start, _safe_float(last_scene.time_end, start))
+    target_hold = min(2.4, max(1.25, duration * 0.34))
+    lip_end = round(max(start + 2.4, end - target_hold), 3)
+    if lip_end >= end - 1.0:
+        lip_end = round(max(start + 2.2, end - 1.0), 3)
+    if lip_end <= start + 1.8:
+        diagnostics.final_scene_split_reason = "split_window_too_narrow"
+        return storyboard_out
+
+    lip_data = last_scene.model_dump(mode="python")
+    hold_data = last_scene.model_dump(mode="python")
+    lip_data["scene_id"] = lip_scene_id
+    hold_data["scene_id"] = hold_scene_id
+    lip_data["time_start"] = round(start, 3)
+    lip_data["time_end"] = round(lip_end, 3)
+    lip_data["duration"] = round(max(0.0, lip_end - start), 3)
+    lip_data["requested_duration_sec"] = lip_data["duration"]
+    hold_data["time_start"] = round(lip_end, 3)
+    hold_data["time_end"] = round(end, 3)
+    hold_data["duration"] = round(max(0.0, end - lip_end), 3)
+    hold_data["requested_duration_sec"] = hold_data["duration"]
+
+    lip_data["scene_purpose"] = "payoff"
+    lip_data["story_function"] = "final_lipsync_payoff"
+    lip_data["clip_arc_stage"] = "power_return"
+    lip_data["performance_phase"] = "final_lipsync_payoff"
+    lip_data["video_generation_route"] = "lip_sync_music"
+    lip_data["planned_video_generation_route"] = "lip_sync_music"
+    lip_data["resolved_workflow_key"] = "lip_sync_music"
+    lip_data["resolved_workflow_file"] = CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["lip_sync_music"]
+    lip_data["render_mode"] = "lip_sync_music"
+    lip_data["ltx_mode"] = "lip_sync_music"
+    lip_data["lip_sync"] = True
+    lip_data["send_audio_to_generator"] = True
+    lip_data["music_vocal_lipsync_allowed"] = True
+    lip_data["audio_slice_kind"] = "music_vocal"
+    lip_data["audio_slice_start_sec"] = lip_data["time_start"]
+    lip_data["audio_slice_end_sec"] = lip_data["time_end"]
+    lip_data["audio_slice_expected_duration_sec"] = lip_data["duration"]
+    lip_data["audio_slice_bounds_filled_from_scene"] = True
+    lip_data["lip_sync_route_state_consistent"] = True
+    if str(lip_data.get("performance_framing") or "").strip().lower() not in LIP_SYNC_PERFORMANCE_FRAMINGS:
+        lip_data["performance_framing"] = "tight_medium"
+    lip_data["camera"] = _lip_sync_safe_camera_line()
+    lip_data["frame_description"] = (
+        "Final vocal payoff direct-to-camera: tight readable singing emotion with eyes, mouth, neck, and shoulders clearly visible."
+    )
+    lip_data["action_in_frame"] = "She performs the last vocal punch to camera with clear lyric articulation and controlled emotional intensity."
+    lip_data["workflow_decision_reason"] = (
+        f"{str(last_scene.workflow_decision_reason or '').strip()} Final hybrid outro split: isolated final lip-sync payoff before ending hold."
+    ).strip()
+    lip_data["lip_sync_decision_reason"] = "forced_final_payoff_lipsync_split_applied"
+
+    hold_goal, hold_frame, hold_action, hold_camera = _build_afterimage_text(last_scene)
+    hold_data["scene_purpose"] = "ending_hold"
+    hold_data["story_function"] = "ending_hold_afterimage"
+    hold_data["clip_arc_stage"] = "afterimage_release"
+    hold_data["performance_phase"] = "afterimage_release"
+    hold_data["video_generation_route"] = "i2v"
+    hold_data["planned_video_generation_route"] = "i2v"
+    hold_data["resolved_workflow_key"] = "i2v"
+    hold_data["resolved_workflow_file"] = CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["i2v"]
+    hold_data["render_mode"] = "image_video"
+    hold_data["ltx_mode"] = "i2v"
+    hold_data["lip_sync"] = False
+    hold_data["lip_sync_text"] = ""
+    hold_data["send_audio_to_generator"] = False
+    hold_data["music_vocal_lipsync_allowed"] = False
+    hold_data["audio_slice_kind"] = "none"
+    hold_data["audio_slice_start_sec"] = hold_data["time_start"]
+    hold_data["audio_slice_end_sec"] = hold_data["time_end"]
+    hold_data["audio_slice_expected_duration_sec"] = hold_data["duration"]
+    hold_data["audio_slice_bounds_filled_from_scene"] = False
+    hold_data["lip_sync_route_state_consistent"] = True
+    hold_data["scene_goal"] = hold_goal
+    hold_data["frame_description"] = hold_frame
+    hold_data["action_in_frame"] = hold_action
+    hold_data["camera"] = hold_camera
+    hold_data["local_phrase"] = None
+    hold_data["what_from_audio_this_scene_uses"] = "Post-phrase resonance and release after vocals, without active singing articulation."
+    hold_data["workflow_decision_reason"] = (
+        f"{str(last_scene.workflow_decision_reason or '').strip()} Final hybrid outro split: ending hold kept as emotional afterimage."
+    ).strip()
+    hold_data["lip_sync_decision_reason"] = "non_lip_afterimage_hold"
+
+    updated_scenes = scenes[:-1]
+    updated_scenes.append(ScenarioDirectorScene.model_validate(lip_data))
+    updated_scenes.append(ScenarioDirectorScene.model_validate(hold_data))
+    for idx, scene in enumerate(updated_scenes):
+        scene.display_index = idx
+    storyboard_out.scenes = updated_scenes
+    diagnostics.final_scene_split_applied = True
+    diagnostics.final_scene_split_reason = "final_non_lip_hybrid_outro_scene_split"
+    diagnostics.final_scene_split_created_ids = [lip_scene_id, hold_scene_id]
+    diagnostics.final_scene_split_strategy = "final_lipsync_plus_afterimage"
+    return storyboard_out
 
 
 def _evaluate_lipsync_mouth_visibility(scene: ScenarioDirectorScene) -> tuple[bool, str]:
@@ -7304,6 +7534,8 @@ def _apply_music_video_mode_policy(
         prev_shot_type = str(scene.shot_type or shot_type)
         kept_scenes.append(scene)
     storyboard_out.scenes = kept_scenes
+    storyboard_out = _maybe_split_final_hybrid_outro_scene(storyboard_out)
+    kept_scenes = storyboard_out.scenes or []
     if kept_scenes:
         if not str(storyboard_out.story.title or "").strip():
             storyboard_out.story.title = "Audio-first music video arc"
