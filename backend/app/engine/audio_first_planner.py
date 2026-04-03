@@ -826,12 +826,18 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
     validation.valid = len(validation.errors) == 0
     durations = [float(scene.duration_sec or 0.0) for scene in planned_scenes]
     duration_span = (max(durations) - min(durations)) if durations else 0.0
-    phrase_loop_prevented = len({
+    unique_summaries = {
         str(scene.summary or "").strip().lower()
         for scene in planned_scenes
         if str(scene.summary or "").strip()
-    }) < len([scene for scene in planned_scenes if str(scene.summary or "").strip()])
-    clip_formula_rebalance_applied = bool(len(durations) >= 4 and duration_span > 2.0)
+    }
+    non_empty_summaries = [scene for scene in planned_scenes if str(scene.summary or "").strip()]
+    phrase_loop_detected = len(unique_summaries) < len(non_empty_summaries)
+    phrase_loop_prevention_action = ""
+    phrase_loop_prevention_reason = "planner_does_not_apply_phrase_merge_or_reframe"
+    phrase_loop_prevented = False
+    clip_formula_rebalance_applied = False
+    clip_formula_rebalance_detected_need = bool(len(durations) >= 4 and duration_span > 2.0)
     arc_progression = ["entry", "build", "peak", "release_afterimage"] if len(planned_scenes) >= 4 else ["entry", "build", "release_afterimage"]
 
     return AudioFirstPlannerOutput(
@@ -858,7 +864,14 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             "no_text_clip_policy": "visual_arc_over_phrase_loop" if not _clean_str(project_input.story_text) else "off",
             "no_text_clip_policy_applied": bool(not _clean_str(project_input.story_text)),
             "phrase_loop_prevented": bool(phrase_loop_prevented),
+            "phrase_loop_detected": bool(phrase_loop_detected),
+            "phrase_loop_prevention_action": phrase_loop_prevention_action,
+            "phrase_loop_prevention_reason": phrase_loop_prevention_reason,
             "clip_formula_rebalance_applied": bool(clip_formula_rebalance_applied),
+            "clip_formula_rebalance_detected_need": bool(clip_formula_rebalance_detected_need),
+            "duration_span_debug": round(duration_span, 3),
+            "rebalance_reason": "duration_span_heuristic_only_no_rebalance_action",
+            "rebalance_actions": [],
             "phrase_boundary_priority_order": [
                 "end_of_vocal_phrase",
                 "clear_energy_change",
