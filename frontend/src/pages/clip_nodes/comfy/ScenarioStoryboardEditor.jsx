@@ -258,6 +258,32 @@ function resolveScenarioModeBadge(modeValue = "") {
   };
 }
 
+function buildScenarioSceneDownloadName(sceneId = "") {
+  const rawSceneId = String(sceneId || "").trim();
+  const safeSceneId = rawSceneId ? rawSceneId.replace(/[^\w-]+/g, "-") : "image";
+  return `scenario-scene-${safeSceneId}.png`;
+}
+
+async function downloadScenarioImage(imageUrl = "", sceneId = "") {
+  const resolvedImageUrl = String(imageUrl || "").trim();
+  if (!resolvedImageUrl) return false;
+  const response = await fetch(resolvedImageUrl);
+  if (!response.ok) {
+    throw new Error(`Scenario image download failed with status ${response.status}`);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const downloadAnchor = document.createElement("a");
+  downloadAnchor.href = objectUrl;
+  downloadAnchor.download = buildScenarioSceneDownloadName(sceneId);
+  downloadAnchor.style.display = "none";
+  document.body.appendChild(downloadAnchor);
+  downloadAnchor.click();
+  downloadAnchor.remove();
+  URL.revokeObjectURL(objectUrl);
+  return true;
+}
+
 export default function ScenarioStoryboardEditor({
   open,
   nodeId,
@@ -287,6 +313,8 @@ export default function ScenarioStoryboardEditor({
   const [scenarioLightboxOpen, setScenarioLightboxOpen] = useState(false);
   const [scenarioLightboxImageUrl, setScenarioLightboxImageUrl] = useState("");
   const [scenarioLightboxSceneId, setScenarioLightboxSceneId] = useState("");
+  const [scenarioLightboxDownloading, setScenarioLightboxDownloading] = useState(false);
+  const [scenarioLightboxDownloadError, setScenarioLightboxDownloadError] = useState("");
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
   const phrasePlaybackRef = useRef({ sceneId: "", phraseIndex: -1, t0: 0, t1: 0 });
@@ -427,6 +455,8 @@ export default function ScenarioStoryboardEditor({
   const openScenarioImageLightbox = (imageUrl = "", sceneId = "") => {
     const resolvedImageUrl = String(imageUrl || "").trim();
     if (!resolvedImageUrl) return;
+    setScenarioLightboxDownloadError("");
+    setScenarioLightboxDownloading(false);
     setScenarioLightboxImageUrl(resolvedImageUrl);
     setScenarioLightboxSceneId(String(sceneId || "").trim());
     setScenarioLightboxOpen(true);
@@ -436,6 +466,8 @@ export default function ScenarioStoryboardEditor({
     setScenarioLightboxOpen(false);
     setScenarioLightboxImageUrl("");
     setScenarioLightboxSceneId("");
+    setScenarioLightboxDownloading(false);
+    setScenarioLightboxDownloadError("");
   };
 
   useEffect(() => {
@@ -447,6 +479,8 @@ export default function ScenarioStoryboardEditor({
       setScenarioLightboxOpen(false);
       setScenarioLightboxImageUrl("");
       setScenarioLightboxSceneId("");
+      setScenarioLightboxDownloading(false);
+      setScenarioLightboxDownloadError("");
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
@@ -460,14 +494,30 @@ export default function ScenarioStoryboardEditor({
     setScenarioLightboxOpen(false);
     setScenarioLightboxImageUrl("");
     setScenarioLightboxSceneId("");
+    setScenarioLightboxDownloading(false);
+    setScenarioLightboxDownloadError("");
   }, [open]);
 
   const scenarioLightboxDownloadName = useMemo(() => {
-    const safeSceneId = String(scenarioLightboxSceneId || "image").replace(/[^\w-]+/g, "-");
-    const extensionMatch = String(scenarioLightboxImageUrl || "").match(/\.(png|jpe?g|webp|gif|bmp|avif)(?:$|\?)/i);
-    const extension = extensionMatch?.[1] ? extensionMatch[1].toLowerCase() : "png";
-    return `scenario-scene-${safeSceneId}.${extension}`;
-  }, [scenarioLightboxImageUrl, scenarioLightboxSceneId]);
+    return buildScenarioSceneDownloadName(scenarioLightboxSceneId);
+  }, [scenarioLightboxSceneId]);
+
+  const handleScenarioLightboxDownload = async () => {
+    if (scenarioLightboxDownloading) return;
+    setScenarioLightboxDownloading(true);
+    setScenarioLightboxDownloadError("");
+    try {
+      await downloadScenarioImage(scenarioLightboxImageUrl, scenarioLightboxSceneId);
+    } catch (error) {
+      console.warn("[SCENARIO STORYBOARD] failed to download scene image", {
+        error: String(error?.message || error),
+        sceneId: scenarioLightboxSceneId,
+      });
+      setScenarioLightboxDownloadError("Не удалось скачать изображение");
+    } finally {
+      setScenarioLightboxDownloading(false);
+    }
+  };
 
   const phrases = useMemo(() => {
     if (Array.isArray(safeAudioData?.phrases) && safeAudioData.phrases.length) return safeAudioData.phrases;
@@ -1678,17 +1728,20 @@ export default function ScenarioStoryboardEditor({
           <div className="clipSB_scenarioLightboxOverlay" onClick={closeScenarioImageLightbox}>
             <div className="clipSB_scenarioLightboxContent" onClick={(event) => event.stopPropagation()}>
               <div className="clipSB_scenarioLightboxControls">
-                <a
+                <button
                   className="clipSB_btn clipSB_btnSecondary"
-                  href={scenarioLightboxImageUrl}
-                  download={scenarioLightboxDownloadName}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  type="button"
+                  onClick={handleScenarioLightboxDownload}
+                  disabled={scenarioLightboxDownloading}
+                  title={scenarioLightboxDownloadName}
                 >
-                  Скачать
-                </a>
+                  {scenarioLightboxDownloading ? "Скачивание..." : "Скачать"}
+                </button>
                 <button className="clipSB_iconBtn" type="button" onClick={closeScenarioImageLightbox} aria-label="Закрыть просмотр">×</button>
               </div>
+              {scenarioLightboxDownloadError ? (
+                <div className="clipSB_hint" role="alert">{scenarioLightboxDownloadError}</div>
+              ) : null}
               <img className="clipSB_scenarioLightboxImage" src={scenarioLightboxImageUrl} alt={`scene-${scenarioLightboxSceneId || "image"}-preview`} />
             </div>
           </div>
