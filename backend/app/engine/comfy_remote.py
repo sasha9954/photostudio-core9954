@@ -6,7 +6,7 @@ import json
 import math
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 from requests import ConnectTimeout, ReadTimeout, RequestException, Response
@@ -35,6 +35,9 @@ COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {
 }
 COMFY_AUDIO_INPUT_KEYS = ("audio", "audio_file", "audio_path", "path", "filename", "url")
 COMFY_AUDIO_INPUT_WIDGET_FALLBACK_KEYS = ("value", "text")
+COMFY_AUDIO_UNSAFE_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
+COMFY_AUDIO_URL_COMPATIBLE_INPUT_KEYS = {"url", "path", "audio_path"}
+COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES = {"loadaudiofromurl", "loadaudiofrompath"}
 
 COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "i2v": {"single_image": True, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": False},
@@ -981,22 +984,72 @@ def _patch_audio_input_nodes(workflow: dict, *, audio_value: str) -> tuple[list[
     return patched_node_ids, None
 
 
-def _collect_audio_input_targets(workflow: dict) -> list[tuple[str, str, str]]:
-    targets: list[tuple[str, str, str]] = []
+def _collect_audio_input_targets(workflow: dict) -> list[dict]:
+    targets: list[dict] = []
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
         class_type = str(node.get("class_type") or "").strip().lower()
+        title = str(((node.get("_meta") or {}).get("title") if isinstance(node.get("_meta"), dict) else "") or "").strip().lower()
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):
             continue
-        if class_type not in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES:
+        matched_by = "class_type" if class_type in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES else ""
+        if not matched_by and ("audio" in title or "lipsync" in title):
+            matched_by = "title"
+        if not matched_by:
             continue
+        found_target = False
         for input_key in COMFY_AUDIO_INPUT_KEYS:
             if input_key in inputs:
-                targets.append((str(node_id), class_type, input_key))
+                targets.append(
+                    {
+                        "node_id": str(node_id),
+                        "class_type": class_type,
+                        "input_key": input_key,
+                        "matched_by": matched_by,
+                    }
+                )
+                found_target = True
                 break
+        if not found_target and class_type in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES:
+            for fallback_key in COMFY_AUDIO_INPUT_WIDGET_FALLBACK_KEYS:
+                if fallback_key in inputs and isinstance(inputs.get(fallback_key), str):
+                    targets.append(
+                        {
+                            "node_id": str(node_id),
+                            "class_type": class_type,
+                            "input_key": fallback_key,
+                            "matched_by": "fallback",
+                        }
+                    )
+                    break
     return targets
+
+
+def _is_remote_safe_audio_url(audio_url: str) -> bool:
+    source = str(audio_url or "").strip()
+    if not source:
+        return False
+    try:
+        parsed = urlparse(source)
+    except Exception:
+        return False
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    return host not in COMFY_AUDIO_UNSAFE_URL_HOSTS
+
+
+def _targets_support_url_transport(audio_targets: list[dict]) -> bool:
+    for target in audio_targets:
+        input_key = str((target or {}).get("input_key") or "").strip().lower()
+        class_type = str((target or {}).get("class_type") or "").strip().lower()
+        if input_key in COMFY_AUDIO_URL_COMPATIBLE_INPUT_KEYS:
+            return True
+        if class_type in COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES:
+            return True
+    return False
 
 
 def _patch_workflow_inputs(
@@ -1277,23 +1330,38 @@ def run_comfy_image_to_video(
         if not valid_audio_workflow:
             return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{workflow_audio_err}"
         audio_targets = _collect_audio_input_targets(patched_workflow)
-        audio_transport_reason = "workflow_has_audio_input_nodes" if audio_targets else "workflow_has_no_direct_audio_input_nodes"
+        has_audio_url = bool(effective_audio_value)
+        has_audio_bytes = bool(audio_bytes)
+        is_remote_safe_audio_url = _is_remote_safe_audio_url(effective_audio_value) if has_audio_url else False
+        supports_url_transport = _targets_support_url_transport(audio_targets)
+        audio_transport_reason = "workflow_has_audio_input_nodes" if audio_targets else "workflow_has_no_patchable_audio_input_nodes"
+        logger.info(
+            "[COMFY AUDIO TARGETS INSPECTION] %s",
+            {
+                "workflowKey": normalized_workflow_key,
+                "workflowFile": workflow_source,
+                "audioTargetsFound": len(audio_targets),
+                "audioTargets": audio_targets,
+            },
+        )
         logger.info(
             "[COMFY AUDIO TRANSPORT DECISION] %s",
             {
                 "workflowKey": normalized_workflow_key,
                 "workflowFile": workflow_source,
                 "audioTransportMode": "pending",
-                "hasAudioBytes": bool(audio_bytes),
-                "hasAudioUrl": bool(effective_audio_value),
+                "hasAudioBytes": has_audio_bytes,
+                "hasAudioUrl": has_audio_url,
                 "audioInputTargets": audio_targets,
                 "reason": audio_transport_reason,
             },
         )
         if audio_targets:
-            if effective_audio_value:
+            selected_by = "no_audio_payload"
+            if has_audio_url and is_remote_safe_audio_url and supports_url_transport:
                 audio_transport_mode = "url"
-            elif audio_bytes:
+                selected_by = "remote_safe_url+target_support"
+            elif has_audio_bytes:
                 audio_filename = f"{Path(image_filename).stem}_audio.mp3"
                 uploaded_audio_name, audio_upload_err = upload_audio_to_comfy(
                     audio_bytes,
@@ -1306,23 +1374,48 @@ def run_comfy_image_to_video(
                     return None, f"capability_error:LTX_AUDIO_UPLOAD_FAILED:{audio_upload_err or 'audio_upload_failed'}"
                 effective_audio_value = str(uploaded_audio_name).strip()
                 audio_transport_mode = "upload"
-            audio_patch_node_ids, audio_patch_err = _patch_audio_input_nodes(
-                patched_workflow,
-                audio_value=effective_audio_value,
-            )
-            if audio_patch_err:
-                return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{audio_patch_err}"
+                selected_by = "audio_upload_fallback"
+            elif has_audio_url and not is_remote_safe_audio_url:
+                audio_transport_mode = "none"
+                selected_by = "url_rejected_unsafe_for_remote"
+            elif has_audio_url and not supports_url_transport:
+                audio_transport_mode = "none"
+                selected_by = "url_rejected_target_not_url_compatible"
+            if audio_transport_mode in {"url", "upload"}:
+                audio_patch_node_ids, audio_patch_err = _patch_audio_input_nodes(
+                    patched_workflow,
+                    audio_value=effective_audio_value,
+                )
+                if audio_patch_err:
+                    return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{audio_patch_err}"
+            else:
+                return None, f"capability_error:LTX_AUDIO_TRANSPORT_UNAVAILABLE:{selected_by}"
+            final_reason = audio_transport_reason
         else:
             audio_transport_mode = "skip_no_audio_target"
+            selected_by = "no_patchable_audio_target"
+            final_reason = audio_transport_reason
+        logger.info(
+            "[COMFY AUDIO TRANSPORT SAFETY] %s",
+            {
+                "workflowKey": normalized_workflow_key,
+                "workflowFile": workflow_source,
+                "audioUrl": effective_audio_value,
+                "isRemoteSafeAudioUrl": is_remote_safe_audio_url,
+                "chosenTransportMode": audio_transport_mode,
+                "reason": selected_by,
+            },
+        )
         logger.info(
             "[COMFY AUDIO TRANSPORT DECISION] %s",
             {
                 "workflowKey": normalized_workflow_key,
                 "workflowFile": workflow_source,
-                "audioTransportMode": audio_transport_mode,
-                "hasAudioBytes": bool(audio_bytes),
-                "hasAudioUrl": bool(effective_audio_value),
-                "reason": audio_transport_reason,
+                "hasAudioBytes": has_audio_bytes,
+                "hasAudioUrl": has_audio_url,
+                "selectedTransportMode": audio_transport_mode,
+                "selectedBy": selected_by,
+                "reason": final_reason,
             },
         )
     continuation_used = False
