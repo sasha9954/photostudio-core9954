@@ -1007,6 +1007,33 @@ def _is_weak_outfit_profile(profile: dict[str, Any] | None) -> bool:
     return (not garment_known) or known < 3
 
 
+def _has_strong_dress_evidence(text: str) -> bool:
+    normalized = f" {str(text or '').lower()} "
+    strong_tokens = (
+        "wearing a dress",
+        "one-piece dress",
+        "one piece dress",
+        "gown",
+        "maxi dress",
+        "midi dress",
+        "mini dress",
+        "dress bodice",
+        "dress hem",
+        "dress skirt",
+    )
+    return any(token in normalized for token in strong_tokens)
+
+
+def _has_strong_casual_separates_evidence(text: str) -> bool:
+    normalized = f" {str(text or '').lower()} "
+    has_jeans = any(token in normalized for token in (" jeans ", " denim ", " denim jeans "))
+    has_top = any(token in normalized for token in (" cropped top ", " crop top ", " t-shirt ", " tshirt ", " tee ", " top "))
+    has_sneakers = any(token in normalized for token in (" sneaker ", " sneakers ", " trainers "))
+    # Two strong signals are enough; jeans + top is already a clear "separates" signal.
+    evidence_score = int(has_jeans) + int(has_top) + int(has_sneakers)
+    return evidence_score >= 2 and (has_jeans or has_top)
+
+
 def _extract_lip_sync_outfit_rescue(
     *,
     reference_profiles: dict[str, Any] | None,
@@ -1030,7 +1057,16 @@ def _extract_lip_sync_outfit_rescue(
             " ".join(str(x or "") for x in invariants),
             " ".join(str(x or "") for x in forbidden),
         ]).lower()
-        if "dress" in merged_text or "gown" in merged_text:
+        strong_casual = _has_strong_casual_separates_evidence(merged_text)
+        strong_dress = _has_strong_dress_evidence(merged_text)
+
+        if strong_casual:
+            rescue.setdefault("garment_category", "casual_layered")
+            rescue.setdefault("garment_top_identity", "top_with_jeans")
+            rescue.setdefault("material_identity", "denim_or_cotton_family")
+            rescue.setdefault("silhouette_identity", "casual_fitted_or_straight")
+            rescue.setdefault("footwear_identity", "sneakers")
+        elif strong_dress:
             rescue.setdefault("garment_category", "dress")
             rescue.setdefault("garment_top_identity", "dress_top")
         elif "jeans" in merged_text or "denim" in merged_text:
@@ -5085,6 +5121,12 @@ def _build_session_world_anchors(
 
     world_style_packs: list[dict[str, Any]] = [
         {
+            "key": "apartment_daylight_realism",
+            "keywords": ["apartment", "home", "living room", "bedroom", "kitchen", "loft", "indoor room", "interior"],
+            "location": "one coherent apartment/home interior with stable room geometry, window/ledge identity, furniture family, and material palette",
+            "style": "photoreal apartment realism with coherent natural/practical lighting behavior and stable interior continuity",
+        },
+        {
             "key": "cinematic_realistic_club",
             "keywords": ["club", "nightlife", "dancefloor", "dj"],
             "location": "one cohesive cinematic realistic club venue with linked spaces (main floor, bar, corridor, backstage)",
@@ -5167,6 +5209,7 @@ def _build_session_world_anchors(
 
     selected_pack = world_style_packs[0]
     best_score = float("-inf")
+    apartment_tokens = ("apartment", "home", "living room", "bedroom", "kitchen", "loft", "indoor room", "interior")
     for pack in world_style_packs:
         pack_key = str(pack.get("key") or "").strip().lower()
         keyword_hits = _token_hit_count(full_signal, list(pack.get("keywords") or []))
@@ -5177,6 +5220,10 @@ def _build_session_world_anchors(
                 score += 2.0
             if any(token in full_signal for token in introspective_tokens):
                 score -= 0.25
+            if any(token in full_signal for token in apartment_tokens):
+                score -= 4.0
+        if "apartment" in pack_key and any(token in full_signal for token in apartment_tokens):
+            score += 3.0
         if "urban" in pack_key and any(token in full_signal for token in urban_tokens):
             score += 1.5
         if any(token in pack_key for token in ("forest", "coastal", "desert")) and any(token in full_signal for token in nature_tokens):
@@ -9541,6 +9588,7 @@ def _build_comfy_image_prompt_assembly(
     style_entities = [role for role in ["style"] if refs_by_role.get(role)]
     props_entities = [role for role in ["props"] if refs_by_role.get(role)]
     contract = scene_contract if isinstance(scene_contract, dict) else {}
+    world_contract = _build_world_continuity_contract(contract)
     identity_contract = _build_identity_contract(contract)
     outfit_profile = identity_contract.get("outfit_profile") if isinstance(identity_contract.get("outfit_profile"), dict) else {}
     task_mode = str(identity_contract.get("task_mode") or "keep_identity")
@@ -9982,7 +10030,6 @@ def _build_comfy_image_prompt_assembly(
         f"- continuity constraints: {continuity_value}",
         f"- session baseline: {json.dumps(session_baseline or {}, ensure_ascii=False)}",
     ])
-    world_contract = _build_world_continuity_contract(contract)
     world_lock_block = "\n".join([
         "WORLD / LOCATION LOCK (STRICT):",
         f"- room identity: {world_contract.get('room_identity') or 'same room identity'}",

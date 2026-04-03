@@ -5021,6 +5021,11 @@ def _extract_character_identity_cues(payload: dict[str, Any], *, role: str = "ch
     role_ctx = refs.get(role) if isinstance(refs.get(role), dict) else {}
     role_meta = role_ctx.get("meta") if isinstance(role_ctx.get("meta"), dict) else {}
     role_profile = role_meta.get("profile") if isinstance(role_meta.get("profile"), dict) else {}
+    reference_profiles = payload.get("referenceProfiles") if isinstance(payload.get("referenceProfiles"), dict) else {}
+    role_reference_profile = reference_profiles.get(role) if isinstance(reference_profiles.get(role), dict) else {}
+    role_visual_profile = role_reference_profile.get("visualProfile") if isinstance(role_reference_profile.get("visualProfile"), dict) else {}
+    role_invariants = role_reference_profile.get("invariants") if isinstance(role_reference_profile.get("invariants"), list) else []
+    role_forbidden = role_reference_profile.get("forbiddenChanges") if isinstance(role_reference_profile.get("forbiddenChanges"), list) else []
     candidates = [
         str(role_ctx.get("label") or ""),
         str(role_ctx.get("shortLabel") or ""),
@@ -5032,12 +5037,40 @@ def _extract_character_identity_cues(payload: dict[str, Any], *, role: str = "ch
         str(role_profile.get("wardrobe") or ""),
         str(role_profile.get("face") or ""),
         str(role_profile.get("hair") or ""),
+        str(role_visual_profile.get("outfit") or ""),
+        str(role_visual_profile.get("dominantColors") or ""),
+        " ".join(str(item or "") for item in role_invariants),
+        " ".join(str(item or "") for item in role_forbidden),
     ]
     blob = " ".join(candidates).lower()
 
     cues: dict[str, str] = {}
+    strong_casual_separates = (
+        any(token in blob for token in ("jeans", "denim"))
+        and any(token in blob for token in ("top", "t-shirt", "tshirt", "tee", "crop top", "cropped top"))
+    ) or (
+        any(token in blob for token in ("jeans", "denim"))
+        and "sneaker" in blob
+    )
+    strong_dress_evidence = any(
+        token in blob
+        for token in (
+            "wearing a dress",
+            "one-piece dress",
+            "one piece dress",
+            "dress bodice",
+            "dress hem",
+            "dress skirt",
+            "gown",
+            "maxi dress",
+            "midi dress",
+            "mini dress",
+        )
+    )
     garment_category = "unknown"
-    if any(token in blob for token in ("swimwear", "swimsuit", "bikini")):
+    if strong_casual_separates:
+        garment_category = "casual_layered"
+    elif any(token in blob for token in ("swimwear", "swimsuit", "bikini")):
         garment_category = "swimwear"
     elif any(token in blob for token in ("coat", "outerwear", "fur", "parka", "jacket")):
         garment_category = "outerwear"
@@ -5045,7 +5078,7 @@ def _extract_character_identity_cues(payload: dict[str, Any], *, role: str = "ch
         garment_category = "suit"
     elif any(token in blob for token in ("armor", "armour", "plate", "metal cuirass")):
         garment_category = "armor"
-    elif any(token in blob for token in ("dress", "gown", "skirt")):
+    elif strong_dress_evidence:
         garment_category = "dress"
     elif any(token in blob for token in ("casual", "streetwear", "layered", "hoodie", "denim")):
         garment_category = "casual_layered"
@@ -5065,8 +5098,14 @@ def _extract_character_identity_cues(payload: dict[str, Any], *, role: str = "ch
         cues["silhouette_identity"] = "outfit silhouette identity remains unchanged from the reference"
     if any(token in blob for token in ("satin", "leather", "denim", "fur", "knit", "chiffon", "metallic", "sheer", "armor")):
         cues["material_identity"] = "material family identity remains stable"
-    if any(token in blob for token in ("boot", "heels", "footwear", "chunky boots")):
+    if any(token in blob for token in ("sneaker", "sneakers", "trainer", "trainers")):
+        cues["footwear_identity"] = "footwear category stays fixed, with sneakers remaining sneakers"
+    elif any(token in blob for token in ("boot", "heels", "footwear", "chunky boots")):
         cues["footwear_identity"] = "footwear category stays fixed, with boots remaining boots"
+    if strong_casual_separates:
+        cues["garment_top_identity"] = "top_with_jeans"
+        cues.setdefault("silhouette_identity", "outfit silhouette identity remains unchanged from the reference")
+        cues.setdefault("material_identity", "material family identity remains stable")
     signature_parts: list[str] = []
     if any(token in blob for token in ("rose", "floral", "petal")):
         signature_parts.append("rose/floral garment details stay visible")
@@ -5325,6 +5364,29 @@ def _is_club_world_relevant_scene(scene: ScenarioDirectorScene, payload: dict[st
     )
 
 
+def _is_apartment_world_relevant_scene(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> bool:
+    payload = payload if isinstance(payload, dict) else {}
+    scene_local_text = " ".join(
+        [
+            str(scene.location or ""),
+            str(scene.frame_description or ""),
+            str(scene.action_in_frame or ""),
+            str(scene.scene_goal or ""),
+        ]
+    ).lower()
+    if any(token in scene_local_text for token in NON_CLUB_WORLD_HINTS):
+        return True
+    payload_background_text = " ".join(
+        [
+            str(payload.get("environment") or ""),
+            str(payload.get("story_summary") or ""),
+            str(payload.get("director_summary") or ""),
+            str(payload.get("full_scenario") or ""),
+        ]
+    ).lower()
+    return any(token in payload_background_text for token in NON_CLUB_WORLD_HINTS)
+
+
 def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> str:
     lead = str(scene.frame_description or "").strip()
     action = str(scene.action_in_frame or "").strip()
@@ -5357,7 +5419,8 @@ def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[s
     parts.append(
         "World continuity lock: keep one coherent real venue across scenes; only zone/angle/distance/mood may vary while architecture/material palette/lighting system stay consistent."
     )
-    apply_club_venue_bible = _is_lip_sync_music_scene(scene) or _is_club_world_relevant_scene(scene, payload=payload)
+    apartment_world = _is_apartment_world_relevant_scene(scene, payload=payload)
+    apply_club_venue_bible = (not apartment_world) and (_is_lip_sync_music_scene(scene) or _is_club_world_relevant_scene(scene, payload=payload))
     if _is_lip_sync_music_scene(scene):
         parts.append(
             "Still-photo canon: prioritize a single frozen photographic moment with scene-specific composition, gaze, pose, and body orientation."
@@ -5368,6 +5431,13 @@ def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[s
         )
         parts.append(
             "Keep one interior language across scenes: same wall/ceiling logic, bar/furniture design, floor material, neon palette, haze-light rig, and crowd styling; no venue hopping or interior redesign."
+        )
+    if apartment_world:
+        parts.append(
+            "Apartment/home world bible (photo continuity): keep one coherent apartment interior identity with stable room geometry, window/ledge identity, furniture family, and material palette."
+        )
+        parts.append(
+            "Do not introduce club/nightlife/dance-floor/bar venue semantics for apartment/home/loft/living-room scenes."
         )
     return _quality_filter_visible_prompt(_join_visible_prompt_parts(parts))
 
@@ -7728,6 +7798,8 @@ def _enforce_single_character_music_video_policy(payload: dict[str, Any], storyb
             if fallback_vocal in {"male", "female", "mixed"}:
                 scene.vocal_presentation = fallback_vocal
         if "character_1" in {str(actor).strip().lower() for actor in (scene.actors or [])}:
+            if not scene.hero_appearance_contract:
+                scene.hero_appearance_contract = _build_normalized_hero_appearance_contract(payload, role="character_1")
             scene.identity_lock_applied = bool(scene.identity_lock_applied or scene.identity_lock_fields_used)
             if not str(scene.identity_lock_notes or "").strip():
                 scene.identity_lock_notes = "single_character_mode_identity_lock_required_for_character_1"
@@ -7750,6 +7822,11 @@ def _enforce_single_character_music_video_policy(payload: dict[str, Any], storyb
                     "accessory_identity",
                     "world_identity",
                 ]
+            if scene.hero_appearance_contract:
+                scene.identity_lock_applied = True
+                scene.identity_lock_fields_used = list(
+                    dict.fromkeys([*(scene.identity_lock_fields_used or []), *scene.hero_appearance_contract.keys()])
+                )
     storyboard_out.story_summary = _remove_single_character_summary_duet_phrases(storyboard_out.story_summary)
     storyboard_out.full_scenario = _remove_single_character_summary_duet_phrases(storyboard_out.full_scenario)
     storyboard_out.director_summary = _remove_single_character_summary_duet_phrases(storyboard_out.director_summary)
