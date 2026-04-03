@@ -19,7 +19,7 @@ COMFY_LTX_CAPABILITIES = {
     "single_image": True,
     "first_last": True,
     "audio_sensitive": True,
-    "lip_sync": False,
+    "lip_sync": True,
     "continuation": False,
 }
 COMFY_AUDIO_WORKFLOW_FILES = {
@@ -34,6 +34,7 @@ COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {
     "loadaudiofrompath",
 }
 COMFY_AUDIO_INPUT_KEYS = ("audio", "audio_file", "audio_path", "path", "filename", "url")
+COMFY_AUDIO_INPUT_WIDGET_FALLBACK_KEYS = ("value", "text")
 
 COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "i2v": {"single_image": True, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": False},
@@ -251,6 +252,64 @@ def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None
             backoff_sec = min(8.0, 2.0 * attempt)
             logger.info("[COMFY REMOTE] upload retrying attempt=%s next_attempt=%s sleep_sec=%.1f", attempt, attempt + 1, backoff_sec)
             time.sleep(backoff_sec)
+
+    return None, last_error
+
+
+def upload_audio_to_comfy(audio_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
+    url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/audio"
+    safe_name = str(filename or "source.mp3").strip() or "source.mp3"
+    size_bytes = len(audio_bytes or b"")
+    connect_timeout = max(20, int(settings.COMFY_UPLOAD_CONNECT_TIMEOUT_SEC or 20))
+    read_timeout = max(180, int(settings.COMFY_UPLOAD_READ_TIMEOUT_SEC or 180))
+    max_attempts = max(4, int(settings.COMFY_UPLOAD_MAX_ATTEMPTS or 4))
+
+    logger.info(
+        "[COMFY REMOTE] audio upload start url=%s filename=%s size_bytes=%s connect_timeout=%s read_timeout=%s max_attempts=%s",
+        url,
+        safe_name,
+        size_bytes,
+        connect_timeout,
+        read_timeout,
+        max_attempts,
+    )
+
+    files = {
+        "audio": (safe_name, audio_bytes, "application/octet-stream"),
+    }
+    data = {"type": "input", "overwrite": "true"}
+
+    last_error = "audio_upload_unknown_error"
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.post(url, files=files, data=data, timeout=(connect_timeout, read_timeout))
+            body_snippet = _response_body_snippet(resp)
+            logger.info(
+                "[COMFY REMOTE] audio upload response attempt=%s status=%s body=%r",
+                attempt,
+                resp.status_code,
+                body_snippet,
+            )
+            if resp.status_code >= 400:
+                return None, f"audio_upload_non_200:status={resp.status_code}:body={body_snippet}"
+            payload, parse_err = _parse_json_response(resp, stage="audio_upload_response")
+            if parse_err or not payload:
+                return None, parse_err or "audio_upload_response_invalid_json"
+
+            name = str(payload.get("name") or payload.get("filename") or "").strip()
+            if name:
+                return name, None
+
+            return None, f"audio_upload_name_missing:{str(payload)[:300]}"
+        except ConnectTimeout as exc:
+            last_error = f"audio_upload_connect_timeout:{str(exc)[:300]}"
+        except ReadTimeout as exc:
+            last_error = f"audio_upload_read_timeout:{str(exc)[:300]}"
+        except RequestException as exc:
+            return None, f"audio_upload_request_error:{str(exc)[:300]}"
+
+        if attempt < max_attempts:
+            time.sleep(min(8.0, 2.0 * attempt))
 
     return None, last_error
 
@@ -844,27 +903,36 @@ def _validate_audio_workflow_file(*, workflow_key: str, workflow_source: str) ->
     return True, None
 
 
-def _patch_audio_input_nodes(workflow: dict, *, audio_url: str) -> tuple[list[str], str | None]:
-    safe_audio_url = str(audio_url or "").strip()
-    if not safe_audio_url:
-        return [], "audio_url_empty"
+def _patch_audio_input_nodes(workflow: dict, *, audio_value: str) -> tuple[list[str], str | None]:
+    safe_audio_value = str(audio_value or "").strip()
+    if not safe_audio_value:
+        return [], "audio_value_empty"
     patched_node_ids: list[str] = []
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
         class_type = str(node.get("class_type") or "").strip().lower()
+        title = str(((node.get("_meta") or {}).get("title") if isinstance(node.get("_meta"), dict) else "") or "").strip().lower()
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):
             continue
-        if class_type not in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES:
+        is_audio_node = class_type in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES or "audio" in title or "lipsync" in title
+        if not is_audio_node:
             continue
         applied = False
         for input_key in COMFY_AUDIO_INPUT_KEYS:
             if input_key in inputs:
-                inputs[input_key] = safe_audio_url
+                inputs[input_key] = safe_audio_value
                 patched_node_ids.append(str(node_id))
                 applied = True
                 break
+        if not applied and class_type in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES:
+            for fallback_key in COMFY_AUDIO_INPUT_WIDGET_FALLBACK_KEYS:
+                if fallback_key in inputs and isinstance(inputs.get(fallback_key), str):
+                    inputs[fallback_key] = safe_audio_value
+                    patched_node_ids.append(str(node_id))
+                    applied = True
+                    break
         if not applied:
             return [], f"audio_loader_input_missing:{node_id}:{class_type}"
 
@@ -1065,6 +1133,8 @@ def run_comfy_image_to_video(
         if not first_last_applied:
             return None, "capability_error:LTX_FIRST_LAST_NOT_IMPLEMENTED:second_frame_patch_not_applied"
     audio_patch_node_ids: list[str] = []
+    audio_transport_mode = "none"
+    effective_audio_value = str(audio_url or "").strip()
     if normalized_workflow_key == "lip_sync":
         valid_audio_workflow, workflow_audio_err = _validate_audio_workflow_file(
             workflow_key=normalized_workflow_key,
@@ -1072,9 +1142,18 @@ def run_comfy_image_to_video(
         )
         if not valid_audio_workflow:
             return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{workflow_audio_err}"
+        if audio_bytes:
+            audio_filename = f"{Path(image_filename).stem}_audio.mp3"
+            uploaded_audio_name, audio_upload_err = upload_audio_to_comfy(audio_bytes, audio_filename)
+            if audio_upload_err or not uploaded_audio_name:
+                return None, f"capability_error:LTX_AUDIO_UPLOAD_FAILED:{audio_upload_err or 'audio_upload_failed'}"
+            effective_audio_value = str(uploaded_audio_name).strip()
+            audio_transport_mode = "upload"
+        elif effective_audio_value:
+            audio_transport_mode = "url"
         audio_patch_node_ids, audio_patch_err = _patch_audio_input_nodes(
             patched_workflow,
-            audio_url=str(audio_url or "").strip(),
+            audio_value=effective_audio_value,
         )
         if audio_patch_err:
             if audio_patch_err == "audio_loader_nodes_not_found":
@@ -1188,6 +1267,8 @@ def run_comfy_image_to_video(
             "end_image_used": bool(first_last_end_node_ids),
             "second_frame_patch_applied": bool(first_last_applied),
             "audio_used": bool(audio_patch_node_ids),
+            "audio_transport_mode": audio_transport_mode,
+            "audio_input_value": effective_audio_value,
             "continuation_used": continuation_used,
             "continuation_source_asset_type": continuation_asset_type,
             "continuation_source_asset_url_present": bool(str(continuation_source_asset_url or "").strip()),

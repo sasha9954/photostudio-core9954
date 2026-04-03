@@ -13336,16 +13336,6 @@ def clip_video(payload: ClipVideoIn):
                 "hint": f"provider={provider} is not compatible with workflow={final_workflow_key}",
             },
         )
-    if provider == "comfy_remote" and final_workflow_key == "lip_sync":
-        return JSONResponse(
-            status_code=422,
-            content={
-                "ok": False,
-                "code": "LTX_PROVIDER_MODE_INCOMPATIBLE",
-                "hint": "provider=comfy_remote is not compatible with workflow=lip_sync",
-            },
-        )
-
     continuation_debug = {
         "requested_mode": str(payload.ltxMode or "").strip().lower() or final_workflow_key,
         "resolved_workflow_key": final_workflow_key,
@@ -13619,10 +13609,44 @@ def clip_video(payload: ClipVideoIn):
             )
         )
         if final_workflow_key == "lip_sync" and not audio_slice_url:
+            print(f"[LIP_SYNC COMFY ERROR] sceneId={scene_id} workflow_file={workflow_path} error=audio_slice_missing")
             return JSONResponse(
                 status_code=422,
                 content={"ok": False, "code": "LTX_AUDIO_REQUIRED_FOR_LIPSYNC", "hint": "audioSliceUrl_required_for_lip_sync_workflow"},
             )
+        audio_bytes = None
+        audio_transport_mode = "none"
+        if final_workflow_key == "lip_sync":
+            tmp_audio_files: list[str] = []
+            try:
+                audio_source_path, audio_source_err = _resolve_audio_slice_source(audio_slice_url, tmp_audio_files)
+                if audio_source_err or not audio_source_path:
+                    print(f"[LIP_SYNC COMFY ERROR] sceneId={scene_id} workflow_file={workflow_path} error=audio_prepare_failed:{audio_source_err or 'audio_source_missing'}")
+                    return JSONResponse(
+                        status_code=422,
+                        content={"ok": False, "code": "LTX_AUDIO_PREPARE_FAILED", "hint": f"audio_slice_prepare_failed:{audio_source_err or 'audio_source_missing'}"},
+                    )
+                with open(audio_source_path, "rb") as audio_file:
+                    audio_bytes = audio_file.read()
+                if not audio_bytes:
+                    return JSONResponse(
+                        status_code=422,
+                        content={"ok": False, "code": "LTX_AUDIO_PREPARE_FAILED", "hint": "audio_slice_bytes_empty"},
+                    )
+                audio_transport_mode = "upload"
+            except Exception as exc:
+                print(f"[LIP_SYNC COMFY ERROR] sceneId={scene_id} workflow_file={workflow_path} error=audio_prepare_exception:{str(exc)[:300]}")
+                return JSONResponse(
+                    status_code=422,
+                    content={"ok": False, "code": "LTX_AUDIO_PREPARE_FAILED", "hint": f"audio_slice_prepare_exception:{str(exc)[:220]}"},
+                )
+            finally:
+                for tmp_path in tmp_audio_files:
+                    try:
+                        if tmp_path and os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                    except Exception:
+                        pass
 
         image_filename = f"{scene_id}_{int(time.time())}.{(image_ext or 'jpg').lower()}"
         print(
@@ -13659,6 +13683,25 @@ def clip_video(payload: ClipVideoIn):
                 ensure_ascii=False,
             )
         )
+        if final_workflow_key == "lip_sync":
+            scene_contract = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+            print(
+                "[LIP_SYNC COMFY DEBUG] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "route": final_workflow_key,
+                        "workflow_file": workflow_path,
+                        "sendAudioToGenerator": True,
+                        "hasAudioSliceUrl": bool(audio_slice_url),
+                        "audioSliceUrl": audio_slice_url,
+                        "audioSliceStartSec": scene_contract.get("audio_slice_start_sec"),
+                        "audioSliceEndSec": scene_contract.get("audio_slice_end_sec"),
+                        "audioTransportMode": audio_transport_mode,
+                    },
+                    ensure_ascii=False,
+                )
+            )
 
         comfy_out, comfy_err = run_comfy_image_to_video(
             image_bytes=image_bytes,
@@ -13674,6 +13717,7 @@ def clip_video(payload: ClipVideoIn):
             scene_id=scene_id,
             start_image_bytes=start_image_bytes,
             end_image_bytes=end_image_bytes,
+            audio_bytes=audio_bytes,
             audio_url=audio_slice_url,
             continuation_source_asset_url=continuation_source_asset_url,
             continuation_source_asset_type=continuation_source_asset_type,
@@ -13702,6 +13746,8 @@ def clip_video(payload: ClipVideoIn):
                 parts = err_text.split(":", 2)
                 capability_code = parts[1] if len(parts) > 1 else "LTX_MODE_NOT_IMPLEMENTED"
                 capability_hint = parts[2] if len(parts) > 2 else "requested_ltx_mode_not_supported_by_comfy_remote"
+                if final_workflow_key == "lip_sync":
+                    print(f"[LIP_SYNC COMFY ERROR] sceneId={scene_id} workflow_file={workflow_path} code={capability_code} error={capability_hint[:300]}")
                 print(
                     "[COMFY FIRST_LAST FINALIZE] "
                     + json.dumps(
@@ -13780,6 +13826,30 @@ def clip_video(payload: ClipVideoIn):
         video_url = str(comfy_out.get("videoUrl") or "").strip()
         prompt_id = str(comfy_out.get("taskId") or "").strip()
         comfy_debug = comfy_out.get("debug") if isinstance(comfy_out, dict) and isinstance(comfy_out.get("debug"), dict) else {}
+        if final_workflow_key == "lip_sync":
+            scene_contract = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+            print(
+                "[LIP_SYNC COMFY DEBUG] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "route": final_workflow_key,
+                        "workflow_file": workflow_path,
+                        "sendAudioToGenerator": True,
+                        "hasAudioSliceUrl": bool(audio_slice_url),
+                        "audioSliceUrl": audio_slice_url,
+                        "audioSliceStartSec": scene_contract.get("audio_slice_start_sec"),
+                        "audioSliceEndSec": scene_contract.get("audio_slice_end_sec"),
+                        "audioTransportMode": comfy_debug.get("audio_transport_mode") or audio_transport_mode,
+                        "audioNodePatched": bool(comfy_debug.get("audio_patch_node_ids")),
+                        "audioNodeTargets": comfy_debug.get("audio_patch_node_ids") or [],
+                        "imageNodePatched": bool(comfy_debug.get("usedNodeIds", {}).get("image")),
+                        "promptNodePatched": bool(comfy_debug.get("prompt_patched_node_ids")),
+                        "submitOk": True,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         print(
             "[CLIP VIDEO PROMPT PATCHED NODES] "
             f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key} "

@@ -9200,6 +9200,19 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         audioSliceUrl: String(comfySceneSnapshot.audioSliceUrl || "").trim(),
         continuationSourceAssetUrl: String(comfySceneSnapshot.continuationSourceAssetUrl || "").trim(),
       };
+      const comfyRouteWorkflow = normalizeDirectRouteToWorkflowKey(
+        comfySceneSnapshot?.resolvedWorkflowKey
+        || comfySceneSnapshot?.resolved_workflow_key
+        || comfySceneSnapshot?.videoGenerationRoute
+        || comfySceneSnapshot?.video_generation_route
+        || comfySceneSnapshot?.plannedVideoGenerationRoute
+        || comfySceneSnapshot?.planned_video_generation_route
+      ) || "i2v";
+      const comfyLipSync = comfyRouteWorkflow === "lip_sync_music";
+      const comfySendAudioToGenerator = Boolean(comfySceneSnapshot?.sendAudioToGenerator ?? comfySceneSnapshot?.send_audio_to_generator ?? comfyLipSync);
+      if (comfyLipSync && comfySendAudioToGenerator && !String(rawVideoSourceUrls.audioSliceUrl || "").trim()) {
+        throw new Error("audioSliceUrl_required_for_lip_sync_workflow");
+      }
       const normalizedVideoSourceUrls = {
         imageUrl: normalizeVideoSourceUrl(rawVideoSourceUrls.imageUrl),
         startImageUrl: normalizeVideoSourceUrl(rawVideoSourceUrls.startImageUrl),
@@ -9222,11 +9235,18 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           imageUrl: normalizedVideoSourceUrls.imageUrl,
           startImageUrl: normalizedVideoSourceUrls.startImageUrl,
           endImageUrl: normalizedVideoSourceUrls.endImageUrl,
-          audioSliceUrl: normalizedVideoSourceUrls.audioSliceUrl,
+          audioSliceUrl: comfyLipSync && comfySendAudioToGenerator ? normalizedVideoSourceUrls.audioSliceUrl : "",
           continuationSourceAssetUrl: normalizedVideoSourceUrls.continuationSourceAssetUrl,
           videoPrompt: syncedVideoPrompt,
           transitionActionPrompt: contextPrompt,
           requestedDurationSec: Number(comfySceneSnapshot.generationDurationSec) || Math.ceil(Number(comfySceneSnapshot.durationSec) || 3),
+          resolvedWorkflowKey: comfyRouteWorkflow,
+          video_generation_route: comfyRouteWorkflow,
+          lipSync: comfyLipSync,
+          send_audio_to_generator: comfyLipSync && comfySendAudioToGenerator,
+          audio_slice_start_sec: Number(comfySceneSnapshot?.audioSliceStartSec ?? comfySceneSnapshot?.audio_slice_start_sec ?? 0),
+          audio_slice_end_sec: Number(comfySceneSnapshot?.audioSliceEndSec ?? comfySceneSnapshot?.audio_slice_end_sec ?? 0),
+          audio_slice_expected_duration_sec: Number(comfySceneSnapshot?.audioSliceExpectedDurationSec ?? comfySceneSnapshot?.audio_slice_expected_duration_sec ?? 0),
           shotType: String(comfySceneSnapshot.sceneNarrativeStep || ''),
           sceneType: String(comfySceneSnapshot.sceneGoal || ''),
           format: comfyScenarioFormat,
