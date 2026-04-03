@@ -5283,23 +5283,46 @@ CLUB_VENUE_RELEVANCE_HINTS = (
     "dj",
     "stage",
 )
+NON_CLUB_WORLD_HINTS = (
+    "apartment",
+    "flat",
+    "living room",
+    "bedroom",
+    "kitchen",
+    "home",
+    "house",
+    "loft",
+    "office",
+)
 
 
 def _is_club_world_relevant_scene(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> bool:
     payload = payload if isinstance(payload, dict) else {}
-    raw = " ".join(
+    scene_local_text = " ".join(
         [
             str(scene.location or ""),
             str(scene.frame_description or ""),
             str(scene.action_in_frame or ""),
             str(scene.scene_goal or ""),
+        ]
+    ).lower()
+    if any(token in scene_local_text for token in NON_CLUB_WORLD_HINTS):
+        return False
+    if any(token in scene_local_text for token in CLUB_VENUE_RELEVANCE_HINTS):
+        return True
+
+    payload_background_text = " ".join(
+        [
             str(payload.get("environment") or ""),
             str(payload.get("story_summary") or ""),
             str(payload.get("director_summary") or ""),
             str(payload.get("full_scenario") or ""),
         ]
     ).lower()
-    return any(token in raw for token in CLUB_VENUE_RELEVANCE_HINTS)
+    return (
+        any(token in payload_background_text for token in CLUB_VENUE_RELEVANCE_HINTS)
+        and not any(token in payload_background_text for token in NON_CLUB_WORLD_HINTS)
+    )
 
 
 def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> str:
