@@ -10916,6 +10916,9 @@ Aspect ratio: ${imageFormat}`,
         selectedIndex: targetSceneIndex,
       });
       setScenarioVideoError("Для этой сцены не хватает source-кадров для video flow (см. [SCENARIO VIDEO REQUEST SUMMARY]).");
+      if (targetSceneIndex >= 0) {
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "missing_required_frame_assets", videoPanelActivated: false });
+      }
     }
 
     if (!hasImageForVideo) return;
@@ -10940,7 +10943,10 @@ Aspect ratio: ${imageFormat}`,
     });
     const effectiveVideoProvider = resolveScenarioSceneVideoProvider(targetScene);
 
-    let attachedAudioSliceUrl = String(targetScene?.audioSliceUrl || "").trim();
+    const audioSliceUrlOverride = String(options?.audioSliceUrlOverride || "").trim();
+    const audioSliceStartSecOverride = Number(options?.audioSliceStartSecOverride);
+    const audioSliceEndSecOverride = Number(options?.audioSliceEndSecOverride);
+    let attachedAudioSliceUrl = String(audioSliceUrlOverride || targetScene?.audioSliceUrl || "").trim();
     const lipSyncRoute = effectiveWorkflowKey === "lip_sync_music";
     traceScenarioVideo("[SCENARIO VIDEO TRACE 7] workflow_resolved", {
       sceneId,
@@ -11026,6 +11032,9 @@ Aspect ratio: ${imageFormat}`,
         contentType: effectiveContentType,
       });
       setScenarioVideoError("Sound dialogue workflows отключены для music_video по умолчанию.");
+      if (targetSceneIndex >= 0) {
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "sound_workflow_blocked_for_clip", videoPanelActivated: false });
+      }
       return;
     }
     const musicVocalLipSyncAllowed = Boolean(targetScene?.musicVocalLipSyncAllowed ?? targetScene?.music_vocal_lipsync_allowed);
@@ -11042,6 +11051,9 @@ Aspect ratio: ${imageFormat}`,
         selectedIndex: targetSceneIndex,
       });
       setScenarioVideoError("Для lipSync не удалось автоматически подготовить audioSlice. Проверьте исходное аудио и попробуйте снова.");
+      if (targetSceneIndex >= 0) {
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "lip_sync_audio_missing", videoPanelActivated: false });
+      }
       return;
     }
     if (effectiveWorkflowKey === "lip_sync_music" && (!musicVocalLipSyncAllowed || audioSliceKind !== "music_vocal")) {
@@ -11052,6 +11064,9 @@ Aspect ratio: ${imageFormat}`,
         audioSliceKind: audioSliceKind || "none",
       });
       setScenarioVideoError("Для lipSync нужен slice с music+vocal compatibility.");
+      if (targetSceneIndex >= 0) {
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "lip_sync_music_vocal_flag_missing", videoPanelActivated: false });
+      }
       return;
     }
 
@@ -11266,8 +11281,12 @@ Aspect ratio: ${imageFormat}`,
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/video/start", buildScenarioTransferLogData(targetScene, scenarioContractPayload));
       }
-      const safeAudioSliceStartSec = Number(targetScene?.audioSliceStartSec ?? targetScene?.audio_slice_start_sec ?? targetScene?.t0 ?? targetScene?.start ?? 0);
-      const safeAudioSliceEndSec = Number(targetScene?.audioSliceEndSec ?? targetScene?.audio_slice_end_sec ?? targetScene?.t1 ?? targetScene?.end ?? safeAudioSliceStartSec);
+      const safeAudioSliceStartSec = Number.isFinite(audioSliceStartSecOverride)
+        ? audioSliceStartSecOverride
+        : Number(targetScene?.audioSliceStartSec ?? targetScene?.audio_slice_start_sec ?? targetScene?.t0 ?? targetScene?.start ?? 0);
+      const safeAudioSliceEndSec = Number.isFinite(audioSliceEndSecOverride)
+        ? audioSliceEndSecOverride
+        : Number(targetScene?.audioSliceEndSec ?? targetScene?.audio_slice_end_sec ?? targetScene?.t1 ?? targetScene?.end ?? safeAudioSliceStartSec);
       const safeAudioSliceExpectedDurationSec = Number(
         targetScene?.audioSliceExpectedDurationSec
         ?? targetScene?.audio_slice_expected_duration_sec

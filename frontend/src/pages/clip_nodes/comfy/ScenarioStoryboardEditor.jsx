@@ -1635,48 +1635,77 @@ export default function ScenarioStoryboardEditor({
                           onClick={async () => {
                             const renderMode = String(selectedScene?.renderMode || "");
                             const resolvedWorkflowKey = String(selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "");
+                            const displayTime = resolveSceneDisplayTime(selectedScene);
                             let preparedAudioSliceUrl = String(selectedScene?.audioSliceUrl || "").trim();
-                            const autoPreparedAudio = sceneLipSync && !preparedAudioSliceUrl;
-                            console.info("[SCENARIO VIDEO TRACE 1] button_click", {
+                            const initialSceneAudioSliceUrl = String(sceneAudioSliceUrl || "").trim();
+                            let workingAudioSliceUrl = preparedAudioSliceUrl || initialSceneAudioSliceUrl;
+                            let workingAudioSliceStartSec = Number(selectedScene?.audioSliceStartSec ?? displayTime.startSec ?? 0);
+                            let workingAudioSliceEndSec = Number(selectedScene?.audioSliceEndSec ?? displayTime.endSec ?? workingAudioSliceStartSec);
+                            const autoPreparedAudio = sceneLipSync && !workingAudioSliceUrl;
+                            console.info("[SCENARIO VIDEO TRACE A] before_auto_slice", {
                               sceneId: String(selectedScene?.sceneId || ""),
                               selectedSceneId: String(selectedSceneId || ""),
                               nodeId: String(nodeId || ""),
-                              workflowKey: resolvedWorkflowKey,
-                              lipSyncRoute: sceneLipSync,
-                              hasImageUrl: Boolean(startFrameSourceUrl || selectedScene?.imageUrl),
-                              hasAudioSliceUrl: Boolean(preparedAudioSliceUrl || sceneAudioSliceUrl),
-                              videoStatus: String(videoStatus || ""),
-                              branch: autoPreparedAudio ? "editor_auto_slice_before_generate" : "editor_direct_generate",
+                              sceneLipSync,
+                              preparedAudioSliceUrl: String(preparedAudioSliceUrl || ""),
+                              sceneAudioSliceUrl: String(initialSceneAudioSliceUrl || ""),
+                              workingAudioSliceUrl: String(workingAudioSliceUrl || ""),
+                              autoPreparedAudio,
+                              whyBlocked: "",
                             });
                             if (autoPreparedAudio) {
                               try {
                                 const extractResult = await handleExtractSceneAudio(selectedScene);
                                 preparedAudioSliceUrl = String(extractResult?.audioSliceUrl || extractResult?.sliceUrl || "").trim();
+                                workingAudioSliceUrl = String(preparedAudioSliceUrl || workingAudioSliceUrl || "").trim();
+                                const extractStartSec = Number(extractResult?.audioSliceStartSec);
+                                const extractEndSec = Number(extractResult?.audioSliceEndSec);
+                                if (Number.isFinite(extractStartSec)) workingAudioSliceStartSec = extractStartSec;
+                                if (Number.isFinite(extractEndSec)) workingAudioSliceEndSec = extractEndSec;
+                                console.info("[SCENARIO VIDEO TRACE B] after_auto_slice_return", {
+                                  sceneId: String(selectedScene?.sceneId || ""),
+                                  selectedSceneId: String(selectedSceneId || ""),
+                                  nodeId: String(nodeId || ""),
+                                  sceneLipSync,
+                                  preparedAudioSliceUrl: String(preparedAudioSliceUrl || ""),
+                                  sceneAudioSliceUrl: String(initialSceneAudioSliceUrl || ""),
+                                  workingAudioSliceUrl: String(workingAudioSliceUrl || ""),
+                                  autoPreparedAudio,
+                                  whyBlocked: "",
+                                });
                               } catch {
                                 preparedAudioSliceUrl = "";
+                                workingAudioSliceUrl = String(workingAudioSliceUrl || "").trim();
+                                console.info("[SCENARIO VIDEO TRACE B] after_auto_slice_return", {
+                                  sceneId: String(selectedScene?.sceneId || ""),
+                                  selectedSceneId: String(selectedSceneId || ""),
+                                  nodeId: String(nodeId || ""),
+                                  sceneLipSync,
+                                  preparedAudioSliceUrl: "",
+                                  sceneAudioSliceUrl: String(initialSceneAudioSliceUrl || ""),
+                                  workingAudioSliceUrl: String(workingAudioSliceUrl || ""),
+                                  autoPreparedAudio,
+                                  whyBlocked: "auto_slice_exception",
+                                });
                               }
                             }
-                            const whyBlocked = sceneLipSync && !preparedAudioSliceUrl ? "lip_sync_audio_missing_after_auto_extract" : "";
-                            console.info("[SCENARIO VIDEO TRACE 2] editor_onGenerateScene_called", {
+                            const whyBlocked = sceneLipSync && !workingAudioSliceUrl ? "lip_sync_audio_missing_after_auto_extract" : "";
+                            console.info("[SCENARIO VIDEO TRACE C] before_editor_block_check", {
                               sceneId: String(selectedScene?.sceneId || ""),
                               selectedSceneId: String(selectedSceneId || ""),
                               nodeId: String(nodeId || ""),
-                              workflowKey: resolvedWorkflowKey,
-                              lipSyncRoute: sceneLipSync,
-                              hasImageUrl: Boolean(startFrameSourceUrl || selectedScene?.imageUrl),
-                              hasAudioSliceUrl: Boolean(preparedAudioSliceUrl || sceneAudioSliceUrl),
-                              videoStatus: String(videoStatus || ""),
-                              branch: whyBlocked ? "editor_block_before_onGenerateScene" : "editor_onGenerateScene_dispatch",
+                              sceneLipSync,
                               autoPreparedAudio,
                               preparedAudioSliceUrl: String(preparedAudioSliceUrl || ""),
-                              fallbackAudioSliceUrl: String(sceneAudioSliceUrl || ""),
+                              sceneAudioSliceUrl: String(initialSceneAudioSliceUrl || ""),
+                              workingAudioSliceUrl: String(workingAudioSliceUrl || ""),
                               whyBlocked,
                             });
                             console.debug("[SCENARIO EDITOR VIDEO SEND]", {
                               videoSendRouteTriggered: true,
                               selectedSceneId,
                               lipSync: sceneLipSync,
-                              audioSlicePresent: Boolean(preparedAudioSliceUrl || sceneAudioSliceUrl),
+                              audioSlicePresent: Boolean(workingAudioSliceUrl),
                               renderMode,
                               resolvedWorkflowKey,
                               firstFrameUrl: startFrameSourceUrl,
@@ -1688,8 +1717,42 @@ export default function ScenarioStoryboardEditor({
                               autoPreparedAudio,
                               whyBlocked,
                             });
-                            if (sceneLipSync && !preparedAudioSliceUrl && !sceneAudioSliceUrl) return;
-                            onGenerateScene?.(nodeId, selectedSceneId, "video", generateMeta);
+                            if (whyBlocked) {
+                              console.info("[SCENARIO VIDEO TRACE E] blocked_before_dispatch", {
+                                sceneId: String(selectedScene?.sceneId || ""),
+                                selectedSceneId: String(selectedSceneId || ""),
+                                nodeId: String(nodeId || ""),
+                                sceneLipSync,
+                                preparedAudioSliceUrl: String(preparedAudioSliceUrl || ""),
+                                sceneAudioSliceUrl: String(initialSceneAudioSliceUrl || ""),
+                                workingAudioSliceUrl: String(workingAudioSliceUrl || ""),
+                                autoPreparedAudio,
+                                whyBlocked,
+                              });
+                              onUpdateScene?.(nodeId, selectedSceneId, {
+                                videoStatus: "idle",
+                                videoError: String(whyBlocked || ""),
+                              });
+                              return;
+                            }
+                            const nextGenerateMeta = {
+                              ...generateMeta,
+                              audioSliceUrlOverride: String(workingAudioSliceUrl || ""),
+                              audioSliceStartSecOverride: workingAudioSliceStartSec,
+                              audioSliceEndSecOverride: workingAudioSliceEndSec,
+                            };
+                            console.info("[SCENARIO VIDEO TRACE D] dispatch_onGenerateScene", {
+                              sceneId: String(selectedScene?.sceneId || ""),
+                              selectedSceneId: String(selectedSceneId || ""),
+                              nodeId: String(nodeId || ""),
+                              sceneLipSync,
+                              preparedAudioSliceUrl: String(preparedAudioSliceUrl || ""),
+                              sceneAudioSliceUrl: String(initialSceneAudioSliceUrl || ""),
+                              workingAudioSliceUrl: String(workingAudioSliceUrl || ""),
+                              autoPreparedAudio,
+                              whyBlocked: "",
+                            });
+                            onGenerateScene?.(nodeId, selectedSceneId, "video", nextGenerateMeta);
                           }}
                           disabled={videoStatus === "loading"}
                           title={sceneLipSync ? "Для lipSync audioSlice подготовится автоматически перед генерацией" : ""}
