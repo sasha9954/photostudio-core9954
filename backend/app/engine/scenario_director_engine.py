@@ -4257,6 +4257,11 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     hold_data = last_scene.model_dump(mode="python")
     lip_data["scene_id"] = lip_scene_id
     hold_data["scene_id"] = hold_scene_id
+    base_display_index = int(_safe_float(last_scene.display_index, len(scenes)))
+    if base_display_index <= 0:
+        base_display_index = len(scenes) if len(scenes) > 0 else 1
+    lip_data["display_index"] = base_display_index
+    hold_data["display_index"] = base_display_index + 1
     lip_data["time_start"] = round(start, 3)
     lip_data["time_end"] = round(lip_end, 3)
     lip_data["duration"] = round(max(0.0, lip_end - start), 3)
@@ -4288,6 +4293,32 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     if str(lip_data.get("performance_framing") or "").strip().lower() not in LIP_SYNC_PERFORMANCE_FRAMINGS:
         lip_data["performance_framing"] = "tight_medium"
     lip_data["camera"] = _lip_sync_safe_camera_line()
+    source_phrase = str(last_scene.local_phrase or "").strip()
+    lip_local_phrase = ""
+    if source_phrase:
+        phrase_parts = [part.strip() for part in re.split(r"(?:\s*[|/·]\s*|\n+|(?<=[\.\!\?;:])\s+)", source_phrase) if part.strip()]
+        hold_markers = ("afterimage", "outro", "hold", "release", "linger", "lingering", "resonance", "final breath", "post-vocal")
+        pre_hold_candidates: list[str] = []
+        fallback_candidates: list[str] = []
+        hold_started = False
+        for part in phrase_parts:
+            normalized_part = re.sub(r"\s+", " ", part).strip()
+            lower_part = normalized_part.lower()
+            is_hold_like = any(marker in lower_part for marker in hold_markers)
+            if not is_hold_like:
+                fallback_candidates.append(normalized_part)
+            if is_hold_like:
+                hold_started = True
+                continue
+            if not hold_started:
+                pre_hold_candidates.append(normalized_part)
+        lip_local_phrase = (pre_hold_candidates[-1] if pre_hold_candidates else (fallback_candidates[-1] if fallback_candidates else "")).strip()
+    if not lip_local_phrase:
+        lip_local_phrase = "Final direct-to-camera vocal payoff with last strong lyrical emphasis."
+    lip_data["local_phrase"] = lip_local_phrase
+    lip_data["what_from_audio_this_scene_uses"] = (
+        "Final vocal punch / final direct-to-camera payoff / last strong vocal emphasis before release."
+    )
     lip_summary = "Final vocal payoff lands in-camera with emotionally precise lyric articulation and performance intensity."
     lip_motion = "Controlled singer-forward movement, expressive phrase-timed hands, subtle body pulse, and readable mouth articulation."
     lip_visual_prompt = (
