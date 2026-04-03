@@ -3295,6 +3295,19 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "supportEntityIds": support_entity_ids,
             "refDirectives": {role: ref_directives.get(role, "optional") for role in refs_used_roles},
         }
+        scene_task_mode = str(
+            payload.get("taskMode")
+            or payload.get("task_mode")
+            or payload.get("mode")
+            or "keep_identity"
+        ).strip().lower()
+        if scene_task_mode not in {"keep_identity", "virtual_try_on", "story_costume_change", "motion_only", "camera_only", "style_transfer"}:
+            scene_task_mode = "keep_identity"
+        scene_outfit_profile = _build_scene_outfit_profile_from_payload(payload, role="character_1")
+        scene_item["taskMode"] = scene_task_mode
+        scene_item["task_mode"] = scene_task_mode
+        scene_item["outfitProfile"] = scene_outfit_profile
+        scene_item["confidenceScores"] = {"outfitProfile": _safe_float(scene.confidence, 0.5)}
         scenes.append(scene_item)
         video.append(
             {
@@ -3345,6 +3358,10 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                     "duetLockEnabled": scene.duet_lock_enabled,
                     "duetIdentityContract": scene.duet_identity_contract,
                     "directorGenreIntent": scene.director_genre_intent,
+                    "taskMode": scene_task_mode,
+                    "task_mode": scene_task_mode,
+                    "outfitProfile": scene_outfit_profile,
+                    "confidenceScores": {"outfitProfile": _safe_float(scene.confidence, 0.5)},
                 },
             }
         )
@@ -4717,6 +4734,46 @@ def _extract_character_identity_cues(payload: dict[str, Any], *, role: str = "ch
     if signature_parts:
         cues["signature_details"] = ", ".join(signature_parts)
     return cues
+
+
+def _build_scene_outfit_profile_from_payload(payload: dict[str, Any], *, role: str = "character_1") -> dict[str, Any]:
+    cues = _extract_character_identity_cues(payload, role=role)
+    garment_category = str(cues.get("garment_category") or "unknown").strip().lower() or "unknown"
+    family_module = "unknown"
+    if garment_category in {"dress", "gown"}:
+        family_module = "dress"
+    elif garment_category in {"swimwear", "swimsuit", "bikini"}:
+        family_module = "swimwear"
+    elif garment_category in {"outerwear", "coat", "fur_coat", "jacket"}:
+        family_module = "outerwear"
+    elif garment_category in {"suit", "tuxedo", "tailored"}:
+        family_module = "suit"
+    elif garment_category in {"armor", "armour"}:
+        family_module = "armor"
+    elif garment_category in {"casual", "casual_layered", "streetwear"}:
+        family_module = "casual_layered"
+    family_fields_map: dict[str, list[str]] = {
+        "dress": ["sleeve_identity", "bodice_identity", "neckline_identity", "skirt_volume_identity", "hem_length_identity", "lining_identity", "applique_identity"],
+        "swimwear": ["top_cut_identity", "bottom_cut_identity", "strap_layout_identity", "coverage_level_identity", "fabric_finish_identity", "no_added_skirt_reinterpretation"],
+        "outerwear": ["coat_length_identity", "fur_volume_identity", "collar_or_hood_identity", "cuff_identity", "closure_identity", "outerwear_silhouette_identity"],
+        "suit": ["jacket_cut_identity", "lapel_identity", "trouser_cut_identity", "shirt_layer_identity", "tie_or_accessory_identity"],
+        "armor": ["plate_layout_identity", "rigid_segment_identity", "joint_coverage_identity", "helmet_or_headgear_identity"],
+        "casual_layered": ["base_layer_identity", "mid_layer_identity", "outer_layer_identity", "layer_order_identity"],
+        "unknown": [],
+    }
+    return {
+        "garment_category": garment_category,
+        "coverage_identity": str(cues.get("coverage_identity") or "unknown").strip() or "unknown",
+        "construction_identity": str(cues.get("construction_identity") or "unknown").strip() or "unknown",
+        "silhouette_identity": str(cues.get("silhouette_identity") or "unknown").strip() or "unknown",
+        "material_identity": str(cues.get("material_identity") or "unknown").strip() or "unknown",
+        "signature_details_identity": str(cues.get("signature_details_identity") or "unknown").strip() or "unknown",
+        "color_identity": str(cues.get("color_identity") or "unknown").strip() or "unknown",
+        "footwear_identity": str(cues.get("footwear_identity") or "unknown").strip() or "unknown",
+        "accessory_identity": str(cues.get("accessory_identity") or "unknown").strip() or "unknown",
+        "family_module": family_module,
+        "family_fields": family_fields_map.get(family_module, []),
+    }
 
 
 def _build_character_identity_visible_lock(

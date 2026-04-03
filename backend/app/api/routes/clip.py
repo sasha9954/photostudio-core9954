@@ -731,6 +731,45 @@ OUTFIT_FAMILY_SPECIFIC_FIELDS: dict[str, list[str]] = {
     "unknown": [],
 }
 
+UNIVERSAL_OUTFIT_PROFILE_KEYS = [
+    "garment_category",
+    "coverage_identity",
+    "construction_identity",
+    "silhouette_identity",
+    "material_identity",
+    "signature_details_identity",
+    "color_identity",
+    "footwear_identity",
+    "accessory_identity",
+    "family_module",
+    "family_fields",
+]
+
+OUTFIT_PROFILE_ALIASES: dict[str, str] = {
+    "garmentCategory": "garment_category",
+    "garment_category": "garment_category",
+    "coverageIdentity": "coverage_identity",
+    "coverage_identity": "coverage_identity",
+    "constructionIdentity": "construction_identity",
+    "construction_identity": "construction_identity",
+    "silhouetteIdentity": "silhouette_identity",
+    "silhouette_identity": "silhouette_identity",
+    "materialIdentity": "material_identity",
+    "material_identity": "material_identity",
+    "signatureDetailsIdentity": "signature_details_identity",
+    "signature_details_identity": "signature_details_identity",
+    "colorIdentity": "color_identity",
+    "color_identity": "color_identity",
+    "footwearIdentity": "footwear_identity",
+    "footwear_identity": "footwear_identity",
+    "accessoryIdentity": "accessory_identity",
+    "accessory_identity": "accessory_identity",
+    "familyModule": "family_module",
+    "family_module": "family_module",
+    "familyFields": "family_fields",
+    "family_fields": "family_fields",
+}
+
 
 def _normalize_task_mode(value: Any) -> str:
     raw = str(value or "").strip().lower()
@@ -767,6 +806,149 @@ def _build_material_motion_profile(material_identity: Any) -> dict[str, str]:
     if "armor" in material or "metal" in material:
         return {"elasticity": "none", "fold_behavior": "rigid_segments", "flutter_budget": "none", "rigidity": "high", "deformation_budget": "very_low"}
     return {"elasticity": "medium", "fold_behavior": "balanced", "flutter_budget": "medium", "rigidity": "medium", "deformation_budget": "medium"}
+
+
+def _merge_outfit_profile(base: Any, override: Any) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for source in (base, override):
+        if not isinstance(source, dict):
+            continue
+        for key, value in source.items():
+            canonical = OUTFIT_PROFILE_ALIASES.get(str(key), str(key))
+            if canonical == "family_fields":
+                if isinstance(value, list):
+                    merged[canonical] = [str(v or "").strip() for v in value if str(v or "").strip()]
+                continue
+            normalized = str(value or "").strip()
+            if normalized:
+                merged[canonical] = normalized
+    return merged
+
+
+def _normalize_outfit_profile(
+    raw_profile: Any,
+    *,
+    garment_category_hint: Any = None,
+    confidence_scores: Any = None,
+) -> dict[str, Any]:
+    merged = _merge_outfit_profile({}, raw_profile if isinstance(raw_profile, dict) else {})
+    garment_category = str(merged.get("garment_category") or garment_category_hint or "unknown").strip().lower() or "unknown"
+    family_module = str(merged.get("family_module") or _infer_family_module(garment_category)).strip().lower() or "unknown"
+    family_fields = merged.get("family_fields")
+    if not isinstance(family_fields, list) or not family_fields:
+        family_fields = list(OUTFIT_FAMILY_SPECIFIC_FIELDS.get(family_module, []))
+    confidence = confidence_scores if isinstance(confidence_scores, dict) else {}
+    normalized: dict[str, Any] = {
+        "garment_category": garment_category,
+        "coverage_identity": str(merged.get("coverage_identity") or "unknown").strip() or "unknown",
+        "construction_identity": str(merged.get("construction_identity") or "unknown").strip() or "unknown",
+        "silhouette_identity": str(merged.get("silhouette_identity") or "unknown").strip() or "unknown",
+        "material_identity": str(merged.get("material_identity") or "unknown").strip() or "unknown",
+        "signature_details_identity": str(merged.get("signature_details_identity") or "unknown").strip() or "unknown",
+        "color_identity": str(merged.get("color_identity") or "unknown").strip() or "unknown",
+        "footwear_identity": str(merged.get("footwear_identity") or "unknown").strip() or "unknown",
+        "accessory_identity": str(merged.get("accessory_identity") or "unknown").strip() or "unknown",
+        "family_module": family_module,
+        "family_fields": family_fields,
+    }
+    normalized["confidence"] = {
+        key: confidence.get(key)
+        for key in UNIVERSAL_OUTFIT_PROFILE_KEYS
+        if confidence.get(key) is not None
+    }
+    return normalized
+
+
+def _resolve_task_mode_execution(task_mode: str, contract: dict[str, Any] | None = None) -> dict[str, Any]:
+    contract = contract if isinstance(contract, dict) else {}
+    explicit_costume_change = bool(contract.get("explicitCostumeChange") or contract.get("allowCostumeChange") or contract.get("costumeChangeRequested"))
+    if task_mode == "virtual_try_on":
+        return {
+            "branch": "virtual_try_on_replace_source_outfit",
+            "outfit_lock_mode": "target_strict_source_relaxed",
+            "allow_text_outfit_override": True,
+            "preserve_source_outfit": False,
+            "source_outfit_replaced": True,
+            "negative_focus": "forbid_redesign_of_target_outfit",
+        }
+    if task_mode == "story_costume_change":
+        return {
+            "branch": "story_costume_change_explicit_gate",
+            "outfit_lock_mode": "relaxed" if explicit_costume_change else "strict",
+            "allow_text_outfit_override": explicit_costume_change,
+            "preserve_source_outfit": not explicit_costume_change,
+            "source_outfit_replaced": explicit_costume_change,
+            "negative_focus": "forbid_unrequested_costume_redesign",
+        }
+    if task_mode == "motion_only":
+        return {
+            "branch": "motion_only_lock_person_outfit",
+            "outfit_lock_mode": "strict",
+            "allow_text_outfit_override": False,
+            "preserve_source_outfit": True,
+            "source_outfit_replaced": False,
+            "negative_focus": "forbid_motion_driven_outfit_reinterpretation",
+        }
+    if task_mode == "camera_only":
+        return {
+            "branch": "camera_only_lock_person_outfit",
+            "outfit_lock_mode": "strict",
+            "allow_text_outfit_override": False,
+            "preserve_source_outfit": True,
+            "source_outfit_replaced": False,
+            "negative_focus": "forbid_camera_driven_outfit_reinterpretation",
+        }
+    return {
+        "branch": "keep_identity_hard_lock",
+        "outfit_lock_mode": "strict",
+        "allow_text_outfit_override": False,
+        "preserve_source_outfit": True,
+        "source_outfit_replaced": False,
+        "negative_focus": "forbid_outfit_category_drift",
+    }
+
+
+def _apply_material_motion_constraints(*, material_motion_profile: dict[str, Any], garment_category: str, task_mode: str) -> dict[str, list[str]]:
+    fold_behavior = str(material_motion_profile.get("fold_behavior") or "").strip().lower()
+    rigidity = str(material_motion_profile.get("rigidity") or "").strip().lower()
+    lines: list[str] = []
+    negatives: list[str] = []
+    if fold_behavior in {"flowing"}:
+        lines.extend([
+            "- allow soft flutter/fold response while preserving garment construction identity",
+            "- motion language may include flowing drape, but must keep garment category and cut unchanged",
+        ])
+        negatives.append("- forbid flow-heavy deformation that changes strap/sleeve/skirt construction identity")
+    elif fold_behavior in {"heavy_structured"}:
+        lines.extend([
+            "- prefer heavier structured folds and inertia-led response",
+            "- reduce airy flutter language and avoid dress-like light-fabric behavior",
+        ])
+        negatives.append("- forbid chiffon-like flutter behavior for rigid/heavy materials")
+    elif fold_behavior in {"soft_volume"}:
+        lines.extend([
+            "- preserve outer volume while allowing soft mass response",
+            "- fur volume can breathe subtly, but must not collapse into thin cloth silhouette",
+        ])
+        negatives.append("- forbid volume collapse into thin dress-like silhouette")
+    elif fold_behavior in {"rigid_segments"}:
+        lines.extend([
+            "- motion should read as rigid segmented mechanics",
+            "- use hinge/segment movement language, never soft fabric flow wording",
+        ])
+        negatives.append("- forbid soft-fabric flutter or dress-like cloth flow for armor/metal")
+    else:
+        lines.append("- balanced fabric response with construction-preserving deformation only")
+
+    if task_mode in {"motion_only", "camera_only"}:
+        negatives.append("- forbid text/emotion/camera interpretation from altering garment construction or category")
+    if garment_category == "swimwear":
+        negatives.append("- forbid inventing sleeves, coat layers, or skirt reinterpretation")
+    if garment_category == "outerwear" and "fur" in str(material_motion_profile):
+        negatives.append("- forbid compressing structured outerwear into thin flutter fabric")
+    if rigidity in {"high", "medium_high"}:
+        negatives.append("- avoid aggressive cloth-wave language that implies ultra-light fabric")
+    return {"lines": lines, "negative_lines": negatives}
 
 
 def _normalize_ltx_workflow_key(candidate: str | None) -> str:
@@ -1024,6 +1206,15 @@ def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = Non
         contract.update(_derive_direct_scene_contract_fields(route_hint))
     contract["taskMode"] = _normalize_task_mode(contract.get("taskMode") or contract.get("task_mode") or payload_map.get("taskMode") or payload_map.get("task_mode"))
     contract["task_mode"] = contract["taskMode"]
+    raw_outfit_profile = _merge_outfit_profile(
+        payload_map.get("outfitProfile") if isinstance(payload_map.get("outfitProfile"), dict) else {},
+        contract.get("outfitProfile") if isinstance(contract.get("outfitProfile"), dict) else {},
+    )
+    contract["outfitProfile"] = _normalize_outfit_profile(
+        raw_outfit_profile,
+        garment_category_hint=contract.get("garmentCategory") or payload_map.get("garmentCategory"),
+        confidence_scores=contract.get("confidenceScores") if isinstance(contract.get("confidenceScores"), dict) else payload_map.get("confidenceScores"),
+    )
     contract["identityContract"] = _build_identity_contract(contract)
 
     if not contract.get("sceneActiveRoles") and isinstance(refs_obj, BaseModel):
@@ -1279,10 +1470,16 @@ def _build_hard_identity_lock_block(*, scene_human_visual_anchors: list[str] | N
 
 def _build_identity_contract(scene_contract: dict[str, Any] | None) -> dict[str, Any]:
     contract = scene_contract if isinstance(scene_contract, dict) else {}
-    outfit_profile = contract.get("outfitProfile") if isinstance(contract.get("outfitProfile"), dict) else {}
-    garment_category = str(outfit_profile.get("garment_category") or contract.get("garmentCategory") or "unknown").strip().lower() or "unknown"
-    family_module = _infer_family_module(garment_category)
     task_mode = _normalize_task_mode(contract.get("taskMode") or contract.get("task_mode"))
+    confidence_scores = contract.get("confidenceScores") if isinstance(contract.get("confidenceScores"), dict) else {}
+    outfit_profile = _normalize_outfit_profile(
+        contract.get("outfitProfile") if isinstance(contract.get("outfitProfile"), dict) else {},
+        garment_category_hint=contract.get("garmentCategory"),
+        confidence_scores=confidence_scores,
+    )
+    garment_category = str(outfit_profile.get("garment_category") or "unknown").strip().lower() or "unknown"
+    family_module = str(outfit_profile.get("family_module") or _infer_family_module(garment_category)).strip().lower() or "unknown"
+    task_execution = _resolve_task_mode_execution(task_mode, contract)
     priority_matrix = {
         "keep_identity": ["person_identity", "outfit_identity", "pose_framing", "world_continuity", "emotional_meaning", "route_motion_styling"],
         "virtual_try_on": ["person_identity", "target_outfit_request", "pose_framing", "world_continuity", "route_motion_styling"],
@@ -1295,16 +1492,12 @@ def _build_identity_contract(scene_contract: dict[str, Any] | None) -> dict[str,
     material_motion_profile = _build_material_motion_profile(material_identity)
     return {
         "task_mode": task_mode,
+        "task_execution": task_execution,
         "person_profile": {"fields": UNIVERSAL_PERSON_IDENTITY_FIELDS},
-        "outfit_profile": {
-            "garment_category": garment_category,
-            "generic_fields": UNIVERSAL_GENERIC_OUTFIT_FIELDS,
-            "family_module": family_module,
-            "family_fields": OUTFIT_FAMILY_SPECIFIC_FIELDS.get(family_module, []),
-        },
+        "outfit_profile": {**outfit_profile, "generic_fields": UNIVERSAL_GENERIC_OUTFIT_FIELDS, "family_module": family_module},
         "priority_matrix": priority_matrix,
         "motion_constraints": material_motion_profile,
-        "confidence_scores": contract.get("confidenceScores") if isinstance(contract.get("confidenceScores"), dict) else {},
+        "confidence_scores": confidence_scores,
     }
 
 
@@ -1312,6 +1505,7 @@ def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | No
     contract = scene_contract if isinstance(scene_contract, dict) else {}
     identity_contract = _build_identity_contract(contract)
     outfit_profile = identity_contract.get("outfit_profile") if isinstance(identity_contract.get("outfit_profile"), dict) else {}
+    task_execution = identity_contract.get("task_execution") if isinstance(identity_contract.get("task_execution"), dict) else {}
     identity_fields = [
         str(item or "").strip()
         for item in (contract.get("identityLockFieldsUsed") or [])
@@ -1327,6 +1521,8 @@ def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | No
     lines = [
         "HARD CONTINUITY EXECUTION CONTRACT (NON-NEGOTIABLE):",
         f"- taskMode={identity_contract.get('task_mode')}",
+        f"- taskExecutionBranch={task_execution.get('branch') or 'keep_identity_hard_lock'}",
+        f"- outfitLockMode={task_execution.get('outfit_lock_mode') or 'strict'}",
         f"- identityLockApplied={bool(contract.get('identityLockApplied', contract.get('identityLock')))}",
         f"- identityLockFieldsUsed={', '.join(identity_fields)}",
         f"- environmentLock={bool(contract.get('environmentLock'))}",
@@ -1343,7 +1539,7 @@ def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | No
         "- route can influence motion/camera/performance but cannot redesign outfit construction unless task mode explicitly allows costume change",
         "- keep visible accessories stable once established; no random accessory invention or disappear/reappear drift unless explicitly requested",
         "- keep stable base colors for skin tone, hair, garments/fabrics, and accessories across scenes; lighting can vary but must not redesign base colors",
-        "- outfit lock is strict: preserve garment type, cut, fabric feel, color family, footwear, accessories, and decorative details unless explicit wardrobe change is requested",
+        "- outfit lock strictness is task-mode controlled: strict for keep_identity/motion_only/camera_only, relaxed only when explicit costume change or virtual try-on replacement is active",
         "- keep same venue/world continuity; prefer progression through connected zones/corners/angles/sub-locations when it improves scene evolution",
         "- same world, different zones rule: keep architecture family, material family, production design family, and venue identity stable across the clip",
         "- keep one world identity and one lighting/shadow/color family across the full clip",
@@ -1365,12 +1561,24 @@ def _build_universal_outfit_lock_block(*, scene_contract: dict[str, Any] | None,
     contract = scene_contract if isinstance(scene_contract, dict) else {}
     identity_contract = _build_identity_contract(contract)
     outfit_profile = identity_contract.get("outfit_profile") if isinstance(identity_contract.get("outfit_profile"), dict) else {}
+    task_execution = identity_contract.get("task_execution") if isinstance(identity_contract.get("task_execution"), dict) else {}
     family_module = str(outfit_profile.get("family_module") or "unknown")
     garment_category = str(outfit_profile.get("garment_category") or "unknown")
     family_fields = [str(x) for x in (outfit_profile.get("family_fields") or []) if str(x).strip()]
+    task_mode = str(identity_contract.get("task_mode") or "keep_identity")
+    material_motion_application = _apply_material_motion_constraints(
+        material_motion_profile=identity_contract.get("motion_constraints") if isinstance(identity_contract.get("motion_constraints"), dict) else {},
+        garment_category=garment_category,
+        task_mode=task_mode,
+    )
     material_motion_profile = identity_contract.get("motion_constraints") if isinstance(identity_contract.get("motion_constraints"), dict) else {}
     lines = [
         "UNIVERSAL OUTFIT CONTRACT (ROUTE-AGNOSTIC, NON-NEGOTIABLE):",
+        f"- task_mode={task_mode}",
+        f"- task_execution_branch={task_execution.get('branch') or 'keep_identity_hard_lock'}",
+        f"- outfit_lock_mode={task_execution.get('outfit_lock_mode') or 'strict'}",
+        f"- source_outfit_preserved={bool(task_execution.get('preserve_source_outfit', True))}",
+        f"- source_outfit_replaced={bool(task_execution.get('source_outfit_replaced', False))}",
         f"- garment_category={garment_category}",
         f"- family_module={family_module}",
         f"- generic_outfit_fields={', '.join(UNIVERSAL_GENERIC_OUTFIT_FIELDS)}",
@@ -1379,7 +1587,17 @@ def _build_universal_outfit_lock_block(*, scene_contract: dict[str, Any] | None,
         "- do not reinterpret outfit into a different clothing family unless task mode explicitly permits costume change",
         f"- material_motion_profile={json.dumps(material_motion_profile, ensure_ascii=False)}",
         "- route may change motion/camera/performance behavior only; base outfit contract remains intact",
+        "MATERIAL MOTION APPLICATION:",
+        *material_motion_application["lines"],
+        "NEGATIVE MATERIAL GUARDS:",
+        *material_motion_application["negative_lines"],
     ]
+    if task_mode == "virtual_try_on":
+        lines.append("- virtual_try_on rule: source outfit lock is intentionally relaxed/replaced; preserve NEW target outfit strongly after swap")
+    elif task_mode == "story_costume_change":
+        lines.append("- story_costume_change rule: outfit may change only when explicit story/user instruction requests it")
+    elif task_mode in {"motion_only", "camera_only"}:
+        lines.append("- motion/camera only rule: narrative/emotion/camera text must not alter outfit construction or category")
     if is_lip_sync_route:
         lines.extend([
             "LIP-SYNC INTERACTION RULE:",
@@ -8764,6 +8982,16 @@ def _build_comfy_image_prompt_assembly(
     style_entities = [role for role in ["style"] if refs_by_role.get(role)]
     props_entities = [role for role in ["props"] if refs_by_role.get(role)]
     contract = scene_contract if isinstance(scene_contract, dict) else {}
+    identity_contract = _build_identity_contract(contract)
+    outfit_profile = identity_contract.get("outfit_profile") if isinstance(identity_contract.get("outfit_profile"), dict) else {}
+    task_mode = str(identity_contract.get("task_mode") or "keep_identity")
+    task_execution = identity_contract.get("task_execution") if isinstance(identity_contract.get("task_execution"), dict) else {}
+    material_motion_profile = identity_contract.get("motion_constraints") if isinstance(identity_contract.get("motion_constraints"), dict) else {}
+    material_motion_application = _apply_material_motion_constraints(
+        material_motion_profile=material_motion_profile,
+        garment_category=str(outfit_profile.get("garment_category") or "unknown"),
+        task_mode=task_mode,
+    )
     profiles = reference_profiles if isinstance(reference_profiles, dict) else {}
     multi_view_profile = multi_view_reference_profile if isinstance(multi_view_reference_profile, dict) else {}
     multi_view_lines = [str(line or "").strip() for line in (multi_view_context_lines or []) if str(line or "").strip()]
@@ -9047,6 +9275,24 @@ def _build_comfy_image_prompt_assembly(
     scene_meaning_block = "\n".join(scene_meaning_lines)
     non_lip_identity_first_block = ""
     non_lip_lyric_guard_block = ""
+    task_mode_runtime_block = "\n".join([
+        "TASK MODE EXECUTION (RUNTIME):",
+        f"- taskMode={task_mode}",
+        f"- executionBranch={task_execution.get('branch') or 'keep_identity_hard_lock'}",
+        f"- outfitLockMode={task_execution.get('outfit_lock_mode') or 'strict'}",
+        f"- textCanOverrideOutfit={bool(task_execution.get('allow_text_outfit_override', False))}",
+        f"- sourceOutfitPreserved={bool(task_execution.get('preserve_source_outfit', True))}",
+        f"- sourceOutfitReplaced={bool(task_execution.get('source_outfit_replaced', False))}",
+    ])
+    material_motion_runtime_block = "\n".join([
+        "MATERIAL MOTION EXECUTION (RUNTIME):",
+        f"- materialMotionProfile={json.dumps(material_motion_profile, ensure_ascii=False)}",
+        *material_motion_application["lines"],
+    ])
+    task_mode_negative_block = "\n".join([
+        "TASK MODE + MATERIAL NEGATIVE CONSTRAINTS:",
+        *material_motion_application["negative_lines"],
+    ])
     global_garment_lock_block = _build_universal_outfit_lock_block(scene_contract=contract, is_lip_sync_route=is_lip_sync_route)
     if is_non_lip_route:
         non_lip_identity_first_block = "\n".join([
@@ -9063,6 +9309,24 @@ def _build_comfy_image_prompt_assembly(
             "- lyrical meaning is allowed only as short emotional subtext",
             "- never let lyrical narrative override face/hair/outfit continuity",
             "- prompt priority: identity/outfit lock → pose/framing/body orientation → venue continuity → short emotional subtext → safe motion hint",
+        ])
+    if task_mode == "virtual_try_on":
+        non_lip_identity_first_block = "\n".join([
+            "VIRTUAL TRY-ON EXECUTION:",
+            "- person identity remains hard-locked",
+            "- source outfit is intentionally replaceable by target garment request",
+            "- after swap, preserve target outfit category/construction/material strictly",
+            "- do not let source garment constraints dominate final styling",
+        ])
+    elif task_mode == "motion_only":
+        scene_meaning_block = "\n".join([
+            scene_meaning_block,
+            "- motion_only rule: text may influence motion rhythm only; no outfit redesign semantics",
+        ])
+    elif task_mode == "camera_only":
+        scene_meaning_block = "\n".join([
+            scene_meaning_block,
+            "- camera_only rule: text may influence framing/composition only; no outfit/body redesign semantics",
         ])
 
     camera_view_consistency_block = "\n".join([
@@ -9132,6 +9396,8 @@ def _build_comfy_image_prompt_assembly(
         framing_and_staging_block,
         identity_layer_block,
         global_garment_lock_block,
+        task_mode_runtime_block,
+        material_motion_runtime_block,
         physics_blocks["lightWorldBlock"],
         physics_blocks["subjectIdentityBlock"],
         physics_blocks["physicalSceneStateBlock"],
@@ -9145,6 +9411,7 @@ def _build_comfy_image_prompt_assembly(
         "PROPS ANCHOR:\n" + ("- props/items connected and must be preserved" if props_entities else "- no explicit props refs"),
         anti_collage_block,
         physics_blocks["negativeConstraintsBlock"],
+        task_mode_negative_block,
         _comfy_text_rendering_block(allow_designed_text=allow_designed_text),
         genre_hardening_block if genre_hardening_block else "GENRE HARDENING: not required (neutral or unspecified scene contract).",
         priority_contract_block,
@@ -9230,6 +9497,18 @@ def _build_comfy_image_prompt_assembly(
         "subjectIdentityBlockPreview": physics_blocks["subjectIdentityBlock"],
         "sceneMeaningBlockPreview": scene_meaning_block,
         "globalGarmentLockBlockPreview": global_garment_lock_block,
+        "taskModeRuntimeBlockPreview": task_mode_runtime_block,
+        "materialMotionRuntimeBlockPreview": material_motion_runtime_block,
+        "taskModeNegativeBlockPreview": task_mode_negative_block,
+        "taskMode": task_mode,
+        "taskExecutionBranch": task_execution.get("branch") or "keep_identity_hard_lock",
+        "outfitLockMode": task_execution.get("outfit_lock_mode") or "strict",
+        "sourceOutfitPreserved": bool(task_execution.get("preserve_source_outfit", True)),
+        "sourceOutfitReplaced": bool(task_execution.get("source_outfit_replaced", False)),
+        "outfitProfile": outfit_profile,
+        "familyModule": outfit_profile.get("family_module") or "unknown",
+        "familyFields": outfit_profile.get("family_fields") or [],
+        "materialMotionProfile": material_motion_profile,
         "nonLipIdentityFirstBlockPreview": non_lip_identity_first_block,
         "nonLipLyricGuardBlockPreview": non_lip_lyric_guard_block,
         "continuityBlockPreview": continuity_block,
@@ -9445,6 +9724,16 @@ def clip_image(payload: ClipImageIn):
     scene_contract["sceneProgressionRule"] = "different parts/angles of the same venue/world unless explicitly changed"
     scene_contract["realismMode"] = "photoreal_cinematic_realism"
     scene_contract["openingShot"] = not bool(previous_continuity_memory)
+    raw_outfit_profile = _merge_outfit_profile(
+        scene_contract.get("outfitProfile") if isinstance(scene_contract.get("outfitProfile"), dict) else {},
+        raw_scene_contract.get("outfitProfile") if isinstance(raw_scene_contract.get("outfitProfile"), dict) else {},
+    )
+    scene_contract["confidenceScores"] = raw_scene_contract.get("confidenceScores") if isinstance(raw_scene_contract.get("confidenceScores"), dict) else (scene_contract.get("confidenceScores") if isinstance(scene_contract.get("confidenceScores"), dict) else {})
+    scene_contract["outfitProfile"] = _normalize_outfit_profile(
+        raw_outfit_profile,
+        garment_category_hint=raw_scene_contract.get("garmentCategory") or scene_contract.get("garmentCategory"),
+        confidence_scores=scene_contract.get("confidenceScores"),
+    )
     scene_contract["taskMode"] = _normalize_task_mode(scene_contract.get("taskMode") or scene_contract.get("task_mode"))
     scene_contract["task_mode"] = scene_contract["taskMode"]
     scene_contract["identityContract"] = _build_identity_contract(scene_contract)
@@ -9834,6 +10123,16 @@ def clip_image(payload: ClipImageIn):
         "mustAppearCastRoles": scene_contract.get("mustAppearCastRoles") or [],
         "mustNotAppear": scene_contract.get("mustNotAppear") or [],
         "identityLock": bool(scene_contract.get("identityLock")),
+        "taskMode": scene_contract.get("taskMode") or "keep_identity",
+        "identityContract": scene_contract.get("identityContract") if isinstance(scene_contract.get("identityContract"), dict) else {},
+        "outfitProfile": scene_contract.get("outfitProfile") if isinstance(scene_contract.get("outfitProfile"), dict) else {},
+        "familyModule": ((scene_contract.get("outfitProfile") or {}).get("family_module") if isinstance(scene_contract.get("outfitProfile"), dict) else "unknown") or "unknown",
+        "familyFields": ((scene_contract.get("outfitProfile") or {}).get("family_fields") if isinstance(scene_contract.get("outfitProfile"), dict) else []) or [],
+        "materialMotionProfile": (((scene_contract.get("identityContract") or {}).get("motion_constraints")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {},
+        "taskExecutionBranch": ((((scene_contract.get("identityContract") or {}).get("task_execution")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {}).get("branch") or "keep_identity_hard_lock",
+        "outfitLockMode": ((((scene_contract.get("identityContract") or {}).get("task_execution")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {}).get("outfit_lock_mode") or "strict",
+        "sourceOutfitPreserved": bool((((scene_contract.get("identityContract") or {}).get("task_execution")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {}).get("preserve_source_outfit", True),
+        "sourceOutfitReplaced": bool((((scene_contract.get("identityContract") or {}).get("task_execution")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {}).get("source_outfit_replaced", False),
         "environmentLock": bool(scene_contract.get("environmentLock")),
         "styleLock": bool(scene_contract.get("styleLock")),
         "degradedConsistency": bool(scene_contract.get("degradedRoles")),
