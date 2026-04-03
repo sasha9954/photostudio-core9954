@@ -13289,8 +13289,20 @@ def clip_video(payload: ClipVideoIn):
     if final_workflow_key == "lip_sync":
         provider = requested_provider or "kie"
         provider_reason = "dedicated_lipsync_provider_strategy"
-    bypass_ltx_model_compatibility = final_workflow_key == "lip_sync" and mode == "lipsync" and provider != "comfy_remote"
+    raw_workflow_key_for_compat = str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()
+    normalized_workflow_key_for_compat = _normalize_ltx_workflow_key(raw_workflow_key_for_compat)
+    bypass_ltx_model_compatibility = (
+        mode == "lipsync"
+        and provider != "comfy_remote"
+        and (
+            final_workflow_key in {"lip_sync", "lip_sync_music"}
+            or normalized_workflow_key_for_compat in {"lip_sync", "lip_sync_music"}
+            or str(raw_workflow_key_for_compat or "").strip().lower() in {"lip_sync", "lip_sync_music"}
+        )
+    )
+    bypass_reason = "none"
     if bypass_ltx_model_compatibility:
+        bypass_reason = "lip_sync_provider_route"
         resolved_model_key = explicit_model
         resolved_model_spec = None
         model_source = "lipsync_provider"
@@ -13318,10 +13330,17 @@ def clip_video(payload: ClipVideoIn):
         f"sceneId={scene_id} workflowKey={final_workflow_key} providerRoute={provider} modelKey={resolved_model_key or 'n/a'} "
         f"mode={mode}"
     )
+    print(
+        "[CLIP VIDEO COMPAT CHECK DEBUG] "
+        f"sceneId={scene_id} rawWorkflowKey={raw_workflow_key_for_compat or 'empty'} "
+        f"normalizedWorkflowKey={normalized_workflow_key_for_compat or 'empty'} "
+        f"bypass_ltx_model_compatibility={'true' if bypass_ltx_model_compatibility else 'false'} "
+        f"reason={bypass_reason}"
+    )
     if bypass_ltx_model_compatibility:
         print(
             "[CLIP VIDEO COMPAT CHECK] "
-            f"sceneId={scene_id} workflowKey={final_workflow_key} bypass_ltx_model_compatibility=true reason=lip_sync_provider_route"
+            f"sceneId={scene_id} workflowKey={final_workflow_key} bypass_ltx_model_compatibility=true reason={bypass_reason}"
         )
 
     if not bypass_ltx_model_compatibility and not resolved_model_spec:

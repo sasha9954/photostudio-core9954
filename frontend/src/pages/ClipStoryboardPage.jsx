@@ -10990,6 +10990,13 @@ Aspect ratio: ${imageFormat}`,
     let effectiveAudioSliceKind = String(targetScene?.audioSliceKind || targetScene?.audio_slice_kind || "").trim().toLowerCase();
     let effectiveMusicVocalLipSyncAllowed = targetScene?.musicVocalLipSyncAllowed ?? targetScene?.music_vocal_lipsync_allowed;
     const lipSyncRoute = effectiveWorkflowKey === "lip_sync_music";
+    const hasAudioSliceUrl = Boolean(attachedAudioSliceUrl);
+    const staleSliceMetadataDetected = Boolean(
+      lipSyncRoute
+      && hasAudioSliceUrl
+      && (!effectiveAudioSliceKind || effectiveMusicVocalLipSyncAllowed == null)
+    );
+    let reextractTriggered = false;
     traceScenarioVideo("[SCENARIO VIDEO TRACE 7] workflow_resolved", {
       sceneId,
       selectedSceneId: requestedSceneId,
@@ -11010,6 +11017,20 @@ Aspect ratio: ${imageFormat}`,
       willStartVideo: true,
     });
     if (lipSyncRoute) {
+      console.info("[SCENARIO LIP SYNC SLICE METADATA]", {
+        sceneId,
+        hasAudioSliceUrl,
+        audioSliceKind: effectiveAudioSliceKind || "",
+        musicVocalLipSyncAllowed: (
+          effectiveMusicVocalLipSyncAllowed == null
+            ? null
+            : Boolean(effectiveMusicVocalLipSyncAllowed)
+        ),
+        staleSliceMetadataDetected,
+        reextractTriggered,
+      });
+    }
+    if (lipSyncRoute) {
       traceScenarioVideo("[SCENARIO VIDEO TRACE 8] before_auto_slice", {
         sceneId,
         selectedSceneId: requestedSceneId,
@@ -11028,16 +11049,22 @@ Aspect ratio: ${imageFormat}`,
         audioSliceUrl: attachedAudioSliceUrl,
       });
     }
-    if (lipSyncRoute && !attachedAudioSliceUrl) {
+    if (lipSyncRoute && (!attachedAudioSliceUrl || staleSliceMetadataDetected)) {
+      reextractTriggered = true;
       try {
         const extracted = await handleScenarioEditorExtractSceneAudio(targetNodeId, sceneId);
         attachedAudioSliceUrl = String(extracted?.audioSliceUrl || extracted?.sliceUrl || "").trim();
-        if (!effectiveAudioSliceKind) {
-          effectiveAudioSliceKind = String(extracted?.audioSliceKind || extracted?.audio_slice_kind || "").trim().toLowerCase();
-        }
-        if (effectiveMusicVocalLipSyncAllowed == null) {
-          effectiveMusicVocalLipSyncAllowed = extracted?.musicVocalLipSyncAllowed ?? extracted?.music_vocal_lipsync_allowed;
-        }
+        effectiveAudioSliceKind = String(
+          extracted?.audioSliceKind
+          || extracted?.audio_slice_kind
+          || effectiveAudioSliceKind
+          || ""
+        ).trim().toLowerCase();
+        effectiveMusicVocalLipSyncAllowed = (
+          extracted?.musicVocalLipSyncAllowed
+          ?? extracted?.music_vocal_lipsync_allowed
+          ?? effectiveMusicVocalLipSyncAllowed
+        );
         traceScenarioVideo("[SCENARIO VIDEO TRACE 9] after_auto_slice", {
           sceneId,
           selectedSceneId: requestedSceneId,
@@ -11072,6 +11099,18 @@ Aspect ratio: ${imageFormat}`,
           reason: String(error?.message || error || "audio_slice_auto_extract_failed"),
         });
       }
+      console.info("[SCENARIO LIP SYNC SLICE METADATA]", {
+        sceneId,
+        hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
+        audioSliceKind: effectiveAudioSliceKind || "",
+        musicVocalLipSyncAllowed: (
+          effectiveMusicVocalLipSyncAllowed == null
+            ? null
+            : Boolean(effectiveMusicVocalLipSyncAllowed)
+        ),
+        staleSliceMetadataDetected,
+        reextractTriggered,
+      });
     }
     if (effectiveContentType === "music_video" && ["i2v_sound", "f_l_sound"].includes(effectiveWorkflowKey)) {
       logScenarioVideoBlocked("validate_mode", "sound_workflow_blocked_for_clip", {
