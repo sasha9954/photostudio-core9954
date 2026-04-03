@@ -730,6 +730,24 @@ UNIVERSAL_GENERIC_OUTFIT_FIELDS = [
     "accessory_identity",
 ]
 
+UPPER_GARMENT_IDENTITY_PRIORITY_KEYS = [
+    "garment_top_identity",
+    "neckline_identity",
+    "silhouette_identity",
+    "coverage_identity",
+    "construction_identity",
+    "material_identity",
+    "signature_details_identity",
+    "strap_width_identity",
+    "strap_layout_identity",
+    "shoulder_coverage_identity",
+    "surface_texture_identity",
+    "texture_identity",
+    "fabric_family_identity",
+    "hem_length_identity",
+    "crop_length_identity",
+]
+
 OUTFIT_FAMILY_SPECIFIC_FIELDS: dict[str, list[str]] = {
     "dress": ["sleeve_identity", "bodice_identity", "neckline_identity", "skirt_volume_identity", "hem_length_identity", "lining_identity", "applique_identity"],
     "swimwear": ["top_cut_identity", "bottom_cut_identity", "strap_layout_identity", "coverage_level_identity", "fabric_finish_identity", "no_added_skirt_reinterpretation"],
@@ -2012,6 +2030,9 @@ def _build_universal_outfit_lock_block(*, scene_contract: dict[str, Any] | None,
         f"- generic_outfit_fields={', '.join(UNIVERSAL_GENERIC_OUTFIT_FIELDS)}",
         f"- family_specific_fields={', '.join(family_fields) if (family_fields and bool(lock_policy.get('family_specific_lock', True))) else 'suppressed_by_low_confidence_or_unknown_family'}",
         "- preserve garment category, coverage identity, construction identity, silhouette identity, material identity, signature details identity, color identity, footwear identity, and relevant accessories",
+        "- upper-garment continuity lock: preserve same top silhouette, neckline type, strap width/layout logic, shoulder exposure/coverage logic, hem/crop-length impression, and fabric/surface read when present in contract",
+        "- authoritative continuity source priority: heroAppearanceContract/sourceOutfitProfile/effectiveOutfitProfile > previous generated scene hint",
+        "- if previous generated scene conflicts with authoritative contract, authoritative contract wins and drift must be rejected",
         "- do not reinterpret outfit into a different clothing family unless task mode explicitly permits costume change",
         f"- material_motion_profile={json.dumps(material_motion_profile, ensure_ascii=False)}",
         "- route may change motion/camera/performance behavior only; base outfit contract remains intact",
@@ -2021,6 +2042,15 @@ def _build_universal_outfit_lock_block(*, scene_contract: dict[str, Any] | None,
         *material_motion_application["lines"],
         "NEGATIVE MATERIAL GUARDS:",
         *material_motion_application["negative_lines"],
+        "UPPER-GARMENT FORBIDDEN CHANGES (UNIVERSAL):",
+        "- do not change top silhouette",
+        "- do not change neckline type",
+        "- do not change strap width/layout or shoulder coverage logic",
+        "- do not add or remove sleeves unless explicitly requested",
+        "- do not lengthen or shorten upper garment into another garment class",
+        "- do not reinterpret fitted top into blouse/dress/bodysuit/tunic/one-piece unless explicitly requested",
+        "- do not change fabric-family read or lose ribbed/knit/smooth/structured surface identity when present",
+        "- do not redesign upper garment under tighter framing, different pose, camera angle, lighting, motion, or crop",
     ]
     if task_mode == "virtual_try_on":
         lines.append("- virtual_try_on rule: source outfit lock is intentionally relaxed/replaced; preserve NEW target outfit strongly after swap")
@@ -9418,14 +9448,88 @@ def _build_scene_framing_and_concert_staging_block(
     return "\n".join(lines)
 
 
+def _is_generic_identity_marker(value: Any) -> bool:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    if not normalized:
+        return True
+    generic_tokens = (
+        "unknown",
+        "same ",
+        "as reference",
+        "reference_locked",
+        "same garment",
+        "same top",
+        "same neckline",
+        "same silhouette",
+        "same material",
+        "same coverage",
+    )
+    return any(token in normalized for token in generic_tokens)
+
+
+def _resolve_authoritative_upper_garment_identity(
+    *,
+    hero_appearance_contract: dict[str, Any] | None,
+    effective_outfit_profile: dict[str, Any] | None,
+    source_outfit_profile: dict[str, Any] | None,
+    fallback_outfit_profile: dict[str, Any] | None,
+) -> tuple[dict[str, str], str]:
+    hero = hero_appearance_contract if isinstance(hero_appearance_contract, dict) else {}
+    effective = effective_outfit_profile if isinstance(effective_outfit_profile, dict) else {}
+    source = source_outfit_profile if isinstance(source_outfit_profile, dict) else {}
+    fallback = fallback_outfit_profile if isinstance(fallback_outfit_profile, dict) else {}
+    canonical_sources = [
+        ("hero", hero),
+        ("effective", effective),
+        ("source", source),
+        ("fallback", fallback),
+    ]
+    resolved: dict[str, str] = {}
+    authoritative_source = "fallback"
+    for key in UPPER_GARMENT_IDENTITY_PRIORITY_KEYS:
+        for source_name, source_map in canonical_sources:
+            candidate = re.sub(r"\s+", " ", str(source_map.get(key) or "").strip())
+            if not candidate or _is_generic_identity_marker(candidate):
+                continue
+            resolved[key] = candidate
+            if authoritative_source == "fallback":
+                authoritative_source = source_name
+            break
+    garment_category = ""
+    for source_name, source_map in canonical_sources:
+        candidate = str(source_map.get("garment_category") or "").strip().lower()
+        if candidate and candidate != "unknown":
+            garment_category = candidate
+            if authoritative_source == "fallback":
+                authoritative_source = source_name
+            break
+    if garment_category and "garment_top_identity" not in resolved:
+        resolved["garment_top_identity"] = garment_category
+    return resolved, authoritative_source
+
+
 def _summarize_outfit_memory_for_rescue(profile: dict[str, Any] | None) -> str:
     data = profile if isinstance(profile, dict) else {}
-    garment = str(data.get("garment_category") or "").strip()
-    silhouette = str(data.get("silhouette_identity") or "").strip()
-    construction = str(data.get("construction_identity") or "").strip()
-    coverage = str(data.get("coverage_identity") or "").strip()
-    color = str(data.get("color_identity") or "").strip()
-    parts = [part for part in [garment, silhouette, construction, coverage, color] if part]
+    parts = []
+    for key in (
+        "garment_top_identity",
+        "garment_category",
+        "neckline_identity",
+        "silhouette_identity",
+        "coverage_identity",
+        "construction_identity",
+        "material_identity",
+        "surface_texture_identity",
+        "texture_identity",
+        "strap_width_identity",
+        "shoulder_coverage_identity",
+        "hem_length_identity",
+        "crop_length_identity",
+        "color_identity",
+    ):
+        value = str(data.get(key) or "").strip()
+        if value and value.lower() != "unknown":
+            parts.append(f"{key}={value}")
     if not parts:
         return ""
     return "; ".join(parts)[:320]
@@ -9520,7 +9624,7 @@ def _detect_high_identity_risk_scene(
         blob,
     ]).lower()
     camera_risk_tokens = (
-        "orbit", "tracking", "moving", "walk", "follow", "purposeful walk", "direct-to-camera performance", "directly to the camera"
+        "orbit", "tracking", "moving", "walk", "follow", "purposeful walk", "dance", "direct-to-camera performance", "directly to the camera"
     )
     has_camera_motion_risk = any(token in camera_blob for token in camera_risk_tokens)
     try:
@@ -9590,6 +9694,16 @@ def _detect_high_identity_risk_scene(
     risk_score = (strong_risk_count * 2) + weak_risk_count
     rescue_threshold_passed = bool(risk_score >= 3 or (strong_risk_count >= 1 and weak_risk_count >= 1))
     rescue_applied = rescue_threshold_passed
+    upper_garment_rescue_applied = bool(
+        rescue_applied
+        and has_outfit_contract
+        and (
+            has_perf_framing_risk
+            or has_camera_motion_risk
+            or scene_index >= 5
+            or has_appearance_drift_risk
+        )
+    )
     return {
         "highIdentityRiskRescueApplied": rescue_applied,
         "highIdentityRiskScore": risk_score,
@@ -9616,6 +9730,7 @@ def _detect_high_identity_risk_scene(
         "hasHeroAppearanceContract": has_hero_contract,
         "hasOutfitProfile": has_outfit_contract,
         "hasLocationContinuityContract": has_location_contract,
+        "upperGarmentRescueApplied": upper_garment_rescue_applied,
     }
 
 
@@ -9626,56 +9741,39 @@ def _build_outfit_continuity_target_summary(
     source_outfit_profile: dict[str, Any],
     fallback_outfit_profile: dict[str, Any],
 ) -> str:
-    neutral_fallback = "preserve the same upper-body garment identity and lower-body outfit identity from the hero reference"
-
-    def _clean(value: Any) -> str:
-        raw = re.sub(r"\s+", " ", str(value or "").strip())
-        if not raw:
-            return ""
-        lowered = raw.lower()
-        generic_markers = ("same ", "unknown", "reference", "none", "n/a")
-        if lowered in {"same", "unknown"}:
-            return ""
-        if any(marker in lowered for marker in generic_markers):
-            return ""
-        return raw
-
-    outfit_sources = [effective_outfit_profile, source_outfit_profile, fallback_outfit_profile]
-    top_identity = ""
+    neutral_fallback = "preserve exact upper-garment identity from authoritative hero/upstream contract"
+    authoritative_upper, _ = _resolve_authoritative_upper_garment_identity(
+        hero_appearance_contract=hero_appearance_contract,
+        effective_outfit_profile=effective_outfit_profile,
+        source_outfit_profile=source_outfit_profile,
+        fallback_outfit_profile=fallback_outfit_profile,
+    )
     bottom_identity = ""
-    neckline_identity = ""
-    silhouette_identity = ""
-    for source in outfit_sources:
-        if not isinstance(source, dict):
-            continue
-        if not top_identity:
-            top_identity = _clean(source.get("garment_top_identity") or source.get("garment_category"))
-        if not bottom_identity:
-            bottom_identity = _clean(source.get("garment_bottom_identity"))
-        if not neckline_identity:
-            neckline_identity = _clean(source.get("neckline_identity"))
-        if not silhouette_identity:
-            silhouette_identity = _clean(source.get("silhouette_identity"))
-
-    if isinstance(hero_appearance_contract, dict):
-        if not top_identity:
-            top_identity = _clean(hero_appearance_contract.get("garment_top_identity"))
-        if not neckline_identity:
-            neckline_identity = _clean(hero_appearance_contract.get("neckline_identity"))
-        if not silhouette_identity:
-            silhouette_identity = _clean(hero_appearance_contract.get("silhouette_identity"))
-        if not bottom_identity:
-            bottom_identity = _clean(hero_appearance_contract.get("garment_bottom_identity"))
-
+    for source in [effective_outfit_profile, source_outfit_profile, fallback_outfit_profile, hero_appearance_contract]:
+        if isinstance(source, dict):
+            candidate = re.sub(r"\s+", " ", str(source.get("garment_bottom_identity") or "").strip())
+            if candidate and not _is_generic_identity_marker(candidate):
+                bottom_identity = candidate
+                break
     parts: list[str] = []
-    if top_identity:
-        parts.append(f"upper-body garment: {top_identity}")
+    for key in (
+        "garment_top_identity",
+        "neckline_identity",
+        "silhouette_identity",
+        "coverage_identity",
+        "construction_identity",
+        "material_identity",
+        "surface_texture_identity",
+        "texture_identity",
+        "strap_width_identity",
+        "shoulder_coverage_identity",
+        "hem_length_identity",
+        "crop_length_identity",
+    ):
+        if authoritative_upper.get(key):
+            parts.append(f"{key}: {authoritative_upper.get(key)}")
     if bottom_identity:
         parts.append(f"lower-body outfit: {bottom_identity}")
-    if neckline_identity:
-        parts.append(f"neckline: {neckline_identity}")
-    if silhouette_identity:
-        parts.append(f"silhouette: {silhouette_identity}")
     if not parts:
         return neutral_fallback
     return "; ".join(parts)
@@ -9707,6 +9805,15 @@ def _build_high_identity_risk_rescue_block(rescue: dict[str, Any]) -> str:
         "- do not let beauty-light drift override stable continuity anchor evidence from confirmed scene",
         "- when framing becomes tighter, preserve upper-body garment logic instead of drifting to anonymous beauty-face crop",
     ]
+    if rescue.get("upperGarmentRescueApplied"):
+        lines.extend([
+            "UPPER-GARMENT RESCUE (AUTHORITATIVE CONTRACT FIRST):",
+            "- preserve exact upper-body garment identity from hero/upstream contract",
+            "- preserve neckline / strap logic / shoulder coverage / silhouette / hem-crop impression / fabric family read",
+            "- tighter framing must preserve garment identity, not weaken it",
+            "- motion, pose, lighting, and crop may evolve; garment identity may not",
+            "- previous generated scene may be used only as continuity hint and must NOT override authoritative outfit contract on conflict",
+        ])
     if identity_memory:
         lines.append(f"- previous_confirmed_stable_identity_memory anchor: {identity_memory}")
     if outfit_memory:
@@ -9777,6 +9884,13 @@ def _build_comfy_image_prompt_assembly(
         or outfit_profile.get("garment_top_identity")
         or ""
     ).strip().lower()
+    authoritative_upper_garment, authoritative_outfit_source = _resolve_authoritative_upper_garment_identity(
+        hero_appearance_contract=hero_appearance_contract,
+        effective_outfit_profile=effective_outfit_profile,
+        source_outfit_profile=source_outfit_profile,
+        fallback_outfit_profile=outfit_profile,
+    )
+    tracked_upper_keys = sorted(list(authoritative_upper_garment.keys()))
     outfit_continuity_target_summary = _build_outfit_continuity_target_summary(
         hero_appearance_contract=hero_appearance_contract,
         effective_outfit_profile=effective_outfit_profile,
@@ -9816,6 +9930,10 @@ def _build_comfy_image_prompt_assembly(
         scene_narrative_step=scene_narrative_step,
         route_hint=route_hint,
     )
+    used_previous_generated_scene_as_hint = bool(
+        str(high_identity_risk_rescue.get("stableSceneAnchorSource") or "") == "previous_scene_memory"
+    )
+    previous_generated_scene_override_blocked = bool(authoritative_outfit_source in {"hero", "effective", "source"} and used_previous_generated_scene_as_hint)
     material_motion_profile = identity_contract.get("motion_constraints") if isinstance(identity_contract.get("motion_constraints"), dict) else {}
     material_motion_application = _apply_material_motion_constraints(
         material_motion_profile=material_motion_profile,
@@ -9933,19 +10051,18 @@ def _build_comfy_image_prompt_assembly(
             "do not change hair length, hair color family, or parting",
             "do not change body read/fullness/height impression",
         ])
-    if is_casual_separates:
-        forbidden_changes.extend([
-            "do not reinterpret the top as a dress",
-            "do not reinterpret top into dress_top, bodysuit, blouse, knit dress, or one-piece silhouette",
-            "do not change neckline type",
-            "do not add sleeves",
-            "do not change strap width or shoulder coverage",
-            "do not lengthen the top into a bodysuit/tunic/dress",
-            "do not redesign the ribbed fitted crop silhouette",
-            "do not replace jeans with other bottoms",
-            "do not change body read by compressing torso or changing shoulder/waist proportion",
-            "do not reinterpret fabric family",
-        ])
+    forbidden_changes.extend([
+        "do not change top silhouette",
+        "do not change neckline type",
+        "do not change strap width/layout or shoulder exposure/coverage logic",
+        "do not add or remove sleeves unless explicitly requested",
+        "do not lengthen or shorten upper garment into another garment class",
+        "do not reinterpret fitted top into blouse/dress/bodysuit/tunic/one-piece without explicit request",
+        "do not change fabric-family read",
+        "do not lose ribbed/knit/smooth/structured surface identity when present in contract",
+        "do not redesign upper-body garment under tighter framing or different pose",
+        "do not reinterpret top because camera angle, lighting, motion, or crop changed",
+    ])
     if has_location_continuity_contract:
         forbidden_changes.extend([
             "do not change architectural family into another home/building",
@@ -9990,21 +10107,14 @@ def _build_comfy_image_prompt_assembly(
     ])
     outfit_continuity_lock_block = "\n".join([
         "OUTFIT CONTINUITY LOCK (STRICT):",
-        "- keep same exact garment type for upper body",
-        "- keep same neckline identity and shoulder exposure logic",
-        "- keep same strap width logic and same hem/crop length impression",
-        "- keep same jeans silhouette / rise / wash family when jeans are present",
+        "- source-of-truth is authoritative hero/upstream appearance+outfit contract",
+        "- previous generated scene can be continuity hint only and must not redefine upper-garment identity",
+        "- keep same exact upper-body garment identity, silhouette, neckline, strap/shoulder coverage logic, hem/crop-length impression, and fabric/surface read",
         "- preserve outfit read continuity across all scenes",
         f"- reference continuity target: {outfit_continuity_target_summary}",
-        f"- garment_top_identity={garment_top_identity or 'unknown'}",
+        f"- authoritative_outfit_source={authoritative_outfit_source}",
+        f"- garment_top_identity={authoritative_upper_garment.get('garment_top_identity') or garment_top_identity or 'unknown'}",
     ])
-    if is_casual_separates:
-        outfit_continuity_lock_block = "\n".join([
-            outfit_continuity_lock_block,
-            "- casual separates rescue enabled: top+jeans silhouette must remain unchanged",
-            "- do not allow dress / bodysuit / blouse / one-piece reinterpretation",
-            "- do not allow neckline drift / strap redesign / sleeve invention / fabric-family reinterpretation",
-        ])
     location_continuity_lock_block = "\n".join([
         "LOCATION CONTINUITY LOCK (STRICT):",
         f"- room/world continuity contract present={has_location_continuity_contract}",
@@ -10505,6 +10615,16 @@ def _build_comfy_image_prompt_assembly(
         "moodPhysicsBlockPreview": physics_blocks["moodPhysicsBlock"],
         "negativeConstraintsBlockPreview": physics_blocks["negativeConstraintsBlock"],
         "highIdentityRiskRescueApplied": bool(high_identity_risk_rescue.get("highIdentityRiskRescueApplied")),
+        "upperGarmentContinuityApplied": bool(tracked_upper_keys),
+        "upperGarmentRescueApplied": bool(high_identity_risk_rescue.get("upperGarmentRescueApplied")),
+        "authoritativeOutfitSource": authoritative_outfit_source,
+        "usedPreviousGeneratedSceneAsHint": used_previous_generated_scene_as_hint,
+        "previousGeneratedSceneOverrideBlocked": previous_generated_scene_override_blocked,
+        "trackedUpperGarmentKeys": tracked_upper_keys,
+        "trackedNeckline": authoritative_upper_garment.get("neckline_identity") or "",
+        "trackedSilhouette": authoritative_upper_garment.get("silhouette_identity") or "",
+        "trackedMaterial": authoritative_upper_garment.get("material_identity") or "",
+        "trackedShoulderCoverage": authoritative_upper_garment.get("shoulder_coverage_identity") or authoritative_upper_garment.get("coverage_identity") or "",
         "highIdentityRiskScore": int(high_identity_risk_rescue.get("highIdentityRiskScore") or 0),
         "highIdentityRiskReasons": high_identity_risk_rescue.get("highIdentityRiskReasons") if isinstance(high_identity_risk_rescue.get("highIdentityRiskReasons"), list) else [],
         "highIdentityRisk": bool(high_identity_risk_rescue.get("highIdentityRiskRescueApplied")),
@@ -10835,6 +10955,14 @@ def clip_image(payload: ClipImageIn):
         confidence_scores=scene_contract.get("confidenceScores"),
     )
     scene_contract["effectiveOutfitProfile"] = scene_contract.get("outfitProfile")
+    authoritative_upper_identity, authoritative_outfit_source = _resolve_authoritative_upper_garment_identity(
+        hero_appearance_contract=scene_contract.get("heroAppearanceContract") if isinstance(scene_contract.get("heroAppearanceContract"), dict) else {},
+        effective_outfit_profile=scene_contract.get("effectiveOutfitProfile") if isinstance(scene_contract.get("effectiveOutfitProfile"), dict) else {},
+        source_outfit_profile=scene_contract.get("sourceOutfitProfile") if isinstance(scene_contract.get("sourceOutfitProfile"), dict) else {},
+        fallback_outfit_profile=scene_contract.get("outfitProfile") if isinstance(scene_contract.get("outfitProfile"), dict) else {},
+    )
+    scene_contract["authoritativeOutfitSource"] = authoritative_outfit_source
+    scene_contract["authoritativeUpperGarmentIdentity"] = authoritative_upper_identity
     upstream_hero_contract = _normalize_hero_appearance_contract(scene_contract.get("heroAppearanceContract"))
     if not upstream_hero_contract and isinstance(raw_scene_contract, dict):
         upstream_hero_contract = _normalize_hero_appearance_contract(raw_scene_contract.get("heroAppearanceContract"))
@@ -10844,8 +10972,21 @@ def clip_image(payload: ClipImageIn):
         scene_contract["heroAppearanceContract"] = upstream_hero_contract
     else:
         scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
+    authoritative_upper_identity, authoritative_outfit_source = _resolve_authoritative_upper_garment_identity(
+        hero_appearance_contract=scene_contract.get("heroAppearanceContract") if isinstance(scene_contract.get("heroAppearanceContract"), dict) else {},
+        effective_outfit_profile=scene_contract.get("effectiveOutfitProfile") if isinstance(scene_contract.get("effectiveOutfitProfile"), dict) else {},
+        source_outfit_profile=scene_contract.get("sourceOutfitProfile") if isinstance(scene_contract.get("sourceOutfitProfile"), dict) else {},
+        fallback_outfit_profile=scene_contract.get("outfitProfile") if isinstance(scene_contract.get("outfitProfile"), dict) else {},
+    )
+    scene_contract["authoritativeOutfitSource"] = authoritative_outfit_source
+    scene_contract["authoritativeUpperGarmentIdentity"] = authoritative_upper_identity
     scene_contract["previousSceneIdentityMemory"] = str((previous_continuity_memory or {}).get("characterState") or "").strip()
-    scene_contract["previousSceneOutfitMemory"] = _summarize_outfit_memory_for_rescue(scene_contract.get("sourceOutfitProfile"))
+    scene_contract["previousSceneOutfitMemory"] = _summarize_outfit_memory_for_rescue(
+        _merge_outfit_profile(
+            scene_contract.get("sourceOutfitProfile"),
+            scene_contract.get("authoritativeUpperGarmentIdentity"),
+        )
+    )
     resolved_stable_anchor = _select_previous_stable_scene_anchor(scene_contract)
     scene_contract["stableSceneAnchorSourceResolved"] = resolved_stable_anchor.get("source") or "none"
     scene_contract["stableSceneAnchorImageUrl"] = str(resolved_stable_anchor.get("image_url") or "")
@@ -10986,7 +11127,7 @@ def clip_image(payload: ClipImageIn):
             )
             scene_contract["effectiveOutfitProfile"] = rescued
             scene_contract["outfitProfile"] = rescued
-            if not should_replace_source_outfit:
+            if not should_replace_source_outfit and not isinstance(scene_contract.get("sourceOutfitProfile"), dict):
                 scene_contract["sourceOutfitProfile"] = rescued
             scene_contract["outfitIdentitySource"] = "referenceProfileRescue"
             scene_contract["lipSyncOutfitRescueApplied"] = bool(is_lip_sync_route)
@@ -11012,9 +11153,18 @@ def clip_image(payload: ClipImageIn):
         )
         scene_contract["effectiveOutfitProfile"] = fallback_outfit
         scene_contract["outfitProfile"] = fallback_outfit
-        scene_contract["sourceOutfitProfile"] = fallback_outfit if not should_replace_source_outfit else scene_contract.get("sourceOutfitProfile")
+        if not should_replace_source_outfit and not isinstance(scene_contract.get("sourceOutfitProfile"), dict):
+            scene_contract["sourceOutfitProfile"] = fallback_outfit
         if not upstream_hero_contract:
             scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
+    authoritative_upper_identity, authoritative_outfit_source = _resolve_authoritative_upper_garment_identity(
+        hero_appearance_contract=scene_contract.get("heroAppearanceContract") if isinstance(scene_contract.get("heroAppearanceContract"), dict) else {},
+        effective_outfit_profile=scene_contract.get("effectiveOutfitProfile") if isinstance(scene_contract.get("effectiveOutfitProfile"), dict) else {},
+        source_outfit_profile=scene_contract.get("sourceOutfitProfile") if isinstance(scene_contract.get("sourceOutfitProfile"), dict) else {},
+        fallback_outfit_profile=scene_contract.get("outfitProfile") if isinstance(scene_contract.get("outfitProfile"), dict) else {},
+    )
+    scene_contract["authoritativeOutfitSource"] = authoritative_outfit_source
+    scene_contract["authoritativeUpperGarmentIdentity"] = authoritative_upper_identity
     if is_lip_sync_route and scene_contract["active_connected_character_roles"] == ["character_1"]:
         scene_contract["single_character_mode_enforced"] = True
     dropped_by_must_not_appear = sorted([role for role in (scene_contract.get("resolvedRoles") or []) if role in must_not_appear_roles])
@@ -11683,6 +11833,23 @@ def clip_image(payload: ClipImageIn):
             "forbiddenChangeCount": int(comfy_assembly_debug.get("forbiddenChangeCount") or 0),
             "heroIdentityKeys": comfy_assembly_debug.get("heroIdentityKeys") if isinstance(comfy_assembly_debug.get("heroIdentityKeys"), list) else [],
             "outfitKeys": comfy_assembly_debug.get("outfitKeys") if isinstance(comfy_assembly_debug.get("outfitKeys"), list) else [],
+        }, ensure_ascii=False))
+        print("[OUTFIT CONTINUITY DEBUG] " + json.dumps({
+            "sceneId": scene_id,
+            "sceneIndex": comfy_assembly_debug.get("sceneIndex"),
+            "hasHeroAppearanceContract": bool(comfy_assembly_debug.get("hasHeroAppearanceContract")),
+            "hasSourceOutfitProfile": bool((scene_contract.get("sourceOutfitProfile") if isinstance(scene_contract, dict) else {})),
+            "hasEffectiveOutfitProfile": bool((scene_contract.get("effectiveOutfitProfile") if isinstance(scene_contract, dict) else {})),
+            "upperGarmentContinuityApplied": bool(comfy_assembly_debug.get("upperGarmentContinuityApplied")),
+            "upperGarmentRescueApplied": bool(comfy_assembly_debug.get("upperGarmentRescueApplied")),
+            "authoritativeOutfitSource": str(comfy_assembly_debug.get("authoritativeOutfitSource") or scene_contract.get("authoritativeOutfitSource") or "fallback"),
+            "usedPreviousGeneratedSceneAsHint": bool(comfy_assembly_debug.get("usedPreviousGeneratedSceneAsHint")),
+            "previousGeneratedSceneOverrideBlocked": bool(comfy_assembly_debug.get("previousGeneratedSceneOverrideBlocked")),
+            "trackedUpperGarmentKeys": comfy_assembly_debug.get("trackedUpperGarmentKeys") if isinstance(comfy_assembly_debug.get("trackedUpperGarmentKeys"), list) else [],
+            "trackedNeckline": str(comfy_assembly_debug.get("trackedNeckline") or ""),
+            "trackedSilhouette": str(comfy_assembly_debug.get("trackedSilhouette") or ""),
+            "trackedMaterial": str(comfy_assembly_debug.get("trackedMaterial") or ""),
+            "trackedShoulderCoverage": str(comfy_assembly_debug.get("trackedShoulderCoverage") or ""),
         }, ensure_ascii=False))
         high_identity_risk_rescue_applied = bool(comfy_assembly_debug.get("highIdentityRiskRescueApplied"))
         high_identity_risk_reasons = (
