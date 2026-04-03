@@ -1637,6 +1637,17 @@ export default function ScenarioStoryboardEditor({
                             const resolvedWorkflowKey = String(selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "");
                             let preparedAudioSliceUrl = String(selectedScene?.audioSliceUrl || "").trim();
                             const autoPreparedAudio = sceneLipSync && !preparedAudioSliceUrl;
+                            console.info("[SCENARIO VIDEO TRACE 1] button_click", {
+                              sceneId: String(selectedScene?.sceneId || ""),
+                              selectedSceneId: String(selectedSceneId || ""),
+                              nodeId: String(nodeId || ""),
+                              workflowKey: resolvedWorkflowKey,
+                              lipSyncRoute: sceneLipSync,
+                              hasImageUrl: Boolean(startFrameSourceUrl || selectedScene?.imageUrl),
+                              hasAudioSliceUrl: Boolean(preparedAudioSliceUrl || sceneAudioSliceUrl),
+                              videoStatus: String(videoStatus || ""),
+                              branch: autoPreparedAudio ? "editor_auto_slice_before_generate" : "editor_direct_generate",
+                            });
                             if (autoPreparedAudio) {
                               try {
                                 const extractResult = await handleExtractSceneAudio(selectedScene);
@@ -1646,6 +1657,21 @@ export default function ScenarioStoryboardEditor({
                               }
                             }
                             const whyBlocked = sceneLipSync && !preparedAudioSliceUrl ? "lip_sync_audio_missing_after_auto_extract" : "";
+                            console.info("[SCENARIO VIDEO TRACE 2] editor_onGenerateScene_called", {
+                              sceneId: String(selectedScene?.sceneId || ""),
+                              selectedSceneId: String(selectedSceneId || ""),
+                              nodeId: String(nodeId || ""),
+                              workflowKey: resolvedWorkflowKey,
+                              lipSyncRoute: sceneLipSync,
+                              hasImageUrl: Boolean(startFrameSourceUrl || selectedScene?.imageUrl),
+                              hasAudioSliceUrl: Boolean(preparedAudioSliceUrl || sceneAudioSliceUrl),
+                              videoStatus: String(videoStatus || ""),
+                              branch: whyBlocked ? "editor_block_before_onGenerateScene" : "editor_onGenerateScene_dispatch",
+                              autoPreparedAudio,
+                              preparedAudioSliceUrl: String(preparedAudioSliceUrl || ""),
+                              fallbackAudioSliceUrl: String(sceneAudioSliceUrl || ""),
+                              whyBlocked,
+                            });
                             console.debug("[SCENARIO EDITOR VIDEO SEND]", {
                               videoSendRouteTriggered: true,
                               selectedSceneId,
@@ -1662,7 +1688,7 @@ export default function ScenarioStoryboardEditor({
                               autoPreparedAudio,
                               whyBlocked,
                             });
-                            if (sceneLipSync && !preparedAudioSliceUrl) return;
+                            if (sceneLipSync && !preparedAudioSliceUrl && !sceneAudioSliceUrl) return;
                             onGenerateScene?.(nodeId, selectedSceneId, "video", generateMeta);
                           }}
                           disabled={videoStatus === "loading"}

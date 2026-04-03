@@ -9142,6 +9142,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || 'image_generation_failed');
       updateComfyScene(comfySafeIndex, { imageUrl: String(out.imageUrl || ''), imageFormat: comfyScenarioFormat, format: comfyScenarioFormat });
     } catch (e) {
+      traceScenarioVideo("[SCENARIO VIDEO TRACE ERROR] start_flow_exception", {
+        sceneId,
+        selectedSceneId: requestedSceneId,
+        nodeId: targetNodeId,
+        workflowKey: "",
+        lipSyncRoute: false,
+        hasImageUrl: false,
+        hasAudioSliceUrl: false,
+        videoStatus: "error",
+        branch: String(e?.message || e || ""),
+      });
       console.error(e);
       setComfyImageError(String(e?.message || e));
     } finally {
@@ -9393,6 +9404,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || 'video_generation_failed');
       updateComfyScene(comfySafeIndex, { videoUrl: String(legacyOut.videoUrl || ''), videoPanelOpen: true, videoStatus: 'done', videoError: '', videoJobId: '' });
     } catch (e) {
+      traceScenarioVideo("[SCENARIO VIDEO TRACE ERROR] start_flow_exception", {
+        sceneId,
+        selectedSceneId: requestedSceneId,
+        nodeId: targetNodeId,
+        workflowKey: "",
+        lipSyncRoute: false,
+        hasImageUrl: false,
+        hasAudioSliceUrl: false,
+        videoStatus: "error",
+        branch: String(e?.message || e || ""),
+      });
       console.error(e);
       updateComfyScene(comfySafeIndex, { videoStatus: 'error', videoError: String(e?.message || e) });
     }
@@ -10708,6 +10730,24 @@ Aspect ratio: ${imageFormat}`,
   }, [scenarioScenes]);
 
   const handleScenarioGenerateVideo = useCallback(async (options = {}) => {
+    const traceScenarioVideo = (label, payload = {}) => {
+      console.info(label, {
+        sceneId: String(payload?.sceneId || "").trim(),
+        selectedSceneId: String(payload?.selectedSceneId || "").trim(),
+        nodeId: String(payload?.nodeId || "").trim(),
+        workflowKey: String(payload?.workflowKey || "").trim(),
+        lipSyncRoute: Boolean(payload?.lipSyncRoute),
+        hasImageUrl: Boolean(payload?.hasImageUrl),
+        hasAudioSliceUrl: Boolean(payload?.hasAudioSliceUrl),
+        videoStatus: String(payload?.videoStatus || "").trim(),
+        branch: String(payload?.branch || "").trim(),
+      });
+    };
+    traceScenarioVideo("[SCENARIO VIDEO TRACE 4] handleScenarioGenerateVideo_enter", {
+      selectedSceneId: String(options?.sceneId || options?.selectedSceneId || scenarioEditor?.selectedSceneId || "").trim(),
+      nodeId: String(options?.nodeId || scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || "").trim(),
+      branch: "enter",
+    });
     console.info("[SCENARIO VIDEO FLOW]", {
       stage: "enter",
       options,
@@ -10759,6 +10799,16 @@ Aspect ratio: ${imageFormat}`,
       sceneId,
       scenesLength: targetScenes.length,
       selectedIndex: scenarioEditor.selected,
+    });
+    traceScenarioVideo("[SCENARIO VIDEO TRACE 5] scene_resolved", {
+      sceneId,
+      selectedSceneId: requestedSceneId,
+      nodeId: targetNodeId,
+      workflowKey: String(targetScene?.resolvedWorkflowKey || targetScene?.ltxMode || ""),
+      hasImageUrl: Boolean(targetScene?.imageUrl),
+      hasAudioSliceUrl: Boolean(targetScene?.audioSliceUrl),
+      videoStatus: String(targetScene?.videoStatus || ""),
+      branch: targetScene ? "scene_found" : "scene_missing",
     });
     if (CLIP_TRACE_SCENARIO_EDITOR_GENERATE) {
       console.debug("[SCENARIO GENERATE ROUTE]", {
@@ -10869,6 +10919,17 @@ Aspect ratio: ${imageFormat}`,
     }
 
     if (!hasImageForVideo) return;
+    traceScenarioVideo("[SCENARIO VIDEO TRACE 6] image_validation_passed", {
+      sceneId,
+      selectedSceneId: requestedSceneId,
+      nodeId: targetNodeId,
+      workflowKey: String(effectiveWorkflowKey || ""),
+      lipSyncRoute: effectiveWorkflowKey === "lip_sync_music",
+      hasImageUrl: hasImageForVideo,
+      hasAudioSliceUrl: Boolean(targetScene?.audioSliceUrl),
+      videoStatus: String(targetScene?.videoStatus || ""),
+      branch: "image_validation_passed",
+    });
     const effectiveLipSync = isLipSyncScene(targetScene);
     const effectiveRenderMode = targetScene?.renderMode || (effectiveLipSync ? "avatar_lipsync" : "standard_video");
     console.info("[SCENARIO VIDEO FLOW]", {
@@ -10881,6 +10942,17 @@ Aspect ratio: ${imageFormat}`,
 
     let attachedAudioSliceUrl = String(targetScene?.audioSliceUrl || "").trim();
     const lipSyncRoute = effectiveWorkflowKey === "lip_sync_music";
+    traceScenarioVideo("[SCENARIO VIDEO TRACE 7] workflow_resolved", {
+      sceneId,
+      selectedSceneId: requestedSceneId,
+      nodeId: targetNodeId,
+      workflowKey: String(effectiveWorkflowKey || ""),
+      lipSyncRoute,
+      hasImageUrl: hasImageForVideo,
+      hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
+      videoStatus: String(targetScene?.videoStatus || ""),
+      branch: "workflow_resolved",
+    });
     console.info("[SCENARIO VIDEO CLICK]", {
       sceneId,
       resolvedWorkflowKey: effectiveWorkflowKey,
@@ -10890,6 +10962,17 @@ Aspect ratio: ${imageFormat}`,
       willStartVideo: true,
     });
     if (lipSyncRoute) {
+      traceScenarioVideo("[SCENARIO VIDEO TRACE 8] before_auto_slice", {
+        sceneId,
+        selectedSceneId: requestedSceneId,
+        nodeId: targetNodeId,
+        workflowKey: String(effectiveWorkflowKey || ""),
+        lipSyncRoute,
+        hasImageUrl: hasImageForVideo,
+        hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
+        videoStatus: String(targetScene?.videoStatus || ""),
+        branch: attachedAudioSliceUrl ? "auto_slice_skip_existing" : "auto_slice_required",
+      });
       console.info("[SCENARIO LIP SYNC CHAIN]", {
         sceneId,
         stage: "before_auto_slice",
@@ -10901,6 +10984,17 @@ Aspect ratio: ${imageFormat}`,
       try {
         const extracted = await handleScenarioEditorExtractSceneAudio(targetNodeId, sceneId);
         attachedAudioSliceUrl = String(extracted?.audioSliceUrl || extracted?.sliceUrl || "").trim();
+        traceScenarioVideo("[SCENARIO VIDEO TRACE 9] after_auto_slice", {
+          sceneId,
+          selectedSceneId: requestedSceneId,
+          nodeId: targetNodeId,
+          workflowKey: String(effectiveWorkflowKey || ""),
+          lipSyncRoute,
+          hasImageUrl: hasImageForVideo,
+          hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
+          videoStatus: String(targetScene?.videoStatus || ""),
+          branch: attachedAudioSliceUrl ? "auto_slice_success" : "auto_slice_empty",
+        });
         console.info("[SCENARIO LIP SYNC CHAIN]", {
           sceneId,
           sliceExtracted: Boolean(attachedAudioSliceUrl),
@@ -10908,6 +11002,17 @@ Aspect ratio: ${imageFormat}`,
           continuingToVideoStart: Boolean(attachedAudioSliceUrl),
         });
       } catch (error) {
+        traceScenarioVideo("[SCENARIO VIDEO TRACE ERROR] auto_slice_failed", {
+          sceneId,
+          selectedSceneId: requestedSceneId,
+          nodeId: targetNodeId,
+          workflowKey: String(effectiveWorkflowKey || ""),
+          lipSyncRoute,
+          hasImageUrl: hasImageForVideo,
+          hasAudioSliceUrl: false,
+          videoStatus: String(targetScene?.videoStatus || ""),
+          branch: String(error?.message || "auto_slice_failed"),
+        });
         console.warn("[SCENARIO VIDEO FLOW] auto audio slice extraction failed", {
           sceneId,
           reason: String(error?.message || error || "audio_slice_auto_extract_failed"),
@@ -11168,6 +11273,17 @@ Aspect ratio: ${imageFormat}`,
         ?? targetScene?.audio_slice_expected_duration_sec
         ?? Math.max(0, safeAudioSliceEndSec - safeAudioSliceStartSec)
       );
+      traceScenarioVideo("[SCENARIO VIDEO TRACE 10] before_payload_build", {
+        sceneId,
+        selectedSceneId: requestedSceneId,
+        nodeId: targetNodeId,
+        workflowKey: String(effectiveWorkflowKey || ""),
+        lipSyncRoute,
+        hasImageUrl: hasImageForVideo,
+        hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
+        videoStatus: String(targetScene?.videoStatus || ""),
+        branch: "before_payload_build",
+      });
       const videoStartPayload = {
         sceneId,
         imageUrl: normalizedScenarioVideoSourceUrls.imageUrl,
@@ -11212,6 +11328,17 @@ Aspect ratio: ${imageFormat}`,
         sceneContract: scenarioContractPayloadSanitized,
         ...scenarioContractPayloadSanitized,
       };
+      traceScenarioVideo("[SCENARIO VIDEO TRACE 11] after_payload_build", {
+        sceneId,
+        selectedSceneId: requestedSceneId,
+        nodeId: targetNodeId,
+        workflowKey: String(videoStartPayload?.resolvedWorkflowKey || ""),
+        lipSyncRoute,
+        hasImageUrl: Boolean(videoStartPayload?.imageUrl || videoStartPayload?.startImageUrl),
+        hasAudioSliceUrl: Boolean(videoStartPayload?.audioSliceUrl),
+        videoStatus: String(targetScene?.videoStatus || ""),
+        branch: "after_payload_build",
+      });
       console.info("[SCENARIO VIDEO FLOW]", {
         stage: "video_payload_built",
         sceneId,
@@ -11257,6 +11384,17 @@ Aspect ratio: ${imageFormat}`,
           willCallVideoStart: true,
         });
       }
+      traceScenarioVideo("[SCENARIO VIDEO TRACE 12] before_video_start_fetch", {
+        sceneId,
+        selectedSceneId: requestedSceneId,
+        nodeId: targetNodeId,
+        workflowKey: String(videoStartPayload?.resolvedWorkflowKey || ""),
+        lipSyncRoute,
+        hasImageUrl: Boolean(videoStartPayload?.imageUrl || videoStartPayload?.startImageUrl),
+        hasAudioSliceUrl: Boolean(videoStartPayload?.audioSliceUrl),
+        videoStatus: String(targetScene?.videoStatus || ""),
+        branch: endpoint,
+      });
       const out = await fetchJson(endpoint, {
         method: "POST",
         timeoutMs: VIDEO_START_TIMEOUT_MS,
@@ -11270,6 +11408,17 @@ Aspect ratio: ${imageFormat}`,
         status: String(out?.status || ""),
         code: String(out?.code || ""),
         hint: String(out?.hint || ""),
+      });
+      traceScenarioVideo("[SCENARIO VIDEO TRACE 13] after_video_start_fetch", {
+        sceneId,
+        selectedSceneId: requestedSceneId,
+        nodeId: targetNodeId,
+        workflowKey: String(videoStartPayload?.resolvedWorkflowKey || ""),
+        lipSyncRoute,
+        hasImageUrl: Boolean(videoStartPayload?.imageUrl || videoStartPayload?.startImageUrl),
+        hasAudioSliceUrl: Boolean(videoStartPayload?.audioSliceUrl),
+        videoStatus: String(out?.status || targetScene?.videoStatus || ""),
+        branch: out?.ok ? "video_start_ok" : "video_start_not_ok",
       });
       if (lipSyncRoute) {
         console.info("[SCENARIO LIP SYNC START RESPONSE]", {
@@ -13558,6 +13707,17 @@ onClipSec: (nodeId, value) => {
               onScenarioSceneGenerate: (nodeId, sceneId, assetType = "scene", meta = {}) => {
                 const normalizedAction = String(assetType || "scene").trim().toLowerCase();
                 const normalizedSceneId = String(sceneId || "").trim();
+                console.info("[SCENARIO VIDEO TRACE 3] page_onGenerateScene_enter", {
+                  sceneId: normalizedSceneId,
+                  selectedSceneId: String(scenarioEditor?.selectedSceneId || ""),
+                  nodeId: String(nodeId || ""),
+                  workflowKey: String(meta?.resolvedWorkflowKey || ""),
+                  lipSyncRoute: String(meta?.resolvedWorkflowKey || "").trim().toLowerCase() === "lip_sync_music",
+                  hasImageUrl: Boolean(meta?.hasImageUrl),
+                  hasAudioSliceUrl: Boolean(meta?.hasAudioSliceUrl),
+                  videoStatus: String(meta?.videoStatus || ""),
+                  branch: normalizedAction || "scene",
+                });
                 const hasExplicitRequestedSceneId = !!normalizedSceneId;
                 const sourceNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === nodeId && nodeItem?.type === "scenarioStoryboard") || null;
                 const rawScenes = Array.isArray(sourceNode?.data?.scenes) ? sourceNode.data.scenes : [];
