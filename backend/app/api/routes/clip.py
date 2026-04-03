@@ -10256,6 +10256,13 @@ def clip_image(payload: ClipImageIn):
 
     role_type_by_role = _build_role_type_by_role(scene_active_roles, reference_profiles)
 
+    identity_contract = scene_contract.get("identityContract") if isinstance(scene_contract.get("identityContract"), dict) else {}
+    task_execution = identity_contract.get("task_execution") if isinstance(identity_contract.get("task_execution"), dict) else {}
+    task_execution_branch = str(task_execution.get("branch") or "")
+    outfit_lock_mode = str(task_execution.get("outfit_lock_mode") or "")
+    source_outfit_preserved = bool(task_execution.get("preserve_source_outfit", True))
+    source_outfit_replaced = bool(task_execution.get("source_outfit_replaced", False))
+
     refs_debug = {
         "characterRefCount": len(character_refs),
         "characterImagesAttached": len(character_images),
@@ -10290,7 +10297,7 @@ def clip_image(payload: ClipImageIn):
         "mustNotAppear": scene_contract.get("mustNotAppear") or [],
         "identityLock": bool(scene_contract.get("identityLock")),
         "taskMode": scene_contract.get("taskMode") or "keep_identity",
-        "identityContract": scene_contract.get("identityContract") if isinstance(scene_contract.get("identityContract"), dict) else {},
+        "identityContract": identity_contract,
         "outfitProfile": scene_contract.get("outfitProfile") if isinstance(scene_contract.get("outfitProfile"), dict) else {},
         "sourceOutfitProfile": scene_contract.get("sourceOutfitProfile") if isinstance(scene_contract.get("sourceOutfitProfile"), dict) else {},
         "targetOutfitProfile": scene_contract.get("targetOutfitProfile") if isinstance(scene_contract.get("targetOutfitProfile"), dict) else {},
@@ -10300,10 +10307,10 @@ def clip_image(payload: ClipImageIn):
         "familyModule": ((scene_contract.get("outfitProfile") or {}).get("family_module") if isinstance(scene_contract.get("outfitProfile"), dict) else "unknown") or "unknown",
         "familyFields": ((scene_contract.get("outfitProfile") or {}).get("family_fields") if isinstance(scene_contract.get("outfitProfile"), dict) else []) or [],
         "materialMotionProfile": (((scene_contract.get("identityContract") or {}).get("motion_constraints")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {},
-        "taskExecutionBranch": ((((scene_contract.get("identityContract") or {}).get("task_execution")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {}).get("branch") or "keep_identity_hard_lock",
-        "outfitLockMode": ((((scene_contract.get("identityContract") or {}).get("task_execution")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {}).get("outfit_lock_mode") or "strict",
-        "sourceOutfitPreserved": bool((((scene_contract.get("identityContract") or {}).get("task_execution")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {}).get("preserve_source_outfit", True),
-        "sourceOutfitReplaced": bool((((scene_contract.get("identityContract") or {}).get("task_execution")) if isinstance(scene_contract.get("identityContract"), dict) else {}) or {}).get("source_outfit_replaced", False),
+        "taskExecutionBranch": task_execution_branch or "keep_identity_hard_lock",
+        "outfitLockMode": outfit_lock_mode or "strict",
+        "sourceOutfitPreserved": source_outfit_preserved,
+        "sourceOutfitReplaced": source_outfit_replaced,
         "environmentLock": bool(scene_contract.get("environmentLock")),
         "styleLock": bool(scene_contract.get("styleLock")),
         "degradedConsistency": bool(scene_contract.get("degradedRoles")),
