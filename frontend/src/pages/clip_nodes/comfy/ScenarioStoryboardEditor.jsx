@@ -1640,7 +1640,7 @@ export default function ScenarioStoryboardEditor({
                             if (autoPreparedAudio) {
                               try {
                                 const extractResult = await handleExtractSceneAudio(selectedScene);
-                                preparedAudioSliceUrl = String(extractResult?.audioSliceUrl || "").trim();
+                                preparedAudioSliceUrl = String(extractResult?.audioSliceUrl || extractResult?.sliceUrl || "").trim();
                               } catch {
                                 preparedAudioSliceUrl = "";
                               }

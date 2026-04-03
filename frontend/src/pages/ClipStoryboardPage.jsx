@@ -10642,7 +10642,7 @@ Aspect ratio: ${imageFormat}`,
       audioUrl: selectedAudioUrl,
       sourceNode,
     });
-    const normalizedDirectUrl = String(directResult?.audioSliceUrl || "").trim();
+    const normalizedDirectUrl = String(directResult?.audioSliceUrl || directResult?.sliceUrl || "").trim();
     if (normalizedDirectUrl) {
       return {
         audioSliceUrl: normalizedDirectUrl,
@@ -10872,10 +10872,25 @@ Aspect ratio: ${imageFormat}`,
     const effectiveVideoProvider = resolveScenarioSceneVideoProvider(targetScene);
 
     let attachedAudioSliceUrl = String(targetScene?.audioSliceUrl || "").trim();
-    if (effectiveWorkflowKey === "lip_sync_music" && !attachedAudioSliceUrl) {
+    const lipSyncRoute = effectiveWorkflowKey === "lip_sync_music";
+    console.info("[SCENARIO VIDEO CLICK]", {
+      sceneId,
+      resolvedWorkflowKey: effectiveWorkflowKey,
+      lipSyncRoute,
+      existingAudioSliceUrl: attachedAudioSliceUrl,
+      willExtractSlice: lipSyncRoute && !attachedAudioSliceUrl,
+      willStartVideo: true,
+    });
+    if (lipSyncRoute && !attachedAudioSliceUrl) {
       try {
         const extracted = await handleScenarioEditorExtractSceneAudio(targetNodeId, sceneId);
-        attachedAudioSliceUrl = String(extracted?.audioSliceUrl || "").trim();
+        attachedAudioSliceUrl = String(extracted?.audioSliceUrl || extracted?.sliceUrl || "").trim();
+        console.info("[SCENARIO LIP SYNC CHAIN]", {
+          sceneId,
+          sliceExtracted: Boolean(attachedAudioSliceUrl),
+          resolvedAudioSliceUrl: attachedAudioSliceUrl,
+          continuingToVideoStart: Boolean(attachedAudioSliceUrl),
+        });
       } catch (error) {
         console.warn("[SCENARIO VIDEO FLOW] auto audio slice extraction failed", {
           sceneId,
@@ -11130,7 +11145,6 @@ Aspect ratio: ${imageFormat}`,
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/video/start", buildScenarioTransferLogData(targetScene, scenarioContractPayload));
       }
-      const lipSyncRoute = effectiveWorkflowKey === "lip_sync_music";
       const safeAudioSliceStartSec = Number(targetScene?.audioSliceStartSec ?? targetScene?.audio_slice_start_sec ?? targetScene?.t0 ?? targetScene?.start ?? 0);
       const safeAudioSliceEndSec = Number(targetScene?.audioSliceEndSec ?? targetScene?.audio_slice_end_sec ?? targetScene?.t1 ?? targetScene?.end ?? safeAudioSliceStartSec);
       const safeAudioSliceExpectedDurationSec = Number(
