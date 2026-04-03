@@ -796,9 +796,42 @@ def _strip_route_risky_rotation_markers(text: str) -> str:
     return cleaned
 
 
+def _rewrite_route_risky_rotation_language(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    rewritten = raw
+    phrase_rewrites: list[tuple[str, str]] = [
+        (r"\bbegins to\s+(?:spin|twirl|swirl)\b", "begins a controlled turn-like movement"),
+        (r"\b(?:spin-first|spin first|twirl-first|twirl first|rotation-first choreography|rotation first choreography)\b", "controlled rotational suggestion through body angle, step, and fabric movement"),
+        (r"\b(?:fast whip-turn|fast whip turn|whip-turn|whip turn)\b", "safe pivot with controlled camera progression"),
+        (r"\b(?:full-body spin|full body spin|aggressive twirl|risky rotation)\b", "dress-led motion beat with safe pivot and flowing fabric response"),
+        (r"\b(?:dramatic dress-sweep|dramatic dress sweep|dress sweep|dramatic sweep)\b", "flowing fabric response with controlled body angle change"),
+        (r"\boverhead dance spectacle\b", "camera reads motion through spatial progression, not sharp rotation"),
+    ]
+    for pattern, replacement in phrase_rewrites:
+        rewritten = re.sub(pattern, replacement, rewritten, flags=re.IGNORECASE)
+
+    word_rewrites: list[tuple[str, str]] = [
+        (r"\bspinning\b", "in controlled turn-like motion"),
+        (r"\btwirling\b", "in controlled turn-like motion"),
+        (r"\bswirling\b", "with flowing fabric response"),
+        (r"\bspin\b", "controlled turn-like movement"),
+        (r"\btwirl\b", "controlled turn-like movement"),
+        (r"\bswirl\b", "controlled flowing movement"),
+    ]
+    for pattern, replacement in word_rewrites:
+        rewritten = re.sub(pattern, replacement, rewritten, flags=re.IGNORECASE)
+
+    rewritten = re.sub(r"\s{2,}", " ", rewritten)
+    rewritten = re.sub(r"\s+([,;:.])", r"\1", rewritten)
+    rewritten = re.sub(r"([,;:.]){2,}", r"\1", rewritten)
+    return rewritten.strip(" ,;:.")
+
+
 def _normalize_image_prompt_by_route(*, route: str, image_prompt: str, fallback_text: str = "") -> str:
     route_key = str(route or "").strip().lower()
-    base = _strip_route_risky_rotation_markers(image_prompt) or _strip_route_risky_rotation_markers(fallback_text)
+    base = _rewrite_route_risky_rotation_language(image_prompt) or _rewrite_route_risky_rotation_language(fallback_text)
     if route_key == "lip_sync_music":
         if not base:
             return (
@@ -818,6 +851,17 @@ def _normalize_image_prompt_by_route(*, route: str, image_prompt: str, fallback_
             f"{base}. Action-space progression stays safe via step/pivot/gesture and evolving body angles, with camera-led dynamism and beat-shaped intensity."
         ).strip()
     return base or str(image_prompt or "").strip() or str(fallback_text or "").strip()
+
+
+def _compact_non_lip_subtext(value: str, *, limit: int = 220) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    text = re.sub(r"[\"“”'`].{12,}?[\"“”'`]", "", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,;:.")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip(" ,;:.") + "…"
 
 
 def _coerce_optional_bool(value: Any) -> bool | None:
@@ -8512,7 +8556,8 @@ def _build_scene_framing_and_concert_staging_block(
         lines.extend([
             "- non-lip scene: DO NOT inherit lip-sync portrait defaults",
             "- prioritize action staging, spatial progression, and environment readability over emotional portrait framing",
-            "- allow wide/full-body/environmental-medium framing when it better serves action",
+            "- prefer medium / three_quarter / medium_full framing for identity-safe readability unless a true establishing scale is required",
+            "- allow wide/full-body framing only when spatial storytelling explicitly requires it",
             "- same venue continuity must be kept while camera zone and staging should progress",
         ])
     if is_concert_scene:
@@ -8577,6 +8622,14 @@ def _build_comfy_image_prompt_assembly(
     profiles = reference_profiles if isinstance(reference_profiles, dict) else {}
     multi_view_profile = multi_view_reference_profile if isinstance(multi_view_reference_profile, dict) else {}
     multi_view_lines = [str(line or "").strip() for line in (multi_view_context_lines or []) if str(line or "").strip()]
+    route_hint = " ".join([
+        str(contract.get("route") or ""),
+        str(contract.get("sourceRoute") or ""),
+        str(contract.get("video_generation_route") or ""),
+        str(contract.get("planned_video_generation_route") or ""),
+        str(contract.get("render_mode") or ""),
+    ]).lower()
+    is_non_lip_route = ("lip_sync" not in route_hint) and any(marker in route_hint for marker in ("i2v", "first_last", "f_l", "image_video"))
 
     def _normalized_gender_presentation(raw: Any) -> str:
         value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
@@ -8838,7 +8891,7 @@ def _build_comfy_image_prompt_assembly(
     scene_meaning_lines = [
         "SCENE LAYER (PRIORITY 2):",
         "SCENE MEANING:",
-        f"- scene delta: {_sanitize_visual_prompt_text(scene_delta)}",
+        f"- scene delta: {_sanitize_visual_prompt_text(_compact_non_lip_subtext(scene_delta) if is_non_lip_route else scene_delta)}",
         f"- scene text/context: {_sanitize_visual_prompt_text(scene_text or text_input or '')}",
     ]
     if scene_goal_value:
@@ -8846,6 +8899,24 @@ def _build_comfy_image_prompt_assembly(
     if scene_narrative_step_value:
         scene_meaning_lines.append(f"- scene progression cue: {scene_narrative_step_value}")
     scene_meaning_block = "\n".join(scene_meaning_lines)
+    non_lip_identity_first_block = ""
+    non_lip_lyric_guard_block = ""
+    if is_non_lip_route:
+        non_lip_identity_first_block = "\n".join([
+            "NON-LIP IDENTITY-OUTFIT LOCK (PRIORITY 0, STRICT):",
+            "- same exact woman as character_1 reference (source-of-truth identity)",
+            "- keep same face identity, same hairstyle/bun structure, same dress silhouette, same sleeves",
+            "- keep same rose placement/rose appliques, same magenta lining, same boots",
+            "- do not redesign garment; do not change sleeve length; do not replace outfit cut",
+            "- do not change hair structure; do not invent a new fashion variant",
+            "- identity/outfit continuity outranks lyrical interpretation and story flourish",
+        ])
+        non_lip_lyric_guard_block = "\n".join([
+            "NON-LIP LYRIC WEIGHT CONTROL (STRICT):",
+            "- lyrical meaning is allowed only as short emotional subtext",
+            "- never let lyrical narrative override face/hair/outfit continuity",
+            "- prompt priority: identity/outfit lock → pose/framing/body orientation → venue continuity → short emotional subtext → safe motion hint",
+        ])
 
     camera_view_consistency_block = "\n".join([
         "CAMERA → VIEW CONSISTENCY:",
@@ -8909,6 +8980,7 @@ def _build_comfy_image_prompt_assembly(
 
     assembled_prompt = "\n\n".join([
         hard_continuity_contract_block,
+        non_lip_identity_first_block,
         opening_shot_realism_block,
         framing_and_staging_block,
         identity_layer_block,
@@ -8938,6 +9010,8 @@ def _build_comfy_image_prompt_assembly(
         multi_view_lock_block,
         camera_view_consistency_block,
         view_continuity_block,
+        scene_meaning_block,
+        non_lip_lyric_guard_block,
         forbidden_changes_block,
         "CHARACTER ANCHOR:\n" + f"- {effective_character_anchor or 'coherent single-character identity across all scenes'}",
     ])
@@ -9007,6 +9081,8 @@ def _build_comfy_image_prompt_assembly(
         "lightWorldBlockPreview": physics_blocks["lightWorldBlock"],
         "subjectIdentityBlockPreview": physics_blocks["subjectIdentityBlock"],
         "sceneMeaningBlockPreview": scene_meaning_block,
+        "nonLipIdentityFirstBlockPreview": non_lip_identity_first_block,
+        "nonLipLyricGuardBlockPreview": non_lip_lyric_guard_block,
         "continuityBlockPreview": continuity_block,
         "sourceControlBlockPreview": source_control_block,
         "physicalSceneStateBlockPreview": physics_blocks["physicalSceneStateBlock"],
@@ -9307,6 +9383,32 @@ def clip_image(payload: ClipImageIn):
     scene_contract["supportEntityIds"] = support_entity_ids
     scene_contract["mustAppear"] = must_appear_roles
     scene_contract["mustAppearCastRoles"] = must_appear_roles
+    route_hint_lower = str(route_hint or scene_contract.get("sourceRoute") or "").strip().lower()
+    non_lip_route = route_hint_lower in {"i2v", "first_last", "f_l"}
+    if non_lip_route:
+        has_character_1_ref = bool(comfy_refs_by_role.get("character_1"))
+        character_1_is_active = "character_1" in scene_active_roles or "character_1" in must_appear_roles
+        if has_character_1_ref and character_1_is_active:
+            scene_contract["identityLock"] = True
+            scene_contract["identityLockApplied"] = True
+            scene_contract["outfitLock"] = True
+            fields = [str(x or "").strip() for x in (scene_contract.get("identityLockFieldsUsed") or []) if str(x or "").strip()]
+            fields.extend([
+                "face_identity",
+                "hair_identity",
+                "hair_structure_identity",
+                "garment_silhouette_identity",
+                "sleeve_identity",
+                "rose_applique_identity",
+                "lining_color_identity",
+                "footwear_identity",
+            ])
+            scene_contract["identityLockFieldsUsed"] = list(dict.fromkeys(fields))
+        scene_contract["active_connected_character_roles"] = [
+            role for role in ("character_1", "character_2", "character_3")
+            if bool(comfy_refs_by_role.get(role)) and (role in scene_active_roles or role in must_appear_roles)
+        ]
+        scene_contract["single_character_mode_enforced"] = bool(scene_contract["active_connected_character_roles"] == ["character_1"])
     dropped_by_must_not_appear = sorted([role for role in (scene_contract.get("resolvedRoles") or []) if role in must_not_appear_roles])
     connected_refs_by_role = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
     refs_used_compact = scene_refs_used if isinstance(scene_refs_used, list) else (list((scene_refs_used or {}).keys()) if isinstance(scene_refs_used, dict) else [])

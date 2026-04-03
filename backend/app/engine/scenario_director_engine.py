@@ -230,7 +230,8 @@ def _normalize_scene_canon_by_route(
                 f"{normalized_description}. Beat shapes mood, intensity, and energy progression."
             ).strip(". ")
         if framing not in NON_LIP_ACTION_FRAMINGS:
-            framing = "wide_action"
+            establishing_signal = any(token in descriptor_text for token in ("establish", "venue reveal", "wide reveal", "crowd scale", "panorama"))
+            framing = "wide_action" if establishing_signal else "medium"
     return normalized_description.strip(), framing
 
 
@@ -256,11 +257,44 @@ def _strip_risky_rotation_markers(text: str) -> str:
     return cleaned
 
 
+def _rewrite_risky_rotation_markers(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    rewritten = raw
+    phrase_rewrites: list[tuple[str, str]] = [
+        (r"\bbegins to\s+(?:spin|twirl|swirl)\b", "begins a controlled turn-like movement"),
+        (r"\b(?:spin-first|spin first|twirl-first|twirl first|rotation-first choreography|rotation first choreography)\b", "controlled rotational suggestion through body angle, step, and fabric movement"),
+        (r"\b(?:fast whip-turn|fast whip turn|whip-turn|whip turn)\b", "safe pivot with controlled camera progression"),
+        (r"\b(?:full-body spin|full body spin|aggressive twirl|risky rotation)\b", "dress-led motion beat with safe pivot and flowing fabric response"),
+        (r"\b(?:dramatic dress-sweep|dramatic dress sweep|dress sweep|dramatic sweep)\b", "flowing fabric response with controlled body angle change"),
+        (r"\boverhead dance spectacle\b", "camera reads motion through spatial progression, not sharp rotation"),
+    ]
+    for pattern, replacement in phrase_rewrites:
+        rewritten = re.sub(pattern, replacement, rewritten, flags=re.IGNORECASE)
+
+    word_rewrites: list[tuple[str, str]] = [
+        (r"\bspinning\b", "in controlled turn-like motion"),
+        (r"\btwirling\b", "in controlled turn-like motion"),
+        (r"\bswirling\b", "with flowing fabric response"),
+        (r"\bspin\b", "controlled turn-like movement"),
+        (r"\btwirl\b", "controlled turn-like movement"),
+        (r"\bswirl\b", "controlled flowing movement"),
+    ]
+    for pattern, replacement in word_rewrites:
+        rewritten = re.sub(pattern, replacement, rewritten, flags=re.IGNORECASE)
+
+    rewritten = re.sub(r"\s{2,}", " ", rewritten)
+    rewritten = re.sub(r"\s+([,;:.])", r"\1", rewritten)
+    rewritten = re.sub(r"([,;:.]){2,}", r"\1", rewritten)
+    return rewritten.strip(" ,;:.")
+
+
 def _normalize_image_prompt_by_route(*, route: str, image_prompt: str, fallback_text: str = "") -> str:
     route_key = str(route or "").strip().lower()
-    base = _strip_risky_rotation_markers(image_prompt)
+    base = _rewrite_risky_rotation_markers(image_prompt)
     if not base:
-        base = _strip_risky_rotation_markers(fallback_text)
+        base = _rewrite_risky_rotation_markers(fallback_text)
     if route_key == "lip_sync_music":
         if not base:
             return (
