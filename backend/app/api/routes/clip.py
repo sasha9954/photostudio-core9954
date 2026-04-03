@@ -9982,6 +9982,7 @@ def _build_comfy_image_prompt_assembly(
         f"- continuity constraints: {continuity_value}",
         f"- session baseline: {json.dumps(session_baseline or {}, ensure_ascii=False)}",
     ])
+    world_contract = _build_world_continuity_contract(contract)
     world_lock_block = "\n".join([
         "WORLD / LOCATION LOCK (STRICT):",
         f"- room identity: {world_contract.get('room_identity') or 'same room identity'}",
