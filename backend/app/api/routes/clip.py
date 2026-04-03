@@ -9327,6 +9327,8 @@ def _build_high_identity_risk_rescue_block(rescue: dict[str, Any]) -> str:
     lines = [
         "HIGH IDENTITY-RISK SCENE RESCUE (UNIVERSAL, STRICT):",
         "- scene is high risk for identity drift: preserve the SAME woman from confirmed stable anchor, not a reimagined portrait",
+        "- if previous confirmed stable scene image is attached inline, treat it as continuity anchor for the SAME person/look (face/hair/outfit), never as a second actress",
+        "- continuity stable image anchor reinforces identity continuity and does not replace primary character role references",
         "- no portrait-beauty reinvention, no different actress effect, no face drift, no age drift, no perceived body/fullness drift",
         "- preserve hair silhouette and base identity while allowing only beat-level expression changes",
         "- preserve garment category, coverage identity, construction identity, silhouette identity, and visible signature details",
@@ -9335,6 +9337,7 @@ def _build_high_identity_risk_rescue_block(rescue: dict[str, Any]) -> str:
         "- do not collapse into face-only glamour crop if it weakens identity/outfit continuity",
         "- keep camera physically readable and upright; no sideways/lying/rotated portrait reinterpretation unless explicitly requested",
         "- lighting/style shifts are allowed only as mood shifts inside the same world; no disconnected portrait-world reinvention",
+        "- do not let beauty-light drift override stable continuity anchor evidence from confirmed scene",
         "- when framing becomes tighter, preserve upper-body garment logic instead of drifting to anonymous beauty-face crop",
     ]
     if identity_memory:
@@ -11006,6 +11009,63 @@ def clip_image(payload: ClipImageIn):
         }, ensure_ascii=False))
         refs_debug["comfyAssemblyDebug"] = comfy_assembly_debug
         print("[COMFY IMAGE ASSEMBLY]", json.dumps(comfy_assembly_debug, ensure_ascii=False))
+        high_identity_risk_rescue_applied = bool(comfy_assembly_debug.get("highIdentityRiskRescueApplied"))
+        high_identity_risk_reasons = (
+            comfy_assembly_debug.get("highIdentityRiskReasons")
+            if isinstance(comfy_assembly_debug.get("highIdentityRiskReasons"), list)
+            else []
+        )
+        continuity_stable_image_source = str(comfy_assembly_debug.get("stableSceneAnchorSource") or "none").strip() or "none"
+        continuity_stable_image_source_usable = continuity_stable_image_source != "none"
+        previous_confirmed_stable_image_loaded = False
+        previous_confirmed_stable_image_load_failure = ""
+        previous_confirmed_stable_image_inline = None
+        previous_confirmed_stable_inline_attached = False
+        previous_confirmed_stable_inline_part_count = 0
+        continuity_stable_image_used = False
+        continuity_stable_image_fallback_used = False
+        continuity_visual_anchor_mode = "disabled_not_high_risk"
+        attached_previous_scene_inline_part_count = 0
+
+        if high_identity_risk_rescue_applied:
+            if previous_confirmed_stable_image_url and continuity_stable_image_source_usable:
+                previous_confirmed_stable_image_inline = _load_reference_image_inline(previous_confirmed_stable_image_url)
+                if previous_confirmed_stable_image_inline:
+                    previous_confirmed_stable_image_loaded = True
+                    continuity_stable_image_used = True
+                    continuity_visual_anchor_mode = "stable_confirmed_inline"
+                else:
+                    previous_confirmed_stable_image_load_failure = _probe_reference_image_inline_failure(previous_confirmed_stable_image_url)
+                    continuity_visual_anchor_mode = "stable_confirmed_load_failed"
+            elif previous_confirmed_stable_image_url and not continuity_stable_image_source_usable:
+                continuity_visual_anchor_mode = "stable_source_unusable"
+            elif not previous_confirmed_stable_image_url:
+                continuity_visual_anchor_mode = "stable_missing_url"
+
+            if (not continuity_stable_image_used) and previous_scene_image_inline:
+                continuity_stable_image_fallback_used = True
+                continuity_visual_anchor_mode = "fallback_previous_scene_inline"
+            elif (not continuity_stable_image_used) and (not previous_scene_image_inline) and continuity_visual_anchor_mode in {
+                "stable_confirmed_load_failed",
+                "stable_missing_url",
+                "stable_source_unusable",
+            }:
+                continuity_visual_anchor_mode = "fallback_previous_scene_unavailable"
+
+        refs_debug.update({
+            "highIdentityRiskRescueApplied": high_identity_risk_rescue_applied,
+            "highIdentityRiskReasons": high_identity_risk_reasons,
+            "stableSceneAnchorSource": continuity_stable_image_source,
+            "previousConfirmedStableImageUrl": previous_confirmed_stable_image_url or None,
+            "previousConfirmedStableImageLoaded": previous_confirmed_stable_image_loaded,
+            "previousConfirmedStableImageLoadFailure": previous_confirmed_stable_image_load_failure or None,
+            "previousConfirmedStableInlineAttached": previous_confirmed_stable_inline_attached,
+            "previousConfirmedStableInlinePartCount": previous_confirmed_stable_inline_part_count,
+            "continuityStableImageSource": continuity_stable_image_source,
+            "continuityStableImageUsed": continuity_stable_image_used,
+            "continuityStableImageFallbackUsed": continuity_stable_image_fallback_used,
+            "continuityVisualAnchorMode": continuity_visual_anchor_mode,
+        })
 
         has_role_aware_refs = any(len(comfy_refs_by_role.get(role) or []) > 0 for role in comfy_roles)
         has_incoming_role_refs = False
@@ -11032,9 +11092,25 @@ def clip_image(payload: ClipImageIn):
                 "text": "Session baseline (persistent world anchors for whole storyboard):\n" + json.dumps(session_baseline, ensure_ascii=False)
             })
 
-        if previous_scene_image_inline:
+        if high_identity_risk_rescue_applied and continuity_stable_image_used and previous_confirmed_stable_image_inline:
+            parts.append({"text": "PREVIOUS CONFIRMED STABLE SCENE IMAGE (visual continuity anchor for the same person/look; reinforcement only, never a second actor):"})
+            parts.append(previous_confirmed_stable_image_inline)
+            previous_confirmed_stable_inline_attached = True
+            previous_confirmed_stable_inline_part_count = 1
+        elif high_identity_risk_rescue_applied and continuity_stable_image_fallback_used and previous_scene_image_inline:
+            parts.append({"text": "Previous generated scene image (high identity-risk fallback continuity anchor; use as same-person continuity support only):"})
+            parts.append(previous_scene_image_inline)
+            attached_previous_scene_inline_part_count = 1
+        elif previous_scene_image_inline:
             parts.append({"text": "Previous generated scene image (visual continuity reference, do not clone composition):"})
             parts.append(previous_scene_image_inline)
+            attached_previous_scene_inline_part_count = 1
+
+        refs_debug["previousConfirmedStableInlineAttached"] = previous_confirmed_stable_inline_attached
+        refs_debug["previousConfirmedStableInlinePartCount"] = previous_confirmed_stable_inline_part_count
+        refs_debug["continuityStableImageUsed"] = continuity_stable_image_used
+        refs_debug["continuityStableImageFallbackUsed"] = continuity_stable_image_fallback_used
+        refs_debug["continuityVisualAnchorMode"] = continuity_visual_anchor_mode
         if first_frame_reference_inline:
             parts.append({"text": "Current scene FIRST FRAME anchor (hard continuity reference for END frame generation):"})
             parts.append(first_frame_reference_inline)
@@ -11151,7 +11227,11 @@ def clip_image(payload: ClipImageIn):
             "locationParts": len(location_images) + len(comfy_inline_parts_by_role.get("location") or []),
             "styleParts": len(style_images) + len(comfy_inline_parts_by_role.get("style") or []),
             "propsParts": len(props_images) + len(comfy_inline_parts_by_role.get("props") or []),
-            "previousSceneParts": 1 if previous_scene_image_inline else 0,
+            "previousSceneParts": attached_previous_scene_inline_part_count,
+            "previousConfirmedStableParts": previous_confirmed_stable_inline_part_count,
+            "continuityStableImageUsed": continuity_stable_image_used,
+            "continuityStableImageFallbackUsed": continuity_stable_image_fallback_used,
+            "continuityVisualAnchorMode": continuity_visual_anchor_mode,
             "heroEntityId": hero_entity_id or None,
             "heroAttached": hero_attached,
             "attachOrder": role_attach_order,
