@@ -13195,7 +13195,7 @@ def clip_video(payload: ClipVideoIn):
     payload_resolved_workflow_raw = str(payload.resolvedWorkflowKey or "").strip()
     payload_resolved_workflow_normalized = _normalize_ltx_workflow_key(payload_resolved_workflow_raw)
     if direct_gemini_storyboard_mode and payload_resolved_workflow_normalized:
-        is_lipsync = payload_resolved_workflow_normalized == "lip_sync"
+        is_lipsync = payload_resolved_workflow_normalized in {"lip_sync", "lip_sync_music"}
         mode = "continuous" if payload_resolved_workflow_normalized in (LTX_FIRST_LAST_WORKFLOW_KEYS | LTX_CONTINUATION_WORKFLOW_KEYS) else ("lipsync" if is_lipsync else "single")
     route_from_workflow = DIRECT_STORYBOARD_WORKFLOW_KEY_TO_PUBLIC_ROUTE.get(payload_resolved_workflow_normalized or "")
     route_render_mode_consistent = True
@@ -13278,7 +13278,7 @@ def clip_video(payload: ClipVideoIn):
         mode = "continuous"
     elif final_workflow_key in LTX_CONTINUATION_WORKFLOW_KEYS:
         mode = "continuous"
-    elif final_workflow_key == "lip_sync":
+    elif final_workflow_key in {"lip_sync", "lip_sync_music"}:
         mode = "lipsync"
     else:
         mode = "single"
@@ -13286,19 +13286,20 @@ def clip_video(payload: ClipVideoIn):
     requested_provider = str(payload.provider or "").strip().lower()
     provider = requested_provider or str(settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
     provider_reason = "payload_or_default"
-    if final_workflow_key == "lip_sync":
+    if final_workflow_key in {"lip_sync", "lip_sync_music"}:
         provider = requested_provider or "kie"
         provider_reason = "dedicated_lipsync_provider_strategy"
     raw_workflow_key_for_compat = str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()
     normalized_workflow_key_for_compat = _normalize_ltx_workflow_key(raw_workflow_key_for_compat)
+    is_lipsync_provider_route = (
+        final_workflow_key in {"lip_sync", "lip_sync_music"}
+        or normalized_workflow_key_for_compat in {"lip_sync", "lip_sync_music"}
+        or str(raw_workflow_key_for_compat or "").strip().lower() in {"lip_sync", "lip_sync_music"}
+    )
     bypass_ltx_model_compatibility = (
-        mode == "lipsync"
-        and provider != "comfy_remote"
-        and (
-            final_workflow_key in {"lip_sync", "lip_sync_music"}
-            or normalized_workflow_key_for_compat in {"lip_sync", "lip_sync_music"}
-            or str(raw_workflow_key_for_compat or "").strip().lower() in {"lip_sync", "lip_sync_music"}
-        )
+        provider != "comfy_remote"
+        and mode == "lipsync"
+        and is_lipsync_provider_route
     )
     bypass_reason = "none"
     if bypass_ltx_model_compatibility:
@@ -13334,6 +13335,8 @@ def clip_video(payload: ClipVideoIn):
         "[CLIP VIDEO COMPAT CHECK DEBUG] "
         f"sceneId={scene_id} rawWorkflowKey={raw_workflow_key_for_compat or 'empty'} "
         f"normalizedWorkflowKey={normalized_workflow_key_for_compat or 'empty'} "
+        f"finalWorkflowKey={final_workflow_key or 'empty'} "
+        f"mode={mode} provider={provider} "
         f"bypass_ltx_model_compatibility={'true' if bypass_ltx_model_compatibility else 'false'} "
         f"reason={bypass_reason}"
     )
