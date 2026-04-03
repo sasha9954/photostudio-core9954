@@ -816,6 +816,7 @@ class ScenarioDirectorScene(BaseModel):
     visual_intensity_level: str = ""
     crowd_relation_state: str = ""
     performance_phase: str = ""
+    audio_emotion_direction: str = ""
     lip_sync: bool = False
     lip_sync_text: str = ""
     send_audio_to_generator: bool = False
@@ -858,6 +859,10 @@ class ScenarioDirectorScene(BaseModel):
     identity_lock_fields_used: list[str] = Field(default_factory=list)
     hero_appearance_contract: dict[str, str] = Field(default_factory=dict)
     previous_stable_image_anchor_applied: bool = False
+    previous_stable_image_anchor_available: bool = False
+    previous_stable_image_anchor_url_resolved: str = ""
+    previous_stable_image_anchor_used: bool = False
+    previous_stable_image_anchor_reason: str = ""
     what_from_audio_this_scene_uses: str = ""
     director_note_layer: str = ""
     boundary_reason: str = "fallback"
@@ -947,6 +952,7 @@ class ScenarioDirectorScene(BaseModel):
         self.visual_intensity_level = str(self.visual_intensity_level or "").strip()
         self.crowd_relation_state = str(self.crowd_relation_state or "").strip()
         self.performance_phase = str(self.performance_phase or "").strip()
+        self.audio_emotion_direction = str(self.audio_emotion_direction or "").strip().lower()
         self.lip_sync = _coerce_bool(self.lip_sync, self.ltx_mode in {"lip_sync", "lip_sync_music"})
         self.lip_sync_text = str(self.lip_sync_text or "").strip()
         self.send_audio_to_generator = _coerce_bool(self.send_audio_to_generator, False)
@@ -997,6 +1003,10 @@ class ScenarioDirectorScene(BaseModel):
             if str(key).strip() and str(value).strip()
         }
         self.previous_stable_image_anchor_applied = _coerce_bool(self.previous_stable_image_anchor_applied, False)
+        self.previous_stable_image_anchor_available = _coerce_bool(self.previous_stable_image_anchor_available, False)
+        self.previous_stable_image_anchor_url_resolved = str(self.previous_stable_image_anchor_url_resolved or "").strip()
+        self.previous_stable_image_anchor_used = _coerce_bool(self.previous_stable_image_anchor_used, False)
+        self.previous_stable_image_anchor_reason = str(self.previous_stable_image_anchor_reason or "").strip()
         self.what_from_audio_this_scene_uses = str(self.what_from_audio_this_scene_uses or "").strip()
         self.director_note_layer = str(self.director_note_layer or "").strip()
         boundary_reason = str(self.boundary_reason or "fallback").strip().lower() or "fallback"
@@ -1123,10 +1133,17 @@ class ScenarioDirectorDiagnostics(BaseModel):
     no_text_clip_policy: str = "off"
     no_text_clip_policy_applied: bool = False
     phrase_loop_prevented: bool = False
+    phrase_loop_detected: bool = False
+    phrase_loop_prevention_action: str = ""
+    phrase_loop_prevention_reason: str = ""
     scene_merge_or_reuse_reason: str = ""
     clip_formula_target: dict[str, int] = Field(default_factory=dict)
     clip_formula_actual: dict[str, int] = Field(default_factory=dict)
     clip_formula_rebalance_applied: bool = False
+    clip_formula_rebalance_detected_need: bool = False
+    duration_span_debug: float = 0.0
+    rebalance_reason: str = ""
+    rebalance_actions: list[str] = Field(default_factory=list)
     clip_formula_rebalance_notes: list[str] = Field(default_factory=list)
     phrase_loop_prevented_reason: str = ""
     strong_first_last_candidate_count: int = 0
@@ -1155,10 +1172,17 @@ class ScenarioDirectorDiagnostics(BaseModel):
         self.no_text_clip_policy = str(self.no_text_clip_policy or "off").strip().lower() or "off"
         self.no_text_clip_policy_applied = _coerce_bool(self.no_text_clip_policy_applied, False)
         self.phrase_loop_prevented = _coerce_bool(self.phrase_loop_prevented, False)
+        self.phrase_loop_detected = _coerce_bool(self.phrase_loop_detected, False)
+        self.phrase_loop_prevention_action = str(self.phrase_loop_prevention_action or "").strip()
+        self.phrase_loop_prevention_reason = str(self.phrase_loop_prevention_reason or "").strip()
         self.scene_merge_or_reuse_reason = str(self.scene_merge_or_reuse_reason or "").strip()
         self.clip_formula_target = self.clip_formula_target if isinstance(self.clip_formula_target, dict) else {}
         self.clip_formula_actual = self.clip_formula_actual if isinstance(self.clip_formula_actual, dict) else {}
         self.clip_formula_rebalance_applied = _coerce_bool(self.clip_formula_rebalance_applied, False)
+        self.clip_formula_rebalance_detected_need = _coerce_bool(self.clip_formula_rebalance_detected_need, False)
+        self.duration_span_debug = _safe_float(self.duration_span_debug, 0.0)
+        self.rebalance_reason = str(self.rebalance_reason or "").strip()
+        self.rebalance_actions = [str(item).strip() for item in (self.rebalance_actions or []) if str(item).strip()]
         self.clip_formula_rebalance_notes = [str(item).strip() for item in (self.clip_formula_rebalance_notes or []) if str(item).strip()]
         self.phrase_loop_prevented_reason = str(self.phrase_loop_prevented_reason or "").strip()
         self.strong_first_last_candidate_count = max(0, int(_safe_float(self.strong_first_last_candidate_count, 0.0)))
@@ -3160,6 +3184,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "props": scene.props,
             "action": scene.action_in_frame,
             "emotion": scene.emotion,
+            "audioEmotionDirection": scene.audio_emotion_direction,
             "sceneGoal": scene.scene_goal,
             "frameDescription": scene.frame_description,
             "actionInFrame": scene.action_in_frame,
@@ -3294,6 +3319,10 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "identityLockFieldsUsed": scene.identity_lock_fields_used,
             "heroAppearanceContract": scene.hero_appearance_contract,
             "previousStableImageAnchorApplied": scene.previous_stable_image_anchor_applied,
+            "previousStableImageAnchorAvailable": scene.previous_stable_image_anchor_available,
+            "previousStableImageAnchorUrlResolved": scene.previous_stable_image_anchor_url_resolved,
+            "previousStableImageAnchorUsed": scene.previous_stable_image_anchor_used,
+            "previousStableImageAnchorReason": scene.previous_stable_image_anchor_reason,
             "primaryRole": primary_role,
             "secondaryRoles": secondary_roles,
             "sceneActiveRoles": scene_active_roles,
@@ -3357,6 +3386,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "vocalPresentation": scene.vocal_presentation,
                 "lipSyncVoiceCompatibility": scene.lip_sync_voice_compatibility,
                 "lipSyncVoiceCompatibilityReason": scene.lip_sync_voice_compatibility_reason,
+                "audioEmotionDirection": scene.audio_emotion_direction,
                 "videoReady": scene.video_ready,
                 "videoBlockReasonCode": scene.video_block_reason_code,
                 "videoBlockReasonMessage": scene.video_block_reason_message,
@@ -3391,6 +3421,11 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                     "confidenceScores": confidence_scores,
                     "heroAppearanceContract": scene.hero_appearance_contract,
                     "previousStableImageAnchorApplied": scene.previous_stable_image_anchor_applied,
+                    "previousStableImageAnchorAvailable": scene.previous_stable_image_anchor_available,
+                    "previousStableImageAnchorUrlResolved": scene.previous_stable_image_anchor_url_resolved,
+                    "previousStableImageAnchorUsed": scene.previous_stable_image_anchor_used,
+                    "previousStableImageAnchorReason": scene.previous_stable_image_anchor_reason,
+                    "audioEmotionDirection": scene.audio_emotion_direction,
                 },
             }
         )
@@ -5285,6 +5320,33 @@ def _strip_video_only_semantics_from_image_prompt(text: str) -> str:
     return ". ".join(cleaned).strip()
 
 
+def _derive_audio_emotion_direction(scene: ScenarioDirectorScene) -> str:
+    explicit = str(scene.audio_emotion_direction or "").strip().lower()
+    if explicit:
+        return explicit
+    signal = " ".join([
+        str(scene.emotion or ""),
+        str(scene.performance_phase or ""),
+        str(scene.audio_anchor_evidence or ""),
+        str(scene.local_phrase or ""),
+        str(scene.what_from_audio_this_scene_uses or ""),
+        str(scene.clip_arc_stage or ""),
+    ]).lower()
+    if any(token in signal for token in ("sad", "ache", "pain", "fragile", "melanch", "restrain")):
+        return "restrained_ache"
+    if any(token in signal for token in ("intimate", "soft", "quiet", "tender", "fragile")):
+        return "intimate_fragile"
+    if any(token in signal for token in ("rising", "build", "longing", "yearn")):
+        return "rising_longing"
+    if any(token in signal for token in ("open", "belt", "peak", "climax", "hook")):
+        return "open_throated_peak"
+    if any(token in signal for token in ("energetic", "drive", "attack", "pulse", "beat")):
+        return "energetic_hook"
+    if any(token in signal for token in ("release", "afterimage", "afterglow", "resolve", "residue")):
+        return "bittersweet_release"
+    return "restrained_ache"
+
+
 def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     scene.scene_purpose = "performance"
     scene.transition_type = "cut" if _safe_float(scene.time_start, 0.0) > 0.0 else "cold_open"
@@ -5324,18 +5386,22 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
             build_ltx_video_canon_block(lip_sync=True),
         ]
     )
-    emotional_tone = str(scene.emotion or "").strip().lower()
+    scene.audio_emotion_direction = _derive_audio_emotion_direction(scene)
+    emotional_tone = str(scene.audio_emotion_direction or scene.emotion or "").strip().lower()
     audio_evidence = str(scene.audio_anchor_evidence or scene.local_phrase or scene.what_from_audio_this_scene_uses or "").strip()
-    emotion_direction = "emotionally restrained but singer-readable"
-    if any(token in emotional_tone for token in ("sad", "pain", "fragile", "melanch", "ache")):
-        emotion_direction = "pain/restraint/fragility with inward gaze and softer tension"
-    elif any(token in emotional_tone for token in ("energetic", "power", "attack", "hook", "drive", "peak", "climax")):
+    emotion_direction = "pain/restraint/fragility with inward gaze and softer tension"
+    if "open_throated_peak" in emotional_tone or "energetic_hook" in emotional_tone:
         emotion_direction = "drive/attack/forward intention with stronger jaw-open singing and stronger hand language"
-    elif any(token in emotional_tone for token in ("intimate", "soft", "quiet", "tender")):
+    elif "bittersweet_release" in emotional_tone:
+        emotion_direction = "softer breath, emotional residue, reduced force with still-readable singing"
+    elif "intimate_fragile" in emotional_tone:
         emotion_direction = "intimate and softer but still mouth-ready singing-readable"
+    elif "rising_longing" in emotional_tone:
+        emotion_direction = "rising longing with increasing intention and readable emotional tension"
     image_lipsync_canon = _join_visible_prompt_parts(
         [
             "LIP-SYNC IMAGE CANON (STRICT): singer-performance-first still frame, not neutral mannequin portrait.",
+            f"Audio emotion direction key: {scene.audio_emotion_direction}.",
             f"Audio-driven emotion direction: {emotion_direction}.",
             f"Audio anchor evidence: {audio_evidence or 'beat/phrase contour from scene timing'}.",
             "Capture mouth-ready singing moment with expressive eyes/brow tension and visible neck/shoulders/upper torso.",
@@ -6445,6 +6511,7 @@ def _rebalance_music_video_formula(
     if not scenes:
         diagnostics.clip_formula_actual = {"lip_sync_music": 0, "f_l": 0, "i2v": 0, "i2v_in_target_range": False}
         diagnostics.clip_formula_rebalance_applied = False
+        diagnostics.clip_formula_rebalance_detected_need = False
         diagnostics.clip_formula_rebalance_notes = ["no_scenes_for_formula_rebalance"]
         return storyboard_out
     notes: list[str] = []
@@ -6504,6 +6571,10 @@ def _rebalance_music_video_formula(
         notes.append(f"selected_i2v:{scene.scene_id}")
 
     diagnostics.clip_formula_actual = _clip_formula_actual_counts(scenes, target)
+    diagnostics.clip_formula_rebalance_detected_need = bool(
+        diagnostics.clip_formula_actual.get("lip_sync_music", 0) != lip_target
+        or diagnostics.clip_formula_actual.get("f_l", 0) != fl_target
+    )
     diagnostics.strong_first_last_candidate_count = len(strong_fl_candidate_ids)
     if diagnostics.clip_formula_actual.get("f_l", 0) >= fl_target:
         diagnostics.first_last_shortage_reason = ""
@@ -7080,7 +7151,14 @@ def _apply_music_video_mode_policy(
             scene.identity_lock_fields_used = identity_fields_used
         if character1_required and hero_contract:
             scene.identity_lock_applied = True
-            scene.previous_stable_image_anchor_applied = bool(index > 0 and kept_scenes and str(kept_scenes[-1].image_prompt or "").strip())
+            stable_anchor_url = str(raw_scene.get("stableSceneAnchorImageUrl") or raw_scene.get("previousConfirmedStableImageUrl") or "").strip()
+            scene.previous_stable_image_anchor_available = bool(index > 0 and kept_scenes)
+            scene.previous_stable_image_anchor_url_resolved = stable_anchor_url
+            scene.previous_stable_image_anchor_used = False
+            scene.previous_stable_image_anchor_applied = False
+            scene.previous_stable_image_anchor_reason = (
+                "anchor_url_available_but_not_used_in_director_stage" if stable_anchor_url else "anchor_not_resolved"
+            )
             guaranteed_fields = list(hero_contract.keys())
             scene.identity_lock_fields_used = list(dict.fromkeys([*(scene.identity_lock_fields_used or []), *guaranteed_fields]))
             if not str(scene.identity_lock_notes or "").strip():
@@ -7157,6 +7235,9 @@ def _apply_music_video_mode_policy(
                 scene.performance_phase = str(scene.clip_arc_stage or "build").strip()
             if not str(scene.emotion or "").strip():
                 scene.emotion = "performance intensity from audio contour"
+            scene.audio_emotion_direction = _derive_audio_emotion_direction(scene)
+            if not str(scene.lip_sync_decision_reason or "").strip():
+                scene.lip_sync_decision_reason = "lip_sync_music_audio_shaped_emotion_applied"
         compacted_ending_hold, ending_hold_reason = _maybe_compact_repeat_heavy_ending_hold(
             scene,
             repeat_heavy_clip=repeat_heavy_clip,
@@ -8750,12 +8831,15 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         phrase_loop_before = _is_repeat_heavy_music_clip(storyboard_out.scenes or [])
         phrase_loop_after = _is_repeat_heavy_music_clip(next_scenes)
         storyboard_out.diagnostics.chorus_detected = bool(phrase_loop_before)
+        storyboard_out.diagnostics.phrase_loop_detected = bool(phrase_loop_before)
+        storyboard_out.diagnostics.phrase_loop_prevention_action = "chunk_merge" if (phrase_loop_before and not phrase_loop_after) else ""
         storyboard_out.diagnostics.phrase_loop_prevented = bool(phrase_loop_before and not phrase_loop_after)
         storyboard_out.diagnostics.phrase_loop_prevented_reason = (
             "repeat_heavy_before_and_resolved_after_merge"
             if storyboard_out.diagnostics.phrase_loop_prevented
             else "repeat_pattern_not_resolved_by_chunk_merge"
         )
+        storyboard_out.diagnostics.phrase_loop_prevention_reason = storyboard_out.diagnostics.phrase_loop_prevented_reason
         storyboard_out.diagnostics.scene_merge_or_reuse_reason = (
             "visual_arc_progression_merge_guard"
             if storyboard_out.diagnostics.phrase_loop_prevented
@@ -10212,8 +10296,14 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "audio_anchor_evidence": str(primary_semantic.get("transitionHint") or "").strip(),
                 "performer_presentation": "female" if is_lip_sync_route else "unknown",
                 "vocal_presentation": "female" if is_lip_sync_route else "unknown",
+                "performance_phase": str(scene.get("clipArcStage") or scene.get("clip_arc_stage") or ("build" if is_lip_sync_route else "")).strip(),
                 "lip_sync_voice_compatibility": "compatible" if is_lip_sync_route else "unknown",
                 "lip_sync_decision_reason": "audio_first_route_lip_sync_music_selected" if is_lip_sync_route else "not_lip_sync_route",
+                "audioEmotionDirection": (
+                    "energetic_hook"
+                    if is_lip_sync_route and str(primary_semantic.get("transitionHint") or "").strip()
+                    else ("restrained_ache" if is_lip_sync_route else "")
+                ),
                 "confidence": 0.9,
                 "sourceRoute": route,
                 "video_generation_route": internal_route,
@@ -10232,10 +10322,13 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
     _apply_story_arc_canon_to_legacy_scenes(legacy_scenes)
     trim_applied_count = len([scene for scene in legacy_scenes if isinstance(scene, dict) and bool(scene.get("phrase_boundary_trim_applied"))])
     phrase_texts = [str(scene.get("local_phrase") or "").strip().lower() for scene in legacy_scenes if isinstance(scene, dict)]
-    phrase_loop_prevented = len(phrase_texts) != len(list(dict.fromkeys([text for text in phrase_texts if text])))
+    phrase_loop_detected = len(phrase_texts) != len(list(dict.fromkeys([text for text in phrase_texts if text])))
+    phrase_loop_prevention_action = "story_arc_canon_dedupe" if trim_applied_count > 0 else ""
+    phrase_loop_prevented = bool(phrase_loop_detected and phrase_loop_prevention_action)
     durations = [float(scene.get("duration") or 0.0) for scene in legacy_scenes if isinstance(scene, dict)]
     duration_span = (max(durations) - min(durations)) if durations else 0.0
-    clip_formula_rebalance_applied = bool(len(durations) >= 4 and duration_span > 2.0)
+    clip_formula_rebalance_applied = False
+    clip_formula_rebalance_detected_need = bool(len(durations) >= 4 and duration_span > 2.0)
     director_summary = (
         str(debug.get("alignment") or "").strip()
         or str(global_story.get("overallNarrative") or "").strip()
@@ -10310,7 +10403,18 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             "phrase_boundary_trim_applied": bool(trim_applied_count > 0),
             "phrase_boundary_trim_applied_count": int(trim_applied_count),
             "phrase_loop_prevented": bool(phrase_loop_prevented),
+            "phrase_loop_detected": bool(phrase_loop_detected),
+            "phrase_loop_prevention_action": phrase_loop_prevention_action,
+            "phrase_loop_prevention_reason": (
+                "phrase_duplicates_detected_and_story_arc_dedupe_applied"
+                if phrase_loop_prevented
+                else "no_active_prevention_action"
+            ),
             "clip_formula_rebalance_applied": bool(clip_formula_rebalance_applied),
+            "clip_formula_rebalance_detected_need": bool(clip_formula_rebalance_detected_need),
+            "duration_span_debug": round(duration_span, 3),
+            "rebalance_reason": "duration_span_heuristic_only_no_rebalance_action",
+            "rebalance_actions": [],
         },
         "scenes": legacy_scenes,
     }

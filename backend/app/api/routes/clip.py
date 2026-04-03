@@ -1746,6 +1746,18 @@ def _build_hero_appearance_contract(scene_contract: dict[str, Any] | None) -> di
     }
 
 
+def _normalize_hero_appearance_contract(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, raw in value.items():
+        clean_key = str(key or "").strip()
+        clean_value = str(raw or "").strip()
+        if clean_key and clean_value:
+            normalized[clean_key] = clean_value
+    return normalized
+
+
 def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | None, opening_shot: bool) -> str:
     contract = scene_contract if isinstance(scene_contract, dict) else {}
     identity_contract = _build_identity_contract(contract)
@@ -9145,6 +9157,34 @@ def _is_environment_only_establishing_scene(*, contract: dict[str, Any], scene_d
     return any(token in bundle for token in ("establish", "wide", "opening", "atmosphere", "venue reveal", "stage reveal", "crowd scale"))
 
 
+def _derive_lip_sync_audio_emotion_direction(contract: dict[str, Any]) -> str:
+    explicit = str(contract.get("audioEmotionDirection") or contract.get("audio_emotion_direction") or "").strip().lower()
+    if explicit:
+        return explicit
+    signal = " ".join([
+        str(contract.get("emotion") or ""),
+        str(contract.get("performer_presentation") or ""),
+        str(contract.get("vocal_presentation") or ""),
+        str(contract.get("performance_phase") or ""),
+        str(contract.get("audio_anchor_evidence") or ""),
+        str(contract.get("what_from_audio_this_scene_uses") or ""),
+        str(contract.get("clipArcStage") or contract.get("clip_arc_stage") or ""),
+    ]).lower()
+    if any(token in signal for token in ("sad", "ache", "pain", "hurt", "fragile", "melanch", "restrain")):
+        return "restrained_ache"
+    if any(token in signal for token in ("intimate", "quiet", "tender", "soft", "whisper", "close")):
+        return "intimate_fragile"
+    if any(token in signal for token in ("longing", "yearn", "build", "rising", "lift")):
+        return "rising_longing"
+    if any(token in signal for token in ("hook", "peak", "climax", "open", "belt", "throated")):
+        return "open_throated_peak"
+    if any(token in signal for token in ("energetic", "drive", "attack", "pulse", "rhythm", "beat")):
+        return "energetic_hook"
+    if any(token in signal for token in ("release", "afterimage", "afterglow", "resolve", "residue")):
+        return "bittersweet_release"
+    return "restrained_ache"
+
+
 def _build_scene_framing_and_concert_staging_block(
     *,
     contract: dict[str, Any],
@@ -9455,6 +9495,7 @@ def _build_comfy_image_prompt_assembly(
     multi_view_lines = [str(line or "").strip() for line in (multi_view_context_lines or []) if str(line or "").strip()]
     is_lip_sync_route = "lip_sync" in route_hint or "lipsync" in route_hint
     is_non_lip_route = ("lip_sync" not in route_hint) and any(marker in route_hint for marker in ("i2v", "first_last", "f_l", "image_video"))
+    lip_sync_audio_emotion_direction = _derive_lip_sync_audio_emotion_direction(contract) if is_lip_sync_route else ""
 
     def _normalized_gender_presentation(raw: Any) -> str:
         value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
@@ -9774,6 +9815,22 @@ def _build_comfy_image_prompt_assembly(
             "- emotional intensity and phrase-driven hand acting must remain outfit-safe",
             "- performance expressiveness is required, but garment continuity is non-negotiable",
         ])
+    lip_sync_audio_emotion_block = ""
+    if is_lip_sync_route:
+        lip_sync_audio_emotion_block = "\n".join([
+            "LIP-SYNC AUDIO EMOTION DIRECTION (STRICT):",
+            f"- audioEmotionDirection={lip_sync_audio_emotion_direction or 'restrained_ache'}",
+            f"- emotion={str(contract.get('emotion') or '').strip() or 'audio_shaped_performance'}",
+            f"- performer_presentation={str(contract.get('performer_presentation') or '').strip() or 'unknown'}",
+            f"- vocal_presentation={str(contract.get('vocal_presentation') or '').strip() or 'unknown'}",
+            f"- performance_phase={str(contract.get('performance_phase') or '').strip() or 'build'}",
+            f"- lip_sync_voice_compatibility={str(contract.get('lip_sync_voice_compatibility') or '').strip() or 'compatible'}",
+            f"- audio_anchor_evidence={str(contract.get('audio_anchor_evidence') or contract.get('what_from_audio_this_scene_uses') or '').strip() or 'phrase/beat contour'}",
+            "- restrained_ache/intimate_fragile: inward vulnerability, softer tension, readable pain in eyes/lips/jaw.",
+            "- open_throated_peak/energetic_hook: stronger jaw-open singing moment, forward intention, stronger brows/eyes/hands.",
+            "- bittersweet_release: softer breath and emotional residue with reduced force but clear singing readability.",
+            "- NEVER degrade to generic neutral singer portrait when audioEmotionDirection is present.",
+        ])
     if is_non_lip_route:
         non_lip_identity_first_block = "\n".join([
             "NON-LIP IDENTITY-OUTFIT LOCK (PRIORITY 0, STRICT):",
@@ -9877,6 +9934,7 @@ def _build_comfy_image_prompt_assembly(
         identity_layer_block,
         global_garment_lock_block,
         lip_sync_outfit_safety_block,
+        lip_sync_audio_emotion_block,
         high_identity_risk_rescue_block,
         task_mode_runtime_block,
         material_motion_runtime_block,
@@ -9980,6 +10038,8 @@ def _build_comfy_image_prompt_assembly(
         "sceneMeaningBlockPreview": scene_meaning_block,
         "globalGarmentLockBlockPreview": global_garment_lock_block,
         "lipSyncOutfitSafetyBlockPreview": lip_sync_outfit_safety_block,
+        "lipSyncAudioEmotionDirection": lip_sync_audio_emotion_direction,
+        "lipSyncAudioEmotionBlockPreview": lip_sync_audio_emotion_block,
         "taskModeRuntimeBlockPreview": task_mode_runtime_block,
         "materialMotionRuntimeBlockPreview": material_motion_runtime_block,
         "taskModeNegativeBlockPreview": task_mode_negative_block,
@@ -10210,6 +10270,14 @@ def clip_image(payload: ClipImageIn):
     if route_hint in {"i2v", "lip_sync_music", "first_last"}:
         scene_contract.update(_derive_direct_scene_contract_fields(route_hint))
         scene_contract["lip_sync_route_state_consistent"] = True
+    incoming_audio_emotion_direction = str(
+        raw_scene_contract.get("audioEmotionDirection")
+        or raw_scene_contract.get("audio_emotion_direction")
+        or scene_contract.get("audioEmotionDirection")
+        or ""
+    ).strip().lower()
+    if incoming_audio_emotion_direction:
+        scene_contract["audioEmotionDirection"] = incoming_audio_emotion_direction
     identity_lock_fields_min = list(dict.fromkeys([
         *UNIVERSAL_PERSON_IDENTITY_FIELDS,
         *UNIVERSAL_GENERIC_OUTFIT_FIELDS,
@@ -10256,7 +10324,16 @@ def clip_image(payload: ClipImageIn):
     )
     scene_contract["outfitProfile"] = scene_contract.get("targetOutfitProfile") if should_replace_source_outfit else scene_contract.get("sourceOutfitProfile")
     scene_contract["effectiveOutfitProfile"] = scene_contract.get("outfitProfile")
-    scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
+    upstream_hero_contract = _normalize_hero_appearance_contract(
+        raw_scene_contract.get("heroAppearanceContract")
+        if isinstance(raw_scene_contract, dict)
+        else None
+    ) or _normalize_hero_appearance_contract(
+        raw_scene_contract.get("hero_appearance_contract")
+        if isinstance(raw_scene_contract, dict)
+        else None
+    ) or _normalize_hero_appearance_contract(scene_contract.get("heroAppearanceContract"))
+    scene_contract["heroAppearanceContract"] = upstream_hero_contract or _build_hero_appearance_contract(scene_contract)
     scene_contract["previousSceneIdentityMemory"] = str((previous_continuity_memory or {}).get("characterState") or "").strip()
     scene_contract["previousSceneOutfitMemory"] = _summarize_outfit_memory_for_rescue(scene_contract.get("sourceOutfitProfile"))
     resolved_stable_anchor = _select_previous_stable_scene_anchor(scene_contract)
@@ -10375,7 +10452,8 @@ def clip_image(payload: ClipImageIn):
             "footwear_identity",
         ])
         scene_contract["identityLockFieldsUsed"] = list(dict.fromkeys(fields))
-        scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
+        if not upstream_hero_contract:
+            scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
     scene_contract["active_connected_character_roles"] = [
         role for role in ("character_1", "character_2", "character_3")
         if bool(comfy_refs_by_role.get(role)) and (role in scene_active_roles or role in must_appear_roles)
@@ -10402,7 +10480,8 @@ def clip_image(payload: ClipImageIn):
             scene_contract["lipSyncOutfitRescueApplied"] = True
             scene_contract["lipSyncOutfitRescueFields"] = sorted(list(lip_sync_rescue.keys()))
             scene_contract["identityContract"] = _build_identity_contract(scene_contract)
-            scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
+            if not upstream_hero_contract:
+                scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
     if has_character_1_ref and (character_1_is_active or is_lip_sync_route) and _is_weak_outfit_profile(scene_contract.get("effectiveOutfitProfile")):
         fallback_outfit = _normalize_outfit_profile(
             _merge_outfit_profile(
@@ -10422,7 +10501,8 @@ def clip_image(payload: ClipImageIn):
         scene_contract["effectiveOutfitProfile"] = fallback_outfit
         scene_contract["outfitProfile"] = fallback_outfit
         scene_contract["sourceOutfitProfile"] = fallback_outfit if not should_replace_source_outfit else scene_contract.get("sourceOutfitProfile")
-        scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
+        if not upstream_hero_contract:
+            scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
     if is_lip_sync_route and scene_contract["active_connected_character_roles"] == ["character_1"]:
         scene_contract["single_character_mode_enforced"] = True
     dropped_by_must_not_appear = sorted([role for role in (scene_contract.get("resolvedRoles") or []) if role in must_not_appear_roles])
@@ -11131,6 +11211,15 @@ def clip_image(payload: ClipImageIn):
             "continuityStableImageUsed": continuity_stable_image_used,
             "continuityStableImageFallbackUsed": continuity_stable_image_fallback_used,
             "continuityVisualAnchorMode": continuity_visual_anchor_mode,
+            "previousStableImageAnchorAvailable": bool(previous_confirmed_stable_image_url),
+            "previousStableImageAnchorUrlResolved": previous_confirmed_stable_image_url or "",
+            "previousStableImageAnchorUsed": bool(continuity_stable_image_used),
+            "previousStableImageAnchorApplied": bool(continuity_stable_image_used),
+            "previousStableImageAnchorReason": (
+                "stable_confirmed_inline_used"
+                if continuity_stable_image_used
+                else ("fallback_previous_scene_inline_used" if continuity_stable_image_fallback_used else continuity_visual_anchor_mode)
+            ),
         })
 
         has_role_aware_refs = any(len(comfy_refs_by_role.get(role) or []) > 0 for role in comfy_roles)
