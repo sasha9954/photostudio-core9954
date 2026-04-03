@@ -9162,6 +9162,91 @@ def _build_scene_framing_and_concert_staging_block(
         ])
     return "\n".join(lines)
 
+
+def _summarize_outfit_memory_for_rescue(profile: dict[str, Any] | None) -> str:
+    data = profile if isinstance(profile, dict) else {}
+    garment = str(data.get("garment_category") or "").strip()
+    silhouette = str(data.get("silhouette_identity") or "").strip()
+    construction = str(data.get("construction_identity") or "").strip()
+    coverage = str(data.get("coverage_identity") or "").strip()
+    color = str(data.get("color_identity") or "").strip()
+    parts = [part for part in [garment, silhouette, construction, coverage, color] if part]
+    if not parts:
+        return ""
+    return "; ".join(parts)[:320]
+
+
+def _detect_ending_closeup_identity_risk(
+    *,
+    contract: dict[str, Any],
+    scene_delta: str,
+    scene_text: str,
+    scene_goal: str,
+    scene_narrative_step: str,
+    route_hint: str,
+) -> dict[str, Any]:
+    blob = " ".join([
+        str(scene_delta or ""),
+        str(scene_text or ""),
+        str(scene_goal or ""),
+        str(scene_narrative_step or ""),
+        str(contract.get("scenePurpose") or ""),
+        str(contract.get("performanceFraming") or contract.get("performance_framing") or ""),
+    ]).lower()
+    is_non_lip_i2v = ("lip_sync" not in route_hint) and ("lipsync" not in route_hint)
+    has_ending_signal = any(token in blob for token in ("final", "outro", "ending", "ending hold", "closure", "resolve", "resolution"))
+    has_closeup_signal = any(token in blob for token in ("close-up", "close up", "face", "portrait", "face_close", "close_emotional", "headshot"))
+    has_quiet_emotion_signal = any(token in blob for token in ("quiet", "melanch", "acceptance", "resolve", "linger", "eyes closed", "soft warm"))
+    previous_memory = contract.get("previousContinuityMemory") if isinstance(contract.get("previousContinuityMemory"), dict) else {}
+    previous_scene_identity_memory = str(contract.get("previousSceneIdentityMemory") or previous_memory.get("characterState") or "").strip()
+    previous_scene_outfit_memory = str(contract.get("previousSceneOutfitMemory") or "").strip()
+    previous_scene_anchor_url = str(contract.get("previousSceneImageUrl") or "").strip()
+    risk_score = sum([
+        1 if is_non_lip_i2v else 0,
+        1 if has_ending_signal else 0,
+        1 if has_closeup_signal else 0,
+        1 if has_quiet_emotion_signal else 0,
+    ])
+    rescue_applied = risk_score >= 3
+    return {
+        "endingCloseupRescueApplied": rescue_applied,
+        "endingCloseupIdentityRisk": risk_score,
+        "isNonLipI2VEnding": bool(is_non_lip_i2v and has_ending_signal),
+        "previousSceneIdentityAnchorUsed": bool(previous_scene_identity_memory),
+        "previousSceneOutfitAnchorUsed": bool(previous_scene_outfit_memory),
+        "previousSceneAnchorImageUsed": bool(previous_scene_anchor_url),
+        "closeupFramingRescueApplied": bool(rescue_applied and has_closeup_signal),
+        "portraitBeautyDriftGuardApplied": bool(rescue_applied and has_closeup_signal),
+        "warmOutroLightingGuardApplied": bool(rescue_applied and ("warm" in blob or "soft light" in blob or "closure" in blob)),
+        "previousSceneIdentityMemory": previous_scene_identity_memory,
+        "previousSceneOutfitMemory": previous_scene_outfit_memory,
+        "routeHint": route_hint,
+    }
+
+
+def _build_ending_closeup_identity_rescue_block(rescue: dict[str, Any]) -> str:
+    if not rescue.get("endingCloseupRescueApplied"):
+        return ""
+    identity_memory = str(rescue.get("previousSceneIdentityMemory") or "").strip()
+    outfit_memory = str(rescue.get("previousSceneOutfitMemory") or "").strip()
+    lines = [
+        "ENDING CLOSE-UP IDENTITY RESCUE (NON-LIP OUTRO, STRICT):",
+        "- this is a high identity-risk final close-up: preserve the SAME woman from the prior confirmed scene, not a reimagined portrait",
+        "- no portrait-beauty reinvention, no different actress effect, no face drift, no age drift, no perceived body/fullness drift",
+        "- no hairstyle redesign, no neckline/top-cut reinterpretation, no garment simplification when framing gets tighter",
+        "- keep intimate close-up emotion while preserving enough shoulders/neckline/upper-chest/garment edge context for continuity",
+        "- do not collapse into face-only glamour crop if it weakens identity/outfit continuity",
+        "- keep camera physically readable and upright; no sideways/lying/rotated portrait reinterpretation unless explicitly requested",
+        "- warm outro lighting is allowed only as a mood shift inside the same world; do not redesign person, skin/hair/outfit base appearance, or venue identity",
+        "- for non-lip i2v close-up endings, identity continuity is stricter than expressive stylization",
+    ]
+    if identity_memory:
+        lines.append(f"- previous_scene_identity_memory anchor: {identity_memory}")
+    if outfit_memory:
+        lines.append(f"- previous_scene_outfit_memory anchor: {outfit_memory}")
+    return "\n".join(lines)
+
+
 def _build_comfy_image_prompt_assembly(
     *,
     scene_delta: str,
@@ -9213,6 +9298,14 @@ def _build_comfy_image_prompt_assembly(
         str(contract.get("planned_video_generation_route") or ""),
         str(contract.get("render_mode") or ""),
     ]).lower()
+    ending_closeup_rescue = _detect_ending_closeup_identity_risk(
+        contract=contract,
+        scene_delta=scene_delta,
+        scene_text=scene_text,
+        scene_goal=scene_goal,
+        scene_narrative_step=scene_narrative_step,
+        route_hint=route_hint,
+    )
     material_motion_profile = identity_contract.get("motion_constraints") if isinstance(identity_contract.get("motion_constraints"), dict) else {}
     material_motion_application = _apply_material_motion_constraints(
         material_motion_profile=material_motion_profile,
@@ -9500,6 +9593,7 @@ def _build_comfy_image_prompt_assembly(
     scene_meaning_block = "\n".join(scene_meaning_lines)
     non_lip_identity_first_block = ""
     non_lip_lyric_guard_block = ""
+    ending_closeup_identity_rescue_block = _build_ending_closeup_identity_rescue_block(ending_closeup_rescue)
     lip_sync_outfit_safety_block = ""
     task_mode_runtime_block = "\n".join([
         "TASK MODE EXECUTION (RUNTIME):",
@@ -9639,6 +9733,7 @@ def _build_comfy_image_prompt_assembly(
         identity_layer_block,
         global_garment_lock_block,
         lip_sync_outfit_safety_block,
+        ending_closeup_identity_rescue_block,
         task_mode_runtime_block,
         material_motion_runtime_block,
         physics_blocks["lightWorldBlock"],
@@ -9755,6 +9850,7 @@ def _build_comfy_image_prompt_assembly(
         "materialMotionProfile": material_motion_profile,
         "nonLipIdentityFirstBlockPreview": non_lip_identity_first_block,
         "nonLipLyricGuardBlockPreview": non_lip_lyric_guard_block,
+        "endingCloseupIdentityRescueBlockPreview": ending_closeup_identity_rescue_block,
         "continuityBlockPreview": continuity_block,
         "sourceControlBlockPreview": source_control_block,
         "physicalSceneStateBlockPreview": physics_blocks["physicalSceneStateBlock"],
@@ -9763,6 +9859,13 @@ def _build_comfy_image_prompt_assembly(
         "textureBlockPreview": physics_blocks["textureBlock"],
         "moodPhysicsBlockPreview": physics_blocks["moodPhysicsBlock"],
         "negativeConstraintsBlockPreview": physics_blocks["negativeConstraintsBlock"],
+        "endingCloseupRescueApplied": bool(ending_closeup_rescue.get("endingCloseupRescueApplied")),
+        "endingCloseupIdentityRisk": int(ending_closeup_rescue.get("endingCloseupIdentityRisk") or 0),
+        "previousSceneIdentityAnchorUsed": bool(ending_closeup_rescue.get("previousSceneIdentityAnchorUsed")),
+        "previousSceneOutfitAnchorUsed": bool(ending_closeup_rescue.get("previousSceneOutfitAnchorUsed")),
+        "closeupFramingRescueApplied": bool(ending_closeup_rescue.get("closeupFramingRescueApplied")),
+        "portraitBeautyDriftGuardApplied": bool(ending_closeup_rescue.get("portraitBeautyDriftGuardApplied")),
+        "warmOutroLightingGuardApplied": bool(ending_closeup_rescue.get("warmOutroLightingGuardApplied")),
         "finalImagePromptPreview": _shorten_text(assembled_prompt, 1800),
         "unusedConnectedInputs": unused_connected_inputs,
     }
@@ -9965,6 +10068,7 @@ def clip_image(payload: ClipImageIn):
     scene_contract["styleLock"] = True
     scene_contract["sessionBaseline"] = bool(isinstance(session_baseline, dict) and session_baseline)
     scene_contract["previousContinuityMemory"] = previous_continuity_memory if isinstance(previous_continuity_memory, dict) else {}
+    scene_contract["previousSceneImageUrl"] = previous_scene_image_url or ""
     scene_contract["sceneProgressionRule"] = "different parts/angles of the same venue/world unless explicitly changed"
     scene_contract["realismMode"] = "photoreal_cinematic_realism"
     scene_contract["openingShot"] = not bool(previous_continuity_memory)
@@ -9994,6 +10098,8 @@ def clip_image(payload: ClipImageIn):
     )
     scene_contract["outfitProfile"] = scene_contract.get("targetOutfitProfile") if should_replace_source_outfit else scene_contract.get("sourceOutfitProfile")
     scene_contract["effectiveOutfitProfile"] = scene_contract.get("outfitProfile")
+    scene_contract["previousSceneIdentityMemory"] = str((previous_continuity_memory or {}).get("characterState") or "").strip()
+    scene_contract["previousSceneOutfitMemory"] = _summarize_outfit_memory_for_rescue(scene_contract.get("sourceOutfitProfile"))
     scene_contract["sourceOutfitReplaced"] = bool(should_replace_source_outfit)
     scene_contract["outfitIdentitySource"] = "targetOutfitProfile" if should_replace_source_outfit else "sourceOutfitProfile"
     scene_contract["lipSyncOutfitRescueApplied"] = False
