@@ -13800,6 +13800,16 @@ def clip_video(payload: ClipVideoIn):
         )
         if final_workflow_key == "lip_sync":
             scene_contract = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+            audio_slice_start_sec = (
+                scene_contract.get("audio_slice_start_sec")
+                if scene_contract.get("audio_slice_start_sec") is not None
+                else scene_contract.get("audioSliceStartSec")
+            )
+            audio_slice_end_sec = (
+                scene_contract.get("audio_slice_end_sec")
+                if scene_contract.get("audio_slice_end_sec") is not None
+                else scene_contract.get("audioSliceEndSec")
+            )
             print(
                 "[LIP_SYNC COMFY DEBUG] "
                 + json.dumps(
@@ -13810,8 +13820,8 @@ def clip_video(payload: ClipVideoIn):
                         "sendAudioToGenerator": True,
                         "hasAudioSliceUrl": bool(audio_slice_url),
                         "audioSliceUrl": audio_slice_url,
-                        "audioSliceStartSec": scene_contract.get("audio_slice_start_sec"),
-                        "audioSliceEndSec": scene_contract.get("audio_slice_end_sec"),
+                        "audioSliceStartSec": audio_slice_start_sec,
+                        "audioSliceEndSec": audio_slice_end_sec,
                         "audioTransportMode": audio_transport_mode,
                     },
                     ensure_ascii=False,

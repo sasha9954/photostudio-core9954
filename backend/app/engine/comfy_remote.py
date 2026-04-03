@@ -43,6 +43,13 @@ COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "lip_sync": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": True, "continuation": False},
 }
 COMFY_LEGACY_WORKFLOW_ALIASES = {"i2v_as": "i2v", "f_l_as": "f_l"}
+COMFY_WORKFLOW_FAMILY = {
+    "i2v": "ltx_image_video",
+    "f_l": "ltx_first_last",
+    "continuation": "ltx_continuation",
+    "lip_sync": "comfy_lip_sync_audio",
+}
+COMFY_MODEL_GATED_WORKFLOW_KEYS = {"i2v", "f_l", "continuation"}
 MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
         "key": "ltx23_dev_fp8",
@@ -1030,13 +1037,61 @@ def run_comfy_image_to_video(
 ) -> tuple[dict | None, str | None]:
     raw_workflow_key = str(workflow_key or "i2v").strip().lower() or "i2v"
     normalized_workflow_key = COMFY_LEGACY_WORKFLOW_ALIASES.get(raw_workflow_key, raw_workflow_key)
+    workflow_family = COMFY_WORKFLOW_FAMILY.get(normalized_workflow_key, "unknown")
+    model_gating_required = normalized_workflow_key in COMFY_MODEL_GATED_WORKFLOW_KEYS
     normalized_model_key = str(model_key or "").strip().lower()
     effective_model_spec = model_spec if isinstance(model_spec, dict) else MODEL_KEY_TO_MODEL_SPEC.get(normalized_model_key)
-    if not effective_model_spec:
-        return None, f"capability_error:LTX_MODEL_NOT_FOUND:unknown_model_key:{normalized_model_key or 'empty'}"
-    compatible_workflow_keys = set(effective_model_spec.get("compatible_workflow_keys") or set())
-    if normalized_workflow_key != "continuation" and compatible_workflow_keys and normalized_workflow_key not in compatible_workflow_keys:
-        return None, f"capability_error:LTX_MODEL_WORKFLOW_INCOMPATIBLE:model={normalized_model_key};workflow={normalized_workflow_key}"
+    capability_skip_reason = ""
+    if model_gating_required:
+        if not effective_model_spec:
+            logger.info(
+                "[COMFY REMOTE CAPABILITY] %s",
+                {
+                    "sceneId": str(scene_id or "").strip(),
+                    "stage": "reject",
+                    "requestedModelKey": normalized_model_key,
+                    "workflowKey": normalized_workflow_key,
+                    "workflowFamily": workflow_family,
+                    "workflowFile": str(workflow_path or settings.COMFY_IMAGE_VIDEO_WORKFLOW or "").strip(),
+                    "modelGatingRequired": True,
+                    "capabilityCheckSkipped": False,
+                    "reason": "model_not_found",
+                },
+            )
+            return None, f"capability_error:LTX_MODEL_NOT_FOUND:unknown_model_key:{normalized_model_key or 'empty'}"
+        compatible_workflow_keys = set(effective_model_spec.get("compatible_workflow_keys") or set())
+        if normalized_workflow_key != "continuation" and compatible_workflow_keys and normalized_workflow_key not in compatible_workflow_keys:
+            logger.info(
+                "[COMFY REMOTE CAPABILITY] %s",
+                {
+                    "sceneId": str(scene_id or "").strip(),
+                    "stage": "reject",
+                    "requestedModelKey": normalized_model_key,
+                    "workflowKey": normalized_workflow_key,
+                    "workflowFamily": workflow_family,
+                    "workflowFile": str(workflow_path or settings.COMFY_IMAGE_VIDEO_WORKFLOW or "").strip(),
+                    "modelGatingRequired": True,
+                    "capabilityCheckSkipped": False,
+                    "reason": "model_workflow_incompatible",
+                },
+            )
+            return None, f"capability_error:LTX_MODEL_WORKFLOW_INCOMPATIBLE:model={normalized_model_key};workflow={normalized_workflow_key}"
+    else:
+        capability_skip_reason = "non_ltx_model_gating_workflow_family"
+    logger.info(
+        "[COMFY REMOTE CAPABILITY] %s",
+        {
+            "sceneId": str(scene_id or "").strip(),
+            "stage": "model_gate",
+            "requestedModelKey": normalized_model_key,
+            "workflowKey": normalized_workflow_key,
+            "workflowFamily": workflow_family,
+            "workflowFile": str(workflow_path or settings.COMFY_IMAGE_VIDEO_WORKFLOW or "").strip(),
+            "modelGatingRequired": bool(model_gating_required),
+            "capabilityCheckSkipped": bool(not model_gating_required),
+            "reason": capability_skip_reason or "passed",
+        },
+    )
     capability_code, capability_hint = _validate_comfy_ltx_request(
         workflow_key=normalized_workflow_key,
         start_image_bytes=start_image_bytes,
@@ -1047,6 +1102,20 @@ def run_comfy_image_to_video(
         continuation_source_asset_type=continuation_source_asset_type,
     )
     if capability_code:
+        logger.info(
+            "[COMFY REMOTE CAPABILITY] %s",
+            {
+                "sceneId": str(scene_id or "").strip(),
+                "stage": "reject",
+                "requestedModelKey": normalized_model_key,
+                "workflowKey": normalized_workflow_key,
+                "workflowFamily": workflow_family,
+                "workflowFile": str(workflow_path or settings.COMFY_IMAGE_VIDEO_WORKFLOW or "").strip(),
+                "modelGatingRequired": bool(model_gating_required),
+                "capabilityCheckSkipped": bool(not model_gating_required),
+                "reason": capability_hint or capability_code,
+            },
+        )
         return None, f"capability_error:{capability_code}:{capability_hint or ''}"
 
     logger.info(
@@ -1070,6 +1139,18 @@ def run_comfy_image_to_video(
         "[COMFY REMOTE] calling upload_image_to_comfy filename=%s size_bytes=%s",
         str(image_filename or "").strip() or "source.jpg",
         len(image_bytes or b""),
+    )
+    logger.info(
+        "[COMFY REMOTE SUBMIT FLOW] %s",
+        {
+            "sceneId": str(scene_id or "").strip(),
+            "workflowKey": normalized_workflow_key,
+            "workflowFamily": workflow_family,
+            "workflowFile": workflow_source,
+            "stage": "before_upload",
+            "submitReachedUpload": True,
+            "submitReachedPromptCreation": False,
+        },
     )
     uploaded_name, upload_err = upload_image_to_comfy(image_bytes, image_filename)
     logger.info(
@@ -1103,12 +1184,14 @@ def run_comfy_image_to_video(
     )
     if patch_err or not patched_workflow:
         return None, f"workflow_patch_failed:{patch_err or 'unknown_patch_error'}"
-    patched_model_node_ids, model_patch_err = _apply_model_spec_to_workflow(
-        patched_workflow,
-        model_spec=effective_model_spec,
-    )
-    if model_patch_err:
-        return None, f"workflow_model_patch_failed:{model_patch_err}"
+    patched_model_node_ids: list[str] = []
+    if effective_model_spec:
+        patched_model_node_ids, model_patch_err = _apply_model_spec_to_workflow(
+            patched_workflow,
+            model_spec=effective_model_spec,
+        )
+        if model_patch_err:
+            return None, f"workflow_model_patch_failed:{model_patch_err}"
     first_last_applied = False
     first_last_start_node_ids: list[str] = []
     first_last_end_node_ids: list[str] = []
@@ -1191,6 +1274,18 @@ def run_comfy_image_to_video(
         len(effective_prompt),
         effective_prompt[:500],
     )
+    logger.info(
+        "[COMFY REMOTE SUBMIT FLOW] %s",
+        {
+            "sceneId": str(scene_id or "").strip(),
+            "workflowKey": normalized_workflow_key,
+            "workflowFamily": workflow_family,
+            "workflowFile": workflow_source,
+            "stage": "before_prompt_create",
+            "submitReachedUpload": True,
+            "submitReachedPromptCreation": True,
+        },
+    )
 
     prompt_id, submit_err = submit_comfy_prompt(patched_workflow)
     if submit_err or not prompt_id:
@@ -1256,8 +1351,12 @@ def run_comfy_image_to_video(
             "workflow_file": Path(str(workflow_source)).name,
             "workflow": workflow_source,
             "workflow_path": workflow_source,
+            "workflow_family": workflow_family,
             "model_key": normalized_model_key,
-            "model_ckpt_applied": str(effective_model_spec.get("ckpt_name") or ""),
+            "model_ckpt_applied": str((effective_model_spec or {}).get("ckpt_name") or ""),
+            "model_gating_required": bool(model_gating_required),
+            "capability_check_skipped": bool(not model_gating_required),
+            "capability_skip_reason": capability_skip_reason,
             "actual_mode": normalized_workflow_key,
             "patched_node_ids": list(dict.fromkeys([*patched_model_node_ids, *first_last_start_node_ids, *first_last_end_node_ids, *audio_patch_node_ids])),
             "prompt_patched_node_ids": FIXED_PROMPT_PATCH_NODE_IDS,
