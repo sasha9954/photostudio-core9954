@@ -9489,6 +9489,11 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           endSec,
           audioUrl: globalAudioUrlRaw,
           audioStoryMode: String(comfyNode?.data?.plannerMeta?.audioStoryMode || comfyNode?.data?.audioStoryMode || ""),
+          lipSync: Boolean(comfySelectedScene?.lipSync ?? comfySelectedScene?.lip_sync),
+          renderMode: String(comfySelectedScene?.renderMode || comfySelectedScene?.render_mode || ""),
+          ltxMode: String(comfySelectedScene?.ltxMode || comfySelectedScene?.ltx_mode || ""),
+          resolvedWorkflowKey: String(comfySelectedScene?.resolvedWorkflowKey || comfySelectedScene?.resolved_workflow_key || ""),
+          requiresAudioSensitiveVideo: Boolean(comfySelectedScene?.requiresAudioSensitiveVideo ?? comfySelectedScene?.requires_audio_sensitive_video),
         },
       });
       if (!out?.ok || !out?.audioSliceUrl) throw new Error(out?.hint || out?.code || "audio_slice_failed");
@@ -10594,6 +10599,11 @@ Aspect ratio: ${imageFormat}`,
           endSec,
           audioUrl: scenarioAudioUrl,
           audioStoryMode: String(scenarioSelected?.audioStoryMode || ""),
+          lipSync: Boolean(scene?.lipSync ?? scene?.lip_sync),
+          renderMode: String(scene?.renderMode || scene?.render_mode || ""),
+          ltxMode: String(scene?.ltxMode || scene?.ltx_mode || ""),
+          resolvedWorkflowKey: String(scene?.resolvedWorkflowKey || scene?.resolved_workflow_key || ""),
+          requiresAudioSensitiveVideo: Boolean(scene?.requiresAudioSensitiveVideo ?? scene?.requires_audio_sensitive_video),
         },
       });
       const resolvedSliceUrl = String(out?.audioSliceUrl || out?.sliceUrl || "").trim();

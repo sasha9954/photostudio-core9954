@@ -144,6 +144,43 @@ class AudioSliceIn(BaseModel):
     t0: float | None = None
     t1: float | None = None
     audioStoryMode: str | None = None
+    lipSync: bool | None = None
+    renderMode: str | None = None
+    ltxMode: str | None = None
+    resolvedWorkflowKey: str | None = None
+    requiresAudioSensitiveVideo: bool | None = None
+
+
+def _resolve_audio_slice_compatibility(payload: AudioSliceIn) -> tuple[str, bool, bool, str]:
+    raw_render_mode = str(payload.renderMode or "").strip().lower()
+    raw_ltx_mode = str(payload.ltxMode or "").strip()
+    raw_workflow_key = str(payload.resolvedWorkflowKey or "").strip()
+    normalized_workflow_key = _normalize_ltx_workflow_key(raw_workflow_key or raw_ltx_mode)
+    raw_audio_story_mode = str(payload.audioStoryMode or "").strip().lower()
+
+    route_hint = raw_render_mode
+    if route_hint == "image_video":
+        route_hint = "i2v"
+    elif route_hint in {"lip_sync", "lip_sync_music"}:
+        route_hint = "lip_sync_music"
+
+    is_lip_sync_route = bool(
+        bool(payload.lipSync)
+        or route_hint == "lip_sync_music"
+        or normalized_workflow_key in {"lip_sync", "lip_sync_music"}
+    )
+    requires_audio_sensitive_video = bool(payload.requiresAudioSensitiveVideo) or is_lip_sync_route
+
+    if is_lip_sync_route:
+        return "music_vocal", True, True, "route_or_workflow_lip_sync_music"
+
+    if requires_audio_sensitive_video:
+        return "unknown", False, True, "explicit_requires_audio_sensitive_video"
+
+    if raw_audio_story_mode == "speech_narrative":
+        return "speech", False, False, "audio_story_mode_speech_narrative"
+
+    return "none", False, False, "default_non_lipsync"
 
 
 class ClipVideoIn(BaseModel):
@@ -12374,6 +12411,10 @@ def _clip_audio_slice_response(payload: AudioSliceIn):
 
         duration = round(t1 - t0, 3)
         asset = _asset_url(filename)
+        audio_slice_kind, music_vocal_lip_sync_allowed, requires_audio_sensitive_video, compat_reason = _resolve_audio_slice_compatibility(payload)
+        audio_story_mode = str(payload.audioStoryMode or "").strip().lower()
+        workflow_hint = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip())
+        render_mode_hint = str(payload.renderMode or "").strip().lower()
         print(
             "[AUDIO SLICE RESULT]",
             json.dumps(
@@ -12382,6 +12423,22 @@ def _clip_audio_slice_response(payload: AudioSliceIn):
                     "outputUrl": asset,
                     "outputPath": output_path,
                     "actualDurationSec": duration,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        print(
+            "[AUDIO SLICE COMPAT]",
+            json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "audioStoryMode": audio_story_mode,
+                    "renderMode": render_mode_hint,
+                    "resolvedWorkflowKey": workflow_hint,
+                    "audioSliceKind": audio_slice_kind,
+                    "musicVocalLipSyncAllowed": music_vocal_lip_sync_allowed,
+                    "requiresAudioSensitiveVideo": requires_audio_sensitive_video,
+                    "reason": compat_reason,
                 },
                 ensure_ascii=False,
             ),
@@ -12399,6 +12456,9 @@ def _clip_audio_slice_response(payload: AudioSliceIn):
             "t1": t1,
             "duration": duration,
             "audioSliceBackendDurationSec": duration,
+            "audioSliceKind": audio_slice_kind,
+            "musicVocalLipSyncAllowed": music_vocal_lip_sync_allowed,
+            "requiresAudioSensitiveVideo": requires_audio_sensitive_video,
             **speech_slice_debug,
         }
     finally:
