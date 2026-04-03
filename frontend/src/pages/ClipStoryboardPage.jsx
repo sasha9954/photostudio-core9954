@@ -10728,6 +10728,14 @@ Aspect ratio: ${imageFormat}`,
         selectedIndex: Number.isInteger(extra?.selectedIndex) ? extra.selectedIndex : null,
       });
     };
+    const logScenarioDirectGenerateBlock = ({ route = "", url = "", reason = "", sceneId: blockedSceneId = "" } = {}) => {
+      console.warn("[SCENARIO DIRECT GENERATE BLOCK]", {
+        route: String(route || "").trim(),
+        url: String(url || "").trim(),
+        reason: String(reason || "").trim(),
+        sceneId: String(blockedSceneId || "").trim(),
+      });
+    };
     const targetNodeId = String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || "").trim();
     const targetNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === targetNodeId) || scenarioFlowSourceNode || null;
     const targetRawScenes = Array.isArray(targetNode?.data?.scenes) ? targetNode.data.scenes : scenarioScenes;
@@ -10881,6 +10889,14 @@ Aspect ratio: ${imageFormat}`,
       willExtractSlice: lipSyncRoute && !attachedAudioSliceUrl,
       willStartVideo: true,
     });
+    if (lipSyncRoute) {
+      console.info("[SCENARIO LIP SYNC CHAIN]", {
+        sceneId,
+        stage: "before_auto_slice",
+        needsSliceExtraction: !attachedAudioSliceUrl,
+        audioSliceUrl: attachedAudioSliceUrl,
+      });
+    }
     if (lipSyncRoute && !attachedAudioSliceUrl) {
       try {
         const extracted = await handleScenarioEditorExtractSceneAudio(targetNodeId, sceneId);
@@ -11246,6 +11262,15 @@ Aspect ratio: ${imageFormat}`,
         timeoutMs: VIDEO_START_TIMEOUT_MS,
         body: videoStartPayload,
       });
+      console.info("[SCENARIO VIDEO START RESPONSE]", {
+        endpoint,
+        sceneId,
+        ok: Boolean(out?.ok),
+        jobId: String(out?.jobId || ""),
+        status: String(out?.status || ""),
+        code: String(out?.code || ""),
+        hint: String(out?.hint || ""),
+      });
       if (lipSyncRoute) {
         console.info("[SCENARIO LIP SYNC START RESPONSE]", {
           sceneId,
@@ -11317,6 +11342,16 @@ Aspect ratio: ${imageFormat}`,
           provider: effectiveVideoProvider,
           raw: out,
         });
+        logScenarioDirectGenerateBlock({
+          route: "/api/clip/video",
+          url: `${API_BASE}/api/clip/video`,
+          reason: "legacy_fallback_disabled_missing_job_id_from_video_start",
+          sceneId,
+        });
+        throw new Error(
+          String(out?.hint || out?.code || "video_start_missing_job_id")
+          + " (legacy direct generate fallback disabled)"
+        );
       }
 
       if (out?.jobId) {
@@ -11454,80 +11489,6 @@ Aspect ratio: ${imageFormat}`,
         return;
       }
 
-      // Fallback for environments where async endpoints are not available yet.
-      const legacyPayload = {
-        sceneId,
-        imageUrl: normalizedScenarioVideoSourceUrls.imageUrl,
-        startImageUrl: normalizedScenarioVideoSourceUrls.startImageUrl,
-        endImageUrl: normalizedScenarioVideoSourceUrls.endImageUrl,
-        audioSliceUrl: normalizedScenarioVideoSourceUrls.audioSliceUrl,
-        external_audio_used: shouldAttachAudioSlice,
-        external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
-        videoPrompt: finalVideoPrompt,
-        transitionActionPrompt,
-        transitionType,
-        requestedDurationSec,
-        lipSync: effectiveLipSync,
-        renderMode: effectiveRenderMode,
-        ltxMode: String(targetScene?.ltxMode || ""),
-        imageStrategy,
-        resolvedWorkflowKey: effectiveWorkflowKey,
-        resolvedModelKey,
-        workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
-        modelFileOverride: String(targetScene?.modelFileOverride || ""),
-        requiresTwoFrames,
-        requiresContinuation: continuationEnabled,
-        requiresAudioSensitiveVideo,
-        continuationFromPrevious: continuationEnabled,
-        continuationSourceSceneId: safeContinuationSourceSceneId,
-        continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
-        continuationSourceAssetType: safeContinuationSourceAssetType,
-        shotType: targetScene.shotType || "",
-        sceneType: targetScene.sceneType || "",
-        format: resolvePreferredSceneFormat(
-          targetScene?.format,
-          targetScene?.imageFormat
-        ),
-        provider: effectiveVideoProvider,
-        sceneRenderProvider: effectiveVideoProvider,
-        ...scenarioContractPayload,
-      };
-      console.debug("[SCENARIO VIDEO LEGACY PAYLOAD]", {
-        endpoint: "/api/clip/video",
-        sceneId,
-        payload: legacyPayload,
-      });
-      const legacyOut = await fetchJson("/api/clip/video", {
-        method: "POST",
-        body: legacyPayload,
-      });
-      console.debug("[SCENARIO VIDEO SEND ROUTE]", {
-        route: "/api/clip/video",
-        sceneId,
-        fallback: true,
-        selectedTab: String(options?.selectedTab || options?.activeTab || ""),
-      });
-      if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || "video_generation_failed");
-      console.info("[SCENARIO VIDEO RESULT]", {
-        sceneId,
-        ok: Boolean(legacyOut?.ok),
-        videoUrl: String(legacyOut?.videoUrl || ""),
-        status: "done",
-        provider: String(legacyOut?.provider || effectiveVideoProvider || ""),
-      });
-      updateScenarioScene(targetSceneIndex, {
-        videoUrl: String(legacyOut.videoUrl || ""),
-        mode: String(legacyOut.mode || ""),
-        model: String(legacyOut.model || ""),
-        requestedDurationSec: normalizeDurationSec(legacyOut.requestedDurationSec),
-        providerDurationSec: normalizeDurationSec(legacyOut.providerDurationSec),
-        videoStatus: "done",
-        videoError: "",
-        videoJobId: "",
-        videoPanelActivated: false,
-      });
-      console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
-      openNextSceneWithoutVideo(targetSceneIndex);
     } catch (e) {
       console.error(e);
       const errorMessage = String(e?.message || e || "");
