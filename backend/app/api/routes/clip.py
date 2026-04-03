@@ -9454,17 +9454,49 @@ def _detect_high_identity_risk_scene(
         str(scene_narrative_step or ""),
         str(contract.get("scenePurpose") or ""),
         str(contract.get("performanceFraming") or contract.get("performance_framing") or ""),
+        str(contract.get("sceneSummary") or ""),
+        str(contract.get("visualPrompt") or contract.get("visual_prompt") or ""),
+        str(contract.get("camera") or ""),
+        str(contract.get("cameraMovement") or contract.get("camera_movement") or ""),
+        str(contract.get("cameraLanguage") or contract.get("camera_language") or ""),
+        str(contract.get("performerFacing") or contract.get("performer_facing") or ""),
+        str(contract.get("cameraReadable") or contract.get("camera_readable") or ""),
     ]).lower()
     lower_route = str(route_hint or "").lower()
-    is_lip_sync_route = "lip_sync" in lower_route or "lipsync" in lower_route
-    is_non_lip_i2v = (not is_lip_sync_route) and any(token in lower_route for token in ("i2v", "image_video", "first_last", "f_l"))
-    framing_tokens = (
-        "close-up", "close up", "closeup", "face", "portrait", "face_close", "close_emotional", "headshot",
-        "beauty", "beauty crop", "face dominant", "intimate portrait", "emotional portrait"
+    is_lip_sync_route = "lip_sync" in lower_route or "lipsync" in lower_route or bool(contract.get("lipSync")) or bool(contract.get("lip_sync")) or bool(contract.get("isLipSync"))
+    is_i2v_route = "i2v" in lower_route or "image_video" in lower_route
+    framing = str(contract.get("performanceFraming") or contract.get("performance_framing") or "").strip().lower()
+    has_perf_framing_risk = framing in {"tight_medium", "medium", "three_quarter"}
+    camera_blob = " ".join([
+        str(contract.get("camera") or ""),
+        str(contract.get("cameraMovement") or contract.get("camera_movement") or ""),
+        str(contract.get("shotType") or contract.get("shot_type") or ""),
+        blob,
+    ]).lower()
+    camera_risk_tokens = (
+        "orbit", "tracking", "moving", "walk", "follow", "purposeful walk", "direct-to-camera performance", "directly to the camera"
     )
-    has_closeup_signal = any(token in blob for token in framing_tokens)
-    has_quiet_emotion_signal = any(token in blob for token in ("quiet", "melanch", "acceptance", "linger", "eyes closed", "intimate"))
+    has_camera_motion_risk = any(token in camera_blob for token in camera_risk_tokens)
+    try:
+        scene_index = int(contract.get("sceneIndex") if contract.get("sceneIndex") is not None else contract.get("scene_index") if contract.get("scene_index") is not None else contract.get("index") if contract.get("index") is not None else 0)
+    except Exception:
+        scene_index = 0
+    drift_risk = contract.get("appearanceDriftRisk")
+    has_appearance_drift_risk = bool(drift_risk) if not isinstance(drift_risk, str) else bool(drift_risk.strip())
+    summary_risk_tokens = (
+        "walk", "turn", "orbit", "directly to the camera", "final lines", "delivers final lines",
+    )
+    has_summary_risk = any(token in blob for token in summary_risk_tokens)
+    has_closeup_signal = has_perf_framing_risk or any(token in blob for token in ("close-up", "close up", "closeup", "portrait", "face dominant", "headshot"))
     has_warm_soft_portrait_risk = any(token in blob for token in ("warm", "soft light", "dreamy", "blurred", "bokeh", "beauty light"))
+    try:
+        requested_duration = float(contract.get("requestedDurationSec") if contract.get("requestedDurationSec") is not None else contract.get("requested_duration_sec") if contract.get("requested_duration_sec") is not None else 0.0)
+    except Exception:
+        requested_duration = 0.0
+    performer_facing_readable = bool(contract.get("performerFacing") or contract.get("performer_facing") or contract.get("cameraReadable") or contract.get("camera_readable")) or any(
+        token in blob for token in ("performer-facing", "performer facing", "camera-readable", "camera readable", "direct-to-camera")
+    )
+    route_perf_risk = (is_i2v_route or is_lip_sync_route) and performer_facing_readable
     weak_outfit_profile = _is_weak_outfit_profile(contract.get("effectiveOutfitProfile"))
     weak_identity_lock = len(contract.get("identityLockFieldsUsed") or []) < 3
     active_roles = contract.get("active_connected_character_roles") if isinstance(contract.get("active_connected_character_roles"), list) else []
@@ -9472,36 +9504,40 @@ def _detect_high_identity_risk_scene(
     anchor = _select_previous_stable_scene_anchor(contract)
     weak_anchor = not bool(anchor.get("identity_memory") or anchor.get("outfit_memory") or anchor.get("image_url"))
     known_drift_prone = bool((contract.get("identityDriftHistoryCount") or 0) > 0 or contract.get("identityDriftProne"))
+    has_hero_contract = bool(_normalize_hero_appearance_contract(contract.get("heroAppearanceContract")))
+    has_outfit_contract = isinstance(contract.get("sourceOutfitProfile"), dict) and bool(contract.get("sourceOutfitProfile")) or isinstance(contract.get("effectiveOutfitProfile"), dict) and bool(contract.get("effectiveOutfitProfile"))
+    has_location_contract = bool(contract.get("locationContinuityContract") or contract.get("worldContinuityContract"))
+    has_strong_contracts = has_hero_contract or has_outfit_contract or has_location_contract
     risk_reasons: list[str] = []
-    risk_score = 0
-    if has_closeup_signal:
-        risk_score += 2
-        risk_reasons.append("face_heavy_or_portrait_framing")
+    if is_lip_sync_route:
+        risk_reasons.append("lip_sync_scene")
+    if has_perf_framing_risk:
+        risk_reasons.append("performance_framing_medium_tight")
+    if has_camera_motion_risk:
+        risk_reasons.append("camera_orbit_tracking_walk_motion")
+    if scene_index >= 5:
+        risk_reasons.append("late_scene_index_5_plus")
+    if has_appearance_drift_risk:
+        risk_reasons.append("appearance_drift_risk_present")
+    if has_summary_risk:
+        risk_reasons.append("scene_text_motion_or_final_lines")
+    if requested_duration >= 3.0:
+        risk_reasons.append("duration_3s_plus")
+    if route_perf_risk:
+        risk_reasons.append("route_performer_facing_camera_readable")
     if weak_outfit_profile:
-        risk_score += 2
         risk_reasons.append("weak_outfit_or_body_anchor")
     if weak_identity_lock or weak_identity_state:
-        risk_score += 2
         risk_reasons.append("weak_identity_continuity_state")
-    if has_warm_soft_portrait_risk:
-        risk_score += 1
-        risk_reasons.append("warm_soft_beauty_lighting_risk")
-    if has_quiet_emotion_signal:
-        risk_score += 1
-        risk_reasons.append("quiet_emotional_face_focus")
-    if is_non_lip_i2v and has_closeup_signal:
-        risk_score += 2
-        risk_reasons.append("non_lip_i2v_closeup_combo")
-    if is_lip_sync_route and has_closeup_signal and weak_outfit_profile:
-        risk_score += 1
-        risk_reasons.append("lip_sync_portrait_with_weak_outfit_cues")
     if weak_anchor:
-        risk_score += 1
         risk_reasons.append("weak_previous_anchor_state")
     if known_drift_prone:
-        risk_score += 1
         risk_reasons.append("repeated_instability_context")
-    rescue_applied = risk_score >= 4
+    if has_strong_contracts and not bool(contract.get("identityLockApplied")):
+        risk_reasons.append("contracts_present_without_identity_lock_applied")
+    risk_reasons = list(dict.fromkeys(risk_reasons))
+    risk_score = len(risk_reasons)
+    rescue_applied = bool(risk_reasons)
     return {
         "highIdentityRiskRescueApplied": rescue_applied,
         "highIdentityRiskScore": risk_score,
@@ -9520,6 +9556,10 @@ def _detect_high_identity_risk_scene(
         "stableAnchorOutfitMemory": str(anchor.get("outfit_memory") or ""),
         "stableAnchorImageUrl": str(anchor.get("image_url") or ""),
         "routeHint": route_hint,
+        "sceneIndex": scene_index,
+        "hasHeroAppearanceContract": has_hero_contract,
+        "hasOutfitProfile": has_outfit_contract,
+        "hasLocationContinuityContract": has_location_contract,
     }
 
 
@@ -9532,16 +9572,20 @@ def _build_high_identity_risk_rescue_block(rescue: dict[str, Any]) -> str:
     lines = [
         "HIGH IDENTITY-RISK SCENE RESCUE (UNIVERSAL, STRICT):",
         "- scene is high risk for identity drift: preserve the SAME woman from confirmed stable anchor, not a reimagined portrait",
+        "- lower stylistic reinterpretation freedom for face, hair, upper-body garment, and neckline silhouette",
         "- if previous confirmed stable scene image is attached inline, treat it as continuity anchor for the SAME person/look (face/hair/outfit), never as a second actress",
         "- continuity stable image anchor reinforces identity continuity and does not replace primary character role references",
         "- no portrait-beauty reinvention, no different actress effect, no face drift, no age drift, no perceived body/fullness drift",
         "- preserve hair silhouette and base identity while allowing only beat-level expression changes",
+        "- preserve same hair color family, length read, parting read, wave/curl tightness read, root-to-end contrast",
         "- preserve garment category, coverage identity, construction identity, silhouette identity, and visible signature details",
+        "- preserve exact top/neckline/strap/shoulder-coverage logic under tight framing",
         "- no hairstyle redesign, no neckline/top-cut reinterpretation, no garment simplification when framing gets tighter",
         "- keep intimate close-up emotion while preserving enough shoulders/neckline/upper-chest/garment edge context for continuity",
         "- do not collapse into face-only glamour crop if it weakens identity/outfit continuity",
         "- keep camera physically readable and upright; no sideways/lying/rotated portrait reinterpretation unless explicitly requested",
         "- lighting/style shifts are allowed only as mood shifts inside the same world; no disconnected portrait-world reinvention",
+        "- keep same apartment/home architectural family when location continuity is present",
         "- do not let beauty-light drift override stable continuity anchor evidence from confirmed scene",
         "- when framing becomes tighter, preserve upper-body garment logic instead of drifting to anonymous beauty-face crop",
     ]
@@ -9597,6 +9641,40 @@ def _build_comfy_image_prompt_assembly(
     world_contract = _build_world_continuity_contract(contract)
     identity_contract = _build_identity_contract(contract)
     outfit_profile = identity_contract.get("outfit_profile") if isinstance(identity_contract.get("outfit_profile"), dict) else {}
+    source_outfit_profile = contract.get("sourceOutfitProfile") if isinstance(contract.get("sourceOutfitProfile"), dict) else {}
+    effective_outfit_profile = contract.get("effectiveOutfitProfile") if isinstance(contract.get("effectiveOutfitProfile"), dict) else {}
+    hero_appearance_contract = _normalize_hero_appearance_contract(contract.get("heroAppearanceContract"))
+    if not hero_appearance_contract:
+        hero_appearance_contract = _build_hero_appearance_contract(contract)
+    has_hero_appearance_contract = bool(hero_appearance_contract)
+    has_outfit_profile = bool(source_outfit_profile or effective_outfit_profile or outfit_profile)
+    has_location_continuity_contract = bool(contract.get("locationContinuityContract") or contract.get("worldContinuityContract"))
+    try:
+        scene_index = int(contract.get("sceneIndex") if contract.get("sceneIndex") is not None else contract.get("scene_index") if contract.get("scene_index") is not None else contract.get("index") if contract.get("index") is not None else 0)
+    except Exception:
+        scene_index = 0
+    garment_top_identity = str(
+        effective_outfit_profile.get("garment_top_identity")
+        or source_outfit_profile.get("garment_top_identity")
+        or outfit_profile.get("garment_top_identity")
+        or ""
+    ).strip().lower()
+    is_casual_separates = garment_top_identity in {"top_with_jeans", "crop_top", "tank_or_cami_top", "t_shirt_top"}
+    has_hair_identity = bool(
+        hero_appearance_contract.get("hair_identity")
+        or hero_appearance_contract.get("hair_structure_identity")
+        or source_outfit_profile.get("hair_identity")
+        or effective_outfit_profile.get("hair_identity")
+    )
+    apartment_home_location = any(
+        token in " ".join([
+            str(contract.get("locationContinuityContract") or ""),
+            str(contract.get("worldContinuityContract") or ""),
+            str(scene_text or ""),
+            str(scene_delta or ""),
+        ]).lower()
+        for token in ("apartment", "home", "living room", "bedroom", "kitchen", "flat")
+    )
     task_mode = str(identity_contract.get("task_mode") or "keep_identity")
     task_execution = identity_contract.get("task_execution") if isinstance(identity_contract.get("task_execution"), dict) else {}
     route_hint = " ".join([
@@ -9722,6 +9800,33 @@ def _build_comfy_image_prompt_assembly(
             "do not beautify into a different woman",
             "do not convert into generic singer portrait",
         ])
+    if has_hero_appearance_contract:
+        forbidden_changes.extend([
+            "do not make the face younger/older than reference",
+            "do not change facial proportions",
+            "do not sharpen or soften the face into another person",
+            "do not change cheek/jaw/nose/lip/eye identity read",
+            "do not change hair length, hair color family, or parting",
+            "do not change body read/fullness/height impression",
+        ])
+    if is_casual_separates:
+        forbidden_changes.extend([
+            "do not reinterpret the top as a dress",
+            "do not reinterpret top into dress_top, bodysuit, blouse, knit dress, or one-piece silhouette",
+            "do not change neckline type",
+            "do not add sleeves",
+            "do not change strap width or shoulder coverage",
+            "do not lengthen the top into a bodysuit/tunic/dress",
+            "do not redesign the ribbed fitted crop silhouette",
+            "do not replace jeans with other bottoms",
+            "do not change body read by compressing torso or changing shoulder/waist proportion",
+            "do not reinterpret fabric family",
+        ])
+    if has_location_continuity_contract:
+        forbidden_changes.extend([
+            "do not change architectural family into another home/building",
+            "do not change window type, column materials, furniture language, daylight logic, wall/floor material family",
+        ])
     forbidden_changes.extend([
         "no silent redesign of window/ledge/furniture/material family in the same scene zone",
         "no silent room geometry redesign unless scene explicitly changes zone",
@@ -9740,6 +9845,8 @@ def _build_comfy_image_prompt_assembly(
     priority_contract_block = "\n".join([
         "HERO PRIORITY CONTRACT (STRICT):",
         "- hero identity is highest-priority visual truth",
+        "- heroAppearanceContract is the primary visual source-of-truth hard lock when present",
+        "- if scene text conflicts with heroAppearanceContract on face/hair/outfit, heroAppearanceContract wins",
         "- props identity must be preserved exactly when connected",
         "- location defines environment/world identity",
         "- style layer controls palette/lighting/cinematic treatment only",
@@ -9748,6 +9855,59 @@ def _build_comfy_image_prompt_assembly(
         "- previous generated scene image is continuity reference, not identity override",
         "- camera/pose/composition may change; identity cannot change",
     ])
+    hero_identity_lock_block = "\n".join([
+        "HERO IDENTITY LOCK (STRICT, SOURCE-OF-TRUTH):",
+        "- treat heroAppearanceContract as hard lock and primary visual truth",
+        "- same face identity, same age read, same body read/fullness/height impression",
+        "- keep same identity under expression, head angle, and motion staging changes",
+        "- expression may change, identity may not",
+        "- locked hero appearance keys:",
+        *([f"- {key}: {value}" for key, value in hero_appearance_contract.items()] or ["- none"]),
+    ])
+    outfit_continuity_lock_block = "\n".join([
+        "OUTFIT CONTINUITY LOCK (STRICT):",
+        "- keep same exact garment type for upper body",
+        "- keep same neckline identity and shoulder exposure logic",
+        "- keep same strap width logic and same hem/crop length impression",
+        "- keep same jeans silhouette / rise / wash family when jeans are present",
+        "- preserve outfit read continuity across all scenes",
+        "- reference continuity target: beige ribbed sleeveless fitted crop top + light blue jeans",
+        f"- garment_top_identity={garment_top_identity or 'unknown'}",
+    ])
+    if is_casual_separates:
+        outfit_continuity_lock_block = "\n".join([
+            outfit_continuity_lock_block,
+            "- casual separates rescue enabled: top+jeans silhouette must remain unchanged",
+            "- do not allow dress / bodysuit / blouse / one-piece reinterpretation",
+            "- do not allow neckline drift / strap redesign / sleeve invention / fabric-family reinterpretation",
+        ])
+    location_continuity_lock_block = "\n".join([
+        "LOCATION CONTINUITY LOCK (STRICT):",
+        f"- room/world continuity contract present={has_location_continuity_contract}",
+        "- keep same architectural family, daylight logic, furniture language, and material family",
+        "- allowed: different camera angle in the same apartment/home",
+        "- forbidden: the feeling of a different house/building/architecture",
+    ] + ([
+        "- apartment/home continuity mode: keep windows, columns, walls/floors, furniture language consistent"
+    ] if apartment_home_location else []))
+    late_scene_face_guard_block = ""
+    if scene_index >= 5:
+        late_scene_face_guard_block = "\n".join([
+            "LATE-SCENE FACE DRIFT GUARD (SCENE 5+):",
+            "- do not make the face younger/older than reference",
+            "- do not change facial proportions",
+            "- do not sharpen or soften the face into another person",
+            "- keep the same cheek/jaw/nose/lip/eye read",
+            "- keep the same identity even under different expression, head angle, and motion staging",
+            "- expression may change, identity may not",
+        ])
+    hair_continuity_guard_block = ""
+    if has_hair_identity:
+        hair_continuity_guard_block = "\n".join([
+            "HAIR CONTINUITY GUARD (STRICT):",
+            "- keep same hair length, same color family, same root-to-end contrast, same wave pattern, same volume read",
+            "- do not drift into different curl tightness, different length, different blonde tone, or different parting",
+        ])
 
     character_role_priority_lines = [
         "CHARACTER ROLE PRIORITY:",
@@ -10078,6 +10238,9 @@ def _build_comfy_image_prompt_assembly(
 
     assembled_prompt = "\n\n".join([
         hard_continuity_contract_block,
+        hero_identity_lock_block,
+        outfit_continuity_lock_block,
+        location_continuity_lock_block,
         non_lip_identity_first_block,
         opening_shot_realism_block,
         framing_and_staging_block,
@@ -10086,6 +10249,8 @@ def _build_comfy_image_prompt_assembly(
         lip_sync_outfit_safety_block,
         lip_sync_audio_emotion_block,
         high_identity_risk_rescue_block,
+        late_scene_face_guard_block,
+        hair_continuity_guard_block,
         task_mode_runtime_block,
         material_motion_runtime_block,
         physics_blocks["lightWorldBlock"],
@@ -10162,6 +10327,7 @@ def _build_comfy_image_prompt_assembly(
 
     debug = {
         "sceneId": scene_id,
+        "sceneIndex": scene_index,
         "connectedNodesSummary": connected_summary,
         "refsByRole": refs_by_role,
         "rolesActive": connected_summary["activeRoles"],
@@ -10217,6 +10383,19 @@ def _build_comfy_image_prompt_assembly(
         "highIdentityRiskRescueApplied": bool(high_identity_risk_rescue.get("highIdentityRiskRescueApplied")),
         "highIdentityRiskScore": int(high_identity_risk_rescue.get("highIdentityRiskScore") or 0),
         "highIdentityRiskReasons": high_identity_risk_rescue.get("highIdentityRiskReasons") if isinstance(high_identity_risk_rescue.get("highIdentityRiskReasons"), list) else [],
+        "highIdentityRisk": bool(high_identity_risk_rescue.get("highIdentityRiskRescueApplied")),
+        "riskReasons": high_identity_risk_rescue.get("highIdentityRiskReasons") if isinstance(high_identity_risk_rescue.get("highIdentityRiskReasons"), list) else [],
+        "hasHeroAppearanceContract": has_hero_appearance_contract,
+        "hasOutfitProfile": has_outfit_profile,
+        "hasLocationContinuityContract": has_location_continuity_contract,
+        "usedHighRiskRescue": bool(high_identity_risk_rescue.get("highIdentityRiskRescueApplied")),
+        "usedCasualSeparatesRescue": bool(is_casual_separates),
+        "usedLateSceneFaceGuard": bool(late_scene_face_guard_block),
+        "usedHairContinuityGuard": bool(hair_continuity_guard_block),
+        "usedLocationContinuityGuard": bool(has_location_continuity_contract),
+        "forbiddenChangeCount": len(forbidden_changes),
+        "heroIdentityKeys": sorted(list(hero_appearance_contract.keys())),
+        "outfitKeys": sorted(list((effective_outfit_profile or source_outfit_profile or outfit_profile).keys())),
         "stableSceneAnchorUsed": bool(high_identity_risk_rescue.get("stableSceneAnchorUsed")),
         "stableSceneAnchorSource": str(high_identity_risk_rescue.get("stableSceneAnchorSource") or "none"),
         "previousConfirmedStableIdentityUsed": bool(high_identity_risk_rescue.get("previousConfirmedStableIdentityUsed")),
@@ -11364,6 +11543,23 @@ def clip_image(payload: ClipImageIn):
         }, ensure_ascii=False))
         refs_debug["comfyAssemblyDebug"] = comfy_assembly_debug
         print("[COMFY IMAGE ASSEMBLY]", json.dumps(comfy_assembly_debug, ensure_ascii=False))
+        print("[IDENTITY RESCUE DEBUG] " + json.dumps({
+            "sceneId": scene_id,
+            "sceneIndex": comfy_assembly_debug.get("sceneIndex"),
+            "highIdentityRisk": bool(comfy_assembly_debug.get("highIdentityRisk")),
+            "riskReasons": comfy_assembly_debug.get("riskReasons") if isinstance(comfy_assembly_debug.get("riskReasons"), list) else [],
+            "hasHeroAppearanceContract": bool(comfy_assembly_debug.get("hasHeroAppearanceContract")),
+            "hasOutfitProfile": bool(comfy_assembly_debug.get("hasOutfitProfile")),
+            "hasLocationContinuityContract": bool(comfy_assembly_debug.get("hasLocationContinuityContract")),
+            "usedHighRiskRescue": bool(comfy_assembly_debug.get("usedHighRiskRescue")),
+            "usedCasualSeparatesRescue": bool(comfy_assembly_debug.get("usedCasualSeparatesRescue")),
+            "usedLateSceneFaceGuard": bool(comfy_assembly_debug.get("usedLateSceneFaceGuard")),
+            "usedHairContinuityGuard": bool(comfy_assembly_debug.get("usedHairContinuityGuard")),
+            "usedLocationContinuityGuard": bool(comfy_assembly_debug.get("usedLocationContinuityGuard")),
+            "forbiddenChangeCount": int(comfy_assembly_debug.get("forbiddenChangeCount") or 0),
+            "heroIdentityKeys": comfy_assembly_debug.get("heroIdentityKeys") if isinstance(comfy_assembly_debug.get("heroIdentityKeys"), list) else [],
+            "outfitKeys": comfy_assembly_debug.get("outfitKeys") if isinstance(comfy_assembly_debug.get("outfitKeys"), list) else [],
+        }, ensure_ascii=False))
         high_identity_risk_rescue_applied = bool(comfy_assembly_debug.get("highIdentityRiskRescueApplied"))
         high_identity_risk_reasons = (
             comfy_assembly_debug.get("highIdentityRiskReasons")
