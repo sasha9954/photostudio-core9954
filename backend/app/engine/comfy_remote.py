@@ -1707,11 +1707,10 @@ def _resolve_audio_transport_mode_for_targets(
         str((target or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES for target in audio_targets
     )
 
-    if has_mediautilities_url_loader and has_audio_bytes and audio_upload_supported:
-        return "upload", "mediautilities_url_loader_prefers_uploaded_file"
-
     if has_url_target and bool(normalized_audio_url) and normalized_audio_url_safe:
         return "url", "url_target_with_remote_safe_url"
+    if has_mediautilities_url_loader and has_audio_bytes and audio_upload_supported:
+        return "upload", "mediautilities_url_loader_prefers_uploaded_file"
     if has_url_target and not bool(normalized_audio_url):
         return "none", "url_target_but_audio_url_missing"
     if has_url_target and not normalized_audio_url_safe:
