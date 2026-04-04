@@ -429,23 +429,18 @@
   },
   "267:214": {
     "inputs": {
-      "frames_number": [
-        "267:225",
+      "audio": [
+        "267:277",
         0
       ],
-      "frame_rate": [
-        "267:261",
-        1
-      ],
-      "batch_size": 1,
       "audio_vae": [
         "267:221",
         0
       ]
     },
-    "class_type": "LTXVEmptyLatentAudio",
+    "class_type": "LTXVAudioVAEEncode",
     "_meta": {
-      "title": "LTXV Пустое латентное аудио"
+      "title": "LTXV Аудио VAE Encode"
     }
   },
   "267:252": {
@@ -715,6 +710,35 @@
     "class_type": "CLIPTextEncode",
     "_meta": {
       "title": "Кодирование текста CLIP (Запрос)"
+    }
+  },
+  "267:276": {
+    "inputs": {
+      "url": ""
+    },
+    "class_type": "LoadAudioFromUrl",
+    "_meta": {
+      "title": "Загрузить аудио из URL"
+    }
+  },
+  "267:277": {
+    "inputs": {
+      "audio": [
+        "267:276",
+        0
+      ],
+      "frames_number": [
+        "267:225",
+        0
+      ],
+      "frame_rate": [
+        "267:261",
+        1
+      ]
+    },
+    "class_type": "TrimAudioDuration",
+    "_meta": {
+      "title": "TrimAudioDuration"
     }
   }
 }

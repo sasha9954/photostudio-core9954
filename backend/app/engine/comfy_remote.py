@@ -1641,6 +1641,11 @@ def _resolve_audio_transport_mode_for_targets(
 
     if has_url_target and bool(normalized_audio_url) and normalized_audio_url_safe:
         return "url", "url_target_with_remote_safe_url"
+    if has_url_target and not bool(normalized_audio_url):
+        return "none", "url_target_but_audio_url_missing"
+    if has_url_target and not normalized_audio_url_safe:
+        return "none", "url_target_but_audio_url_not_remote_safe"
+
     if has_path_target and bool(path_audio_value):
         return "path", "path_target_with_filesystem_path"
     if has_upload_filename_target and has_audio_bytes and audio_upload_supported:
@@ -1649,10 +1654,6 @@ def _resolve_audio_transport_mode_for_targets(
         return "none", "source_file_node_requires_upload_but_audio_bytes_missing"
     if has_upload_filename_target and not audio_upload_supported:
         return "none", "source_file_node_requires_upload_but_endpoint_unavailable"
-    if has_url_target and not bool(normalized_audio_url):
-        return "none", "url_target_but_audio_url_missing"
-    if has_url_target and not normalized_audio_url_safe:
-        return "none", "url_target_but_audio_url_not_remote_safe"
     if has_path_target and not bool(path_audio_value):
         return "none", "path_target_but_filesystem_path_missing"
     return "none", "no_compatible_audio_transport_for_discovered_targets"
