@@ -10,10 +10,9 @@
   },
   "276": {
     "inputs": {
-      "audio": "роза_7.2s.mp3",
-      "audioUI": "/api/view?filename=%D1%80%D0%BE%D0%B7%D0%B0_7.2s.mp3&type=input&subfolder=&rand=0.4681482380976856"
+      "url": "https://example.com/audio.mp3"
     },
-    "class_type": "LoadAudio",
+    "class_type": "LoadAudioFromUrl",
     "_meta": {
       "title": "Load Audio"
     }

@@ -13806,36 +13806,7 @@ def clip_video(payload: ClipVideoIn):
         audio_bytes = None
         audio_transport_mode = "none"
         if final_workflow_key == "lip_sync":
-            tmp_audio_files: list[str] = []
-            try:
-                audio_source_path, audio_source_err = _resolve_audio_slice_source(audio_slice_url, tmp_audio_files)
-                if audio_source_err or not audio_source_path:
-                    print(f"[LIP_SYNC COMFY ERROR] sceneId={scene_id} workflow_file={workflow_path} error=audio_prepare_failed:{audio_source_err or 'audio_source_missing'}")
-                    return JSONResponse(
-                        status_code=422,
-                        content={"ok": False, "code": "LTX_AUDIO_PREPARE_FAILED", "hint": f"audio_slice_prepare_failed:{audio_source_err or 'audio_source_missing'}"},
-                    )
-                with open(audio_source_path, "rb") as audio_file:
-                    audio_bytes = audio_file.read()
-                if not audio_bytes:
-                    return JSONResponse(
-                        status_code=422,
-                        content={"ok": False, "code": "LTX_AUDIO_PREPARE_FAILED", "hint": "audio_slice_bytes_empty"},
-                    )
-                audio_transport_mode = "upload"
-            except Exception as exc:
-                print(f"[LIP_SYNC COMFY ERROR] sceneId={scene_id} workflow_file={workflow_path} error=audio_prepare_exception:{str(exc)[:300]}")
-                return JSONResponse(
-                    status_code=422,
-                    content={"ok": False, "code": "LTX_AUDIO_PREPARE_FAILED", "hint": f"audio_slice_prepare_exception:{str(exc)[:220]}"},
-                )
-            finally:
-                for tmp_path in tmp_audio_files:
-                    try:
-                        if tmp_path and os.path.exists(tmp_path):
-                            os.remove(tmp_path)
-                    except Exception:
-                        pass
+            audio_transport_mode = "url"
 
         image_filename = f"{scene_id}_{int(time.time())}.{(image_ext or 'jpg').lower()}"
         print(

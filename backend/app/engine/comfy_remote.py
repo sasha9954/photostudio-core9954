@@ -2258,6 +2258,9 @@ def run_comfy_image_to_video(
             has_audio_bytes=has_audio_bytes,
             audio_upload_supported=_COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is not False,
         )
+        if selected_transport_mode == "upload":
+            selected_transport_mode = "none"
+            selected_transport_reason = "upload_transport_disabled_for_lip_sync_url_only_mode"
         source_audio_target_classes = [
             {
                 "node_id": str((target or {}).get("node_id") or "").strip(),
@@ -2312,6 +2315,15 @@ def run_comfy_image_to_video(
                 "selectedTransportMode": selected_transport_mode,
                 "selectedBy": selected_by,
                 "reason": selected_transport_reason,
+            },
+        )
+        logger.info(
+            "[COMFY LIPSYNC AUDIO URL RESOLUTION] %s",
+            {
+                "rawAudioSliceUrl": original_audio_url,
+                "normalizedAudioSliceUrl": normalized_audio_url,
+                "isRemoteSafe": is_normalized_audio_url_safe,
+                "selectedTransportMode": selected_transport_mode,
             },
         )
         logger.info(
