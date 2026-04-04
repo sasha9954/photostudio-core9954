@@ -1,7 +1,7 @@
 {
   "75": {
     "inputs": {
-      "filename_prefix": "video/LTX_2.3_i2v",
+      "filename_prefix": "video/LTX_2.3_ia2v",
       "format": "auto",
       "codec": "auto",
       "video": [
@@ -512,6 +512,10 @@
       ],
       "images": [
         "267:251",
+        0
+      ],
+      "audio": [
+        "267:220",
         0
       ]
     },
