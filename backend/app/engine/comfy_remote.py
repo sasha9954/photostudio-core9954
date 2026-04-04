@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 import json
 import math
@@ -215,6 +216,55 @@ def load_workflow_json(path: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError("workflow_invalid_json_root")
     return data
+
+
+def _build_workflow_fingerprint(*, workflow: dict, workflow_key: str, workflow_path: str) -> dict:
+    raw_path = str(workflow_path or "").strip()
+    workflow_file_path = Path(raw_path)
+    if not workflow_file_path.is_absolute():
+        workflow_file_path = Path(__file__).resolve().parents[2] / raw_path
+    absolute_path = workflow_file_path.resolve()
+    file_exists = absolute_path.exists() and absolute_path.is_file()
+    file_size_bytes = 0
+    file_mtime = 0.0
+    file_md5 = ""
+    if file_exists:
+        stat = absolute_path.stat()
+        file_size_bytes = int(stat.st_size)
+        file_mtime = float(stat.st_mtime)
+        file_md5 = hashlib.md5(absolute_path.read_bytes()).hexdigest()
+
+    discovered_audio_source_classes = sorted(
+        {
+            str((node or {}).get("class_type") or "").strip().lower()
+            for node in (workflow or {}).values()
+            if isinstance(node, dict)
+            and str((node or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_SOURCE_NODE_CLASS_NAMES
+        }
+    )
+    all_class_types = {
+        str((node or {}).get("class_type") or "").strip().lower()
+        for node in (workflow or {}).values()
+        if isinstance(node, dict)
+    }
+    return {
+        "workflowKey": str(workflow_key or "").strip(),
+        "workflowPath": raw_path,
+        "absoluteWorkflowPath": str(absolute_path),
+        "fileExists": bool(file_exists),
+        "fileSizeBytes": file_size_bytes,
+        "fileMtime": file_mtime,
+        "md5": file_md5,
+        "topLevelNodeCount": len(workflow) if isinstance(workflow, dict) else 0,
+        "hasLoadAudio": "loadaudio" in all_class_types,
+        "hasLoadAudioFromUrl": "loadaudiofromurl" in all_class_types,
+        "hasLoadAudioFromPath": "loadaudiofrompath" in all_class_types,
+        "hasTrimAudioDuration": "trimaudioduration" in all_class_types,
+        "hasLTXVAudioVAEEncode": "ltxvaudiovaeencode" in all_class_types,
+        "hasCreateVideo": "createvideo" in all_class_types,
+        "hasSaveVideo": "savevideo" in all_class_types,
+        "discoveredAudioSourceClassTypes": discovered_audio_source_classes,
+    }
 
 
 def _response_body_snippet(resp: Response) -> str:
@@ -1261,6 +1311,7 @@ def _collect_audio_input_targets(
         if not isinstance(inputs, dict):
             continue
         input_keys = list(inputs.keys())
+        normalized_input_keys = {str(key).strip().lower(): str(key) for key in input_keys}
         if class_type in COMFY_AUDIO_DOWNSTREAM_NODE_CLASS_NAMES:
             downstream_nodes.append(
                 {
@@ -1276,14 +1327,15 @@ def _collect_audio_input_targets(
             continue
         found_source_target = False
         for input_key in _class_audio_input_key_priority(class_type):
-            if input_key in inputs:
+            actual_input_key = normalized_input_keys.get(str(input_key).strip().lower())
+            if actual_input_key and actual_input_key in inputs:
                 source_targets.append(
                     {
                         "node_id": str(node_id),
                         "class_type": class_type,
                         "title": title,
                         "input_keys": input_keys,
-                        "input_key": input_key,
+                        "input_key": actual_input_key,
                         "matched_by": matched_by,
                     }
                 )
@@ -1956,6 +2008,23 @@ def run_comfy_image_to_video(
         workflow = load_workflow_json(workflow_source)
     except Exception as exc:
         return None, f"workflow_load_failed:{str(exc)[:300]}"
+    workflow_fingerprint = _build_workflow_fingerprint(
+        workflow=workflow,
+        workflow_key=normalized_workflow_key,
+        workflow_path=workflow_source,
+    )
+    logger.info(
+        "[COMFY WORKFLOW FINGERPRINT] %s",
+        {
+            key: value
+            for key, value in workflow_fingerprint.items()
+            if key != "discoveredAudioSourceClassTypes"
+        },
+    )
+    logger.info(
+        "[COMFY WORKFLOW FINGERPRINT] discoveredAudioSourceClassTypes=%s",
+        workflow_fingerprint.get("discoveredAudioSourceClassTypes") or [],
+    )
 
     logger.info(
         "[COMFY REMOTE] calling upload_image_to_comfy filename=%s size_bytes=%s",
@@ -2100,6 +2169,54 @@ def run_comfy_image_to_video(
             has_audio_bytes=has_audio_bytes,
             audio_upload_supported=_COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is not False,
         )
+        source_audio_target_classes = [
+            {
+                "node_id": str((target or {}).get("node_id") or "").strip(),
+                "class_type": str((target or {}).get("class_type") or "").strip().lower(),
+                "input_key": str((target or {}).get("input_key") or "").strip(),
+            }
+            for target in audio_targets
+            if isinstance(target, dict)
+        ]
+        downstream_audio_node_classes = [
+            {
+                "node_id": str((node or {}).get("node_id") or "").strip(),
+                "class_type": str((node or {}).get("class_type") or "").strip().lower(),
+            }
+            for node in downstream_audio_nodes
+            if isinstance(node, dict)
+        ]
+        logger.info(
+            "[COMFY AUDIO TARGET DISCOVERY] %s",
+            {
+                "workflowKey": normalized_workflow_key,
+                "workflowFile": workflow_source,
+                "sourceAudioTargets": audio_targets,
+                "sourceAudioTargetClasses": source_audio_target_classes,
+                "downstreamAudioNodeClasses": downstream_audio_node_classes,
+                "selectedTransportMode": selected_transport_mode,
+                "selectedTransportReason": selected_transport_reason,
+            },
+        )
+        workflow_has_load_audio_from_url = bool(workflow_fingerprint.get("hasLoadAudioFromUrl"))
+        if workflow_has_load_audio_from_url and is_normalized_audio_url_safe and selected_transport_mode != "url":
+            logger.error(
+                "[COMFY AUDIO TRANSPORT INCONSISTENT] %s",
+                {
+                    "workflowKey": normalized_workflow_key,
+                    "workflowFile": workflow_source,
+                    "selectedTransportMode": selected_transport_mode,
+                    "selectedTransportReason": selected_transport_reason,
+                    "normalizedAudioUrl": normalized_audio_url,
+                    "normalizedAudioUrlSafe": is_normalized_audio_url_safe,
+                    "workflowHasLoadAudioFromUrl": workflow_has_load_audio_from_url,
+                    "sourceAudioTargetClasses": source_audio_target_classes,
+                },
+            )
+            return (
+                None,
+                "capability_error:LTX_AUDIO_TRANSPORT_INCONSISTENT:load_audio_from_url_present_but_url_transport_not_selected",
+            )
         upload_fallback_allowed = selected_transport_mode == "upload"
         upload_guard_reason = "allowed" if upload_fallback_allowed else selected_transport_reason
         selected_by = selected_transport_reason
