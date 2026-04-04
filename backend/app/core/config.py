@@ -1,12 +1,14 @@
 from pathlib import Path
 import logging
 import os
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
 
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 logger = logging.getLogger(__name__)
+LOCALHOST_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 
 
 class Settings(BaseSettings):
@@ -66,6 +68,17 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+def is_localhost_url(value: str | None) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        host = str(urlparse(raw).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in LOCALHOST_HOSTS
+
+
 def _gemini_key_source() -> str:
     if os.getenv("GEMINI_API_KEY"):
         return "environment"
@@ -85,6 +98,17 @@ logger.info(
 
 logger.info("[CONFIG] COMFY_BASE_URL=%s", str(settings.COMFY_BASE_URL).rstrip("/"))
 logger.info("[CONFIG] PUBLIC_BASE_URL=%s", str(settings.PUBLIC_BASE_URL).rstrip("/"))
+logger.info(
+    "[CONFIG] is_public_base_localhost=%s",
+    is_localhost_url(settings.PUBLIC_BASE_URL),
+)
+if is_localhost_url(settings.PUBLIC_BASE_URL):
+    logger.warning(
+        "[CONFIG PROBLEM] PUBLIC_BASE_URL points to localhost/loopback (%s). "
+        "Remote Comfy lip-sync cannot fetch backend audio via localhost; set PUBLIC_BASE_URL "
+        "to a reachable URL (e.g. Tailscale/MagicDNS/LAN/external).",
+        str(settings.PUBLIC_BASE_URL).rstrip("/"),
+    )
 logger.info(
     "[CONFIG] COMFY_OUTPUT_HANDOFF_STRATEGY=%s",
     str(settings.COMFY_OUTPUT_HANDOFF_STRATEGY or "backend_proxy").strip().lower() or "backend_proxy",

@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.router import api_router
 from app.db.sqlite import init_db
 from app.core.static_paths import STATIC_DIR, ASSETS_DIR, ensure_static_dirs
-from app.core.config import settings
+from app.core.config import settings, is_localhost_url
 
 app = FastAPI(title="PhotoStudio Core API", version="0.2.0")
 logger = logging.getLogger(__name__)
@@ -96,12 +96,30 @@ def _startup():
     ensure_static_dirs()
     print("STATIC_DIR =", str(STATIC_DIR))
     print("ASSETS_DIR =", str(ASSETS_DIR))
+    comfy_base_url = str(settings.COMFY_BASE_URL).rstrip("/")
+    public_base_url = str(settings.PUBLIC_BASE_URL).rstrip("/")
+    is_public_base_localhost = is_localhost_url(public_base_url)
+    is_comfy_base_localhost = is_localhost_url(comfy_base_url)
     logger.info(
-        "[STARTUP] COMFY_BASE_URL=%s PUBLIC_BASE_URL=%s COMFY_OUTPUT_HANDOFF_STRATEGY=%s",
-        str(settings.COMFY_BASE_URL).rstrip("/"),
-        str(settings.PUBLIC_BASE_URL).rstrip("/"),
+        "[STARTUP] COMFY_BASE_URL=%s PUBLIC_BASE_URL=%s is_public_base_localhost=%s COMFY_OUTPUT_HANDOFF_STRATEGY=%s",
+        comfy_base_url,
+        public_base_url,
+        is_public_base_localhost,
         str(settings.COMFY_OUTPUT_HANDOFF_STRATEGY or "backend_proxy").strip().lower() or "backend_proxy",
     )
+    if is_public_base_localhost:
+        logger.error(
+            "[STARTUP CONFIG PROBLEM] PUBLIC_BASE_URL=%s is localhost/loopback. "
+            "Remote comfy lip-sync requires a reachable backend URL for audio (Tailscale/MagicDNS/LAN/external).",
+            public_base_url,
+        )
+    if not is_comfy_base_localhost and is_public_base_localhost:
+        logger.error(
+            "[STARTUP CONFIG PROBLEM] COMFY_BASE_URL=%s looks remote while PUBLIC_BASE_URL=%s is localhost. "
+            "This pairing breaks remote audio handoff for lip-sync.",
+            comfy_base_url,
+            public_base_url,
+        )
     init_db()
 
 

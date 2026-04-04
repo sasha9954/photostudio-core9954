@@ -1783,7 +1783,7 @@ function buildAudioSliceReadyPatch({
 
 function normalizeLipSyncSceneStatePatch(scene = {}, patch = {}) {
   const nextPatch = patch && typeof patch === "object" ? { ...patch } : {};
-  const protectedSourceFields = ["imageUrl", "startImageUrl", "endImageUrl", "audioSliceUrl"];
+  const protectedSourceFields = ["imageUrl", "startImageUrl", "endImageUrl", "audioSliceUrl", "videoSourceImageUrl"];
   const patchVideoStatus = String(nextPatch?.videoStatus || "").trim().toLowerCase();
   const isVideoErrorPatch = patchVideoStatus === "error" || patchVideoStatus === "stopped" || patchVideoStatus === "not_found";
   if (isVideoErrorPatch) {
@@ -7236,6 +7236,11 @@ const scenarioSelectedCanInheritPreviousEnd = scenarioSelectedTransitionType ===
 const scenarioSelectedEffectiveStartImageUrl = getEffectiveSceneStartImage(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedEndImageUrl = String(scenarioSelectedFrameUrls.endImageUrl || "").trim();
 const scenarioSelectedVideoSourceImageUrl = String(scenarioSelected?.videoSourceImageUrl || "").trim();
+const scenarioSelectedVideoSourcePosterUrl = resolveAssetUrl(
+  scenarioSelectedVideoSourceImageUrl
+  || scenarioSelectedEffectiveStartImageUrl
+  || scenarioSelected?.imageUrl
+);
 const scenarioSelectedVideoPanelActivated = !!scenarioSelected?.videoPanelActivated;
 const scenarioSelectedStartImageSource = getSceneStartImageSource(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedImageFormat = resolvePreferredSceneFormat(scenarioSelected?.format, scenarioSelected?.imageFormat);
@@ -7589,19 +7594,27 @@ const comfyShowVideoSection = Boolean(
       const isTerminalVideoPatch = ["error", "stopped", "not_found"].includes(nextVideoStatus);
       if (isTerminalVideoPatch) {
         const patchKeys = Object.keys(patch || {});
-        const protectedSourceFields = ["imageUrl", "startImageUrl", "endImageUrl", "audioSliceUrl"];
+        const protectedSourceFields = ["imageUrl", "startImageUrl", "endImageUrl", "audioSliceUrl", "videoSourceImageUrl"];
         const attemptedProtectedWrite = protectedSourceFields.filter((field) => Object.prototype.hasOwnProperty.call(patch || {}, field));
         const protectedSourceFieldsPreserved = attemptedProtectedWrite.every((field) => !Object.prototype.hasOwnProperty.call(normalizedPatch, field));
         const mergedPreview = { ...sceneAtIdx, ...normalizedPatch };
-        console.info("[SCENARIO ERROR PATCH GUARD]", {
-          sceneId: String(sceneAtIdx?.sceneId || ""),
-          previousVideoStatus,
-          nextVideoStatus,
-          patchKeys,
-          protectedSourceFieldsPreserved,
-          imageStillPresent: Boolean(String(mergedPreview?.imageUrl || mergedPreview?.startImageUrl || mergedPreview?.endImageUrl || "").trim()),
-          audioSliceStillPresent: Boolean(String(mergedPreview?.audioSliceUrl || "").trim()),
-        });
+          console.info("[SCENARIO ERROR PATCH GUARD]", {
+            sceneId: String(sceneAtIdx?.sceneId || ""),
+            previousVideoStatus,
+            nextVideoStatus,
+            patchKeys,
+            protectedSourceFieldsPreserved,
+            imageStillPresent: Boolean(
+              String(
+                mergedPreview?.videoSourceImageUrl
+                || mergedPreview?.imageUrl
+                || mergedPreview?.startImageUrl
+                || mergedPreview?.endImageUrl
+                || ""
+              ).trim()
+            ),
+            audioSliceStillPresent: Boolean(String(mergedPreview?.audioSliceUrl || "").trim()),
+          });
       }
       const nextScenes = scenes.map((s, i) => (i === resolvedIdx ? { ...s, ...normalizedPatch } : s));
       return { ...n, data: { ...n.data, scenes: nextScenes } };
@@ -17845,10 +17858,10 @@ const hydrate = useCallback((source = "unknown") => {
                                     src={scenarioSelected.videoUrl}
                                     poster={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
                                   />
-                                ) : scenarioSelectedVideoSourceImageUrl ? (
+                                ) : scenarioSelectedVideoSourcePosterUrl ? (
                                   <img
                                     className="clipSB_videoPoster"
-                                    src={scenarioSelectedVideoSourceImageUrl}
+                                    src={scenarioSelectedVideoSourcePosterUrl}
                                     alt="video preview"
                                   />
                                 ) : (
@@ -17875,8 +17888,8 @@ const hydrate = useCallback((source = "unknown") => {
                                 src={scenarioSelected.videoUrl}
                                 poster={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
                               />
-                            ) : scenarioSelectedVideoSourceImageUrl ? (
-                              <img className="clipSB_videoPoster" src={scenarioSelectedVideoSourceImageUrl} alt="poster" />
+                            ) : scenarioSelectedVideoSourcePosterUrl ? (
+                              <img className="clipSB_videoPoster" src={scenarioSelectedVideoSourcePosterUrl} alt="poster" />
                             ) : (
                               <div className="clipSB_videoFramePlaceholder">PREVIEW</div>
                             )}
