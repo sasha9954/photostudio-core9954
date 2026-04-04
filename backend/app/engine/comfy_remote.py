@@ -6,6 +6,7 @@ import json
 import math
 import socket
 import time
+from collections import deque
 from pathlib import Path
 from urllib.parse import quote, urlparse, urlunparse
 
@@ -39,6 +40,17 @@ COMFY_AUDIO_INPUT_KEYS = ("audio", "audio_file", "audio_path", "path", "filename
 COMFY_AUDIO_INPUT_WIDGET_FALLBACK_KEYS = ("value", "text")
 COMFY_AUDIO_TITLE_HINTS = ("audio", "music", "sound", "lipsync", "lip sync", "wav", "mp3")
 COMFY_LIPSYNC_WORKFLOW_AUDIO_FALLBACK_CLASS_NAMES = {"ltxvemptylatentaudio"}
+COMFY_MAIN_VIDEO_BRANCH_CLASS_NAMES = {
+    "ltxvconcatavlatent",
+    "ltxvseparateavlatent",
+    "ltxvaudiovaeencode",
+    "ltxvaudiovaedecode",
+    "trimaudioduration",
+    "createvideo",
+    "savevideo",
+}
+COMFY_MOUTH_CONTROL_HINTS = ("phoneme", "viseme", "mouth", "avatar", "face", "wav2lip", "sadtalker")
+COMFY_NON_MOUTH_LIPSYNC_TITLES = ("lipsink", "lip sink", "lipsync-video", "lip-sync-video")
 COMFY_AUDIO_UNSAFE_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 COMFY_AUDIO_URL_COMPATIBLE_INPUT_KEYS = {"url", "path", "audio_path"}
 COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES = {"loadaudiofromurl", "loadaudiofrompath"}
@@ -1095,6 +1107,126 @@ def _collect_audio_input_targets(
     return targets
 
 
+def _build_workflow_adjacency(workflow: dict) -> dict[str, list[dict]]:
+    adjacency: dict[str, list[dict]] = {}
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for input_key, input_value in inputs.items():
+            if isinstance(input_value, list) and len(input_value) >= 1:
+                source_node_id = str(input_value[0] or "").strip()
+                if not source_node_id:
+                    continue
+                adjacency.setdefault(source_node_id, []).append(
+                    {
+                        "to_node_id": str(node_id),
+                        "input_key": str(input_key),
+                    }
+                )
+    return adjacency
+
+
+def _is_mouth_control_node(class_type: str, title: str) -> bool:
+    class_l = str(class_type or "").strip().lower()
+    title_l = str(title or "").strip().lower()
+    if any(hint in class_l for hint in COMFY_MOUTH_CONTROL_HINTS):
+        return True
+    if any(hint in title_l for hint in COMFY_NON_MOUTH_LIPSYNC_TITLES):
+        return False
+    return any(hint in title_l for hint in COMFY_MOUTH_CONTROL_HINTS)
+
+
+def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str]) -> dict:
+    patched_audio_node_class = ""
+    patched_audio_node_title = ""
+    patched_audio_node_downstream_summary = {"visitedNodeCount": 0, "pathPreview": [], "reachedClassTypes": []}
+    audio_reaches_main_video_branch = False
+    audio_reaches_mouth_control_branch = False
+    workflow_lip_sync_capable = False
+
+    if not isinstance(workflow, dict):
+        return {
+            "patchedAudioNodeClass": patched_audio_node_class,
+            "patchedAudioNodeTitle": patched_audio_node_title,
+            "patchedAudioNodeDownstreamSummary": patched_audio_node_downstream_summary,
+            "workflowLipSyncCapable": workflow_lip_sync_capable,
+            "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
+            "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+        }
+
+    adjacency = _build_workflow_adjacency(workflow)
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        class_type_l = str(node.get("class_type") or "").strip().lower()
+        title_l = str(((node.get("_meta") or {}).get("title") if isinstance(node.get("_meta"), dict) else "") or "").strip().lower()
+        if _is_mouth_control_node(class_type_l, title_l):
+            workflow_lip_sync_capable = True
+            break
+
+    first_node_id = str((audio_patch_node_ids or [""])[0] or "").strip()
+    first_node = workflow.get(first_node_id) if first_node_id else None
+    if isinstance(first_node, dict):
+        patched_audio_node_class = str(first_node.get("class_type") or "").strip()
+        patched_audio_node_title = str(((first_node.get("_meta") or {}).get("title") if isinstance(first_node.get("_meta"), dict) else "") or "").strip()
+
+    if not audio_patch_node_ids:
+        return {
+            "patchedAudioNodeClass": patched_audio_node_class,
+            "patchedAudioNodeTitle": patched_audio_node_title,
+            "patchedAudioNodeDownstreamSummary": patched_audio_node_downstream_summary,
+            "workflowLipSyncCapable": workflow_lip_sync_capable,
+            "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
+            "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+        }
+
+    queue = deque([str(node_id) for node_id in audio_patch_node_ids if str(node_id or "").strip()])
+    visited: set[str] = set()
+    reached_classes: set[str] = set()
+    path_preview: list[str] = []
+    while queue:
+        current_node_id = queue.popleft()
+        if current_node_id in visited:
+            continue
+        visited.add(current_node_id)
+        for edge in adjacency.get(current_node_id, []):
+            downstream_node_id = str(edge.get("to_node_id") or "").strip()
+            downstream_node = workflow.get(downstream_node_id)
+            if not isinstance(downstream_node, dict):
+                continue
+            downstream_class = str(downstream_node.get("class_type") or "").strip()
+            downstream_title = str(((downstream_node.get("_meta") or {}).get("title") if isinstance(downstream_node.get("_meta"), dict) else "") or "").strip()
+            downstream_class_l = downstream_class.lower()
+            reached_classes.add(downstream_class)
+            if downstream_class_l in COMFY_MAIN_VIDEO_BRANCH_CLASS_NAMES:
+                audio_reaches_main_video_branch = True
+            if _is_mouth_control_node(downstream_class_l, downstream_title.lower()):
+                audio_reaches_mouth_control_branch = True
+            if len(path_preview) < 16:
+                path_preview.append(
+                    f"{current_node_id} -[{str(edge.get('input_key') or '').strip()}]-> {downstream_node_id}:{downstream_class or 'unknown'}"
+                )
+            if downstream_node_id not in visited:
+                queue.append(downstream_node_id)
+
+    patched_audio_node_downstream_summary = {
+        "visitedNodeCount": len(visited),
+        "pathPreview": path_preview,
+        "reachedClassTypes": sorted([item for item in reached_classes if item]),
+    }
+    return {
+        "patchedAudioNodeClass": patched_audio_node_class,
+        "patchedAudioNodeTitle": patched_audio_node_title,
+        "patchedAudioNodeDownstreamSummary": patched_audio_node_downstream_summary,
+        "workflowLipSyncCapable": workflow_lip_sync_capable,
+        "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
+        "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+    }
+
+
 def _normalize_audio_url_for_remote_transport(audio_url: str | None) -> tuple[str, dict]:
     original_url = str(audio_url or "").strip()
     public_base_url = str(settings.PUBLIC_BASE_URL or "").strip()
@@ -1480,6 +1612,14 @@ def run_comfy_image_to_video(
     effective_audio_value = str(audio_url or "").strip()
     audio_targets_found = 0
     lip_sync_proof_reason = ""
+    proof_reason_detailed = ""
+    probable_actual_workflow_mode = "generic_i2v"
+    patched_audio_node_class = ""
+    patched_audio_node_title = ""
+    patched_audio_node_downstream_summary: dict = {}
+    workflow_lip_sync_capable = False
+    audio_reaches_main_video_branch = False
+    audio_reaches_mouth_control_branch = False
     if normalized_workflow_key == "lip_sync":
         global _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED
         valid_audio_workflow, workflow_audio_err = _validate_audio_workflow_file(
@@ -1755,6 +1895,30 @@ def run_comfy_image_to_video(
                 "lipSyncProofReason": lip_sync_proof_reason or "ok",
             },
         )
+        inspection = _inspect_audio_path_mode(
+            patched_workflow,
+            audio_patch_node_ids=audio_patch_node_ids,
+        )
+        patched_audio_node_class = str(inspection.get("patchedAudioNodeClass") or "").strip()
+        patched_audio_node_title = str(inspection.get("patchedAudioNodeTitle") or "").strip()
+        patched_audio_node_downstream_summary = inspection.get("patchedAudioNodeDownstreamSummary") if isinstance(inspection.get("patchedAudioNodeDownstreamSummary"), dict) else {}
+        workflow_lip_sync_capable = bool(inspection.get("workflowLipSyncCapable"))
+        audio_reaches_main_video_branch = bool(inspection.get("audioReachesMainVideoBranch"))
+        audio_reaches_mouth_control_branch = bool(inspection.get("audioReachesMouthControlBranch"))
+        logger.info(
+            "[COMFY LIPSYNC WORKFLOW INSPECTION] %s",
+            {
+                "sceneId": str(scene_id or "").strip(),
+                "workflowKey": normalized_workflow_key,
+                "workflowFile": workflow_source,
+                "patchedAudioNodeClass": patched_audio_node_class,
+                "patchedAudioNodeTitle": patched_audio_node_title,
+                "patchedAudioNodeDownstreamSummary": patched_audio_node_downstream_summary,
+                "workflowLipSyncCapable": workflow_lip_sync_capable,
+                "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
+                "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+            },
+        )
     audio_used = bool(audio_patch_node_ids)
     lip_sync_proof_confirmed = True
     lip_sync_degraded_to_i2v = False
@@ -1765,13 +1929,44 @@ def run_comfy_image_to_video(
             and audio_targets_found > 0
             and audio_transport_mode in {"url", "upload"}
             and bool(str(effective_audio_value).strip())
+            and audio_reaches_mouth_control_branch
         )
         lip_sync_degraded_to_i2v = not lip_sync_proof_confirmed
-        probable_fallback_mode = "i2v_like" if lip_sync_degraded_to_i2v else "audio_driven_lip_sync"
+        if lip_sync_proof_confirmed:
+            probable_actual_workflow_mode = "real_lipsync"
+        elif audio_used and audio_reaches_main_video_branch:
+            probable_actual_workflow_mode = "i2v_with_audio"
+        else:
+            probable_actual_workflow_mode = "generic_i2v"
+        probable_fallback_mode = "i2v_like" if probable_actual_workflow_mode != "real_lipsync" else "audio_driven_lip_sync"
         if lip_sync_proof_confirmed:
             lip_sync_proof_reason = "audio_patch_contract_confirmed"
+            proof_reason_detailed = "mouth_control_branch_confirmed"
         elif not lip_sync_proof_reason:
             lip_sync_proof_reason = "audio_proof_contract_not_satisfied"
+        if not proof_reason_detailed:
+            if audio_used and audio_reaches_main_video_branch and not audio_reaches_mouth_control_branch:
+                proof_reason_detailed = "audio_reaches_av_latent_concat_only_no_mouth_control_branch"
+            elif not audio_used:
+                proof_reason_detailed = "audio_patch_not_applied"
+            elif not audio_reaches_main_video_branch:
+                proof_reason_detailed = "audio_branch_does_not_reach_main_video_path"
+            elif not workflow_lip_sync_capable:
+                proof_reason_detailed = "workflow_has_no_mouth_lipsync_capable_nodes"
+            else:
+                proof_reason_detailed = "real_mouth_lipsync_path_not_proven"
+    elif normalized_workflow_key == "i2v":
+        probable_actual_workflow_mode = "generic_i2v"
+    if normalized_workflow_key == "lip_sync":
+        logger.info(
+            "[COMFY LIPSYNC MODE RESOLUTION] %s",
+            {
+                "routeRequestWorkflowKey": "lip_sync",
+                "actualWorkflowMode": probable_actual_workflow_mode,
+                "realMouthSyncProven": lip_sync_proof_confirmed,
+                "proofReasonDetailed": proof_reason_detailed or "",
+            },
+        )
     continuation_used = False
     continuation_asset_type = _detect_continuation_asset_type(continuation_source_asset_url, continuation_source_asset_type)
     if normalized_workflow_key == "continuation":
@@ -1891,7 +2086,12 @@ def run_comfy_image_to_video(
             "audioPatchNodeIds": audio_patch_node_ids,
             "lipSyncProofConfirmed": lip_sync_proof_confirmed,
             "lipSyncDegradedToI2V": lip_sync_degraded_to_i2v,
+            "probableActualWorkflowMode": probable_actual_workflow_mode,
+            "workflowLipSyncCapable": workflow_lip_sync_capable,
+            "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
+            "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
             "reason": lip_sync_proof_reason or "ok",
+            "proofReasonDetailed": proof_reason_detailed or "",
         },
     )
 
@@ -1938,7 +2138,15 @@ def run_comfy_image_to_video(
             "lipSyncProofConfirmed": lip_sync_proof_confirmed,
             "lipSyncDegradedToI2V": lip_sync_degraded_to_i2v,
             "lipSyncProofReason": lip_sync_proof_reason or ("ok" if lip_sync_proof_confirmed else "audio_proof_contract_not_satisfied"),
+            "proofReasonDetailed": proof_reason_detailed or "",
             "probableFallbackMode": probable_fallback_mode,
+            "probableActualWorkflowMode": probable_actual_workflow_mode,
+            "patchedAudioNodeClass": patched_audio_node_class,
+            "patchedAudioNodeTitle": patched_audio_node_title,
+            "patchedAudioNodeDownstreamSummary": patched_audio_node_downstream_summary,
+            "workflowLipSyncCapable": workflow_lip_sync_capable,
+            "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
+            "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
             "capabilities": COMFY_LTX_CAPABILITIES,
             "capabilities_snapshot": COMFY_LTX_CAPABILITIES,
             "inputsUsed": {
