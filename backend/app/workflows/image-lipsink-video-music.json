@@ -681,19 +681,33 @@
       "title": "Загрузить аудио из URL"
     }
   },
+  "267:278": {
+    "inputs": {
+      "expression": "a / b",
+      "values.a": [
+        "267:225",
+        0
+      ],
+      "values.b": [
+        "267:261",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Duration Seconds"
+    }
+  },
   "267:277": {
     "inputs": {
       "audio": [
         "267:276",
         0
       ],
-      "frames_number": [
-        "267:225",
+      "start_index": 0,
+      "duration": [
+        "267:278",
         0
-      ],
-      "frame_rate": [
-        "267:261",
-        1
       ]
     },
     "class_type": "TrimAudioDuration",
