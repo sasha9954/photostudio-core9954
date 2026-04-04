@@ -1696,6 +1696,9 @@ def _resolve_audio_transport_mode_for_targets(
     has_audio_bytes: bool,
     audio_upload_supported: bool,
 ) -> tuple[str, str]:
+    has_mediautilities_url_loader = any(
+        str((target or {}).get("class_type") or "").strip().lower() == "mediautilities_audiourlloader" for target in audio_targets
+    )
     has_url_target = any(
         str((target or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES for target in audio_targets
     )
@@ -1703,6 +1706,9 @@ def _resolve_audio_transport_mode_for_targets(
     has_upload_filename_target = any(
         str((target or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES for target in audio_targets
     )
+
+    if has_mediautilities_url_loader and has_audio_bytes and audio_upload_supported:
+        return "upload", "mediautilities_url_loader_prefers_uploaded_file"
 
     if has_url_target and bool(normalized_audio_url) and normalized_audio_url_safe:
         return "url", "url_target_with_remote_safe_url"
@@ -1735,6 +1741,19 @@ def _resolve_audio_patch_value_for_target(
 ) -> tuple[str | None, str, str | None]:
     class_type = str((target or {}).get("class_type") or "").strip().lower()
 
+    if class_type == "mediautilities_audiourlloader":
+        if selected_transport_mode == "upload":
+            value = str(uploaded_audio_name or "").strip()
+            if not value:
+                return None, "rejected_incompatible_transport", "uploaded_audio_name_missing_for_mediautilities_audiourlloader"
+            return value, "upload_filename_for_mediautilities_audiourlloader", None
+        if selected_transport_mode != "url":
+            return None, "rejected_incompatible_transport", "url_or_upload_transport_required_for_mediautilities_audiourlloader"
+        value = str(normalized_audio_url or "").strip() or str(original_audio_url or "").strip()
+        if not value:
+            return None, "rejected_incompatible_transport", "audio_url_missing_for_mediautilities_audiourlloader"
+        return value, "normalized_url_for_mediautilities_audiourlloader", None
+
     if class_type in COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES:
         if selected_transport_mode != "upload":
             return None, "rejected_incompatible_transport", "upload_filename_transport_required_for_source_file_node"
@@ -1743,7 +1762,7 @@ def _resolve_audio_patch_value_for_target(
             return None, "rejected_incompatible_transport", "uploaded_audio_name_missing_for_source_file_node"
         return value, "upload_filename_for_loadaudio", None
 
-    if class_type in {"loadaudiofromurl", "mediautilities_audiourlloader"}:
+    if class_type in {"loadaudiofromurl"}:
         if selected_transport_mode != "url":
             return None, "rejected_incompatible_transport", f"url_transport_required_for_{class_type}"
         value = str(normalized_audio_url or "").strip() or str(original_audio_url or "").strip()
@@ -2380,6 +2399,11 @@ def run_comfy_image_to_video(
                     if not isinstance(inputs, dict):
                         continue
                     allow_create = bool((target or {}).get("allow_create"))
+                    if target_class_type == "mediautilities_audiourlloader" and audio_transport_mode == "upload":
+                        node["class_type"] = "LoadAudio"
+                        inputs.pop("url", None)
+                        target_input_key = "audio"
+                        allow_create = True
                     if target_input_key not in inputs and not allow_create:
                         continue
                     inputs[target_input_key] = resolved_value
