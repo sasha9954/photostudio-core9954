@@ -61,6 +61,16 @@ COMFY_NON_MOUTH_LIPSYNC_TITLES = ("lipsink", "lip sink", "lipsync-video", "lip-s
 COMFY_AUDIO_UNSAFE_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 COMFY_AUDIO_URL_COMPATIBLE_INPUT_KEYS = {"url", "path", "audio_path"}
 COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES = {"loadaudiofromurl", "loadaudiofrompath"}
+COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES = {
+    "prompt_text": {"primitivestringmultiline"},
+    "prompt_encode": {"cliptextencode"},
+    "image_input": {"loadimage"},
+    "audio_input": {"loadaudio", "vhs_loadaudio", "vhs_loadaudioupload", "loadaudiofromurl", "loadaudiofrompath"},
+    "trim_audio": {"trimaudioduration"},
+    "audio_encode": {"ltxvaudiovaeencode"},
+    "save_video": {"savevideo"},
+    "create_video": {"createvideo"},
+}
 
 COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "i2v": {"single_image": True, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": False},
@@ -819,14 +829,123 @@ FIXED_SEED_NODES = (("267:216", "noise_seed"), ("267:237", "noise_seed"))
 FIXED_PROMPT_PATCH_NODE_IDS = [FIXED_IMAGE_VIDEO_NODES["prompt"][0]]
 
 
-def _resolve_workflow_fps(workflow: dict, default_fps: int = 24) -> int:
+def _node_title_lower(node: dict) -> str:
+    return str(((node.get("_meta") or {}).get("title") if isinstance(node.get("_meta"), dict) else "") or "").strip().lower()
+
+
+def _discover_lip_sync_nodes(workflow: dict) -> dict:
+    discovered = {
+        "prompt_text_node_id": "",
+        "prompt_encode_node_id": "",
+        "width_node_id": "",
+        "height_node_id": "",
+        "length_node_id": "",
+        "fps_node_id": "",
+        "image_node_ids": [],
+        "audio_node_ids": [],
+        "trim_audio_node_ids": [],
+        "audio_encode_node_ids": [],
+        "save_video_node_ids": [],
+        "create_video_node_ids": [],
+        "save_video_filename_prefix": "",
+    }
+    if not isinstance(workflow, dict):
+        return discovered
+
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        title_l = _node_title_lower(node)
+        inputs = node.get("inputs")
+        input_map = inputs if isinstance(inputs, dict) else {}
+
+        if class_type in COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES["prompt_text"] and (
+            "prompt" in title_l or not discovered["prompt_text_node_id"]
+        ):
+            discovered["prompt_text_node_id"] = str(node_id)
+        if "width" in title_l and "value" in input_map and not discovered["width_node_id"]:
+            discovered["width_node_id"] = str(node_id)
+        if "height" in title_l and "value" in input_map and not discovered["height_node_id"]:
+            discovered["height_node_id"] = str(node_id)
+        if any(hint in title_l for hint in ("length", "frame", "duration")) and "value" in input_map and not discovered["length_node_id"]:
+            discovered["length_node_id"] = str(node_id)
+        if "fps" in title_l and "value" in input_map and not discovered["fps_node_id"]:
+            discovered["fps_node_id"] = str(node_id)
+
+        if class_type in COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES["image_input"] and "image" in input_map:
+            discovered["image_node_ids"].append(str(node_id))
+        if class_type in COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES["audio_input"]:
+            discovered["audio_node_ids"].append(str(node_id))
+        if class_type in COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES["trim_audio"]:
+            discovered["trim_audio_node_ids"].append(str(node_id))
+        if class_type in COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES["audio_encode"]:
+            discovered["audio_encode_node_ids"].append(str(node_id))
+        if class_type in COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES["save_video"]:
+            discovered["save_video_node_ids"].append(str(node_id))
+            if not discovered["save_video_filename_prefix"]:
+                discovered["save_video_filename_prefix"] = str(input_map.get("filename_prefix") or "").strip()
+        if class_type in COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES["create_video"]:
+            discovered["create_video_node_ids"].append(str(node_id))
+
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        if class_type not in COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES["prompt_encode"]:
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        text_link = inputs.get("text")
+        title_l = _node_title_lower(node)
+        if (
+            isinstance(text_link, list)
+            and text_link
+            and str(text_link[0]).strip() == discovered["prompt_text_node_id"]
+        ):
+            discovered["prompt_encode_node_id"] = str(node_id)
+            break
+        if not discovered["prompt_encode_node_id"] and "prompt" in title_l:
+            discovered["prompt_encode_node_id"] = str(node_id)
+
+    for key in (
+        "image_node_ids",
+        "audio_node_ids",
+        "trim_audio_node_ids",
+        "audio_encode_node_ids",
+        "save_video_node_ids",
+        "create_video_node_ids",
+    ):
+        discovered[key] = list(dict.fromkeys(discovered[key]))
+    return discovered
+
+
+def _resolve_workflow_fps(workflow: dict, *, preferred_fps_node_id: str = "", default_fps: int = 24) -> int:
     fps_node_id, fps_input_key = FIXED_IMAGE_VIDEO_NODES["fps"]
+    if preferred_fps_node_id:
+        fps_node_id = preferred_fps_node_id
+        fps_input_key = "value"
     node = workflow.get(str(fps_node_id))
     if isinstance(node, dict):
         inputs = node.get("inputs")
         if isinstance(inputs, dict):
             try:
                 fps_value = int(inputs.get(fps_input_key) or default_fps)
+                if fps_value > 0:
+                    return fps_value
+            except Exception:
+                pass
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        title_l = _node_title_lower(node)
+        if "fps" in title_l and "value" in inputs:
+            try:
+                fps_value = int(inputs.get("value") or default_fps)
                 if fps_value > 0:
                     return fps_value
             except Exception:
@@ -1371,10 +1490,16 @@ def _patch_workflow_inputs(
     height: int,
     requested_duration_sec: float,
     seed: int | None,
-) -> tuple[dict | None, str | None, int | None, int | None]:
+    workflow_key: str = "",
+    workflow_path: str = "",
+) -> tuple[dict | None, str | None, int | None, int | None, dict]:
     wf = copy.deepcopy(workflow)
+    normalized_workflow_key = str(workflow_key or "").strip().lower()
+    discovery = _discover_lip_sync_nodes(wf) if normalized_workflow_key == "lip_sync" else {}
+    used_legacy_fallback_ids = False
 
-    fps = _resolve_workflow_fps(wf)
+    discovered_fps_id = str(discovery.get("fps_node_id") or "").strip() if isinstance(discovery, dict) else ""
+    fps = _resolve_workflow_fps(wf, preferred_fps_node_id=discovered_fps_id)
     frames = max(1, int(math.ceil(float(requested_duration_sec) * float(fps))))
     print("[COMFY LENGTH APPLY]", {
         "requestedDurationSec": float(requested_duration_sec),
@@ -1382,17 +1507,49 @@ def _patch_workflow_inputs(
         "frames": int(frames),
     })
 
-    patch_values = [
-        (*FIXED_IMAGE_VIDEO_NODES["image"], image_name),
-        (*FIXED_IMAGE_VIDEO_NODES["prompt"], prompt),
-        (*FIXED_IMAGE_VIDEO_NODES["width"], int(width)),
-        (*FIXED_IMAGE_VIDEO_NODES["height"], int(height)),
-        (*FIXED_IMAGE_VIDEO_NODES["length"], int(frames)),
-    ]
+    patch_values = []
+    if normalized_workflow_key == "lip_sync":
+        discovered_prompt_id = str(discovery.get("prompt_text_node_id") or "").strip()
+        discovered_image_ids = [str(item) for item in (discovery.get("image_node_ids") or []) if str(item).strip()]
+        if discovered_image_ids:
+            patch_values.append((discovered_image_ids[0], "image", image_name))
+        else:
+            used_legacy_fallback_ids = True
+            patch_values.append((*FIXED_IMAGE_VIDEO_NODES["image"], image_name))
+
+        if discovered_prompt_id:
+            patch_values.append((discovered_prompt_id, "value", prompt))
+        else:
+            used_legacy_fallback_ids = True
+            patch_values.append((*FIXED_IMAGE_VIDEO_NODES["prompt"], prompt))
+    else:
+        patch_values.extend([
+            (*FIXED_IMAGE_VIDEO_NODES["image"], image_name),
+            (*FIXED_IMAGE_VIDEO_NODES["prompt"], prompt),
+        ])
+    if normalized_workflow_key == "lip_sync":
+        discovered_width_id = str(discovery.get("width_node_id") or "").strip()
+        discovered_height_id = str(discovery.get("height_node_id") or "").strip()
+        discovered_length_id = str(discovery.get("length_node_id") or "").strip()
+        patch_values.append(((discovered_width_id or FIXED_IMAGE_VIDEO_NODES["width"][0]), "value", int(width)))
+        patch_values.append(((discovered_height_id or FIXED_IMAGE_VIDEO_NODES["height"][0]), "value", int(height)))
+        patch_values.append(((discovered_length_id or FIXED_IMAGE_VIDEO_NODES["length"][0]), "value", int(frames)))
+        used_legacy_fallback_ids = bool(
+            used_legacy_fallback_ids
+            or not discovered_width_id
+            or not discovered_height_id
+            or not discovered_length_id
+        )
+    else:
+        patch_values.extend([
+            (*FIXED_IMAGE_VIDEO_NODES["width"], int(width)),
+            (*FIXED_IMAGE_VIDEO_NODES["height"], int(height)),
+            (*FIXED_IMAGE_VIDEO_NODES["length"], int(frames)),
+        ])
     for node_id, key, value in patch_values:
         ok, err = _set_node_input(wf, node_id, key, value)
         if not ok:
-            return None, err, None, None
+            return None, err, None, None, {}
 
     _patch_audio_frames(wf, frames)
 
@@ -1400,9 +1557,44 @@ def _patch_workflow_inputs(
         for node_id, key in FIXED_SEED_NODES:
             ok, err = _set_node_input(wf, node_id, key, int(seed))
             if not ok:
-                return None, err, None, None
+                return None, err, None, None, {}
 
-    return wf, None, frames, fps
+    discovery_debug = {
+        "workflow_key": normalized_workflow_key,
+        "workflow_path": workflow_path,
+        "discoveredPromptTextNodeId": str(discovery.get("prompt_text_node_id") or ""),
+        "discoveredPromptEncodeNodeId": str(discovery.get("prompt_encode_node_id") or ""),
+        "discoveredWidthNodeId": str(discovery.get("width_node_id") or ""),
+        "discoveredHeightNodeId": str(discovery.get("height_node_id") or ""),
+        "discoveredLengthNodeId": str(discovery.get("length_node_id") or ""),
+        "discoveredFpsNodeId": str(discovery.get("fps_node_id") or ""),
+        "discoveredImageNodeIds": discovery.get("image_node_ids") or [],
+        "discoveredAudioNodeIds": discovery.get("audio_node_ids") or [],
+        "discoveredTrimAudioNodeIds": discovery.get("trim_audio_node_ids") or [],
+        "discoveredAudioEncodeNodeIds": discovery.get("audio_encode_node_ids") or [],
+        "discoveredSaveVideoNodeIds": discovery.get("save_video_node_ids") or [],
+        "discoveredCreateVideoNodeIds": discovery.get("create_video_node_ids") or [],
+        "saveVideoFilenamePrefix": str(discovery.get("save_video_filename_prefix") or ""),
+        "usedLegacyFallbackIds": bool(used_legacy_fallback_ids),
+        "patchedPromptNodeId": str((discovery.get("prompt_text_node_id") or FIXED_IMAGE_VIDEO_NODES["prompt"][0]) if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["prompt"][0]),
+        "patchedImageNodeId": str((discovery.get("image_node_ids") or [FIXED_IMAGE_VIDEO_NODES["image"][0]])[0]),
+        "patchedWidthNodeId": str((discovery.get("width_node_id") or FIXED_IMAGE_VIDEO_NODES["width"][0]) if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["width"][0]),
+        "patchedHeightNodeId": str((discovery.get("height_node_id") or FIXED_IMAGE_VIDEO_NODES["height"][0]) if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["height"][0]),
+        "patchedLengthNodeId": str((discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0]) if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["length"][0]),
+    }
+    logger.info("[COMFY WORKFLOW DISCOVERY] %s", discovery_debug)
+    logger.info(
+        "[COMFY PATCH TARGETS] %s",
+        {
+            "workflow_key": normalized_workflow_key,
+            "workflow_path": workflow_path,
+            "patchTargets": [
+                {"node_id": str(node_id), "input_key": str(key)}
+                for node_id, key, _ in patch_values
+            ],
+        },
+    )
+    return wf, None, frames, fps, discovery_debug
 
 
 def _apply_model_spec_to_workflow(workflow: dict, *, model_spec: dict) -> tuple[list[str], str | None]:
@@ -1587,7 +1779,7 @@ def run_comfy_image_to_video(
         if end_upload_err or not uploaded_end_name:
             return None, f"upload_failed:{end_upload_err or 'end_image_upload_failed'}"
 
-    patched_workflow, patch_err, frame_count, fps = _patch_workflow_inputs(
+    patched_workflow, patch_err, frame_count, fps, workflow_discovery_debug = _patch_workflow_inputs(
         workflow,
         image_name=uploaded_name,
         prompt=effective_prompt,
@@ -1595,6 +1787,8 @@ def run_comfy_image_to_video(
         height=int(height),
         requested_duration_sec=float(requested_duration_sec),
         seed=seed,
+        workflow_key=normalized_workflow_key,
+        workflow_path=workflow_source,
     )
     if patch_err or not patched_workflow:
         return None, f"workflow_patch_failed:{patch_err or 'unknown_patch_error'}"
@@ -2026,12 +2220,12 @@ def run_comfy_image_to_video(
         {
             "uploaded_name": uploaded_name,
             "effective_prompt": effective_prompt,
-            "image": patched_workflow.get("269", {}).get("inputs", {}).get("image"),
-            "prompt": patched_workflow.get("267:266", {}).get("inputs", {}).get("value"),
-            "width": patched_workflow.get("267:257", {}).get("inputs", {}).get("value"),
-            "height": patched_workflow.get("267:258", {}).get("inputs", {}).get("value"),
+            "image": patched_workflow.get(str((workflow_discovery_debug.get("patchedImageNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "269"), {}).get("inputs", {}).get("image"),
+            "prompt": patched_workflow.get(str((workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "267:266"), {}).get("inputs", {}).get("value"),
+            "width": patched_workflow.get(str((workflow_discovery_debug.get("patchedWidthNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "267:257"), {}).get("inputs", {}).get("value"),
+            "height": patched_workflow.get(str((workflow_discovery_debug.get("patchedHeightNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "267:258"), {}).get("inputs", {}).get("value"),
             "fps": fps,
-            "length": patched_workflow.get("267:225", {}).get("inputs", {}).get("value"),
+            "length": patched_workflow.get(str((workflow_discovery_debug.get("patchedLengthNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "267:225"), {}).get("inputs", {}).get("value"),
             "audioFrames": patched_workflow.get("267:214", {}).get("inputs", {}).get("frames_number"),
         },
     )
@@ -2040,7 +2234,7 @@ def run_comfy_image_to_video(
         str(scene_id or "").strip(),
         normalized_workflow_key,
         normalized_model_key,
-        FIXED_PROMPT_PATCH_NODE_IDS,
+        [str((workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "") or FIXED_IMAGE_VIDEO_NODES["prompt"][0])],
         len(effective_prompt),
         effective_prompt[:500],
     )
@@ -2167,7 +2361,8 @@ def run_comfy_image_to_video(
             "capability_skip_reason": capability_skip_reason,
             "actual_mode": normalized_workflow_key,
             "patched_node_ids": list(dict.fromkeys([*patched_model_node_ids, *first_last_start_node_ids, *first_last_end_node_ids, *audio_patch_node_ids])),
-            "prompt_patched_node_ids": FIXED_PROMPT_PATCH_NODE_IDS,
+            "prompt_patched_node_ids": [str((workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "") or FIXED_IMAGE_VIDEO_NODES["prompt"][0])],
+            "workflow_discovery": workflow_discovery_debug if isinstance(workflow_discovery_debug, dict) else {},
             "first_last_start_node_ids": first_last_start_node_ids,
             "first_last_end_node_ids": first_last_end_node_ids,
             "start_image_used": bool(first_last_start_node_ids),
@@ -2213,8 +2408,8 @@ def run_comfy_image_to_video(
                 "audioUrl": bool(str(audio_url or "").strip()),
             },
             "usedNodeIds": {
-                "image": FIXED_IMAGE_VIDEO_NODES["image"][0],
-                "promptSource": FIXED_IMAGE_VIDEO_NODES["prompt"][0],
+                "image": str((workflow_discovery_debug.get("patchedImageNodeId") if isinstance(workflow_discovery_debug, dict) else "") or FIXED_IMAGE_VIDEO_NODES["image"][0]),
+                "promptSource": str((workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "") or FIXED_IMAGE_VIDEO_NODES["prompt"][0]),
                 "width": FIXED_IMAGE_VIDEO_NODES["width"][0],
                 "height": FIXED_IMAGE_VIDEO_NODES["height"][0],
                 "length": FIXED_IMAGE_VIDEO_NODES["length"][0],
