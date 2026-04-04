@@ -1783,7 +1783,7 @@ function buildAudioSliceReadyPatch({
 
 function normalizeLipSyncSceneStatePatch(scene = {}, patch = {}) {
   const nextPatch = patch && typeof patch === "object" ? { ...patch } : {};
-  const protectedSourceFields = ["imageUrl", "startImageUrl", "endImageUrl", "audioSliceUrl", "videoSourceImageUrl"];
+  const protectedSourceFields = SCENARIO_VIDEO_SOURCE_FIELDS;
   const patchVideoStatus = String(nextPatch?.videoStatus || "").trim().toLowerCase();
   const isVideoErrorPatch = patchVideoStatus === "error" || patchVideoStatus === "stopped" || patchVideoStatus === "not_found";
   if (isVideoErrorPatch) {
@@ -1966,6 +1966,21 @@ const SCENARIO_GENERATED_ASSET_FIELDS = [
   "videoJobId",
   "videoSourceImageUrl",
   "videoPanelActivated",
+];
+
+const SCENARIO_VIDEO_SOURCE_FIELDS = [
+  "imageUrl",
+  "startImageUrl",
+  "endImageUrl",
+  "videoSourceImageUrl",
+  "audioSliceUrl",
+];
+
+const SCENARIO_VIDEO_RESULT_FIELDS = [
+  "videoUrl",
+  "videoStatus",
+  "videoError",
+  "videoJobId",
 ];
 
 function stripScenarioGeneratedAssets(scene = {}) {
@@ -7224,6 +7239,20 @@ const scenarioSelected = scenarioSelectedIndex >= 0 ? (scenarioScenes[scenarioSe
 const scenarioSelectedImageStrategy = String(scenarioSelected?.imageStrategy || deriveScenarioImageStrategy(scenarioSelected)).trim().toLowerCase() || "single";
 const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelected);
 const scenarioSelectedIsLipSync = isLipSyncScene(scenarioSelected);
+const scenarioSelectedActualWorkflowMode = String(
+  scenarioSelected?.probableActualWorkflowMode
+  || scenarioSelected?.videoActualWorkflowMode
+  || ""
+).trim().toLowerCase();
+const scenarioSelectedWorkflowDegradedToI2V = Boolean(
+  scenarioSelected?.lipSyncDegradedToI2V
+  || (scenarioSelectedActualWorkflowMode === "i2v_with_audio" && scenarioSelectedIsLipSync)
+);
+const scenarioSelectedWorkflowLabel = scenarioSelectedActualWorkflowMode === "i2v_with_audio"
+  ? "i2v + audio"
+  : (scenarioSelectedActualWorkflowMode === "real_lipsync"
+    ? "real lipsync"
+    : (scenarioSelectedIsLipSync ? "lip_sync_music (route)" : "standard i2v"));
 const scenarioPreviousScene = scenarioSelectedIndex > 0 ? scenarioScenes[scenarioSelectedIndex - 1] : null;
 const scenarioSelectedFrameUrls = resolveSceneFrameUrls(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedPreviewSources = resolveScenarioScenePreviewSources(scenarioSelected, scenarioPreviousScene);
@@ -7593,6 +7622,9 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
         : sceneRef;
       if (!Number.isInteger(resolvedIdx) || resolvedIdx < 0 || !scenes[resolvedIdx]) return n;
       const sceneAtIdx = scenes[resolvedIdx] || {};
+      const sourceFieldsBefore = Object.fromEntries(
+        SCENARIO_VIDEO_SOURCE_FIELDS.map((field) => [field, String(sceneAtIdx?.[field] || "").trim()])
+      );
       const previousVideoStatus = String(sceneAtIdx?.videoStatus || "").trim().toLowerCase();
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
         console.debug("[SCENARIO SCENE PATCH TARGET RESOLVED]", {
@@ -7611,11 +7643,20 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
         });
       }
       const normalizedPatch = normalizeLipSyncSceneStatePatch(sceneAtIdx, patch);
+      const actionName = String(options?.actionName || "").trim();
+      const preserveSourceFields = Boolean(options?.preserveSourceFieldsInVideoActions);
+      if (preserveSourceFields) {
+        SCENARIO_VIDEO_SOURCE_FIELDS.forEach((field) => {
+          if (!Object.prototype.hasOwnProperty.call(normalizedPatch, field)) return;
+          const nextValue = String(normalizedPatch?.[field] || "").trim();
+          if (!nextValue) delete normalizedPatch[field];
+        });
+      }
       const nextVideoStatus = String(normalizedPatch?.videoStatus || "").trim().toLowerCase();
       const isTerminalVideoPatch = ["error", "stopped", "not_found"].includes(nextVideoStatus);
       if (isTerminalVideoPatch) {
         const patchKeys = Object.keys(patch || {});
-        const protectedSourceFields = ["imageUrl", "startImageUrl", "endImageUrl", "audioSliceUrl", "videoSourceImageUrl"];
+        const protectedSourceFields = SCENARIO_VIDEO_SOURCE_FIELDS;
         const attemptedProtectedWrite = protectedSourceFields.filter((field) => Object.prototype.hasOwnProperty.call(patch || {}, field));
         const protectedSourceFieldsPreserved = attemptedProtectedWrite.every((field) => !Object.prototype.hasOwnProperty.call(normalizedPatch, field));
         const mergedPreview = { ...sceneAtIdx, ...normalizedPatch };
@@ -7636,6 +7677,30 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             ),
             audioSliceStillPresent: Boolean(String(mergedPreview?.audioSliceUrl || "").trim()),
           });
+      }
+      if (preserveSourceFields) {
+        const mergedPreview = { ...sceneAtIdx, ...normalizedPatch };
+        const sourceFieldsAfter = Object.fromEntries(
+          SCENARIO_VIDEO_SOURCE_FIELDS.map((field) => [field, String(mergedPreview?.[field] || "").trim()])
+        );
+        const sourceFieldsPreserved = SCENARIO_VIDEO_SOURCE_FIELDS.every((field) => {
+          const before = sourceFieldsBefore[field];
+          const after = sourceFieldsAfter[field];
+          return !before || Boolean(after);
+        });
+        const clearedVideoFieldCount = SCENARIO_VIDEO_RESULT_FIELDS.filter((field) => {
+          if (!Object.prototype.hasOwnProperty.call(normalizedPatch, field)) return false;
+          return !String(normalizedPatch?.[field] || "").trim();
+        }).length;
+        console.info("[SCENARIO VIDEO ACTION PATCH]", {
+          sceneId: String(sceneAtIdx?.sceneId || ""),
+          actionName: actionName || "video_panel_action",
+          patchKeys: Object.keys(normalizedPatch || {}),
+          sourceFieldsBefore,
+          sourceFieldsAfter,
+          sourceFieldsPreserved,
+          videoFieldsCleared: clearedVideoFieldCount > 0,
+        });
       }
       const nextScenes = scenes.map((s, i) => (i === resolvedIdx ? { ...s, ...normalizedPatch } : s));
       return { ...n, data: { ...n.data, scenes: nextScenes } };
@@ -7753,7 +7818,12 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
     const applyScenarioVideoPatch = (patch = {}, context = {}) => {
       const normalizedPatch = patch && typeof patch === "object" ? patch : {};
       const didPatch = Object.keys(normalizedPatch).length > 0;
-      if (didPatch) updateScenarioScene(sceneId, normalizedPatch);
+      if (didPatch) {
+        updateScenarioScene(sceneId, normalizedPatch, {
+          actionName: String(context?.actionName || "video_poll"),
+          preserveSourceFieldsInVideoActions: true,
+        });
+      }
       console.info("[SCENARIO VIDEO ERROR PROPAGATION]", {
         sceneId,
         jobId: String(context?.jobId || ""),
@@ -7977,6 +8047,12 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
           return;
         }
         const status = String(out?.status || "").toLowerCase() || "running";
+        const workflowInspectionPatch = {
+          probableActualWorkflowMode: String(out?.probableActualWorkflowMode || "").trim(),
+          lipSyncDegradedToI2V: Boolean(out?.lipSyncDegradedToI2V),
+          lipSyncProofConfirmed: Boolean(out?.lipSyncProofConfirmed),
+          proofReasonDetailed: String(out?.proofReasonDetailed || "").trim(),
+        };
         const nextMeta = {
           ...activeMeta,
           providerJobId: String(out?.providerJobId || activeMeta?.providerJobId || ""),
@@ -7994,11 +8070,12 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
           scenarioVideoJobsBySceneRef.current.set(sceneId, toleratedMeta);
           persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
           if (nextNotFoundCount < notFoundRetryLimit) {
-            applyScenarioVideoPatch({
-              videoStatus: "running",
-              videoError: "",
-              videoJobId: toleratedMeta.jobId,
-            }, { jobId: String(toleratedMeta?.jobId || ""), status: "running", code: String(out?.code || ""), hint: String(out?.hint || ""), message: "status_not_found_retry" });
+          applyScenarioVideoPatch({
+            videoStatus: "running",
+            videoError: "",
+            videoJobId: toleratedMeta.jobId,
+            ...workflowInspectionPatch,
+          }, { jobId: String(toleratedMeta?.jobId || ""), status: "running", code: String(out?.code || ""), hint: String(out?.hint || ""), message: "status_not_found_retry" });
             scheduleScenarioPoll(2200, "status_not_found_retry");
             return;
           }
@@ -8007,6 +8084,7 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoError: String(out?.hint || out?.code || "video_job_not_found"),
             videoJobId: toleratedMeta.jobId,
             videoPanelActivated: false,
+            ...workflowInspectionPatch,
           }, { jobId: String(toleratedMeta?.jobId || ""), status: "not_found", code: String(out?.code || ""), hint: String(out?.hint || ""), message: String(out?.error || out?.message || "video_job_not_found") });
           console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
@@ -8028,6 +8106,7 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
               videoStatus: "running",
               videoJobId: toleratedMeta.jobId,
               videoError: "",
+              ...workflowInspectionPatch,
             }, { jobId: String(toleratedMeta?.jobId || ""), status: "running", message: "status_not_found_retry" });
             scheduleScenarioPoll(2200, "status_not_found_retry");
             return;
@@ -8037,6 +8116,7 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoJobId: toleratedMeta.jobId,
             videoError: String(out?.error || out?.hint || "video_job_not_found"),
             videoPanelActivated: false,
+            ...workflowInspectionPatch,
           }, { jobId: String(toleratedMeta?.jobId || ""), status: "not_found", code: String(out?.code || ""), hint: String(out?.hint || ""), message: String(out?.error || out?.message || "video_job_not_found") });
           console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
@@ -8047,6 +8127,7 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
           videoStatus: status,
           videoJobId: settledMeta.jobId,
           videoError: status === "error" || status === "stopped" ? extractScenarioVideoError(out) : "",
+          ...workflowInspectionPatch,
         }, {
           jobId: String(settledMeta?.jobId || ""),
           status,
@@ -8096,6 +8177,7 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoError: "",
             videoJobId: settledMeta.jobId,
             videoPanelActivated: false,
+            ...workflowInspectionPatch,
           }, { jobId: String(settledMeta?.jobId || ""), status: "done", message: "video_ready" });
           console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "done", jobId: settledMeta.jobId });
@@ -10701,7 +10783,7 @@ Aspect ratio: ${imageFormat}`,
         audioSliceStatus: "error",
         audioSliceError: msg,
         audioSliceLoadError: msg,
-      });
+      }, { actionName: "take_audio", preserveSourceFieldsInVideoActions: true });
       if (idx === scenarioEditor.selected) setScenarioVideoError(msg);
       return null;
     }
@@ -10725,7 +10807,7 @@ Aspect ratio: ${imageFormat}`,
       audioSliceT1: endSec,
       audioSliceDurationSec: Math.max(0, endSec - startSec),
       audioSliceExpectedDurationSec: Math.max(0, endSec - startSec),
-    });
+    }, { actionName: "take_audio", preserveSourceFieldsInVideoActions: true });
 
     try {
       console.debug("[SCENARIO AUDIO SLICE REQUEST]", {
@@ -10787,7 +10869,8 @@ Aspect ratio: ${imageFormat}`,
           speechSafeAdjusted: out?.speechSafeAdjusted,
           speechSafeShiftMs: out?.speechSafeShiftMs,
           sliceMayCutSpeech: out?.sliceMayCutSpeech,
-        })
+        }),
+        { actionName: "take_audio", preserveSourceFieldsInVideoActions: true }
       );
       return {
         audioSliceUrl: resolvedSliceUrl,
@@ -10815,7 +10898,7 @@ Aspect ratio: ${imageFormat}`,
         audioSliceStatus: "error",
         audioSliceError: msg,
         audioSliceLoadError: msg,
-      });
+      }, { actionName: "take_audio", preserveSourceFieldsInVideoActions: true });
       if (idx === scenarioEditor.selected) setScenarioVideoError(msg);
       return null;
     } finally {
@@ -11112,7 +11195,7 @@ Aspect ratio: ${imageFormat}`,
       });
       setScenarioVideoError("Для этой сцены не хватает source-кадров для video flow (см. [SCENARIO VIDEO REQUEST SUMMARY]).");
       if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "missing_required_frame_assets", videoPanelActivated: true });
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "missing_required_frame_assets", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
       }
     }
 
@@ -11275,7 +11358,7 @@ Aspect ratio: ${imageFormat}`,
       });
       setScenarioVideoError("Sound dialogue workflows отключены для music_video по умолчанию.");
       if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "sound_workflow_blocked_for_clip", videoPanelActivated: true });
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "sound_workflow_blocked_for_clip", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
       }
       return;
     }
@@ -11294,7 +11377,7 @@ Aspect ratio: ${imageFormat}`,
       });
       setScenarioVideoError("Для lipSync не удалось автоматически подготовить audioSlice. Проверьте исходное аудио и попробуйте снова.");
       if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "lip_sync_audio_missing", videoPanelActivated: true });
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "lip_sync_audio_missing", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
       }
       return;
     }
@@ -11307,7 +11390,7 @@ Aspect ratio: ${imageFormat}`,
       });
       setScenarioVideoError("Для lipSync нужен slice с music+vocal compatibility.");
       if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "lip_sync_music_vocal_flag_missing", videoPanelActivated: true });
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "lip_sync_music_vocal_flag_missing", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
       }
       return;
     }
@@ -11401,7 +11484,7 @@ Aspect ratio: ${imageFormat}`,
       continuationSourceSceneId: safeContinuationSourceSceneId,
       continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
       continuationSourceAssetType: safeContinuationSourceAssetType,
-    });
+    }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
     console.info("[SCENARIO VIDEO FLOW]", {
       stage: "normalized_urls",
       sceneId,
@@ -11448,7 +11531,7 @@ Aspect ratio: ${imageFormat}`,
     }
 
     console.log("[StoryboardVideo] video_loading_on reason=generate_video", { sceneId });
-    updateScenarioScene(targetSceneIndex, { videoUrl: "", videoStatus: "queued", videoError: "", videoJobId: "", videoPanelActivated: true });
+    updateScenarioScene(targetSceneIndex, { videoUrl: "", videoStatus: "queued", videoError: "", videoJobId: "", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
     setScenarioVideoError("");
     console.log("[StoryboardVideo] generate", {
       sceneId,
@@ -11806,7 +11889,7 @@ Aspect ratio: ${imageFormat}`,
           renderMode: effectiveRenderMode,
           status: "queued",
         };
-        updateScenarioScene(targetSceneIndex, { videoJobId: startedMeta.jobId, videoStatus: "queued", videoError: "" });
+        updateScenarioScene(targetSceneIndex, { videoJobId: startedMeta.jobId, videoStatus: "queued", videoError: "" }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
         let shouldStartPolling = true;
         try {
           console.info("[SCENARIO VIDEO STATUS INFO]", {
@@ -11851,7 +11934,7 @@ Aspect ratio: ${imageFormat}`,
               videoError: "",
               videoJobId: startedMeta.jobId,
               videoPanelActivated: true,
-            });
+            }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
             clearActiveVideoJob(sceneId, { status: "done", jobId: startedMeta.jobId });
             console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: true });
             openNextSceneWithoutVideo(targetSceneIndex);
@@ -11862,7 +11945,7 @@ Aspect ratio: ${imageFormat}`,
               videoError: String(immediateOut?.error || immediateOut?.hint || "video_job_failed"),
               videoJobId: startedMeta.jobId,
               videoPanelActivated: true,
-            });
+            }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
             clearActiveVideoJob(sceneId, { status: immediateStatus, jobId: startedMeta.jobId });
             console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: immediateStatus, videoPanelActivatedAfterApply: true });
             shouldStartPolling = false;
@@ -11871,7 +11954,7 @@ Aspect ratio: ${imageFormat}`,
               videoStatus: immediateStatus,
               videoError: "",
               videoJobId: startedMeta.jobId,
-            });
+            }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
           }
         } catch (immediateStatusError) {
           const message = String(immediateStatusError?.message || immediateStatusError || "");
@@ -11912,7 +11995,7 @@ Aspect ratio: ${imageFormat}`,
         error: errorMessage,
       });
       setScenarioVideoError(String(e?.message || e));
-      updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e), videoPanelActivated: true });
+      updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e), videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
       console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "error", videoPanelActivatedAfterApply: true });
       clearActiveVideoJob(sceneId, { status: "error" });
     }
@@ -11936,7 +12019,7 @@ Aspect ratio: ${imageFormat}`,
       preservedSourceFields,
     });
     clearActiveVideoJob(sceneId);
-    updateScenarioScene(scenarioEditor.selected, { videoUrl: "", videoStatus: "", videoError: "", videoJobId: "" });
+    updateScenarioScene(scenarioEditor.selected, { videoUrl: "", videoStatus: "", videoError: "", videoJobId: "" }, { actionName: "clear_video", preserveSourceFieldsInVideoActions: true });
   }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected?.audioSliceUrl, scenarioSelected?.endImageUrl, scenarioSelected?.imageUrl, scenarioSelected?.sceneId, scenarioSelected?.videoSourceImageUrl, scenarioSelected?.videoStatus, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
 
   const handleScenarioAddToVideo = useCallback(() => {
@@ -17823,7 +17906,9 @@ const hydrate = useCallback((source = "unknown") => {
                         ) : (
                           <div className="clipSB_hint">
                             {scenarioSelectedIsLipSync
-                              ? "Для lipSync audioSlice подготовится автоматически при «Сделать видео». Если авто-извлечение не удастся, появится ошибка."
+                              ? (scenarioSelectedWorkflowDegradedToI2V
+                                ? "Текущий workflow деградировал в i2v + audio: audioSlice используется как audio-conditioning, не как mouth lipsync."
+                                : "Для lipSync audioSlice подготовится автоматически при «Сделать видео». Если авто-извлечение не удастся, появится ошибка.")
                               : "Срез ещё не создан. Нажмите «Взять аудио»."}
                           </div>
                         )}
@@ -17845,7 +17930,11 @@ const hydrate = useCallback((source = "unknown") => {
 
                     {scenarioSelectedVideoPanelActivated ? (
                       <div ref={scenarioVideoCardRef} className={`clipSB_scenarioEditRow clipSB_videoBlock${(scenarioVideoFocusPulse || scenarioVideoOpen) ? " clipSB_videoBlockPulse" : ""}`}>
-                        <div className="clipSB_hint" style={{ marginBottom: 8 }}>Видео сцены</div>
+                        <div className="clipSB_hint" style={{ marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <span>Видео сцены</span>
+                          <span className="clipSB_tag">{scenarioSelectedWorkflowLabel}</span>
+                          {scenarioSelectedWorkflowDegradedToI2V ? <span className="clipSB_tag" style={{ background: "#5a3d1a", color: "#ffd9a8" }}>degraded mode</span> : null}
+                        </div>
                         {scenarioSelectedTransitionType === "continuous" ? (
                           <div className="clipSB_videoPipelineRow">
                             <div className="clipSB_videoFrameSmall">
@@ -17899,7 +17988,7 @@ const hydrate = useCallback((source = "unknown") => {
                                     alt="video preview"
                                   />
                                 ) : (
-                                  <div className="clipSB_videoFramePlaceholder">RESULT</div>
+                                  <div className="clipSB_videoFramePlaceholder">Исходное изображение для видео отсутствует</div>
                                 )}
 
                                 {scenarioShowingGeneratingOverlay ? (
@@ -17925,7 +18014,7 @@ const hydrate = useCallback((source = "unknown") => {
                             ) : scenarioSelectedVideoSourcePosterUrl ? (
                               <img className="clipSB_videoPoster" src={scenarioSelectedVideoSourcePosterUrl} alt="poster" />
                             ) : (
-                              <div className="clipSB_videoFramePlaceholder">PREVIEW</div>
+                              <div className="clipSB_videoFramePlaceholder">Исходное изображение для видео отсутствует</div>
                             )}
 
                             {scenarioShowingGeneratingOverlay ? (
@@ -17953,7 +18042,11 @@ const hydrate = useCallback((source = "unknown") => {
                             className="clipSB_btn clipSB_btnSecondary"
                             onClick={handleScenarioGenerateVideo}
                             disabled={scenarioCreateButtonBusy || !scenarioHasImageForVideo}
-                            title={scenarioSelectedIsLipSync ? "Для lipSync audioSlice будет автоматически подготовлен перед генерацией видео." : ""}
+                            title={scenarioSelectedIsLipSync
+                              ? (scenarioSelectedWorkflowDegradedToI2V
+                                ? "Текущий route lip_sync_music выполняется как i2v + audio (degraded mode), без mouth-control lipsync."
+                                : "Для lipSync audioSlice будет автоматически подготовлен перед генерацией видео.")
+                              : ""}
                           >
                             {scenarioCreateButtonBusy ? "Делаю..." : "Сделать видео"}
                           </button>

@@ -13053,11 +13053,19 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
             job = CLIP_VIDEO_JOBS.get(job_id)
             if not job:
                 return
+            debug_payload = out.get("debug") if isinstance(out.get("debug"), dict) else {}
+            probable_actual_workflow_mode = str(debug_payload.get("probableActualWorkflowMode") or "").strip().lower()
+            lip_sync_degraded_to_i2v = bool(debug_payload.get("lipSyncDegradedToI2V"))
+            mode_for_product = str(out.get("mode") or "").strip()
+            if probable_actual_workflow_mode == "i2v_with_audio":
+                mode_for_product = "i2v_with_audio"
+            elif lip_sync_degraded_to_i2v and mode_for_product == "lipsync":
+                mode_for_product = "i2v_with_audio"
             job.update({
                 "status": status,
                 "videoUrl": video_url or None,
                 "provider": provider_name or str(job.get("provider") or payload.provider or "").strip().lower() or None,
-                "mode": str(out.get("mode") or "").strip(),
+                "mode": mode_for_product,
                 "model": str(out.get("model") or "").strip(),
                 "workflowKey": str(((out.get("debug") or {}).get("workflow_key") if isinstance(out.get("debug"), dict) else "") or "").strip(),
                 "providerJobId": str(out.get("taskId") or job.get("providerJobId") or "").strip(),
@@ -13077,9 +13085,9 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "audioTargetsFound": int(((out.get("debug") or {}).get("audio_targets_found") if isinstance(out.get("debug"), dict) else 0) or 0),
                 "audioTargetsSummary": ((out.get("debug") or {}).get("audio_targets_summary") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("audio_targets_summary"), list) else []),
                 "lipSyncProofConfirmed": bool(((out.get("debug") or {}).get("lipSyncProofConfirmed")) if isinstance(out.get("debug"), dict) else False),
-                "lipSyncDegradedToI2V": bool(((out.get("debug") or {}).get("lipSyncDegradedToI2V")) if isinstance(out.get("debug"), dict) else False),
+                "lipSyncDegradedToI2V": lip_sync_degraded_to_i2v,
                 "lipSyncProofReason": str(((out.get("debug") or {}).get("lipSyncProofReason") if isinstance(out.get("debug"), dict) else "") or ""),
-                "probableActualWorkflowMode": str(((out.get("debug") or {}).get("probableActualWorkflowMode") if isinstance(out.get("debug"), dict) else "") or ""),
+                "probableActualWorkflowMode": probable_actual_workflow_mode,
                 "patchedAudioNodeClass": str(((out.get("debug") or {}).get("patchedAudioNodeClass") if isinstance(out.get("debug"), dict) else "") or ""),
                 "patchedAudioNodeTitle": str(((out.get("debug") or {}).get("patchedAudioNodeTitle") if isinstance(out.get("debug"), dict) else "") or ""),
                 "patchedAudioNodeDownstreamSummary": ((out.get("debug") or {}).get("patchedAudioNodeDownstreamSummary") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("patchedAudioNodeDownstreamSummary"), dict) else {}),
