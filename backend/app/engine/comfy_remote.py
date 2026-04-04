@@ -35,6 +35,7 @@ COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {
     "vhs_loadaudio",
     "vhs_loadaudioupload",
     "loadaudiofromurl",
+    "mediautilities_audiourlloader",
     "loadaudiofrompath",
 }
 COMFY_AUDIO_SOURCE_NODE_CLASS_NAMES = {
@@ -42,6 +43,7 @@ COMFY_AUDIO_SOURCE_NODE_CLASS_NAMES = {
     "vhs_loadaudio",
     "vhs_loadaudioupload",
     "loadaudiofromurl",
+    "mediautilities_audiourlloader",
     "loadaudiofrompath",
 }
 COMFY_AUDIO_DOWNSTREAM_NODE_CLASS_NAMES = {
@@ -76,13 +78,20 @@ COMFY_MOUTH_CONTROL_HINTS = ("phoneme", "viseme", "mouth", "avatar", "face", "wa
 COMFY_NON_MOUTH_LIPSYNC_TITLES = ("lipsink", "lip sink", "lipsync-video", "lip-sync-video")
 COMFY_AUDIO_UNSAFE_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 COMFY_AUDIO_URL_COMPATIBLE_INPUT_KEYS = {"url", "path", "audio_path"}
-COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES = {"loadaudiofromurl", "loadaudiofrompath"}
+COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES = {"loadaudiofromurl", "mediautilities_audiourlloader", "loadaudiofrompath"}
 COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES = {"loadaudio", "vhs_loadaudio", "vhs_loadaudioupload"}
 COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES = {
     "prompt_text": {"primitivestringmultiline"},
     "prompt_encode": {"cliptextencode"},
     "image_input": {"loadimage"},
-    "audio_input": {"loadaudio", "vhs_loadaudio", "vhs_loadaudioupload", "loadaudiofromurl", "loadaudiofrompath"},
+    "audio_input": {
+        "loadaudio",
+        "vhs_loadaudio",
+        "vhs_loadaudioupload",
+        "loadaudiofromurl",
+        "mediautilities_audiourlloader",
+        "loadaudiofrompath",
+    },
     "trim_audio": {"trimaudioduration"},
     "audio_encode": {"ltxvaudiovaeencode"},
     "save_video": {"savevideo"},
@@ -257,7 +266,7 @@ def _build_workflow_fingerprint(*, workflow: dict, workflow_key: str, workflow_p
         "md5": file_md5,
         "topLevelNodeCount": len(workflow) if isinstance(workflow, dict) else 0,
         "hasLoadAudio": "loadaudio" in all_class_types,
-        "hasLoadAudioFromUrl": "loadaudiofromurl" in all_class_types,
+        "hasLoadAudioFromUrl": bool({"loadaudiofromurl", "mediautilities_audiourlloader"} & all_class_types),
         "hasLoadAudioFromPath": "loadaudiofrompath" in all_class_types,
         "hasTrimAudioDuration": "trimaudioduration" in all_class_types,
         "hasLTXVAudioVAEEncode": "ltxvaudiovaeencode" in all_class_types,
@@ -1284,6 +1293,8 @@ def _class_audio_input_key_priority(class_type: str) -> tuple[str, ...]:
     normalized = str(class_type or "").strip().lower()
     if normalized in {"loadaudio", "vhs_loadaudio", "vhs_loadaudioupload"}:
         return ("audio", "audio_file", "filename")
+    if normalized == "mediautilities_audiourlloader":
+        return ("url",)
     if normalized == "loadaudiofromurl":
         return ("url", "audio_path", "path", "audio")
     if normalized == "loadaudiofrompath":
@@ -1685,7 +1696,9 @@ def _resolve_audio_transport_mode_for_targets(
     has_audio_bytes: bool,
     audio_upload_supported: bool,
 ) -> tuple[str, str]:
-    has_url_target = any(str((target or {}).get("class_type") or "").strip().lower() == "loadaudiofromurl" for target in audio_targets)
+    has_url_target = any(
+        str((target or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES for target in audio_targets
+    )
     has_path_target = any(str((target or {}).get("class_type") or "").strip().lower() == "loadaudiofrompath" for target in audio_targets)
     has_upload_filename_target = any(
         str((target or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES for target in audio_targets
@@ -1730,13 +1743,13 @@ def _resolve_audio_patch_value_for_target(
             return None, "rejected_incompatible_transport", "uploaded_audio_name_missing_for_source_file_node"
         return value, "upload_filename_for_loadaudio", None
 
-    if class_type == "loadaudiofromurl":
+    if class_type in {"loadaudiofromurl", "mediautilities_audiourlloader"}:
         if selected_transport_mode != "url":
-            return None, "rejected_incompatible_transport", "url_transport_required_for_loadaudiofromurl"
+            return None, "rejected_incompatible_transport", f"url_transport_required_for_{class_type}"
         value = str(normalized_audio_url or "").strip() or str(original_audio_url or "").strip()
         if not value:
-            return None, "rejected_incompatible_transport", "audio_url_missing_for_loadaudiofromurl"
-        return value, "normalized_url_for_loadaudiofromurl", None
+            return None, "rejected_incompatible_transport", f"audio_url_missing_for_{class_type}"
+        return value, f"normalized_url_for_{class_type}", None
 
     if class_type == "loadaudiofrompath":
         if selected_transport_mode != "path":

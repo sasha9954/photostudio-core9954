@@ -716,7 +716,7 @@
     "inputs": {
       "url": ""
     },
-    "class_type": "LoadAudioFromUrl",
+    "class_type": "MediaUtilities_AudioURLLoader",
     "_meta": {
       "title": "Загрузить аудио из URL"
     }
