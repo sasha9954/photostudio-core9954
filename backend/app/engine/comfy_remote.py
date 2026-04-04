@@ -76,6 +76,7 @@ COMFY_NON_MOUTH_LIPSYNC_TITLES = ("lipsink", "lip sink", "lipsync-video", "lip-s
 COMFY_AUDIO_UNSAFE_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 COMFY_AUDIO_URL_COMPATIBLE_INPUT_KEYS = {"url", "path", "audio_path"}
 COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES = {"loadaudiofromurl", "loadaudiofrompath"}
+COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES = {"loadaudio", "vhs_loadaudio", "vhs_loadaudioupload"}
 COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES = {
     "prompt_text": {"primitivestringmultiline"},
     "prompt_encode": {"cliptextencode"},
@@ -1607,6 +1608,94 @@ def _targets_support_url_transport(audio_targets: list[dict]) -> bool:
     return False
 
 
+def _extract_filesystem_audio_path(audio_value: str | None) -> str:
+    raw = str(audio_value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+    scheme = str(parsed.scheme or "").strip().lower()
+    if scheme == "file":
+        return str(parsed.path or "").strip()
+    if not scheme:
+        return raw
+    return ""
+
+
+def _resolve_audio_transport_mode_for_targets(
+    *,
+    audio_targets: list[dict],
+    normalized_audio_url: str,
+    normalized_audio_url_safe: bool,
+    path_audio_value: str,
+    has_audio_bytes: bool,
+    audio_upload_supported: bool,
+) -> tuple[str, str]:
+    has_url_target = any(str((target or {}).get("class_type") or "").strip().lower() == "loadaudiofromurl" for target in audio_targets)
+    has_path_target = any(str((target or {}).get("class_type") or "").strip().lower() == "loadaudiofrompath" for target in audio_targets)
+    has_upload_filename_target = any(
+        str((target or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES for target in audio_targets
+    )
+
+    if has_url_target and bool(normalized_audio_url) and normalized_audio_url_safe:
+        return "url", "url_target_with_remote_safe_url"
+    if has_path_target and bool(path_audio_value):
+        return "path", "path_target_with_filesystem_path"
+    if has_upload_filename_target and has_audio_bytes and audio_upload_supported:
+        return "upload", "source_file_node_with_audio_upload"
+    if has_upload_filename_target and not has_audio_bytes:
+        return "none", "source_file_node_requires_upload_but_audio_bytes_missing"
+    if has_upload_filename_target and not audio_upload_supported:
+        return "none", "source_file_node_requires_upload_but_endpoint_unavailable"
+    if has_url_target and not bool(normalized_audio_url):
+        return "none", "url_target_but_audio_url_missing"
+    if has_url_target and not normalized_audio_url_safe:
+        return "none", "url_target_but_audio_url_not_remote_safe"
+    if has_path_target and not bool(path_audio_value):
+        return "none", "path_target_but_filesystem_path_missing"
+    return "none", "no_compatible_audio_transport_for_discovered_targets"
+
+
+def _resolve_audio_patch_value_for_target(
+    *,
+    target: dict,
+    selected_transport_mode: str,
+    original_audio_url: str,
+    normalized_audio_url: str,
+    path_audio_value: str,
+    uploaded_audio_name: str,
+) -> tuple[str | None, str, str | None]:
+    class_type = str((target or {}).get("class_type") or "").strip().lower()
+
+    if class_type in COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES:
+        if selected_transport_mode != "upload":
+            return None, "rejected_incompatible_transport", "upload_filename_transport_required_for_source_file_node"
+        value = str(uploaded_audio_name or "").strip()
+        if not value:
+            return None, "rejected_incompatible_transport", "uploaded_audio_name_missing_for_source_file_node"
+        return value, "upload_filename_for_loadaudio", None
+
+    if class_type == "loadaudiofromurl":
+        if selected_transport_mode != "url":
+            return None, "rejected_incompatible_transport", "url_transport_required_for_loadaudiofromurl"
+        value = str(normalized_audio_url or "").strip() or str(original_audio_url or "").strip()
+        if not value:
+            return None, "rejected_incompatible_transport", "audio_url_missing_for_loadaudiofromurl"
+        return value, "normalized_url_for_loadaudiofromurl", None
+
+    if class_type == "loadaudiofrompath":
+        if selected_transport_mode != "path":
+            return None, "rejected_incompatible_transport", "filesystem_path_transport_required_for_loadaudiofrompath"
+        value = str(path_audio_value or "").strip()
+        if not value:
+            return None, "rejected_incompatible_transport", "audio_path_missing_for_loadaudiofrompath"
+        return value, "filesystem_path_for_loadaudiofrompath", None
+
+    return None, "rejected_incompatible_transport", f"unsupported_audio_source_class:{class_type or 'unknown'}"
+
+
 def _patch_workflow_inputs(
     workflow: dict,
     *,
@@ -2000,47 +2089,19 @@ def run_comfy_image_to_video(
         is_normalized_audio_url_safe, normalized_audio_url_safety_reason = _assess_remote_audio_url_safety(normalized_audio_url) if bool(normalized_audio_url) else (False, "audio_url_missing")
         effective_audio_value = normalized_audio_url
         supports_url_transport = _targets_support_url_transport(audio_targets)
+        path_audio_value = _extract_filesystem_audio_path(original_audio_url)
         audio_transport_reason = "workflow_has_audio_input_nodes" if audio_targets else "workflow_has_no_patchable_audio_input_nodes"
-        upload_fallback_allowed = bool(
-            has_audio_bytes
-            and not supports_url_transport
-            and not is_normalized_audio_url_safe
-            and _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is not False
+        selected_transport_mode, selected_transport_reason = _resolve_audio_transport_mode_for_targets(
+            audio_targets=audio_targets,
+            normalized_audio_url=normalized_audio_url,
+            normalized_audio_url_safe=is_normalized_audio_url_safe,
+            path_audio_value=path_audio_value,
+            has_audio_bytes=has_audio_bytes,
+            audio_upload_supported=_COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is not False,
         )
-        upload_guard_reason = "allowed"
-        if not upload_fallback_allowed:
-            if not has_audio_bytes:
-                upload_guard_reason = "audio_bytes_missing"
-            elif _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is False:
-                upload_guard_reason = "upload_endpoint_previously_unsupported"
-            elif supports_url_transport:
-                upload_guard_reason = "url_or_path_transport_supported"
-            elif is_normalized_audio_url_safe:
-                upload_guard_reason = "normalized_remote_safe_url_available"
-        selected_by = "pending"
-        selected_transport_reason = audio_transport_reason
-        if bool(normalized_audio_url) and is_normalized_audio_url_safe and supports_url_transport:
-            selected_by = "normalized_remote_safe_url+target_support"
-            selected_transport_mode = "url"
-            selected_transport_reason = "remote_safe_normalized_url_available"
-        elif upload_fallback_allowed:
-            selected_by = "audio_upload_fallback"
-            selected_transport_mode = "upload"
-            selected_transport_reason = "url_transport_unavailable_fallback_to_upload"
-        elif bool(normalized_audio_url) and not is_normalized_audio_url_safe:
-            selected_by = "normalized_url_rejected_unsafe_for_remote"
-            selected_transport_mode = "none"
-            selected_transport_reason = normalized_audio_url_safety_reason
-        elif bool(normalized_audio_url) and not supports_url_transport:
-            selected_by = "url_rejected_target_not_url_compatible"
-            selected_transport_mode = "none"
-            selected_transport_reason = "targets_not_url_compatible"
-        elif has_audio_bytes and not upload_fallback_allowed:
-            selected_by = f"upload_guard_blocked:{upload_guard_reason}"
-            selected_transport_mode = "none"
-            selected_transport_reason = upload_guard_reason
-        else:
-            selected_transport_mode = "none"
+        upload_fallback_allowed = selected_transport_mode == "upload"
+        upload_guard_reason = "allowed" if upload_fallback_allowed else selected_transport_reason
+        selected_by = selected_transport_reason
         normalization_reason = str((normalization_log_payload or {}).get("normalizationReason") or "").strip() or "unknown"
         if normalization_reason in {"public_base_url_missing", "public_base_url_invalid", "public_base_url_parse_failed", "public_base_url_localhost"}:
             normalized_audio_url_safety_reason = normalization_reason
@@ -2058,6 +2119,7 @@ def run_comfy_image_to_video(
                 "normalizedAudioUrlSafe": is_normalized_audio_url_safe,
                 "normalizedAudioUrlSafetyReason": normalized_audio_url_safety_reason,
                 "supportsUrlTransport": supports_url_transport,
+                "pathAudioValue": path_audio_value,
                 "uploadFallbackAllowed": upload_fallback_allowed,
                 "selectedTransportMode": selected_transport_mode,
                 "selectedBy": selected_by,
@@ -2073,6 +2135,7 @@ def run_comfy_image_to_video(
                 "downstreamAudioNodes": downstream_audio_nodes,
                 "selectedTransportMode": selected_transport_mode,
                 "selectedBy": selected_by,
+                "selectedTransportReason": selected_transport_reason,
                 "rawAudioValuePreview": _preview_value(effective_audio_value),
                 "rawAudioValueType": type(effective_audio_value).__name__,
             },
@@ -2094,16 +2157,15 @@ def run_comfy_image_to_video(
                 "normalizedAudioUrlSafe": is_normalized_audio_url_safe,
                 "normalizedAudioUrlSafetyReason": normalized_audio_url_safety_reason,
                 "supportsUrlTransport": supports_url_transport,
+                "pathAudioValue": path_audio_value,
                 "uploadFallbackAllowed": upload_fallback_allowed,
                 "reason": audio_transport_reason,
             },
         )
         if audio_targets:
-            selected_by = "no_audio_payload"
-            if bool(normalized_audio_url) and is_normalized_audio_url_safe and supports_url_transport:
-                audio_transport_mode = "url"
-                selected_by = "normalized_remote_safe_url+target_support"
-            elif upload_fallback_allowed:
+            selected_by = selected_transport_reason
+            uploaded_audio_name = ""
+            if selected_transport_mode == "upload":
                 audio_filename = f"{Path(image_filename).stem}_audio.mp3"
                 uploaded_audio_name, audio_upload_err = upload_audio_to_comfy(
                     audio_bytes,
@@ -2127,18 +2189,8 @@ def run_comfy_image_to_video(
                         )
                         return None, "capability_error:LTX_AUDIO_UPLOAD_ENDPOINT_UNSUPPORTED:audio_upload_non_200:status=405"
                     return None, f"capability_error:LTX_AUDIO_UPLOAD_FAILED:{audio_upload_err or 'audio_upload_failed'}"
-                effective_audio_value = str(uploaded_audio_name).strip()
-                audio_transport_mode = "upload"
-                selected_by = "audio_upload_fallback"
-            elif bool(normalized_audio_url) and not is_normalized_audio_url_safe:
-                audio_transport_mode = "none"
-                selected_by = f"normalized_url_rejected_unsafe_for_remote:{normalized_audio_url_safety_reason}"
-            elif bool(normalized_audio_url) and not supports_url_transport:
-                audio_transport_mode = "none"
-                selected_by = "url_rejected_target_not_url_compatible"
-            elif has_audio_bytes and not upload_fallback_allowed:
-                audio_transport_mode = "none"
-                selected_by = f"upload_guard_blocked:{upload_guard_reason}"
+                selected_by = "audio_upload_for_source_file_nodes"
+            audio_transport_mode = selected_transport_mode
             if (
                 audio_transport_mode == "none"
                 and _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is False
@@ -2156,16 +2208,53 @@ def run_comfy_image_to_video(
                     "uploadBlockedBecauseEndpointUnsupported": False,
                 },
             )
-            if audio_transport_mode in {"url", "upload"}:
-                audio_patch_node_ids, audio_patch_err = _patch_audio_input_nodes(
-                    patched_workflow,
-                    audio_value=effective_audio_value,
-                    audio_targets=audio_targets,
-                )
-                if audio_patch_err:
-                    return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{audio_patch_err}"
+            if audio_transport_mode in {"url", "upload", "path"}:
+                audio_patch_node_ids = []
                 lip_sync_proof_reason = "audio_patch_applied"
                 audio_patch_types = []
+                for target in audio_targets:
+                    resolved_value, value_strategy, value_err = _resolve_audio_patch_value_for_target(
+                        target=target,
+                        selected_transport_mode=audio_transport_mode,
+                        original_audio_url=original_audio_url,
+                        normalized_audio_url=normalized_audio_url,
+                        path_audio_value=path_audio_value,
+                        uploaded_audio_name=uploaded_audio_name,
+                    )
+                    target_node_id = str((target or {}).get("node_id") or "").strip()
+                    target_input_key = str((target or {}).get("input_key") or "").strip()
+                    target_class_type = str((target or {}).get("class_type") or "").strip().lower()
+                    logger.info(
+                        "[COMFY AUDIO VALUE STRATEGY] %s",
+                        {
+                            "workflowKey": normalized_workflow_key,
+                            "workflowFile": workflow_source,
+                            "targetNodeId": target_node_id,
+                            "targetClassType": target_class_type,
+                            "targetInputKey": target_input_key,
+                            "selectedTransportMode": audio_transport_mode,
+                            "valueStrategy": value_strategy,
+                            "patchedValueType": type(resolved_value).__name__ if resolved_value is not None else "none",
+                            "patchedValuePreview": _preview_value(resolved_value),
+                        },
+                    )
+                    if value_err:
+                        return None, f"capability_error:LTX_AUDIO_TRANSPORT_INCOMPATIBLE:{value_err}"
+                    if not target_node_id or not target_input_key:
+                        continue
+                    node = patched_workflow.get(target_node_id)
+                    if not isinstance(node, dict):
+                        continue
+                    inputs = node.get("inputs")
+                    if not isinstance(inputs, dict):
+                        continue
+                    allow_create = bool((target or {}).get("allow_create"))
+                    if target_input_key not in inputs and not allow_create:
+                        continue
+                    inputs[target_input_key] = resolved_value
+                    audio_patch_node_ids.append(target_node_id)
+                if not audio_patch_node_ids:
+                    return None, "capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:audio_target_patch_failed"
                 for target in audio_targets:
                     node_id = str((target or {}).get("node_id") or "").strip()
                     input_key = str((target or {}).get("input_key") or "").strip()
@@ -2211,8 +2300,8 @@ def run_comfy_image_to_video(
                                 ]
                             )
                         ),
-                        "patchedValueType": type(effective_audio_value).__name__,
-                        "patchedValuePreview": _preview_value(effective_audio_value),
+                        "patchedValueType": "class_aware",
+                        "patchedValuePreview": "see_[COMFY_AUDIO_PATCH_TYPES]",
                     },
                 )
                 logger.info(
@@ -2225,7 +2314,7 @@ def run_comfy_image_to_video(
                     },
                 )
             else:
-                return None, f"capability_error:LTX_AUDIO_TRANSPORT_UNAVAILABLE:{selected_by}"
+                return None, f"capability_error:LTX_AUDIO_TRANSPORT_UNAVAILABLE:{selected_transport_reason}"
             final_reason = audio_transport_reason
         else:
             audio_transport_mode = "skip_no_audio_target"
@@ -2278,7 +2367,7 @@ def run_comfy_image_to_video(
         lip_sync_proof_confirmed = bool(
             audio_used
             and audio_targets_found > 0
-            and audio_transport_mode in {"url", "upload"}
+            and audio_transport_mode in {"url", "upload", "path"}
             and bool(str(effective_audio_value).strip())
         )
         if not lip_sync_proof_confirmed and not lip_sync_proof_reason:
@@ -2286,7 +2375,7 @@ def run_comfy_image_to_video(
                 lip_sync_proof_reason = "audio_patch_node_ids_empty"
             elif audio_targets_found <= 0:
                 lip_sync_proof_reason = "audio_targets_not_found"
-            elif audio_transport_mode not in {"url", "upload"}:
+            elif audio_transport_mode not in {"url", "upload", "path"}:
                 lip_sync_proof_reason = f"audio_transport_mode_invalid:{audio_transport_mode}"
             elif not str(effective_audio_value).strip():
                 lip_sync_proof_reason = "audio_input_value_empty"
@@ -2342,7 +2431,7 @@ def run_comfy_image_to_video(
         base_audio_patch_contract_confirmed = bool(
             audio_used
             and audio_targets_found > 0
-            and audio_transport_mode in {"url", "upload"}
+            and audio_transport_mode in {"url", "upload", "path"}
             and bool(str(effective_audio_value).strip())
         )
         explicit_mouth_control_lipsync_confirmed = bool(base_audio_patch_contract_confirmed and audio_reaches_mouth_control_branch)
