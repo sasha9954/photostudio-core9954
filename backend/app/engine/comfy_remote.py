@@ -36,6 +36,7 @@ COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {
     "vhs_loadaudioupload",
     "loadaudiofromurl",
     "loadaudiofrompath",
+    "mediautilities_audiourlloader",
 }
 COMFY_AUDIO_SOURCE_NODE_CLASS_NAMES = {
     "loadaudio",
@@ -43,6 +44,7 @@ COMFY_AUDIO_SOURCE_NODE_CLASS_NAMES = {
     "vhs_loadaudioupload",
     "loadaudiofromurl",
     "loadaudiofrompath",
+    "mediautilities_audiourlloader",
 }
 COMFY_AUDIO_DOWNSTREAM_NODE_CLASS_NAMES = {
     "trimaudioduration",
@@ -76,7 +78,7 @@ COMFY_MOUTH_CONTROL_HINTS = ("phoneme", "viseme", "mouth", "avatar", "face", "wa
 COMFY_NON_MOUTH_LIPSYNC_TITLES = ("lipsink", "lip sink", "lipsync-video", "lip-sync-video")
 COMFY_AUDIO_UNSAFE_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 COMFY_AUDIO_URL_COMPATIBLE_INPUT_KEYS = {"url", "path", "audio_path"}
-COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES = {"loadaudiofromurl", "loadaudiofrompath"}
+COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES = {"loadaudiofromurl", "loadaudiofrompath", "mediautilities_audiourlloader"}
 COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES = {"loadaudio", "vhs_loadaudio", "vhs_loadaudioupload"}
 COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES = {
     "prompt_text": {"primitivestringmultiline"},
@@ -88,6 +90,7 @@ COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES = {
         "vhs_loadaudioupload",
         "loadaudiofromurl",
         "loadaudiofrompath",
+        "mediautilities_audiourlloader",
     },
     "trim_audio": {"trimaudioduration"},
     "audio_encode": {"ltxvaudiovaeencode"},
@@ -1331,7 +1334,7 @@ def _class_audio_input_key_priority(class_type: str) -> tuple[str, ...]:
     normalized = str(class_type or "").strip().lower()
     if normalized in {"loadaudio", "vhs_loadaudio", "vhs_loadaudioupload"}:
         return ("audio", "audio_file", "filename")
-    if normalized == "loadaudiofromurl":
+    if normalized in {"loadaudiofromurl", "mediautilities_audiourlloader"}:
         return ("url", "audio_path", "path", "audio")
     if normalized == "loadaudiofrompath":
         return ("path", "audio_path", "audio", "filename")
@@ -1779,7 +1782,7 @@ def _resolve_audio_patch_value_for_target(
             return None, "rejected_incompatible_transport", "uploaded_audio_name_missing_for_source_file_node"
         return value, "upload_filename_for_loadaudio", None
 
-    if class_type in {"loadaudiofromurl"}:
+    if class_type in {"loadaudiofromurl", "mediautilities_audiourlloader"}:
         if selected_transport_mode != "url":
             return None, "rejected_incompatible_transport", f"url_transport_required_for_{class_type}"
         value = str(normalized_audio_url or "").strip() or str(original_audio_url or "").strip()
