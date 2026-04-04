@@ -36,6 +36,21 @@ COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {
     "loadaudiofromurl",
     "loadaudiofrompath",
 }
+COMFY_AUDIO_SOURCE_NODE_CLASS_NAMES = {
+    "loadaudio",
+    "vhs_loadaudio",
+    "vhs_loadaudioupload",
+    "loadaudiofromurl",
+    "loadaudiofrompath",
+}
+COMFY_AUDIO_DOWNSTREAM_NODE_CLASS_NAMES = {
+    "trimaudioduration",
+    "ltxvaudiovaeencode",
+    "ltxvaudiovaedecode",
+    "createvideo",
+    "ltxvconcatavlatent",
+    "ltxvseparateavlatent",
+}
 COMFY_AUDIO_INPUT_KEYS = ("audio", "audio_file", "audio_path", "path", "filename", "url")
 COMFY_AUDIO_INPUT_WIDGET_FALLBACK_KEYS = ("value", "text")
 COMFY_AUDIO_TITLE_HINTS = ("audio", "music", "sound", "lipsync", "lip sync", "wav", "mp3")
@@ -1214,13 +1229,25 @@ def _patch_audio_input_nodes(workflow: dict, *, audio_value: str, audio_targets:
     return patched_node_ids, None
 
 
+def _class_audio_input_key_priority(class_type: str) -> tuple[str, ...]:
+    normalized = str(class_type or "").strip().lower()
+    if normalized in {"loadaudio", "vhs_loadaudio", "vhs_loadaudioupload"}:
+        return ("audio", "audio_file", "filename")
+    if normalized == "loadaudiofromurl":
+        return ("url", "audio_path", "path", "audio")
+    if normalized == "loadaudiofrompath":
+        return ("path", "audio_path", "audio", "filename")
+    return COMFY_AUDIO_INPUT_KEYS
+
+
 def _collect_audio_input_targets(
     workflow: dict,
     *,
     workflow_key: str = "",
     workflow_file: str = "",
-) -> list[dict]:
-    targets: list[dict] = []
+) -> dict:
+    source_targets: list[dict] = []
+    downstream_nodes: list[dict] = []
     normalized_workflow_key = str(workflow_key or "").strip().lower()
     workflow_filename = Path(str(workflow_file or "")).name.strip().lower()
     expected_lipsync_file = COMFY_AUDIO_WORKFLOW_FILES.get("lip_sync", "").strip().lower()
@@ -1233,17 +1260,23 @@ def _collect_audio_input_targets(
         if not isinstance(inputs, dict):
             continue
         input_keys = list(inputs.keys())
-        matched_by = "class_type" if class_type in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES else ""
-        if not matched_by and any(hint in title for hint in COMFY_AUDIO_TITLE_HINTS):
-            matched_by = "title"
-        if not matched_by and any(any(hint in str(key).lower() for hint in COMFY_AUDIO_TITLE_HINTS) for key in input_keys):
-            matched_by = "input_key_hint"
+        if class_type in COMFY_AUDIO_DOWNSTREAM_NODE_CLASS_NAMES:
+            downstream_nodes.append(
+                {
+                    "node_id": str(node_id),
+                    "class_type": class_type,
+                    "title": title,
+                    "input_keys": input_keys,
+                    "matched_by": "downstream_class",
+                }
+            )
+        matched_by = "class_type" if class_type in COMFY_AUDIO_SOURCE_NODE_CLASS_NAMES else ""
         if not matched_by:
             continue
-        found_target = False
-        for input_key in COMFY_AUDIO_INPUT_KEYS:
+        found_source_target = False
+        for input_key in _class_audio_input_key_priority(class_type):
             if input_key in inputs:
-                targets.append(
+                source_targets.append(
                     {
                         "node_id": str(node_id),
                         "class_type": class_type,
@@ -1253,12 +1286,12 @@ def _collect_audio_input_targets(
                         "matched_by": matched_by,
                     }
                 )
-                found_target = True
+                found_source_target = True
                 break
-        if not found_target and class_type in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES:
+        if not found_source_target:
             for fallback_key in COMFY_AUDIO_INPUT_WIDGET_FALLBACK_KEYS:
                 if fallback_key in inputs and isinstance(inputs.get(fallback_key), str):
-                    targets.append(
+                    source_targets.append(
                         {
                             "node_id": str(node_id),
                             "class_type": class_type,
@@ -1271,7 +1304,7 @@ def _collect_audio_input_targets(
                     break
 
     if (
-        not targets
+        not source_targets
         and normalized_workflow_key == "lip_sync"
         and workflow_filename == expected_lipsync_file
     ):
@@ -1283,7 +1316,7 @@ def _collect_audio_input_targets(
             if not isinstance(inputs, dict):
                 continue
             if class_type in COMFY_LIPSYNC_WORKFLOW_AUDIO_FALLBACK_CLASS_NAMES:
-                targets.append(
+                source_targets.append(
                     {
                         "node_id": str(node_id),
                         "class_type": class_type,
@@ -1295,7 +1328,10 @@ def _collect_audio_input_targets(
                     }
                 )
                 break
-    return targets
+    return {
+        "source_targets": source_targets,
+        "downstream_nodes": downstream_nodes,
+    }
 
 
 def _snapshot_node_inputs(workflow: dict, node_ids: list[str], *, allowed_keys: set[str] | None = None) -> list[dict]:
@@ -1915,6 +1951,7 @@ def run_comfy_image_to_video(
             return None, "capability_error:LTX_FIRST_LAST_NOT_IMPLEMENTED:second_frame_patch_not_applied"
     audio_patch_node_ids: list[str] = []
     audio_targets: list[dict] = []
+    downstream_audio_nodes: list[dict] = []
     audio_transport_mode = "none"
     effective_audio_value = str(audio_url or "").strip()
     audio_targets_found = 0
@@ -1938,11 +1975,13 @@ def run_comfy_image_to_video(
         )
         if not valid_audio_workflow:
             return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{workflow_audio_err}"
-        audio_targets = _collect_audio_input_targets(
+        audio_target_plan = _collect_audio_input_targets(
             patched_workflow,
             workflow_key=normalized_workflow_key,
             workflow_file=workflow_source,
         )
+        audio_targets = list((audio_target_plan or {}).get("source_targets") or [])
+        downstream_audio_nodes = list((audio_target_plan or {}).get("downstream_nodes") or [])
         audio_targets_found = len(audio_targets)
         has_audio_url = bool(effective_audio_value)
         has_audio_bytes = bool(audio_bytes)
@@ -1961,9 +2000,6 @@ def run_comfy_image_to_video(
         is_normalized_audio_url_safe, normalized_audio_url_safety_reason = _assess_remote_audio_url_safety(normalized_audio_url) if bool(normalized_audio_url) else (False, "audio_url_missing")
         effective_audio_value = normalized_audio_url
         supports_url_transport = _targets_support_url_transport(audio_targets)
-        normalized_audio_url_available = bool(normalized_audio_url) and is_normalized_audio_url_safe
-        if normalized_audio_url_available and not supports_url_transport:
-            supports_url_transport = True
         audio_transport_reason = "workflow_has_audio_input_nodes" if audio_targets else "workflow_has_no_patchable_audio_input_nodes"
         upload_fallback_allowed = bool(
             has_audio_bytes
@@ -2029,12 +2065,16 @@ def run_comfy_image_to_video(
             },
         )
         logger.info(
-            "[COMFY AUDIO TARGETS INSPECTION] %s",
+            "[COMFY AUDIO PATCH PLAN] %s",
             {
                 "workflowKey": normalized_workflow_key,
                 "workflowFile": workflow_source,
-                "audioTargetsFound": len(audio_targets),
-                "audioTargets": audio_targets,
+                "sourceAudioTargets": audio_targets,
+                "downstreamAudioNodes": downstream_audio_nodes,
+                "selectedTransportMode": selected_transport_mode,
+                "selectedBy": selected_by,
+                "rawAudioValuePreview": _preview_value(effective_audio_value),
+                "rawAudioValueType": type(effective_audio_value).__name__,
             },
         )
         logger.info("[COMFY AUDIO URL NORMALIZATION] %s", normalization_log_payload)
@@ -2147,6 +2187,34 @@ def run_comfy_image_to_video(
                             "patched_value_preview": _preview_value(patched_value),
                         }
                     )
+                logger.info(
+                    "[COMFY AUDIO PATCH APPLY] %s",
+                    {
+                        "workflowKey": normalized_workflow_key,
+                        "workflowFile": workflow_source,
+                        "patchedSourceNodeIds": audio_patch_node_ids,
+                        "patchedSourceNodeClasses": list(
+                            dict.fromkeys(
+                                [
+                                    str((target or {}).get("class_type") or "").strip()
+                                    for target in audio_targets
+                                    if str((target or {}).get("node_id") or "").strip() in set(audio_patch_node_ids)
+                                ]
+                            )
+                        ),
+                        "patchedInputKeys": list(
+                            dict.fromkeys(
+                                [
+                                    str((target or {}).get("input_key") or "").strip()
+                                    for target in audio_targets
+                                    if str((target or {}).get("node_id") or "").strip() in set(audio_patch_node_ids)
+                                ]
+                            )
+                        ),
+                        "patchedValueType": type(effective_audio_value).__name__,
+                        "patchedValuePreview": _preview_value(effective_audio_value),
+                    },
+                )
                 logger.info(
                     "[COMFY AUDIO PATCH TYPES] %s",
                     {
@@ -2527,6 +2595,7 @@ def run_comfy_image_to_video(
             "audio_used": bool(audio_patch_node_ids),
             "audio_targets_found": audio_targets_found,
             "audio_targets_summary": audio_targets[:8],
+            "audio_downstream_nodes_summary": downstream_audio_nodes[:8],
             "audio_transport_mode": audio_transport_mode,
             "audio_input_value": effective_audio_value,
             "continuation_used": continuation_used,
