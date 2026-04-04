@@ -49,6 +49,13 @@ COMFY_MAIN_VIDEO_BRANCH_CLASS_NAMES = {
     "createvideo",
     "savevideo",
 }
+COMFY_LTX_AV_AUDIO_PATH_CLASS_NAMES = {
+    "ltxvaudiovaeencode",
+    "ltxvconcatavlatent",
+    "ltxvseparateavlatent",
+    "ltxvaudiovaedecode",
+    "createvideo",
+}
 COMFY_MOUTH_CONTROL_HINTS = ("phoneme", "viseme", "mouth", "avatar", "face", "wav2lip", "sadtalker")
 COMFY_NON_MOUTH_LIPSYNC_TITLES = ("lipsink", "lip sink", "lipsync-video", "lip-sync-video")
 COMFY_AUDIO_UNSAFE_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
@@ -1146,6 +1153,8 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
     audio_reaches_main_video_branch = False
     audio_reaches_mouth_control_branch = False
     workflow_lip_sync_capable = False
+    workflow_uses_av_audio_path = False
+    av_audio_driven_generation_present = False
 
     if not isinstance(workflow, dict):
         return {
@@ -1155,6 +1164,9 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
             "workflowLipSyncCapable": workflow_lip_sync_capable,
             "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
             "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+            "workflowUsesAVAudioPath": workflow_uses_av_audio_path,
+            "avAudioDrivenGenerationPresent": av_audio_driven_generation_present,
+            "explicitMouthControlBranchPresent": workflow_lip_sync_capable,
         }
 
     adjacency = _build_workflow_adjacency(workflow)
@@ -1165,7 +1177,8 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
         title_l = str(((node.get("_meta") or {}).get("title") if isinstance(node.get("_meta"), dict) else "") or "").strip().lower()
         if _is_mouth_control_node(class_type_l, title_l):
             workflow_lip_sync_capable = True
-            break
+        if class_type_l in COMFY_LTX_AV_AUDIO_PATH_CLASS_NAMES:
+            workflow_uses_av_audio_path = True
 
     first_node_id = str((audio_patch_node_ids or [""])[0] or "").strip()
     first_node = workflow.get(first_node_id) if first_node_id else None
@@ -1181,6 +1194,9 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
             "workflowLipSyncCapable": workflow_lip_sync_capable,
             "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
             "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+            "workflowUsesAVAudioPath": workflow_uses_av_audio_path,
+            "avAudioDrivenGenerationPresent": av_audio_driven_generation_present,
+            "explicitMouthControlBranchPresent": workflow_lip_sync_capable,
         }
 
     queue = deque([str(node_id) for node_id in audio_patch_node_ids if str(node_id or "").strip()])
@@ -1203,6 +1219,8 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
             reached_classes.add(downstream_class)
             if downstream_class_l in COMFY_MAIN_VIDEO_BRANCH_CLASS_NAMES:
                 audio_reaches_main_video_branch = True
+            if downstream_class_l in COMFY_LTX_AV_AUDIO_PATH_CLASS_NAMES:
+                av_audio_driven_generation_present = True
             if _is_mouth_control_node(downstream_class_l, downstream_title.lower()):
                 audio_reaches_mouth_control_branch = True
             if len(path_preview) < 16:
@@ -1224,6 +1242,9 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
         "workflowLipSyncCapable": workflow_lip_sync_capable,
         "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
         "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+        "workflowUsesAVAudioPath": workflow_uses_av_audio_path,
+        "avAudioDrivenGenerationPresent": av_audio_driven_generation_present,
+        "explicitMouthControlBranchPresent": workflow_lip_sync_capable,
     }
 
 
@@ -1620,6 +1641,9 @@ def run_comfy_image_to_video(
     workflow_lip_sync_capable = False
     audio_reaches_main_video_branch = False
     audio_reaches_mouth_control_branch = False
+    workflow_uses_av_audio_path = False
+    av_audio_driven_generation_present = False
+    explicit_mouth_control_branch_present = False
     if normalized_workflow_key == "lip_sync":
         global _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED
         valid_audio_workflow, workflow_audio_err = _validate_audio_workflow_file(
@@ -1905,6 +1929,9 @@ def run_comfy_image_to_video(
         workflow_lip_sync_capable = bool(inspection.get("workflowLipSyncCapable"))
         audio_reaches_main_video_branch = bool(inspection.get("audioReachesMainVideoBranch"))
         audio_reaches_mouth_control_branch = bool(inspection.get("audioReachesMouthControlBranch"))
+        workflow_uses_av_audio_path = bool(inspection.get("workflowUsesAVAudioPath"))
+        av_audio_driven_generation_present = bool(inspection.get("avAudioDrivenGenerationPresent"))
+        explicit_mouth_control_branch_present = bool(inspection.get("explicitMouthControlBranchPresent"))
         logger.info(
             "[COMFY LIPSYNC WORKFLOW INSPECTION] %s",
             {
@@ -1917,6 +1944,9 @@ def run_comfy_image_to_video(
                 "workflowLipSyncCapable": workflow_lip_sync_capable,
                 "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
                 "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+                "workflowUsesAVAudioPath": workflow_uses_av_audio_path,
+                "avAudioDrivenGenerationPresent": av_audio_driven_generation_present,
+                "explicitMouthControlBranchPresent": explicit_mouth_control_branch_present,
             },
         )
     audio_used = bool(audio_patch_node_ids)
@@ -1924,29 +1954,41 @@ def run_comfy_image_to_video(
     lip_sync_degraded_to_i2v = False
     probable_fallback_mode = ""
     if normalized_workflow_key == "lip_sync":
-        lip_sync_proof_confirmed = bool(
+        base_audio_patch_contract_confirmed = bool(
             audio_used
             and audio_targets_found > 0
             and audio_transport_mode in {"url", "upload"}
             and bool(str(effective_audio_value).strip())
-            and audio_reaches_mouth_control_branch
         )
-        lip_sync_degraded_to_i2v = not lip_sync_proof_confirmed
-        if lip_sync_proof_confirmed:
-            probable_actual_workflow_mode = "real_lipsync"
-        elif audio_used and audio_reaches_main_video_branch:
-            probable_actual_workflow_mode = "i2v_with_audio"
+        explicit_mouth_control_lipsync_confirmed = bool(base_audio_patch_contract_confirmed and audio_reaches_mouth_control_branch)
+        ltx_av_audio_driven_confirmed = bool(
+            base_audio_patch_contract_confirmed
+            and workflow_uses_av_audio_path
+            and av_audio_driven_generation_present
+            and audio_reaches_main_video_branch
+        )
+        lip_sync_proof_confirmed = bool(explicit_mouth_control_lipsync_confirmed or ltx_av_audio_driven_confirmed)
+        if explicit_mouth_control_lipsync_confirmed:
+            probable_actual_workflow_mode = "explicit_mouth_control_lipsync"
+        elif ltx_av_audio_driven_confirmed:
+            probable_actual_workflow_mode = "ltx_av_audio_driven_performance"
         else:
             probable_actual_workflow_mode = "generic_i2v"
-        probable_fallback_mode = "i2v_like" if probable_actual_workflow_mode != "real_lipsync" else "audio_driven_lip_sync"
-        if lip_sync_proof_confirmed:
+        lip_sync_degraded_to_i2v = probable_actual_workflow_mode == "generic_i2v"
+        probable_fallback_mode = "i2v_like" if lip_sync_degraded_to_i2v else "audio_driven_character_performance"
+        if explicit_mouth_control_lipsync_confirmed:
             lip_sync_proof_reason = "audio_patch_contract_confirmed"
             proof_reason_detailed = "mouth_control_branch_confirmed"
+        elif ltx_av_audio_driven_confirmed:
+            lip_sync_proof_reason = "audio_patch_contract_confirmed"
+            proof_reason_detailed = "ltx_av_audio_driven_generation_path_confirmed"
         elif not lip_sync_proof_reason:
             lip_sync_proof_reason = "audio_proof_contract_not_satisfied"
         if not proof_reason_detailed:
-            if audio_used and audio_reaches_main_video_branch and not audio_reaches_mouth_control_branch:
-                proof_reason_detailed = "audio_reaches_av_latent_concat_only_no_mouth_control_branch"
+            if not base_audio_patch_contract_confirmed:
+                proof_reason_detailed = "audio_patch_contract_not_satisfied"
+            elif audio_used and audio_reaches_main_video_branch and workflow_uses_av_audio_path and not audio_reaches_mouth_control_branch:
+                proof_reason_detailed = "ltx_av_audio_path_confirmed_without_explicit_mouth_control_branch"
             elif not audio_used:
                 proof_reason_detailed = "audio_patch_not_applied"
             elif not audio_reaches_main_video_branch:
@@ -2090,6 +2132,9 @@ def run_comfy_image_to_video(
             "workflowLipSyncCapable": workflow_lip_sync_capable,
             "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
             "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+            "workflowUsesAVAudioPath": workflow_uses_av_audio_path,
+            "avAudioDrivenGenerationPresent": av_audio_driven_generation_present,
+            "explicitMouthControlBranchPresent": explicit_mouth_control_branch_present,
             "reason": lip_sync_proof_reason or "ok",
             "proofReasonDetailed": proof_reason_detailed or "",
         },
@@ -2147,6 +2192,9 @@ def run_comfy_image_to_video(
             "workflowLipSyncCapable": workflow_lip_sync_capable,
             "audioReachesMainVideoBranch": audio_reaches_main_video_branch,
             "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
+            "workflowUsesAVAudioPath": workflow_uses_av_audio_path,
+            "avAudioDrivenGenerationPresent": av_audio_driven_generation_present,
+            "explicitMouthControlBranchPresent": explicit_mouth_control_branch_present,
             "capabilities": COMFY_LTX_CAPABILITIES,
             "capabilities_snapshot": COMFY_LTX_CAPABILITIES,
             "inputsUsed": {
