@@ -2361,6 +2361,7 @@ def run_comfy_image_to_video(
                 audio_patch_node_ids = []
                 lip_sync_proof_reason = "audio_patch_applied"
                 audio_patch_types = []
+                mutation_targets_required: set[str] = set()
                 for target in audio_targets:
                     resolved_value, value_strategy, value_err = _resolve_audio_patch_value_for_target(
                         target=target,
@@ -2399,26 +2400,58 @@ def run_comfy_image_to_video(
                         continue
                     allow_create = bool((target or {}).get("allow_create"))
                     if target_class_type == "mediautilities_audiourlloader" and audio_transport_mode == "upload":
+                        mutation_targets_required.add(target_node_id)
                         node["class_type"] = "LoadAudio"
                         inputs.pop("url", None)
                         target_input_key = "audio"
                         allow_create = True
+                        logger.info(
+                            "[COMFY AUDIO NODE MUTATION] %s",
+                            {
+                                "nodeId": target_node_id,
+                                "fromClassType": "MediaUtilities_AudioURLLoader",
+                                "toClassType": "LoadAudio",
+                                "selectedTransportMode": audio_transport_mode,
+                                "patchedInputKey": target_input_key,
+                                "patchedValuePreview": _preview_value(resolved_value),
+                            },
+                        )
                     if target_input_key not in inputs and not allow_create:
                         continue
                     inputs[target_input_key] = resolved_value
                     audio_patch_node_ids.append(target_node_id)
                 if not audio_patch_node_ids:
                     return None, "capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:audio_target_patch_failed"
+
+                for node_id in mutation_targets_required:
+                    node = patched_workflow.get(node_id)
+                    if not isinstance(node, dict):
+                        return None, "capability_error:LTX_AUDIO_NODE_MUTATION_FAILED:mediautilities_node_not_rewritten_to_loadaudio"
+                    node_class_type = str(node.get("class_type") or "").strip().lower()
+                    inputs = node.get("inputs")
+                    if not isinstance(inputs, dict):
+                        return None, "capability_error:LTX_AUDIO_NODE_MUTATION_FAILED:mediautilities_node_not_rewritten_to_loadaudio"
+                    rewritten_audio = str(inputs.get("audio") or "").strip()
+                    uses_url_input = "url" in inputs and bool(str(inputs.get("url") or "").strip())
+                    if node_class_type == "mediautilities_audiourlloader" or uses_url_input or rewritten_audio != str(uploaded_audio_name or "").strip():
+                        return None, "capability_error:LTX_AUDIO_NODE_MUTATION_FAILED:mediautilities_node_not_rewritten_to_loadaudio"
+
+                patched_nodes_set = set(audio_patch_node_ids)
                 for target in audio_targets:
                     node_id = str((target or {}).get("node_id") or "").strip()
-                    input_key = str((target or {}).get("input_key") or "").strip()
-                    if not node_id or not input_key:
+                    if not node_id or node_id not in patched_nodes_set:
                         continue
                     node = patched_workflow.get(node_id)
                     if not isinstance(node, dict):
                         continue
                     inputs = node.get("inputs")
-                    if not isinstance(inputs, dict) or input_key not in inputs:
+                    if not isinstance(inputs, dict):
+                        continue
+                    if str(node.get("class_type") or "").strip().lower() == "loadaudio":
+                        input_key = "audio"
+                    else:
+                        input_key = str((target or {}).get("input_key") or "").strip()
+                    if not input_key or input_key not in inputs:
                         continue
                     patched_value = inputs.get(input_key)
                     audio_patch_types.append(
@@ -2439,20 +2472,14 @@ def run_comfy_image_to_video(
                         "patchedSourceNodeClasses": list(
                             dict.fromkeys(
                                 [
-                                    str((target or {}).get("class_type") or "").strip()
-                                    for target in audio_targets
-                                    if str((target or {}).get("node_id") or "").strip() in set(audio_patch_node_ids)
+                                    str((patched_workflow.get(node_id) or {}).get("class_type") or "").strip()
+                                    for node_id in audio_patch_node_ids
+                                    if isinstance(patched_workflow.get(node_id), dict)
                                 ]
                             )
                         ),
                         "patchedInputKeys": list(
-                            dict.fromkeys(
-                                [
-                                    str((target or {}).get("input_key") or "").strip()
-                                    for target in audio_targets
-                                    if str((target or {}).get("node_id") or "").strip() in set(audio_patch_node_ids)
-                                ]
-                            )
+                            dict.fromkeys([str(item.get("input_key") or "").strip() for item in audio_patch_types if isinstance(item, dict)])
                         ),
                         "patchedValueType": "class_aware",
                         "patchedValuePreview": "see_[COMFY_AUDIO_PATCH_TYPES]",
