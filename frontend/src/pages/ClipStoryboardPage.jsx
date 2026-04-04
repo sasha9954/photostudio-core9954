@@ -1781,6 +1781,34 @@ function buildAudioSliceReadyPatch({
   };
 }
 
+function normalizeLipSyncSceneStatePatch(scene = {}, patch = {}) {
+  const nextPatch = patch && typeof patch === "object" ? { ...patch } : {};
+  const merged = { ...(scene && typeof scene === "object" ? scene : {}), ...nextPatch };
+  const normalizedWorkflowKey = String(
+    merged?.resolvedWorkflowKey
+    || merged?.resolved_workflow_key
+    || ""
+  ).trim().toLowerCase();
+  const normalizedRenderMode = String(merged?.renderMode || merged?.render_mode || "").trim().toLowerCase();
+  const isLipSyncRoute = normalizedWorkflowKey === "lip_sync_music" || normalizedRenderMode === "lip_sync_music";
+  const hasAudioSlice = Boolean(String(merged?.audioSliceUrl || "").trim());
+  if (!isLipSyncRoute) return nextPatch;
+  nextPatch.renderMode = "lip_sync_music";
+  nextPatch.resolvedWorkflowKey = "lip_sync_music";
+  if (String(merged?.ltxMode || "").trim().toLowerCase() === "i2v" || !String(merged?.ltxMode || "").trim()) {
+    nextPatch.ltxMode = "lip_sync";
+  }
+  if (hasAudioSlice) {
+    const normalizedSliceKind = String(merged?.audioSliceKind || merged?.audio_slice_kind || "").trim().toLowerCase();
+    nextPatch.audioSliceKind = normalizedSliceKind || "music_vocal";
+    nextPatch.musicVocalLipSyncAllowed = true;
+    nextPatch.requiresAudioSensitiveVideo = true;
+    nextPatch.send_audio_to_generator = true;
+    nextPatch.external_audio_used = true;
+  }
+  return nextPatch;
+}
+
 function isVideoJobInProgress(status) {
   const normalized = String(status || "").toLowerCase();
   return normalized === "queued" || normalized === "running";
@@ -7545,7 +7573,8 @@ const comfyShowVideoSection = Boolean(
           patchKeys: Object.keys(patch || {}),
         });
       }
-      const nextScenes = scenes.map((s, i) => (i === resolvedIdx ? { ...s, ...patch } : s));
+      const normalizedPatch = normalizeLipSyncSceneStatePatch(sceneAtIdx, patch);
+      const nextScenes = scenes.map((s, i) => (i === resolvedIdx ? { ...s, ...normalizedPatch } : s));
       return { ...n, data: { ...n.data, scenes: nextScenes } };
     }));
   }, [scenarioFlowSourceNode?.id, setNodes]);
@@ -8207,7 +8236,9 @@ const comfyShowVideoSection = Boolean(
       if (n.id !== comfyNode.id) return n;
       const scenes = Array.isArray(n?.data?.mockScenes) ? n.data.mockScenes : [];
       if (!scenes[idx]) return n;
-      const nextScenes = scenes.map((scene, sceneIdx) => (sceneIdx === idx ? { ...scene, ...patch } : scene));
+      const sceneAtIdx = scenes[idx] || {};
+      const normalizedPatch = normalizeLipSyncSceneStatePatch(sceneAtIdx, patch);
+      const nextScenes = scenes.map((scene, sceneIdx) => (sceneIdx === idx ? { ...scene, ...normalizedPatch } : scene));
       return { ...n, data: { ...n.data, mockScenes: nextScenes } };
     }));
   }, [comfyNode?.id, setNodes]);
@@ -11415,7 +11446,9 @@ Aspect ratio: ${imageFormat}`,
         requestedDurationSec,
         lipSync: lipSyncRoute ? true : effectiveLipSync,
         renderMode: effectiveRenderMode,
-        ltxMode: String(targetScene?.ltxMode || ""),
+        ltxMode: lipSyncRoute
+          ? "lip_sync"
+          : String(targetScene?.ltxMode || ""),
         imageStrategy,
         resolvedWorkflowKey: effectiveWorkflowKey,
         video_generation_route: effectiveWorkflowKey,

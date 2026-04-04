@@ -13068,6 +13068,17 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "effectivePromptPreview": str(((out.get("debug") or {}).get("effectivePromptPreview") if isinstance(out.get("debug"), dict) else "") or ""),
                 "effectivePromptLength": int(((out.get("debug") or {}).get("effectivePromptLength") if isinstance(out.get("debug"), dict) else 0) or 0),
                 "promptPatchedNodeIds": ((out.get("debug") or {}).get("promptPatchedNodeIds") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("promptPatchedNodeIds"), list) else []),
+                "audioUsed": bool(((out.get("debug") or {}).get("audio_used")) if isinstance(out.get("debug"), dict) else False),
+                "audioPatchNodeIds": ((out.get("debug") or {}).get("audio_patch_node_ids") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("audio_patch_node_ids"), list) else []),
+                "audioTransportMode": str(((out.get("debug") or {}).get("audio_transport_mode") if isinstance(out.get("debug"), dict) else "") or ""),
+                "audioInputValue": str(((out.get("debug") or {}).get("audio_input_value") if isinstance(out.get("debug"), dict) else "") or ""),
+                "workflowFile": str(((out.get("debug") or {}).get("workflow_file") if isinstance(out.get("debug"), dict) else "") or ""),
+                "workflowFamily": str(((out.get("debug") or {}).get("workflow_family") if isinstance(out.get("debug"), dict) else "") or ""),
+                "audioTargetsFound": int(((out.get("debug") or {}).get("audio_targets_found") if isinstance(out.get("debug"), dict) else 0) or 0),
+                "audioTargetsSummary": ((out.get("debug") or {}).get("audio_targets_summary") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("audio_targets_summary"), list) else []),
+                "lipSyncProofConfirmed": bool(((out.get("debug") or {}).get("lipSyncProofConfirmed")) if isinstance(out.get("debug"), dict) else False),
+                "lipSyncDegradedToI2V": bool(((out.get("debug") or {}).get("lipSyncDegradedToI2V")) if isinstance(out.get("debug"), dict) else False),
+                "lipSyncProofReason": str(((out.get("debug") or {}).get("lipSyncProofReason") if isinstance(out.get("debug"), dict) else "") or ""),
                 "updatedAt": time.time(),
                 "completedAt": time.time() if status == "done" else None,
             })
@@ -13099,6 +13110,23 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 f"sceneId={scene_id} jobId={job_id} provider={provider_name} "
                 f"resolvedWorkflow={str((out.get('debug') or {}).get('workflow_key') if isinstance(out.get('debug'), dict) else '') or resolved_workflow_hint} "
                 f"result=success"
+            )
+            print(
+                "[CLIP VIDEO JOB AUDIO PROOF] "
+                + json.dumps(
+                    {
+                        "sceneId": str(scene_id or "").strip(),
+                        "jobId": job_id,
+                        "provider": provider_name,
+                        "workflowKey": str((out.get("debug") or {}).get("workflow_key") if isinstance(out.get("debug"), dict) else "") or resolved_workflow_hint,
+                        "audioUsed": bool((out.get("debug") or {}).get("audio_used")) if isinstance(out.get("debug"), dict) else False,
+                        "audioPatchNodeIds": (out.get("debug") or {}).get("audio_patch_node_ids") if isinstance(out.get("debug"), dict) else [],
+                        "lipSyncProofConfirmed": bool((out.get("debug") or {}).get("lipSyncProofConfirmed")) if isinstance(out.get("debug"), dict) else False,
+                        "lipSyncDegradedToI2V": bool((out.get("debug") or {}).get("lipSyncDegradedToI2V")) if isinstance(out.get("debug"), dict) else False,
+                        "reason": str((out.get("debug") or {}).get("lipSyncProofReason") if isinstance(out.get("debug"), dict) else ""),
+                    },
+                    ensure_ascii=False,
+                )
             )
         else:
             debug_payload = out.get("debug") if isinstance(out.get("debug"), dict) else {}
@@ -13166,6 +13194,17 @@ def clip_video_start(payload: ClipVideoIn):
             "effectivePromptPreview": "",
             "effectivePromptLength": 0,
             "promptPatchedNodeIds": [],
+            "audioUsed": False,
+            "audioPatchNodeIds": [],
+            "audioTransportMode": "",
+            "audioInputValue": "",
+            "workflowFile": "",
+            "workflowFamily": "",
+            "audioTargetsFound": 0,
+            "audioTargetsSummary": [],
+            "lipSyncProofConfirmed": False,
+            "lipSyncDegradedToI2V": False,
+            "lipSyncProofReason": "",
             "updatedAt": time.time(),
             "completedAt": None,
         }

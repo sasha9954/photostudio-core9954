@@ -1320,8 +1320,11 @@ def run_comfy_image_to_video(
         if not first_last_applied:
             return None, "capability_error:LTX_FIRST_LAST_NOT_IMPLEMENTED:second_frame_patch_not_applied"
     audio_patch_node_ids: list[str] = []
+    audio_targets: list[dict] = []
     audio_transport_mode = "none"
     effective_audio_value = str(audio_url or "").strip()
+    audio_targets_found = 0
+    lip_sync_proof_reason = ""
     if normalized_workflow_key == "lip_sync":
         valid_audio_workflow, workflow_audio_err = _validate_audio_workflow_file(
             workflow_key=normalized_workflow_key,
@@ -1330,6 +1333,7 @@ def run_comfy_image_to_video(
         if not valid_audio_workflow:
             return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{workflow_audio_err}"
         audio_targets = _collect_audio_input_targets(patched_workflow)
+        audio_targets_found = len(audio_targets)
         has_audio_url = bool(effective_audio_value)
         has_audio_bytes = bool(audio_bytes)
         is_remote_safe_audio_url = _is_remote_safe_audio_url(effective_audio_value) if has_audio_url else False
@@ -1388,6 +1392,7 @@ def run_comfy_image_to_video(
                 )
                 if audio_patch_err:
                     return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{audio_patch_err}"
+                lip_sync_proof_reason = "audio_patch_applied"
             else:
                 return None, f"capability_error:LTX_AUDIO_TRANSPORT_UNAVAILABLE:{selected_by}"
             final_reason = audio_transport_reason
@@ -1395,6 +1400,7 @@ def run_comfy_image_to_video(
             audio_transport_mode = "skip_no_audio_target"
             selected_by = "no_patchable_audio_target"
             final_reason = audio_transport_reason
+            lip_sync_proof_reason = "audio_targets_not_found"
         logger.info(
             "[COMFY AUDIO TRANSPORT SAFETY] %s",
             {
@@ -1418,6 +1424,53 @@ def run_comfy_image_to_video(
                 "reason": final_reason,
             },
         )
+        audio_used = bool(audio_patch_node_ids)
+        lip_sync_proof_confirmed = bool(
+            audio_used
+            and audio_targets_found > 0
+            and audio_transport_mode in {"url", "upload"}
+            and bool(str(effective_audio_value).strip())
+        )
+        if not lip_sync_proof_confirmed and not lip_sync_proof_reason:
+            if not audio_used:
+                lip_sync_proof_reason = "audio_patch_node_ids_empty"
+            elif audio_targets_found <= 0:
+                lip_sync_proof_reason = "audio_targets_not_found"
+            elif audio_transport_mode not in {"url", "upload"}:
+                lip_sync_proof_reason = f"audio_transport_mode_invalid:{audio_transport_mode}"
+            elif not str(effective_audio_value).strip():
+                lip_sync_proof_reason = "audio_input_value_empty"
+            else:
+                lip_sync_proof_reason = "audio_proof_contract_not_satisfied"
+        logger.info(
+            "[COMFY AUDIO PATCH RESULT] %s",
+            {
+                "sceneId": str(scene_id or "").strip(),
+                "workflowKey": normalized_workflow_key,
+                "workflowFile": workflow_source,
+                "audioPatchNodeIds": audio_patch_node_ids,
+                "audioUsed": audio_used,
+                "lipSyncProofConfirmedProvisional": lip_sync_proof_confirmed,
+                "lipSyncProofReason": lip_sync_proof_reason or "ok",
+            },
+        )
+    audio_used = bool(audio_patch_node_ids)
+    lip_sync_proof_confirmed = True
+    lip_sync_degraded_to_i2v = False
+    probable_fallback_mode = ""
+    if normalized_workflow_key == "lip_sync":
+        lip_sync_proof_confirmed = bool(
+            audio_used
+            and audio_targets_found > 0
+            and audio_transport_mode in {"url", "upload"}
+            and bool(str(effective_audio_value).strip())
+        )
+        lip_sync_degraded_to_i2v = not lip_sync_proof_confirmed
+        probable_fallback_mode = "i2v_like" if lip_sync_degraded_to_i2v else "audio_driven_lip_sync"
+        if lip_sync_proof_confirmed:
+            lip_sync_proof_reason = "audio_patch_contract_confirmed"
+        elif not lip_sync_proof_reason:
+            lip_sync_proof_reason = "audio_proof_contract_not_satisfied"
     continuation_used = False
     continuation_asset_type = _detect_continuation_asset_type(continuation_source_asset_url, continuation_source_asset_type)
     if normalized_workflow_key == "continuation":
@@ -1457,6 +1510,9 @@ def run_comfy_image_to_video(
             "workflowKey": normalized_workflow_key,
             "workflowFamily": workflow_family,
             "workflowFile": workflow_source,
+            "audioTargetsFound": audio_targets_found,
+            "audioTransportMode": audio_transport_mode,
+            "audioInputValuePresent": bool(str(effective_audio_value).strip()),
             "stage": "before_prompt_create",
             "submitReachedUpload": True,
             "submitReachedPromptCreation": True,
@@ -1523,6 +1579,20 @@ def run_comfy_image_to_video(
     is_accessible, access_err = validate_comfy_output_access(file_meta or {})
     if not is_accessible:
         return None, access_err or "COMFY_OUTPUT_NOT_ACCESSIBLE"
+    logger.info(
+        "[COMFY FINAL LIPSYNC PROOF] %s",
+        {
+            "provider": "comfy_remote",
+            "sceneId": str(scene_id or "").strip(),
+            "workflowKey": normalized_workflow_key,
+            "workflowFile": workflow_source,
+            "audioUsed": audio_used,
+            "audioPatchNodeIds": audio_patch_node_ids,
+            "lipSyncProofConfirmed": lip_sync_proof_confirmed,
+            "lipSyncDegradedToI2V": lip_sync_degraded_to_i2v,
+            "reason": lip_sync_proof_reason or "ok",
+        },
+    )
 
     return {
         "provider": "comfy_remote",
@@ -1555,12 +1625,19 @@ def run_comfy_image_to_video(
             "end_image_used": bool(first_last_end_node_ids),
             "second_frame_patch_applied": bool(first_last_applied),
             "audio_used": bool(audio_patch_node_ids),
+            "audio_targets_found": audio_targets_found,
+            "audio_targets_summary": audio_targets[:8],
             "audio_transport_mode": audio_transport_mode,
             "audio_input_value": effective_audio_value,
             "continuation_used": continuation_used,
             "continuation_source_asset_type": continuation_asset_type,
             "continuation_source_asset_url_present": bool(str(continuation_source_asset_url or "").strip()),
             "audio_patch_node_ids": audio_patch_node_ids,
+            "audioProofConfirmed": lip_sync_proof_confirmed,
+            "lipSyncProofConfirmed": lip_sync_proof_confirmed,
+            "lipSyncDegradedToI2V": lip_sync_degraded_to_i2v,
+            "lipSyncProofReason": lip_sync_proof_reason or ("ok" if lip_sync_proof_confirmed else "audio_proof_contract_not_satisfied"),
+            "probableFallbackMode": probable_fallback_mode,
             "capabilities": COMFY_LTX_CAPABILITIES,
             "capabilities_snapshot": COMFY_LTX_CAPABILITIES,
             "inputsUsed": {
