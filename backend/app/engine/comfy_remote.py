@@ -253,7 +253,7 @@ def _extract_comfy_failed_trace(history_entry: dict) -> dict:
     completed = bool(status_payload.get("completed"))
     has_execution_error = bool(execution_error_payload)
     errors = history_entry.get("errors") if isinstance(history_entry.get("errors"), list) else []
-    failed = status_str in {"error", "failed"} or has_execution_error or bool(errors) or (status_str and not completed and status_str != "success")
+    failed = status_str in {"error", "failed"} or has_execution_error or bool(errors)
     if not failed:
         return {}
     return {
