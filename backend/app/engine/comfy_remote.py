@@ -35,6 +35,8 @@ COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {
 }
 COMFY_AUDIO_INPUT_KEYS = ("audio", "audio_file", "audio_path", "path", "filename", "url")
 COMFY_AUDIO_INPUT_WIDGET_FALLBACK_KEYS = ("value", "text")
+COMFY_AUDIO_TITLE_HINTS = ("audio", "music", "sound", "lipsync", "lip sync", "wav", "mp3")
+COMFY_LIPSYNC_WORKFLOW_AUDIO_FALLBACK_CLASS_NAMES = {"ltxvemptylatentaudio"}
 COMFY_AUDIO_UNSAFE_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 COMFY_AUDIO_URL_COMPATIBLE_INPUT_KEYS = {"url", "path", "audio_path"}
 COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES = {"loadaudiofromurl", "loadaudiofrompath"}
@@ -946,11 +948,31 @@ def _validate_audio_workflow_file(*, workflow_key: str, workflow_source: str) ->
     return True, None
 
 
-def _patch_audio_input_nodes(workflow: dict, *, audio_value: str) -> tuple[list[str], str | None]:
+def _patch_audio_input_nodes(workflow: dict, *, audio_value: str, audio_targets: list[dict] | None = None) -> tuple[list[str], str | None]:
     safe_audio_value = str(audio_value or "").strip()
     if not safe_audio_value:
         return [], "audio_value_empty"
     patched_node_ids: list[str] = []
+    if isinstance(audio_targets, list) and audio_targets:
+        for target in audio_targets:
+            target_node_id = str((target or {}).get("node_id") or "").strip()
+            input_key = str((target or {}).get("input_key") or "").strip()
+            if not target_node_id or not input_key:
+                continue
+            node = workflow.get(target_node_id)
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            allow_create = bool((target or {}).get("allow_create"))
+            if input_key in inputs or allow_create:
+                inputs[input_key] = safe_audio_value
+                patched_node_ids.append(target_node_id)
+        if patched_node_ids:
+            return list(dict.fromkeys(patched_node_ids)), None
+        return [], "audio_target_patch_failed"
+
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
@@ -984,8 +1006,16 @@ def _patch_audio_input_nodes(workflow: dict, *, audio_value: str) -> tuple[list[
     return patched_node_ids, None
 
 
-def _collect_audio_input_targets(workflow: dict) -> list[dict]:
+def _collect_audio_input_targets(
+    workflow: dict,
+    *,
+    workflow_key: str = "",
+    workflow_file: str = "",
+) -> list[dict]:
     targets: list[dict] = []
+    normalized_workflow_key = str(workflow_key or "").strip().lower()
+    workflow_filename = Path(str(workflow_file or "")).name.strip().lower()
+    expected_lipsync_file = COMFY_AUDIO_WORKFLOW_FILES.get("lip_sync", "").strip().lower()
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
@@ -994,9 +1024,12 @@ def _collect_audio_input_targets(workflow: dict) -> list[dict]:
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):
             continue
+        input_keys = list(inputs.keys())
         matched_by = "class_type" if class_type in COMFY_AUDIO_INPUT_NODE_CLASS_NAMES else ""
-        if not matched_by and ("audio" in title or "lipsync" in title):
+        if not matched_by and any(hint in title for hint in COMFY_AUDIO_TITLE_HINTS):
             matched_by = "title"
+        if not matched_by and any(any(hint in str(key).lower() for hint in COMFY_AUDIO_TITLE_HINTS) for key in input_keys):
+            matched_by = "input_key_hint"
         if not matched_by:
             continue
         found_target = False
@@ -1006,6 +1039,8 @@ def _collect_audio_input_targets(workflow: dict) -> list[dict]:
                     {
                         "node_id": str(node_id),
                         "class_type": class_type,
+                        "title": title,
+                        "input_keys": input_keys,
                         "input_key": input_key,
                         "matched_by": matched_by,
                     }
@@ -1019,11 +1054,39 @@ def _collect_audio_input_targets(workflow: dict) -> list[dict]:
                         {
                             "node_id": str(node_id),
                             "class_type": class_type,
+                            "title": title,
+                            "input_keys": input_keys,
                             "input_key": fallback_key,
                             "matched_by": "fallback",
                         }
                     )
                     break
+
+    if (
+        not targets
+        and normalized_workflow_key == "lip_sync"
+        and workflow_filename == expected_lipsync_file
+    ):
+        for node_id, node in workflow.items():
+            if not isinstance(node, dict):
+                continue
+            class_type = str(node.get("class_type") or "").strip().lower()
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            if class_type in COMFY_LIPSYNC_WORKFLOW_AUDIO_FALLBACK_CLASS_NAMES:
+                targets.append(
+                    {
+                        "node_id": str(node_id),
+                        "class_type": class_type,
+                        "title": str(((node.get("_meta") or {}).get("title") if isinstance(node.get("_meta"), dict) else "") or "").strip().lower(),
+                        "input_keys": list(inputs.keys()),
+                        "input_key": "audio",
+                        "matched_by": "workflow_specific_class_fallback",
+                        "allow_create": True,
+                    }
+                )
+                break
     return targets
 
 
@@ -1332,7 +1395,11 @@ def run_comfy_image_to_video(
         )
         if not valid_audio_workflow:
             return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{workflow_audio_err}"
-        audio_targets = _collect_audio_input_targets(patched_workflow)
+        audio_targets = _collect_audio_input_targets(
+            patched_workflow,
+            workflow_key=normalized_workflow_key,
+            workflow_file=workflow_source,
+        )
         audio_targets_found = len(audio_targets)
         has_audio_url = bool(effective_audio_value)
         has_audio_bytes = bool(audio_bytes)
@@ -1389,6 +1456,7 @@ def run_comfy_image_to_video(
                 audio_patch_node_ids, audio_patch_err = _patch_audio_input_nodes(
                     patched_workflow,
                     audio_value=effective_audio_value,
+                    audio_targets=audio_targets,
                 )
                 if audio_patch_err:
                     return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{audio_patch_err}"
@@ -1401,6 +1469,16 @@ def run_comfy_image_to_video(
             selected_by = "no_patchable_audio_target"
             final_reason = audio_transport_reason
             lip_sync_proof_reason = "audio_targets_not_found"
+            logger.critical(
+                "[COMFY LIPSYNC DEGRADED CRITICAL] %s",
+                {
+                    "sceneId": str(scene_id or "").strip(),
+                    "workflowKey": normalized_workflow_key,
+                    "workflowFile": workflow_source,
+                    "reason": lip_sync_proof_reason,
+                    "audioTransportMode": audio_transport_mode,
+                },
+            )
         logger.info(
             "[COMFY AUDIO TRANSPORT SAFETY] %s",
             {
