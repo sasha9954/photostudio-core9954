@@ -1783,6 +1783,16 @@ function buildAudioSliceReadyPatch({
 
 function normalizeLipSyncSceneStatePatch(scene = {}, patch = {}) {
   const nextPatch = patch && typeof patch === "object" ? { ...patch } : {};
+  const protectedSourceFields = ["imageUrl", "startImageUrl", "endImageUrl", "audioSliceUrl"];
+  const patchVideoStatus = String(nextPatch?.videoStatus || "").trim().toLowerCase();
+  const isVideoErrorPatch = patchVideoStatus === "error" || patchVideoStatus === "stopped" || patchVideoStatus === "not_found";
+  if (isVideoErrorPatch) {
+    protectedSourceFields.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(nextPatch, field)) {
+        delete nextPatch[field];
+      }
+    });
+  }
   const merged = { ...(scene && typeof scene === "object" ? scene : {}), ...nextPatch };
   const normalizedWorkflowKey = String(
     merged?.resolvedWorkflowKey
@@ -8795,8 +8805,27 @@ const comfyShowVideoSection = Boolean(
           clearActiveComfyVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
+        const activeMetaNow = comfyVideoJobsBySceneRef.current.get(sceneId) || {};
+        const nextPollErrorCount = (Number(activeMetaNow?.pollErrorCount) || 0) + 1;
+        const exhaustedPollRetries = nextPollErrorCount >= 3;
+        const nextMeta = { ...activeMetaNow, pollErrorCount: nextPollErrorCount, updatedAt: Date.now() };
+        comfyVideoJobsBySceneRef.current.set(sceneId, nextMeta);
+        persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
         if (idx >= 0) {
-          updateComfySceneById(sceneId, { videoStatus: "running", videoError: "" });
+          if (exhaustedPollRetries) {
+            updateComfySceneById(sceneId, {
+              videoStatus: "error",
+              videoError: String(e?.message || e || "video_poll_failed"),
+              videoJobId: String(nextMeta?.jobId || ""),
+              videoPanelOpen: true,
+            });
+          } else {
+            updateComfySceneById(sceneId, { videoStatus: "running", videoError: "" });
+          }
+        }
+        if (exhaustedPollRetries) {
+          clearActiveComfyVideoJob(sceneId, { status: "error", jobId: String(nextMeta?.jobId || "") });
+          return;
         }
         scheduleComfyPoll(2400, "exception_retry");
       }
@@ -9468,7 +9497,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         branch: String(e?.message || e || ""),
       });
       console.error(e);
-      updateComfyScene(comfySafeIndex, { videoStatus: 'error', videoError: String(e?.message || e) });
+      if (sceneId) {
+        clearActiveComfyVideoJob(sceneId, { status: "error" });
+      }
+      updateComfyScene(comfySafeIndex, { videoStatus: 'error', videoError: String(e?.message || e), videoPanelOpen: true });
     }
   }, [buildComfyVideoJobMeta, clearActiveComfyVideoJob, comfyHasActiveVideoJobForScene, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfySceneById]);
 

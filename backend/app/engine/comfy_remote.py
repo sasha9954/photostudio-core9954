@@ -14,6 +14,7 @@ from requests import ConnectTimeout, ReadTimeout, RequestException, Response
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+_COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED: bool | None = None
 
 COMFY_LTX_CAPABILITIES = {
     "single_image": True,
@@ -276,6 +277,7 @@ def upload_audio_to_comfy(
     workflow_file: str = "",
     transport_mode: str = "upload",
 ) -> tuple[str | None, str | None]:
+    global _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/audio"
     safe_name = str(filename or "source.mp3").strip() or "source.mp3"
     size_bytes = len(audio_bytes or b"")
@@ -336,6 +338,8 @@ def upload_audio_to_comfy(
                 },
             )
             if resp.status_code >= 400:
+                if resp.status_code == 405:
+                    _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED = False
                 return None, f"audio_upload_non_200:status={resp.status_code}:body={body_snippet}"
             payload, parse_err = _parse_json_response(resp, stage="audio_upload_response")
             if parse_err or not payload:
@@ -1453,6 +1457,7 @@ def run_comfy_image_to_video(
     audio_targets_found = 0
     lip_sync_proof_reason = ""
     if normalized_workflow_key == "lip_sync":
+        global _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED
         valid_audio_workflow, workflow_audio_err = _validate_audio_workflow_file(
             workflow_key=normalized_workflow_key,
             workflow_source=workflow_source,
@@ -1482,12 +1487,22 @@ def run_comfy_image_to_video(
         is_normalized_audio_url_safe = _is_remote_safe_audio_url(normalized_audio_url) if bool(normalized_audio_url) else False
         effective_audio_value = normalized_audio_url
         supports_url_transport = _targets_support_url_transport(audio_targets)
+        normalized_audio_url_available = bool(normalized_audio_url) and is_normalized_audio_url_safe
+        if normalized_audio_url_available and not supports_url_transport:
+            supports_url_transport = True
         audio_transport_reason = "workflow_has_audio_input_nodes" if audio_targets else "workflow_has_no_patchable_audio_input_nodes"
-        upload_fallback_allowed = bool(has_audio_bytes and not supports_url_transport and not is_normalized_audio_url_safe)
+        upload_fallback_allowed = bool(
+            has_audio_bytes
+            and not supports_url_transport
+            and not is_normalized_audio_url_safe
+            and _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is not False
+        )
         upload_guard_reason = "allowed"
         if not upload_fallback_allowed:
             if not has_audio_bytes:
                 upload_guard_reason = "audio_bytes_missing"
+            elif _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is False:
+                upload_guard_reason = "upload_endpoint_previously_unsupported"
             elif supports_url_transport:
                 upload_guard_reason = "url_or_path_transport_supported"
             elif is_normalized_audio_url_safe:
@@ -1511,8 +1526,13 @@ def run_comfy_image_to_video(
                 "hasAudioBytes": has_audio_bytes,
                 "hasAudioUrl": has_audio_url,
                 "audioInputTargets": audio_targets,
+                "originalAudioUrl": original_audio_url,
+                "normalizedAudioUrl": normalized_audio_url,
+                "wasNormalized": bool((normalization_log_payload or {}).get("wasNormalized")),
                 "originalAudioUrlSafe": is_original_audio_url_safe,
                 "normalizedAudioUrlSafe": is_normalized_audio_url_safe,
+                "supportsUrlTransport": supports_url_transport,
+                "uploadFallbackAllowed": upload_fallback_allowed,
                 "reason": audio_transport_reason,
             },
         )
@@ -1532,6 +1552,7 @@ def run_comfy_image_to_video(
                 )
                 if audio_upload_err or not uploaded_audio_name:
                     if "audio_upload_non_200:status=405" in str(audio_upload_err or ""):
+                        _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED = False
                         logger.warning(
                             "[COMFY AUDIO UPLOAD GUARD] %s",
                             {
@@ -1614,6 +1635,13 @@ def run_comfy_image_to_video(
                 "selectedTransportMode": audio_transport_mode,
                 "selectedBy": selected_by,
                 "reason": final_reason,
+                "originalAudioUrl": original_audio_url,
+                "normalizedAudioUrl": normalized_audio_url,
+                "wasNormalized": bool((normalization_log_payload or {}).get("wasNormalized")),
+                "originalAudioUrlSafe": is_original_audio_url_safe,
+                "normalizedAudioUrlSafe": is_normalized_audio_url_safe,
+                "supportsUrlTransport": supports_url_transport,
+                "uploadFallbackAllowed": upload_fallback_allowed,
             },
         )
         audio_used = bool(audio_patch_node_ids)
