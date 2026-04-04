@@ -2007,7 +2007,8 @@ def run_comfy_image_to_video(
             {
                 "routeRequestWorkflowKey": "lip_sync",
                 "actualWorkflowMode": probable_actual_workflow_mode,
-                "realMouthSyncProven": lip_sync_proof_confirmed,
+                "audioDrivenProofConfirmed": lip_sync_proof_confirmed,
+                "realMouthSyncProven": explicit_mouth_control_lipsync_confirmed,
                 "proofReasonDetailed": proof_reason_detailed or "",
             },
         )
