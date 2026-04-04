@@ -8,15 +8,6 @@
       "title": "Load Image"
     }
   },
-  "276": {
-    "inputs": {
-      "url": "https://example.com/audio.mp3"
-    },
-    "class_type": "LoadAudioFromUrl",
-    "_meta": {
-      "title": "Load Audio"
-    }
-  },
   "341": {
     "inputs": {
       "filename_prefix": "video/LTX_2.3_ia2v",
@@ -30,6 +21,15 @@
     "class_type": "SaveVideo",
     "_meta": {
       "title": "Save Video"
+    }
+  },
+  "346": {
+    "inputs": {
+      "url": "https://example.com/audio.mp3"
+    },
+    "class_type": "MediaUtilities_AudioURLLoader",
+    "_meta": {
+      "title": "MediaUtilities_AudioURLLoader"
     }
   },
   "340:285": {
@@ -572,7 +572,7 @@
         0
       ],
       "audio": [
-        "276",
+        "346",
         0
       ]
     },
