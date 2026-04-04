@@ -2363,6 +2363,24 @@ def run_comfy_image_to_video(
                 audio_patch_types = []
                 mutation_targets_required: set[str] = set()
                 for target in audio_targets:
+                    target_node_id = str((target or {}).get("node_id") or "").strip()
+                    target_input_key = str((target or {}).get("input_key") or "").strip()
+                    target_class_type = str((target or {}).get("class_type") or "").strip().lower()
+                    node = patched_workflow.get(target_node_id)
+                    actual_class_type = str((node or {}).get("class_type") or "").strip().lower() if isinstance(node, dict) else ""
+                    actual_inputs = (node or {}).get("inputs") if isinstance(node, dict) else None
+                    actual_input_keys = sorted(actual_inputs.keys()) if isinstance(actual_inputs, dict) else []
+                    logger.info(
+                        "[COMFY AUDIO TARGET SNAPSHOT] %s",
+                        {
+                            "nodeId": target_node_id,
+                            "discoveredClassType": target_class_type,
+                            "actualClassType": actual_class_type,
+                            "discoveredInputKey": target_input_key,
+                            "actualInputKeys": actual_input_keys,
+                        },
+                    )
+
                     resolved_value, value_strategy, value_err = _resolve_audio_patch_value_for_target(
                         target=target,
                         selected_transport_mode=audio_transport_mode,
@@ -2371,9 +2389,6 @@ def run_comfy_image_to_video(
                         path_audio_value=path_audio_value,
                         uploaded_audio_name=uploaded_audio_name,
                     )
-                    target_node_id = str((target or {}).get("node_id") or "").strip()
-                    target_input_key = str((target or {}).get("input_key") or "").strip()
-                    target_class_type = str((target or {}).get("class_type") or "").strip().lower()
                     logger.info(
                         "[COMFY AUDIO VALUE STRATEGY] %s",
                         {
@@ -2390,51 +2405,78 @@ def run_comfy_image_to_video(
                     )
                     if value_err:
                         return None, f"capability_error:LTX_AUDIO_TRANSPORT_INCOMPATIBLE:{value_err}"
-                    if not target_node_id or not target_input_key:
-                        continue
-                    node = patched_workflow.get(target_node_id)
-                    if not isinstance(node, dict):
+                    if not target_node_id or not target_input_key or not isinstance(node, dict):
                         continue
                     inputs = node.get("inputs")
                     if not isinstance(inputs, dict):
                         continue
                     allow_create = bool((target or {}).get("allow_create"))
-                    if target_class_type == "mediautilities_audiourlloader" and audio_transport_mode == "upload":
+                    mutation_applied = False
+                    if actual_class_type == "mediautilities_audiourlloader" and audio_transport_mode == "upload":
                         mutation_targets_required.add(target_node_id)
                         node["class_type"] = "LoadAudio"
+                        inputs = node.get("inputs")
+                        if not isinstance(inputs, dict):
+                            inputs = {}
+                            node["inputs"] = inputs
                         inputs.pop("url", None)
                         target_input_key = "audio"
                         allow_create = True
-                        logger.info(
-                            "[COMFY AUDIO NODE MUTATION] %s",
-                            {
-                                "nodeId": target_node_id,
-                                "fromClassType": "MediaUtilities_AudioURLLoader",
-                                "toClassType": "LoadAudio",
-                                "selectedTransportMode": audio_transport_mode,
-                                "patchedInputKey": target_input_key,
-                                "patchedValuePreview": _preview_value(resolved_value),
-                            },
-                        )
+                        mutation_applied = True
                     if target_input_key not in inputs and not allow_create:
                         continue
                     inputs[target_input_key] = resolved_value
                     audio_patch_node_ids.append(target_node_id)
+                    if mutation_applied:
+                        logger.info(
+                            "[COMFY AUDIO NODE MUTATION APPLIED] %s",
+                            {
+                                "nodeId": target_node_id,
+                                "actualClassTypeAfter": str(node.get("class_type") or "").strip(),
+                                "actualInputKeysAfter": sorted(inputs.keys()),
+                                "audioValuePreview": _preview_value(inputs.get("audio")),
+                            },
+                        )
                 if not audio_patch_node_ids:
                     return None, "capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:audio_target_patch_failed"
 
                 for node_id in mutation_targets_required:
                     node = patched_workflow.get(node_id)
                     if not isinstance(node, dict):
-                        return None, "capability_error:LTX_AUDIO_NODE_MUTATION_FAILED:mediautilities_node_not_rewritten_to_loadaudio"
+                        return None, "capability_error:LTX_AUDIO_NODE_MUTATION_FAILED:actual_workflow_node_not_rewritten"
                     node_class_type = str(node.get("class_type") or "").strip().lower()
                     inputs = node.get("inputs")
                     if not isinstance(inputs, dict):
-                        return None, "capability_error:LTX_AUDIO_NODE_MUTATION_FAILED:mediautilities_node_not_rewritten_to_loadaudio"
+                        return None, "capability_error:LTX_AUDIO_NODE_MUTATION_FAILED:actual_workflow_node_not_rewritten"
                     rewritten_audio = str(inputs.get("audio") or "").strip()
-                    uses_url_input = "url" in inputs and bool(str(inputs.get("url") or "").strip())
-                    if node_class_type == "mediautilities_audiourlloader" or uses_url_input or rewritten_audio != str(uploaded_audio_name or "").strip():
-                        return None, "capability_error:LTX_AUDIO_NODE_MUTATION_FAILED:mediautilities_node_not_rewritten_to_loadaudio"
+                    url_value = str(inputs.get("url") or "").strip()
+                    if node_class_type != "loadaudio" or bool(url_value) or rewritten_audio != str(uploaded_audio_name or "").strip():
+                        return None, "capability_error:LTX_AUDIO_NODE_MUTATION_FAILED:actual_workflow_node_not_rewritten"
+
+                patched_workflow_source_nodes = []
+                for target in audio_targets:
+                    node_id = str((target or {}).get("node_id") or "").strip()
+                    if not node_id:
+                        continue
+                    node = patched_workflow.get(node_id)
+                    if not isinstance(node, dict):
+                        continue
+                    inputs = node.get("inputs")
+                    if not isinstance(inputs, dict):
+                        inputs = {}
+                    patched_workflow_source_nodes.append(
+                        {
+                            "nodeId": node_id,
+                            "actualClassType": str(node.get("class_type") or "").strip(),
+                            "actualInputKeys": sorted(inputs.keys()),
+                            "audioPreview": _preview_value(inputs.get("audio")),
+                            "urlPreview": _preview_value(inputs.get("url")),
+                        }
+                    )
+                logger.info(
+                    "[COMFY AUDIO PATCHED WORKFLOW SUMMARY] %s",
+                    {"sourceNodes": patched_workflow_source_nodes},
+                )
 
                 patched_nodes_set = set(audio_patch_node_ids)
                 for target in audio_targets:
