@@ -13057,9 +13057,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
             probable_actual_workflow_mode = str(debug_payload.get("probableActualWorkflowMode") or "").strip().lower()
             lip_sync_degraded_to_i2v = bool(debug_payload.get("lipSyncDegradedToI2V"))
             mode_for_product = str(out.get("mode") or "").strip()
-            if probable_actual_workflow_mode == "generic_i2v":
-                mode_for_product = "i2v_with_audio"
-            elif probable_actual_workflow_mode in {"ltx_av_audio_driven_performance", "explicit_mouth_control_lipsync"}:
+            if probable_actual_workflow_mode in {"ltx_av_audio_driven_performance", "explicit_mouth_control_lipsync"}:
                 mode_for_product = probable_actual_workflow_mode
             elif lip_sync_degraded_to_i2v and mode_for_product == "lipsync":
                 mode_for_product = "i2v_with_audio"

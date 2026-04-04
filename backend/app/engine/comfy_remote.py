@@ -1153,6 +1153,7 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
     audio_reaches_main_video_branch = False
     audio_reaches_mouth_control_branch = False
     workflow_lip_sync_capable = False
+    explicit_mouth_control_branch_present = False
     workflow_uses_av_audio_path = False
     av_audio_driven_generation_present = False
 
@@ -1166,7 +1167,7 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
             "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
             "workflowUsesAVAudioPath": workflow_uses_av_audio_path,
             "avAudioDrivenGenerationPresent": av_audio_driven_generation_present,
-            "explicitMouthControlBranchPresent": workflow_lip_sync_capable,
+            "explicitMouthControlBranchPresent": explicit_mouth_control_branch_present,
         }
 
     adjacency = _build_workflow_adjacency(workflow)
@@ -1177,6 +1178,7 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
         title_l = str(((node.get("_meta") or {}).get("title") if isinstance(node.get("_meta"), dict) else "") or "").strip().lower()
         if _is_mouth_control_node(class_type_l, title_l):
             workflow_lip_sync_capable = True
+            explicit_mouth_control_branch_present = True
         if class_type_l in COMFY_LTX_AV_AUDIO_PATH_CLASS_NAMES:
             workflow_uses_av_audio_path = True
 
@@ -1196,7 +1198,7 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
             "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
             "workflowUsesAVAudioPath": workflow_uses_av_audio_path,
             "avAudioDrivenGenerationPresent": av_audio_driven_generation_present,
-            "explicitMouthControlBranchPresent": workflow_lip_sync_capable,
+            "explicitMouthControlBranchPresent": explicit_mouth_control_branch_present,
         }
 
     queue = deque([str(node_id) for node_id in audio_patch_node_ids if str(node_id or "").strip()])
@@ -1244,7 +1246,7 @@ def _inspect_audio_path_mode(workflow: dict, *, audio_patch_node_ids: list[str])
         "audioReachesMouthControlBranch": audio_reaches_mouth_control_branch,
         "workflowUsesAVAudioPath": workflow_uses_av_audio_path,
         "avAudioDrivenGenerationPresent": av_audio_driven_generation_present,
-        "explicitMouthControlBranchPresent": workflow_lip_sync_capable,
+        "explicitMouthControlBranchPresent": explicit_mouth_control_branch_present,
     }
 
 
@@ -1993,7 +1995,7 @@ def run_comfy_image_to_video(
                 proof_reason_detailed = "audio_patch_not_applied"
             elif not audio_reaches_main_video_branch:
                 proof_reason_detailed = "audio_branch_does_not_reach_main_video_path"
-            elif not workflow_lip_sync_capable:
+            elif not explicit_mouth_control_branch_present:
                 proof_reason_detailed = "workflow_has_no_mouth_lipsync_capable_nodes"
             else:
                 proof_reason_detailed = "real_mouth_lipsync_path_not_proven"
