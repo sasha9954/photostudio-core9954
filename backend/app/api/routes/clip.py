@@ -14026,6 +14026,9 @@ def clip_video(payload: ClipVideoIn):
             elif "history_wait_failed:comfy_node_execution_failed" in err_text:
                 code = "comfy_node_execution_failed"
                 status_code = 502
+            elif "history_wait_failed:comfy_progress_bar_io_failed" in err_text:
+                code = "comfy_progress_bar_io_failed"
+                status_code = 502
             elif "history_wait_failed:comfy_execution_failed" in err_text:
                 code = "comfy_execution_failed"
                 status_code = 502

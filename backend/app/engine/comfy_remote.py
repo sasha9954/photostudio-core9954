@@ -350,6 +350,18 @@ def _extract_comfy_failed_trace(history_entry: dict) -> dict:
     }
 
 
+def _is_progress_bar_io_failure(failed_trace: dict) -> bool:
+    if not isinstance(failed_trace, dict):
+        return False
+    traceback_preview = str(failed_trace.get("traceback_preview") or "").lower()
+    error_message = str(failed_trace.get("error_message") or "").lower()
+    exception_type = str(failed_trace.get("exception_type") or "").lower()
+    merged = " ".join([traceback_preview, error_message, exception_type])
+    has_oserror_invalid_arg = "oserror" in merged and "invalid argument" in merged
+    has_tqdm_path = any(token in merged for token in ("tqdm", "trange", "prestartup_script.py", "comfyui_manager", "logger.py"))
+    return has_oserror_invalid_arg and has_tqdm_path
+
+
 def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/image"
     safe_name = str(filename or "source.jpg").strip() or "source.jpg"
@@ -546,15 +558,22 @@ def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
     connect_timeout = max(20, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 20))
     read_timeout = max(120, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 120))
     disable_pbar = bool(getattr(settings, "COMFY_DISABLE_PBAR_FOR_REMOTE", True))
+    disable_pbar_top_level = bool(getattr(settings, "COMFY_DISABLE_PBAR_COMPAT_TOP_LEVEL", True))
     request_payload: dict = {"prompt": workflow}
     if disable_pbar:
         request_payload["extra_data"] = {"disable_pbar": True}
+        if disable_pbar_top_level:
+            # Compatibility fallback for desktop/fork wrappers that inspect top-level request fields
+            # instead of reading extra_data forwarded to queue execution context.
+            request_payload["disable_pbar"] = True
     logger.info(
-        "[COMFY REMOTE] request prompt url=%s connect_timeout=%s read_timeout=%s disable_pbar=%s",
+        "[COMFY REMOTE] request prompt url=%s connect_timeout=%s read_timeout=%s disable_pbar=%s disable_pbar_top_level=%s payload_keys=%s",
         url,
         connect_timeout,
         read_timeout,
         disable_pbar,
+        disable_pbar_top_level,
+        sorted(list(request_payload.keys())),
     )
     try:
         resp = requests.post(url, json=request_payload, timeout=(connect_timeout, read_timeout))
@@ -663,6 +682,7 @@ def wait_for_comfy_result(
                 )
                 failed_trace = _extract_comfy_failed_trace(entry)
                 if failed_trace:
+                    progress_bar_io_failure = _is_progress_bar_io_failure(failed_trace)
                     logger.error(
                         "[COMFY FAILED TRACE] %s",
                         {
@@ -670,10 +690,15 @@ def wait_for_comfy_result(
                             "workflow_key": str(workflow_key or "").strip(),
                             "workflow_file": str(workflow_file or "").strip(),
                             **failed_trace,
+                            "disable_pbar_requested": bool(getattr(settings, "COMFY_DISABLE_PBAR_FOR_REMOTE", True)),
+                            "disable_pbar_top_level_requested": bool(getattr(settings, "COMFY_DISABLE_PBAR_COMPAT_TOP_LEVEL", True)),
+                            "progress_bar_io_failure": progress_bar_io_failure,
                         },
                     )
                     failed_node_id = str(failed_trace.get("failed_node_id") or "").strip()
                     failure_code = "comfy_node_execution_failed" if failed_node_id else "comfy_execution_failed"
+                    if progress_bar_io_failure:
+                        failure_code = "comfy_progress_bar_io_failed"
                     logger.error(
                         "[COMFY EXECUTION FAILURE CLASSIFICATION] %s",
                         {
@@ -683,6 +708,7 @@ def wait_for_comfy_result(
                             "failureCode": failure_code,
                             "failedNodeId": failed_node_id,
                             "failedNodeType": str(failed_trace.get("failed_node_type") or "").strip(),
+                            "progressBarFailure": progress_bar_io_failure,
                         },
                     )
                     return payload, f"{failure_code}:{failed_trace.get('error_message') or failed_trace.get('exception_type') or failed_trace.get('comfy_status')}"

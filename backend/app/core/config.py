@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     COMFY_POLL_INTERVAL_SEC: int = 2
     COMFY_POLL_TIMEOUT_SEC: int = 600
     COMFY_DISABLE_PBAR_FOR_REMOTE: bool = True
+    COMFY_DISABLE_PBAR_COMPAT_TOP_LEVEL: bool = True
     COMFY_IMAGE_VIDEO_WORKFLOW: str = "app/workflows/image-video-silent-directprompt.json"
     VIDEO_PROVIDER_DEFAULT: str = "kie"
 
