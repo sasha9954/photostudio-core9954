@@ -707,21 +707,6 @@
       "title": "Resize Image/Mask"
     }
   },
-  "340:343": {
-    "inputs": {
-      "preview_markdown": "",
-      "preview_text": "",
-      "previewMode": null,
-      "source": [
-        "340:342",
-        0
-      ]
-    },
-    "class_type": "PreviewAny",
-    "_meta": {
-      "title": "Preview as Text"
-    }
-  },
   "340:306": {
     "inputs": {
       "text": [
@@ -745,31 +730,6 @@
     "class_type": "CheckpointLoaderSimple",
     "_meta": {
       "title": "Load Checkpoint"
-    }
-  },
-  "340:342": {
-    "inputs": {
-      "prompt": "",
-      "max_length": 256,
-      "sampling_mode": "on",
-      "sampling_mode.temperature": 0.7,
-      "sampling_mode.top_k": 64,
-      "sampling_mode.top_p": 0.95,
-      "sampling_mode.min_p": 0.05,
-      "sampling_mode.repetition_penalty": 1.05,
-      "sampling_mode.seed": 0,
-      "clip": [
-        "340:344",
-        1
-      ],
-      "image": [
-        "340:297",
-        0
-      ]
-    },
-    "class_type": "TextGenerateLTX2Prompt",
-    "_meta": {
-      "title": "TextGenerateLTX2Prompt"
     }
   },
   "340:319": {
