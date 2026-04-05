@@ -350,16 +350,45 @@ def _extract_comfy_failed_trace(history_entry: dict) -> dict:
     }
 
 
-def _is_progress_bar_io_failure(failed_trace: dict) -> bool:
+def _collect_progress_bar_io_failure_markers(failed_trace: dict) -> tuple[bool, list[str]]:
     if not isinstance(failed_trace, dict):
-        return False
-    traceback_preview = str(failed_trace.get("traceback_preview") or "").lower()
-    error_message = str(failed_trace.get("error_message") or "").lower()
-    exception_type = str(failed_trace.get("exception_type") or "").lower()
-    merged = " ".join([traceback_preview, error_message, exception_type])
-    has_oserror_invalid_arg = "oserror" in merged and "invalid argument" in merged
-    has_tqdm_path = any(token in merged for token in ("tqdm", "trange", "prestartup_script.py", "comfyui_manager", "logger.py"))
-    return has_oserror_invalid_arg and has_tqdm_path
+        return False, []
+    execution_error_payload = (
+        failed_trace.get("execution_error_payload")
+        if isinstance(failed_trace.get("execution_error_payload"), dict)
+        else {}
+    )
+    merged_parts = [
+        failed_trace.get("traceback_preview"),
+        failed_trace.get("error_message"),
+        failed_trace.get("exception_type"),
+        execution_error_payload.get("traceback"),
+        execution_error_payload.get("tb"),
+        execution_error_payload.get("exception_message"),
+        execution_error_payload.get("error"),
+        execution_error_payload.get("message"),
+    ]
+    merged_text = " ".join(_preview_value(part, limit=2000) for part in merged_parts if part is not None).lower()
+    marker_candidates = (
+        "tqdm",
+        "trange",
+        "tqdm/std.py",
+        "tqdm/asyncio.py",
+        "model_trange",
+        "print_status",
+        "fp_write",
+        "prestartup_script.py",
+        "comfyui_manager",
+        "logger.py",
+    )
+    matched_markers = [marker for marker in marker_candidates if marker in merged_text]
+    has_oserror_invalid_arg = "oserror" in merged_text and "invalid argument" in merged_text
+    return bool(has_oserror_invalid_arg and matched_markers), matched_markers
+
+
+def _is_progress_bar_io_failure(failed_trace: dict) -> bool:
+    is_failure, _ = _collect_progress_bar_io_failure_markers(failed_trace)
+    return is_failure
 
 
 def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
@@ -682,7 +711,7 @@ def wait_for_comfy_result(
                 )
                 failed_trace = _extract_comfy_failed_trace(entry)
                 if failed_trace:
-                    progress_bar_io_failure = _is_progress_bar_io_failure(failed_trace)
+                    progress_bar_io_failure, progress_bar_io_markers = _collect_progress_bar_io_failure_markers(failed_trace)
                     logger.error(
                         "[COMFY FAILED TRACE] %s",
                         {
@@ -693,6 +722,7 @@ def wait_for_comfy_result(
                             "disable_pbar_requested": bool(getattr(settings, "COMFY_DISABLE_PBAR_FOR_REMOTE", True)),
                             "disable_pbar_top_level_requested": bool(getattr(settings, "COMFY_DISABLE_PBAR_COMPAT_TOP_LEVEL", True)),
                             "progress_bar_io_failure": progress_bar_io_failure,
+                            "progress_bar_io_markers": progress_bar_io_markers,
                         },
                     )
                     failed_node_id = str(failed_trace.get("failed_node_id") or "").strip()
@@ -709,6 +739,11 @@ def wait_for_comfy_result(
                             "failedNodeId": failed_node_id,
                             "failedNodeType": str(failed_trace.get("failed_node_type") or "").strip(),
                             "progressBarFailure": progress_bar_io_failure,
+                            "progressBarMarkers": progress_bar_io_markers,
+                            "disablePbarRequested": bool(getattr(settings, "COMFY_DISABLE_PBAR_FOR_REMOTE", True)),
+                            "disablePbarTopLevelRequested": bool(
+                                getattr(settings, "COMFY_DISABLE_PBAR_COMPAT_TOP_LEVEL", True)
+                            ),
                         },
                     )
                     return payload, f"{failure_code}:{failed_trace.get('error_message') or failed_trace.get('exception_type') or failed_trace.get('comfy_status')}"
