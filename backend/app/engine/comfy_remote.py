@@ -429,88 +429,115 @@ def upload_audio_to_comfy(
     transport_mode: str = "upload",
 ) -> tuple[str | None, str | None]:
     global _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED
-    url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/audio"
+    base_url = str(settings.COMFY_BASE_URL).rstrip("/")
     safe_name = str(filename or "source.mp3").strip() or "source.mp3"
     size_bytes = len(audio_bytes or b"")
     connect_timeout = max(20, int(settings.COMFY_UPLOAD_CONNECT_TIMEOUT_SEC or 20))
     read_timeout = max(180, int(settings.COMFY_UPLOAD_READ_TIMEOUT_SEC or 180))
     max_attempts = max(4, int(settings.COMFY_UPLOAD_MAX_ATTEMPTS or 4))
-
-    logger.info(
-        "[COMFY REMOTE] audio upload start url=%s filename=%s size_bytes=%s connect_timeout=%s read_timeout=%s max_attempts=%s",
-        url,
-        safe_name,
-        size_bytes,
-        connect_timeout,
-        read_timeout,
-        max_attempts,
-    )
-    logger.info(
-        "[COMFY AUDIO UPLOAD ATTEMPT] %s",
-        {
-            "endpoint": url,
-            "method": "POST",
-            "workflowKey": str(workflow_key or "").strip(),
-            "workflowFile": str(workflow_file or "").strip(),
-            "transportMode": str(transport_mode or "").strip(),
-            "status": None,
-            "success": False,
-            "bodyPreview": "",
-        },
-    )
-
-    files = {
-        "audio": (safe_name, audio_bytes, "application/octet-stream"),
-    }
-    data = {"type": "input", "overwrite": "true"}
-
+    workflow_key_safe = str(workflow_key or "").strip()
+    workflow_file_safe = str(workflow_file or "").strip()
+    transport_mode_safe = str(transport_mode or "").strip()
+    endpoint_variants = []
+    if _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is not False:
+        endpoint_variants.append({"path": "/upload/audio", "file_field": "audio"})
+    endpoint_variants.append({"path": "/upload/image", "file_field": "image"})
     last_error = "upload_unknown_error"
-    for attempt in range(1, max_attempts + 1):
-        try:
-            resp = requests.post(url, files=files, data=data, timeout=(connect_timeout, read_timeout))
-            body_snippet = _response_body_snippet(resp)
-            logger.info(
-                "[COMFY REMOTE] audio upload response attempt=%s status=%s body=%r",
-                attempt,
-                resp.status_code,
-                body_snippet,
-            )
-            logger.info(
-                "[COMFY AUDIO UPLOAD ATTEMPT] %s",
-                {
-                    "endpoint": url,
-                    "method": "POST",
-                    "workflowKey": str(workflow_key or "").strip(),
-                    "workflowFile": str(workflow_file or "").strip(),
-                    "transportMode": str(transport_mode or "").strip(),
-                    "status": int(resp.status_code),
-                    "success": bool(resp.status_code < 400),
-                    "bodyPreview": body_snippet,
-                },
-            )
-            if resp.status_code >= 400:
-                if resp.status_code == 405:
-                    _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED = False
-                return None, f"upload_non_200:status={resp.status_code}:body={body_snippet}"
-            payload, parse_err = _parse_json_response(resp, stage="upload_response")
-            if parse_err or not payload:
-                return None, parse_err or "upload_response_invalid_json"
+    unsupported_route_attempts: list[str] = []
+    for endpoint_variant in endpoint_variants:
+        upload_url = f"{base_url}{endpoint_variant['path']}"
+        file_field_name = str(endpoint_variant["file_field"])
+        form_field_names = [file_field_name, "type", "overwrite"]
+        logger.info(
+            "[COMFY REMOTE] audio upload start url=%s filename=%s size_bytes=%s connect_timeout=%s read_timeout=%s max_attempts=%s",
+            upload_url,
+            safe_name,
+            size_bytes,
+            connect_timeout,
+            read_timeout,
+            max_attempts,
+        )
+        logger.info(
+            "[COMFY AUDIO UPLOAD REQUEST] %s",
+            {
+                "endpoint": upload_url,
+                "method": "POST",
+                "fieldNames": form_field_names,
+                "filename": safe_name,
+                "workflowKey": workflow_key_safe,
+                "workflowFile": workflow_file_safe,
+                "transportMode": transport_mode_safe,
+                "status": None,
+                "success": False,
+                "bodyPreview": "",
+            },
+        )
+        files = {
+            file_field_name: (safe_name, audio_bytes, "application/octet-stream"),
+        }
+        data = {"type": "input", "overwrite": "true"}
 
-            name = str(payload.get("name") or payload.get("filename") or "").strip()
-            if name:
-                return name, None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.post(upload_url, files=files, data=data, timeout=(connect_timeout, read_timeout))
+                body_snippet = _response_body_snippet(resp)
+                logger.info(
+                    "[COMFY REMOTE] audio upload response endpoint=%s attempt=%s status=%s body=%r",
+                    endpoint_variant["path"],
+                    attempt,
+                    resp.status_code,
+                    body_snippet,
+                )
+                logger.info(
+                    "[COMFY AUDIO UPLOAD REQUEST] %s",
+                    {
+                        "endpoint": upload_url,
+                        "method": "POST",
+                        "fieldNames": form_field_names,
+                        "filename": safe_name,
+                        "workflowKey": workflow_key_safe,
+                        "workflowFile": workflow_file_safe,
+                        "transportMode": transport_mode_safe,
+                        "status": int(resp.status_code),
+                        "success": bool(resp.status_code < 400),
+                        "bodyPreview": body_snippet,
+                    },
+                )
+                if resp.status_code >= 400:
+                    if resp.status_code in {404, 405}:
+                        unsupported_route_attempts.append(
+                            f"path={endpoint_variant['path']}:status={resp.status_code}:body={body_snippet}"
+                        )
+                        if endpoint_variant["path"] == "/upload/audio":
+                            _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED = False
+                        break
+                    return None, f"upload_non_200:status={resp.status_code}:body={body_snippet}"
+                payload, parse_err = _parse_json_response(resp, stage="upload_response")
+                if parse_err or not payload:
+                    return None, parse_err or "upload_response_invalid_json"
 
-            return None, f"upload_name_missing:{str(payload)[:300]}"
-        except ConnectTimeout as exc:
-            last_error = f"upload_connect_timeout:{str(exc)[:300]}"
-        except ReadTimeout as exc:
-            last_error = f"upload_read_timeout:{str(exc)[:300]}"
-        except RequestException as exc:
-            return None, f"upload_request_error:{str(exc)[:300]}"
+                name = str(payload.get("name") or payload.get("filename") or "").strip()
+                if name:
+                    if endpoint_variant["path"] == "/upload/audio":
+                        _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED = True
+                    return name, None
+                return None, f"upload_name_missing:{str(payload)[:300]}"
+            except ConnectTimeout as exc:
+                last_error = f"upload_connect_timeout:{str(exc)[:300]}"
+            except ReadTimeout as exc:
+                last_error = f"upload_read_timeout:{str(exc)[:300]}"
+            except RequestException as exc:
+                return None, f"upload_request_error:{str(exc)[:300]}"
 
-        if attempt < max_attempts:
-            time.sleep(min(8.0, 2.0 * attempt))
+            if attempt < max_attempts:
+                time.sleep(min(8.0, 2.0 * attempt))
 
+    if unsupported_route_attempts:
+        return (
+            None,
+            "capability_error:COMFY_AUDIO_UPLOAD_ENDPOINT_UNSUPPORTED:"
+            + ";".join(unsupported_route_attempts)[:500],
+        )
     return None, last_error
 
 
@@ -2411,6 +2438,8 @@ def run_comfy_image_to_video(
                         transport_mode=audio_transport_mode,
                     )
                     if upload_audio_err or not uploaded_audio_name:
+                        if str(upload_audio_err or "").startswith("capability_error:"):
+                            return None, str(upload_audio_err)
                         return None, f"upload_failed:{upload_audio_err or 'upload_name_missing'}"
                 audio_patch_node_ids = []
                 lip_sync_proof_reason = "audio_patch_applied"
