@@ -25,11 +25,11 @@
   },
   "346": {
     "inputs": {
-      "url": "https://example.com/audio.mp3"
+      "audio": "audio.mp3"
     },
-    "class_type": "MediaUtilities_AudioURLLoader",
+    "class_type": "LoadAudio",
     "_meta": {
-      "title": "MediaUtilities_AudioURLLoader"
+      "title": "Load Audio"
     }
   },
   "340:285": {

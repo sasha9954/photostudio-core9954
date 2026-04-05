@@ -13962,6 +13962,12 @@ def clip_video(payload: ClipVideoIn):
             elif "history_wait_failed:timeout" in err_text:
                 code = "comfy_timeout"
                 status_code = 504
+            elif "history_wait_failed:comfy_node_execution_failed" in err_text:
+                code = "comfy_node_execution_failed"
+                status_code = 502
+            elif "history_wait_failed:comfy_execution_failed" in err_text:
+                code = "comfy_execution_failed"
+                status_code = 502
             elif "COMFY_OUTPUT_URL_INVALID" in err_text:
                 code = "COMFY_OUTPUT_URL_INVALID"
                 status_code = 502
@@ -13975,6 +13981,20 @@ def clip_video(payload: ClipVideoIn):
                 code = "comfy_output_missing"
             elif "workflow_" in err_text or "missing_node" in err_text or "missing_input" in err_text:
                 code = "comfy_invalid_workflow"
+            print(
+                "[COMFY EXECUTION FAILURE CLASSIFICATION] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "workflowKey": final_workflow_key,
+                        "workflowFile": workflow_path,
+                        "errorHint": err_text[:300],
+                        "classifiedCode": code,
+                        "statusCode": status_code,
+                    },
+                    ensure_ascii=False,
+                )
+            )
             return JSONResponse(status_code=status_code, content={"ok": False, "code": code, "hint": err_text[:300]})
         print(
             "[CLIP VIDEO COMFY SUBMIT] "

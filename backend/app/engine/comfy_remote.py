@@ -640,7 +640,20 @@ def wait_for_comfy_result(
                             **failed_trace,
                         },
                     )
-                    return payload, f"comfy_execution_failed:{failed_trace.get('error_message') or failed_trace.get('exception_type') or failed_trace.get('comfy_status')}"
+                    failed_node_id = str(failed_trace.get("failed_node_id") or "").strip()
+                    failure_code = "comfy_node_execution_failed" if failed_node_id else "comfy_execution_failed"
+                    logger.error(
+                        "[COMFY EXECUTION FAILURE CLASSIFICATION] %s",
+                        {
+                            "prompt_id": safe_prompt_id,
+                            "workflow_key": str(workflow_key or "").strip(),
+                            "workflow_file": str(workflow_file or "").strip(),
+                            "failureCode": failure_code,
+                            "failedNodeId": failed_node_id,
+                            "failedNodeType": str(failed_trace.get("failed_node_type") or "").strip(),
+                        },
+                    )
+                    return payload, f"{failure_code}:{failed_trace.get('error_message') or failed_trace.get('exception_type') or failed_trace.get('comfy_status')}"
                 outputs = entry.get("outputs")
                 if isinstance(outputs, dict):
                     logger.info(
@@ -2253,15 +2266,25 @@ def run_comfy_image_to_video(
         supports_url_transport = _targets_support_url_transport(audio_targets)
         path_audio_value = _extract_filesystem_audio_path(original_audio_url)
         audio_transport_reason = "workflow_has_audio_input_nodes" if audio_targets else "workflow_has_no_patchable_audio_input_nodes"
-        if supports_url_transport and normalized_audio_url and is_normalized_audio_url_safe:
-            selected_transport_mode = "url"
-            selected_transport_reason = "lipsync_url_transport_forced_from_remote_safe_audio_url"
-            selected_by = "lip_sync_url_only_mode"
+        has_upload_filename_target = any(
+            str((target or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES
+            for target in audio_targets
+        )
+        audio_upload_supported = _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is not False
+        if has_upload_filename_target and has_audio_bytes and audio_upload_supported:
+            selected_transport_mode = "upload"
+            selected_transport_reason = "lipsync_source_file_node_with_audio_upload"
+            selected_by = "lip_sync_upload_primary_mode"
         else:
-            return (
-                None,
-                f"capability_error:LTX_AUDIO_REMOTE_URL_UNAVAILABLE:{normalized_audio_url_safety_reason or 'audio_url_not_remote_safe'}",
+            selected_transport_mode, selected_transport_reason = _resolve_audio_transport_mode_for_targets(
+                audio_targets=audio_targets,
+                normalized_audio_url=normalized_audio_url,
+                normalized_audio_url_safe=is_normalized_audio_url_safe,
+                path_audio_value=path_audio_value,
+                has_audio_bytes=has_audio_bytes,
+                audio_upload_supported=audio_upload_supported,
             )
+            selected_by = "lip_sync_compat_fallback_mode"
         source_audio_target_classes = [
             {
                 "node_id": str((target or {}).get("node_id") or "").strip(),
@@ -2291,7 +2314,7 @@ def run_comfy_image_to_video(
                 "selectedTransportReason": selected_transport_reason,
             },
         )
-        upload_fallback_allowed = False
+        upload_fallback_allowed = bool(has_upload_filename_target)
         upload_guard_reason = "allowed" if upload_fallback_allowed else selected_transport_reason
         normalization_reason = str((normalization_log_payload or {}).get("normalizationReason") or "").strip() or "unknown"
         if normalization_reason in {"public_base_url_missing", "public_base_url_invalid", "public_base_url_parse_failed", "public_base_url_localhost"}:
@@ -2376,7 +2399,19 @@ def run_comfy_image_to_video(
                     "uploadBlockedBecauseEndpointUnsupported": False,
                 },
             )
-            if audio_transport_mode == "url":
+            if audio_transport_mode in {"url", "upload", "path"}:
+                if audio_transport_mode == "upload":
+                    if not has_audio_bytes:
+                        return None, "capability_error:LTX_AUDIO_TRANSPORT_UNAVAILABLE:audio_bytes_missing_for_upload"
+                    uploaded_audio_name, upload_audio_err = upload_audio_to_comfy(
+                        audio_bytes=audio_bytes or b"",
+                        filename="source.mp3",
+                        workflow_key=normalized_workflow_key,
+                        workflow_file=workflow_source,
+                        transport_mode=audio_transport_mode,
+                    )
+                    if upload_audio_err or not uploaded_audio_name:
+                        return None, f"audio_upload_failed:{upload_audio_err or 'audio_upload_name_missing'}"
                 audio_patch_node_ids = []
                 lip_sync_proof_reason = "audio_patch_applied"
                 audio_patch_types = []
