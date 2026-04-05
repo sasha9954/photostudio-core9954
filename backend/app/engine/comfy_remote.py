@@ -2411,7 +2411,7 @@ def run_comfy_image_to_video(
                         transport_mode=audio_transport_mode,
                     )
                     if upload_audio_err or not uploaded_audio_name:
-                        return None, f"audio_upload_failed:{upload_audio_err or 'audio_upload_name_missing'}"
+                        return None, f"upload_failed:{upload_audio_err or 'audio_upload_name_missing'}"
                 audio_patch_node_ids = []
                 lip_sync_proof_reason = "audio_patch_applied"
                 audio_patch_types = []

@@ -2776,7 +2776,7 @@ def _prepare_provider_audio_url(source_url: str) -> tuple[str, str | None]:
         mime_type=upload_mime,
     )
     if upload_err or not uploaded_audio_url:
-        return "", upload_err or "audio_upload_failed"
+        return "", upload_err or "upload_failed"
     return uploaded_audio_url, None
 
 
