@@ -99,6 +99,11 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+if not settings.cors_allow_origins_list:
+    raise ValueError(
+        "CORS_ALLOW_ORIGINS must contain at least one valid http(s) origin after filtering invalid entries"
+    )
+
 
 def is_localhost_url(value: str | None) -> bool:
     raw = str(value or "").strip()
