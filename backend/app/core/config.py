@@ -12,6 +12,30 @@ logger = logging.getLogger(__name__)
 LOCALHOST_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 
 
+def _is_valid_http_url(value: str | None) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return bool((parsed.netloc or "").strip())
+
+
+def is_localhost_url(value: str | None) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        host = str(urlparse(raw).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in LOCALHOST_HOSTS
+
+
 class Settings(BaseSettings):
     PS_ENV: str = "dev"
     SECRET_KEY: str = "dev-secret-change-me"
@@ -103,30 +127,6 @@ if not settings.cors_allow_origins_list:
     raise ValueError(
         "CORS_ALLOW_ORIGINS must contain at least one valid http(s) origin after filtering invalid entries"
     )
-
-
-def is_localhost_url(value: str | None) -> bool:
-    raw = str(value or "").strip()
-    if not raw:
-        return False
-    try:
-        host = str(urlparse(raw).hostname or "").strip().lower()
-    except Exception:
-        return False
-    return host in LOCALHOST_HOSTS
-
-
-def _is_valid_http_url(value: str | None) -> bool:
-    raw = str(value or "").strip()
-    if not raw:
-        return False
-    try:
-        parsed = urlparse(raw)
-    except Exception:
-        return False
-    if parsed.scheme not in {"http", "https"}:
-        return False
-    return bool((parsed.netloc or "").strip())
 
 
 def _gemini_key_source() -> str:
