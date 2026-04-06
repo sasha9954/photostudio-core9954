@@ -3,6 +3,7 @@ import logging
 import os
 from urllib.parse import urlparse
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -15,7 +16,8 @@ class Settings(BaseSettings):
     PS_ENV: str = "dev"
     SECRET_KEY: str = "dev-secret-change-me"
     DB_PATH: str = "app/app.db"
-    PUBLIC_BASE_URL: str = "http://127.0.0.1:8000"
+    PUBLIC_BASE_URL: str
+    CORS_ALLOW_ORIGINS: str
     TOKEN_TTL_SECONDS: int = 60 * 60 * 24 * 14  # 14 days
 
     # Gemini / Engine
@@ -38,7 +40,8 @@ class Settings(BaseSettings):
     KIE_POLL_TIMEOUT_SEC: int = 300
 
     # Remote ComfyUI image-to-video
-    COMFY_BASE_URL: str = "http://127.0.0.1:8000"
+    COMFY_BASE_URL: str
+    COMFY_LAB_URL: str = ""
     COMFY_OUTPUT_HANDOFF_STRATEGY: str = "backend_proxy"
     COMFY_UPLOAD_CONNECT_TIMEOUT_SEC: int = 10
     COMFY_UPLOAD_READ_TIMEOUT_SEC: int = 120
@@ -65,6 +68,24 @@ class Settings(BaseSettings):
         "env_file_encoding": "utf-8",
         "extra": "ignore",
     }
+
+    @field_validator("PUBLIC_BASE_URL", "COMFY_BASE_URL", "CORS_ALLOW_ORIGINS", mode="before")
+    @classmethod
+    def _required_non_empty(cls, value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            raise ValueError("must be set via environment and cannot be empty")
+        return raw
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        values = []
+        for item in str(self.CORS_ALLOW_ORIGINS or "").split(","):
+            clean = item.strip().rstrip("/")
+            if clean:
+                values.append(clean)
+        # preserve order and remove duplicates
+        return list(dict.fromkeys(values))
 
 
 settings = Settings()
@@ -100,6 +121,7 @@ logger.info(
 
 logger.info("[CONFIG] COMFY_BASE_URL=%s", str(settings.COMFY_BASE_URL).rstrip("/"))
 logger.info("[CONFIG] PUBLIC_BASE_URL=%s", str(settings.PUBLIC_BASE_URL).rstrip("/"))
+logger.info("[CONFIG] CORS_ALLOW_ORIGINS=%s", settings.cors_allow_origins_list)
 logger.info(
     "[CONFIG] is_public_base_localhost=%s",
     is_localhost_url(settings.PUBLIC_BASE_URL),

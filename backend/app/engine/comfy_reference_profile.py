@@ -37,7 +37,7 @@ def _resolve_reference_url(url: str) -> str:
         return raw
     if raw.startswith("//"):
         return f"http:{raw}"
-    base = (settings.PUBLIC_BASE_URL or "http://127.0.0.1:8000").rstrip("/")
+    base = str(settings.PUBLIC_BASE_URL).rstrip("/")
     if raw.startswith("/"):
         return f"{base}{raw}"
     return f"{base}/{raw}"

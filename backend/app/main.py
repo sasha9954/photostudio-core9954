@@ -1,6 +1,5 @@
 from app.engine.engine_init import load_engine_config
 import os
-import re
 import logging
 from datetime import datetime, timezone
 
@@ -13,6 +12,15 @@ from app.db.sqlite import init_db
 from app.core.static_paths import STATIC_DIR, ASSETS_DIR, ensure_static_dirs
 from app.core.config import settings, is_localhost_url
 
+
+def _normalize_origin(value: str | None) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+def _origin_allowed(origin: str | None) -> bool:
+    normalized = _normalize_origin(origin)
+    return bool(normalized) and normalized in settings.cors_allow_origins_list
+
 app = FastAPI(title="PhotoStudio Core API", version="0.2.0")
 logger = logging.getLogger(__name__)
 
@@ -24,8 +32,7 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 app.add_middleware(
     CORSMiddleware,
-    # Dev: accept any localhost/127.0.0.1 port, keep cookies (allow_credentials)
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=settings.cors_allow_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,21 +50,21 @@ async def _force_cors_headers(request: Request, call_next):
     path = request.url.path or ""
     origin = request.headers.get("origin")
 
-    is_dev_origin = bool(origin and re.match(r"^http://(localhost|127\.0\.0\.1)(:\d+)?$", origin))
+    is_allowed_origin = _origin_allowed(origin)
     is_static = path.startswith("/static/")
 
     if is_static:
-        # For static assets we can be permissive in dev.
-        # If Origin is present and is localhost/127.* -> reflect it.
+        # For static assets we can be permissive.
+        # If Origin is present and is in CORS_ALLOW_ORIGINS -> reflect it.
         # If Origin is missing -> set '*'.
-        if is_dev_origin:
+        if is_allowed_origin:
             resp.headers["Access-Control-Allow-Origin"] = origin
             resp.headers["Access-Control-Allow-Credentials"] = "true"
             resp.headers.setdefault("Vary", "Origin")
         else:
             resp.headers.setdefault("Access-Control-Allow-Origin", "*")
     else:
-        if is_dev_origin:
+        if is_allowed_origin:
             resp.headers["Access-Control-Allow-Origin"] = origin
             resp.headers["Access-Control-Allow-Credentials"] = "true"
             resp.headers.setdefault("Vary", "Origin")
@@ -67,27 +74,20 @@ class CORSStaticFiles(StaticFiles):
     """StaticFiles that always adds CORS headers for dev so the frontend can load images safely."""
     async def get_response(self, path: str, scope):
         resp = await super().get_response(path, scope)
-        try:
-            headers = dict((k.decode() if isinstance(k, (bytes, bytearray)) else k,
-                            v.decode() if isinstance(v, (bytes, bytearray)) else v)
-                           for k, v in resp.headers.raw)
-        except Exception:
-            headers = {}
-
         origin = None
         for (k, v) in scope.get("headers", []):
             if k == b"origin":
                 origin = v.decode("utf-8", "ignore")
                 break
 
-        is_dev_origin = bool(origin and re.match(r"^http://(localhost|127\.0\.0\.1)(:\d+)?$", origin))
-        # For static assets in dev we can reflect localhost origins (works with fetch/canvas).
-        if is_dev_origin:
+        is_allowed_origin = _origin_allowed(origin)
+        # For static assets we can reflect explicitly allowed origins (works with fetch/canvas).
+        if is_allowed_origin:
             resp.headers["Access-Control-Allow-Origin"] = origin
             resp.headers["Access-Control-Allow-Credentials"] = "true"
             resp.headers.setdefault("Vary", "Origin")
         else:
-            # No Origin header (e.g. direct navigation) or non-dev origin: be permissive for static.
+            # No Origin header (e.g. direct navigation) or non-allowed origin: be permissive for static.
             resp.headers.setdefault("Access-Control-Allow-Origin", "*")
         return resp
 

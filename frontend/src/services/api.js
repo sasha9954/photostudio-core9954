@@ -48,7 +48,13 @@ function createApiError({
   return error;
 }
 
-export const API_BASE = `http://${window.location.hostname}:8000`;
+function resolveApiBase(){
+  const envBase = String(import.meta.env.VITE_API_BASE_URL || "").trim();
+  if (envBase) return envBase.replace(/\/+$/, "");
+  return `${window.location.protocol}//${window.location.hostname}:8000`;
+}
+
+export const API_BASE = resolveApiBase();
 export async function fetchJson(path,{method="GET",headers={},body,signal,timeoutMs=0}={}){
   const timeoutValue = Number(timeoutMs);
   const hasTimeout = Number.isFinite(timeoutValue) && timeoutValue > 0;

@@ -155,7 +155,7 @@ function resolveAssetUrl(url){
 }
 
 // Backend merge endpoint expects STRICT relative paths: /static/videos/...
-// Our persistent urls may be absolute (http://127.0.0.1:8000/static/videos/...) or other variants.
+// Our persistent urls may be absolute backend URLs (/static/videos/... or full http(s) URL) or other variants.
 function toStaticVideosPath(url){
   let s = String(url || "").trim();
   if(!s) return "";

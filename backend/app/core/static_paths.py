@@ -18,7 +18,7 @@ def ensure_static_dirs() -> None:
 
 
 def asset_url(filename: str) -> str:
-    base = (settings.PUBLIC_BASE_URL or "http://127.0.0.1:8000").rstrip("/")
+    base = str(settings.PUBLIC_BASE_URL).rstrip("/")
     return f"{base}/static/assets/{filename}"
 
 
