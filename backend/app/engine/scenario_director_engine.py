@@ -1639,6 +1639,12 @@ def _normalize_scenario_director_scene_defaults(payload: dict[str, Any]) -> tupl
             scene["narration_mode"] = "full"
             normalized_fields.append(f"scenes[{idx}].narration_mode")
             warnings.append("scenario_director_normalized_narration_mode_default")
+        video_negative_prompt = str(scene.get("video_negative_prompt") or scene.get("videoNegativePrompt") or "").strip()
+        if not video_negative_prompt:
+            video_negative_prompt = build_ltx_video_negative_prompt(scene)
+            scene["video_negative_prompt"] = video_negative_prompt
+            scene["videoNegativePrompt"] = video_negative_prompt
+            normalized_fields.append(f"scenes[{idx}].video_negative_prompt")
         normalized_scenes.append(scene)
     repaired["scenes"] = normalized_scenes
     return repaired, normalized_fields, list(dict.fromkeys(warnings))
@@ -5984,7 +5990,7 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     scene.video_prompt = _quality_filter_visible_prompt(scene.video_prompt)
 
 
-def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | None = None) -> str:
+def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | dict[str, Any] | None = None) -> str:
     shared_safety_floor = [
         "no extreme motion blur",
         "no broken anatomy",
@@ -5999,51 +6005,66 @@ def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | None = None) 
         "no spinning around head",
         "no aggressive zoom out",
         "no fast retreating camera",
-        "no whip-pan",
         "no chaotic background dance",
         "no crowd stealing focus",
         "no unreadable mouth",
-        "no dead mannequin blocking",
         "no broken mouth articulation",
         "no face distortion",
-        "no duplicated microphone",
         "no ghost hand on microphone",
     ]
     i2v_route_negative = [
         "no jerky dance",
-        "no fast flailing arms",
+        "no flailing arms",
         "no abrupt spins",
         "no violent head whipping",
-        "no high-frequency body shaking",
-        "no aggressive torso snapping",
-        "no frantic crowd turbulence",
+        "no high-frequency shaking",
         "no overhead orbit",
         "no top orbit",
         "no head-top camera circle",
         "no drone-like loop",
         "no roll-tilt orbit",
+        "no anatomy break",
         "no identity drift",
     ]
     ending_afterglow_negative = [
         "no abrupt cut feeling",
         "no chaotic outro movement",
-        "no fast camera retreat",
+        "no fast retreating camera",
         "no frantic background extras",
-        "no random dance explosion in final hold",
+        "no random dance explosion",
         "no unreadable final pose",
     ]
 
     if not scene:
         return ", ".join(shared_safety_floor)
 
-    resolved_route = str(scene.resolved_workflow_key or scene.ltx_mode or "").strip().lower()
-    transition_type = str(scene.transition_type or "").strip().lower()
-    purpose = str(scene.scene_purpose or "").strip().lower()
-    clip_arc_stage = str(scene.clip_arc_stage or "").strip().lower()
-    is_lip_sync_route = bool(scene.lip_sync) or resolved_route in {"lip_sync_music", "lip_sync"}
+    if isinstance(scene, dict):
+        resolved_route = str(
+            scene.get("resolved_workflow_key")
+            or scene.get("resolvedWorkflowKey")
+            or scene.get("video_generation_route")
+            or scene.get("videoGenerationRoute")
+            or scene.get("planned_video_generation_route")
+            or scene.get("plannedVideoGenerationRoute")
+            or scene.get("ltx_mode")
+            or scene.get("ltxMode")
+            or ""
+        ).strip().lower()
+        transition_type = str(scene.get("transition_type") or scene.get("transitionType") or "").strip().lower()
+        purpose = str(scene.get("scene_purpose") or scene.get("scenePurpose") or "").strip().lower()
+        clip_arc_stage = str(scene.get("clip_arc_stage") or scene.get("clipArcStage") or "").strip().lower()
+        lip_sync_flag = _coerce_bool(scene.get("lip_sync") if "lip_sync" in scene else scene.get("lipSync"), False)
+    else:
+        resolved_route = str(scene.resolved_workflow_key or scene.ltx_mode or "").strip().lower()
+        transition_type = str(scene.transition_type or "").strip().lower()
+        purpose = str(scene.scene_purpose or "").strip().lower()
+        clip_arc_stage = str(scene.clip_arc_stage or "").strip().lower()
+        lip_sync_flag = bool(scene.lip_sync)
+
+    is_lip_sync_route = lip_sync_flag or resolved_route in {"lip_sync_music", "lip_sync"}
     is_ending_afterglow_scene = (
         purpose in {"outro", "ending", "afterglow", "payoff"}
-        or clip_arc_stage in {"outro", "ending", "afterglow", "payoff"}
+        or clip_arc_stage in {"outro", "ending", "afterglow", "payoff", "afterimage_release"}
         or transition_type in {"ending_hold", "afterglow", "outro"}
     )
 
@@ -9489,6 +9510,8 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     # Gemini output is the source of truth: keep only production-safe normalization,
     # avoid semantic rewriting of scene count/timing/story arc.
     storyboard_out = _normalize_scene_timeline(storyboard_out)
+    for scene in (storyboard_out.scenes or []):
+        scene.video_negative_prompt = build_ltx_video_negative_prompt(scene)
     _assert_storyboard_quality(storyboard_out)
     return storyboard_out
 
