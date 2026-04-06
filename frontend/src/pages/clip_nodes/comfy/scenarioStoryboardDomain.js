@@ -1380,14 +1380,10 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const danceCanonSuffix = buildDanceSafePromptCanonSuffix();
   const orbitCanonSuffix = buildOrbitSafetyCanonSuffix();
   if (isLipSyncRoute) {
-    normalizedScene.videoPromptRu = sanitizeVisiblePromptText(`${normalizedScene.videoPromptRu}. ${lipSyncCanonSuffix}. ${orbitCanonSuffix}`);
     normalizedScene.videoPromptEn = sanitizeVisiblePromptText(`${normalizedScene.videoPromptEn}. ${lipSyncCanonSuffix}. ${orbitCanonSuffix}`);
-    normalizedScene.imagePromptRu = sanitizeVisiblePromptText(`${normalizedScene.imagePromptRu}. ${lipSyncCanonSuffix}`);
     normalizedScene.imagePromptEn = sanitizeVisiblePromptText(`${normalizedScene.imagePromptEn}. ${lipSyncCanonSuffix}`);
   } else {
-    normalizedScene.videoPromptRu = sanitizeVisiblePromptText(`${normalizedScene.videoPromptRu}. ${danceCanonSuffix}. ${orbitCanonSuffix}`);
     normalizedScene.videoPromptEn = sanitizeVisiblePromptText(`${normalizedScene.videoPromptEn}. ${danceCanonSuffix}. ${orbitCanonSuffix}`);
-    normalizedScene.imagePromptRu = sanitizeVisiblePromptText(`${normalizedScene.imagePromptRu}. ${danceCanonSuffix}`);
     normalizedScene.imagePromptEn = sanitizeVisiblePromptText(`${normalizedScene.imagePromptEn}. ${danceCanonSuffix}`);
   }
   const distinctPrompts = ensureDistinctStartEndPrompts(normalizedScene);
