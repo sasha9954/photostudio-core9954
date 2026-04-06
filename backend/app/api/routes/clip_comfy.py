@@ -1,6 +1,7 @@
 import re
 from typing import Any
 import os
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -604,12 +605,24 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
 
 
 @router.post("/clip/comfy/scenario-director/generate")
-async def clip_comfy_scenario_director_generate(payload: ScenarioDirectorGenerateIn) -> dict[str, Any]:
+async def clip_comfy_scenario_director_generate(request: Request, payload: ScenarioDirectorGenerateIn) -> dict[str, Any]:
     req = payload.model_dump(mode="json")
+    request_id_header = str(request.headers.get("x-scenario-director-request-id") or "").strip()
+    metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}
+    metadata_request_id = str(metadata.get("scenarioDirectorRequestId") or "").strip()
+    scenario_director_request_id = request_id_header or metadata_request_id or f"sd-{uuid4().hex[:12]}"
+    req.setdefault("metadata", {})
+    if isinstance(req.get("metadata"), dict):
+        req["metadata"]["scenarioDirectorRequestId"] = scenario_director_request_id
+    logger.info(
+        "[SCENARIO DIRECTOR ROUTE] route=%s requestId=%s method=%s",
+        "/api/clip/comfy/scenario-director/generate",
+        scenario_director_request_id,
+        "POST",
+    )
     direct_mode_enabled = _resolve_direct_gemini_storyboard_mode(req, default=False)
     req["directGeminiStoryboardMode"] = direct_mode_enabled
     req["direct_gemini_storyboard_mode"] = direct_mode_enabled
-    req.setdefault("metadata", {})
     if isinstance(req.get("metadata"), dict):
         req["metadata"]["directGeminiStoryboardMode"] = direct_mode_enabled
         req["metadata"]["direct_gemini_storyboard_mode"] = direct_mode_enabled
@@ -684,7 +697,7 @@ async def clip_comfy_scenario_director_generate(payload: ScenarioDirectorGenerat
         return run_scenario_director(req)
     except ScenarioDirectorError as exc:
         exc_details = exc.details if isinstance(exc.details, dict) else {}
-        http_status = int(exc_details.get("http_status") or 0)
+        http_status = int(exc_details.get("http_status") or exc_details.get("httpStatus") or 0)
         if http_status == 403 and _should_use_scenario_director_fixture(req, reason="gemini_403"):
             logger.warning("[clip_comfy_scenario_director_generate] Gemini 403 fallback to deterministic fixture")
             return _build_scenario_director_fixture(req, fixture_reason="gemini_403_fallback")

@@ -13208,11 +13208,38 @@ onClipSec: (nodeId, value) => {
                       audioType,
                     },
                   };
+                  const scenarioDirectorRequestId = (window.crypto?.randomUUID?.() || `sd-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+                  const scenarioDirectorClickCount = ((window.__scenarioDirectorClickCount = Number(window.__scenarioDirectorClickCount || 0) + 1));
+                  payload.metadata = {
+                    ...(payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
+                    scenarioDirectorRequestId,
+                    scenarioDirectorClickCount,
+                    requestSource: "comfyBrain:onParse",
+                    modeFlags: {
+                      directGeminiStoryboardMode: true,
+                      plannerMode: mode,
+                    },
+                  };
+                  console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
+                    phase: "before_fetch",
+                    source: "comfyBrain:onParse",
+                    scenarioDirectorRequestId,
+                    scenarioDirectorClickCount,
+                    modeFlags: payload?.metadata?.modeFlags || {},
+                  });
 
                   const out = await fetchJson("/api/clip/comfy/scenario-director/generate", {
                     method: "POST",
                     body: payload,
+                    headers: { "x-scenario-director-request-id": scenarioDirectorRequestId },
                     signal: controller.signal,
+                  });
+                  console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
+                    phase: "after_fetch",
+                    source: "comfyBrain:onParse",
+                    scenarioDirectorRequestId,
+                    scenarioDirectorClickCount,
+                    httpStatus: 200,
                   });
                   if (!out?.ok) throw new Error(out?.detail || out?.hint || "scenario_director_failed");
                   const normalizedDirector = normalizeScenarioDirectorApiResponse(out, {});
@@ -15021,6 +15048,30 @@ onClipSec: (nodeId, value) => {
                     format: requestPayload?.director_controls?.format || "",
                   });
                 }
+                const scenarioDirectorRequestId = (window.crypto?.randomUUID?.() || `sd-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+                const scenarioDirectorClickCount = ((window.__scenarioDirectorClickCount = Number(window.__scenarioDirectorClickCount || 0) + 1));
+                const requestPayloadWithDebug = {
+                  ...requestPayload,
+                  metadata: {
+                    ...(requestPayload?.metadata && typeof requestPayload.metadata === "object" ? requestPayload.metadata : {}),
+                    scenarioDirectorRequestId,
+                    scenarioDirectorClickCount,
+                    requestSource: "narrative:onGenerateScenario",
+                    requestKey,
+                    modeFlags: {
+                      directGeminiStoryboardMode: Boolean(requestPayload?.directGeminiStoryboardMode ?? requestPayload?.direct_gemini_storyboard_mode),
+                      plannerMode: String(requestPayload?.options?.mode || ""),
+                    },
+                  },
+                };
+                console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
+                  phase: "before_fetch",
+                  source: "narrative:onGenerateScenario",
+                  scenarioDirectorRequestId,
+                  scenarioDirectorClickCount,
+                  requestKey,
+                  modeFlags: requestPayloadWithDebug?.metadata?.modeFlags || {},
+                });
 
                 try {
                   const response = await new Promise((resolve, reject) => {
@@ -15034,11 +15085,20 @@ onClipSec: (nodeId, value) => {
 
                     Promise.resolve(fetchJson('/api/clip/comfy/scenario-director/generate', {
                       method: 'POST',
-                      body: requestPayload,
+                      body: requestPayloadWithDebug,
+                      headers: { "x-scenario-director-request-id": scenarioDirectorRequestId },
                       signal: controller.signal,
                     }))
                       .then((result) => {
                         window.clearTimeout(timeoutId);
+                        console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
+                          phase: "after_fetch",
+                          source: "narrative:onGenerateScenario",
+                          scenarioDirectorRequestId,
+                          scenarioDirectorClickCount,
+                          requestKey,
+                          httpStatus: 200,
+                        });
                         console.debug("[SCENARIO GENERATE REQUEST]", {
                           requestKey,
                           inFlight: true,
@@ -15052,6 +15112,15 @@ onClipSec: (nodeId, value) => {
                       .catch((requestError) => {
                         window.clearTimeout(timeoutId);
                         const httpStatus = Number(requestError?.status || requestError?.httpStatus || requestError?.response?.status || 0) || null;
+                        console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
+                          phase: "after_fetch_error",
+                          source: "narrative:onGenerateScenario",
+                          scenarioDirectorRequestId,
+                          scenarioDirectorClickCount,
+                          requestKey,
+                          httpStatus,
+                          errorCode: requestError?.code || requestError?.payload?.detail?.code || "",
+                        });
                         console.debug("[SCENARIO GENERATE REQUEST]", {
                           requestKey,
                           inFlight: true,
@@ -15095,7 +15164,11 @@ onClipSec: (nodeId, value) => {
                   });
                 } catch (error) {
                   const aborted = isAbortLikeError(error);
-                  const message = String(error?.message || 'Scenario Director request failed').trim();
+                  const backendCode = String(error?.payload?.detail?.code || error?.code || "").trim().toLowerCase();
+                  const quotaMessage = "Gemini quota exceeded / rate limit exceeded. Проверь billing / limits / key.";
+                  const message = backendCode === "provider_quota_exceeded"
+                    ? quotaMessage
+                    : String(error?.message || 'Scenario Director request failed').trim();
                   setNodes((prev) => {
                     const nextNodes = prev.map((x) => {
                       if (x.id !== nodeId) return x;
