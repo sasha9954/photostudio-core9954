@@ -385,6 +385,24 @@ function translatePlannerMetaToVisiblePrompt(scene = {}, { mode = "image" } = {}
   return cleaned;
 }
 
+function buildLipSyncPromptCanonSuffix() {
+  return sanitizeVisiblePromptText(
+    "LIP-SYNC PERFORMANCE RULES STRICT: performer-first, face/mouth readability mandatory, eye line toward camera or near-camera preferred, emotional lyric delivery through face/shoulders/hands/subtle torso rhythm, only gentle head turns/subtle lean/soft sway/phrase-timed hand gestures. Camera stays slow and controlled with gentle push-in, slight lateral drift, slow eye-level arc only. Forbidden: overhead orbit, top-down rotation, camera roll, spinning around head, aggressive zoom out, fast retreating camera, whip-pan, chaotic background dance, crowd stealing focus, unreadable mouth, extreme motion blur."
+  );
+}
+
+function buildDanceSafePromptCanonSuffix() {
+  return sanitizeVisiblePromptText(
+    "DANCE MOTION SAFETY: smooth dynamic nightclub realism, controlled musical movement, beat-shaped but readable motion, stable anatomy-safe choreography, elegant club-energy not frantic chaos. Use groove/sway/step/pivot/rebound/pose progression and phrase-shaped accents with moderate amplitude. Avoid jerky dance, fast flailing arms, abrupt spins, violent head whipping, high-frequency shaking, extreme rotation velocity, aggressive torso snapping, stroboscopic pose changes, ultra-fast partner turbulence."
+  );
+}
+
+function buildOrbitSafetyCanonSuffix() {
+  return sanitizeVisiblePromptText(
+    "CAMERA ORBIT SAFETY: if orbit is used, keep slow horizontal arc around performer at eye/chest/waist level, prefer right-to-left or left-to-right around subject plane, preserve stable horizon and subject readability. Forbidden: top orbit, overhead spin, top-down path, head-top camera circle, drone-like loop, roll-tilt orbit."
+  );
+}
+
 function ensureDistinctStartEndPrompts(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const startRaw = sanitizeVisiblePromptText(source.startFramePromptEn || source.startFramePromptRu || "");
@@ -1356,6 +1374,22 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     normalizedScene.videoPromptRu || translatePlannerMetaToVisiblePrompt(normalizedScene, { mode: "video" })
   );
   normalizedScene.videoPromptEn = sanitizeVisiblePromptText(normalizedScene.videoPromptEn || normalizedScene.videoPromptRu);
+  const routeKey = String(normalizedScene.resolvedWorkflowKey || "").trim().toLowerCase();
+  const isLipSyncRoute = routeKey === "lip_sync_music" || Boolean(normalizedScene.lipSync || normalizedScene.requiresAudioSensitiveVideo);
+  const lipSyncCanonSuffix = buildLipSyncPromptCanonSuffix();
+  const danceCanonSuffix = buildDanceSafePromptCanonSuffix();
+  const orbitCanonSuffix = buildOrbitSafetyCanonSuffix();
+  if (isLipSyncRoute) {
+    normalizedScene.videoPromptRu = sanitizeVisiblePromptText(`${normalizedScene.videoPromptRu}. ${lipSyncCanonSuffix}. ${orbitCanonSuffix}`);
+    normalizedScene.videoPromptEn = sanitizeVisiblePromptText(`${normalizedScene.videoPromptEn}. ${lipSyncCanonSuffix}. ${orbitCanonSuffix}`);
+    normalizedScene.imagePromptRu = sanitizeVisiblePromptText(`${normalizedScene.imagePromptRu}. ${lipSyncCanonSuffix}`);
+    normalizedScene.imagePromptEn = sanitizeVisiblePromptText(`${normalizedScene.imagePromptEn}. ${lipSyncCanonSuffix}`);
+  } else {
+    normalizedScene.videoPromptRu = sanitizeVisiblePromptText(`${normalizedScene.videoPromptRu}. ${danceCanonSuffix}. ${orbitCanonSuffix}`);
+    normalizedScene.videoPromptEn = sanitizeVisiblePromptText(`${normalizedScene.videoPromptEn}. ${danceCanonSuffix}. ${orbitCanonSuffix}`);
+    normalizedScene.imagePromptRu = sanitizeVisiblePromptText(`${normalizedScene.imagePromptRu}. ${danceCanonSuffix}`);
+    normalizedScene.imagePromptEn = sanitizeVisiblePromptText(`${normalizedScene.imagePromptEn}. ${danceCanonSuffix}`);
+  }
   const distinctPrompts = ensureDistinctStartEndPrompts(normalizedScene);
   normalizedScene.startFramePromptRu = sanitizeVisiblePromptText(normalizedScene.startFramePromptRu || distinctPrompts.startFramePrompt);
   normalizedScene.startFramePromptEn = sanitizeVisiblePromptText(normalizedScene.startFramePromptEn || normalizedScene.startFramePromptRu);

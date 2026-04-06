@@ -231,6 +231,11 @@ def _normalize_scene_canon_by_route(
             normalized_description = (
                 f"{normalized_description}. Beat progression drives emotional intensity and performance energy."
             ).strip(". ")
+        if normalized_description and "face/mouth readability is mandatory" not in normalized_description.lower():
+            normalized_description = (
+                f"{normalized_description}. Performer-first lip-sync canon: face/mouth readability is mandatory, eye line stays toward camera or near-camera, "
+                "camera must stay slow/controlled/readable (gentle push-in, slight lateral drift, slow eye-level arc), and forbid overhead orbit/top-down rotation/camera roll/fast retreat."
+            ).strip(". ")
         if framing not in LIP_SYNC_PERFORMANCE_FRAMINGS:
             framing = "tight_medium"
     elif route in {"i2v", "first_last"}:
@@ -255,6 +260,11 @@ def _normalize_scene_canon_by_route(
         elif normalized_description and "beat shapes mood" not in normalized_description.lower():
             normalized_description = (
                 f"{normalized_description}. Beat shapes mood, intensity, and energy progression."
+            ).strip(". ")
+        if normalized_description and "model-safe choreography" not in normalized_description.lower():
+            normalized_description = (
+                f"{normalized_description}. Motion safety canon: smooth dynamic nightclub realism with controlled musical movement, "
+                "phrase-shaped readable accents, moderate amplitude, controlled rotation only, and no jerky dance/flailing limbs/abrupt spins/hair-whip/torso-snapping/crowd turbulence."
             ).strip(". ")
         if framing not in NON_LIP_ACTION_FRAMINGS:
             establishing_signal = any(token in descriptor_text for token in ("establish", "venue reveal", "wide reveal", "crowd scale", "panorama"))
@@ -5787,14 +5797,17 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
             "Emotional singing performance in tight medium framing with persistent face/mouth readability.",
             "Allow phrase-driven hand acting and expressive upper-body performance: lyric-marking fingers/hands, one hand to chest, one hand open outward, controlled torso pulse, and coordinated head/shoulder/hand emphasis.",
             "Performance should feel alive, not frozen: permit small forward intention and subtle weight shift while preserving stable lipsync readability.",
-            "Camera behavior is locked/smooth: static or very slow push-in with minimal drift; if orbit language appears, treat it as a gentle left/right side partial arc, not a flip or inversion.",
+            "LIP-SYNC PERFORMANCE RULES (STRICT): performer-first, face/mouth readability mandatory, eye line toward camera or near-camera preferred, emotional lyric delivery through face/shoulders/hands/subtle torso rhythm.",
+            "Camera behavior is locked/smooth: static or very slow push-in with minimal drift; if orbit language appears, treat it as a gentle left/right side partial arc, not a flip/inversion/overhead orbit.",
+            "CAMERA ORBIT SAFETY: if orbit is used, keep it as a slow horizontal arc around performer at eye/chest/waist level and keep subject readable.",
             "Keep horizon and vertical axis stable: camera remains upright and physically readable at all times.",
             "No upside-down framing, no full frame inversion, no vertical roll/barrel-roll, no top-over flip, no tumbling, no uncontrolled axial rotation.",
-            "No full 360° orbit around performer, no aggressive circular chase camera, no fast rotational move around face/body.",
+            "No full 360° orbit around performer, no aggressive circular chase camera, no fast rotational move around face/body, no top orbit, no overhead spin, no head-top camera circle, no drone-like loop over subject.",
+            "No top-down rotation, no camera roll, no spinning around head, no aggressive zoom-out, no fast retreating camera, and no wide framing drift into generic dance floor shot.",
             "Subject may sway/turn for performance, but camera orientation stays controlled and upright.",
             "Garment continuity remains strict during performance: emotional gestures must not redesign sleeves, bodice, neckline, skirt silhouette, rose layout, lining visibility logic, or footwear identity.",
             "Optional safe variant: performer may gently rotate while camera stays upright and background shifts behind trajectory, preserving character integrity.",
-            "Environment remains background support; no running/chasing/spinning as primary action.",
+            "Environment remains background support; no running/chasing/spinning as primary action, no chaotic background dance, and no crowd stealing focus.",
             build_ltx_video_canon_block(lip_sync=True),
         ]
     )
@@ -9535,15 +9548,20 @@ def _build_request_text(
         "For lip_sync_music scenes, default framing is tight medium / medium / 3/4 body performance framing.\n"
         "For lip_sync_music scenes, keep lower frame boundary around slightly below waist up to upper thigh when possible.\n"
         "For lip_sync_music scenes, keep face/mouth/neck/shoulders/upper torso clearly readable; include hands when performance helps expression.\n"
-        "For lip_sync_music scenes, stage singer-performance-first: performer stays camera-readable, direct eye contact is preferred on strong lines, subtle sway/head-turn/hand-gesture are allowed.\n"
+        "For lip_sync_music scenes, stage singer-performance-first: performer stays camera-readable, direct eye contact (or near-camera eye line) is preferred on strong lines, only gentle head turns/subtle lean/soft sway/phrase-timed hand gestures are allowed.\n"
         "For lip_sync_music scenes, do NOT use spin-first/twirl-first/full-body dance silhouette/overhead dance spectacle as the primary idea.\n"
-        "For lip_sync_music scenes, camera can move but performer motion stays safe and articulation-first (no risky body-spin choreography as main event).\n"
+        "For lip_sync_music scenes, camera can move but must remain slow and controlled: gentle push-in, slight lateral drift, slow eye-level arc only.\n"
+        "For lip_sync_music scenes, forbid overhead orbit, top-down rotation, camera roll, spinning around head, aggressive zoom-out, and fast retreating camera.\n"
+        "For lip_sync_music scenes, background extras may move softly but must stay secondary and non-distracting; never turn frame into chaotic dance floor.\n"
         "Do NOT describe lip_sync_music scenes primarily as face-only close-up by default.\n"
         "Avoid pure close-up face framing for lip_sync_music unless the strongest beat explicitly requires that close emotional intent.\n"
         "If the strongest beat is better served by close-up or full-body framing, keep that intentional framing choice and make the reason explicit in description.\n"
         "For non-lip scenes, do NOT inherit lip-sync portrait defaults; prioritize action blocking, spatial progression, and venue zone readability.\n"
         "For non-lip i2v scenes, write ACTION/SPACE/BEAT-first (movement, zone progression, gesture, atmosphere), not portrait-only reads.\n"
+        "For non-lip i2v scenes, preserve energy but keep motion model-safe: smooth groove/controlled weight shift/soft step-pivot-sway/phrase-based accents/moderate tempo body rhythm.\n"
+        "For non-lip i2v scenes, avoid jerky dance, fast flailing arms, abrupt spins, violent head whipping, high-frequency shaking, and extreme rotation velocity.\n"
         "For non-lip i2v scenes, avoid violent spins/repeated twirls/aggressive fabric sweeps as primary action; prefer camera-led energy with safer body motion.\n"
+        "If non-lip scene uses orbit/reveal wrap, orbit must be slow horizontal eye-level/chest-level/waist-level arc; no overhead path, no top orbit, no barrel-roll horizon tilt.\n"
         "For non-lip scenes, preserve intended camera diversity (wide, low-angle, overhead, tracking, crowd/action staging) instead of collapsing to portrait framing.\n"
         "Concert/festival scenes must keep physically plausible performer placement: never standing on audience heads, never floating over crowd, never impossible support planes.\n"
         "Inside one venue, prefer different connected sub-zones across scenes (barricade, side aisle, walkway gap, platform edge, stage-side rail, backstage side entry, merch/bar alley).\n"
@@ -9767,9 +9785,12 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- For lip_sync_music scenes, you must write the intended performance framing directly in scene description (source-of-truth), not rely on downstream correction.\n"
         "- For lip_sync_music scenes, default to tight medium / medium / 3/4 body with lower frame boundary around slightly-below-waist to upper-thigh when possible.\n"
         "- Keep mouth/face/neck/shoulders/upper torso readable for articulation and emotion; include hands when useful for performance readability.\n"
-        "- For lip_sync_music scenes, singer-performance-first: camera-readable to-camera delivery, direct gaze preferred on strong lines, subtle sway/head-turn/hand gestures only.\n"
+        "- For lip_sync_music scenes, singer-performance-first: camera-readable to-camera (or near-camera) delivery, direct gaze preferred on strong lines, gentle head turns/subtle lean/soft sway/phrase-timed hand gestures only.\n"
         "- For lip_sync_music scenes, avoid spin-first/twirl-first/full-body dance silhouette/overhead dance spectacle as primary composition.\n"
         "- For lip_sync_music scenes, keep body action LTX-safe: no risky rotational choreography as main event.\n"
+        "- For lip_sync_music scenes, camera movement must stay slow/controlled/readable: gentle push-in, slight lateral drift, slow eye-level arc only.\n"
+        "- For lip_sync_music scenes, forbid overhead orbit/top-down rotation/camera roll/spinning around head/aggressive zoom-out/fast retreating camera.\n"
+        "- For lip_sync_music scenes, background extras may move softly but must remain secondary and never steal focus from face/upper torso/gestures.\n"
         "- Avoid face-only close-up lip_sync_music framing unless a strongest beat explicitly requires close emotional framing.\n"
         "- lip_sync_music framing preference applies only to lip-sync scenes; non-lip scenes should stay action/staging driven.\n"
         "- short opening atmosphere beats (<1.6s) should be merged or treated as non-renderable establishing transitions, not standalone hero shots.\n"
@@ -9777,7 +9798,10 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- in concert/crowd worlds, character placement must be physically grounded in valid venue zones.\n"
         "- For non-lip scenes, preserve action/staging camera diversity (wide/low-angle/overhead/tracking/crowd dynamics); do not collapse into portrait defaults.\n"
         "- For non-lip i2v scenes, write ACTION/SPACE/BEAT-first with movement + zone progression + atmosphere, not portrait-only face/upper-torso beats.\n"
+        "- For non-lip i2v scenes, preserve energy but keep movement model-safe: smooth groove, controlled weight shift, soft step/pivot/sway, phrase-shaped arm accents, moderate tempo body rhythm.\n"
+        "- For non-lip i2v scenes, avoid jerky dance, fast flailing arms, abrupt spins, violent head whipping, high-frequency body shaking, extreme rotation velocity, and frantic crowd turbulence.\n"
         "- For non-lip i2v scenes, avoid violent spins/repeated twirls/aggressive fabric sweep loops as primary action; use camera-led energy with safe body motion.\n"
+        "- If orbit is used in non-lip scenes, keep slow horizontal eye/chest/waist-level arc around subject plane; no overhead path, no top orbit, no head-top circle, no roll-tilt orbit.\n"
         "SCENE SEGMENTATION:\n"
         "- Keep phrase-based segmentation aligned to audio phrases.\n"
         "- End scenes at natural phrase ends or just before safe post-phrase spill.\n"
