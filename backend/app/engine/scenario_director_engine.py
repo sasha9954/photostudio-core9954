@@ -11182,7 +11182,7 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
     reference_image_part_count = len(reference_image_parts)
     request_part_count = len(request_parts)
     has_inline_audio = bool(inline_audio_part)
-    max_output_tokens = 8192
+    max_output_tokens = 4096
     logger.info(
         "[SCENARIO DIRECTOR PAYLOAD ESTIMATE] route=%s requestId=%s promptLengthChars=%s requestPartCount=%s referenceImagePartCount=%s hasInlineAudio=%s maxOutputTokens=%s",
         route_path,
@@ -11428,7 +11428,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         "generationConfig": {
             "temperature": 0.2,
             "responseMimeType": "application/json",
-            "maxOutputTokens": 8192,
+            "maxOutputTokens": 4096,
         },
     }
 

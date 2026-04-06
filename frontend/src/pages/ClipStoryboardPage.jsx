@@ -12415,6 +12415,7 @@ Aspect ratio: ${imageFormat}`,
   const assemblyAbortControllerRef = useRef(null);
   const narrativeAbortControllersRef = useRef(new Map());
   const narrativeGenerateInFlightRef = useRef(new Map());
+  const scenarioDirectorInFlightRef = useRef(new Map());
   const assemblyPollTimerRef = useRef(null);
   const assemblyPollingActiveRef = useRef(false);
 
@@ -12422,6 +12423,7 @@ Aspect ratio: ${imageFormat}`,
     narrativeAbortControllersRef.current.forEach((controller) => controller?.abort());
     narrativeAbortControllersRef.current.clear();
     narrativeGenerateInFlightRef.current.clear();
+    scenarioDirectorInFlightRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -13099,7 +13101,24 @@ onClipSec: (nodeId, value) => {
               },
               onParse: async (nodeId) => {
                 const brainCurrent = nodesRef.current.find((x) => x.id === nodeId);
-                if (brainCurrent?.data?.isParsing) return;
+                const requestKey = `scenario-parse:${String(nodeId || "")}`;
+                const wasInFlight = scenarioDirectorInFlightRef.current.get(requestKey) === true;
+                if (wasInFlight || brainCurrent?.data?.isParsing) {
+                  console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
+                    phase: "before_fetch_skipped_duplicate",
+                    source: "comfyBrain:onParse",
+                    requestKey,
+                    duplicateBlocked: true,
+                  });
+                  return;
+                }
+                scenarioDirectorInFlightRef.current.set(requestKey, true);
+                console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
+                  phase: "before_fetch_gate_open",
+                  source: "comfyBrain:onParse",
+                  requestKey,
+                  duplicateBlocked: false,
+                });
 
                 if (parseTimeoutRef.current) {
                   clearTimeout(parseTimeoutRef.current);
@@ -13442,6 +13461,7 @@ onClipSec: (nodeId, value) => {
                     ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: parseToken, lastParseError: String(err?.message || err) } }
                     : x)));
                 } finally {
+                  scenarioDirectorInFlightRef.current.delete(requestKey);
                   clearTimeout(timeoutId);
                   if (parseTimeoutRef.current === timeoutId) {
                     parseTimeoutRef.current = null;
@@ -14883,6 +14903,7 @@ onClipSec: (nodeId, value) => {
                 const activeNode = currentNodes.find((nodeItem) => nodeItem.id === nodeId);
                 const requestKey = `scenario-generate:${String(nodeId || "")}`;
                 const wasInFlight = narrativeGenerateInFlightRef.current.get(requestKey) === true;
+                const wasScenarioDirectorInFlight = scenarioDirectorInFlightRef.current.get(requestKey) === true;
                 const activeNodeIsGenerating = activeNode?.data?.isGenerating === true;
                 const liveController = narrativeAbortControllersRef.current.get(nodeId);
                 const hasLiveController = !!liveController && liveController?.signal?.aborted !== true;
@@ -14936,7 +14957,7 @@ onClipSec: (nodeId, value) => {
                     finalIsGenerating: false,
                   });
                 }
-                if (wasInFlight) {
+                if (wasInFlight || wasScenarioDirectorInFlight) {
                   console.debug("[SCENARIO GENERATE REQUEST]", {
                     requestKey,
                     inFlight: true,
@@ -14959,6 +14980,7 @@ onClipSec: (nodeId, value) => {
                   return;
                 }
                 narrativeGenerateInFlightRef.current.set(requestKey, true);
+                scenarioDirectorInFlightRef.current.set(requestKey, true);
                 console.debug("[SCENARIO GENERATE REQUEST]", {
                   requestKey,
                   inFlight: false,
@@ -15034,6 +15056,8 @@ onClipSec: (nodeId, value) => {
 
                 if (!requestPayload) {
                   narrativeAbortControllersRef.current.delete(nodeId);
+                  narrativeGenerateInFlightRef.current.delete(requestKey);
+                  scenarioDirectorInFlightRef.current.delete(requestKey);
                   syncNarrativeGenerateState({
                     finalIsGenerating: false,
                     reason: "narrative:scenario-generate:missing-request-payload",
@@ -15193,6 +15217,7 @@ onClipSec: (nodeId, value) => {
                     narrativeAbortControllersRef.current.delete(nodeId);
                   }
                   narrativeGenerateInFlightRef.current.delete(requestKey);
+                  scenarioDirectorInFlightRef.current.delete(requestKey);
                   const latestNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
                   const finalIsGenerating = latestNode?.data?.isGenerating === true;
                   console.debug("[SCENARIO GENERATE STATE]", {
