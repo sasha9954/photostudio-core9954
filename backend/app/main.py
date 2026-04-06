@@ -100,13 +100,25 @@ def _startup():
     public_base_url = str(settings.PUBLIC_BASE_URL).rstrip("/")
     is_public_base_localhost = is_localhost_url(public_base_url)
     is_comfy_base_localhost = is_localhost_url(comfy_base_url)
+    cors_allow_origins = settings.cors_allow_origins_list
     logger.info(
-        "[STARTUP] COMFY_BASE_URL=%s PUBLIC_BASE_URL=%s is_public_base_localhost=%s COMFY_OUTPUT_HANDOFF_STRATEGY=%s",
+        "[STARTUP] COMFY_BASE_URL=%s PUBLIC_BASE_URL=%s CORS_ALLOW_ORIGINS=%s is_public_base_localhost=%s is_comfy_base_localhost=%s COMFY_OUTPUT_HANDOFF_STRATEGY=%s",
         comfy_base_url,
         public_base_url,
+        cors_allow_origins,
         is_public_base_localhost,
+        is_comfy_base_localhost,
         str(settings.COMFY_OUTPUT_HANDOFF_STRATEGY or "backend_proxy").strip().lower() or "backend_proxy",
     )
+    if not cors_allow_origins:
+        logger.error(
+            "[STARTUP CONFIG PROBLEM] CORS_ALLOW_ORIGINS has no valid http(s) origins after parsing."
+        )
+    if settings.cors_allow_origins_invalid_list:
+        logger.warning(
+            "[STARTUP CONFIG WARNING] Ignored invalid CORS origins: %s",
+            settings.cors_allow_origins_invalid_list,
+        )
     if is_public_base_localhost:
         logger.error(
             "[STARTUP CONFIG PROBLEM] PUBLIC_BASE_URL=%s is localhost/loopback. "
@@ -119,6 +131,12 @@ def _startup():
             "This pairing breaks remote audio handoff for lip-sync.",
             comfy_base_url,
             public_base_url,
+        )
+    comfy_scheme = str(settings.COMFY_BASE_URL or "").strip().lower()
+    if not (comfy_scheme.startswith("http://") or comfy_scheme.startswith("https://")):
+        logger.warning(
+            "[STARTUP CONFIG WARNING] COMFY_BASE_URL seems invalid (expected http(s) URL): %s",
+            str(settings.COMFY_BASE_URL or "").strip(),
         )
     init_db()
 

@@ -82,10 +82,19 @@ class Settings(BaseSettings):
         values = []
         for item in str(self.CORS_ALLOW_ORIGINS or "").split(","):
             clean = item.strip().rstrip("/")
-            if clean:
+            if clean and _is_valid_http_url(clean):
                 values.append(clean)
         # preserve order and remove duplicates
         return list(dict.fromkeys(values))
+
+    @property
+    def cors_allow_origins_invalid_list(self) -> list[str]:
+        invalid = []
+        for item in str(self.CORS_ALLOW_ORIGINS or "").split(","):
+            clean = item.strip().rstrip("/")
+            if clean and not _is_valid_http_url(clean):
+                invalid.append(clean)
+        return list(dict.fromkeys(invalid))
 
 
 settings = Settings()
@@ -100,6 +109,19 @@ def is_localhost_url(value: str | None) -> bool:
     except Exception:
         return False
     return host in LOCALHOST_HOSTS
+
+
+def _is_valid_http_url(value: str | None) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return bool((parsed.netloc or "").strip())
 
 
 def _gemini_key_source() -> str:
@@ -122,9 +144,18 @@ logger.info(
 logger.info("[CONFIG] COMFY_BASE_URL=%s", str(settings.COMFY_BASE_URL).rstrip("/"))
 logger.info("[CONFIG] PUBLIC_BASE_URL=%s", str(settings.PUBLIC_BASE_URL).rstrip("/"))
 logger.info("[CONFIG] CORS_ALLOW_ORIGINS=%s", settings.cors_allow_origins_list)
+if settings.cors_allow_origins_invalid_list:
+    logger.warning(
+        "[CONFIG WARNING] CORS_ALLOW_ORIGINS contains invalid entries (ignored)=%s",
+        settings.cors_allow_origins_invalid_list,
+    )
 logger.info(
     "[CONFIG] is_public_base_localhost=%s",
     is_localhost_url(settings.PUBLIC_BASE_URL),
+)
+logger.info(
+    "[CONFIG] is_comfy_base_localhost=%s",
+    is_localhost_url(settings.COMFY_BASE_URL),
 )
 if is_localhost_url(settings.PUBLIC_BASE_URL):
     logger.warning(
@@ -137,3 +168,8 @@ logger.info(
     "[CONFIG] COMFY_OUTPUT_HANDOFF_STRATEGY=%s",
     str(settings.COMFY_OUTPUT_HANDOFF_STRATEGY or "backend_proxy").strip().lower() or "backend_proxy",
 )
+if not _is_valid_http_url(settings.COMFY_BASE_URL):
+    logger.warning(
+        "[CONFIG WARNING] COMFY_BASE_URL looks invalid: %s",
+        str(settings.COMFY_BASE_URL).rstrip("/"),
+    )

@@ -45,7 +45,7 @@ export default function LoginPage(){
       }
       const me = await refresh();
       if(!me?.ok){
-        throw new Error("Сессия не активировалась. Проверь: фронт и бэкенд должны открываться на одном hostname (localhost или 127.0.0.1). Обнови страницу и попробуй ещё раз.");
+        throw new Error("Сессия не активировалась. Проверь сетевой конфиг: фронт должен ходить в backend через VITE_API_BASE_URL и открываться с разрешённого origin. Обнови страницу и попробуй ещё раз.");
       }
       nav(returnTo);
     }catch(ex){

@@ -1,6 +1,5 @@
-// IMPORTANT: cookie-session with SameSite=Lax won't work reliably if frontend and backend
-// are on different "sites" (e.g. localhost vs 127.0.0.1). Поэтому подстраиваемся под
-// текущий hostname, чтобы API_BASE совпадал со "сайтом" фронта.
+// IMPORTANT: frontend must always call backend API, never Comfy directly.
+// Prefer explicit VITE_API_BASE_URL. Fallback is same-origin deployment.
 
 function normalizeApiErrorMessage(res, data){
   // FastAPI validation: {detail: [{loc: [...], msg: "...", type: "..."}]}
@@ -51,7 +50,12 @@ function createApiError({
 function resolveApiBase(){
   const envBase = String(import.meta.env.VITE_API_BASE_URL || "").trim();
   if (envBase) return envBase.replace(/\/+$/, "");
-  return `${window.location.protocol}//${window.location.hostname}:8000`;
+  const sameOrigin = String(window.location.origin || "").trim();
+  if (sameOrigin) {
+    console.warn("[API_BASE] VITE_API_BASE_URL is empty; using window.location.origin fallback:", sameOrigin);
+    return sameOrigin.replace(/\/+$/, "");
+  }
+  throw new Error("VITE_API_BASE_URL is required (or browser origin must be available).");
 }
 
 export const API_BASE = resolveApiBase();
