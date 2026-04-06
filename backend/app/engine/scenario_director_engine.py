@@ -9,6 +9,7 @@ import tempfile
 import time
 from typing import Any
 from urllib.parse import urljoin, urlparse
+from uuid import uuid4
 
 import requests
 
@@ -9828,6 +9829,25 @@ def _build_audio_coverage_refinement_prompt(payload: dict[str, Any], storyboard_
 
 
 def _send_director_request(api_key: str, body: dict[str, Any]) -> tuple[dict[str, Any] | None, str, list[str]]:
+    return _send_director_request_with_debug(api_key, body, debug_context=None)
+
+
+def _is_quota_or_rate_limited_response(response_payload: dict[str, Any] | None) -> bool:
+    if not isinstance(response_payload, dict) or not response_payload.get("__http_error__"):
+        return False
+    status = int(response_payload.get("status") or 0)
+    text_l = str(response_payload.get("text") or "").lower()
+    if status == 429:
+        return True
+    return any(token in text_l for token in ("resource_exhausted", "quota", "rate limit", "too many requests"))
+
+
+def _send_director_request_with_debug(
+    api_key: str,
+    body: dict[str, Any],
+    *,
+    debug_context: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, str, list[str]]:
     def _is_temp_unavailable(response_payload: dict[str, Any] | None) -> bool:
         if not isinstance(response_payload, dict) or not response_payload.get("__http_error__"):
             return False
@@ -9838,12 +9858,34 @@ def _send_director_request(api_key: str, body: dict[str, Any]) -> tuple[dict[str
     attempted_models: list[str] = []
     response: dict[str, Any] | None = None
     model_used = DEFAULT_TEXT_MODEL
+    attempt_index = 0
+    total_attempt_budget = (len([DEFAULT_TEXT_MODEL, FALLBACK_TEXT_MODEL])) * (len(GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC) + 1)
+    base_ctx = debug_context if isinstance(debug_context, dict) else {}
     for candidate_model in [DEFAULT_TEXT_MODEL, FALLBACK_TEXT_MODEL]:
         if candidate_model in attempted_models:
             continue
         attempted_models.append(candidate_model)
         for retry_idx in range(0, len(GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC) + 1):
+            attempt_index += 1
+            started_at = time.perf_counter()
             response = post_generate_content(api_key, candidate_model, body, timeout=120)
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 1)
+            response_status = int(response.get("status") or 0) if isinstance(response, dict) and response.get("__http_error__") else 200
+            finish_reason = _extract_gemini_finish_reason(response) if isinstance(response, dict) and not response.get("__http_error__") else ""
+            logger.info(
+                "[SCENARIO DIRECTOR GEMINI ATTEMPT] route=%s requestId=%s geminiAttemptIndex=%s geminiAttemptCount=%s modelUsed=%s attemptedModels=%s isRetry=%s retryReason=%s responseHttpStatus=%s responseFinishReason=%s elapsedMs=%s",
+                str(base_ctx.get("route") or "/api/clip/comfy/scenario-director/generate"),
+                str(base_ctx.get("scenarioDirectorRequestId") or ""),
+                attempt_index,
+                total_attempt_budget,
+                candidate_model,
+                attempted_models,
+                bool(base_ctx.get("isRetry")),
+                str(base_ctx.get("retryReason") or ""),
+                response_status,
+                finish_reason or "unknown",
+                elapsed_ms,
+            )
             if not _is_temp_unavailable(response):
                 break
             if retry_idx >= len(GEMINI_TEMP_UNAVAILABLE_RETRY_BACKOFFS_SEC):
@@ -9857,6 +9899,8 @@ def _send_director_request(api_key: str, body: dict[str, Any]) -> tuple[dict[str
             )
             time.sleep(backoff_sec)
         model_used = candidate_model
+        if _is_quota_or_rate_limited_response(response):
+            break
         if not isinstance(response, dict) or not response.get("__http_error__"):
             break
     return response, model_used, attempted_models
@@ -9866,6 +9910,20 @@ def _build_scenario_director_http_error(response: dict[str, Any], *, fallback_co
     status_code = int(response.get("status") or 502)
     error_text = str(response.get("text") or "")
     error_text_l = error_text.lower()
+    is_quota_exceeded = _is_quota_or_rate_limited_response(response)
+    if is_quota_exceeded:
+        return ScenarioDirectorError(
+            "provider_quota_exceeded",
+            "Gemini quota exceeded / rate limit exceeded. Проверь billing / limits / key.",
+            status_code=429,
+            details={
+                "provider": "gemini",
+                "httpStatus": status_code or 429,
+                "retryable": False,
+                "reason": "quota_or_rate_limited",
+                "upstreamMessage": error_text[:400],
+            },
+        )
     is_temp_unavailable = status_code == 503 or "unavailable" in error_text_l or "high demand" in error_text_l
     if is_temp_unavailable:
         return ScenarioDirectorError(
@@ -9881,8 +9939,8 @@ def _build_scenario_director_http_error(response: dict[str, Any], *, fallback_co
     return ScenarioDirectorError(
         fallback_code,
         f"{fallback_message} with HTTP {status_code}: {error_text[:400]}",
-        status_code=502,
-        details={"httpStatus": status_code},
+        status_code=status_code if 400 <= status_code < 600 else 502,
+        details={"httpStatus": status_code, "provider": "gemini", "retryable": False},
     )
 
 
@@ -11111,12 +11169,30 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
 
 
 def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[str, Any], api_key: str) -> dict[str, Any]:
-    logger.info("[SCENARIO DIRECTOR] audio-first single-call mode")
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    scenario_director_request_id = str(metadata.get("scenarioDirectorRequestId") or "").strip() or f"sd-{uuid4().hex[:12]}"
+    route_path = "/api/clip/comfy/scenario-director/generate"
+    logger.info("[SCENARIO DIRECTOR] audio-first single-call mode requestId=%s route=%s", scenario_director_request_id, route_path)
     prompt = _build_audio_first_single_call_prompt(payload)
     logger.info("[SCENARIO DIRECTOR] sending inline audio to Gemini")
     inline_audio_part = _build_inline_audio_part(audio_context)
     reference_image_parts = _build_reference_image_parts(payload)
     request_parts = [{"text": prompt}, *reference_image_parts, inline_audio_part]
+    prompt_length_chars = len(str(prompt or ""))
+    reference_image_part_count = len(reference_image_parts)
+    request_part_count = len(request_parts)
+    has_inline_audio = bool(inline_audio_part)
+    max_output_tokens = 8192
+    logger.info(
+        "[SCENARIO DIRECTOR PAYLOAD ESTIMATE] route=%s requestId=%s promptLengthChars=%s requestPartCount=%s referenceImagePartCount=%s hasInlineAudio=%s maxOutputTokens=%s",
+        route_path,
+        scenario_director_request_id,
+        prompt_length_chars,
+        request_part_count,
+        reference_image_part_count,
+        has_inline_audio,
+        max_output_tokens,
+    )
     body = {
         "systemInstruction": {
             "parts": [{"text": "Return strict JSON only."}],
@@ -11125,10 +11201,19 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
         "generationConfig": {
             "temperature": 0.2,
             "responseMimeType": "application/json",
-            "maxOutputTokens": 8192,
+            "maxOutputTokens": max_output_tokens,
         },
     }
-    response, model_used, attempted_models = _send_director_request(api_key, body)
+    response, model_used, attempted_models = _send_director_request_with_debug(
+        api_key,
+        body,
+        debug_context={
+            "route": route_path,
+            "scenarioDirectorRequestId": scenario_director_request_id,
+            "isRetry": False,
+            "retryReason": "",
+        },
+    )
     if not isinstance(response, dict):
         raise ScenarioDirectorError("gemini_request_failed", "Gemini did not return a JSON object.", status_code=502)
     if response.get("__http_error__"):
@@ -11156,7 +11241,16 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
                 }
             ],
         }
-        retry_response, retry_model_used, retry_attempts = _send_director_request(api_key, retry_body)
+        retry_response, retry_model_used, retry_attempts = _send_director_request_with_debug(
+            api_key,
+            retry_body,
+            debug_context={
+                "route": route_path,
+                "scenarioDirectorRequestId": scenario_director_request_id,
+                "isRetry": True,
+                "retryReason": "parse_or_contract_retry",
+            },
+        )
         attempted_models.extend(model for model in retry_attempts if model not in attempted_models)
         if not isinstance(retry_response, dict):
             raise
