@@ -50,12 +50,30 @@ function createApiError({
 function resolveApiBase(){
   const envBase = String(import.meta.env.VITE_API_BASE_URL || "").trim();
   if (envBase) return envBase.replace(/\/+$/, "");
-  const sameOrigin = String(window.location.origin || "").trim();
-  if (sameOrigin) {
-    console.warn("[API_BASE] VITE_API_BASE_URL is empty; using window.location.origin fallback:", sameOrigin);
-    return sameOrigin.replace(/\/+$/, "");
+
+  const protocol = String(window.location.protocol || "http:");
+  const hostname = String(window.location.hostname || "").trim();
+  const port = String(window.location.port || "").trim();
+  const origin = String(window.location.origin || "").trim();
+
+  if (!hostname) {
+    throw new Error("Cannot resolve API base: hostname is empty and VITE_API_BASE_URL is not set.");
   }
-  throw new Error("VITE_API_BASE_URL is required (or browser origin must be available).");
+
+  // Frontend must always call backend API, never Vite/static host.
+  if (port === "5173" || port === "4173" || port === "3000") {
+    const backendBase = `${protocol}//${hostname}:8000`;
+    console.warn("[API_BASE] VITE_API_BASE_URL is empty; using dev-port fallback:", backendBase);
+    return backendBase;
+  }
+
+  // Same-origin deployment (including reverse proxy to backend API).
+  if (origin) {
+    console.warn("[API_BASE] VITE_API_BASE_URL is empty; using same-origin fallback:", origin);
+    return origin.replace(/\/+$/, "");
+  }
+
+  return `${protocol}//${hostname}:8000`;
 }
 
 export const API_BASE = resolveApiBase();
