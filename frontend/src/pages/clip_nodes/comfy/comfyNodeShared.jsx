@@ -87,3 +87,35 @@ export function resolveAssetUrl(url) {
   if (raw.startsWith("static/assets/")) return `${API_BASE}/${raw}`;
   return raw;
 }
+
+function isLikelyAssetUrl(value) {
+  const clean = String(value || "").trim();
+  if (!clean) return false;
+  if (/^(https?:\/\/|data:|blob:)/i.test(clean)) return true;
+  if (clean.startsWith("/static/") || clean.startsWith("static/")) return true;
+  if (clean.startsWith("/assets/") || clean.startsWith("assets/")) return true;
+  return false;
+}
+
+function toFirstRefValue(refs) {
+  if (Array.isArray(refs) && refs.length) {
+    const first = refs[0];
+    return typeof first === "string" ? first : (first?.url || first?.value || "");
+  }
+  return "";
+}
+
+export function resolveRefThumbnailUrl(refData = {}) {
+  const item = refData && typeof refData === "object" ? refData : {};
+  const refsFirst = toFirstRefValue(item?.refs);
+  const directCandidates = [item?.url, item?.value, refsFirst, item?.imageUrl];
+  for (const candidateRaw of directCandidates) {
+    const candidate = String(candidateRaw || "").trim();
+    if (!candidate || !isLikelyAssetUrl(candidate)) continue;
+    const resolved = String(resolveAssetUrl(candidate) || "").trim();
+    if (resolved) return resolved;
+  }
+  const previewCandidate = String(item?.preview || "").trim();
+  if (!previewCandidate || !isLikelyAssetUrl(previewCandidate)) return "";
+  return String(resolveAssetUrl(previewCandidate) || "").trim();
+}

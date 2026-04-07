@@ -63,6 +63,7 @@ import {
   resolveScenarioWorkflowKey,
 } from "./clip_nodes/comfy/scenarioStoryboardDomain";
 import ScenarioStoryboardEditor from "./clip_nodes/comfy/ScenarioStoryboardEditor";
+import { resolveRefThumbnailUrl as resolveComfyRefThumbnailUrl } from "./clip_nodes/comfy/comfyNodeShared";
 
 
 // -------------------------
@@ -4860,10 +4861,14 @@ function normalizeRefData(data, kindHint = "") {
     ? data.refs
     : (data?.url ? [{ url: data.url, name: data?.name || "" }] : []);
   const refs = refsRaw
-    .map((item) => ({
-      url: String(item?.url || "").trim(),
-      name: String(item?.name || "").trim(),
-    }))
+    .map((item) => {
+      const safeItem = item && typeof item === "object" ? item : { value: String(item || "") };
+      return {
+        ...safeItem,
+        url: String(resolveComfyRefThumbnailUrl(safeItem) || "").trim(),
+        name: String(safeItem?.name || "").trim(),
+      };
+    })
     .filter((item) => !!item.url)
     .slice(0, maxFiles);
 
@@ -6148,9 +6153,24 @@ function RefNode({ id, data }) {
       >
         <div className="clipSB_refGrid" style={{ marginBottom: 10 }}>
           {uploadSoftError ? <div className="clipSB_refWarningBadge">⚠ {uploadSoftError}</div> : null}
-          {refs.map((item, idx) => (
+          {refs.map((item, idx) => {
+            const resolvedThumbnailUrl = resolveComfyRefThumbnailUrl(item);
+            console.debug("[REF NODE THUMBNAIL]", {
+              nodeType: kind,
+              preview: item?.preview,
+              value: item?.value,
+              refs: item?.refs,
+              resolvedThumbnailUrl,
+            });
+            return (
             <div className="clipSB_refThumb" key={`${item.url}-${idx}`}>
-              <img src={resolveAssetUrl(item.url)} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" />
+              {resolvedThumbnailUrl ? (
+                <img src={resolvedThumbnailUrl} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" />
+              ) : (
+                <div className="clipSB_refLiteEmpty" title="Thumbnail недоступен">
+                  <span>thumbnail недоступен</span>
+                </div>
+              )}
               <button
                 className="clipSB_refThumbRemove"
                 title="Удалить изображение"
@@ -6159,7 +6179,7 @@ function RefNode({ id, data }) {
                 ×
               </button>
             </div>
-          ))}
+          );})}
           {canAddMore ? (
             <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">
               +
