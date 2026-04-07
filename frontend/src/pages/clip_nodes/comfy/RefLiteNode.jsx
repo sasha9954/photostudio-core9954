@@ -48,15 +48,19 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const RefThumbImage = ({ item, idx }) => {
     const candidates = useMemo(() => buildRefImageCandidates(item), [item]);
     const [candidateIndex, setCandidateIndex] = useState(0);
+    const [thumbExhausted, setThumbExhausted] = useState(candidates.length === 0);
     const activeSrc = candidates[candidateIndex] || "";
     const candidateSignature = candidates.join("|");
-    useEffect(() => { setCandidateIndex(0); }, [candidateSignature]);
+    useEffect(() => {
+      setCandidateIndex(0);
+      setThumbExhausted(candidates.length === 0);
+    }, [item, candidateSignature]);
 
     useEffect(() => {
       console.debug("[REF THUMB FIX] candidates", { handleId, idx, candidates });
     }, [handleId, idx, candidates]);
 
-    if (!activeSrc) {
+    if (thumbExhausted || !activeSrc) {
       return <div className="clipSB_refLiteEmpty" title="Thumbnail недоступен"><span>thumbnail недоступен</span></div>;
     }
 
@@ -71,8 +75,11 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
             if (nextIndex < candidates.length) {
               console.debug("[REF THUMB FIX] onError fallback", { handleId, idx, failed: activeSrc, next: candidates[nextIndex] });
               setCandidateIndex(nextIndex);
+              setThumbExhausted(false);
             } else {
               console.debug("[REF THUMB FIX] onError fallback", { handleId, idx, failed: activeSrc, next: null });
+              console.debug("[REF THUMB FIX] exhausted fallback", { handleId, idx, failed: activeSrc });
+              setThumbExhausted(true);
             }
           }}
         />

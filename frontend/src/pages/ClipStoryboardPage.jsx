@@ -6106,17 +6106,19 @@ function BrainNode({ id, data }) {
 function RefThumbnailTile({ item, idx, title, kind, onRemoveImage, onOpenLightbox }) {
   const thumbnailCandidates = useMemo(() => buildRefImageCandidates(item), [item]);
   const [thumbIndex, setThumbIndex] = useState(0);
+  const [thumbExhausted, setThumbExhausted] = useState(thumbnailCandidates.length === 0);
   const resolvedThumbnailUrl = thumbnailCandidates[thumbIndex] || "";
   const candidateSignature = thumbnailCandidates.join("|");
 
   useEffect(() => {
     setThumbIndex(0);
+    setThumbExhausted(thumbnailCandidates.length === 0);
     console.debug("[REF THUMB FIX] candidates", { nodeType: kind, idx, candidates: thumbnailCandidates });
-  }, [kind, idx, candidateSignature]);
+  }, [item, kind, idx, candidateSignature]);
 
   return (
     <div className="clipSB_refThumb" key={`${item.url || item.value || item.name || "ref"}-${idx}`}>
-      {resolvedThumbnailUrl ? (
+      {!thumbExhausted && resolvedThumbnailUrl ? (
         <button className="clipSB_refLiteOpen" onClick={() => onOpenLightbox?.(resolvedThumbnailUrl)} title="Открыть фото">
           <img
             src={resolvedThumbnailUrl}
@@ -6127,6 +6129,11 @@ function RefThumbnailTile({ item, idx, title, kind, onRemoveImage, onOpenLightbo
               if (nextIndex < thumbnailCandidates.length) {
                 console.debug("[REF THUMB FIX] onError fallback", { nodeType: kind, idx, failed: resolvedThumbnailUrl, next: thumbnailCandidates[nextIndex] });
                 setThumbIndex(nextIndex);
+                setThumbExhausted(false);
+              } else {
+                console.debug("[REF THUMB FIX] onError fallback", { nodeType: kind, idx, failed: resolvedThumbnailUrl, next: null });
+                console.debug("[REF THUMB FIX] exhausted fallback", { nodeType: kind, idx, failed: resolvedThumbnailUrl });
+                setThumbExhausted(true);
               }
             }}
           />
