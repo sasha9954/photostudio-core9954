@@ -14,6 +14,11 @@ from app.engine.scenario_director_engine import (
     run_scenario_director_master,
     run_scenario_director_scenes,
 )
+from app.engine.clip_storyboard_pipeline import (
+    ClipPipelineError,
+    regenerate_clip_chunk,
+    run_clip_storyboard_pipeline,
+)
 
 import json
 import logging
@@ -173,6 +178,15 @@ class ScenarioDirectorGenerateIn(BaseModel):
     direct_gemini_storyboard_mode: bool | None = None
 
 
+
+
+def _is_clip_music_video_pipeline(req: dict[str, Any]) -> bool:
+    mode = str(req.get("mode") or "oneshot").strip().lower()
+    controls = req.get("director_controls") if isinstance(req.get("director_controls"), dict) else {}
+    content_type = str(controls.get("contentType") or "").strip().lower()
+    metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}
+    clip_mode = str(metadata.get("pipelineMode") or metadata.get("mode") or "clip").strip().lower()
+    return mode in {"oneshot", "clip_pipeline"} and content_type == "music_video" and clip_mode == "clip"
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
 ANIMAL_LABEL_BY_SPECIES = {
     "dog": "собака",
@@ -694,7 +708,16 @@ async def clip_comfy_scenario_director_generate(request: Request, payload: Scena
             return run_scenario_director_master(req)
         if mode == "scenes":
             return run_scenario_director_scenes(req)
+        if mode == "regenerate_chunk":
+            return regenerate_clip_chunk(req)
+        if _is_clip_music_video_pipeline(req):
+            return run_clip_storyboard_pipeline(req)
         return run_scenario_director(req)
+    except ClipPipelineError as exc:
+        detail: dict[str, Any] = {"code": exc.code, "message": exc.message}
+        if exc.details:
+            detail["details"] = exc.details
+        raise HTTPException(status_code=exc.status_code, detail=detail) from exc
     except ScenarioDirectorError as exc:
         exc_details = exc.details if isinstance(exc.details, dict) else {}
         http_status = int(exc_details.get("http_status") or exc_details.get("httpStatus") or 0)
