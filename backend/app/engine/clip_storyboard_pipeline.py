@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -18,6 +19,7 @@ WHOLE_MAP_RETRY_COUNT = 3
 CHUNK_RETRY_COUNT = 3
 REPAIR_RETRY_COUNT = 2
 CLIP_REF_ROLES = ("character_1", "character_2", "character_3", "animal", "group", "location", "style", "props")
+CLIP_CONTEXT_VERSION = "clip_pipeline_context_v1"
 
 
 class ClipPipelineError(Exception):
@@ -194,6 +196,10 @@ def _normalize_media_file_part(url: str, *, fallback_mime: str) -> dict[str, Any
     return {"fileData": {"mimeType": fallback_mime, "fileUri": file_url}}
 
 
+def _now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
 def _extract_refs_by_role(payload: dict[str, Any]) -> dict[str, list[str]]:
     refs_out: dict[str, list[str]] = {role: [] for role in CLIP_REF_ROLES}
     connected = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
@@ -205,7 +211,7 @@ def _extract_refs_by_role(payload: dict[str, Any]) -> dict[str, list[str]]:
     return refs_out
 
 
-def _normalize_clip_context(payload: dict[str, Any], provided_context: dict[str, Any] | None = None) -> dict[str, Any]:
+def _prepare_clip_pipeline_context(payload: dict[str, Any], provided_context: dict[str, Any] | None = None) -> dict[str, Any]:
     ctx = provided_context if isinstance(provided_context, dict) else {}
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     audio_url = str(
@@ -226,26 +232,185 @@ def _normalize_clip_context(payload: dict[str, Any], provided_context: dict[str,
         for ref_url in role_refs[:6]:
             role_parts.append(_normalize_media_file_part(str(ref_url), fallback_mime="image/jpeg"))
         refs_media[role] = [part for part in role_parts if part]
+    cache_handle = str(ctx.get("cache_handle") or ctx.get("cache_id") or "").strip()
+    cache_id = str(ctx.get("cache_id") or cache_handle).strip()
+    created_at = str(ctx.get("created_at") or "").strip() or _now_iso()
     has_audio = bool(audio_part)
     has_refs = any(refs_media.get(role) for role in CLIP_REF_ROLES)
-    state = "ready_with_media" if has_audio else "missing_audio_media"
-    if has_audio and not has_refs:
-        state = "ready_audio_only"
-    elif has_audio and has_refs:
-        state = "ready_with_media_refs"
+    if cache_handle:
+        context_state = "prepared_remote_cache_context"
+        used_context_mode = "remote_cache_context"
+    elif has_audio:
+        context_state = "prepared_local_media_context"
+        used_context_mode = "local_media_context"
+    else:
+        context_state = "missing_audio_media"
+        used_context_mode = "local_media_context"
+    refs_contract = {
+        role: {
+            "handles": [str(ref).strip() for ref in (refs_by_role.get(role) if isinstance(refs_by_role.get(role), list) else []) if str(ref).strip()],
+            "uris": [str(ref).strip() for ref in (refs_by_role.get(role) if isinstance(refs_by_role.get(role), list) else []) if str(ref).strip()],
+            "media_parts": refs_media.get(role) if isinstance(refs_media.get(role), list) else [],
+        }
+        for role in CLIP_REF_ROLES
+    }
     return {
-        "state": state,
-        "context_version": "clip_pipeline_v1",
-        "is_reusable": has_audio,
-        "audio_source": "master_track",
-        "audio": {
-            "audio_url": audio_url,
+        "context_version": CLIP_CONTEXT_VERSION,
+        "context_state": context_state,
+        "context_status": context_state,
+        "used_context_mode": used_context_mode,
+        "is_reusable": bool(has_audio or cache_handle),
+        "created_at": created_at,
+        "updated_at": _now_iso(),
+        "cache_handle": cache_handle or None,
+        "cache_id": cache_id or None,
+        "audio_source": {
+            "handle": str(ctx.get("audio_source_handle") or "master_track"),
+            "uri": audio_url,
+            "file_reference": str(ctx.get("audio_file_reference") or audio_url),
+            "attached": has_audio,
             "media_part": audio_part,
         },
         "audio_url": audio_url,
         "refs_by_role": refs_by_role,
+        "refs_contract": refs_contract,
         "refs_media_parts_by_role": refs_media,
+        "refs_roles_attached": [role for role in CLIP_REF_ROLES if refs_contract.get(role, {}).get("media_parts")],
+        "audio_media_attached": has_audio,
+        "has_refs_media": has_refs,
         "system_instruction": "clip mode music video production storyboard",
+    }
+
+
+def _normalize_clip_context(payload: dict[str, Any], provided_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    return _prepare_clip_pipeline_context(payload, provided_context)
+
+
+def _build_context_diagnostics(context: dict[str, Any], *, stage: str, chunk_id: str | None = None) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "chunk_id": chunk_id,
+        "context_version": context.get("context_version"),
+        "context_state": context.get("context_state"),
+        "used_context_mode": context.get("used_context_mode"),
+        "is_reusable": bool(context.get("is_reusable")),
+        "audio_media_attached": bool(context.get("audio_media_attached")),
+        "ref_roles_attached": list(context.get("refs_roles_attached") or []),
+        "cache_handle_present": bool(context.get("cache_handle")),
+    }
+
+
+def _build_scene_schema(*, required_only: bool = False) -> dict[str, Any]:
+    prompt_fields = {
+        "frame_prompt": {"type": "string"},
+        "camera_prompt": {"type": "string"},
+        "motion_prompt": {"type": "string"},
+        "first_frame_prompt": {"type": "string"},
+        "last_frame_prompt": {"type": "string"},
+        "transition_prompt": {"type": "string"},
+    }
+    base = {
+        "type": "object",
+        "properties": {
+            "scene_id": {"type": "string"},
+            "t0": {"type": "number"},
+            "t1": {"type": "number"},
+            "section_type": {"type": "string"},
+            "route": {"type": "string", "enum": list(ALLOWED_CLIP_ROUTES)},
+            "goal": {"type": "string"},
+            "continuity_tokens": {"type": "array", "items": {"type": "string"}},
+            "is_boundary_scene": {"type": "boolean"},
+            "recurring_group_id": {"type": "string"},
+            **prompt_fields,
+        },
+        "required": ["scene_id", "t0", "t1", "section_type", "route", "goal"],
+    }
+    if required_only:
+        return {k: v for k, v in base.items() if k != "additionalProperties"}
+    return base
+
+
+def _build_whole_track_map_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "track_id": {"type": "string"},
+            "mode": {"type": "string", "enum": ["clip"]},
+            "duration_sec": {"type": "number"},
+            "global_arc": {"type": "string"},
+            "world_lock": {"type": "object"},
+            "identity_lock": {"type": "object"},
+            "style_lock": {"type": "object"},
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "section_id": {"type": "string"},
+                        "t0": {"type": "number"},
+                        "t1": {"type": "number"},
+                        "section_type": {"type": "string"},
+                        "energy": {"type": "integer"},
+                        "recurring_group_id": {"type": "string"},
+                        "suggested_visual_role": {"type": "string"},
+                    },
+                    "required": ["section_id", "t0", "t1", "section_type"],
+                },
+            },
+            "no_split_ranges": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"t0": {"type": "number"}, "t1": {"type": "number"}, "reason": {"type": "string"}},
+                    "required": ["t0", "t1"],
+                },
+            },
+            "suggested_chunk_boundaries": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"chunk_id": {"type": "string"}, "t0": {"type": "number"}, "t1": {"type": "number"}},
+                    "required": ["chunk_id", "t0", "t1"],
+                },
+            },
+        },
+        "required": ["track_id", "mode", "duration_sec", "global_arc", "sections"],
+    }
+
+
+def _build_chunk_response_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "track_id": {"type": "string"},
+            "mode": {"type": "string", "enum": ["clip"]},
+            "chunk_id": {"type": "string"},
+            "t0": {"type": "number"},
+            "t1": {"type": "number"},
+            "continuity_out": {"type": "object"},
+            "scenes": {"type": "array", "items": _build_scene_schema()},
+        },
+        "required": ["track_id", "mode", "chunk_id", "t0", "t1", "scenes"],
+    }
+
+
+def _build_repair_response_schema() -> dict[str, Any]:
+    edge_scene_schema = _build_scene_schema(required_only=True)
+    return {
+        "type": "object",
+        "properties": {
+            "repaired_chunk_edges": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "left_scene": edge_scene_schema,
+                        "right_scene": edge_scene_schema,
+                    },
+                },
+            },
+            "transition_scene": _build_scene_schema(required_only=True),
+        },
     }
 
 
@@ -282,14 +447,15 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
         "content_type": ((payload.get("director_controls") or {}).get("contentType") if isinstance(payload.get("director_controls"), dict) else ""),
         "audio_duration_sec": payload.get("audioDurationSec"),
         "refs_roles_present": [role for role, refs in (context.get("refs_by_role") or {}).items() if isinstance(refs, list) and refs],
-        "context_state": context.get("state"),
+        "context_state": context.get("context_state"),
+        "used_context_mode": context.get("used_context_mode"),
     }
     parts: list[dict[str, Any]] = [
         {"text": "Build WholeTrackMapResponse JSON for clip mode only."},
         {"text": "No giant transcript. Keep lean map with sections/no_split_ranges/suggested_chunk_boundaries."},
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
-    audio_part = ((context.get("audio") or {}).get("media_part") if isinstance(context.get("audio"), dict) else {})
+    audio_part = ((context.get("audio_source") or {}).get("media_part") if isinstance(context.get("audio_source"), dict) else {})
     if isinstance(audio_part, dict) and audio_part:
         parts.append({"text": "Master audio input:"})
         parts.append(audio_part)
@@ -297,13 +463,22 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
     return {
         "systemInstruction": {"parts": [{"text": str(context.get("system_instruction") or "You are a production clip storyboard planner. Return strict JSON only.")}]},
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json", "maxOutputTokens": 8192},
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+            "responseSchema": _build_whole_track_map_schema(),
+            "maxOutputTokens": 8192,
+        },
     }
 
 
 def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMapResponse, context: dict[str, Any]) -> dict[str, Any]:
     runtime = {
-        "context": {"audio_url": context.get("audio_url"), "context_state": context.get("state")},
+        "context": {
+            "audio_url": context.get("audio_url"),
+            "context_state": context.get("context_state"),
+            "used_context_mode": context.get("used_context_mode"),
+        },
         "whole_track_map": whole_map.model_dump(mode="json"),
         "chunk_request": req.model_dump(mode="json"),
     }
@@ -312,7 +487,7 @@ def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMa
         {"text": "Allowed routes only: i2v, ia2v, first_last. No transcript/audioStructure/semanticTimeline."},
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
-    audio_part = ((context.get("audio") or {}).get("media_part") if isinstance(context.get("audio"), dict) else {})
+    audio_part = ((context.get("audio_source") or {}).get("media_part") if isinstance(context.get("audio_source"), dict) else {})
     if isinstance(audio_part, dict) and audio_part:
         parts.append({"text": "Master audio context input:"})
         parts.append(audio_part)
@@ -320,7 +495,12 @@ def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMa
     return {
         "systemInstruction": {"parts": [{"text": str(context.get("system_instruction") or "You are a production clip storyboard planner. Return strict JSON only.")}]},
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json", "maxOutputTokens": 8192},
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+            "responseSchema": _build_chunk_response_schema(),
+            "maxOutputTokens": 8192,
+        },
     }
 
 
@@ -446,7 +626,12 @@ def _run_optional_repair(*, api_key: str, merged: dict[str, Any], issues: list[M
     body = {
         "systemInstruction": {"parts": [{"text": "You repair chunk-boundary scenes only. Return strict JSON only."}]},
         "contents": [{"role": "user", "parts": [{"text": _build_repair_prompt(merged=merged, issues=issues)}]}],
-        "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json", "maxOutputTokens": 4096},
+        "generationConfig": {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+            "responseSchema": _build_repair_response_schema(),
+            "maxOutputTokens": 4096,
+        },
     }
     parsed, _ = _call_gemini_json(api_key=api_key, body=body, retry_count=REPAIR_RETRY_COUNT)
     return {"applied": True, "issues": [issue.__dict__ for issue in issues], "result": parsed}
@@ -487,6 +672,63 @@ def _apply_repair_result(merged: dict[str, Any], repair_data: dict[str, Any]) ->
     return {**merged, "scenes": scenes}, {"edge_rewrites_applied": applied_edges, "transition_scene_applied": transition_applied}
 
 
+def _validate_merged_storyboard(merged: dict[str, Any]) -> dict[str, Any]:
+    scenes = merged.get("scenes") if isinstance(merged.get("scenes"), list) else []
+    errors: list[str] = []
+    seen_ids: set[str] = set()
+    prev_t0 = -1.0
+    prev_t1 = -1.0
+    for idx, scene in enumerate(scenes):
+        if not isinstance(scene, dict):
+            errors.append(f"scene[{idx}] is not object")
+            continue
+        scene_id = str(scene.get("scene_id") or "").strip()
+        route = str(scene.get("route") or "").strip()
+        if not scene_id:
+            errors.append(f"scene[{idx}] missing scene_id")
+        elif scene_id in seen_ids:
+            errors.append(f"duplicate scene_id={scene_id}")
+        seen_ids.add(scene_id)
+        if route not in ALLOWED_CLIP_ROUTES:
+            errors.append(f"scene[{idx}] invalid route={route}")
+        t0 = float(scene.get("t0") or 0.0)
+        t1 = float(scene.get("t1") or 0.0)
+        if t0 < 0 or t1 <= 0 or t1 <= t0:
+            errors.append(f"scene[{idx}] invalid time range t0={t0}, t1={t1}")
+        if idx > 0 and t0 < prev_t0:
+            errors.append(f"scene[{idx}] out of order t0={t0} < previous_t0={prev_t0}")
+        if idx > 0 and t0 < prev_t1:
+            errors.append(f"scene[{idx}] overlap conflict t0={t0} < previous_t1={prev_t1}")
+        if route in {"i2v", "ia2v"}:
+            for field in ("frame_prompt", "camera_prompt", "motion_prompt"):
+                if not str(scene.get(field) or "").strip():
+                    errors.append(f"scene[{idx}] missing {field} for route={route}")
+        if route == "first_last":
+            for field in ("first_frame_prompt", "last_frame_prompt", "transition_prompt"):
+                if not str(scene.get(field) or "").strip():
+                    errors.append(f"scene[{idx}] missing {field} for route=first_last")
+        continuity_tokens = scene.get("continuity_tokens")
+        if continuity_tokens is not None and not isinstance(continuity_tokens, list):
+            errors.append(f"scene[{idx}] continuity_tokens must be list")
+        prev_t0 = t0
+        prev_t1 = t1
+    return {"valid": not errors, "scene_count": len(scenes), "errors": errors}
+
+
+def _validate_repair_applied_storyboard(pre_repair: dict[str, Any], post_repair: dict[str, Any]) -> dict[str, Any]:
+    post_validation = _validate_merged_storyboard(post_repair)
+    pre_count = len(pre_repair.get("scenes") if isinstance(pre_repair.get("scenes"), list) else [])
+    post_count = len(post_repair.get("scenes") if isinstance(post_repair.get("scenes"), list) else [])
+    if post_count <= 0:
+        post_validation["errors"].append("repair produced empty storyboard")
+    return {
+        "valid": bool(post_validation.get("valid")),
+        "pre_scene_count": pre_count,
+        "post_scene_count": post_count,
+        "errors": list(post_validation.get("errors") or []),
+    }
+
+
 def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], context: dict[str, Any]) -> tuple[WholeTrackMapResponse, dict[str, Any], list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     last_error: ClipPipelineError | None = None
@@ -495,6 +737,7 @@ def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], con
         try:
             raw, call_diag = _call_gemini_json(api_key=api_key, body=req_body, retry_count=2)
             model = WholeTrackMapResponse.model_validate(raw)
+            diagnostics.append({"stage": "whole_map", "attempt": attempt, "response_schema_enabled": True, "context_state": context.get("context_state")})
             return model, call_diag, diagnostics
         except ValidationError as exc:
             reason = "invalid whole track map contract"
@@ -512,9 +755,19 @@ def _generate_chunk_with_retry(*, api_key: str, req: ChunkStoryboardRequest, who
     for attempt in range(1, CHUNK_RETRY_COUNT + 1):
         try:
             body = _build_chunk_request(req=req, whole_map=whole_map, context=context)
-            parsed_chunk, _ = _call_gemini_json(api_key=api_key, body=body, retry_count=2)
+            parsed_chunk, call_diag = _call_gemini_json(api_key=api_key, body=body, retry_count=2)
             chunk = ChunkStoryboardResponse.model_validate(parsed_chunk)
             _validate_chunk_response(chunk)
+            diagnostics.append(
+                {
+                    "stage": "chunk",
+                    "chunk_id": req.chunk_id,
+                    "attempt": attempt,
+                    "response_schema_enabled": True,
+                    "context_state": context.get("context_state"),
+                    "gemini_retries": call_diag.get("retries") if isinstance(call_diag, dict) else None,
+                }
+            )
             return chunk, diagnostics
         except ValidationError as exc:
             diagnostics.append({"stage": "chunk", "chunk_id": req.chunk_id, "attempt": attempt, "reason": "invalid chunk contract", "errors": exc.errors()})
@@ -531,8 +784,10 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
         raise ClipPipelineError("fatal_fail", "GEMINI_API_KEY is missing for clip pipeline.", status_code=503)
 
     context = _normalize_clip_context(payload)
-    state_history = [context.get("state") or "context_prepared"]
+    state_history = [context.get("context_state") or "context_prepared"]
     retry_diagnostics: list[dict[str, Any]] = []
+    schema_diagnostics = {"whole_map_schema_enabled": True, "chunk_schema_enabled": True, "repair_schema_enabled": True}
+    context_diagnostics = [_build_context_diagnostics(context, stage="stage_0_context_prepare")]
     try:
         whole_map, map_diag, map_retry = _generate_whole_map_with_retry(api_key=api_key, payload=payload, context=context)
         retry_diagnostics.extend(map_retry)
@@ -564,12 +819,25 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
 
         state_history.append("merging")
         merged, issues, merge_diag = _local_merge(whole_map.track_id, chunk_results)
+        merged_validation = _validate_merged_storyboard(merged)
+        if not merged_validation.get("valid"):
+            raise ClipPipelineError("retryable_fail", "merged storyboard validation failed", details={"errors": merged_validation.get("errors")})
         repair_data = {"applied": False, "issues": []}
         repair_apply_diag = {"edge_rewrites_applied": 0, "transition_scene_applied": False}
+        repair_validation_diag: dict[str, Any] = {"attempted": False, "accepted": False, "errors": []}
         if issues:
             state_history.append("repairing")
             repair_data = _run_optional_repair(api_key=api_key, merged=merged, issues=issues)
-            merged, repair_apply_diag = _apply_repair_result(merged, repair_data)
+            pre_repair_merged = dict(merged)
+            merged_candidate, repair_apply_diag = _apply_repair_result(merged, repair_data)
+            repair_validation_diag = {"attempted": True, **_validate_repair_applied_storyboard(pre_repair_merged, merged_candidate)}
+            if repair_validation_diag.get("valid"):
+                merged = merged_candidate
+                repair_validation_diag["accepted"] = True
+            else:
+                repair_data["repair_rejected_reason"] = "post_repair_validation_failed"
+                repair_data["repair_rejected_errors"] = repair_validation_diag.get("errors") or []
+                repair_validation_diag["accepted"] = False
 
         state_history.append("complete")
         return {
@@ -590,7 +858,17 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
             "chunks": [chunk.model_dump(mode="json", exclude_none=True) for chunk in chunk_results],
             "merged_storyboard": merged,
             "repair": repair_data,
-            "meta": {"model": CLIP_PIPELINE_MODEL, "mapDiagnostics": map_diag, "retryDiagnostics": retry_diagnostics, "mergeDiagnostics": merge_diag, "repairApplyDiagnostics": repair_apply_diag},
+            "meta": {
+                "model": CLIP_PIPELINE_MODEL,
+                "mapDiagnostics": map_diag,
+                "retryDiagnostics": retry_diagnostics,
+                "mergeDiagnostics": merge_diag,
+                "mergedValidationDiagnostics": merged_validation,
+                "repairApplyDiagnostics": repair_apply_diag,
+                "repairValidationDiagnostics": repair_validation_diag,
+                "schemaDiagnostics": schema_diagnostics,
+                "contextDiagnostics": context_diagnostics,
+            },
         }
     except ClipPipelineError:
         state_history.append("retryable_fail")
@@ -635,11 +913,26 @@ def regenerate_clip_chunk(payload: dict[str, Any]) -> dict[str, Any]:
     )
     context = _normalize_clip_context(payload, payload.get("context") if isinstance(payload.get("context"), dict) else None)
     chunk, retry_diag = _generate_chunk_with_retry(api_key=api_key, req=req, whole_map=whole_map, context=context)
+    regenerate_diagnostics = {
+        "stage": "regenerate_chunk",
+        "chunk_id": chunk_id,
+        "response_schema_enabled": True,
+        "used_context_mode": context.get("used_context_mode"),
+        "audio_media_attached": bool(context.get("audio_media_attached")),
+        "ref_roles_attached": list(context.get("refs_roles_attached") or []),
+        "attempt_count": len(retry_diag),
+    }
     return {
         "ok": True,
         "mode": "clip",
         "state": "chunk_done",
         "chunk": chunk.model_dump(mode="json", exclude_none=True),
         "context": context,
-        "meta": {"model": CLIP_PIPELINE_MODEL, "retryDiagnostics": retry_diag},
+        "meta": {
+            "model": CLIP_PIPELINE_MODEL,
+            "retryDiagnostics": retry_diag,
+            "schemaDiagnostics": {"chunk_schema_enabled": True},
+            "contextDiagnostics": [_build_context_diagnostics(context, stage="regenerate_context_prepare", chunk_id=chunk_id)],
+            "regenerateDiagnostics": regenerate_diagnostics,
+        },
     }
