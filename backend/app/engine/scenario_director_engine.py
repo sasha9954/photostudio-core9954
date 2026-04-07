@@ -10339,7 +10339,14 @@ def _is_semantically_nonempty_compact_result(
     safe_motion_default = "character performance aligned to the current music phrase."
     safe_camera_default = "steady medium shot with music-video framing."
     safe_environment_default = "music-video performance environment."
-    safe_route_default = "i2v | lip_sync_music | first_last"
+    defaultish_routes = {
+        "",
+        "i2v",
+        "lip_sync_music",
+        "first_last",
+        "i2v | lip_sync_music | first_last",
+        "i2v|lip_sync_music|first_last",
+    }
 
     def _compact_text(value: Any) -> str:
         if value is None:
@@ -10393,6 +10400,7 @@ def _is_semantically_nonempty_compact_result(
         t1 = _safe_float(adapted_scene.get("t1"), t0)
         duration = _safe_float(adapted_scene.get("duration"), max(0.0, t1 - t0))
         has_real_timing = (t1 - t0) > 0.0 or duration > 0.0
+        route_is_non_default = bool(route_norm) and route_norm not in defaultish_routes
 
         text_is_non_default = any(
             [
@@ -10405,11 +10413,15 @@ def _is_semantically_nonempty_compact_result(
                 bool(motion_norm) and motion_norm != safe_motion_default,
                 bool(camera_norm) and camera_norm != safe_camera_default,
                 bool(environment_norm) and environment_norm != safe_environment_default,
-                bool(route_norm) and route_norm != safe_route_default,
                 bool(story_function_norm),
                 bool(adapted_tags),
             ]
         )
+
+        # route is intentionally not treated as a strong semantic signal:
+        # even non-default route values alone should not pass semantic gate.
+        if route_is_non_default and not (text_is_non_default or scene_metadata_non_default):
+            continue
 
         if (text_is_non_default or scene_metadata_non_default) and has_real_timing:
             meaningful_scene_detected = True
