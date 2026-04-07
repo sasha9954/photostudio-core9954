@@ -1,5 +1,5 @@
 import React from "react";
-import { Handle, Position, NodeShell, handleStyle, resolveAssetUrl, useRef } from "./comfyNodeShared";
+import { Handle, Position, NodeShell, handleStyle, resolveRefThumbnailUrl, useRef } from "./comfyNodeShared";
 import { formatRefProfileDetails } from "./refProfileDetails";
 
 const REF_STATUS_LABELS = {
@@ -20,7 +20,24 @@ const ROLE_TYPE_OPTIONS = [
 export default function RefLiteNode({ id, data, title, className, handleId, showRoleSelector = false }) {
   const inputRef = useRef(null);
   const maxFiles = 5;
-  const refs = Array.isArray(data?.refs) ? data.refs.map((item) => ({ url: String(item?.url || "").trim(), name: String(item?.name || "").trim(), type: String(item?.type || "").trim() })).filter((item) => !!item.url).slice(0, maxFiles) : [];
+  const refs = Array.isArray(data?.refs)
+    ? data.refs
+      .map((item) => {
+        const thumbnailUrl = resolveRefThumbnailUrl(item);
+        return {
+          url: thumbnailUrl || String(item?.url || "").trim(),
+          thumbnailUrl,
+          name: String(item?.name || "").trim(),
+          type: String(item?.type || "").trim(),
+          preview: String(item?.preview || "").trim(),
+          value: String(item?.value || "").trim(),
+          refs: Array.isArray(item?.refs) ? item.refs : [],
+          imageUrl: String(item?.imageUrl || "").trim(),
+        };
+      })
+      .filter((item) => !!item.url || !!item.value || item.refs.length > 0 || !!item.preview || !!item.imageUrl)
+      .slice(0, maxFiles)
+    : [];
   const canAddMore = refs.length < maxFiles;
   const refStatus = String(data?.refStatus || (refs.length ? "draft" : "empty"));
   const isError = refStatus === "error";
@@ -64,7 +81,29 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
           </select>
         </div>
       ) : null}
-      <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => <div className="clipSB_refThumb" key={`${item.url}-${idx}`}><button className="clipSB_refLiteOpen" onClick={() => data?.onOpenLightbox?.(item.url)} title="Открыть фото"><img src={resolveAssetUrl(item.url)} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" /></button><button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button></div>)}{canAddMore ? <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">+</button> : null}</div>}</div>
+      <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => {
+        console.debug("[REF NODE THUMBNAIL]", {
+          nodeType: data?.kind || handleId || "ref_lite",
+          preview: item.preview,
+          value: item.value,
+          refs: item.refs,
+          resolvedThumbnailUrl: item.thumbnailUrl,
+        });
+        return (
+          <div className="clipSB_refThumb" key={`${item.url || "ref"}-${idx}`}>
+            {item.thumbnailUrl ? (
+              <button className="clipSB_refLiteOpen" onClick={() => data?.onOpenLightbox?.(item.thumbnailUrl)} title="Открыть фото">
+                <img src={item.thumbnailUrl} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" />
+              </button>
+            ) : (
+              <div className="clipSB_refLiteEmpty" title="Thumbnail недоступен">
+                <span>thumbnail недоступен</span>
+              </div>
+            )}
+            <button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button>
+          </div>
+        );
+      })}{canAddMore ? <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">+</button> : null}</div>}</div>
       <div style={{ display: "flex", gap: 8 }}>
         <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading || refStatus === "loading"}>{data?.uploading ? "Загрузка…" : refs.length ? "Добавить фото" : "Загрузить фото"}</button>
       </div>
