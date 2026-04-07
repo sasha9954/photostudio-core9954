@@ -10321,6 +10321,105 @@ def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any
     }
 
 
+def _is_semantically_nonempty_compact_result(
+    compact_payload: dict[str, Any],
+    adapted_payload: dict[str, Any],
+) -> tuple[bool, str]:
+    if not isinstance(compact_payload, dict) or not isinstance(adapted_payload, dict):
+        return False, "invalid_payload_type"
+    storyboard = compact_payload.get("storyboard") if isinstance(compact_payload.get("storyboard"), dict) else {}
+    compact_scenes = storyboard.get("scenes") if isinstance(storyboard.get("scenes"), list) else []
+    adapted_scenes = adapted_payload.get("scenes") if isinstance(adapted_payload.get("scenes"), list) else []
+    if not compact_scenes:
+        return False, "compact_scenes_missing"
+    if not adapted_scenes:
+        return False, "adapted_scenes_missing"
+
+    safe_summary_default = "premium music-video performance beat."
+    safe_motion_default = "character performance aligned to the current music phrase."
+    safe_camera_default = "steady medium shot with music-video framing."
+    safe_environment_default = "music-video performance environment."
+    safe_route_default = "i2v | lip_sync_music | first_last"
+
+    def _compact_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return str(value).strip()
+
+    def _norm(value: Any) -> str:
+        return _compact_text(value).lower()
+
+    meaningful_scene_detected = False
+    for idx, raw_scene in enumerate(compact_scenes):
+        if not isinstance(raw_scene, dict):
+            continue
+        adapted_scene = adapted_scenes[idx] if idx < len(adapted_scenes) and isinstance(adapted_scenes[idx], dict) else {}
+
+        src_description = _compact_text(raw_scene.get("description"))
+        src_route = _compact_text(raw_scene.get("route"))
+        src_story_function = _compact_text(raw_scene.get("story_function") or raw_scene.get("storyFunction"))
+        src_environment = _compact_text(raw_scene.get("environment"))
+        src_performance = _compact_text(raw_scene.get("performance_framing") or raw_scene.get("performanceFraming"))
+        src_tags = [str(tag).strip() for tag in (raw_scene.get("content_tags") or []) if str(tag).strip()]
+        src_start = raw_scene.get("start_time_sec")
+        src_end = raw_scene.get("end_time_sec")
+        src_has_timing = src_start is not None or src_end is not None
+
+        src_has_real_signal = any(
+            [
+                bool(src_description),
+                bool(src_route),
+                bool(src_story_function),
+                bool(src_environment),
+                bool(src_performance),
+                bool(src_tags),
+                src_has_timing,
+            ]
+        )
+        if not src_has_real_signal:
+            continue
+
+        summary_norm = _norm(adapted_scene.get("summary"))
+        visual_norm = _norm(adapted_scene.get("visualPrompt"))
+        motion_norm = _norm(adapted_scene.get("motion"))
+        camera_norm = _norm(adapted_scene.get("camera"))
+        environment_norm = _norm(adapted_scene.get("environment"))
+        route_norm = _norm(adapted_scene.get("route"))
+        story_function_norm = _norm(adapted_scene.get("storyFunction"))
+        adapted_tags = [str(tag).strip() for tag in (adapted_scene.get("content_tags") or []) if str(tag).strip()]
+        t0 = _safe_float(adapted_scene.get("t0"), 0.0)
+        t1 = _safe_float(adapted_scene.get("t1"), t0)
+        duration = _safe_float(adapted_scene.get("duration"), max(0.0, t1 - t0))
+        has_real_timing = (t1 - t0) > 0.0 or duration > 0.0
+
+        text_is_non_default = any(
+            [
+                bool(summary_norm) and summary_norm != safe_summary_default,
+                bool(visual_norm) and visual_norm != safe_summary_default,
+            ]
+        )
+        scene_metadata_non_default = any(
+            [
+                bool(motion_norm) and motion_norm != safe_motion_default,
+                bool(camera_norm) and camera_norm != safe_camera_default,
+                bool(environment_norm) and environment_norm != safe_environment_default,
+                bool(route_norm) and route_norm != safe_route_default,
+                bool(story_function_norm),
+                bool(adapted_tags),
+            ]
+        )
+
+        if (text_is_non_default or scene_metadata_non_default) and has_real_timing:
+            meaningful_scene_detected = True
+            break
+
+    if not meaningful_scene_detected:
+        return False, "no_meaningful_scene_content_after_defaults"
+    return True, "ok"
+
+
 def _adapt_audio_first_rich_payload_to_legacy_contract(rich_payload: dict[str, Any], *, parse_stage: str = "audio_first_initial") -> dict[str, Any] | None:
     if not isinstance(rich_payload, dict):
         return None
@@ -10548,26 +10647,35 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
         return isinstance(scenes_value, list) and len(scenes_value) > 0
 
     parse_branch = ""
+    parse_reason = ""
     if _is_valid_legacy_contract(extracted):
         parse_branch = "legacy_parse"
     else:
         compact_adapted = _adapt_audio_first_compact_to_legacy_contract(extracted, parse_stage=parse_stage)
-        if _is_valid_legacy_contract(compact_adapted):
+        compact_is_valid = _is_valid_legacy_contract(compact_adapted)
+        compact_is_semantic, compact_reason = _is_semantically_nonempty_compact_result(extracted, compact_adapted)
+        if compact_is_valid and compact_is_semantic:
             extracted = compact_adapted
             parse_branch = "compact_to_legacy_adapter"
         else:
+            parse_branch = "compact_rejected_semantic_empty" if compact_is_valid else "compact_invalid_contract"
+            parse_reason = compact_reason if compact_is_valid else "compact_contract_invalid"
             rich_adapted = _adapt_audio_first_rich_payload_to_legacy_contract(extracted, parse_stage=parse_stage)
             if isinstance(rich_adapted, dict) and _is_valid_legacy_contract(rich_adapted):
                 extracted = rich_adapted
                 parse_branch = "rich_to_legacy_adapter"
+                parse_reason = ""
             else:
                 parse_branch = "fatal_invalid"
+                if not parse_reason:
+                    parse_reason = "rich_adapter_failed"
 
     missing = [key for key in required if key not in extracted]
     if missing:
         logger.warning(
-            "[SCENARIO DIRECTOR] audio-first parser branch=%s parse_stage=%s top_level_keys=%s missing=%s",
+            "[SCENARIO DIRECTOR] audio-first parser branch=%s reason=%s parse_stage=%s top_level_keys=%s missing=%s",
             parse_branch,
+            parse_reason,
             parse_stage,
             top_level_keys,
             missing,
@@ -10576,7 +10684,12 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
             "gemini_contract_invalid",
             "Gemini audio-first payload missed required fields.",
             status_code=502,
-            details={"missingFields": missing, "rawPreview": str(raw_text or "")[:800], "parseBranch": parse_branch},
+            details={
+                "missingFields": missing,
+                "rawPreview": str(raw_text or "")[:800],
+                "parseBranch": parse_branch,
+                "parseReason": parse_reason,
+            },
         )
     if not isinstance(extracted.get("transcript"), list):
         raise ScenarioDirectorError(
@@ -10619,8 +10732,9 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
             details={"field": "scenes", "reason": "empty_list"},
         )
     logger.info(
-        "[SCENARIO DIRECTOR] audio-first parser branch=%s parse_stage=%s top_level_keys=%s scenes=%s",
+        "[SCENARIO DIRECTOR] audio-first parser branch=%s reason=%s parse_stage=%s top_level_keys=%s scenes=%s",
         parse_branch,
+        parse_reason,
         parse_stage,
         top_level_keys,
         len(scenes),
