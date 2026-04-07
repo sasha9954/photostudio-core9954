@@ -17,6 +17,83 @@ const ROLE_TYPE_OPTIONS = [
   { value: "support", label: "Поддержка" },
 ];
 
+function getRefThumbCandidateSignature(item) {
+  return buildRefImageCandidates(item).join("|");
+}
+
+function getStableRefItemKey(item, idx) {
+  const explicitId = String(item?.id || "").trim();
+  if (explicitId) return explicitId;
+  const candidateSignature = getRefThumbCandidateSignature(item);
+  if (candidateSignature) return `sig:${candidateSignature}`;
+  return `idx:${idx}`;
+}
+
+const RefThumbImage = React.memo(function RefThumbImage({
+  item,
+  idx,
+  title,
+  handleId,
+  onOpenLightbox,
+}) {
+  const candidates = useMemo(() => buildRefImageCandidates(item), [item]);
+  const candidateSignature = useMemo(() => candidates.join("|"), [candidates]);
+  const rerenderCountRef = useRef(0);
+  const [candidateIndex, setCandidateIndex] = useState(0);
+  const [thumbExhausted, setThumbExhausted] = useState(candidates.length === 0);
+  const activeSrc = candidates[candidateIndex] || "";
+
+  useEffect(() => {
+    console.debug("[REF THUMB FIX] mount", { handleId, idx });
+  }, [handleId, idx]);
+
+  useEffect(() => {
+    rerenderCountRef.current += 1;
+    if (rerenderCountRef.current <= 3) {
+      console.debug("[REF THUMB FIX] rerender", { handleId, idx, count: rerenderCountRef.current });
+    }
+  });
+
+  useEffect(() => {
+    console.debug("[REF THUMB FIX] candidateSignature changed", { handleId, idx });
+    setCandidateIndex(0);
+    setThumbExhausted(candidates.length === 0);
+  }, [candidateSignature, candidates.length, handleId, idx]);
+
+  if (thumbExhausted || !activeSrc) {
+    return <div className="clipSB_refLiteEmpty" title="Thumbnail недоступен"><span>thumbnail недоступен</span></div>;
+  }
+
+  return (
+    <button className="clipSB_refLiteOpen" onClick={() => onOpenLightbox?.(activeSrc)} title="Открыть фото">
+      <img
+        src={activeSrc}
+        alt={`${title} ${idx + 1}`}
+        className="clipSB_refThumbImg"
+        onError={() => {
+          const nextIndex = candidateIndex + 1;
+          if (nextIndex < candidates.length) {
+            console.debug("[REF THUMB FIX] onError fallback", { handleId, idx, failed: activeSrc, next: candidates[nextIndex] });
+            setCandidateIndex(nextIndex);
+            setThumbExhausted(false);
+          } else {
+            console.debug("[REF THUMB FIX] onError fallback", { handleId, idx, failed: activeSrc, next: null });
+            console.debug("[REF THUMB FIX] exhausted fallback", { handleId, idx, failed: activeSrc });
+            setThumbExhausted(true);
+          }
+        }}
+      />
+    </button>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.idx === nextProps.idx
+    && prevProps.title === nextProps.title
+    && prevProps.handleId === nextProps.handleId
+    && getRefThumbCandidateSignature(prevProps.item) === getRefThumbCandidateSignature(nextProps.item)
+  );
+});
+
 export default function RefLiteNode({ id, data, title, className, handleId, showRoleSelector = false }) {
   const inputRef = useRef(null);
   const maxFiles = 5;
@@ -41,51 +118,10 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
   const roleType = String(data?.roleType || "auto").trim().toLowerCase() || "auto";
+  const onOpenLightbox = data?.onOpenLightbox;
 
   const openPicker = () => { if (canAddMore) inputRef.current?.click(); };
   const onInputChange = async (e) => { const files = Array.from(e.target.files || []); if (files.length) await data?.onPickImage?.(id, files); e.target.value = ""; };
-
-  const RefThumbImage = ({ item, idx }) => {
-    const candidates = useMemo(() => buildRefImageCandidates(item), [item]);
-    const [candidateIndex, setCandidateIndex] = useState(0);
-    const [thumbExhausted, setThumbExhausted] = useState(candidates.length === 0);
-    const activeSrc = candidates[candidateIndex] || "";
-    const candidateSignature = candidates.join("|");
-    useEffect(() => {
-      setCandidateIndex(0);
-      setThumbExhausted(candidates.length === 0);
-    }, [candidateSignature]);
-
-    useEffect(() => {
-      console.debug("[REF THUMB FIX] candidates", { handleId, idx, candidates });
-    }, [handleId, idx, candidates]);
-
-    if (thumbExhausted || !activeSrc) {
-      return <div className="clipSB_refLiteEmpty" title="Thumbnail недоступен"><span>thumbnail недоступен</span></div>;
-    }
-
-    return (
-      <button className="clipSB_refLiteOpen" onClick={() => data?.onOpenLightbox?.(activeSrc)} title="Открыть фото">
-        <img
-          src={activeSrc}
-          alt={`${title} ${idx + 1}`}
-          className="clipSB_refThumbImg"
-          onError={() => {
-            const nextIndex = candidateIndex + 1;
-            if (nextIndex < candidates.length) {
-              console.debug("[REF THUMB FIX] onError fallback", { handleId, idx, failed: activeSrc, next: candidates[nextIndex] });
-              setCandidateIndex(nextIndex);
-              setThumbExhausted(false);
-            } else {
-              console.debug("[REF THUMB FIX] onError fallback", { handleId, idx, failed: activeSrc, next: null });
-              console.debug("[REF THUMB FIX] exhausted fallback", { handleId, idx, failed: activeSrc });
-              setThumbExhausted(true);
-            }
-          }}
-        />
-      </button>
-    );
-  };
 
   return (<>
     <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
@@ -119,8 +155,8 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
       ) : null}
       <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => {
         return (
-          <div className="clipSB_refThumb" key={`${item.url || item.value || item.name || "ref"}-${idx}`}>
-            <RefThumbImage item={item} idx={idx} />
+          <div className="clipSB_refThumb" key={getStableRefItemKey(item, idx)}>
+            <RefThumbImage item={item} idx={idx} title={title} handleId={handleId} onOpenLightbox={onOpenLightbox} />
             <button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button>
           </div>
         );

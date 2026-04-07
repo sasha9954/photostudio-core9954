@@ -6105,19 +6105,31 @@ function BrainNode({ id, data }) {
 
 function RefThumbnailTile({ item, idx, title, kind, onRemoveImage, onOpenLightbox }) {
   const thumbnailCandidates = useMemo(() => buildRefImageCandidates(item), [item]);
+  const rerenderCountRef = useRef(0);
   const [thumbIndex, setThumbIndex] = useState(0);
   const [thumbExhausted, setThumbExhausted] = useState(thumbnailCandidates.length === 0);
   const resolvedThumbnailUrl = thumbnailCandidates[thumbIndex] || "";
   const candidateSignature = thumbnailCandidates.join("|");
 
   useEffect(() => {
+    console.debug("[REF THUMB FIX] mount", { nodeType: kind, idx });
+  }, [kind, idx]);
+
+  useEffect(() => {
+    rerenderCountRef.current += 1;
+    if (rerenderCountRef.current <= 3) {
+      console.debug("[REF THUMB FIX] rerender", { nodeType: kind, idx, count: rerenderCountRef.current });
+    }
+  });
+
+  useEffect(() => {
+    console.debug("[REF THUMB FIX] candidateSignature changed", { nodeType: kind, idx });
     setThumbIndex(0);
     setThumbExhausted(thumbnailCandidates.length === 0);
-    console.debug("[REF THUMB FIX] candidates", { nodeType: kind, idx, candidates: thumbnailCandidates });
-  }, [item, kind, idx, candidateSignature]);
+  }, [candidateSignature, thumbnailCandidates.length, kind, idx]);
 
   return (
-    <div className="clipSB_refThumb" key={`${item.url || item.value || item.name || "ref"}-${idx}`}>
+    <div className="clipSB_refThumb">
       {!thumbExhausted && resolvedThumbnailUrl ? (
         <button className="clipSB_refLiteOpen" onClick={() => onOpenLightbox?.(resolvedThumbnailUrl)} title="Открыть фото">
           <img
@@ -6147,6 +6159,25 @@ function RefThumbnailTile({ item, idx, title, kind, onRemoveImage, onOpenLightbo
     </div>
   );
 }
+
+function getRefThumbCandidateSignature(item) {
+  return buildRefImageCandidates(item).join("|");
+}
+
+function getStableRefItemKey(item, idx) {
+  const explicitId = String(item?.id || "").trim();
+  if (explicitId) return explicitId;
+  const candidateSignature = getRefThumbCandidateSignature(item);
+  if (candidateSignature) return `sig:${candidateSignature}`;
+  return `idx:${idx}`;
+}
+
+const MemoRefThumbnailTile = React.memo(RefThumbnailTile, (prevProps, nextProps) => (
+  prevProps.idx === nextProps.idx
+  && prevProps.title === nextProps.title
+  && prevProps.kind === nextProps.kind
+  && getRefThumbCandidateSignature(prevProps.item) === getRefThumbCandidateSignature(nextProps.item)
+));
 
 function RefNode({ id, data }) {
   const inputRef = useRef(null);
@@ -6186,6 +6217,10 @@ function RefNode({ id, data }) {
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
   const showRoleSelector = kind === "ref_character";
   const roleType = normalizeCharacterRoleType(data?.roleType);
+  const onOpenLightbox = data?.onOpenLightbox;
+  const onRemoveImage = data?.onRemoveImage;
+  const openLightbox = useCallback((url) => onOpenLightbox?.(url), [onOpenLightbox]);
+  const removeImageAt = useCallback((imageIndex) => onRemoveImage?.(id, imageIndex), [id, onRemoveImage]);
 
   const openPicker = () => {
     if (!canAddMore) return;
@@ -6212,14 +6247,14 @@ function RefNode({ id, data }) {
           {uploadSoftError ? <div className="clipSB_refWarningBadge">⚠ {uploadSoftError}</div> : null}
           {refs.map((item, idx) => {
             return (
-              <RefThumbnailTile
-                key={`${item.url || item.value || item.name || "ref"}-${idx}`}
+              <MemoRefThumbnailTile
+                key={getStableRefItemKey(item, idx)}
                 item={item}
                 idx={idx}
                 title={title}
                 kind={kind}
-                onOpenLightbox={(url) => data?.onOpenLightbox?.(url)}
-                onRemoveImage={(imageIndex) => data?.onRemoveImage?.(id, imageIndex)}
+                onOpenLightbox={openLightbox}
+                onRemoveImage={removeImageAt}
               />
             );
           })}
