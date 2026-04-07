@@ -11097,16 +11097,12 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
         if payload_duration > 0:
             return payload_duration, "payload.audioDurationSec"
 
+        result_metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        result_metadata_audio = result_metadata.get("audio") if isinstance(result_metadata.get("audio"), dict) else {}
         parsed_candidates = [
             ("result.audioDurationSec", result.get("audioDurationSec")),
             ("result.duration", result.get("duration")),
-            (
-                "result.metadata.audio.durationSec",
-                (result.get("metadata") or {}).get("audio", {}).get("durationSec")
-                if isinstance(result.get("metadata"), dict)
-                and isinstance((result.get("metadata") or {}).get("audio"), dict)
-                else None,
-            ),
+            ("result.metadata.audio.durationSec", result_metadata_audio.get("durationSec")),
         ]
         for source_name, candidate in parsed_candidates:
             parsed_duration = _safe_float(candidate, 0.0)
