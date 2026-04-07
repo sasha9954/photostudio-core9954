@@ -11499,16 +11499,6 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
             "temperature": 0.2,
             "responseMimeType": "application/json",
             "maxOutputTokens": max_output_tokens,
-            "responseSchema": {
-                "type": "OBJECT",
-                "required": ["transcript", "audioStructure", "semanticTimeline", "scenes"],
-                "properties": {
-                    "transcript": {"type": "ARRAY"},
-                    "audioStructure": {"type": "OBJECT"},
-                    "semanticTimeline": {"type": "ARRAY"},
-                    "scenes": {"type": "ARRAY"},
-                },
-            },
         },
     }
     response, model_used, attempted_models = _send_director_request_with_debug(
