@@ -11092,6 +11092,55 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
     transcript_rows = result.get("transcript") if isinstance(result.get("transcript"), list) else []
     semantic_timeline = result.get("semanticTimeline") if isinstance(result.get("semanticTimeline"), list) else []
     raw_scenes = result.get("scenes") if isinstance(result.get("scenes"), list) else []
+    def _resolve_single_call_duration_sec() -> tuple[float, str]:
+        payload_duration = _safe_float(runtime_payload.get("audioDurationSec"), 0.0)
+        if payload_duration > 0:
+            return payload_duration, "payload.audioDurationSec"
+
+        parsed_candidates = [
+            ("result.audioDurationSec", result.get("audioDurationSec")),
+            ("result.duration", result.get("duration")),
+            (
+                "result.metadata.audio.durationSec",
+                (result.get("metadata") or {}).get("audio", {}).get("durationSec")
+                if isinstance(result.get("metadata"), dict)
+                and isinstance((result.get("metadata") or {}).get("audio"), dict)
+                else None,
+            ),
+        ]
+        for source_name, candidate in parsed_candidates:
+            parsed_duration = _safe_float(candidate, 0.0)
+            if parsed_duration > 0:
+                return parsed_duration, source_name
+
+        def _max_t1(rows: list[Any]) -> float:
+            max_end = 0.0
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_end = _safe_float(
+                    row.get("t1"),
+                    _safe_float(
+                        row.get("end"),
+                        _safe_float(row.get("time_end"), _safe_float(row.get("timeEnd"), 0.0)),
+                    ),
+                )
+                if row_end > max_end:
+                    max_end = row_end
+            return max_end
+
+        scene_end = _max_t1(raw_scenes)
+        if scene_end > 0:
+            return scene_end, "fallback.scenes_max_t1"
+        semantic_end = _max_t1(semantic_timeline)
+        if semantic_end > 0:
+            return semantic_end, "fallback.semanticTimeline_end"
+        transcript_end = _max_t1(transcript_rows)
+        if transcript_end > 0:
+            return transcript_end, "fallback.transcript_end"
+        return 0.0, "fallback.default_zero"
+
+    resolved_duration_sec, resolved_duration_source = _resolve_single_call_duration_sec()
     direct_gemini_storyboard_mode = _is_direct_gemini_storyboard_mode(runtime_payload)
     scene_merge_applied = False
     direct_short_scene_policy_debug: dict[str, Any] = {}
@@ -11356,7 +11405,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
     duration_span = (max(durations) - min(durations)) if durations else 0.0
     clip_formula_rebalance_applied = False
     clip_formula_rebalance_detected_need = bool(len(durations) >= 4 and duration_span > 2.0)
-    oversized_threshold = 5.5 if 20.0 <= duration <= 40.0 else 6.0
+    oversized_threshold = 5.5 if 20.0 <= resolved_duration_sec <= 40.0 else 6.0
     oversized_scene_ids = [
         str(scene.get("scene_id") or "").strip()
         for scene in legacy_scenes
@@ -11445,6 +11494,8 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             ),
             "clip_formula_rebalance_applied": bool(clip_formula_rebalance_applied),
             "clip_formula_rebalance_detected_need": bool(clip_formula_rebalance_detected_need),
+            "resolvedAudioDurationSec": round(_safe_float(resolved_duration_sec, 0.0), 3),
+            "resolvedAudioDurationSource": resolved_duration_source,
             "duration_span_debug": round(duration_span, 3),
             "rebalance_reason": "duration_span_heuristic_only_no_rebalance_action",
             "rebalance_actions": [],
