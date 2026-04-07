@@ -145,6 +145,11 @@ JSON_ONLY_RETRY_SUFFIX = (
     "HARD CONTRACT: narration_mode must be present in every scene, must be a string, must never be null, and allowed values are full, duck, pause. "
     "If unsure use full."
 )
+AUDIO_FIRST_JSON_RETRY_SUFFIX = (
+    "\n\nRETRY OVERRIDE (AUDIO-FIRST): Return ONLY one JSON object. No markdown. No commentary. No comments. "
+    "Keep exact required top-level contract keys: transcript (array), audioStructure (object), semanticTimeline (array), scenes (array). "
+    "Additional keys are allowed only if all required keys remain present and correctly typed."
+)
 MASTER_JSON_RETRY_SUFFIX = (
     "\n\nRETRY OVERRIDE: Return ONLY JSON. No markdown. No comments. "
     "MASTER MODE ONLY. DO NOT generate scenes. Keep fields short."
@@ -10015,84 +10020,26 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
     )
     arc_story_function_hint = "entry | development | transition | peak | ending | outro"
     return (
-        "I am attaching audio and character reference images.\n"
-        "Treat them as real inputs for a grounded photoreal music-video storyboard request.\n"
-        "Do NOT invent hidden assumptions.\n"
-        "First explain exactly what you infer from the inputs.\n"
-        "Then return storyboard JSON.\n"
-        "Think like a cinematic real-world music video director: emotionally alive and shootable.\n"
-        "INPUT PRIORITY:\n"
-        "- Audio is primary for timing, rhythm, phrase alignment, and energy transitions.\n"
-        "- Audio is NOT automatically the literal world-building source in all cases.\n"
-        "- If effective director note exists, treat it as active world/story frame instruction and let it bias world choice.\n"
-        "- Director note can steer toward performance framing while audio still drives timing/rhythm.\n"
-        "- If effective director note is empty and no location reference is provided, default to one coherent real-world venue.\n"
-        "WORLD CHOICE DEFAULT (when location is not explicitly fixed):\n"
-        "1) one real coherent venue (e.g., club floor + backstage + corridor zones of the same place)\n"
-        "2) keep the same world across all scenes, changing only zones, camera, blocking, and light mood\n"
-        "3) keep a grounded photoreal baseline from scene 1\n"
-        "4) abstract/metaphorical environment only if explicitly required by the user inputs\n"
-        "DO NOT DEFAULT TO:\n"
-        "- salt plains\n"
-        "- barren desert\n"
-        "- cracked wasteland\n"
-        "- premium minimalist studio abstraction baseline\n"
-        "- literal symbolic emptiness from lyrics alone\n"
-        "MARINE/DESOLATION WORDS:\n"
-        "- Words like salt, void, shipwreck, naufragare are usually metaphorical.\n"
-        "- Use them as emotional tone, lighting mood, or atmosphere by default.\n"
-        "- Use literal marine/desolation world only if explicitly required by inputs.\n"
-        "CHARACTER IDENTITY LOCK (MANDATORY):\n"
-        "- Character reference is the exact identity source.\n"
-        "- Keep same face, same hair, same body silhouette, same body proportions, same outfit identity, same overall styling.\n"
-        "- Use the same character consistently across all scenes unless user explicitly asks otherwise.\n"
-        "LIP SYNC REQUIREMENTS:\n"
-        "- For ~30 second vocal music clip, lip_sync_music is important.\n"
-        "- Include multiple lip_sync_music scenes.\n"
-        "- Minimum 2 scenes must use route=lip_sync_music when vocals are present.\n"
-        "- Do not output all scenes as i2v by default.\n"
-        "- For lip_sync_music scenes, you must write the intended performance framing directly in scene description (source-of-truth), not rely on downstream correction.\n"
-        "- For lip_sync_music scenes, default to tight medium / medium / 3/4 body with lower frame boundary around slightly-below-waist to upper-thigh when possible.\n"
-        "- Keep mouth/face/neck/shoulders/upper torso readable for articulation and emotion; include hands when useful for performance readability.\n"
-        "- For lip_sync_music scenes, singer-performance-first: camera-readable to-camera (or near-camera) delivery, direct gaze preferred on strong lines, gentle head turns/subtle lean/soft sway/phrase-timed hand gestures only.\n"
-        "- For lip_sync_music scenes, avoid spin-first/twirl-first/full-body dance silhouette/overhead dance spectacle as primary composition.\n"
-        "- For lip_sync_music scenes, keep body action LTX-safe: no risky rotational choreography as main event.\n"
-        "- For lip_sync_music scenes, camera movement must stay slow/controlled/readable: gentle push-in, slight lateral drift, slow eye-level arc only.\n"
-        "- For lip_sync_music scenes, forbid overhead orbit/top-down rotation/camera roll/spinning around head/aggressive zoom-out/fast retreating camera.\n"
-        "- For lip_sync_music scenes, background extras may move softly but must remain secondary and never steal focus from face/upper torso/gestures.\n"
-        "- Avoid face-only close-up lip_sync_music framing unless a strongest beat explicitly requires close emotional framing.\n"
-        "- lip_sync_music framing preference applies only to lip-sync scenes; non-lip scenes should stay action/staging driven.\n"
-        "- short opening atmosphere beats (<1.6s) should be merged or treated as non-renderable establishing transitions, not standalone hero shots.\n"
-        "- environment-first establishing reveal may intentionally have no active character subject.\n"
-        "- in concert/crowd worlds, character placement must be physically grounded in valid venue zones.\n"
-        "- For non-lip scenes, preserve action/staging camera diversity (wide/low-angle/overhead/tracking/crowd dynamics); do not collapse into portrait defaults.\n"
-        "- For non-lip i2v scenes, write ACTION/SPACE/BEAT-first with movement + zone progression + atmosphere, not portrait-only face/upper-torso beats.\n"
-        "- For non-lip i2v scenes, preserve energy but keep movement model-safe: smooth groove, controlled weight shift, soft step/pivot/sway, phrase-shaped arm accents, moderate tempo body rhythm.\n"
-        "- For non-lip i2v scenes, avoid jerky dance, fast flailing arms, abrupt spins, violent head whipping, high-frequency body shaking, extreme rotation velocity, and frantic crowd turbulence.\n"
-        "- For non-lip i2v scenes, avoid violent spins/repeated twirls/aggressive fabric sweep loops as primary action; use camera-led energy with safe body motion.\n"
-        "- If orbit is used in non-lip scenes, keep slow horizontal eye/chest/waist-level arc around subject plane; no overhead path, no top orbit, no head-top circle, no roll-tilt orbit.\n"
-        "SCENE SEGMENTATION:\n"
-        "- Keep phrase-based segmentation aligned to audio phrases.\n"
-        "- End scenes at natural phrase ends or just before safe post-phrase spill.\n"
-        "- Do not drift scene ends past phrase breaks (even short trailing letters/syllables).\n"
-        "- If a phrase break happens earlier, prefer earlier end boundary.\n"
-        "- First scene is not a special intro by default.\n"
-        "- Do not stretch the first scene as intro unless intro is explicitly present in audio.\n"
-        "- Keep boundaries tight around real vocal phrase transitions.\n"
-        "- Do not reduce scene count artificially.\n"
-        "- Prefer clip-friendly scene durations (about 2-5.5 sec) when phrase timing allows.\n"
-        "- Use route per scene independently (i2v | lip_sync_music | first_last) based on creative and performance needs.\n"
-        "- performance_framing must be explicit per scene; if route=lip_sync_music and framing is missing, repair before final JSON.\n"
-        "STORY ARC CANON (MANDATORY, WITHOUT BREAKING AUDIO-FIRST):\n"
-        "- Build a complete mini-arc for every clip: ENTRY → DEVELOPMENT/EVENT → ENDING/RESOLUTION.\n"
-        "- Reveal meaning through emotional progression + zone progression + performance progression; do not reuse one spinning-dress motif as default metaphor.\n"
-        "- Keep phrase-based scene boundaries from audio; arc is scene PURPOSE, not timing override.\n"
-        "- Opening beat must establish world/hero/starting emotional state.\n"
-        "- Middle beats must progress (escalation, turn, energy cycle, reflective reset, or payoff setup).\n"
-        "- Ending beat must feel intentionally finished (release, closure, afterglow, final statement), never abrupt random excerpt.\n"
-        "- For short audio (~20-40s): include entry beat, several development beats, and ending/outro beat.\n"
-        "- For long audio (1-5+ min): keep opening-development-ending macro arc, and allow middle sub-arcs, refrain returns, secondary turns, and late climax/release.\n"
-        "- Performance-first clips still need beginning feeling, middle progression feeling, and ending feeling; do not force literal plot.\n"
+        "Audio-first scenario director. Return one canonical JSON object immediately.\n"
+        "No prose, no analysis, no markdown.\n"
+        "Use attached audio + references as real inputs.\n"
+        "PRIORITY:\n"
+        "- Audio drives segmentation, timestamps, rhythm, and energy transitions.\n"
+        "- Director note (if present) biases world/story framing but must not break audio timing.\n"
+        "- Keep one coherent grounded world unless user explicitly asks for world switch.\n"
+        "CHARACTER + LOCATION LOCK:\n"
+        "- Character references are identity source of truth.\n"
+        "- Keep same face/hair/body silhouette/outfit identity across scenes unless user explicitly requests change.\n"
+        "- Keep venue continuity; vary zone/camera/blocking/light, not identity/world.\n"
+        "SEGMENTATION + ROUTE:\n"
+        "- Segment by real phrase boundaries, pauses, and energy shifts.\n"
+        "- Prefer scene duration about 2.0-5.5 sec when phrase timing allows.\n"
+        "- Use route per scene from enum: i2v | lip_sync_music | first_last.\n"
+        "- If vocals are present, include lip_sync_music where performance readability is needed.\n"
+        "SCENE QUALITY:\n"
+        "- Scenes must be shootable and grounded.\n"
+        "- For lip_sync_music keep face/mouth/neck/shoulders/upper torso readable and camera motion controlled.\n"
+        "- Avoid rotation-first choreography and unstable camera behavior.\n"
         "IMPORTANT: use ONLY canonical role ids in planning fields (character_1, character_2, character_3, animal, group, location, style, props).\n"
         "Never put filenames or display labels into actors/participants/roles.\n"
         "REAL TIMELINE REQUIREMENTS:\n"
@@ -10102,20 +10049,9 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- DO NOT compress the timeline.\n"
         "- The full timeline of transcript and scenes MUST span the actual audio duration.\n"
         "- The last scene MUST end close to the full duration of the audio.\n"
-        "- Each segment must correspond to real spoken timing in the audio.\n"
-        "- Scene boundaries should align with:\n"
-        "  - speech phrases\n"
-        "  - pauses\n"
-        "  - energy shifts\n"
-        "- Do not merge two adjacent lyrical phrases into one scene unless they express the same semantic beat.\n"
-        "- Prefer short clip-friendly scene durations (about 2-5.5 sec) when phrase timing allows.\n"
-        "BAD:\n"
-        "- t0: 0.0 → t1: 1.0 for full audio\n"
-        "GOOD:\n"
-        "- t0: 0.0 → t1: 4.2 → t1: 9.8 → ... → ~60.0\n"
         "Return ONLY valid JSON. No markdown. No comments. No prose outside JSON.\n"
         "STRICT OUTPUT CONTRACT: top-level JSON MUST include transcript (array), audioStructure (object), semanticTimeline (array), scenes (array).\n"
-        "If you also return input_understanding/storyboard, keep them as optional extras and still keep required top-level contract fields.\n"
+        "Do not nest the required fields under storyboard/output.\n"
         f"Director note: {director_note if director_note else 'empty'}\n"
         f"{references_block}"
         "Canonical output JSON contract (required top-level):\n"
@@ -10161,9 +10097,7 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         '      "route": "i2v | lip_sync_music | first_last",\n'
         '      "content_tags": []\n'
         "    }\n"
-        "  ],\n"
-        '  "input_understanding": {},\n'
-        '  "storyboard": {}\n'
+        "  ]\n"
         "}"
     )
 
@@ -10681,6 +10615,11 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
                 parse_branch = "fatal_invalid"
                 if not parse_reason:
                     parse_reason = "rich_adapter_failed"
+    parse_branch = parse_branch or "unknown"
+    parse_reason = parse_reason or ("legacy_contract_valid" if parse_branch == "legacy_parse" else "none")
+    raw_length = len(str(raw_text or ""))
+    finish_reason_normalized = (finish_reason or "").strip()
+    likely_truncated = finish_reason_normalized in {"MAX_TOKENS", "LENGTH"} or raw_length >= 3500
 
     missing = [key for key in required if key not in extracted]
     if missing:
@@ -10699,8 +10638,12 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
             details={
                 "missingFields": missing,
                 "rawPreview": str(raw_text or "")[:800],
+                "rawLength": raw_length,
+                "finishReason": finish_reason_normalized,
+                "topLevelKeys": top_level_keys,
                 "parseBranch": parse_branch,
                 "parseReason": parse_reason,
+                "likelyTruncated": likely_truncated,
             },
         )
     if not isinstance(extracted.get("transcript"), list):
@@ -10708,14 +10651,34 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
             "gemini_contract_invalid",
             "Gemini audio-first payload has invalid transcript type.",
             status_code=502,
-            details={"field": "transcript", "expectedType": "list", "actualType": type(extracted.get("transcript")).__name__},
+            details={
+                "field": "transcript",
+                "expectedType": "list",
+                "actualType": type(extracted.get("transcript")).__name__,
+                "rawLength": raw_length,
+                "finishReason": finish_reason_normalized,
+                "topLevelKeys": top_level_keys,
+                "parseBranch": parse_branch,
+                "parseReason": parse_reason,
+                "likelyTruncated": likely_truncated,
+            },
         )
     if not isinstance(extracted.get("audioStructure"), dict):
         raise ScenarioDirectorError(
             "gemini_contract_invalid",
             "Gemini audio-first payload has invalid audioStructure type.",
             status_code=502,
-            details={"field": "audioStructure", "expectedType": "dict", "actualType": type(extracted.get("audioStructure")).__name__},
+            details={
+                "field": "audioStructure",
+                "expectedType": "dict",
+                "actualType": type(extracted.get("audioStructure")).__name__,
+                "rawLength": raw_length,
+                "finishReason": finish_reason_normalized,
+                "topLevelKeys": top_level_keys,
+                "parseBranch": parse_branch,
+                "parseReason": parse_reason,
+                "likelyTruncated": likely_truncated,
+            },
         )
     if not isinstance(extracted.get("semanticTimeline"), list):
         raise ScenarioDirectorError(
@@ -10726,6 +10689,12 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
                 "field": "semanticTimeline",
                 "expectedType": "list",
                 "actualType": type(extracted.get("semanticTimeline")).__name__,
+                "rawLength": raw_length,
+                "finishReason": finish_reason_normalized,
+                "topLevelKeys": top_level_keys,
+                "parseBranch": parse_branch,
+                "parseReason": parse_reason,
+                "likelyTruncated": likely_truncated,
             },
         )
     scenes = extracted.get("scenes")
@@ -10734,14 +10703,33 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
             "gemini_contract_invalid",
             "Gemini audio-first payload has invalid scenes type.",
             status_code=502,
-            details={"field": "scenes", "expectedType": "list", "actualType": type(scenes).__name__},
+            details={
+                "field": "scenes",
+                "expectedType": "list",
+                "actualType": type(scenes).__name__,
+                "rawLength": raw_length,
+                "finishReason": finish_reason_normalized,
+                "topLevelKeys": top_level_keys,
+                "parseBranch": parse_branch,
+                "parseReason": parse_reason,
+                "likelyTruncated": likely_truncated,
+            },
         )
     if not scenes:
         raise ScenarioDirectorError(
             "gemini_contract_invalid",
             "Gemini audio-first payload returned empty scenes.",
             status_code=502,
-            details={"field": "scenes", "reason": "empty_list"},
+            details={
+                "field": "scenes",
+                "reason": "empty_list",
+                "rawLength": raw_length,
+                "finishReason": finish_reason_normalized,
+                "topLevelKeys": top_level_keys,
+                "parseBranch": parse_branch,
+                "parseReason": parse_reason,
+                "likelyTruncated": likely_truncated,
+            },
         )
     logger.info(
         "[SCENARIO DIRECTOR] audio-first parser branch=%s reason=%s parse_stage=%s top_level_keys=%s scenes=%s",
@@ -11491,7 +11479,7 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
     reference_image_part_count = len(reference_image_parts)
     request_part_count = len(request_parts)
     has_inline_audio = bool(inline_audio_part)
-    max_output_tokens = 4096
+    max_output_tokens = 6144
     logger.info(
         "[SCENARIO DIRECTOR PAYLOAD ESTIMATE] route=%s requestId=%s promptLengthChars=%s requestPartCount=%s referenceImagePartCount=%s hasInlineAudio=%s maxOutputTokens=%s",
         route_path,
@@ -11511,6 +11499,16 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
             "temperature": 0.2,
             "responseMimeType": "application/json",
             "maxOutputTokens": max_output_tokens,
+            "responseSchema": {
+                "type": "OBJECT",
+                "required": ["transcript", "audioStructure", "semanticTimeline", "scenes"],
+                "properties": {
+                    "transcript": {"type": "ARRAY"},
+                    "audioStructure": {"type": "OBJECT"},
+                    "semanticTimeline": {"type": "ARRAY"},
+                    "scenes": {"type": "ARRAY"},
+                },
+            },
         },
     }
     response, model_used, attempted_models = _send_director_request_with_debug(
@@ -11546,7 +11544,7 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": f"{prompt}\n{JSON_ONLY_RETRY_SUFFIX}"}, *reference_image_parts, inline_audio_part],
+                    "parts": [{"text": f"{prompt}\n{AUDIO_FIRST_JSON_RETRY_SUFFIX}"}, *reference_image_parts, inline_audio_part],
                 }
             ],
         }
