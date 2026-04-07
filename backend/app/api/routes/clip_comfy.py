@@ -189,6 +189,13 @@ def _is_clip_music_video_pipeline(req: dict[str, Any]) -> bool:
     explicit_metadata_mode = str(metadata.get("pipelineMode") or "").strip().lower() == "clip_pipeline_v1"
     explicit_bool_flag = _flag_enabled(metadata.get("useClipStoryboardPipeline"), default=False)
     return content_type == "music_video" and (explicit_mode or explicit_metadata_mode or explicit_bool_flag)
+
+
+def _has_legacy_single_call_shape(resp: dict[str, Any]) -> bool:
+    if not isinstance(resp, dict):
+        return False
+    legacy_keys = ("transcript", "audioStructure", "semanticTimeline", "storyboardOut")
+    return any(key in resp for key in legacy_keys)
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
 ANIMAL_LABEL_BY_SPECIES = {
     "dog": "собака",
@@ -706,14 +713,36 @@ async def clip_comfy_scenario_director_generate(request: Request, payload: Scena
         return _build_scenario_director_fixture(req, fixture_reason="manual_override")
     try:
         mode = str(req.get("mode") or "oneshot").strip().lower()
+        clip_pipeline_requested = _is_clip_music_video_pipeline(req)
         if mode == "master":
+            if clip_pipeline_requested:
+                raise ClipPipelineError(
+                    "clip_pipeline_not_used",
+                    "Request was marked for clip pipeline but fell back to legacy path",
+                    status_code=422,
+                    details={"mode": mode},
+                )
             return run_scenario_director_master(req)
         if mode == "scenes":
+            if clip_pipeline_requested:
+                raise ClipPipelineError(
+                    "clip_pipeline_not_used",
+                    "Request was marked for clip pipeline but fell back to legacy path",
+                    status_code=422,
+                    details={"mode": mode},
+                )
             return run_scenario_director_scenes(req)
         if mode == "regenerate_chunk":
             return regenerate_clip_chunk(req)
-        if _is_clip_music_video_pipeline(req):
-            return run_clip_storyboard_pipeline(req)
+        if clip_pipeline_requested:
+            out = run_clip_storyboard_pipeline(req)
+            if str(out.get("pipeline") or "").strip() != "clip_chunked_v1" or _has_legacy_single_call_shape(out):
+                raise ClipPipelineError(
+                    "clip_pipeline_not_used",
+                    "Request was marked for clip pipeline but fell back to legacy path",
+                    status_code=500,
+                )
+            return out
         return run_scenario_director(req)
     except ClipPipelineError as exc:
         detail: dict[str, Any] = {"code": exc.code, "message": exc.message}

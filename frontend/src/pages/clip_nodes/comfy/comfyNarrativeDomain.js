@@ -686,6 +686,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     : "9:16";
 
   const payload = {
+    mode: isMusicVideo ? "clip_pipeline" : "oneshot",
     directGeminiStoryboardMode: true,
     direct_gemini_storyboard_mode: true,
     source: {
@@ -725,6 +726,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       sourceLabel: normalizeText(resolvedSource.sourceLabel) || normalizeText(resolvedSource.label),
       directGeminiStoryboardMode: true,
       direct_gemini_storyboard_mode: true,
+      ...(isMusicVideo ? { pipelineMode: "clip_pipeline_v1", useClipStoryboardPipeline: true } : {}),
       fileOrLinkMeta: connectedInputs?.video_file_in?.meta || connectedInputs?.video_link_in?.meta || connectedInputs?.audio_in?.meta || {},
       roleTypeByRole,
       audio: {
@@ -1029,6 +1031,92 @@ function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
 }
 
 export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) {
+  const clipPipelineUsed = String(response?.pipeline || "").trim() === "clip_chunked_v1";
+  if (clipPipelineUsed) {
+    const mergedStoryboard = response?.merged_storyboard && typeof response.merged_storyboard === "object"
+      ? response.merged_storyboard
+      : {};
+    const mergedScenesRaw = Array.isArray(mergedStoryboard?.scenes) ? mergedStoryboard.scenes : [];
+    const chunks = Array.isArray(response?.chunks) ? response.chunks : [];
+    const chunkBySceneId = {};
+    chunks.forEach((chunk) => {
+      const chunkId = normalizeText(chunk?.chunk_id);
+      const scenes = Array.isArray(chunk?.scenes) ? chunk.scenes : [];
+      scenes.forEach((scene) => {
+        const sceneId = normalizeText(scene?.scene_id);
+        if (sceneId && chunkId) chunkBySceneId[sceneId] = chunkId;
+      });
+    });
+    const normalizedScenes = mergedScenesRaw.map((scene, index) => {
+      const sceneId = normalizeText(scene?.scene_id) || `S${index + 1}`;
+      const route = normalizeText(scene?.route).toLowerCase();
+      const firstFramePrompt = normalizeText(scene?.first_frame_prompt || scene?.firstFramePrompt);
+      const lastFramePrompt = normalizeText(scene?.last_frame_prompt || scene?.lastFramePrompt);
+      const transitionPrompt = normalizeText(scene?.transition_prompt || scene?.transitionPrompt);
+      const framePrompt = normalizeText(scene?.frame_prompt || scene?.framePrompt || scene?.goal || "");
+      return {
+        scene_id: sceneId,
+        time_start: Number(scene?.t0 ?? scene?.time_start ?? 0) || 0,
+        time_end: Number(scene?.t1 ?? scene?.time_end ?? 0) || 0,
+        duration: Math.max(0, (Number(scene?.t1 ?? scene?.time_end ?? 0) || 0) - (Number(scene?.t0 ?? scene?.time_start ?? 0) || 0)),
+        scene_goal: normalizeText(scene?.goal),
+        route,
+        source_route: route,
+        planned_video_generation_route: route,
+        video_generation_route: route,
+        resolved_workflow_key: route === "first_last" ? "f_l" : route,
+        ltx_mode: route === "first_last" ? "f_l" : route,
+        framePrompt,
+        imagePrompt: framePrompt,
+        frame_prompt: framePrompt,
+        camera_prompt: normalizeText(scene?.camera_prompt || scene?.cameraPrompt),
+        motion_prompt: normalizeText(scene?.motion_prompt || scene?.motionPrompt),
+        startFramePrompt: route === "first_last" ? firstFramePrompt : "",
+        endFramePrompt: route === "first_last" ? lastFramePrompt : "",
+        transitionActionPrompt: route === "first_last" ? transitionPrompt : normalizeText(scene?.motion_prompt || scene?.motionPrompt),
+        first_frame_prompt: firstFramePrompt,
+        last_frame_prompt: lastFramePrompt,
+        transition_prompt: transitionPrompt,
+        chunkId: chunkBySceneId[sceneId] || "",
+      };
+    });
+    const storyboardOut = {
+      scenes: normalizedScenes,
+      contentType: "music_video",
+      format: normalizeText(response?.job?.format || state?.format) || "9:16",
+    };
+    const directorOutput = {
+      scenes: normalizedScenes,
+      contentType: "music_video",
+      format: storyboardOut.format,
+      clipPipeline: {
+        pipeline: "clip_chunked_v1",
+        whole_track_map: response?.whole_track_map || null,
+        chunks,
+        merged_storyboard: mergedStoryboard,
+        repair: response?.repair || null,
+        meta: response?.meta || {},
+      },
+    };
+    console.debug("[CLIP PIPELINE NORMALIZE]", {
+      pipelineModeSent: "clip_pipeline_v1",
+      pipelineUsedReturned: response?.meta?.pipelineUsed || response?.pipeline,
+      sceneCount: normalizedScenes.length,
+      finalSceneEnd: response?.meta?.finalSceneEnd,
+      audioDurationSec: response?.meta?.audioDurationSec,
+    });
+    return {
+      storyboardOut,
+      scenario: "",
+      voiceScript: "",
+      brainPackage: null,
+      bgMusicPrompt: "",
+      globalMusicPrompt: "",
+      directorOutput,
+      raw: response,
+    };
+  }
+
   const compactStoryboardOut = mapCompactDirectorResponseToStoryboardOut(response);
   const storyboardOut = response?.storyboardOut && typeof response.storyboardOut === "object"
     ? response.storyboardOut

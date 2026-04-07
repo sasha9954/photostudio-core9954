@@ -18,6 +18,7 @@ CLIP_PIPELINE_MODEL = "gemini-3.1-pro-preview"
 WHOLE_MAP_RETRY_COUNT = 3
 CHUNK_RETRY_COUNT = 3
 REPAIR_RETRY_COUNT = 2
+FULL_COVERAGE_TOLERANCE_SEC = 0.3
 CLIP_REF_ROLES = ("character_1", "character_2", "character_3", "animal", "group", "location", "style", "props")
 CLIP_CONTEXT_VERSION = "clip_pipeline_context_v1"
 
@@ -729,6 +730,68 @@ def _validate_repair_applied_storyboard(pre_repair: dict[str, Any], post_repair:
     }
 
 
+def _final_scene_end(merged: dict[str, Any]) -> float:
+    scenes = merged.get("scenes") if isinstance(merged.get("scenes"), list) else []
+    if not scenes:
+        return 0.0
+    return max(float(scene.get("t1") or 0.0) for scene in scenes if isinstance(scene, dict))
+
+
+def _ensure_route_prompts(scene: dict[str, Any]) -> dict[str, Any]:
+    route = str(scene.get("route") or "").strip()
+    goal = str(scene.get("goal") or "").strip()
+    frame_prompt = str(scene.get("frame_prompt") or goal or "Cinematic frame aligned with music phrase.").strip()
+    camera_prompt = str(scene.get("camera_prompt") or "Cinematic camera with readable motion.").strip()
+    motion_prompt = str(scene.get("motion_prompt") or "Beat-synced movement with continuity.").strip()
+    scene["frame_prompt"] = frame_prompt
+    scene["camera_prompt"] = camera_prompt
+    scene["motion_prompt"] = motion_prompt
+    if route == "first_last":
+        scene["first_frame_prompt"] = str(scene.get("first_frame_prompt") or frame_prompt).strip()
+        scene["last_frame_prompt"] = str(scene.get("last_frame_prompt") or frame_prompt).strip()
+        scene["transition_prompt"] = str(scene.get("transition_prompt") or motion_prompt).strip()
+    return scene
+
+
+def _apply_clip_route_mix_policy(merged: dict[str, Any], whole_map: WholeTrackMapResponse) -> tuple[dict[str, Any], dict[str, Any]]:
+    scenes = [dict(scene) for scene in (merged.get("scenes") if isinstance(merged.get("scenes"), list) else []) if isinstance(scene, dict)]
+    if not scenes:
+        return merged, {"changed": 0, "route_counts": {}}
+
+    def _route_for_scene(scene: dict[str, Any]) -> str:
+        text = f"{scene.get('section_type') or ''} {scene.get('goal') or ''}".lower()
+        if any(token in text for token in ("hook", "chorus", "reveal", "transformation", "drop", "signature")):
+            return "first_last"
+        if any(token in text for token in ("vocal", "singer", "performance", "lyric", "phrase")):
+            return "ia2v"
+        if any(token in text for token in ("bridge", "instrumental", "mood", "environment", "world", "movement")):
+            return "i2v"
+        return str(scene.get("route") or "i2v").strip() if str(scene.get("route") or "").strip() in ALLOWED_CLIP_ROUTES else "i2v"
+
+    changed = 0
+    for scene in scenes:
+        desired = _route_for_scene(scene)
+        if desired != str(scene.get("route") or "").strip():
+            scene["route"] = desired
+            changed += 1
+        _ensure_route_prompts(scene)
+
+    approx_music_video = 20.0 <= float(whole_map.duration_sec) <= 45.0
+    has_repeat = any(str(sec.section_type or "").lower() in {"chorus", "hook"} or sec.recurring_group_id for sec in whole_map.sections)
+    has_first_last = any(str(scene.get("route") or "") == "first_last" for scene in scenes)
+    if approx_music_video and has_repeat and not has_first_last:
+        anchor_idx = max(0, min(len(scenes) - 1, len(scenes) // 2))
+        scenes[anchor_idx]["route"] = "first_last"
+        _ensure_route_prompts(scenes[anchor_idx])
+        changed += 1
+
+    route_counts: dict[str, int] = {}
+    for scene in scenes:
+        route = str(scene.get("route") or "i2v")
+        route_counts[route] = route_counts.get(route, 0) + 1
+    return {**merged, "scenes": scenes}, {"changed": changed, "route_counts": route_counts}
+
+
 def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], context: dict[str, Any]) -> tuple[WholeTrackMapResponse, dict[str, Any], list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     last_error: ClipPipelineError | None = None
@@ -839,6 +902,53 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 repair_data["repair_rejected_errors"] = repair_validation_diag.get("errors") or []
                 repair_validation_diag["accepted"] = False
 
+        merged, route_mix_diag = _apply_clip_route_mix_policy(merged, whole_map)
+        merged_validation = _validate_merged_storyboard(merged)
+        if not merged_validation.get("valid"):
+            raise ClipPipelineError("retryable_fail", "route-mix merged storyboard validation failed", details={"errors": merged_validation.get("errors")})
+
+        audio_duration_sec = float(payload.get("audioDurationSec") or whole_map.duration_sec or 0.0)
+        final_scene_end = _final_scene_end(merged)
+        full_coverage_achieved = final_scene_end >= max(0.0, audio_duration_sec - FULL_COVERAGE_TOLERANCE_SEC)
+        tail_repair_attempted = False
+        if not full_coverage_achieved and chunks:
+            tail_repair_attempted = True
+            last_boundary = chunks[-1]
+            section_ids = [sec.section_id for sec in whole_map.sections if not (sec.t1 <= last_boundary.t0 or sec.t0 >= last_boundary.t1)]
+            recurring_ids = list(dict.fromkeys([sec.recurring_group_id for sec in whole_map.sections if sec.recurring_group_id]))
+            repair_req = ChunkStoryboardRequest(
+                track_id=whole_map.track_id,
+                chunk_id=last_boundary.chunk_id,
+                t0=last_boundary.t0,
+                t1=last_boundary.t1,
+                global_map_ref=ChunkMapRef(section_ids=section_ids, recurring_group_ids=[x for x in recurring_ids if x]),
+                continuity_in=ContinuityIn(previous_chunk_id=chunk_results[-2].chunk_id if len(chunk_results) > 1 else None, tail_state=continuity_tail),
+                creative_note="TAIL COVERAGE REPAIR: ensure last scene reaches track end.",
+            )
+            repaired_last_chunk, tail_retry_diag = _generate_chunk_with_retry(api_key=api_key, req=repair_req, whole_map=whole_map, context=context)
+            retry_diagnostics.extend(tail_retry_diag)
+            chunk_results[-1] = repaired_last_chunk
+            merged, issues, merge_diag = _local_merge(whole_map.track_id, chunk_results)
+            merged, route_mix_diag = _apply_clip_route_mix_policy(merged, whole_map)
+            merged_validation = _validate_merged_storyboard(merged)
+            if not merged_validation.get("valid"):
+                raise ClipPipelineError("retryable_fail", "tail-repair merged storyboard validation failed", details={"errors": merged_validation.get("errors")})
+            final_scene_end = _final_scene_end(merged)
+            full_coverage_achieved = final_scene_end >= max(0.0, audio_duration_sec - FULL_COVERAGE_TOLERANCE_SEC)
+        if not full_coverage_achieved:
+            missing_tail_sec = max(0.0, round(audio_duration_sec - final_scene_end, 3))
+            raise ClipPipelineError(
+                "clip_pipeline_tail_not_covered",
+                "Final storyboard does not cover full audio duration.",
+                status_code=422,
+                details={
+                    "audioDurationSec": round(audio_duration_sec, 3),
+                    "finalSceneEnd": round(final_scene_end, 3),
+                    "missingTailSec": missing_tail_sec,
+                    "retryable": True,
+                },
+            )
+
         state_history.append("complete")
         return {
             "ok": True,
@@ -860,10 +970,19 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
             "repair": repair_data,
             "meta": {
                 "model": CLIP_PIPELINE_MODEL,
+                "pipelineUsed": "clip_chunked_v1",
+                "legacyPathUsed": False,
+                "wholeMapUsed": True,
+                "chunkCount": len(chunk_results),
+                "finalSceneEnd": round(final_scene_end, 3),
+                "audioDurationSec": round(audio_duration_sec, 3),
+                "fullCoverageAchieved": full_coverage_achieved,
+                "tailRepairAttempted": tail_repair_attempted,
                 "mapDiagnostics": map_diag,
                 "retryDiagnostics": retry_diagnostics,
                 "mergeDiagnostics": merge_diag,
                 "mergedValidationDiagnostics": merged_validation,
+                "routeMixDiagnostics": route_mix_diag,
                 "repairApplyDiagnostics": repair_apply_diag,
                 "repairValidationDiagnostics": repair_validation_diag,
                 "schemaDiagnostics": schema_diagnostics,

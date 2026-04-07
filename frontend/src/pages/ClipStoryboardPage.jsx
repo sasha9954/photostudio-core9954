@@ -13202,11 +13202,16 @@ onClipSec: (nodeId, value) => {
                   const audioType = wantLipSync ? "song" : "bg";
 
                   const payload = {
-                    mode: "oneshot",
+                    mode: "clip_pipeline",
                     directGeminiStoryboardMode: true,
                     direct_gemini_storyboard_mode: true,
                     audioUrl: audioUrl || "",
                     text: textValue || "",
+                    director_controls: {
+                      contentType: "music_video",
+                      format: "9:16",
+                      preferAudioOverText: true,
+                    },
                     refsByRole: {
                       character_1: Array.isArray(characterRefs) ? characterRefs : [],
                       location: Array.isArray(locationRefs) ? locationRefs : [],
@@ -13231,6 +13236,8 @@ onClipSec: (nodeId, value) => {
                   const scenarioDirectorClickCount = ((window.__scenarioDirectorClickCount = Number(window.__scenarioDirectorClickCount || 0) + 1));
                   payload.metadata = {
                     ...(payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
+                    pipelineMode: "clip_pipeline_v1",
+                    useClipStoryboardPipeline: true,
                     scenarioDirectorRequestId,
                     scenarioDirectorClickCount,
                     requestSource: "comfyBrain:onParse",
@@ -13261,6 +13268,12 @@ onClipSec: (nodeId, value) => {
                     httpStatus: 200,
                   });
                   if (!out?.ok) throw new Error(out?.detail || out?.hint || "scenario_director_failed");
+                  console.debug("[CLIP PIPELINE UI RESPONSE]", {
+                    pipelineUsed: out?.meta?.pipelineUsed || out?.pipeline || "legacy",
+                    sceneCount: Array.isArray(out?.merged_storyboard?.scenes) ? out.merged_storyboard.scenes.length : 0,
+                    finalSceneEnd: out?.meta?.finalSceneEnd,
+                    audioDurationSec: out?.meta?.audioDurationSec,
+                  });
                   const normalizedDirector = normalizeScenarioDirectorApiResponse(out, {});
 
                   if (parseTokenRef.current !== parseToken) return;
@@ -13268,7 +13281,8 @@ onClipSec: (nodeId, value) => {
                   if (latestInput.signature !== plannerInputSignature) return;
 
                   const audioDuration = Number(
-                    normalizedDirector?.storyboardOut?.scenes?.[normalizedDirector?.storyboardOut?.scenes?.length - 1]?.time_end
+                    out?.meta?.audioDurationSec
+                    || normalizedDirector?.storyboardOut?.scenes?.[normalizedDirector?.storyboardOut?.scenes?.length - 1]?.time_end
                     || normalizedDirector?.directorOutput?.scenes?.[normalizedDirector?.directorOutput?.scenes?.length - 1]?.t1
                     || out?.audioDuration
                     || 30
@@ -13284,6 +13298,9 @@ onClipSec: (nodeId, value) => {
                       const t0 = Number(s.start ?? s.t0 ?? s.time_start ?? 0);
                       const t1 = Number(s.end ?? s.t1 ?? s.time_end ?? 0);
                       const prompt = String(s.imagePrompt || s.image_prompt || s.framePrompt || s.prompt || s.sceneText || s.scene_goal || `Scene ${idx + 1}`);
+                      const route = String(s.route || s.video_generation_route || s.planned_video_generation_route || "").trim().toLowerCase();
+                      const firstFramePrompt = String(s.startFramePrompt || s.first_frame_prompt || s.firstFramePrompt || "");
+                      const lastFramePrompt = String(s.endFramePrompt || s.last_frame_prompt || s.lastFramePrompt || "");
                       const transitionType = resolveSceneTransitionType(s);
                       const sceneId = buildCanonicalSceneId(s, idx, "scene");
                       return {
@@ -13300,13 +13317,16 @@ onClipSec: (nodeId, value) => {
                         sceneText: s.sceneText || "",
                         imagePrompt: s.imagePrompt || "",
                         framePrompt: s.framePrompt || s.imagePrompt || s.prompt || "",
-                        startFramePrompt: s.startFramePrompt || "",
-                        endFramePrompt: s.endFramePrompt || "",
-                        transitionActionPrompt: s.transitionActionPrompt || s.videoPrompt || "",
+                        startFramePrompt: firstFramePrompt,
+                        endFramePrompt: lastFramePrompt,
+                        transitionActionPrompt: s.transitionActionPrompt || s.transition_prompt || s.videoPrompt || "",
+                        route,
                         videoPrompt: s.videoPrompt || "",
                         imageUrl: s.imageUrl || "",
                         startImageUrl: s.startImageUrl || "",
                         endImageUrl: s.endImageUrl || "",
+                        imagePreviewStatus: (s.imageUrl || s.startImageUrl || s.endImageUrl) ? "ready" : "missing",
+                        imagePreviewSource: route === "first_last" ? "first_frame_prompt" : "frame_prompt",
                         inheritPreviousEndAsStart: !!s.inheritPreviousEndAsStart,
                         startFrameSource: s.startFrameSource === "previous_end" ? "previous_end" : "manual",
                         ltxMode: s.ltxMode || s.ltx_mode || "",
@@ -15084,6 +15104,8 @@ onClipSec: (nodeId, value) => {
                     requestKey,
                     modeFlags: {
                       directGeminiStoryboardMode: Boolean(requestPayload?.directGeminiStoryboardMode ?? requestPayload?.direct_gemini_storyboard_mode),
+                      pipelineMode: String(requestPayload?.metadata?.pipelineMode || ""),
+                      useClipStoryboardPipeline: Boolean(requestPayload?.metadata?.useClipStoryboardPipeline),
                       plannerMode: String(requestPayload?.options?.mode || ""),
                     },
                   },
@@ -15159,6 +15181,12 @@ onClipSec: (nodeId, value) => {
 
                   const refreshedNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
                   const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, refreshedNode?.data || {});
+                  console.debug("[CLIP PIPELINE UI RESPONSE]", {
+                    pipelineUsed: response?.meta?.pipelineUsed || response?.pipeline || "legacy",
+                    sceneCount: Array.isArray(response?.merged_storyboard?.scenes) ? response.merged_storyboard.scenes.length : 0,
+                    finalSceneEnd: response?.meta?.finalSceneEnd,
+                    audioDurationSec: response?.meta?.audioDurationSec,
+                  });
                   if (!normalizedOutputs?.storyboardOut || !normalizedOutputs?.directorOutput) {
                     throw new Error('Scenario Director backend returned an incomplete contract.');
                   }
