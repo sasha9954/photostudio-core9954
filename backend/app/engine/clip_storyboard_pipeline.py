@@ -1268,6 +1268,15 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 },
             )
 
+        logger.warning(
+            "[CLIP PIPELINE BACKEND RESPONSE SUMMARY] pipeline=%s scene_count=%s final_scene_end=%s audio_duration=%s whole_map_sections=%s chunk_count=%s",
+            "clip_chunked_v1",
+            len(merged.get("scenes") or []),
+            round(final_scene_end, 3),
+            round(audio_duration_sec, 3),
+            len(whole_map.sections or []),
+            len(chunk_results),
+        )
         state_history.append("complete")
         return {
             "ok": True,
@@ -1292,9 +1301,11 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 "pipelineUsed": "clip_chunked_v1",
                 "legacyPathUsed": False,
                 "wholeMapUsed": True,
+                "sceneCount": len(merged.get("scenes") or []),
                 "chunkCount": len(chunk_results),
                 "finalSceneEnd": round(final_scene_end, 3),
                 "audioDurationSec": round(audio_duration_sec, 3),
+                "wholeMapSectionCount": len(whole_map.sections or []),
                 "fullCoverageAchieved": full_coverage_achieved,
                 "tailRepairAttempted": tail_repair_attempted,
                 "mapDiagnostics": map_diag,

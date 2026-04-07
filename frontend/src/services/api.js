@@ -101,7 +101,8 @@ export async function fetchJson(path,{method="GET",headers={},body,signal,timeou
   }
 
   try {
-    const res = await fetch(`${API_BASE}${path}`,{
+    const requestUrl = `${API_BASE}${path}`;
+    const res = await fetch(requestUrl,{
       credentials: "include",
       method,
       signal: activeSignal,
@@ -110,7 +111,23 @@ export async function fetchJson(path,{method="GET",headers={},body,signal,timeou
     });
     const text = await res.text();
     let data=null;
-    try{ data = text?JSON.parse(text):null; }catch{ data={raw:text}; }
+    try{
+      data = text?JSON.parse(text):null;
+    }catch(parseError){
+      const parseDebugPayload = {
+        url: requestUrl,
+        status: res.status,
+        contentType: String(res.headers?.get?.("content-type") || ""),
+        textSnippet: String(text || "").slice(0, 500),
+      };
+      if (res.ok) {
+        console.error("[CLIP PIPELINE FETCH JSON PARSE ERROR]", {
+          ...parseDebugPayload,
+          parseErrorMessage: String(parseError?.message || parseError || ""),
+        });
+      }
+      data={raw:text};
+    }
     if(!res.ok){
       // FastAPI часто возвращает {detail: ...}
       const msg = normalizeApiErrorMessage(res, data);

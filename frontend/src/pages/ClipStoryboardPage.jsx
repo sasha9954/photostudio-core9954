@@ -183,6 +183,7 @@ const CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD = false;
 const CLIP_TRACE_SCENARIO_SCENE_ASSETS = false;
 const CLIP_TRACE_SCENARIO_IMAGE_E2E = false;
 const CLIP_TRACE_ROLE_CONTRACT_SCENE_ID = "TRACE_SCENE_2P_001";
+console.warn("[CLIP PIPELINE FRONTEND BUILD MARKER] v=clip_pipeline_debug_01");
 
 function shouldTraceRoleContractScene(sceneId = "") {
   const needle = String(CLIP_TRACE_ROLE_CONTRACT_SCENE_ID || "").trim();
@@ -13281,13 +13282,40 @@ onClipSec: (nodeId, value) => {
                     scenarioDirectorClickCount,
                     modeFlags: clipPipelinePayload?.metadata?.modeFlags || {},
                   });
-
-                  const out = await fetchJson("/api/clip/comfy/scenario-director/generate", {
-                    method: "POST",
-                    body: clipPipelinePayload,
-                    headers: { "x-scenario-director-request-id": scenarioDirectorRequestId },
-                    signal: controller.signal,
+                  console.debug("[CLIP PIPELINE FRONTEND FETCH START]", {
+                    source: "comfyBrain:onParse",
+                    url: "/api/clip/comfy/scenario-director/generate",
+                    scenarioDirectorRequestId,
+                    clipPipelineRequested: parseClipPipelineRequested,
                   });
+
+                  let out = null;
+                  try {
+                    out = await fetchJson("/api/clip/comfy/scenario-director/generate", {
+                      method: "POST",
+                      body: clipPipelinePayload,
+                      headers: { "x-scenario-director-request-id": scenarioDirectorRequestId },
+                      signal: controller.signal,
+                    });
+                    console.debug("[CLIP PIPELINE FRONTEND FETCH SUCCESS RAW]", {
+                      source: "comfyBrain:onParse",
+                      responseType: typeof out,
+                      responseKeys: out && typeof out === "object" ? Object.keys(out) : [],
+                      pipeline: out?.pipeline,
+                      meta: out?.meta,
+                    });
+                  } catch (requestError) {
+                    console.error("[CLIP PIPELINE FRONTEND FETCH ERROR]", {
+                      source: "comfyBrain:onParse",
+                      message: requestError?.message,
+                      stack: requestError?.stack,
+                      payload: requestError?.payload,
+                      response: requestError?.response,
+                      status: requestError?.status,
+                      httpStatus: requestError?.httpStatus,
+                    });
+                    throw requestError;
+                  }
                   console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
                     phase: "after_fetch",
                     source: "comfyBrain:onParse",
@@ -13301,6 +13329,12 @@ onClipSec: (nodeId, value) => {
                     sceneCount: Array.isArray(out?.merged_storyboard?.scenes) ? out.merged_storyboard.scenes.length : 0,
                     finalSceneEnd: out?.meta?.finalSceneEnd,
                     audioDurationSec: out?.meta?.audioDurationSec,
+                  });
+                  console.debug("[CLIP PIPELINE FRONTEND BEFORE NORMALIZE]", {
+                    hasResponse: !!out,
+                    pipeline: out?.pipeline,
+                    meta: out?.meta,
+                    sceneCount: Array.isArray(out?.merged_storyboard?.scenes) ? out.merged_storyboard.scenes.length : null,
                   });
                   const normalizedDirector = normalizeScenarioDirectorApiResponse(out, {});
 
@@ -13511,6 +13545,16 @@ onClipSec: (nodeId, value) => {
                       : x)));
                     return;
                   }
+                  console.error("[CLIP PIPELINE FRONTEND RUNTIME ERROR]", {
+                    name: err?.name,
+                    message: err?.message,
+                    stack: err?.stack,
+                    payload: err?.payload,
+                    status: err?.status,
+                    httpStatus: err?.httpStatus,
+                    requestSource: "comfyBrain:onParse",
+                    clipPipelineRequested: parseClipPipelineRequested,
+                  });
                   console.error(err);
                   notify({ type: "error", message: "Ошибка разбора сцены" });
                   setNodes((prev) => prev.map((x) => (x.id === nodeId
@@ -15182,6 +15226,13 @@ onClipSec: (nodeId, value) => {
                   requestKey,
                   modeFlags: normalizedRequestPayload?.metadata?.modeFlags || {},
                 });
+                console.debug("[CLIP PIPELINE FRONTEND FETCH START]", {
+                  source: "narrative:onGenerateScenario",
+                  url: "/api/clip/comfy/scenario-director/generate",
+                  scenarioDirectorRequestId,
+                  requestKey,
+                  clipPipelineRequested,
+                });
 
                 try {
                   const response = await new Promise((resolve, reject) => {
@@ -15201,6 +15252,13 @@ onClipSec: (nodeId, value) => {
                     }))
                       .then((result) => {
                         window.clearTimeout(timeoutId);
+                        console.debug("[CLIP PIPELINE FRONTEND FETCH SUCCESS RAW]", {
+                          source: "narrative:onGenerateScenario",
+                          responseType: typeof result,
+                          responseKeys: result && typeof result === "object" ? Object.keys(result) : [],
+                          pipeline: result?.pipeline,
+                          meta: result?.meta,
+                        });
                         console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
                           phase: "after_fetch",
                           source: "narrative:onGenerateScenario",
@@ -15221,6 +15279,15 @@ onClipSec: (nodeId, value) => {
                       })
                       .catch((requestError) => {
                         window.clearTimeout(timeoutId);
+                        console.error("[CLIP PIPELINE FRONTEND FETCH ERROR]", {
+                          source: "narrative:onGenerateScenario",
+                          message: requestError?.message,
+                          stack: requestError?.stack,
+                          payload: requestError?.payload,
+                          response: requestError?.response,
+                          status: requestError?.status,
+                          httpStatus: requestError?.httpStatus,
+                        });
                         const httpStatus = Number(requestError?.status || requestError?.httpStatus || requestError?.response?.status || 0) || null;
                         console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
                           phase: "after_fetch_error",
@@ -15244,6 +15311,12 @@ onClipSec: (nodeId, value) => {
                   });
 
                   const refreshedNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
+                  console.debug("[CLIP PIPELINE FRONTEND BEFORE NORMALIZE]", {
+                    hasResponse: !!response,
+                    pipeline: response?.pipeline,
+                    meta: response?.meta,
+                    sceneCount: Array.isArray(response?.merged_storyboard?.scenes) ? response.merged_storyboard.scenes.length : null,
+                  });
                   const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, refreshedNode?.data || {});
                   console.debug("[CLIP PIPELINE UI RESPONSE]", {
                     pipelineUsed: response?.meta?.pipelineUsed || response?.pipeline || "legacy",
@@ -15279,6 +15352,16 @@ onClipSec: (nodeId, value) => {
                     return rebound;
                   });
                 } catch (error) {
+                  console.error("[CLIP PIPELINE FRONTEND RUNTIME ERROR]", {
+                    name: error?.name,
+                    message: error?.message,
+                    stack: error?.stack,
+                    payload: error?.payload,
+                    status: error?.status,
+                    httpStatus: error?.httpStatus,
+                    requestSource: normalizedRequestPayload?.metadata?.requestSource || "narrative:onGenerateScenario",
+                    clipPipelineRequested,
+                  });
                   const aborted = isAbortLikeError(error);
                   if (aborted) {
                     console.error("[SCENARIO DIRECTOR FRONTEND TIMEOUT]", {
