@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from base64 import b64encode
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -682,6 +683,42 @@ def _validate_chunk_response(chunk: ChunkStoryboardResponse) -> None:
                 raise ClipPipelineError("retryable_fail", "missing first_last prompts", details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id})
 
 
+_GENERIC_SCENE_ID_RE = re.compile(r"^(?:scene|sc|s)?_?\d+$", re.IGNORECASE)
+
+
+def _canonical_clip_scene_id(chunk_id: str, scene_index: int, old_scene_id: str) -> str:
+    base_id = f"{chunk_id}_scene_{scene_index + 1:02d}"
+    old = str(old_scene_id or "").strip()
+    if not old or _GENERIC_SCENE_ID_RE.match(old):
+        return base_id
+    suffix = re.sub(r"[^a-z0-9]+", "_", old.lower()).strip("_")
+    if not suffix or suffix == base_id:
+        return base_id
+    return f"{base_id}_{suffix[:48]}"
+
+
+def _canonicalize_chunk_scene_ids(chunk: ChunkStoryboardResponse) -> tuple[ChunkStoryboardResponse, dict[str, Any]]:
+    scene_id_map: dict[str, str] = {}
+    canonicalized_scenes: list[ClipScene] = []
+    applied = 0
+    for idx, scene in enumerate(chunk.scenes):
+        old_scene_id = str(scene.scene_id or "").strip()
+        new_scene_id = _canonical_clip_scene_id(chunk.chunk_id, idx, old_scene_id)
+        if new_scene_id != old_scene_id:
+            applied += 1
+        scene_payload = scene.model_dump(mode="json", exclude_none=True)
+        scene_payload["scene_id"] = new_scene_id
+        canonicalized_scenes.append(ClipScene.model_validate(scene_payload))
+        scene_id_map[old_scene_id or f"__empty__{idx + 1}"] = new_scene_id
+    canonical_chunk = ChunkStoryboardResponse.model_validate(
+        {
+            **chunk.model_dump(mode="json", exclude_none=True),
+            "scenes": [scene.model_dump(mode="json", exclude_none=True) for scene in canonicalized_scenes],
+        }
+    )
+    return canonical_chunk, {"canonicalSceneIdApplied": applied, "canonicalSceneIdMap": scene_id_map}
+
+
 def _flatten_ref_parts(ref_parts_by_role: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for role in ("character_1", "location", "style", "props", "character_2", "character_3", "animal", "group"):
@@ -1082,6 +1119,7 @@ def _generate_chunk_with_retry(*, api_key: str, req: ChunkStoryboardRequest, who
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_done status=ok attempt=%s", req.chunk_id, attempt)
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=parse_start attempt=%s", req.chunk_id, attempt)
             chunk = ChunkStoryboardResponse.model_validate(parsed_chunk)
+            chunk, canonical_diag = _canonicalize_chunk_scene_ids(chunk)
             _validate_chunk_response(chunk)
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=parse_done valid=true attempt=%s", req.chunk_id, attempt)
             diagnostics.append(
@@ -1092,6 +1130,8 @@ def _generate_chunk_with_retry(*, api_key: str, req: ChunkStoryboardRequest, who
                     "response_schema_enabled": True,
                     "context_state": context.get("context_state"),
                     "gemini_retries": call_diag.get("retries") if isinstance(call_diag, dict) else None,
+                    "canonicalSceneIdApplied": canonical_diag.get("canonicalSceneIdApplied", 0),
+                    "canonicalSceneIdMap": canonical_diag.get("canonicalSceneIdMap", {}),
                 }
             )
             return chunk, diagnostics
