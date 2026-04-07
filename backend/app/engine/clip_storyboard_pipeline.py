@@ -179,13 +179,102 @@ def _extract_json(raw_text: str) -> dict[str, Any] | None:
     return None
 
 
-def _call_gemini_json(*, api_key: str, body: dict[str, Any], retry_count: int = 3) -> tuple[dict[str, Any], dict[str, Any]]:
+def _estimate_request_payload_metrics(body: dict[str, Any]) -> dict[str, Any]:
+    audio_part_size_bytes = 0
+    refs_total_size_bytes = 0
+    total_inline_parts = 0
+    contents = body.get("contents") if isinstance(body.get("contents"), list) else []
+    for content in contents:
+        parts = content.get("parts") if isinstance(content, dict) and isinstance(content.get("parts"), list) else []
+        for idx, part in enumerate(parts):
+            inline = part.get("inlineData") if isinstance(part, dict) and isinstance(part.get("inlineData"), dict) else {}
+            if not inline:
+                continue
+            total_inline_parts += 1
+            encoded = str(inline.get("data") or "")
+            approx_bytes = int((len(encoded) * 3) / 4) if encoded else 0
+            text_hint = str((parts[idx - 1].get("text") if idx > 0 and isinstance(parts[idx - 1], dict) else "") or "").lower()
+            if "master audio" in text_hint:
+                audio_part_size_bytes += approx_bytes
+            else:
+                refs_total_size_bytes += approx_bytes
+    schema_enabled = bool(((body.get("generationConfig") or {}).get("responseJsonSchema")) if isinstance(body.get("generationConfig"), dict) else False)
+    whole_map_request_size_estimate = len(json.dumps(body, ensure_ascii=False))
+    return {
+        "audio_part_size_bytes": audio_part_size_bytes,
+        "refs_total_size_bytes": refs_total_size_bytes,
+        "total_inline_parts": total_inline_parts,
+        "whole_map_request_size_estimate": whole_map_request_size_estimate,
+        "schema_enabled": schema_enabled,
+    }
+
+
+def _call_gemini_json(
+    *,
+    api_key: str,
+    body: dict[str, Any],
+    retry_count: int = 3,
+    stage: str = "unknown",
+    chunk_id: str | None = None,
+    request_started: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     last_error = "gemini_invalid_json"
-    diagnostics: dict[str, Any] = {"model": CLIP_PIPELINE_MODEL, "retries": 0}
+    request_finished = False
+    diagnostics: dict[str, Any] = {"model": CLIP_PIPELINE_MODEL, "retries": 0, "stage": stage, "chunk_id": chunk_id}
+    req_metrics = _estimate_request_payload_metrics(body)
+    logger.info(
+        "[CLIP PIPELINE GEMINI PAYLOAD] stage=%s chunk_id=%s schema_enabled=%s audio_bytes=%s refs_bytes=%s inline_parts=%s request_size_estimate=%s",
+        stage,
+        chunk_id,
+        req_metrics.get("schema_enabled"),
+        req_metrics.get("audio_part_size_bytes"),
+        req_metrics.get("refs_total_size_bytes"),
+        req_metrics.get("total_inline_parts"),
+        req_metrics.get("whole_map_request_size_estimate"),
+    )
+    if int(req_metrics.get("whole_map_request_size_estimate") or 0) > 15_000_000:
+        logger.warning(
+            "[CLIP PIPELINE GEMINI PAYLOAD DIAGNOSTICS] stage=%s chunk_id=%s audio_part_size_bytes=%s refs_total_size_bytes=%s total_inline_parts=%s whole_map_request_size_estimate=%s",
+            stage,
+            chunk_id,
+            req_metrics.get("audio_part_size_bytes"),
+            req_metrics.get("refs_total_size_bytes"),
+            req_metrics.get("total_inline_parts"),
+            req_metrics.get("whole_map_request_size_estimate"),
+        )
     for attempt in range(retry_count):
-        resp = post_generate_content(api_key, CLIP_PIPELINE_MODEL, body, timeout=120)
+        logger.info(
+            "[CLIP PIPELINE GEMINI CALL] stage=%s chunk_id=%s attempt=%s event=before_post_generate_content request_started=%s",
+            stage,
+            chunk_id,
+            attempt + 1,
+            request_started,
+        )
+        try:
+            resp = post_generate_content(api_key, CLIP_PIPELINE_MODEL, body, timeout=120)
+            request_finished = True
+        except Exception as exc:
+            diagnostics["retries"] = attempt + 1
+            last_error = "gemini_request_exception"
+            logger.exception(
+                "[CLIP PIPELINE GEMINI CALL] stage=%s chunk_id=%s attempt=%s event=after_post_generate_content_exception error=%s",
+                stage,
+                chunk_id,
+                attempt + 1,
+                str(exc),
+            )
+            continue
+        http_error = not isinstance(resp, dict) or resp.get("status") not in {None, 200}
         diagnostics["retries"] = attempt + 1
-        if not isinstance(resp, dict) or resp.get("status") not in {None, 200}:
+        logger.info(
+            "[CLIP PIPELINE GEMINI CALL] stage=%s chunk_id=%s attempt=%s event=after_post_generate_content response_status=%s httpError=%s",
+            stage,
+            chunk_id,
+            attempt + 1,
+            resp.get("status") if isinstance(resp, dict) else "unknown",
+            http_error,
+        )
+        if http_error:
             status = resp.get("status") if isinstance(resp, dict) else "unknown"
             last_error = f"gemini_http_error:{status}"
             if isinstance(resp, dict):
@@ -208,10 +297,34 @@ def _call_gemini_json(*, api_key: str, body: dict[str, Any], retry_count: int = 
             continue
         raw = _extract_gemini_text(resp)
         parsed = _extract_json(raw)
+        logger.info(
+            "[CLIP PIPELINE GEMINI CALL] stage=%s chunk_id=%s attempt=%s response_status=%s httpError=%s parsed_text_exists=%s parsed_json_exists=%s",
+            stage,
+            chunk_id,
+            attempt + 1,
+            resp.get("status") if isinstance(resp, dict) else "unknown",
+            http_error,
+            bool(raw),
+            isinstance(parsed, dict),
+        )
         if isinstance(parsed, dict):
             return parsed, diagnostics
         last_error = "gemini_invalid_or_truncated_json"
-    raise ClipPipelineError("retryable_fail", "Gemini returned invalid JSON.", status_code=502, details={"reason": last_error, **diagnostics})
+    raise ClipPipelineError(
+        "retryable_fail",
+        "Gemini returned invalid JSON.",
+        status_code=502,
+        details={
+            "reason": last_error,
+            "stage": stage,
+            "chunk_id": chunk_id,
+            "attempt": diagnostics.get("retries"),
+            "request_started": request_started,
+            "request_finished": request_finished,
+            **req_metrics,
+            **diagnostics,
+        },
+    )
 
 
 def _is_local_or_private_url(url: str) -> bool:
@@ -770,7 +883,11 @@ def _run_optional_repair(*, api_key: str, merged: dict[str, Any], issues: list[M
             "maxOutputTokens": 4096,
         },
     }
-    parsed, _ = _call_gemini_json(api_key=api_key, body=body, retry_count=REPAIR_RETRY_COUNT)
+    logger.info("[CLIP PIPELINE GEMINI] stage=repair event=request_start")
+    parsed, _ = _call_gemini_json(api_key=api_key, body=body, retry_count=REPAIR_RETRY_COUNT, stage="repair", request_started=True)
+    logger.info("[CLIP PIPELINE GEMINI] stage=repair event=request_done status=ok")
+    logger.info("[CLIP PIPELINE GEMINI] stage=repair event=parse_start")
+    logger.info("[CLIP PIPELINE GEMINI] stage=repair event=parse_done valid=%s", isinstance(parsed, dict))
     return {"applied": True, "issues": [issue.__dict__ for issue in issues], "result": parsed}
 
 
@@ -934,15 +1051,21 @@ def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], con
     for attempt in range(1, WHOLE_MAP_RETRY_COUNT + 1):
         req_body = _build_whole_track_map_request(payload, context)
         try:
-            raw, call_diag = _call_gemini_json(api_key=api_key, body=req_body, retry_count=2)
+            logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=request_start attempt=%s", attempt)
+            raw, call_diag = _call_gemini_json(api_key=api_key, body=req_body, retry_count=2, stage="whole_map", request_started=True)
+            logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=request_done status=ok attempt=%s", attempt)
+            logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_start attempt=%s", attempt)
             model = WholeTrackMapResponse.model_validate(raw)
+            logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_done valid=true attempt=%s", attempt)
             diagnostics.append({"stage": "whole_map", "attempt": attempt, "response_schema_enabled": True, "context_state": context.get("context_state")})
             return model, call_diag, diagnostics
         except ValidationError as exc:
+            logger.warning("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_done valid=false attempt=%s", attempt)
             reason = "invalid whole track map contract"
             diagnostics.append({"stage": "whole_map", "attempt": attempt, "reason": reason, "errors": exc.errors()})
             last_error = ClipPipelineError("retryable_fail", reason, details={"attempt": attempt, "errors": exc.errors()})
         except ClipPipelineError as exc:
+            logger.warning("[CLIP PIPELINE GEMINI] stage=whole_map event=request_done status=error attempt=%s reason=%s", attempt, exc.message)
             diagnostics.append({"stage": "whole_map", "attempt": attempt, "reason": exc.message})
             last_error = exc
     raise last_error or ClipPipelineError("retryable_fail", "invalid whole track map contract")
@@ -954,9 +1077,13 @@ def _generate_chunk_with_retry(*, api_key: str, req: ChunkStoryboardRequest, who
     for attempt in range(1, CHUNK_RETRY_COUNT + 1):
         try:
             body = _build_chunk_request(req=req, whole_map=whole_map, context=context)
-            parsed_chunk, call_diag = _call_gemini_json(api_key=api_key, body=body, retry_count=2)
+            logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_start attempt=%s", req.chunk_id, attempt)
+            parsed_chunk, call_diag = _call_gemini_json(api_key=api_key, body=body, retry_count=2, stage="chunk", chunk_id=req.chunk_id, request_started=True)
+            logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_done status=ok attempt=%s", req.chunk_id, attempt)
+            logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=parse_start attempt=%s", req.chunk_id, attempt)
             chunk = ChunkStoryboardResponse.model_validate(parsed_chunk)
             _validate_chunk_response(chunk)
+            logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=parse_done valid=true attempt=%s", req.chunk_id, attempt)
             diagnostics.append(
                 {
                     "stage": "chunk",
@@ -969,9 +1096,11 @@ def _generate_chunk_with_retry(*, api_key: str, req: ChunkStoryboardRequest, who
             )
             return chunk, diagnostics
         except ValidationError as exc:
+            logger.warning("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=parse_done valid=false attempt=%s", req.chunk_id, attempt)
             diagnostics.append({"stage": "chunk", "chunk_id": req.chunk_id, "attempt": attempt, "reason": "invalid chunk contract", "errors": exc.errors()})
             last_error = ClipPipelineError("retryable_fail", "invalid chunk contract", details={"chunk_id": req.chunk_id, "attempt": attempt, "errors": exc.errors()})
         except ClipPipelineError as exc:
+            logger.warning("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_done status=error attempt=%s reason=%s", req.chunk_id, attempt, exc.message)
             diagnostics.append({"stage": "chunk", "chunk_id": req.chunk_id, "attempt": attempt, "reason": exc.message})
             last_error = exc
     raise last_error or ClipPipelineError("retryable_fail", "invalid chunk", details={"chunk_id": req.chunk_id})
@@ -987,8 +1116,17 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
     retry_diagnostics: list[dict[str, Any]] = []
     schema_diagnostics = {"whole_map_schema_enabled": True, "chunk_schema_enabled": True, "repair_schema_enabled": True}
     context_diagnostics = [_build_context_diagnostics(context, stage="stage_0_context_prepare")]
+    last_seen: dict[str, Any] = {
+        "stage": "context_prepare",
+        "attempt": 0,
+        "chunk_id": None,
+        "request_started": False,
+        "request_finished": False,
+    }
     try:
+        last_seen.update({"stage": "whole_map", "attempt": 1, "request_started": True, "request_finished": False})
         whole_map, map_diag, map_retry = _generate_whole_map_with_retry(api_key=api_key, payload=payload, context=context)
+        last_seen.update({"stage": "whole_map", "request_finished": True})
         retry_diagnostics.extend(map_retry)
 
         state_history.append("track_mapped")
@@ -999,6 +1137,7 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
         continuity_tail = ContinuityTailState()
         for boundary in chunks:
             state_history.append("chunk_running")
+            last_seen.update({"stage": "chunk", "chunk_id": boundary.chunk_id, "request_started": True, "request_finished": False})
             section_ids = [sec.section_id for sec in whole_map.sections if not (sec.t1 <= boundary.t0 or sec.t0 >= boundary.t1)]
             recurring_ids = list(dict.fromkeys([sec.recurring_group_id for sec in whole_map.sections if sec.recurring_group_id]))
             req = ChunkStoryboardRequest(
@@ -1011,6 +1150,7 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 creative_note=str((payload.get("metadata") or {}).get("creativeNote") or "") if isinstance(payload.get("metadata"), dict) else "",
             )
             chunk, chunk_retry = _generate_chunk_with_retry(api_key=api_key, req=req, whole_map=whole_map, context=context)
+            last_seen.update({"stage": "chunk", "chunk_id": boundary.chunk_id, "request_finished": True})
             retry_diagnostics.extend(chunk_retry)
             continuity_tail = ContinuityTailState.model_validate(chunk.continuity_out if isinstance(chunk.continuity_out, dict) else {})
             chunk_results.append(chunk)
@@ -1026,7 +1166,9 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
         repair_validation_diag: dict[str, Any] = {"attempted": False, "accepted": False, "errors": []}
         if issues:
             state_history.append("repairing")
+            last_seen.update({"stage": "repair", "request_started": True, "request_finished": False})
             repair_data = _run_optional_repair(api_key=api_key, merged=merged, issues=issues)
+            last_seen.update({"stage": "repair", "request_finished": True})
             pre_repair_merged = dict(merged)
             merged_candidate, repair_apply_diag = _apply_repair_result(merged, repair_data)
             repair_validation_diag = {"attempted": True, **_validate_repair_applied_storyboard(pre_repair_merged, merged_candidate)}
@@ -1062,6 +1204,7 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 creative_note="TAIL COVERAGE REPAIR: ensure last scene reaches track end.",
             )
             repaired_last_chunk, tail_retry_diag = _generate_chunk_with_retry(api_key=api_key, req=repair_req, whole_map=whole_map, context=context)
+            last_seen.update({"stage": "chunk", "chunk_id": last_boundary.chunk_id, "request_finished": True})
             retry_diagnostics.extend(tail_retry_diag)
             chunk_results[-1] = repaired_last_chunk
             merged, issues, merge_diag = _local_merge(whole_map.track_id, chunk_results)
@@ -1125,12 +1268,36 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 "contextDiagnostics": context_diagnostics,
             },
         }
-    except ClipPipelineError:
+    except ClipPipelineError as exc:
         state_history.append("retryable_fail")
+        exc_attempt = (exc.details or {}).get("attempt") if isinstance(exc.details, dict) else None
+        exc_chunk_id = (exc.details or {}).get("chunk_id") if isinstance(exc.details, dict) else None
+        exc.details = {
+            **(exc.details if isinstance(exc.details, dict) else {}),
+            "last_seen_stage": last_seen.get("stage"),
+            "last_seen_attempt": exc_attempt if exc_attempt is not None else last_seen.get("attempt"),
+            "last_seen_chunk_id": exc_chunk_id if exc_chunk_id is not None else last_seen.get("chunk_id"),
+            "request_started": bool(last_seen.get("request_started")),
+            "request_finished": bool(last_seen.get("request_finished")),
+            "state_history": state_history,
+        }
         raise
     except Exception as exc:
         state_history.append("fatal_fail")
-        raise ClipPipelineError("fatal_fail", "clip pipeline failed", status_code=500, details={"error": str(exc), "state_history": state_history}) from exc
+        raise ClipPipelineError(
+            "fatal_fail",
+            "clip pipeline failed",
+            status_code=500,
+            details={
+                "error": str(exc),
+                "state_history": state_history,
+                "last_seen_stage": last_seen.get("stage"),
+                "last_seen_attempt": last_seen.get("attempt"),
+                "last_seen_chunk_id": last_seen.get("chunk_id"),
+                "request_started": bool(last_seen.get("request_started")),
+                "request_finished": bool(last_seen.get("request_finished")),
+            },
+        ) from exc
 
 
 def regenerate_clip_chunk(payload: dict[str, Any]) -> dict[str, Any]:

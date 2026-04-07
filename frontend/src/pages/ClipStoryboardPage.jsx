@@ -13135,6 +13135,8 @@ onClipSec: (nodeId, value) => {
                 parseControllerRef.current = controller;
                 activeParseNodeRef.current = nodeId;
                 let timeoutTriggered = false;
+                let parseScenarioDirectorRequestId = "";
+                let parseClipPipelineRequested = false;
 
                 const timeoutId = setTimeout(() => {
                   if (parseTokenRef.current !== parseToken) return;
@@ -13233,6 +13235,7 @@ onClipSec: (nodeId, value) => {
                     },
                   };
                   const scenarioDirectorRequestId = (window.crypto?.randomUUID?.() || `sd-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+                  parseScenarioDirectorRequestId = scenarioDirectorRequestId;
                   const scenarioDirectorClickCount = ((window.__scenarioDirectorClickCount = Number(window.__scenarioDirectorClickCount || 0) + 1));
                   payload.metadata = {
                     ...(payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
@@ -13259,6 +13262,11 @@ onClipSec: (nodeId, value) => {
                       useClipStoryboardPipeline: true,
                     },
                   };
+                  parseClipPipelineRequested = Boolean(
+                    clipPipelinePayload?.mode === "clip_pipeline"
+                    && clipPipelinePayload?.metadata?.pipelineMode === "clip_pipeline_v1"
+                    && clipPipelinePayload?.metadata?.useClipStoryboardPipeline === true
+                  );
                   console.debug("[CLIP PIPELINE REQUEST PAYLOAD]", {
                     mode: clipPipelinePayload.mode,
                     pipelineMode: clipPipelinePayload.metadata?.pipelineMode,
@@ -13489,6 +13497,14 @@ onClipSec: (nodeId, value) => {
                 } catch (err) {
                   if (parseTokenRef.current !== parseToken) return;
                   if (err?.name === "AbortError") {
+                    console.error("[SCENARIO DIRECTOR FRONTEND TIMEOUT]", {
+                      message: "request timed out on frontend",
+                      source: "comfyBrain:onParse",
+                      requestSource: "comfyBrain:onParse",
+                      scenarioDirectorRequestId: parseScenarioDirectorRequestId,
+                      clipPipelineRequested: parseClipPipelineRequested,
+                      timeoutTriggered,
+                    });
                     if (timeoutTriggered) return;
                     setNodes((prev) => prev.map((x) => (x.id === nodeId
                       ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null, lastParseError: null } }
@@ -15146,6 +15162,11 @@ onClipSec: (nodeId, value) => {
                     },
                   }
                   : requestPayloadWithDebug;
+                const clipPipelineRequested = Boolean(
+                  normalizedRequestPayload?.mode === "clip_pipeline"
+                  && normalizedRequestPayload?.metadata?.pipelineMode === "clip_pipeline_v1"
+                  && normalizedRequestPayload?.metadata?.useClipStoryboardPipeline === true
+                );
                 console.debug("[CLIP PIPELINE REQUEST PAYLOAD]", {
                   mode: normalizedRequestPayload?.mode,
                   pipelineMode: normalizedRequestPayload?.metadata?.pipelineMode,
@@ -15259,6 +15280,16 @@ onClipSec: (nodeId, value) => {
                   });
                 } catch (error) {
                   const aborted = isAbortLikeError(error);
+                  if (aborted) {
+                    console.error("[SCENARIO DIRECTOR FRONTEND TIMEOUT]", {
+                      message: "request timed out on frontend",
+                      source: "narrative:onGenerateScenario",
+                      requestSource: normalizedRequestPayload?.metadata?.requestSource || "narrative:onGenerateScenario",
+                      scenarioDirectorRequestId,
+                      clipPipelineRequested,
+                      requestKey,
+                    });
+                  }
                   const backendCode = String(error?.payload?.detail?.code || error?.code || "").trim().toLowerCase();
                   const quotaMessage = "Gemini quota exceeded / rate limit exceeded. Проверь billing / limits / key.";
                   const message = backendCode === "provider_quota_exceeded"
