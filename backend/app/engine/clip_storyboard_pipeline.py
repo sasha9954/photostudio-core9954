@@ -1,11 +1,17 @@
 import json
 import logging
 import os
+from base64 import b64encode
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+import ipaddress
+import mimetypes
 
+import requests
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.core.config import settings
@@ -208,11 +214,87 @@ def _call_gemini_json(*, api_key: str, body: dict[str, Any], retry_count: int = 
     raise ClipPipelineError("retryable_fail", "Gemini returned invalid JSON.", status_code=502, details={"reason": last_error, **diagnostics})
 
 
-def _normalize_media_file_part(url: str, *, fallback_mime: str) -> dict[str, Any]:
-    file_url = str(url or "").strip()
-    if not file_url:
+def _is_local_or_private_url(url: str) -> bool:
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return False
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+        return True
+    if host.endswith(".local") or host.endswith(".internal") or host.endswith(".lan") or host.endswith(".home") or host.endswith(".ts.net"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return not ip.is_global
+    except Exception:
+        return False
+
+
+def _guess_mime_type(url: str, fallback_mime: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    guessed = mimetypes.guess_type((parsed.path or "").strip())[0]
+    return str(guessed or fallback_mime or "application/octet-stream")
+
+
+def _try_read_local_static_asset(url: str) -> bytes | None:
+    raw = str(url or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    path = str(parsed.path or "").lstrip("/")
+    if not path.startswith("static/assets/"):
+        return None
+    filename = path.split("static/assets/", 1)[1]
+    if not filename:
+        return None
+    assets_dir = Path(__file__).resolve().parents[1] / "static" / "assets"
+    candidate = (assets_dir / filename).resolve()
+    assets_root = assets_dir.resolve()
+    if assets_root not in candidate.parents and candidate != assets_root:
+        return None
+    if not candidate.exists() or not candidate.is_file():
+        return None
+    return candidate.read_bytes()
+
+
+def _fetch_media_bytes(url: str) -> bytes:
+    local_bytes = _try_read_local_static_asset(url)
+    if local_bytes is not None:
+        return local_bytes
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.content
+
+
+def _build_inline_media_part_from_url(url: str, *, fallback_mime: str) -> dict[str, Any]:
+    media_url = str(url or "").strip()
+    if not media_url:
         return {}
-    return {"fileData": {"mimeType": fallback_mime, "fileUri": file_url}}
+    try:
+        raw = _fetch_media_bytes(media_url)
+        mime = _guess_mime_type(media_url, fallback_mime)
+        return {"inlineData": {"mimeType": mime, "data": b64encode(raw).decode("ascii")}}
+    except Exception:
+        logger.warning("clip_pipeline_inline_media_failed media_url=%s", media_url, exc_info=True)
+        return {}
+
+
+def _normalize_media_to_inline_part(url: str, *, fallback_mime: str) -> dict[str, Any]:
+    media_url = str(url or "").strip()
+    if not media_url:
+        return {}
+    if _is_local_or_private_url(media_url):
+        logger.info(
+            "clip_pipeline_media_transport_fallback media_url=%s reason=local_or_private_url_not_allowed_for_gemini_fileUri fallback_transport=inlineData",
+            media_url,
+        )
+    return _build_inline_media_part_from_url(media_url, fallback_mime=fallback_mime)
 
 
 def _now_iso() -> str:
@@ -243,13 +325,13 @@ def _prepare_clip_pipeline_context(payload: dict[str, Any], provided_context: di
     refs_by_role = ctx.get("refs_by_role") if isinstance(ctx.get("refs_by_role"), dict) else _extract_refs_by_role(payload)
     audio_part = (ctx.get("audio") or {}).get("media_part") if isinstance(ctx.get("audio"), dict) else {}
     if not isinstance(audio_part, dict) or not audio_part:
-        audio_part = _normalize_media_file_part(audio_url, fallback_mime="audio/mpeg")
+        audio_part = _normalize_media_to_inline_part(audio_url, fallback_mime="audio/mpeg")
     refs_media: dict[str, list[dict[str, Any]]] = {}
     for role in CLIP_REF_ROLES:
         role_refs = refs_by_role.get(role) if isinstance(refs_by_role.get(role), list) else []
         role_parts: list[dict[str, Any]] = []
         for ref_url in role_refs[:6]:
-            role_parts.append(_normalize_media_file_part(str(ref_url), fallback_mime="image/jpeg"))
+            role_parts.append(_normalize_media_to_inline_part(str(ref_url), fallback_mime="image/jpeg"))
         refs_media[role] = [part for part in role_parts if part]
     cache_handle = str(ctx.get("cache_handle") or ctx.get("cache_id") or "").strip()
     cache_id = str(ctx.get("cache_id") or cache_handle).strip()
