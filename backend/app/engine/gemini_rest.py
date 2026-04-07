@@ -86,15 +86,27 @@ def post_generate_content(api_key: str, model: str, body: Dict[str, Any], timeou
     if not r.ok:
         # Try to extract a human readable error
         text = r.text or ""
+        error_payload: dict[str, Any] | None = None
+        error_message = ""
         try:
             j = r.json()
+            if isinstance(j, dict):
+                error_payload = j
             if isinstance(j, dict) and "error" in j and isinstance(j["error"], dict):
                 msg = j["error"].get("message")
                 if msg:
+                    error_message = str(msg)
                     text = f"{msg} | raw={text}"
         except Exception:
             pass
-        return {"__http_error__": True, "status": int(r.status_code), "text": text}
+        return {
+            "__http_error__": True,
+            "status": int(r.status_code),
+            "text": text,
+            "message": error_message,
+            "error": (error_payload or {}).get("error") if isinstance(error_payload, dict) else None,
+            "body": error_payload,
+        }
 
     try:
         return r.json()

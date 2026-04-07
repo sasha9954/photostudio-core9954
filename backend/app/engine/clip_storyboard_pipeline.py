@@ -180,7 +180,25 @@ def _call_gemini_json(*, api_key: str, body: dict[str, Any], retry_count: int = 
         resp = post_generate_content(api_key, CLIP_PIPELINE_MODEL, body, timeout=120)
         diagnostics["retries"] = attempt + 1
         if not isinstance(resp, dict) or resp.get("status") not in {None, 200}:
-            last_error = f"gemini_http_error:{resp.get('status') if isinstance(resp, dict) else 'unknown'}"
+            status = resp.get("status") if isinstance(resp, dict) else "unknown"
+            last_error = f"gemini_http_error:{status}"
+            if isinstance(resp, dict):
+                diagnostics["geminiError"] = {
+                    "status": resp.get("status"),
+                    "message": resp.get("message"),
+                    "text": resp.get("text"),
+                    "error": resp.get("error"),
+                    "body": resp.get("body"),
+                }
+                if isinstance(status, int) and 400 <= status <= 599:
+                    schema = ((body.get("generationConfig") or {}).get("responseJsonSchema") if isinstance(body.get("generationConfig"), dict) else None)
+                    logger.warning(
+                        "clip_pipeline_gemini_http_error status=%s model=%s schema=%s error=%s",
+                        status,
+                        CLIP_PIPELINE_MODEL,
+                        json.dumps(schema, ensure_ascii=False) if isinstance(schema, dict) else None,
+                        json.dumps(diagnostics.get("geminiError"), ensure_ascii=False),
+                    )
             continue
         raw = _extract_gemini_text(resp)
         parsed = _extract_json(raw)
@@ -467,7 +485,7 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
         "generationConfig": {
             "temperature": 0.2,
             "responseMimeType": "application/json",
-            "responseSchema": _build_whole_track_map_schema(),
+            "responseJsonSchema": _build_whole_track_map_schema(),
             "maxOutputTokens": 8192,
         },
     }
@@ -499,7 +517,7 @@ def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMa
         "generationConfig": {
             "temperature": 0.2,
             "responseMimeType": "application/json",
-            "responseSchema": _build_chunk_response_schema(),
+            "responseJsonSchema": _build_chunk_response_schema(),
             "maxOutputTokens": 8192,
         },
     }
@@ -630,7 +648,7 @@ def _run_optional_repair(*, api_key: str, merged: dict[str, Any], issues: list[M
         "generationConfig": {
             "temperature": 0.1,
             "responseMimeType": "application/json",
-            "responseSchema": _build_repair_response_schema(),
+            "responseJsonSchema": _build_repair_response_schema(),
             "maxOutputTokens": 4096,
         },
     }
