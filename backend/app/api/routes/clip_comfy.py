@@ -185,8 +185,10 @@ def _is_clip_music_video_pipeline(req: dict[str, Any]) -> bool:
     controls = req.get("director_controls") if isinstance(req.get("director_controls"), dict) else {}
     content_type = str(controls.get("contentType") or "").strip().lower()
     metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}
-    clip_mode = str(metadata.get("pipelineMode") or metadata.get("mode") or "clip").strip().lower()
-    return mode in {"oneshot", "clip_pipeline"} and content_type == "music_video" and clip_mode == "clip"
+    explicit_mode = mode == "clip_pipeline"
+    explicit_metadata_mode = str(metadata.get("pipelineMode") or "").strip().lower() == "clip_pipeline_v1"
+    explicit_bool_flag = _flag_enabled(metadata.get("useClipStoryboardPipeline"), default=False)
+    return content_type == "music_video" and (explicit_mode or explicit_metadata_mode or explicit_bool_flag)
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
 ANIMAL_LABEL_BY_SPECIES = {
     "dog": "собака",
