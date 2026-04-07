@@ -10118,45 +10118,52 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "If you also return input_understanding/storyboard, keep them as optional extras and still keep required top-level contract fields.\n"
         f"Director note: {director_note if director_note else 'empty'}\n"
         f"{references_block}"
-        "Output JSON contract (strict, only this shape):\n"
+        "Canonical output JSON contract (required top-level):\n"
         "{\n"
-        '  "input_understanding": {\n'
-        '    "audio_visual_read": "",\n'
-        '    "character_identity_read": "",\n'
-        '    "location_specification_level": "fully_specified | partially_specified | unspecified",\n'
-        '    "default_world_choice_if_unspecified": "",\n'
-        '    "marine_words_interpretation": "literal | metaphorical | mixed",\n'
-        '    "planned_scene_types": [],\n'
-        '    "lip_sync_importance": "",\n'
-        '    "identity_lock_importance": "",\n'
-        '    "same_character_across_all_scenes": true,\n'
-        '    "can_choose_routes_independently": true,\n'
-        '    "will_avoid": []\n'
+        '  "transcript": [\n'
+        '    { "t0": 0.0, "t1": 0.0, "text": "" }\n'
+        "  ],\n"
+        '  "audioStructure": {\n'
+        '    "pauses": [],\n'
+        '    "energyPeaks": [],\n'
+        '    "transitions": [],\n'
+        '    "pacingType": "",\n'
+        '    "rhythmDescription": ""\n'
         "  },\n"
-        '  "storyboard": {\n'
-        '    "story_summary": "",\n'
-        '    "full_scenario": "",\n'
-        '    "voice_script": "",\n'
-        '    "director_summary": "",\n'
-        '    "audio_understanding": {},\n'
-        '    "narrative_strategy": {},\n'
-        '    "diagnostics": {\n'
-        '      "total_duration": 0,\n'
-        '      "scene_count": 0\n'
-        "    },\n"
-        '    "scenes": [\n'
-        "      {\n"
-        '        "scene_id": 1,\n'
-        '        "start_time_sec": 0,\n'
-        '        "end_time_sec": 0,\n'
-        '        "route": "i2v | lip_sync_music | first_last",\n'
-        '        "performance_framing": "tight_medium | medium | three_quarter | close_emotional | wide_action | full_body_action",\n'
-        f'        "story_function": "{arc_story_function_hint}",\n'
-        '        "description": "",\n'
-        '        "content_tags": []\n'
-        "      }\n"
-        "    ]\n"
-        "  }\n"
+        '  "semanticTimeline": [\n'
+        '    {\n'
+        '      "t0": 0.0,\n'
+        '      "t1": 0.0,\n'
+        '      "text": "",\n'
+        '      "meaning": "",\n'
+        '      "visualFocus": "",\n'
+        '      "emotion": "",\n'
+        '      "sceneType": "",\n'
+        '      "transitionHint": ""\n'
+        "    }\n"
+        "  ],\n"
+        '  "scenes": [\n'
+        "    {\n"
+        '      "sceneId": "S1",\n'
+        '      "t0": 0.0,\n'
+        '      "t1": 0.0,\n'
+        '      "duration": 0.0,\n'
+        '      "summary": "",\n'
+        '      "visualPrompt": "",\n'
+        '      "characters": ["character_1"],\n'
+        '      "environment": "",\n'
+        '      "camera": "",\n'
+        '      "motion": "",\n'
+        '      "transitionIn": "",\n'
+        '      "transitionOut": "",\n'
+        '      "sceneType": "",\n'
+        f'      "storyFunction": "{arc_story_function_hint}",\n'
+        '      "route": "i2v | lip_sync_music | first_last",\n'
+        '      "content_tags": []\n'
+        "    }\n"
+        "  ],\n"
+        '  "input_understanding": {},\n'
+        '  "storyboard": {}\n'
         "}"
     )
 
@@ -10524,26 +10531,43 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
         )
     top_level_keys = list(extracted.keys()) if isinstance(extracted, dict) else []
     logger.info("[SCENARIO DIRECTOR] audio-first parse_stage=%s top_level_keys=%s", parse_stage, top_level_keys)
-    parse_branch = "legacy_parse"
-    if (
-        isinstance(extracted.get("input_understanding"), dict)
-        and isinstance(extracted.get("storyboard"), dict)
-        and not any(key in extracted for key in ("transcript", "audioStructure", "semanticTimeline", "scenes"))
-    ):
-        parse_branch = "rich_parse"
-        extracted = _adapt_audio_first_compact_to_legacy_contract(extracted, parse_stage=parse_stage)
-        parse_branch = "rich_to_legacy_adapter"
-    elif not all(key in extracted for key in ("transcript", "audioStructure", "semanticTimeline", "scenes")):
-        rich_adapted = _adapt_audio_first_rich_payload_to_legacy_contract(extracted, parse_stage=parse_stage)
-        if isinstance(rich_adapted, dict):
-            extracted = rich_adapted
-            parse_branch = "rich_to_legacy_adapter"
     required = ("transcript", "audioStructure", "semanticTimeline", "scenes")
+
+    def _is_valid_legacy_contract(payload: dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        if any(key not in payload for key in required):
+            return False
+        if not isinstance(payload.get("transcript"), list):
+            return False
+        if not isinstance(payload.get("audioStructure"), dict):
+            return False
+        if not isinstance(payload.get("semanticTimeline"), list):
+            return False
+        scenes_value = payload.get("scenes")
+        return isinstance(scenes_value, list) and len(scenes_value) > 0
+
+    parse_branch = ""
+    if _is_valid_legacy_contract(extracted):
+        parse_branch = "legacy_parse"
+    else:
+        compact_adapted = _adapt_audio_first_compact_to_legacy_contract(extracted, parse_stage=parse_stage)
+        if _is_valid_legacy_contract(compact_adapted):
+            extracted = compact_adapted
+            parse_branch = "compact_to_legacy_adapter"
+        else:
+            rich_adapted = _adapt_audio_first_rich_payload_to_legacy_contract(extracted, parse_stage=parse_stage)
+            if isinstance(rich_adapted, dict) and _is_valid_legacy_contract(rich_adapted):
+                extracted = rich_adapted
+                parse_branch = "rich_to_legacy_adapter"
+            else:
+                parse_branch = "fatal_invalid"
+
     missing = [key for key in required if key not in extracted]
     if missing:
         logger.warning(
             "[SCENARIO DIRECTOR] audio-first parser branch=%s parse_stage=%s top_level_keys=%s missing=%s",
-            "fatal_invalid",
+            parse_branch,
             parse_stage,
             top_level_keys,
             missing,
@@ -10552,7 +10576,7 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
             "gemini_contract_invalid",
             "Gemini audio-first payload missed required fields.",
             status_code=502,
-            details={"missingFields": missing, "rawPreview": str(raw_text or "")[:800], "parseBranch": "fatal_invalid"},
+            details={"missingFields": missing, "rawPreview": str(raw_text or "")[:800], "parseBranch": parse_branch},
         )
     if not isinstance(extracted.get("transcript"), list):
         raise ScenarioDirectorError(
