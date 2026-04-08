@@ -70,10 +70,17 @@ class WholeTrackMapResponse(BaseModel):
     track_id: str
     mode: str
     duration_sec: float
-    global_arc: str
+    opening_anchor: str = ""
+    ending_callback_rule: str = ""
+    global_arc: str | dict[str, str]
     world_lock: dict[str, Any] = Field(default_factory=dict)
     identity_lock: dict[str, Any] = Field(default_factory=dict)
     style_lock: dict[str, Any] = Field(default_factory=dict)
+    recurring_visual_motifs: list[str] = Field(default_factory=list)
+    chorus_visual_policy: str = ""
+    lip_sync_phrase_ranges: list[TimeRangeReason] = Field(default_factory=list)
+    phrase_endpoints: list[float] = Field(default_factory=list)
+    target_route_mix_per_30s: dict[str, int] = Field(default_factory=dict)
     sections: list[WholeTrackSection] = Field(default_factory=list)
     no_split_ranges: list[TimeRangeReason] = Field(default_factory=list)
     suggested_chunk_boundaries: list[ChunkBoundary] = Field(default_factory=list)
@@ -84,6 +91,20 @@ class WholeTrackMapResponse(BaseModel):
             raise ValueError("mode must be clip")
         if self.duration_sec <= 0:
             raise ValueError("duration_sec must be > 0")
+        if isinstance(self.global_arc, str):
+            arc_text = self.global_arc.strip() or "setup→rise→turn→release→afterimage"
+            self.global_arc = {
+                "setup": arc_text,
+                "rise": arc_text,
+                "turn": arc_text,
+                "release": arc_text,
+                "afterimage": arc_text,
+            }
+        self.target_route_mix_per_30s = {
+            "ia2v": int((self.target_route_mix_per_30s or {}).get("ia2v") or 2),
+            "first_last": int((self.target_route_mix_per_30s or {}).get("first_last") or 2),
+            "i2v": int((self.target_route_mix_per_30s or {}).get("i2v") or 4),
+        }
         return self
 
 
@@ -126,6 +147,11 @@ class ClipScene(BaseModel):
     section_type: str
     route: str
     goal: str
+    scene_goal: str | None = None
+    scene_story_role: str | None = None
+    hero_present: bool = True
+    world_anchor: str | None = None
+    lip_sync: bool | None = None
     continuity_tokens: list[str] = Field(default_factory=list)
     is_boundary_scene: bool = False
     recurring_group_id: str | None = None
@@ -135,6 +161,16 @@ class ClipScene(BaseModel):
     first_frame_prompt: str | None = None
     last_frame_prompt: str | None = None
     transition_prompt: str | None = None
+
+    @model_validator(mode="after")
+    def normalize_scene_contract(self) -> "ClipScene":
+        if not str(self.goal or "").strip() and str(self.scene_goal or "").strip():
+            self.goal = str(self.scene_goal or "").strip()
+        if not str(self.scene_goal or "").strip():
+            self.scene_goal = str(self.goal or "").strip()
+        if self.lip_sync is None:
+            self.lip_sync = self.route == "ia2v"
+        return self
 
 
 class ChunkStoryboardResponse(BaseModel):
@@ -702,6 +738,11 @@ def _build_scene_schema(*, required_only: bool = False) -> dict[str, Any]:
             "section_type": {"type": "string"},
             "route": {"type": "string", "enum": list(ALLOWED_CLIP_ROUTES)},
             "goal": {"type": "string"},
+            "scene_goal": {"type": "string"},
+            "scene_story_role": {"type": "string"},
+            "hero_present": {"type": "boolean"},
+            "world_anchor": {"type": "string"},
+            "lip_sync": {"type": "boolean"},
             "continuity_tokens": {"type": "array", "items": {"type": "string"}},
             "is_boundary_scene": {"type": "boolean"},
             "recurring_group_id": {"type": "string"},
@@ -721,10 +762,41 @@ def _build_whole_track_map_schema() -> dict[str, Any]:
             "track_id": {"type": "string"},
             "mode": {"type": "string", "enum": ["clip"]},
             "duration_sec": {"type": "number"},
-            "global_arc": {"type": "string"},
+            "opening_anchor": {"type": "string"},
+            "ending_callback_rule": {"type": "string"},
+            "global_arc": {
+                "type": "object",
+                "properties": {
+                    "setup": {"type": "string"},
+                    "rise": {"type": "string"},
+                    "turn": {"type": "string"},
+                    "release": {"type": "string"},
+                    "afterimage": {"type": "string"},
+                },
+                "required": ["setup", "rise", "turn", "release", "afterimage"],
+            },
             "world_lock": {"type": "object"},
             "identity_lock": {"type": "object"},
             "style_lock": {"type": "object"},
+            "recurring_visual_motifs": {"type": "array", "items": {"type": "string"}},
+            "chorus_visual_policy": {"type": "string"},
+            "lip_sync_phrase_ranges": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"t0": {"type": "number"}, "t1": {"type": "number"}, "reason": {"type": "string"}},
+                    "required": ["t0", "t1"],
+                },
+            },
+            "phrase_endpoints": {"type": "array", "items": {"type": "number"}},
+            "target_route_mix_per_30s": {
+                "type": "object",
+                "properties": {
+                    "ia2v": {"type": "integer"},
+                    "first_last": {"type": "integer"},
+                    "i2v": {"type": "integer"},
+                },
+            },
             "sections": {
                 "type": "array",
                 "items": {
@@ -758,7 +830,25 @@ def _build_whole_track_map_schema() -> dict[str, Any]:
                 },
             },
         },
-        "required": ["track_id", "mode", "duration_sec", "global_arc", "sections"],
+        "required": [
+            "track_id",
+            "mode",
+            "duration_sec",
+            "opening_anchor",
+            "ending_callback_rule",
+            "global_arc",
+            "world_lock",
+            "identity_lock",
+            "style_lock",
+            "recurring_visual_motifs",
+            "chorus_visual_policy",
+            "lip_sync_phrase_ranges",
+            "phrase_endpoints",
+            "target_route_mix_per_30s",
+            "sections",
+            "no_split_ranges",
+            "suggested_chunk_boundaries",
+        ],
     }
 
 
@@ -808,9 +898,18 @@ def _validate_chunk_response(chunk: ChunkStoryboardResponse) -> None:
             raise ClipPipelineError("retryable_fail", "invalid scene route", details={"route": scene.route, "chunk_id": chunk.chunk_id})
         if scene.t1 <= scene.t0:
             raise ClipPipelineError("retryable_fail", "invalid scene timestamps", details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id})
+        duration = float(scene.t1) - float(scene.t0)
+        if duration > 10.0:
+            raise ClipPipelineError(
+                "retryable_fail",
+                "scene duration above 10s is disallowed for clip planning",
+                details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id, "duration_sec": round(duration, 3)},
+            )
         if scene.route in {"i2v", "ia2v"}:
             if not (str(scene.frame_prompt or "").strip() and str(scene.camera_prompt or "").strip() and str(scene.motion_prompt or "").strip()):
                 raise ClipPipelineError("retryable_fail", "missing i2v/ia2v prompts", details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id})
+        if scene.route == "ia2v" and scene.lip_sync is False:
+            raise ClipPipelineError("retryable_fail", "ia2v requires lip_sync=true", details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id})
         if scene.route == "first_last":
             if not (str(scene.first_frame_prompt or "").strip() and str(scene.last_frame_prompt or "").strip() and str(scene.transition_prompt or "").strip()):
                 raise ClipPipelineError("retryable_fail", "missing first_last prompts", details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id})
@@ -872,7 +971,12 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
     }
     parts: list[dict[str, Any]] = [
         {"text": "Build WholeTrackMapResponse JSON for clip mode only."},
-        {"text": "No giant transcript. Keep lean map with sections/no_split_ranges/suggested_chunk_boundaries."},
+        {"text": "Story-first music-video director mode: setup starts from first seconds even in instrumental intro."},
+        {"text": "Single-hero + single-world lock: character_1 is default protagonist, one location means one world. No identity/environment drift."},
+        {"text": "Scene duration policy for downstream chunking: preferred 3.0-6.0s, occasional 6.0-8.0s, 10.0s+ is anti-pattern."},
+        {"text": "Split policy anchors: phrase ends + beat accents; avoid cutting mid-vocal-line unless unavoidable."},
+        {"text": "Return full contract keys including opening_anchor, ending_callback_rule, global_arc(setup/rise/turn/release/afterimage), locks, recurring motifs, chorus policy, lip_sync_phrase_ranges, phrase_endpoints, no_split_ranges, suggested_chunk_boundaries, target_route_mix_per_30s."},
+        {"text": "Default route mix prior per ~30s: ia2v=2, first_last=2, i2v=4 (adapt to section type, but keep as baseline)."},
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
     audio_part = ((context.get("audio_source") or {}).get("media_part") if isinstance(context.get("audio_source"), dict) else {})
@@ -911,6 +1015,14 @@ def _build_chunk_request(
     parts: list[dict[str, Any]] = [
         {"text": "Return ChunkStoryboardResponse JSON for CLIP mode only."},
         {"text": "Allowed routes only: i2v, ia2v, first_last. No transcript/audioStructure/semanticTimeline."},
+        {"text": "Route canon: ia2v=lip-sync performance only (readable face+mouth, medium/three-quarter, slight front angle, soft orbit/push/pull/side move, emotional delivery)."},
+        {"text": "Route canon: i2v=story/world/action progression; never static brick-wall duplicate shots."},
+        {"text": "Route canon: first_last=controlled transition/episode bridge/start-end callback; never dump route."},
+        {"text": "Scene contract per scene: scene_goal, scene_story_role, route, hero_present, world_anchor, lip_sync, frame_prompt, camera_prompt, motion_prompt, continuity_tokens."},
+        {"text": "Continuity contract: adjacent scenes inside episode must feel like progression (same hero/world/light/emotion line unless explicit route bridge)."},
+        {"text": "Duration policy per scene: min 3.0s, preferred 3.0-6.0s, rare up to 8.0s, avoid 10.0s+."},
+        {"text": "Do not cut inside vocal line unless forced by no_split constraints; prefer phrase endpoints and beat accents."},
+        {"text": "Final scene of full track should rhyme with opening anchor via meaning/emotion/visual callback."},
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
     chunk_audio_part, chunk_audio_diag = _build_chunk_audio_slice(
@@ -1161,6 +1273,8 @@ def _validate_merged_storyboard(merged: dict[str, Any]) -> dict[str, Any]:
         t1 = float(scene.get("t1") or 0.0)
         if t0 < 0 or t1 <= 0 or t1 <= t0:
             errors.append(f"scene[{idx}] invalid time range t0={t0}, t1={t1}")
+        if (t1 - t0) > 10.0:
+            errors.append(f"scene[{idx}] duration_above_10s={round(t1 - t0, 3)}")
         if idx > 0 and t0 < prev_t0:
             errors.append(f"scene[{idx}] out of order t0={t0} < previous_t0={prev_t0}")
         if idx > 0 and t0 < prev_t1:
@@ -1202,6 +1316,34 @@ def _final_scene_end(merged: dict[str, Any]) -> float:
     return max(float(scene.get("t1") or 0.0) for scene in scenes if isinstance(scene, dict))
 
 
+def _compute_directorial_diagnostics(merged: dict[str, Any], whole_map: WholeTrackMapResponse) -> dict[str, Any]:
+    scenes = [scene for scene in (merged.get("scenes") or []) if isinstance(scene, dict)]
+    durations = [max(0.0, float(s.get("t1") or 0.0) - float(s.get("t0") or 0.0)) for s in scenes]
+    phrase_endpoints = sorted(float(x) for x in (whole_map.phrase_endpoints or []) if isinstance(x, (int, float)))
+    no_split_ranges = [(float(r.t0), float(r.t1)) for r in (whole_map.no_split_ranges or []) if r.t1 > r.t0]
+    tolerance = 0.35
+    scene_cuts = []
+    for idx, scene in enumerate(scenes):
+        if idx > 0:
+            scene_cuts.append(float(scene.get("t0") or 0.0))
+        scene_cuts.append(float(scene.get("t1") or 0.0))
+    phrase_hits = 0
+    for cut in scene_cuts:
+        if any(abs(cut - endpoint) <= tolerance for endpoint in phrase_endpoints):
+            phrase_hits += 1
+    mid_phrase_forced = 0
+    for cut in scene_cuts:
+        if any((r0 + tolerance) < cut < (r1 - tolerance) for r0, r1 in no_split_ranges):
+            mid_phrase_forced += 1
+    return {
+        "scenes_below_3_sec_count": sum(1 for d in durations if d < 3.0),
+        "scenes_above_8_sec_count": sum(1 for d in durations if d > 8.0),
+        "scenes_above_10_sec_count": sum(1 for d in durations if d > 10.0),
+        "phrase_boundary_hits": phrase_hits,
+        "mid_phrase_forced_splits": mid_phrase_forced,
+    }
+
+
 def _ensure_route_prompts(scene: dict[str, Any]) -> dict[str, Any]:
     route = str(scene.get("route") or "").strip()
     goal = str(scene.get("goal") or "").strip()
@@ -1223,13 +1365,17 @@ def _apply_clip_route_mix_policy(merged: dict[str, Any], whole_map: WholeTrackMa
     if not scenes:
         return merged, {"changed": 0, "route_counts": {}}
 
+    target_mix = whole_map.target_route_mix_per_30s or {"ia2v": 2, "first_last": 2, "i2v": 4}
+
     def _route_for_scene(scene: dict[str, Any]) -> str:
         text = f"{scene.get('section_type') or ''} {scene.get('goal') or ''}".lower()
-        if any(token in text for token in ("hook", "chorus", "reveal", "transformation", "drop", "signature")):
-            return "first_last"
-        if any(token in text for token in ("vocal", "singer", "performance", "lyric", "phrase")):
+        if bool(scene.get("lip_sync")):
             return "ia2v"
-        if any(token in text for token in ("bridge", "instrumental", "mood", "environment", "world", "movement")):
+        if any(token in text for token in ("hook", "chorus", "reveal", "transformation", "drop", "signature", "bridge", "callback")):
+            return "first_last"
+        if any(token in text for token in ("vocal", "singer", "performance", "lyric", "phrase", "mouth", "face", "delivery")):
+            return "ia2v"
+        if any(token in text for token in ("instrumental", "mood", "environment", "world", "movement", "walk", "action", "dance", "atmosphere")):
             return "i2v"
         return str(scene.get("route") or "i2v").strip() if str(scene.get("route") or "").strip() in ALLOWED_CLIP_ROUTES else "i2v"
 
@@ -1241,20 +1387,60 @@ def _apply_clip_route_mix_policy(merged: dict[str, Any], whole_map: WholeTrackMa
             changed += 1
         _ensure_route_prompts(scene)
 
-    approx_music_video = 20.0 <= float(whole_map.duration_sec) <= 45.0
-    has_repeat = any(str(sec.section_type or "").lower() in {"chorus", "hook"} or sec.recurring_group_id for sec in whole_map.sections)
-    has_first_last = any(str(scene.get("route") or "") == "first_last" for scene in scenes)
-    if approx_music_video and has_repeat and not has_first_last:
-        anchor_idx = max(0, min(len(scenes) - 1, len(scenes) // 2))
-        scenes[anchor_idx]["route"] = "first_last"
-        _ensure_route_prompts(scenes[anchor_idx])
-        changed += 1
-
+    window_size = 30.0
+    duration = max(1.0, float(whole_map.duration_sec or 0.0))
+    windows = max(1, int(round(duration / window_size)))
+    expected = {route: int(target_mix.get(route) or 0) * windows for route in ALLOWED_CLIP_ROUTES}
     route_counts: dict[str, int] = {}
     for scene in scenes:
         route = str(scene.get("route") or "i2v")
         route_counts[route] = route_counts.get(route, 0) + 1
-    return {**merged, "scenes": scenes}, {"changed": changed, "route_counts": route_counts}
+
+    def _scene_weight(scene: dict[str, Any], route: str) -> int:
+        txt = f"{scene.get('section_type') or ''} {scene.get('goal') or ''} {scene.get('scene_story_role') or ''}".lower()
+        if route == "ia2v":
+            return 3 if any(x in txt for x in ("vocal", "lyric", "phrase", "sing", "delivery")) else 0
+        if route == "first_last":
+            return 3 if any(x in txt for x in ("opening", "ending", "bridge", "turn", "callback", "chorus", "hook")) else 0
+        return 1
+
+    for route in ("ia2v", "first_last"):
+        deficit = max(0, expected.get(route, 0) - route_counts.get(route, 0))
+        if deficit <= 0:
+            continue
+        candidates = sorted(
+            [s for s in scenes if str(s.get("route") or "") == "i2v"],
+            key=lambda s: _scene_weight(s, route),
+            reverse=True,
+        )
+        for scene in candidates[:deficit]:
+            scene["route"] = route
+            if route == "ia2v":
+                scene["lip_sync"] = True
+            _ensure_route_prompts(scene)
+            changed += 1
+
+    for scene in scenes:
+        route = str(scene.get("route") or "i2v")
+        if route == "ia2v":
+            scene["lip_sync"] = True
+            scene["camera_prompt"] = str(scene.get("camera_prompt") or "").strip() or (
+                "Medium/three-quarter shot, hero near frontal gaze, soft orbit or gentle push-pull, face and mouth readable."
+            )
+            scene["motion_prompt"] = str(scene.get("motion_prompt") or "").strip() or (
+                "Smooth emotional lip-sync delivery, subtle motion only, avoid dance-action."
+            )
+        elif scene.get("lip_sync") is None:
+            scene["lip_sync"] = False
+
+    route_counts = {}
+    for scene in scenes:
+        route = str(scene.get("route") or "i2v")
+        route_counts[route] = route_counts.get(route, 0) + 1
+    return {
+        **merged,
+        "scenes": scenes,
+    }, {"changed": changed, "route_counts": route_counts, "target_route_mix_per_30s": target_mix, "windows_30s": windows}
 
 
 def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], context: dict[str, Any]) -> tuple[WholeTrackMapResponse, dict[str, Any], list[dict[str, Any]]]:
@@ -1507,11 +1693,7 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
             len(chunk_results),
         )
         state_history.append("complete")
-        scene_durations = [
-            max(0.0, float(scene.get("t1") or 0.0) - float(scene.get("t0") or 0.0))
-            for scene in (merged.get("scenes") if isinstance(merged.get("scenes"), list) else [])
-            if isinstance(scene, dict)
-        ]
+        directorial_diagnostics = _compute_directorial_diagnostics(merged, whole_map)
         total_sec = round(max(0.0, perf_counter() - total_started), 3)
         return {
             "ok": True,
@@ -1563,8 +1745,7 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                     "scene_count": len(merged.get("scenes") or []),
                     "chunk_count": len(chunk_results),
                     "retry_count": retry_count,
-                    "scenes_below_3_sec_count": sum(1 for d in scene_durations if d < 3.0),
-                    "scenes_above_8_sec_count": sum(1 for d in scene_durations if d > 8.0),
+                    **directorial_diagnostics,
                     "decoded_master_audio_cached": bool(decoded_audio_diag.get("decoded_master_audio_cached")),
                     "decoded_master_audio_reused_for_chunks": bool(decoded_audio_diag.get("decoded_master_audio_cached")),
                 },
