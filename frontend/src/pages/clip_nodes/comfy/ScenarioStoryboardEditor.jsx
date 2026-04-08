@@ -304,6 +304,8 @@ export default function ScenarioStoryboardEditor({
   onUpdateMusic,
   onGenerateMusic,
   onExtractSceneAudio,
+  storyboardPackage = null,
+  onRunPipelineStage,
 }) {
   const [activeSelectionType, setActiveSelectionType] = useState("scene");
   const [activeSelectionId, setActiveSelectionId] = useState("");
@@ -315,6 +317,7 @@ export default function ScenarioStoryboardEditor({
   const [scenarioLightboxSceneId, setScenarioLightboxSceneId] = useState("");
   const [scenarioLightboxDownloading, setScenarioLightboxDownloading] = useState(false);
   const [scenarioLightboxDownloadError, setScenarioLightboxDownloadError] = useState("");
+  const [pipelineBusyStage, setPipelineBusyStage] = useState("");
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
   const phrasePlaybackRef = useRef({ sceneId: "", phraseIndex: -1, t0: 0, t1: 0 });
@@ -324,6 +327,28 @@ export default function ScenarioStoryboardEditor({
   const stopNodeDragEvent = (event) => event.stopPropagation();
 
   const safeScenes = Array.isArray(scenes) ? scenes : [];
+  const pipelineStageStatuses = useMemo(() => (
+    storyboardPackage && typeof storyboardPackage === "object" && storyboardPackage.stage_statuses && typeof storyboardPackage.stage_statuses === "object"
+      ? storyboardPackage.stage_statuses
+      : {}
+  ), [storyboardPackage]);
+  const pipelineStages = [
+    { id: "story_core", label: "CORE" },
+    { id: "audio_map", label: "AUDIO" },
+    { id: "role_plan", label: "ROLES" },
+    { id: "scene_plan", label: "SCENES" },
+    { id: "scene_prompts", label: "PROMPTS" },
+    { id: "finalize", label: "FINAL" },
+  ];
+  const runPipelineStage = async (stageId, autoRun = false) => {
+    if (typeof onRunPipelineStage !== "function") return;
+    setPipelineBusyStage(stageId || (autoRun ? "auto" : ""));
+    try {
+      await onRunPipelineStage(nodeId, { stageId, autoRun });
+    } finally {
+      setPipelineBusyStage("");
+    }
+  };
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
   const normalizedScenes = useMemo(
     () => safeScenes.map((scene, idx) => {
@@ -960,6 +985,7 @@ export default function ScenarioStoryboardEditor({
     selectedSceneId,
     selectedSceneRuntime: selectedRuntime,
     audioData: safeAudioData,
+    storyboardPackage: storyboardPackage || {},
   }, null, 2);
   const scenarioRawJson = useMemo(() => (
     activeTab === "debug" ? formatRawForCopy() : ""
@@ -1103,6 +1129,10 @@ export default function ScenarioStoryboardEditor({
           onMouseDown={stopNodeDragEvent}
           onPointerDown={stopNodeDragEvent}
         >
+          <details style={{ marginBottom: 8 }}>
+            <summary className="clipSB_copySelectable nodrag nopan" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent}>Storyboard package</summary>
+            <pre className="clipSB_pre">{JSON.stringify(storyboardPackage || {}, null, 2)}</pre>
+          </details>
           <button
             className="clipSB_scenarioJsonCopyBtn nodrag nopan nowheel"
             type="button"
@@ -1161,6 +1191,19 @@ export default function ScenarioStoryboardEditor({
         {masterAudioUrl ? <audio key={masterAudioUrl} ref={masterAudioRef} src={masterAudioUrl} preload="metadata" style={{ display: "none" }} /> : null}
 
         <div className="clipSB_scenarioEditorTopTabs">
+          <div className="clipSB_scenarioEditorBtnRow" style={{ marginBottom: 8, flexWrap: "wrap" }}>
+            {pipelineStages.map((stage) => {
+              const stageMeta = pipelineStageStatuses?.[stage.id] && typeof pipelineStageStatuses[stage.id] === "object" ? pipelineStageStatuses[stage.id] : {};
+              const stageStatus = String(stageMeta?.status || "idle").trim().toLowerCase() || "idle";
+              return (
+                <button key={stage.id} className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!!pipelineBusyStage} onClick={() => runPipelineStage(stage.id, false)}>
+                  {stage.label} · {stageStatus}
+                </button>
+              );
+            })}
+            <button className="clipSB_btn" type="button" disabled={!!pipelineBusyStage} onClick={() => runPipelineStage("", true)}>AUTO (placeholder)</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!!pipelineBusyStage} onClick={() => setActiveTab("debug")}>JSON</button>
+          </div>
           <div className="clipSB_scenarioEditorTabsRow">
             {TOP_TABS.map((tab) => (
               <button

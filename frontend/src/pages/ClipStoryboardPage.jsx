@@ -14467,6 +14467,10 @@ onClipSec: (nodeId, value) => {
               rawScenarioResponse,
               storyboardOut,
               directorOutput,
+              storyboardPackage: (
+                directorOutput?.storyboardPackage
+                && typeof directorOutput.storyboardPackage === "object"
+              ) ? directorOutput.storyboardPackage : (base?.data?.storyboardPackage || null),
               scenarioMode: String(
                 sourceNode?.data?.contentType
                 || directorOutput?.contentType
@@ -14675,6 +14679,57 @@ onClipSec: (nodeId, value) => {
                   return;
                 }
                 handleScenarioGenerateVideo({ sceneIndex, sceneId: resolvedSceneId, ...meta });
+              },
+              onScenarioRunPipelineStage: async (nodeId, options = {}) => {
+                const activeNodes = nodesRef.current || [];
+                const targetNode = activeNodes.find((nodeItem) => nodeItem.id === nodeId && nodeItem.type === "scenarioStoryboard");
+                const stageId = String(options?.stageId || "").trim();
+                const autoRun = Boolean(options?.autoRun);
+                const storyboardPackage = (
+                  targetNode?.data?.storyboardPackage
+                  && typeof targetNode.data.storyboardPackage === "object"
+                ) ? targetNode.data.storyboardPackage : {};
+                const sourceNode = activeNodes.find((nodeItem) => nodeItem.id === incomingEdge?.source);
+                const connectedAudioUrl = String(
+                  sourceNode?.data?.audioUrl
+                  || sourceNode?.data?.masterAudioUrl
+                  || ""
+                ).trim();
+                const payload = {
+                  mode: "scenario_stage",
+                  pipelineMode: "scenario_stage_v1",
+                  stageId,
+                  autoRun,
+                  storyboardPackage,
+                  audioUrl: connectedAudioUrl,
+                  audioDurationSec: Number(sourceNode?.data?.audioDurationSec || 0) || 0,
+                  source: sourceNode?.data?.resolvedSource || {},
+                  context_refs: sourceNode?.data?.connectedInputs || {},
+                  metadata: {
+                    pipelineMode: "scenario_stage_v1",
+                    requestSource: "scenario_storyboard:manual_stage",
+                  },
+                };
+                const response = await fetchJson("/api/clip/comfy/scenario-director/generate", {
+                  method: "POST",
+                  body: payload,
+                });
+                setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                  if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
+                  return {
+                    ...nodeItem,
+                    data: {
+                      ...nodeItem.data,
+                      storyboardPackage: response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : (nodeItem?.data?.storyboardPackage || {}),
+                      directorOutput: {
+                        ...(nodeItem?.data?.directorOutput && typeof nodeItem.data.directorOutput === "object" ? nodeItem.data.directorOutput : {}),
+                        pipeline: "scenario_stage_v1",
+                        storyboardPackage: response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : (nodeItem?.data?.storyboardPackage || {}),
+                        executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
+                      },
+                    },
+                  };
+                })));
               },
               onScenarioMusicUpdate: (nodeId, patch = {}) => {
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
@@ -18722,6 +18777,8 @@ const hydrate = useCallback((source = "unknown") => {
         onUpdateMusic={activeScenarioStoryboardNode?.data?.onScenarioMusicUpdate}
         onGenerateMusic={activeScenarioStoryboardNode?.data?.onScenarioMusicGenerate}
         onExtractSceneAudio={handleScenarioEditorExtractSceneAudio}
+        storyboardPackage={activeScenarioStoryboardNode?.data?.storyboardPackage || null}
+        onRunPipelineStage={activeScenarioStoryboardNode?.data?.onScenarioRunPipelineStage}
       />
 
       {comfyEditor.open ? (

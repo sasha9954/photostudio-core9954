@@ -5,7 +5,7 @@ import re
 import io
 from base64 import b64encode, b64decode
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from time import perf_counter
@@ -653,7 +653,7 @@ def _build_chunk_audio_slice(
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _extract_refs_by_role(payload: dict[str, Any]) -> dict[str, list[str]]:

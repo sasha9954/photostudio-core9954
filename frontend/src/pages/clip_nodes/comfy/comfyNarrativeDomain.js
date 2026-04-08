@@ -1031,6 +1031,35 @@ function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
 }
 
 export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) {
+  if (String(response?.pipeline || "").trim() === "scenario_stage_v1") {
+    const storyboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : {};
+    const storyCore = storyboardPackage?.story_core && typeof storyboardPackage.story_core === "object" ? storyboardPackage.story_core : {};
+    const storyboardOut = {
+      scenes: Array.isArray(storyboardPackage?.final_storyboard?.scenes) ? storyboardPackage.final_storyboard.scenes : [],
+      contentType: "music_video",
+      format: normalizeText(state?.format) || "9:16",
+      story_summary: normalizeText(storyCore?.story_summary),
+      opening_anchor: normalizeText(storyCore?.opening_anchor),
+      ending_callback_rule: normalizeText(storyCore?.ending_callback_rule),
+    };
+    return {
+      storyboardOut,
+      scenario: normalizeText(storyCore?.story_summary),
+      voiceScript: "",
+      brainPackage: null,
+      bgMusicPrompt: "",
+      globalMusicPrompt: "",
+      directorOutput: {
+        pipeline: "scenario_stage_v1",
+        storyboardPackage,
+        stageStatuses: storyboardPackage?.stage_statuses && typeof storyboardPackage.stage_statuses === "object" ? storyboardPackage.stage_statuses : {},
+        diagnostics: storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object" ? storyboardPackage.diagnostics : {},
+        executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
+        scenes: storyboardOut.scenes,
+      },
+      raw: response,
+    };
+  }
   const clipPipelineUsed = String(response?.pipeline || "").trim() === "clip_chunked_v1";
   if (clipPipelineUsed) {
     const mergedStoryboard = response?.merged_storyboard && typeof response.merged_storyboard === "object"
@@ -1097,6 +1126,10 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         repair: response?.repair || null,
         meta: response?.meta || {},
       },
+      storyboardPackage: response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : null,
+      stageStatuses: response?.storyboardPackage?.stage_statuses && typeof response.storyboardPackage.stage_statuses === "object" ? response.storyboardPackage.stage_statuses : {},
+      diagnostics: response?.storyboardPackage?.diagnostics && typeof response.storyboardPackage.diagnostics === "object" ? response.storyboardPackage.diagnostics : {},
+      executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
     };
     console.debug("[CLIP PIPELINE NORMALIZE]", {
       pipelineModeSent: "clip_pipeline_v1",

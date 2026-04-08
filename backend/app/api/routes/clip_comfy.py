@@ -19,6 +19,13 @@ from app.engine.clip_storyboard_pipeline import (
     regenerate_clip_chunk,
     run_clip_storyboard_pipeline,
 )
+from app.engine.scenario_stage_pipeline import (
+    create_storyboard_package,
+    mark_stale_downstream,
+    resolve_stage_sequence,
+    run_pipeline,
+    run_stage,
+)
 
 import json
 import logging
@@ -174,6 +181,13 @@ class ScenarioDirectorGenerateIn(BaseModel):
     selectedLocationRefUrl: str = ""
     selectedPropsRefUrls: list[str] = Field(default_factory=list)
     options: dict[str, Any] = Field(default_factory=dict)
+    storyboardPackage: dict[str, Any] = Field(default_factory=dict)
+    stageId: str = ""
+    stageIds: list[str] = Field(default_factory=list)
+    autoRun: bool = False
+    markStaleFrom: str = ""
+    staleReason: str = ""
+    pipelineMode: str = ""
     directGeminiStoryboardMode: bool | None = None
     direct_gemini_storyboard_mode: bool | None = None
 
@@ -637,6 +651,40 @@ async def clip_comfy_scenario_director_generate(request: Request, payload: Scena
     req.setdefault("metadata", {})
     if isinstance(req.get("metadata"), dict):
         req["metadata"]["scenarioDirectorRequestId"] = scenario_director_request_id
+    pipeline_mode = str(
+        req.get("pipelineMode")
+        or (req.get("metadata") if isinstance(req.get("metadata"), dict) else {}).get("pipelineMode")
+        or ""
+    ).strip().lower()
+    if pipeline_mode == "scenario_stage_v1":
+        incoming_package = req.get("storyboardPackage") if isinstance(req.get("storyboardPackage"), dict) else {}
+        package = incoming_package or create_storyboard_package(req)
+        mark_stale_from = str(req.get("markStaleFrom") or "").strip()
+        if mark_stale_from:
+            package = mark_stale_downstream(package, mark_stale_from, reason=str(req.get("staleReason") or ""))
+        stage_id = str(req.get("stageId") or "").strip()
+        stage_ids = req.get("stageIds") if isinstance(req.get("stageIds"), list) else []
+        auto_run = bool(req.get("autoRun"))
+        if stage_id:
+            package = run_stage(stage_id, package, req)
+            executed_stages = [stage_id]
+        else:
+            resolved_stage_ids = resolve_stage_sequence(stage_ids, auto_mode=auto_run)
+            package = run_pipeline(resolved_stage_ids, package, req)
+            executed_stages = resolved_stage_ids
+        return {
+            "ok": True,
+            "pipeline": "scenario_stage_v1",
+            "executedStages": executed_stages,
+            "storyboardPackage": package,
+            "storyboardOut": package.get("final_storyboard") if isinstance(package.get("final_storyboard"), dict) else {},
+            "directorOutput": {
+                "pipeline": "scenario_stage_v1",
+                "story_core": package.get("story_core") if isinstance(package.get("story_core"), dict) else {},
+                "stage_statuses": package.get("stage_statuses") if isinstance(package.get("stage_statuses"), dict) else {},
+                "diagnostics": package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {},
+            },
+        }
     logger.info(
         "[SCENARIO DIRECTOR ROUTE] route=%s requestId=%s method=%s",
         "/api/clip/comfy/scenario-director/generate",
