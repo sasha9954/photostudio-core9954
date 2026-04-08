@@ -468,33 +468,92 @@ def _decode_audio_inline_bytes(context: dict[str, Any]) -> tuple[bytes, str]:
     return (raw, _guess_mime_type(audio_url, "audio/mpeg"))
 
 
+def _get_or_build_decoded_master_audio(context: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    cache = context.get("decoded_master_audio_cache")
+    if isinstance(cache, dict) and cache.get("ready"):
+        return cache, {"decoded_master_audio_cached": True, "decoded_master_audio_build_sec": 0.0, "decoded_master_audio_reused_for_chunks": True}
+    if not isinstance(cache, dict):
+        cache = {}
+        context["decoded_master_audio_cache"] = cache
+    started = perf_counter()
+    try:
+        raw, mime = _decode_audio_inline_bytes(context)
+        if not raw:
+            cache.update({"ready": False, "error": "master_audio_unavailable"})
+            return cache, {
+                "decoded_master_audio_cached": False,
+                "decoded_master_audio_build_sec": round(max(0.0, perf_counter() - started), 3),
+                "decoded_master_audio_reused_for_chunks": False,
+                "error": "master_audio_unavailable",
+            }
+        audio, sr = librosa.load(io.BytesIO(raw), sr=None, mono=False)
+        total_samples = int(audio.shape[-1]) if hasattr(audio, "shape") else 0
+        if total_samples <= 0 or sr <= 0:
+            cache.update({"ready": False, "error": "decoded_audio_empty"})
+            return cache, {
+                "decoded_master_audio_cached": False,
+                "decoded_master_audio_build_sec": round(max(0.0, perf_counter() - started), 3),
+                "decoded_master_audio_reused_for_chunks": False,
+                "error": "decoded_audio_empty",
+            }
+        duration_sec = max(0.0, total_samples / float(sr))
+        channels = int(audio.shape[0]) if getattr(audio, "ndim", 1) > 1 else 1
+        cache.update(
+            {
+                "ready": True,
+                "audio": audio,
+                "sample_rate": int(sr),
+                "total_samples": total_samples,
+                "duration_sec": round(duration_sec, 6),
+                "channels": channels,
+                "source_mime": mime,
+                "build_sec": round(max(0.0, perf_counter() - started), 3),
+            }
+        )
+        return cache, {
+            "decoded_master_audio_cached": True,
+            "decoded_master_audio_build_sec": cache.get("build_sec", 0.0),
+            "decoded_master_audio_reused_for_chunks": False,
+        }
+    except Exception:
+        logger.warning("clip_pipeline_master_audio_decode_failed", exc_info=True)
+        cache.update({"ready": False, "error": "decode_failed"})
+        return cache, {
+            "decoded_master_audio_cached": False,
+            "decoded_master_audio_build_sec": round(max(0.0, perf_counter() - started), 3),
+            "decoded_master_audio_reused_for_chunks": False,
+            "error": "decode_failed",
+        }
+
+
 def _build_chunk_audio_slice(
     *,
-    context: dict[str, Any],
+    decoded_audio_cache: dict[str, Any],
     chunk_t0: float,
     chunk_t1: float,
     track_duration_sec: float,
     overlap_sec: float = CHUNK_AUDIO_SLICE_OVERLAP_SEC,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    build_started = perf_counter()
     t0 = max(0.0, float(chunk_t0) - overlap_sec)
     t1 = max(t0, float(chunk_t1) + overlap_sec)
     if track_duration_sec > 0:
         t1 = min(float(track_duration_sec), t1)
         t0 = min(t0, t1)
     try:
-        raw, _ = _decode_audio_inline_bytes(context)
-        if not raw:
-            return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "master_audio_unavailable"}
-        audio, sr = librosa.load(io.BytesIO(raw), sr=None, mono=False)
-        total_samples = int(audio.shape[-1]) if hasattr(audio, "shape") else 0
-        if total_samples <= 0 or sr <= 0:
-            return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "decoded_audio_empty"}
+        if not bool(decoded_audio_cache.get("ready")):
+            return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": str(decoded_audio_cache.get("error") or "master_audio_unavailable"), "chunk_audio_slice_build_sec": round(max(0.0, perf_counter() - build_started), 3)}
+        audio = decoded_audio_cache.get("audio")
+        sr = int(decoded_audio_cache.get("sample_rate") or 0)
+        total_samples = int(decoded_audio_cache.get("total_samples") or 0)
+        if audio is None or total_samples <= 0 or sr <= 0:
+            return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "decoded_audio_empty", "chunk_audio_slice_build_sec": round(max(0.0, perf_counter() - build_started), 3)}
         real_track_duration = max(0.0, total_samples / float(sr))
         t1 = min(t1, real_track_duration)
         start_idx = int(max(0, round(t0 * sr)))
         end_idx = int(min(total_samples, round(t1 * sr)))
         if end_idx <= start_idx:
-            return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "slice_bounds_invalid"}
+            return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "slice_bounds_invalid", "chunk_audio_slice_build_sec": round(max(0.0, perf_counter() - build_started), 3)}
         sliced = audio[..., start_idx:end_idx]
         buff = io.BytesIO()
         sf.write(buff, sliced.T if getattr(sliced, "ndim", 1) > 1 else sliced, sr, format="WAV", subtype="PCM_16")
@@ -506,10 +565,11 @@ def _build_chunk_audio_slice(
             "slice_t1": round(t1, 3),
             "audio_part_size_bytes": len(out),
             "slice_overlap_sec": overlap_sec,
+            "chunk_audio_slice_build_sec": round(max(0.0, perf_counter() - build_started), 3),
         }
     except Exception:
         logger.warning("clip_pipeline_chunk_audio_slice_failed", exc_info=True)
-        return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "slice_generation_failed"}
+        return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "slice_generation_failed", "chunk_audio_slice_build_sec": round(max(0.0, perf_counter() - build_started), 3)}
 
 
 def _now_iso() -> str:
@@ -824,7 +884,13 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
     }
 
 
-def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMapResponse, context: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _build_chunk_request(
+    *,
+    req: ChunkStoryboardRequest,
+    whole_map: WholeTrackMapResponse,
+    context: dict[str, Any],
+    decoded_audio_cache: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     runtime = {
         "context": {
             "audio_url": context.get("audio_url"),
@@ -840,7 +906,7 @@ def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMa
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
     chunk_audio_part, chunk_audio_diag = _build_chunk_audio_slice(
-        context=context,
+        decoded_audio_cache=decoded_audio_cache,
         chunk_t0=req.t0,
         chunk_t1=req.t1,
         track_duration_sec=float(whole_map.duration_sec or 0.0),
@@ -884,6 +950,10 @@ def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMa
         "chunk_audio_bytes": int(chunk_audio_diag.get("audio_part_size_bytes") or 0),
         "refs_reattached": bool(_flatten_ref_parts(context.get("refs_media_parts_by_role") if isinstance(context.get("refs_media_parts_by_role"), dict) else {})),
         "chunk_audio_error": chunk_audio_diag.get("error"),
+        "decoded_master_audio_cached": bool(decoded_audio_cache.get("ready")),
+        "decoded_master_audio_build_sec": float(decoded_audio_cache.get("build_sec") or 0.0),
+        "decoded_master_audio_reused_for_chunks": bool(decoded_audio_cache.get("ready")),
+        "chunk_audio_slice_build_sec": float(chunk_audio_diag.get("chunk_audio_slice_build_sec") or 0.0),
     }
     return body, transport_diag
 
@@ -1215,12 +1285,24 @@ def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], con
     raise last_error or ClipPipelineError("retryable_fail", "invalid whole track map contract")
 
 
-def _generate_chunk_with_retry(*, api_key: str, req: ChunkStoryboardRequest, whole_map: WholeTrackMapResponse, context: dict[str, Any]) -> tuple[ChunkStoryboardResponse, list[dict[str, Any]]]:
+def _generate_chunk_with_retry(
+    *,
+    api_key: str,
+    req: ChunkStoryboardRequest,
+    whole_map: WholeTrackMapResponse,
+    context: dict[str, Any],
+    decoded_audio_cache: dict[str, Any],
+) -> tuple[ChunkStoryboardResponse, list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     last_error: ClipPipelineError | None = None
     for attempt in range(1, CHUNK_RETRY_COUNT + 1):
         try:
-            body, transport_diag = _build_chunk_request(req=req, whole_map=whole_map, context=context)
+            body, transport_diag = _build_chunk_request(
+                req=req,
+                whole_map=whole_map,
+                context=context,
+                decoded_audio_cache=decoded_audio_cache,
+            )
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_start attempt=%s", req.chunk_id, attempt)
             parsed_chunk, call_diag = _call_gemini_json(api_key=api_key, body=body, retry_count=2, stage="chunk", chunk_id=req.chunk_id, request_started=True)
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_done status=ok attempt=%s", req.chunk_id, attempt)
@@ -1260,6 +1342,7 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
         raise ClipPipelineError("fatal_fail", "GEMINI_API_KEY is missing for clip pipeline.", status_code=503)
 
     context = _normalize_clip_context(payload)
+    decoded_audio_cache, decoded_audio_diag = _get_or_build_decoded_master_audio(context)
     state_history = [context.get("context_state") or "context_prepared"]
     retry_diagnostics: list[dict[str, Any]] = []
     schema_diagnostics = {"whole_map_schema_enabled": True, "chunk_schema_enabled": True, "repair_schema_enabled": True}
@@ -1307,7 +1390,13 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 continuity_in=ContinuityIn(previous_chunk_id=chunk_results[-1].chunk_id if chunk_results else None, tail_state=continuity_tail),
                 creative_note=str((payload.get("metadata") or {}).get("creativeNote") or "") if isinstance(payload.get("metadata"), dict) else "",
             )
-            chunk, chunk_retry = _generate_chunk_with_retry(api_key=api_key, req=req, whole_map=whole_map, context=context)
+            chunk, chunk_retry = _generate_chunk_with_retry(
+                api_key=api_key,
+                req=req,
+                whole_map=whole_map,
+                context=context,
+                decoded_audio_cache=decoded_audio_cache,
+            )
             last_seen.update({"stage": f"chunk_{boundary.chunk_id}", "chunk_id": boundary.chunk_id, "request_finished": True})
             retry_diagnostics.extend(chunk_retry)
             retry_count += len(chunk_retry)
@@ -1367,7 +1456,13 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 continuity_in=ContinuityIn(previous_chunk_id=chunk_results[-2].chunk_id if len(chunk_results) > 1 else None, tail_state=continuity_tail),
                 creative_note="TAIL COVERAGE REPAIR: ensure last scene reaches track end.",
             )
-            repaired_last_chunk, tail_retry_diag = _generate_chunk_with_retry(api_key=api_key, req=repair_req, whole_map=whole_map, context=context)
+            repaired_last_chunk, tail_retry_diag = _generate_chunk_with_retry(
+                api_key=api_key,
+                req=repair_req,
+                whole_map=whole_map,
+                context=context,
+                decoded_audio_cache=decoded_audio_cache,
+            )
             last_seen.update({"stage": f"chunk_{last_boundary.chunk_id}", "chunk_id": last_boundary.chunk_id, "request_finished": True})
             retry_diagnostics.extend(tail_retry_diag)
             retry_count += len(tail_retry_diag)
@@ -1453,6 +1548,7 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                     "whole_map_sec": whole_map_sec,
                     "chunk_secs": chunk_secs,
                     "merge_sec": merge_sec,
+                    "decoded_master_audio_build_sec": float(decoded_audio_diag.get("decoded_master_audio_build_sec") or 0.0),
                 },
                 "resultDiagnostics": {
                     "scene_count": len(merged.get("scenes") or []),
@@ -1460,6 +1556,8 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                     "retry_count": retry_count,
                     "scenes_below_3_sec_count": sum(1 for d in scene_durations if d < 3.0),
                     "scenes_above_8_sec_count": sum(1 for d in scene_durations if d > 8.0),
+                    "decoded_master_audio_cached": bool(decoded_audio_diag.get("decoded_master_audio_cached")),
+                    "decoded_master_audio_reused_for_chunks": bool(decoded_audio_diag.get("decoded_master_audio_cached")),
                 },
             },
         }
@@ -1529,7 +1627,14 @@ def regenerate_clip_chunk(payload: dict[str, Any]) -> dict[str, Any]:
         ),
     )
     context = _normalize_clip_context(payload, payload.get("context") if isinstance(payload.get("context"), dict) else None)
-    chunk, retry_diag = _generate_chunk_with_retry(api_key=api_key, req=req, whole_map=whole_map, context=context)
+    decoded_audio_cache, decoded_audio_diag = _get_or_build_decoded_master_audio(context)
+    chunk, retry_diag = _generate_chunk_with_retry(
+        api_key=api_key,
+        req=req,
+        whole_map=whole_map,
+        context=context,
+        decoded_audio_cache=decoded_audio_cache,
+    )
     regenerate_diagnostics = {
         "stage": "regenerate_chunk",
         "chunk_id": chunk_id,
@@ -1538,6 +1643,9 @@ def regenerate_clip_chunk(payload: dict[str, Any]) -> dict[str, Any]:
         "audio_media_attached": bool(context.get("audio_media_attached")),
         "ref_roles_attached": list(context.get("refs_roles_attached") or []),
         "attempt_count": len(retry_diag),
+        "decoded_master_audio_cached": bool(decoded_audio_diag.get("decoded_master_audio_cached")),
+        "decoded_master_audio_build_sec": float(decoded_audio_diag.get("decoded_master_audio_build_sec") or 0.0),
+        "decoded_master_audio_reused_for_chunks": bool(decoded_audio_diag.get("decoded_master_audio_cached")),
     }
     return {
         "ok": True,
