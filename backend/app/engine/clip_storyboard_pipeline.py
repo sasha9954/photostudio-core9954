@@ -526,6 +526,14 @@ def _get_or_build_decoded_master_audio(context: dict[str, Any]) -> tuple[dict[st
         }
 
 
+def _sanitize_response_context(context: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(context, dict):
+        return {}
+    sanitized = dict(context)
+    sanitized.pop("decoded_master_audio_cache", None)
+    return sanitized
+
+
 def _build_chunk_audio_slice(
     *,
     decoded_audio_cache: dict[str, Any],
@@ -1343,6 +1351,7 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
 
     context = _normalize_clip_context(payload)
     decoded_audio_cache, decoded_audio_diag = _get_or_build_decoded_master_audio(context)
+    response_context = _sanitize_response_context(context)
     state_history = [context.get("context_state") or "context_prepared"]
     retry_diagnostics: list[dict[str, Any]] = []
     schema_diagnostics = {"whole_map_schema_enabled": True, "chunk_schema_enabled": True, "repair_schema_enabled": True}
@@ -1517,7 +1526,7 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
             },
             "state": state_history[-1],
             "state_history": state_history,
-            "context": context,
+            "context": response_context,
             "whole_track_map": whole_map.model_dump(mode="json"),
             "chunks": [chunk.model_dump(mode="json", exclude_none=True) for chunk in chunk_results],
             "merged_storyboard": merged,
@@ -1628,6 +1637,7 @@ def regenerate_clip_chunk(payload: dict[str, Any]) -> dict[str, Any]:
     )
     context = _normalize_clip_context(payload, payload.get("context") if isinstance(payload.get("context"), dict) else None)
     decoded_audio_cache, decoded_audio_diag = _get_or_build_decoded_master_audio(context)
+    response_context = _sanitize_response_context(context)
     chunk, retry_diag = _generate_chunk_with_retry(
         api_key=api_key,
         req=req,
@@ -1652,7 +1662,7 @@ def regenerate_clip_chunk(payload: dict[str, Any]) -> dict[str, Any]:
         "mode": "clip",
         "state": "chunk_done",
         "chunk": chunk.model_dump(mode="json", exclude_none=True),
-        "context": context,
+        "context": response_context,
         "meta": {
             "model": CLIP_PIPELINE_MODEL,
             "retryDiagnostics": retry_diag,
