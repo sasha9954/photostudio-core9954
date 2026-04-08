@@ -76,7 +76,7 @@ class WholeTrackMapResponse(BaseModel):
     duration_sec: float
     opening_anchor: str = ""
     ending_callback_rule: str = ""
-    global_arc: str | dict[str, str]
+    global_arc: str | dict[str, str] = ""
     world_lock: dict[str, Any] = Field(default_factory=dict)
     identity_lock: dict[str, Any] = Field(default_factory=dict)
     style_lock: dict[str, Any] = Field(default_factory=dict)
@@ -95,14 +95,32 @@ class WholeTrackMapResponse(BaseModel):
             raise ValueError("mode must be clip")
         if self.duration_sec <= 0:
             raise ValueError("duration_sec must be > 0")
+        arc_fallback = "setup→rise→turn→release→afterimage"
         if isinstance(self.global_arc, str):
-            arc_text = self.global_arc.strip() or "setup→rise→turn→release→afterimage"
+            arc_text = self.global_arc.strip() or arc_fallback
             self.global_arc = {
                 "setup": arc_text,
                 "rise": arc_text,
                 "turn": arc_text,
                 "release": arc_text,
                 "afterimage": arc_text,
+            }
+        elif isinstance(self.global_arc, dict):
+            shared = next((str(v).strip() for v in self.global_arc.values() if str(v or "").strip()), arc_fallback)
+            self.global_arc = {
+                "setup": str(self.global_arc.get("setup") or "").strip() or shared,
+                "rise": str(self.global_arc.get("rise") or "").strip() or shared,
+                "turn": str(self.global_arc.get("turn") or "").strip() or shared,
+                "release": str(self.global_arc.get("release") or "").strip() or shared,
+                "afterimage": str(self.global_arc.get("afterimage") or "").strip() or shared,
+            }
+        else:
+            self.global_arc = {
+                "setup": arc_fallback,
+                "rise": arc_fallback,
+                "turn": arc_fallback,
+                "release": arc_fallback,
+                "afterimage": arc_fallback,
             }
         self.target_route_mix_per_30s = {
             "ia2v": int((self.target_route_mix_per_30s or {}).get("ia2v") or 2),
@@ -208,21 +226,34 @@ def _extract_gemini_text(resp: dict[str, Any]) -> str:
     return "\n".join(out).strip()
 
 
-def _extract_json(raw_text: str) -> dict[str, Any] | None:
+def _extract_json(raw_text: str) -> tuple[dict[str, Any] | None, bool]:
     text = str(raw_text or "").strip()
     if not text:
-        return None
+        return None, False
+    salvage_applied = False
+    fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.MULTILINE).strip()
+    if fenced != text:
+        text = fenced
+        salvage_applied = True
     try:
-        return json.loads(text)
+        return json.loads(text), salvage_applied
     except Exception:
         pass
     first, last = text.find("{"), text.rfind("}")
     if first >= 0 and last > first:
+        candidate = text[first : last + 1]
+        salvage_applied = True
         try:
-            return json.loads(text[first : last + 1])
+            return json.loads(candidate), salvage_applied
         except Exception:
-            return None
-    return None
+            repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+            repaired = repaired.replace("“", '"').replace("”", '"')
+            repaired = repaired.replace("’", "'")
+            try:
+                return json.loads(repaired), True
+            except Exception:
+                return None, salvage_applied
+    return None, salvage_applied
 
 
 def _estimate_request_payload_metrics(body: dict[str, Any]) -> dict[str, Any]:
@@ -343,7 +374,7 @@ def _call_gemini_json(
                     )
             continue
         raw = _extract_gemini_text(resp)
-        parsed = _extract_json(raw)
+        parsed, salvage_applied = _extract_json(raw)
         logger.info(
             "[CLIP PIPELINE GEMINI CALL] stage=%s chunk_id=%s attempt=%s response_status=%s httpError=%s parsed_text_exists=%s parsed_json_exists=%s",
             stage,
@@ -354,6 +385,7 @@ def _call_gemini_json(
             bool(raw),
             isinstance(parsed, dict),
         )
+        diagnostics["invalid_json_salvage_applied"] = bool(salvage_applied)
         if isinstance(parsed, dict):
             return parsed, diagnostics
         last_error = "gemini_invalid_or_truncated_json"
@@ -838,8 +870,141 @@ def _build_whole_track_map_schema() -> dict[str, Any]:
                 },
             },
         },
-        "required": ["track_id", "mode", "duration_sec", "global_arc", "world_lock", "identity_lock", "style_lock", "sections"],
+        "required": [
+            "track_id",
+            "mode",
+            "duration_sec",
+            "sections",
+            "opening_anchor",
+            "ending_callback_rule",
+            "world_lock",
+            "identity_lock",
+            "style_lock",
+            "phrase_endpoints",
+            "no_split_ranges",
+        ],
     }
+
+
+def _default_opening_anchor(sections: list[dict[str, Any]]) -> str:
+    if not sections:
+        return "Open from the first audible beat with the same hero in the same world."
+    first = sections[0] if isinstance(sections[0], dict) else {}
+    section_type = str(first.get("section_type") or "intro").strip() or "intro"
+    t0 = round(float(first.get("t0") or 0.0), 2)
+    return f"Start in {section_type} at ~{t0}s with the core hero/world identity already established."
+
+
+def _default_ending_callback_rule(sections: list[dict[str, Any]], opening_anchor: str) -> str:
+    if not sections:
+        return f"Final beat must emotionally callback to opening anchor: {opening_anchor}"
+    last = sections[-1] if isinstance(sections[-1], dict) else {}
+    section_type = str(last.get("section_type") or "outro").strip() or "outro"
+    return f"Ending in {section_type} must callback to opening anchor meaning and close the same hero/world arc."
+
+
+def _default_chunk_boundaries(duration_sec: float, no_split_ranges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if duration_sec <= 0:
+        return []
+    chunks: list[dict[str, Any]] = []
+    t = 0.0
+    idx = 1
+    step = 24.0
+    no_split = []
+    for r in no_split_ranges:
+        try:
+            t0 = float(r.get("t0"))
+            t1 = float(r.get("t1"))
+            if t1 > t0:
+                no_split.append((t0, t1))
+        except Exception:
+            continue
+    while t < duration_sec:
+        end = min(duration_sec, t + step)
+        for r0, r1 in no_split:
+            if t < r0 < end:
+                end = min(duration_sec, r1)
+                break
+        if end <= t:
+            end = min(duration_sec, t + max(1.0, step / 2))
+        chunks.append({"chunk_id": f"chunk_{idx:02d}", "t0": round(t, 3), "t1": round(end, 3)})
+        idx += 1
+        t = end
+    return chunks
+
+
+def _normalize_whole_map_payload(raw: dict[str, Any], *, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized = dict(raw or {})
+    defaults_applied: list[str] = []
+    enrich_missing: list[str] = []
+    sections = normalized.get("sections") if isinstance(normalized.get("sections"), list) else []
+    if not normalized.get("track_id"):
+        track_id = str(normalized.get("track_id") or payload.get("trackId") or "track_clip").strip()
+        normalized["track_id"] = track_id
+        defaults_applied.append("track_id")
+    if not normalized.get("mode"):
+        normalized["mode"] = "clip"
+        defaults_applied.append("mode")
+    if not normalized.get("duration_sec"):
+        normalized["duration_sec"] = float(payload.get("audioDurationSec") or 0.0)
+        defaults_applied.append("duration_sec")
+    opening_anchor = str(normalized.get("opening_anchor") or "").strip()
+    if not opening_anchor:
+        opening_anchor = _default_opening_anchor(sections)
+        normalized["opening_anchor"] = opening_anchor
+        defaults_applied.append("opening_anchor")
+    if not str(normalized.get("ending_callback_rule") or "").strip():
+        normalized["ending_callback_rule"] = _default_ending_callback_rule(sections, opening_anchor)
+        defaults_applied.append("ending_callback_rule")
+    if not isinstance(normalized.get("global_arc"), (str, dict)):
+        normalized["global_arc"] = "setup→rise→turn→release→afterimage"
+        defaults_applied.append("global_arc")
+
+    enrich_defaults = {
+        "recurring_visual_motifs": [],
+        "chorus_visual_policy": "",
+        "lip_sync_phrase_ranges": [],
+        "target_route_mix_per_30s": {"ia2v": 2, "first_last": 2, "i2v": 4},
+    }
+    for key, default_value in enrich_defaults.items():
+        value = normalized.get(key)
+        is_missing = value is None or value == "" or value == [] or value == {}
+        if is_missing:
+            enrich_missing.append(key)
+            normalized[key] = default_value
+            defaults_applied.append(key)
+    if not isinstance(normalized.get("suggested_chunk_boundaries"), list) or not normalized.get("suggested_chunk_boundaries"):
+        enrich_missing.append("suggested_chunk_boundaries")
+        normalized["suggested_chunk_boundaries"] = _default_chunk_boundaries(
+            float(normalized.get("duration_sec") or 0.0),
+            normalized.get("no_split_ranges") if isinstance(normalized.get("no_split_ranges"), list) else [],
+        )
+        defaults_applied.append("suggested_chunk_boundaries")
+    if isinstance(normalized.get("global_arc"), str):
+        enrich_missing.append("global_arc_detail")
+
+    diag = {
+        "whole_map_enrich_missing_fields": sorted(set(enrich_missing)),
+        "whole_map_defaults_applied": defaults_applied,
+    }
+    return normalized, diag
+
+
+def _validate_whole_map_core(model: WholeTrackMapResponse) -> tuple[bool, list[str]]:
+    missing: list[str] = []
+    if not str(model.track_id or "").strip():
+        missing.append("track_id")
+    if model.mode != "clip":
+        missing.append("mode")
+    if float(model.duration_sec or 0.0) <= 0:
+        missing.append("duration_sec")
+    if not model.sections:
+        missing.append("sections")
+    if not str(model.opening_anchor or "").strip():
+        missing.append("opening_anchor")
+    if not str(model.ending_callback_rule or "").strip():
+        missing.append("ending_callback_rule")
+    return (len(missing) == 0), missing
 
 
 def _build_chunk_response_schema() -> dict[str, Any]:
@@ -1038,7 +1203,8 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
         {"text": "Even instrumental intro must progress story beat-to-beat; avoid emotional hold shots unless intentionally rare."},
         {"text": "Brick-wall loop/repeated same-mood shots are forbidden."},
         {"text": "Split policy anchors: phrase ends + beat accents; avoid cutting mid-vocal-line unless unavoidable."},
-        {"text": "Return full contract keys including opening_anchor, ending_callback_rule, global_arc(setup/rise/turn/release/afterimage), locks, recurring motifs, chorus policy, lip_sync_phrase_ranges, phrase_endpoints, no_split_ranges, suggested_chunk_boundaries, target_route_mix_per_30s."},
+        {"text": "Core required and must be valid: track_id, mode, duration_sec, sections, opening_anchor, ending_callback_rule, identity_lock, world_lock, style_lock, phrase_endpoints, no_split_ranges."},
+        {"text": "Enrich fields are optional nice-to-have: recurring_visual_motifs, chorus_visual_policy, lip_sync_phrase_ranges, target_route_mix_per_30s, suggested_chunk_boundaries, expanded global_arc details."},
         {"text": "Default route mix prior per ~30s: ia2v=2, first_last=2, i2v=4 (adapt to section type, but keep as baseline)."},
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
@@ -1516,8 +1682,19 @@ def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], con
             raw, call_diag = _call_gemini_json(api_key=api_key, body=req_body, retry_count=2, stage="whole_map", request_started=True)
             logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=request_done status=ok attempt=%s", attempt)
             logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_start attempt=%s", attempt)
-            model = WholeTrackMapResponse.model_validate(raw)
+            normalized_raw, normalize_diag = _normalize_whole_map_payload(raw, payload=payload)
+            model = WholeTrackMapResponse.model_validate(normalized_raw)
+            core_valid, core_missing = _validate_whole_map_core(model)
+            if not core_valid:
+                raise ClipPipelineError(
+                    "retryable_fail",
+                    "whole_map core contract is invalid",
+                    details={"attempt": attempt, "core_missing": core_missing},
+                )
             logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_done valid=true attempt=%s", attempt)
+            enrich_missing_fields = normalize_diag.get("whole_map_enrich_missing_fields") if isinstance(normalize_diag, dict) else []
+            defaults_applied = normalize_diag.get("whole_map_defaults_applied") if isinstance(normalize_diag, dict) else []
+            degraded_mode = bool(enrich_missing_fields)
             diagnostics.append(
                 {
                     "stage": "whole_map",
@@ -1527,9 +1704,20 @@ def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], con
                     "full_audio_attached": bool(context.get("audio_media_attached")),
                     "full_audio_bytes": int(call_diag.get("audio_part_size_bytes") or 0),
                     "refs_total_size_bytes": int(call_diag.get("refs_total_size_bytes") or 0),
+                    "whole_map_core_valid": core_valid,
+                    "whole_map_enrich_missing_fields": enrich_missing_fields,
+                    "whole_map_defaults_applied": defaults_applied,
+                    "whole_map_degraded_mode": degraded_mode,
+                    "invalid_json_salvage_applied": bool(call_diag.get("invalid_json_salvage_applied")),
                 }
             )
-            return model, call_diag, diagnostics
+            return model, {
+                **call_diag,
+                "whole_map_core_valid": core_valid,
+                "whole_map_enrich_missing_fields": enrich_missing_fields,
+                "whole_map_defaults_applied": defaults_applied,
+                "whole_map_degraded_mode": degraded_mode,
+            }, diagnostics
         except ValidationError as exc:
             logger.warning("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_done valid=false attempt=%s", attempt)
             reason = "invalid whole track map contract"
