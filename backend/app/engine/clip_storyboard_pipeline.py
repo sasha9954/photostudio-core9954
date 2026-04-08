@@ -1559,6 +1559,7 @@ def _generate_chunk_with_retry(
             "oversized_split_applied": 0,
             "oversized_unresolved": 0,
         }
+        transport_diag: dict[str, Any] = {}
         try:
             body, transport_diag = _build_chunk_request(
                 req=req,
@@ -1611,6 +1612,7 @@ def _generate_chunk_with_retry(
                     "oversized_split_applied": oversized_diag.get("oversized_split_applied", 0),
                     "oversized_unresolved": oversized_diag.get("oversized_unresolved", 0),
                     "oversizedSceneDiagnostics": oversized_diag,
+                    "transportDiagnostics": transport_diag,
                 }
             )
             last_error = exc
