@@ -33,6 +33,10 @@ FULL_COVERAGE_TOLERANCE_SEC = 0.3
 CLIP_REF_ROLES = ("character_1", "character_2", "character_3", "animal", "group", "location", "style", "props")
 CLIP_CONTEXT_VERSION = "clip_pipeline_context_v1"
 CHUNK_AUDIO_SLICE_OVERLAP_SEC = 1.5
+CLIP_DURATION_TARGET_MIN_SEC = 3.0
+CLIP_DURATION_TARGET_MAX_SEC = 6.0
+CLIP_DURATION_RARE_MAX_SEC = 8.0
+CLIP_DURATION_HARD_MAX_SEC = 10.0
 
 
 class ClipPipelineError(Exception):
@@ -765,15 +769,19 @@ def _build_whole_track_map_schema() -> dict[str, Any]:
             "opening_anchor": {"type": "string"},
             "ending_callback_rule": {"type": "string"},
             "global_arc": {
-                "type": "object",
-                "properties": {
-                    "setup": {"type": "string"},
-                    "rise": {"type": "string"},
-                    "turn": {"type": "string"},
-                    "release": {"type": "string"},
-                    "afterimage": {"type": "string"},
-                },
-                "required": ["setup", "rise", "turn", "release", "afterimage"],
+                "oneOf": [
+                    {"type": "string"},
+                    {
+                        "type": "object",
+                        "properties": {
+                            "setup": {"type": "string"},
+                            "rise": {"type": "string"},
+                            "turn": {"type": "string"},
+                            "release": {"type": "string"},
+                            "afterimage": {"type": "string"},
+                        },
+                    },
+                ]
             },
             "world_lock": {"type": "object"},
             "identity_lock": {"type": "object"},
@@ -830,25 +838,7 @@ def _build_whole_track_map_schema() -> dict[str, Any]:
                 },
             },
         },
-        "required": [
-            "track_id",
-            "mode",
-            "duration_sec",
-            "opening_anchor",
-            "ending_callback_rule",
-            "global_arc",
-            "world_lock",
-            "identity_lock",
-            "style_lock",
-            "recurring_visual_motifs",
-            "chorus_visual_policy",
-            "lip_sync_phrase_ranges",
-            "phrase_endpoints",
-            "target_route_mix_per_30s",
-            "sections",
-            "no_split_ranges",
-            "suggested_chunk_boundaries",
-        ],
+        "required": ["track_id", "mode", "duration_sec", "global_arc", "world_lock", "identity_lock", "style_lock", "sections"],
     }
 
 
@@ -899,12 +889,27 @@ def _validate_chunk_response(chunk: ChunkStoryboardResponse) -> None:
         if scene.t1 <= scene.t0:
             raise ClipPipelineError("retryable_fail", "invalid scene timestamps", details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id})
         duration = float(scene.t1) - float(scene.t0)
-        if duration > 10.0:
+        if duration > CLIP_DURATION_HARD_MAX_SEC:
             raise ClipPipelineError(
                 "retryable_fail",
                 "scene duration above 10s is disallowed for clip planning",
                 details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id, "duration_sec": round(duration, 3)},
             )
+        if duration > CLIP_DURATION_RARE_MAX_SEC:
+            raise ClipPipelineError(
+                "retryable_fail",
+                "oversized scene above 8s requires split/replan",
+                details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id, "duration_sec": round(duration, 3)},
+            )
+        if duration < CLIP_DURATION_TARGET_MIN_SEC:
+            scene_role = str(scene.scene_story_role or "").lower()
+            section_type = str(scene.section_type or "").lower()
+            if not scene.is_boundary_scene and all(token not in f"{scene_role} {section_type}" for token in ("transition", "bridge", "pickup", "accent", "hit")):
+                raise ClipPipelineError(
+                    "retryable_fail",
+                    "scene duration below 3s requires explicit beat/transition justification",
+                    details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id, "duration_sec": round(duration, 3)},
+                )
         if scene.route in {"i2v", "ia2v"}:
             if not (str(scene.frame_prompt or "").strip() and str(scene.camera_prompt or "").strip() and str(scene.motion_prompt or "").strip()):
                 raise ClipPipelineError("retryable_fail", "missing i2v/ia2v prompts", details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id})
@@ -913,6 +918,61 @@ def _validate_chunk_response(chunk: ChunkStoryboardResponse) -> None:
         if scene.route == "first_last":
             if not (str(scene.first_frame_prompt or "").strip() and str(scene.last_frame_prompt or "").strip() and str(scene.transition_prompt or "").strip()):
                 raise ClipPipelineError("retryable_fail", "missing first_last prompts", details={"scene_id": scene.scene_id, "chunk_id": chunk.chunk_id})
+
+
+def _safe_split_points_for_scene(
+    *,
+    t0: float,
+    t1: float,
+    phrase_endpoints: list[float],
+    no_split_ranges: list[tuple[float, float]],
+) -> list[float]:
+    min_d = CLIP_DURATION_TARGET_MIN_SEC
+    max_d = CLIP_DURATION_RARE_MAX_SEC
+    candidates = sorted({round(p, 3) for p in phrase_endpoints if (t0 + min_d) <= p <= (t1 - min_d)})
+    safe: list[float] = []
+    for p in candidates:
+        left = p - t0
+        right = t1 - p
+        if left < min_d or right < min_d or left > max_d or right > max_d:
+            continue
+        if any((r0 + 0.2) < p < (r1 - 0.2) for r0, r1 in no_split_ranges):
+            continue
+        safe.append(p)
+    return safe
+
+
+def _soft_split_oversized_chunk_scenes(chunk: ChunkStoryboardResponse, whole_map: WholeTrackMapResponse) -> tuple[ChunkStoryboardResponse, dict[str, Any]]:
+    scenes = list(chunk.scenes or [])
+    if not scenes:
+        return chunk, {"oversized_candidates": 0, "oversized_split_applied": 0, "oversized_unresolved": 0}
+    phrase_endpoints = sorted(float(x) for x in (whole_map.phrase_endpoints or []) if isinstance(x, (int, float)))
+    no_split_ranges = [(float(r.t0), float(r.t1)) for r in (whole_map.no_split_ranges or []) if r.t1 > r.t0]
+    rebuilt: list[ClipScene] = []
+    candidates = 0
+    applied = 0
+    unresolved = 0
+    for scene in scenes:
+        duration = float(scene.t1) - float(scene.t0)
+        if duration <= CLIP_DURATION_RARE_MAX_SEC:
+            rebuilt.append(scene)
+            continue
+        candidates += 1
+        split_points = _safe_split_points_for_scene(t0=float(scene.t0), t1=float(scene.t1), phrase_endpoints=phrase_endpoints, no_split_ranges=no_split_ranges)
+        if not split_points:
+            unresolved += 1
+            rebuilt.append(scene)
+            continue
+        split_t = split_points[0]
+        left_payload = scene.model_dump(mode="json", exclude_none=True)
+        right_payload = scene.model_dump(mode="json", exclude_none=True)
+        left_payload.update({"scene_id": f"{scene.scene_id}_a", "t0": round(float(scene.t0), 3), "t1": round(split_t, 3), "is_boundary_scene": True})
+        right_payload.update({"scene_id": f"{scene.scene_id}_b", "t0": round(split_t, 3), "t1": round(float(scene.t1), 3), "is_boundary_scene": True})
+        rebuilt.append(ClipScene.model_validate(left_payload))
+        rebuilt.append(ClipScene.model_validate(right_payload))
+        applied += 1
+    patched_chunk = ChunkStoryboardResponse.model_validate({**chunk.model_dump(mode="json", exclude_none=True), "scenes": [s.model_dump(mode="json", exclude_none=True) for s in rebuilt]})
+    return patched_chunk, {"oversized_candidates": candidates, "oversized_split_applied": applied, "oversized_unresolved": unresolved}
 
 
 _GENERIC_SCENE_ID_RE = re.compile(r"^(?:scene|sc|s)?_?\d+$", re.IGNORECASE)
@@ -973,7 +1033,10 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
         {"text": "Build WholeTrackMapResponse JSON for clip mode only."},
         {"text": "Story-first music-video director mode: setup starts from first seconds even in instrumental intro."},
         {"text": "Single-hero + single-world lock: character_1 is default protagonist, one location means one world. No identity/environment drift."},
-        {"text": "Scene duration policy for downstream chunking: preferred 3.0-6.0s, occasional 6.0-8.0s, 10.0s+ is anti-pattern."},
+        {"text": "Scene duration canon: target 3.0-6.0s, rare allowed 6.0-8.0s, above 8.0s is oversized and should be split, above 10.0s is forbidden."},
+        {"text": "Do not map one full verse/section into one long static scene; subdivide long sections into meaningful beat-level progression scenes."},
+        {"text": "Even instrumental intro must progress story beat-to-beat; avoid emotional hold shots unless intentionally rare."},
+        {"text": "Brick-wall loop/repeated same-mood shots are forbidden."},
         {"text": "Split policy anchors: phrase ends + beat accents; avoid cutting mid-vocal-line unless unavoidable."},
         {"text": "Return full contract keys including opening_anchor, ending_callback_rule, global_arc(setup/rise/turn/release/afterimage), locks, recurring motifs, chorus policy, lip_sync_phrase_ranges, phrase_endpoints, no_split_ranges, suggested_chunk_boundaries, target_route_mix_per_30s."},
         {"text": "Default route mix prior per ~30s: ia2v=2, first_last=2, i2v=4 (adapt to section type, but keep as baseline)."},
@@ -1020,7 +1083,10 @@ def _build_chunk_request(
         {"text": "Route canon: first_last=controlled transition/episode bridge/start-end callback; never dump route."},
         {"text": "Scene contract per scene: scene_goal, scene_story_role, route, hero_present, world_anchor, lip_sync, frame_prompt, camera_prompt, motion_prompt, continuity_tokens."},
         {"text": "Continuity contract: adjacent scenes inside episode must feel like progression (same hero/world/light/emotion line unless explicit route bridge)."},
-        {"text": "Duration policy per scene: min 3.0s, preferred 3.0-6.0s, rare up to 8.0s, avoid 10.0s+."},
+        {"text": "Duration canon per scene: target 3.0-6.0s, rare allowed 6.0-8.0s, >8.0s oversized split candidate, >10.0s forbidden."},
+        {"text": "If section is long, split into multiple meaningful beats; do not output long static emotional holding scenes."},
+        {"text": "Lip-sync scenes must be punchy phrase-delivery moments, not long static vocal blocks."},
+        {"text": "Brick-wall loop/repeated same mood shots is forbidden."},
         {"text": "Do not cut inside vocal line unless forced by no_split constraints; prefer phrase endpoints and beat accents."},
         {"text": "Final scene of full track should rhyme with opening anchor via meaning/emotion/visual callback."},
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
@@ -1253,6 +1319,7 @@ def _apply_repair_result(merged: dict[str, Any], repair_data: dict[str, Any]) ->
 def _validate_merged_storyboard(merged: dict[str, Any]) -> dict[str, Any]:
     scenes = merged.get("scenes") if isinstance(merged.get("scenes"), list) else []
     errors: list[str] = []
+    soft_violations: list[str] = []
     seen_ids: set[str] = set()
     prev_t0 = -1.0
     prev_t1 = -1.0
@@ -1273,8 +1340,15 @@ def _validate_merged_storyboard(merged: dict[str, Any]) -> dict[str, Any]:
         t1 = float(scene.get("t1") or 0.0)
         if t0 < 0 or t1 <= 0 or t1 <= t0:
             errors.append(f"scene[{idx}] invalid time range t0={t0}, t1={t1}")
-        if (t1 - t0) > 10.0:
+        duration = t1 - t0
+        if duration > CLIP_DURATION_HARD_MAX_SEC:
             errors.append(f"scene[{idx}] duration_above_10s={round(t1 - t0, 3)}")
+        elif duration > CLIP_DURATION_RARE_MAX_SEC:
+            soft_violations.append(f"scene[{idx}] oversized_duration_above_8s={round(duration, 3)}")
+        elif duration < CLIP_DURATION_TARGET_MIN_SEC:
+            role_text = f"{scene.get('scene_story_role') or ''} {scene.get('section_type') or ''}".lower()
+            if not bool(scene.get("is_boundary_scene")) and all(token not in role_text for token in ("transition", "bridge", "pickup", "accent", "hit")):
+                soft_violations.append(f"scene[{idx}] short_duration_below_3s={round(duration, 3)}")
         if idx > 0 and t0 < prev_t0:
             errors.append(f"scene[{idx}] out of order t0={t0} < previous_t0={prev_t0}")
         if idx > 0 and t0 < prev_t1:
@@ -1292,7 +1366,7 @@ def _validate_merged_storyboard(merged: dict[str, Any]) -> dict[str, Any]:
             errors.append(f"scene[{idx}] continuity_tokens must be list")
         prev_t0 = t0
         prev_t1 = t1
-    return {"valid": not errors, "scene_count": len(scenes), "errors": errors}
+    return {"valid": not errors, "scene_count": len(scenes), "errors": errors, "soft_violations": soft_violations}
 
 
 def _validate_repair_applied_storyboard(pre_repair: dict[str, Any], post_repair: dict[str, Any]) -> dict[str, Any]:
@@ -1336,6 +1410,8 @@ def _compute_directorial_diagnostics(merged: dict[str, Any], whole_map: WholeTra
         if any((r0 + tolerance) < cut < (r1 - tolerance) for r0, r1 in no_split_ranges):
             mid_phrase_forced += 1
     return {
+        "scenes_in_target_3_6_sec_count": sum(1 for d in durations if CLIP_DURATION_TARGET_MIN_SEC <= d <= CLIP_DURATION_TARGET_MAX_SEC),
+        "scenes_6_8_sec_count": sum(1 for d in durations if CLIP_DURATION_TARGET_MAX_SEC < d <= CLIP_DURATION_RARE_MAX_SEC),
         "scenes_below_3_sec_count": sum(1 for d in durations if d < 3.0),
         "scenes_above_8_sec_count": sum(1 for d in durations if d > 8.0),
         "scenes_above_10_sec_count": sum(1 for d in durations if d > 10.0),
@@ -1363,62 +1439,39 @@ def _ensure_route_prompts(scene: dict[str, Any]) -> dict[str, Any]:
 def _apply_clip_route_mix_policy(merged: dict[str, Any], whole_map: WholeTrackMapResponse) -> tuple[dict[str, Any], dict[str, Any]]:
     scenes = [dict(scene) for scene in (merged.get("scenes") if isinstance(merged.get("scenes"), list) else []) if isinstance(scene, dict)]
     if not scenes:
-        return merged, {"changed": 0, "route_counts": {}}
+        return merged, {"route_changes_count": 0, "planner_route_counts": {}, "final_route_counts": {}}
 
     target_mix = whole_map.target_route_mix_per_30s or {"ia2v": 2, "first_last": 2, "i2v": 4}
-
-    def _route_for_scene(scene: dict[str, Any]) -> str:
-        text = f"{scene.get('section_type') or ''} {scene.get('goal') or ''}".lower()
-        if bool(scene.get("lip_sync")):
-            return "ia2v"
-        if any(token in text for token in ("hook", "chorus", "reveal", "transformation", "drop", "signature", "bridge", "callback")):
-            return "first_last"
-        if any(token in text for token in ("vocal", "singer", "performance", "lyric", "phrase", "mouth", "face", "delivery")):
-            return "ia2v"
-        if any(token in text for token in ("instrumental", "mood", "environment", "world", "movement", "walk", "action", "dance", "atmosphere")):
-            return "i2v"
-        return str(scene.get("route") or "i2v").strip() if str(scene.get("route") or "").strip() in ALLOWED_CLIP_ROUTES else "i2v"
-
-    changed = 0
+    planner_route_counts: dict[str, int] = {}
     for scene in scenes:
-        desired = _route_for_scene(scene)
-        if desired != str(scene.get("route") or "").strip():
+        planner_route = str(scene.get("route") or "i2v").strip()
+        if planner_route not in ALLOWED_CLIP_ROUTES:
+            planner_route = "i2v"
+        scene["route"] = planner_route
+        planner_route_counts[planner_route] = planner_route_counts.get(planner_route, 0) + 1
+
+    route_changes_count = 0
+    local_soft_changes_budget = 2
+    for idx, scene in enumerate(scenes):
+        route = str(scene.get("route") or "i2v").strip()
+        text = f"{scene.get('section_type') or ''} {scene.get('goal') or ''} {scene.get('scene_story_role') or ''}".lower()
+        desired: str | None = None
+        if bool(scene.get("lip_sync")) and route != "ia2v":
+            desired = "ia2v"
+        elif route == "ia2v" and not bool(scene.get("lip_sync")):
+            desired = "i2v"
+        elif local_soft_changes_budget > 0:
+            is_open_close = idx in {0, len(scenes) - 1}
+            semantic_bridge = any(t in text for t in ("bridge", "opening", "ending", "callback", "turn"))
+            if (is_open_close or semantic_bridge) and route == "i2v":
+                desired = "first_last"
+        if desired and desired != route:
             scene["route"] = desired
-            changed += 1
-        _ensure_route_prompts(scene)
-
-    window_size = 30.0
-    duration = max(1.0, float(whole_map.duration_sec or 0.0))
-    windows = max(1, int(round(duration / window_size)))
-    expected = {route: int(target_mix.get(route) or 0) * windows for route in ALLOWED_CLIP_ROUTES}
-    route_counts: dict[str, int] = {}
-    for scene in scenes:
-        route = str(scene.get("route") or "i2v")
-        route_counts[route] = route_counts.get(route, 0) + 1
-
-    def _scene_weight(scene: dict[str, Any], route: str) -> int:
-        txt = f"{scene.get('section_type') or ''} {scene.get('goal') or ''} {scene.get('scene_story_role') or ''}".lower()
-        if route == "ia2v":
-            return 3 if any(x in txt for x in ("vocal", "lyric", "phrase", "sing", "delivery")) else 0
-        if route == "first_last":
-            return 3 if any(x in txt for x in ("opening", "ending", "bridge", "turn", "callback", "chorus", "hook")) else 0
-        return 1
-
-    for route in ("ia2v", "first_last"):
-        deficit = max(0, expected.get(route, 0) - route_counts.get(route, 0))
-        if deficit <= 0:
-            continue
-        candidates = sorted(
-            [s for s in scenes if str(s.get("route") or "") == "i2v"],
-            key=lambda s: _scene_weight(s, route),
-            reverse=True,
-        )
-        for scene in candidates[:deficit]:
-            scene["route"] = route
-            if route == "ia2v":
+            route_changes_count += 1
+            if desired == "first_last":
+                local_soft_changes_budget -= 1
+            if desired == "ia2v":
                 scene["lip_sync"] = True
-            _ensure_route_prompts(scene)
-            changed += 1
 
     for scene in scenes:
         route = str(scene.get("route") or "i2v")
@@ -1432,15 +1485,25 @@ def _apply_clip_route_mix_policy(merged: dict[str, Any], whole_map: WholeTrackMa
             )
         elif scene.get("lip_sync") is None:
             scene["lip_sync"] = False
+        _ensure_route_prompts(scene)
 
-    route_counts = {}
+    final_route_counts: dict[str, int] = {}
     for scene in scenes:
         route = str(scene.get("route") or "i2v")
-        route_counts[route] = route_counts.get(route, 0) + 1
+        final_route_counts[route] = final_route_counts.get(route, 0) + 1
+    window_size = 30.0
+    duration = max(1.0, float(whole_map.duration_sec or 0.0))
+    windows = max(1, int(round(duration / window_size)))
     return {
         **merged,
         "scenes": scenes,
-    }, {"changed": changed, "route_counts": route_counts, "target_route_mix_per_30s": target_mix, "windows_30s": windows}
+    }, {
+        "route_changes_count": route_changes_count,
+        "planner_route_counts": planner_route_counts,
+        "final_route_counts": final_route_counts,
+        "target_route_mix_per_30s": target_mix,
+        "windows_30s": windows,
+    }
 
 
 def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], context: dict[str, Any]) -> tuple[WholeTrackMapResponse, dict[str, Any], list[dict[str, Any]]]:
@@ -1502,6 +1565,7 @@ def _generate_chunk_with_retry(
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_done status=ok attempt=%s", req.chunk_id, attempt)
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=parse_start attempt=%s", req.chunk_id, attempt)
             chunk = ChunkStoryboardResponse.model_validate(parsed_chunk)
+            chunk, oversized_diag = _soft_split_oversized_chunk_scenes(chunk, whole_map)
             chunk, canonical_diag = _canonicalize_chunk_scene_ids(chunk)
             _validate_chunk_response(chunk)
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=parse_done valid=true attempt=%s", req.chunk_id, attempt)
@@ -1515,6 +1579,7 @@ def _generate_chunk_with_retry(
                     "gemini_retries": call_diag.get("retries") if isinstance(call_diag, dict) else None,
                     "canonicalSceneIdApplied": canonical_diag.get("canonicalSceneIdApplied", 0),
                     "canonicalSceneIdMap": canonical_diag.get("canonicalSceneIdMap", {}),
+                    "oversizedSceneDiagnostics": oversized_diag,
                     "transportDiagnostics": transport_diag,
                 }
             )
