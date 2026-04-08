@@ -1553,6 +1553,12 @@ def _generate_chunk_with_retry(
     diagnostics: list[dict[str, Any]] = []
     last_error: ClipPipelineError | None = None
     for attempt in range(1, CHUNK_RETRY_COUNT + 1):
+        canonical_diag: dict[str, Any] = {"canonicalSceneIdApplied": 0, "canonicalSceneIdMap": {}}
+        oversized_diag: dict[str, Any] = {
+            "oversized_candidates": 0,
+            "oversized_split_applied": 0,
+            "oversized_unresolved": 0,
+        }
         try:
             body, transport_diag = _build_chunk_request(
                 req=req,
@@ -1565,8 +1571,8 @@ def _generate_chunk_with_retry(
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_done status=ok attempt=%s", req.chunk_id, attempt)
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=parse_start attempt=%s", req.chunk_id, attempt)
             chunk = ChunkStoryboardResponse.model_validate(parsed_chunk)
-            chunk, oversized_diag = _soft_split_oversized_chunk_scenes(chunk, whole_map)
             chunk, canonical_diag = _canonicalize_chunk_scene_ids(chunk)
+            chunk, oversized_diag = _soft_split_oversized_chunk_scenes(chunk, whole_map)
             _validate_chunk_response(chunk)
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=parse_done valid=true attempt=%s", req.chunk_id, attempt)
             diagnostics.append(
@@ -1579,6 +1585,9 @@ def _generate_chunk_with_retry(
                     "gemini_retries": call_diag.get("retries") if isinstance(call_diag, dict) else None,
                     "canonicalSceneIdApplied": canonical_diag.get("canonicalSceneIdApplied", 0),
                     "canonicalSceneIdMap": canonical_diag.get("canonicalSceneIdMap", {}),
+                    "oversized_candidates": oversized_diag.get("oversized_candidates", 0),
+                    "oversized_split_applied": oversized_diag.get("oversized_split_applied", 0),
+                    "oversized_unresolved": oversized_diag.get("oversized_unresolved", 0),
                     "oversizedSceneDiagnostics": oversized_diag,
                     "transportDiagnostics": transport_diag,
                 }
@@ -1590,7 +1599,20 @@ def _generate_chunk_with_retry(
             last_error = ClipPipelineError("retryable_fail", "invalid chunk contract", details={"chunk_id": req.chunk_id, "attempt": attempt, "errors": exc.errors()})
         except ClipPipelineError as exc:
             logger.warning("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_done status=error attempt=%s reason=%s", req.chunk_id, attempt, exc.message)
-            diagnostics.append({"stage": "chunk", "chunk_id": req.chunk_id, "attempt": attempt, "reason": exc.message})
+            diagnostics.append(
+                {
+                    "stage": "chunk",
+                    "chunk_id": req.chunk_id,
+                    "attempt": attempt,
+                    "reason": exc.message,
+                    "canonicalSceneIdApplied": canonical_diag.get("canonicalSceneIdApplied", 0),
+                    "canonicalSceneIdMap": canonical_diag.get("canonicalSceneIdMap", {}),
+                    "oversized_candidates": oversized_diag.get("oversized_candidates", 0),
+                    "oversized_split_applied": oversized_diag.get("oversized_split_applied", 0),
+                    "oversized_unresolved": oversized_diag.get("oversized_unresolved", 0),
+                    "oversizedSceneDiagnostics": oversized_diag,
+                }
+            )
             last_error = exc
     raise last_error or ClipPipelineError("retryable_fail", "invalid chunk", details={"chunk_id": req.chunk_id})
 
