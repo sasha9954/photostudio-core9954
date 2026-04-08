@@ -933,6 +933,43 @@ def _default_chunk_boundaries(duration_sec: float, no_split_ranges: list[dict[st
     return chunks
 
 
+def _should_attach_full_audio_to_whole_map(
+    payload: dict[str, Any], context: dict[str, Any], req_metrics_estimate: dict[str, Any] | None = None
+) -> tuple[bool, dict[str, Any]]:
+    duration_sec = float(payload.get("audioDurationSec") or 0.0)
+    duration_limit_sec = 35.0
+    audio_size_limit_bytes = 6_000_000
+    audio_part = ((context.get("audio_source") or {}).get("media_part") if isinstance(context.get("audio_source"), dict) else {})
+    inline = audio_part.get("inlineData") if isinstance(audio_part, dict) and isinstance(audio_part.get("inlineData"), dict) else {}
+    encoded = str(inline.get("data") or "")
+    estimated_audio_bytes = int((len(encoded) * 3) / 4) if encoded else 0
+    req_audio_bytes = int((req_metrics_estimate or {}).get("audio_part_size_bytes") or 0)
+    if req_audio_bytes > 0:
+        estimated_audio_bytes = req_audio_bytes
+
+    attach = True
+    reason = "audio_within_limits"
+    if duration_sec > duration_limit_sec:
+        attach = False
+        reason = f"audio_duration_sec_gt_{int(duration_limit_sec)}"
+    elif estimated_audio_bytes > audio_size_limit_bytes:
+        attach = False
+        reason = f"estimated_audio_bytes_gt_{audio_size_limit_bytes}"
+    elif not encoded:
+        attach = False
+        reason = "master_audio_missing_inline_data"
+
+    return attach, {
+        "whole_map_audio_attached": bool(attach),
+        "whole_map_audio_gated": not bool(attach),
+        "whole_map_audio_gate_reason": reason,
+        "whole_map_audio_duration_sec": duration_sec,
+        "whole_map_audio_estimated_bytes": estimated_audio_bytes,
+        "whole_map_audio_gate_duration_threshold_sec": duration_limit_sec,
+        "whole_map_audio_gate_size_threshold_bytes": audio_size_limit_bytes,
+    }
+
+
 def _normalize_whole_map_payload(raw: dict[str, Any], *, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized = dict(raw or {})
     defaults_applied: list[str] = []
@@ -959,6 +996,35 @@ def _normalize_whole_map_payload(raw: dict[str, Any], *, payload: dict[str, Any]
     if not isinstance(normalized.get("global_arc"), (str, dict)):
         normalized["global_arc"] = "setup→rise→turn→release→afterimage"
         defaults_applied.append("global_arc")
+    if not isinstance(normalized.get("sections"), list) or not normalized.get("sections"):
+        track_duration = float(normalized.get("duration_sec") or payload.get("audioDurationSec") or 0.0)
+        normalized["sections"] = [
+            {
+                "section_id": "sec_01",
+                "t0": 0.0,
+                "t1": round(track_duration, 3) if track_duration > 0 else 1.0,
+                "section_type": "full_track",
+                "energy": 5,
+                "suggested_visual_role": "progressive_core_arc",
+            }
+        ]
+        defaults_applied.append("sections")
+        sections = normalized.get("sections") if isinstance(normalized.get("sections"), list) else []
+    if not isinstance(normalized.get("identity_lock"), dict):
+        normalized["identity_lock"] = {}
+        defaults_applied.append("identity_lock")
+    if not isinstance(normalized.get("world_lock"), dict):
+        normalized["world_lock"] = {}
+        defaults_applied.append("world_lock")
+    if not isinstance(normalized.get("style_lock"), dict):
+        normalized["style_lock"] = {}
+        defaults_applied.append("style_lock")
+    if not isinstance(normalized.get("phrase_endpoints"), list):
+        normalized["phrase_endpoints"] = []
+        defaults_applied.append("phrase_endpoints")
+    if not isinstance(normalized.get("no_split_ranges"), list):
+        normalized["no_split_ranges"] = []
+        defaults_applied.append("no_split_ranges")
 
     enrich_defaults = {
         "recurring_visual_motifs": [],
@@ -1004,6 +1070,16 @@ def _validate_whole_map_core(model: WholeTrackMapResponse) -> tuple[bool, list[s
         missing.append("opening_anchor")
     if not str(model.ending_callback_rule or "").strip():
         missing.append("ending_callback_rule")
+    if model.identity_lock is None:
+        missing.append("identity_lock")
+    if model.world_lock is None:
+        missing.append("world_lock")
+    if model.style_lock is None:
+        missing.append("style_lock")
+    if model.phrase_endpoints is None:
+        missing.append("phrase_endpoints")
+    if model.no_split_ranges is None:
+        missing.append("no_split_ranges")
     return (len(missing) == 0), missing
 
 
@@ -1186,7 +1262,7 @@ def _flatten_ref_parts(ref_parts_by_role: dict[str, list[dict[str, Any]]]) -> li
     return out
 
 
-def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     runtime = {
         "content_type": ((payload.get("director_controls") or {}).get("contentType") if isinstance(payload.get("director_controls"), dict) else ""),
         "audio_duration_sec": payload.get("audioDurationSec"),
@@ -1209,9 +1285,16 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
     audio_part = ((context.get("audio_source") or {}).get("media_part") if isinstance(context.get("audio_source"), dict) else {})
-    if isinstance(audio_part, dict) and audio_part:
+    attach_audio, audio_gate_diag = _should_attach_full_audio_to_whole_map(payload, context)
+    if attach_audio and isinstance(audio_part, dict) and audio_part:
         parts.append({"text": "Master audio input:"})
         parts.append(audio_part)
+    else:
+        parts.append(
+            {
+                "text": "Master audio inline blob intentionally omitted for whole_map size stability. Plan structural arc/sections/phrase_endpoints/no_split_ranges using runtime duration + refs only."
+            }
+        )
     parts.extend(_flatten_ref_parts(context.get("refs_media_parts_by_role") if isinstance(context.get("refs_media_parts_by_role"), dict) else {}))
     return {
         "systemInstruction": {"parts": [{"text": str(context.get("system_instruction") or "You are a production clip storyboard planner. Return strict JSON only.")}]},
@@ -1222,7 +1305,7 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
             "responseJsonSchema": _build_whole_track_map_schema(),
             "maxOutputTokens": 8192,
         },
-    }
+    }, audio_gate_diag
 
 
 def _build_chunk_request(
@@ -1676,7 +1759,7 @@ def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], con
     diagnostics: list[dict[str, Any]] = []
     last_error: ClipPipelineError | None = None
     for attempt in range(1, WHOLE_MAP_RETRY_COUNT + 1):
-        req_body = _build_whole_track_map_request(payload, context)
+        req_body, audio_gate_diag = _build_whole_track_map_request(payload, context)
         try:
             logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=request_start attempt=%s", attempt)
             raw, call_diag = _call_gemini_json(api_key=api_key, body=req_body, retry_count=2, stage="whole_map", request_started=True)
@@ -1709,10 +1792,12 @@ def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], con
                     "whole_map_defaults_applied": defaults_applied,
                     "whole_map_degraded_mode": degraded_mode,
                     "invalid_json_salvage_applied": bool(call_diag.get("invalid_json_salvage_applied")),
+                    **audio_gate_diag,
                 }
             )
             return model, {
                 **call_diag,
+                **audio_gate_diag,
                 "whole_map_core_valid": core_valid,
                 "whole_map_enrich_missing_fields": enrich_missing_fields,
                 "whole_map_defaults_applied": defaults_applied,
@@ -1721,11 +1806,11 @@ def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], con
         except ValidationError as exc:
             logger.warning("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_done valid=false attempt=%s", attempt)
             reason = "invalid whole track map contract"
-            diagnostics.append({"stage": "whole_map", "attempt": attempt, "reason": reason, "errors": exc.errors()})
+            diagnostics.append({"stage": "whole_map", "attempt": attempt, "reason": reason, "errors": exc.errors(), **audio_gate_diag})
             last_error = ClipPipelineError("retryable_fail", reason, details={"attempt": attempt, "errors": exc.errors()})
         except ClipPipelineError as exc:
             logger.warning("[CLIP PIPELINE GEMINI] stage=whole_map event=request_done status=error attempt=%s reason=%s", attempt, exc.message)
-            diagnostics.append({"stage": "whole_map", "attempt": attempt, "reason": exc.message})
+            diagnostics.append({"stage": "whole_map", "attempt": attempt, "reason": exc.message, **audio_gate_diag})
             last_error = exc
     raise last_error or ClipPipelineError("retryable_fail", "invalid whole track map contract")
 
