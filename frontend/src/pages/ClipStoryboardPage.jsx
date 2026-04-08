@@ -195,7 +195,7 @@ function shouldTraceRoleContractScene(sceneId = "") {
   if (!needle) return false;
   return String(sceneId || "").trim() === needle;
 }
-const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
+const SCENARIO_DIRECTOR_LONG_TIMEOUT_MS = 300_000;
 const VIDEO_START_TIMEOUT_MS = 25_000;
 const VIDEO_STATUS_TIMEOUT_MS = 15_000;
 const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
@@ -915,7 +915,7 @@ function isAbortLikeError(error) {
 }
 
 function buildScenarioDirectorTimeoutError() {
-  const error = new Error(`Scenario Director request timed out after ${Math.round(SCENARIO_DIRECTOR_TIMEOUT_MS / 1000)} seconds.`);
+  const error = new Error(`Scenario Director request timed out after ${Math.round(SCENARIO_DIRECTOR_LONG_TIMEOUT_MS / 1000)} seconds.`);
   error.name = "TimeoutError";
   return error;
 }
@@ -13247,8 +13247,8 @@ onClipSec: (nodeId, value) => {
                   setNodes((prev) => prev.map((x) => (x.id === nodeId
                     ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null, lastParseError: null } }
                     : x)));
-                  notify({ type: "warning", message: "Разбор занял слишком много времени" });
-                }, 95000);
+                  notify({ type: "warning", message: `Разбор занял слишком много времени (> ${Math.round(SCENARIO_DIRECTOR_LONG_TIMEOUT_MS / 1000)} сек)` });
+                }, SCENARIO_DIRECTOR_LONG_TIMEOUT_MS);
                 parseTimeoutRef.current = timeoutId;
 
                 console.info("[CLIP STORAGE] scenario parse start", { nodeId, parseToken, accountKey, STORE_KEY });
@@ -15337,7 +15337,7 @@ onClipSec: (nodeId, value) => {
                     const timeoutId = window.setTimeout(() => {
                       controller.abort();
                       reject(buildScenarioDirectorTimeoutError());
-                    }, SCENARIO_DIRECTOR_TIMEOUT_MS);
+                    }, SCENARIO_DIRECTOR_LONG_TIMEOUT_MS);
                     controller.signal.addEventListener("abort", () => {
                       window.clearTimeout(timeoutId);
                     }, { once: true });
