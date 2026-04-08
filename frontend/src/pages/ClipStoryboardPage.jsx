@@ -50,7 +50,7 @@ import {
   PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
-import { buildScenarioDirectorRequestPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
+import { buildScenarioDirectorRequestPayload, buildScenarioStageManualPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 import {
   buildScenarioHumanVisualAnchors,
   buildScenarioPreviewInput,
@@ -14695,36 +14695,48 @@ onClipSec: (nodeId, value) => {
                   || sourceNode?.data?.masterAudioUrl
                   || ""
                 ).trim();
-                const payload = {
-                  mode: "scenario_stage",
-                  pipelineMode: "scenario_stage_v1",
+                const payload = buildScenarioStageManualPayload({
+                  sourceState: sourceNode?.data || {},
+                  targetState: targetNode?.data || {},
                   stageId,
                   autoRun,
                   storyboardPackage,
-                  audioUrl: connectedAudioUrl,
-                  audioDurationSec: Number(sourceNode?.data?.audioDurationSec || 0) || 0,
-                  source: sourceNode?.data?.resolvedSource || {},
-                  context_refs: sourceNode?.data?.connectedInputs || {},
-                  metadata: {
-                    pipelineMode: "scenario_stage_v1",
-                    requestSource: "scenario_storyboard:manual_stage",
-                  },
-                };
+                });
+                if (!String(payload?.audioUrl || "").trim() && connectedAudioUrl) {
+                  payload.audioUrl = connectedAudioUrl;
+                }
                 const response = await fetchJson("/api/clip/comfy/scenario-director/generate", {
                   method: "POST",
                   body: payload,
                 });
+                const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, targetNode?.data || {});
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
+                  const nextStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
+                    ? response.storyboardPackage
+                    : (nodeItem?.data?.storyboardPackage || {});
+                  const nextDirectorOutput = normalizedOutputs?.directorOutput && typeof normalizedOutputs.directorOutput === "object"
+                    ? normalizedOutputs.directorOutput
+                    : {};
+                  const nextStoryboardOut = normalizedOutputs?.storyboardOut && typeof normalizedOutputs.storyboardOut === "object"
+                    ? normalizedOutputs.storyboardOut
+                    : (nodeItem?.data?.storyboardOut || {});
+                  const nextScenes = Array.isArray(nextStoryboardOut?.scenes) ? nextStoryboardOut.scenes : (nodeItem?.data?.scenes || []);
                   return {
                     ...nodeItem,
                     data: {
                       ...nodeItem.data,
-                      storyboardPackage: response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : (nodeItem?.data?.storyboardPackage || {}),
+                      storyboardPackage: nextStoryboardPackage,
+                      storyboardOut: nextStoryboardOut,
+                      scenes: nextScenes,
+                      scenarioPackage: nextDirectorOutput?.storyboardPackage || nodeItem?.data?.scenarioPackage || {},
+                      scenario: normalizedOutputs?.scenario || nodeItem?.data?.scenario || "",
+                      rawScenarioResponse: response && typeof response === "object" ? response : null,
                       directorOutput: {
                         ...(nodeItem?.data?.directorOutput && typeof nodeItem.data.directorOutput === "object" ? nodeItem.data.directorOutput : {}),
+                        ...nextDirectorOutput,
                         pipeline: "scenario_stage_v1",
-                        storyboardPackage: response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : (nodeItem?.data?.storyboardPackage || {}),
+                        storyboardPackage: nextStoryboardPackage,
                         executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                       },
                     },

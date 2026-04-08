@@ -301,8 +301,31 @@ def run_pipeline(stage_ids: list[str], package: dict[str, Any], payload: dict[st
     return pkg
 
 
-def resolve_stage_sequence(requested_stage_ids: list[str] | None = None, *, auto_mode: bool = False) -> list[str]:
+def _resolve_stage_with_dependencies(stage_id: str, ordered: list[str], visited: set[str]) -> None:
+    if stage_id in visited:
+        return
+    visited.add(stage_id)
+    for dep in STAGE_DEPENDENCIES.get(stage_id, []):
+        _resolve_stage_with_dependencies(dep, ordered, visited)
+    if stage_id not in ordered:
+        ordered.append(stage_id)
+
+
+def resolve_stage_sequence(
+    requested_stage_ids: list[str] | None = None,
+    *,
+    auto_mode: bool = False,
+    include_dependencies: bool = False,
+) -> list[str]:
     if auto_mode:
         return list(STAGE_IDS)
     stage_ids = [stage_id for stage_id in (requested_stage_ids or []) if stage_id in STAGE_IDS]
-    return stage_ids or ["input_package", "story_core"]
+    if not stage_ids:
+        stage_ids = ["story_core"]
+    if not include_dependencies:
+        return stage_ids
+    ordered: list[str] = []
+    visited: set[str] = set()
+    for stage_id in stage_ids:
+        _resolve_stage_with_dependencies(stage_id, ordered, visited)
+    return ordered

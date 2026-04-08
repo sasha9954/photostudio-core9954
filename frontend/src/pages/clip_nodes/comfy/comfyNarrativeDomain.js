@@ -762,6 +762,71 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   return payload;
 }
 
+export function buildScenarioStageManualPayload({
+  sourceState = {},
+  targetState = {},
+  stageId = "",
+  autoRun = false,
+  storyboardPackage = {},
+} = {}) {
+  const basePayload = buildScenarioDirectorRequestPayload(sourceState) || {};
+  const source = sourceState && typeof sourceState === "object" ? sourceState : {};
+  const target = targetState && typeof targetState === "object" ? targetState : {};
+  const directorOutput = target?.directorOutput && typeof target.directorOutput === "object" ? target.directorOutput : {};
+  const existingStoryboardPackage = (
+    storyboardPackage && typeof storyboardPackage === "object" && Object.keys(storyboardPackage).length
+  ) ? storyboardPackage : (target?.storyboardPackage && typeof target.storyboardPackage === "object" ? target.storyboardPackage : {});
+
+  return {
+    ...basePayload,
+    mode: "scenario_stage",
+    pipelineMode: "scenario_stage_v1",
+    stageId: normalizeText(stageId),
+    autoRun: Boolean(autoRun),
+    storyboardPackage: existingStoryboardPackage,
+    text: normalizeText(source?.text || target?.text || basePayload?.text),
+    storyText: normalizeText(source?.storyText || target?.storyText),
+    note: normalizeText(source?.note || source?.storyText || target?.note || target?.storyText),
+    directorNote: normalizeText(source?.directorNote || target?.directorNote),
+    audioUrl: normalizeText(source?.audioUrl || source?.masterAudioUrl || target?.audioUrl || basePayload?.audioUrl),
+    audioDurationSec: Number(source?.audioDurationSec || target?.audioDurationSec || basePayload?.audioDurationSec || 0) || 0,
+    source: source?.resolvedSource && typeof source.resolvedSource === "object" ? source.resolvedSource : (basePayload?.source || {}),
+    context_refs: source?.connectedInputs && typeof source.connectedInputs === "object" ? source.connectedInputs : (basePayload?.context_refs || {}),
+    connected_context_summary: (
+      source?.connected_context_summary && typeof source.connected_context_summary === "object"
+    ) ? source.connected_context_summary : (basePayload?.connected_context_summary || {}),
+    director_controls: {
+      ...(basePayload?.director_controls && typeof basePayload.director_controls === "object" ? basePayload.director_controls : {}),
+      ...(source?.director_controls && typeof source.director_controls === "object" ? source.director_controls : {}),
+      contentType: normalizeText(source?.contentType || target?.scenarioMode || basePayload?.director_controls?.contentType) || "music_video",
+      format: normalizeText(source?.format || target?.format || basePayload?.director_controls?.format) || "9:16",
+    },
+    contentType: normalizeText(source?.contentType || target?.scenarioMode || basePayload?.director_controls?.contentType) || "music_video",
+    format: normalizeText(source?.format || target?.format || basePayload?.director_controls?.format) || "9:16",
+    roleTypeByRole: source?.roleTypeByRole && typeof source.roleTypeByRole === "object" ? source.roleTypeByRole : (basePayload?.metadata?.roleTypeByRole || {}),
+    refsByRole: source?.refsByRole && typeof source.refsByRole === "object" ? source.refsByRole : {},
+    selectedCharacterRefUrl: normalizeText(source?.selectedCharacterRefUrl),
+    selectedStyleRefUrl: normalizeText(source?.selectedStyleRefUrl),
+    selectedLocationRefUrl: normalizeText(source?.selectedLocationRefUrl),
+    selectedPropsRefUrls: Array.isArray(source?.selectedPropsRefUrls) ? source.selectedPropsRefUrls : [],
+    master_output: source?.master_output && typeof source.master_output === "object" ? source.master_output : {},
+    timeWindow: source?.timeWindow && typeof source.timeWindow === "object" ? source.timeWindow : {},
+    options: source?.options && typeof source.options === "object" ? source.options : {},
+    metadata: {
+      ...(basePayload?.metadata && typeof basePayload.metadata === "object" ? basePayload.metadata : {}),
+      ...(source?.metadata && typeof source.metadata === "object" ? source.metadata : {}),
+      pipelineMode: "scenario_stage_v1",
+      requestSource: "scenario_storyboard:manual_stage",
+      contentType: normalizeText(source?.contentType || target?.scenarioMode) || "music_video",
+      format: normalizeText(source?.format || target?.format) || "9:16",
+    },
+    scenario: target?.scenario || source?.scenario || "",
+    scenarioPackage: target?.scenarioPackage && typeof target.scenarioPackage === "object" ? target.scenarioPackage : {},
+    storyboardOut: target?.storyboardOut && typeof target.storyboardOut === "object" ? target.storyboardOut : {},
+    directorOutput: directorOutput,
+  };
+}
+
 function toCanonicalRoleId(value, fallbackIndex = -1) {
   const clean = normalizeText(value);
   const canonical = clean.toLowerCase().replace(/\s+/g, "_");
@@ -1046,6 +1111,7 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       storyboardOut,
       scenario: normalizeText(storyCore?.story_summary),
       voiceScript: "",
+      scenarioPackage: storyboardPackage,
       brainPackage: null,
       bgMusicPrompt: "",
       globalMusicPrompt: "",

@@ -332,6 +332,11 @@ export default function ScenarioStoryboardEditor({
       ? storyboardPackage.stage_statuses
       : {}
   ), [storyboardPackage]);
+  const pipelineStoryCore = useMemo(() => (
+    storyboardPackage && typeof storyboardPackage === "object" && storyboardPackage.story_core && typeof storyboardPackage.story_core === "object"
+      ? storyboardPackage.story_core
+      : {}
+  ), [storyboardPackage]);
   const pipelineStages = [
     { id: "story_core", label: "CORE" },
     { id: "audio_map", label: "AUDIO" },
@@ -1392,7 +1397,25 @@ export default function ScenarioStoryboardEditor({
                   </div>
                 </div>
               </div>
-            ) : !selectedScene ? <div className="clipSB_empty">Нет выбранной сцены</div> : (
+            ) : !selectedScene ? (
+              <div className="clipSB_scenarioEditorBlock">
+                <div className="clipSB_scenarioEditorBlockHead">
+                  <h4>STAGE OUTPUT</h4>
+                </div>
+                {String(pipelineStoryCore?.story_summary || "").trim() ? (
+                  <div className="clipSB_storyboardKv"><span>story_summary</span><strong>{String(pipelineStoryCore.story_summary || "").trim()}</strong></div>
+                ) : null}
+                {String(pipelineStoryCore?.opening_anchor || "").trim() ? (
+                  <div className="clipSB_storyboardKv"><span>opening_anchor</span><strong>{String(pipelineStoryCore.opening_anchor || "").trim()}</strong></div>
+                ) : null}
+                {String(pipelineStoryCore?.ending_callback_rule || "").trim() ? (
+                  <div className="clipSB_storyboardKv"><span>ending_callback_rule</span><strong>{String(pipelineStoryCore.ending_callback_rule || "").trim()}</strong></div>
+                ) : null}
+                {!String(pipelineStoryCore?.story_summary || "").trim() ? (
+                  <div className="clipSB_empty">Нет сцен и ещё нет story_core. Запусти CORE или AUTO.</div>
+                ) : null}
+              </div>
+            ) : (
               <>
                 <div className="clipSB_scenarioEditorSceneTitle">Сцена {selectedSceneId}</div>
 

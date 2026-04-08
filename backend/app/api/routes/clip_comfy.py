@@ -24,7 +24,6 @@ from app.engine.scenario_stage_pipeline import (
     mark_stale_downstream,
     resolve_stage_sequence,
     run_pipeline,
-    run_stage,
 )
 
 import json
@@ -210,6 +209,34 @@ def _has_legacy_single_call_shape(resp: dict[str, Any]) -> bool:
         return False
     legacy_keys = ("transcript", "audioStructure", "semanticTimeline", "storyboardOut")
     return any(key in resp for key in legacy_keys)
+
+
+def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
+    controls = req.get("director_controls") if isinstance(req.get("director_controls"), dict) else {}
+    return {
+        "text": str(req.get("text") or "").strip(),
+        "note": str(req.get("note") or req.get("storyText") or req.get("directorNote") or "").strip(),
+        "source": req.get("source") if isinstance(req.get("source"), dict) else {},
+        "audio_url": str(req.get("audioUrl") or "").strip(),
+        "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),
+        "content_type": str(controls.get("contentType") or "music_video"),
+    }
+
+
+def _sync_stage_package_input(
+    package: dict[str, Any],
+    req: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    if not isinstance(package, dict):
+        return package, False
+    next_package = dict(package)
+    current_input = next_package.get("input") if isinstance(next_package.get("input"), dict) else {}
+    snapshot_input = _build_stage_input_snapshot(req)
+    input_changed = current_input != snapshot_input
+    next_package["input"] = snapshot_input
+    next_package["refs_inventory"] = req.get("context_refs") if isinstance(req.get("context_refs"), dict) else {}
+    next_package["assigned_roles"] = req.get("roleTypeByRole") if isinstance(req.get("roleTypeByRole"), dict) else {}
+    return next_package, input_changed
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
 ANIMAL_LABEL_BY_SPECIES = {
     "dog": "собака",
@@ -659,6 +686,9 @@ async def clip_comfy_scenario_director_generate(request: Request, payload: Scena
     if pipeline_mode == "scenario_stage_v1":
         incoming_package = req.get("storyboardPackage") if isinstance(req.get("storyboardPackage"), dict) else {}
         package = incoming_package or create_storyboard_package(req)
+        package, input_changed = _sync_stage_package_input(package, req)
+        if input_changed:
+            package = mark_stale_downstream(package, "input_package", reason="payload_refresh")
         mark_stale_from = str(req.get("markStaleFrom") or "").strip()
         if mark_stale_from:
             package = mark_stale_downstream(package, mark_stale_from, reason=str(req.get("staleReason") or ""))
@@ -666,15 +696,19 @@ async def clip_comfy_scenario_director_generate(request: Request, payload: Scena
         stage_ids = req.get("stageIds") if isinstance(req.get("stageIds"), list) else []
         auto_run = bool(req.get("autoRun"))
         if stage_id:
-            package = run_stage(stage_id, package, req)
-            executed_stages = [stage_id]
-        else:
-            resolved_stage_ids = resolve_stage_sequence(stage_ids, auto_mode=auto_run)
+            resolved_stage_ids = resolve_stage_sequence([stage_id], auto_mode=False, include_dependencies=True)
             package = run_pipeline(resolved_stage_ids, package, req)
             executed_stages = resolved_stage_ids
+        else:
+            resolved_stage_ids = resolve_stage_sequence(stage_ids, auto_mode=auto_run, include_dependencies=not auto_run)
+            package = run_pipeline(resolved_stage_ids, package, req)
+            executed_stages = resolved_stage_ids
+        diagnostics = package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {}
         return {
             "ok": True,
             "pipeline": "scenario_stage_v1",
+            "requestedStage": stage_id or "",
+            "autoRun": auto_run,
             "executedStages": executed_stages,
             "storyboardPackage": package,
             "storyboardOut": package.get("final_storyboard") if isinstance(package.get("final_storyboard"), dict) else {},
@@ -682,8 +716,9 @@ async def clip_comfy_scenario_director_generate(request: Request, payload: Scena
                 "pipeline": "scenario_stage_v1",
                 "story_core": package.get("story_core") if isinstance(package.get("story_core"), dict) else {},
                 "stage_statuses": package.get("stage_statuses") if isinstance(package.get("stage_statuses"), dict) else {},
-                "diagnostics": package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {},
+                "diagnostics": diagnostics,
             },
+            "diagnostics": diagnostics,
         }
     logger.info(
         "[SCENARIO DIRECTOR ROUTE] route=%s requestId=%s method=%s",
