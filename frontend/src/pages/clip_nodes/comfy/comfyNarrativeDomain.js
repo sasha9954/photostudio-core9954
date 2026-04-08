@@ -1099,8 +1099,11 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
   if (String(response?.pipeline || "").trim() === "scenario_stage_v1") {
     const storyboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : {};
     const storyCore = storyboardPackage?.story_core && typeof storyboardPackage.story_core === "object" ? storyboardPackage.story_core : {};
+    const scenes = Array.isArray(storyboardPackage?.final_storyboard?.scenes)
+      ? storyboardPackage.final_storyboard.scenes
+      : (Array.isArray(storyboardPackage?.scene_plan?.scenes) ? storyboardPackage.scene_plan.scenes : []);
     const storyboardOut = {
-      scenes: Array.isArray(storyboardPackage?.final_storyboard?.scenes) ? storyboardPackage.final_storyboard.scenes : [],
+      scenes,
       contentType: "music_video",
       format: normalizeText(state?.format) || "9:16",
       story_summary: normalizeText(storyCore?.story_summary),

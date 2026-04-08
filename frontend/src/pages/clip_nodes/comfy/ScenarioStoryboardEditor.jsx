@@ -345,6 +345,20 @@ export default function ScenarioStoryboardEditor({
     { id: "scene_prompts", label: "PROMPTS" },
     { id: "finalize", label: "FINAL" },
   ];
+  const pipelineStageChips = pipelineStages.map((stage) => {
+    const stageMeta = pipelineStageStatuses?.[stage.id] && typeof pipelineStageStatuses[stage.id] === "object" ? pipelineStageStatuses[stage.id] : {};
+    const status = String(stageMeta?.status || "idle").trim().toLowerCase() || "idle";
+    const error = String(stageMeta?.error || stageMeta?.message || "").trim();
+    const colorByStatus = {
+      idle: "#94a3b8",
+      running: "#0ea5e9",
+      done: "#22c55e",
+      stale: "#f59e0b",
+      error: "#ef4444",
+    };
+    const statusColor = colorByStatus[status] || colorByStatus.idle;
+    return { ...stage, status, error, statusColor };
+  });
   const runPipelineStage = async (stageId, autoRun = false) => {
     if (typeof onRunPipelineStage !== "function") return;
     setPipelineBusyStage(stageId || (autoRun ? "auto" : ""));
@@ -1198,16 +1212,26 @@ export default function ScenarioStoryboardEditor({
         <div className="clipSB_scenarioEditorTopTabs">
           <div className="clipSB_scenarioEditorBtnRow" style={{ marginBottom: 8, flexWrap: "wrap" }}>
             {pipelineStages.map((stage) => {
-              const stageMeta = pipelineStageStatuses?.[stage.id] && typeof pipelineStageStatuses[stage.id] === "object" ? pipelineStageStatuses[stage.id] : {};
-              const stageStatus = String(stageMeta?.status || "idle").trim().toLowerCase() || "idle";
               return (
                 <button key={stage.id} className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!!pipelineBusyStage} onClick={() => runPipelineStage(stage.id, false)}>
-                  {stage.label} · {stageStatus}
+                  {stage.label}
                 </button>
               );
             })}
             <button className="clipSB_btn" type="button" disabled={!!pipelineBusyStage} onClick={() => runPipelineStage("", true)}>AUTO (placeholder)</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!!pipelineBusyStage} onClick={() => setActiveTab("debug")}>JSON</button>
+          </div>
+          <div className="clipSB_scenarioEditorBtnRow" style={{ marginBottom: 8, gap: 6, flexWrap: "wrap" }}>
+            {pipelineStageChips.map((stage) => (
+              <span
+                key={`${stage.id}-status`}
+                className="clipSB_tag clipSB_tagStatus"
+                title={stage.error || `${stage.label}: ${stage.status}`}
+                style={{ borderColor: stage.statusColor, color: stage.statusColor }}
+              >
+                {stage.label}:{stage.status}
+              </span>
+            ))}
           </div>
           <div className="clipSB_scenarioEditorTabsRow">
             {TOP_TABS.map((tab) => (

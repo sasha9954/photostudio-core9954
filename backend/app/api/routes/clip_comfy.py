@@ -231,12 +231,19 @@ def _sync_stage_package_input(
         return package, False
     next_package = dict(package)
     current_input = next_package.get("input") if isinstance(next_package.get("input"), dict) else {}
+    current_refs_inventory = next_package.get("refs_inventory") if isinstance(next_package.get("refs_inventory"), dict) else {}
+    current_assigned_roles = next_package.get("assigned_roles") if isinstance(next_package.get("assigned_roles"), dict) else {}
     snapshot_input = _build_stage_input_snapshot(req)
+    snapshot_refs_inventory = req.get("context_refs") if isinstance(req.get("context_refs"), dict) else {}
+    snapshot_assigned_roles = req.get("roleTypeByRole") if isinstance(req.get("roleTypeByRole"), dict) else {}
     input_changed = current_input != snapshot_input
+    refs_changed = current_refs_inventory != snapshot_refs_inventory
+    roles_changed = current_assigned_roles != snapshot_assigned_roles
+    package_changed = input_changed or refs_changed or roles_changed
     next_package["input"] = snapshot_input
-    next_package["refs_inventory"] = req.get("context_refs") if isinstance(req.get("context_refs"), dict) else {}
-    next_package["assigned_roles"] = req.get("roleTypeByRole") if isinstance(req.get("roleTypeByRole"), dict) else {}
-    return next_package, input_changed
+    next_package["refs_inventory"] = snapshot_refs_inventory
+    next_package["assigned_roles"] = snapshot_assigned_roles
+    return next_package, package_changed
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
 ANIMAL_LABEL_BY_SPECIES = {
     "dog": "собака",
@@ -686,8 +693,8 @@ async def clip_comfy_scenario_director_generate(request: Request, payload: Scena
     if pipeline_mode == "scenario_stage_v1":
         incoming_package = req.get("storyboardPackage") if isinstance(req.get("storyboardPackage"), dict) else {}
         package = incoming_package or create_storyboard_package(req)
-        package, input_changed = _sync_stage_package_input(package, req)
-        if input_changed:
+        package, package_changed = _sync_stage_package_input(package, req)
+        if package_changed:
             package = mark_stale_downstream(package, "input_package", reason="payload_refresh")
         mark_stale_from = str(req.get("markStaleFrom") or "").strip()
         if mark_stale_from:
