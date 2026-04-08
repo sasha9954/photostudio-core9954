@@ -2,16 +2,20 @@ import json
 import logging
 import os
 import re
-from base64 import b64encode
+import io
+from base64 import b64encode, b64decode
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 from urllib.parse import urlparse
 import ipaddress
 import mimetypes
 
+import librosa
+import soundfile as sf
 import requests
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -28,6 +32,7 @@ REPAIR_RETRY_COUNT = 2
 FULL_COVERAGE_TOLERANCE_SEC = 0.3
 CLIP_REF_ROLES = ("character_1", "character_2", "character_3", "animal", "group", "location", "style", "props")
 CLIP_CONTEXT_VERSION = "clip_pipeline_context_v1"
+CHUNK_AUDIO_SLICE_OVERLAP_SEC = 1.5
 
 
 class ClipPipelineError(Exception):
@@ -223,6 +228,7 @@ def _call_gemini_json(
     request_finished = False
     diagnostics: dict[str, Any] = {"model": CLIP_PIPELINE_MODEL, "retries": 0, "stage": stage, "chunk_id": chunk_id}
     req_metrics = _estimate_request_payload_metrics(body)
+    diagnostics.update(req_metrics)
     logger.info(
         "[CLIP PIPELINE GEMINI PAYLOAD] stage=%s chunk_id=%s schema_enabled=%s audio_bytes=%s refs_bytes=%s inline_parts=%s request_size_estimate=%s",
         stage,
@@ -445,6 +451,65 @@ def _normalize_media_to_inline_part(url: str, *, fallback_mime: str) -> dict[str
             media_url,
         )
     return _build_inline_media_part_from_url(media_url, fallback_mime=fallback_mime)
+
+
+def _decode_audio_inline_bytes(context: dict[str, Any]) -> tuple[bytes, str]:
+    audio_source = context.get("audio_source") if isinstance(context.get("audio_source"), dict) else {}
+    audio_part = audio_source.get("media_part") if isinstance(audio_source.get("media_part"), dict) else {}
+    inline = audio_part.get("inlineData") if isinstance(audio_part.get("inlineData"), dict) else {}
+    data = str(inline.get("data") or "").strip()
+    if data:
+        mime = str(inline.get("mimeType") or "audio/mpeg").strip() or "audio/mpeg"
+        return (b64decode(data), mime)
+    audio_url = str(context.get("audio_url") or (audio_source.get("uri") if isinstance(audio_source, dict) else "") or "").strip()
+    if not audio_url:
+        return (b"", "")
+    raw = _fetch_media_bytes(audio_url)
+    return (raw, _guess_mime_type(audio_url, "audio/mpeg"))
+
+
+def _build_chunk_audio_slice(
+    *,
+    context: dict[str, Any],
+    chunk_t0: float,
+    chunk_t1: float,
+    track_duration_sec: float,
+    overlap_sec: float = CHUNK_AUDIO_SLICE_OVERLAP_SEC,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    t0 = max(0.0, float(chunk_t0) - overlap_sec)
+    t1 = max(t0, float(chunk_t1) + overlap_sec)
+    if track_duration_sec > 0:
+        t1 = min(float(track_duration_sec), t1)
+        t0 = min(t0, t1)
+    try:
+        raw, _ = _decode_audio_inline_bytes(context)
+        if not raw:
+            return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "master_audio_unavailable"}
+        audio, sr = librosa.load(io.BytesIO(raw), sr=None, mono=False)
+        total_samples = int(audio.shape[-1]) if hasattr(audio, "shape") else 0
+        if total_samples <= 0 or sr <= 0:
+            return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "decoded_audio_empty"}
+        real_track_duration = max(0.0, total_samples / float(sr))
+        t1 = min(t1, real_track_duration)
+        start_idx = int(max(0, round(t0 * sr)))
+        end_idx = int(min(total_samples, round(t1 * sr)))
+        if end_idx <= start_idx:
+            return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "slice_bounds_invalid"}
+        sliced = audio[..., start_idx:end_idx]
+        buff = io.BytesIO()
+        sf.write(buff, sliced.T if getattr(sliced, "ndim", 1) > 1 else sliced, sr, format="WAV", subtype="PCM_16")
+        out = buff.getvalue()
+        part = {"inlineData": {"mimeType": "audio/wav", "data": b64encode(out).decode("ascii")}}
+        return part, {
+            "local_audio_slice": True,
+            "slice_t0": round(t0, 3),
+            "slice_t1": round(t1, 3),
+            "audio_part_size_bytes": len(out),
+            "slice_overlap_sec": overlap_sec,
+        }
+    except Exception:
+        logger.warning("clip_pipeline_chunk_audio_slice_failed", exc_info=True)
+        return {}, {"local_audio_slice": False, "slice_t0": round(t0, 3), "slice_t1": round(t1, 3), "error": "slice_generation_failed"}
 
 
 def _now_iso() -> str:
@@ -759,7 +824,7 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
     }
 
 
-def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMapResponse, context: dict[str, Any]) -> dict[str, Any]:
+def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMapResponse, context: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     runtime = {
         "context": {
             "audio_url": context.get("audio_url"),
@@ -774,12 +839,30 @@ def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMa
         {"text": "Allowed routes only: i2v, ia2v, first_last. No transcript/audioStructure/semanticTimeline."},
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
-    audio_part = ((context.get("audio_source") or {}).get("media_part") if isinstance(context.get("audio_source"), dict) else {})
-    if isinstance(audio_part, dict) and audio_part:
-        parts.append({"text": "Master audio context input:"})
-        parts.append(audio_part)
+    chunk_audio_part, chunk_audio_diag = _build_chunk_audio_slice(
+        context=context,
+        chunk_t0=req.t0,
+        chunk_t1=req.t1,
+        track_duration_sec=float(whole_map.duration_sec or 0.0),
+    )
+    if isinstance(chunk_audio_part, dict) and chunk_audio_part:
+        parts.append({"text": "Local chunk audio slice input (window + overlap):"})
+        parts.append(chunk_audio_part)
+    else:
+        raise ClipPipelineError(
+            "retryable_fail",
+            "chunk local audio slice is required but unavailable",
+            status_code=502,
+            details={
+                "chunk_id": req.chunk_id,
+                "local_audio_slice": False,
+                "slice_t0": chunk_audio_diag.get("slice_t0"),
+                "slice_t1": chunk_audio_diag.get("slice_t1"),
+                "reason": chunk_audio_diag.get("error") or "slice_unavailable",
+            },
+        )
     parts.extend(_flatten_ref_parts(context.get("refs_media_parts_by_role") if isinstance(context.get("refs_media_parts_by_role"), dict) else {}))
-    return {
+    body = {
         "systemInstruction": {"parts": [{"text": str(context.get("system_instruction") or "You are a production clip storyboard planner. Return strict JSON only.")}]},
         "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {
@@ -789,6 +872,20 @@ def _build_chunk_request(*, req: ChunkStoryboardRequest, whole_map: WholeTrackMa
             "maxOutputTokens": 8192,
         },
     }
+    transport_diag = {
+        "stage": "chunk",
+        "chunk_id": req.chunk_id,
+        "cached_context_used": False,
+        "cache_handle_present": bool(context.get("cache_handle")),
+        "duplicated_master_audio": False,
+        "local_audio_slice": bool(chunk_audio_diag.get("local_audio_slice")),
+        "local_audio_slice_t0": chunk_audio_diag.get("slice_t0"),
+        "local_audio_slice_t1": chunk_audio_diag.get("slice_t1"),
+        "chunk_audio_bytes": int(chunk_audio_diag.get("audio_part_size_bytes") or 0),
+        "refs_reattached": bool(_flatten_ref_parts(context.get("refs_media_parts_by_role") if isinstance(context.get("refs_media_parts_by_role"), dict) else {})),
+        "chunk_audio_error": chunk_audio_diag.get("error"),
+    }
+    return body, transport_diag
 
 
 def _plan_chunks(whole_map: WholeTrackMapResponse) -> list[ChunkBoundary]:
@@ -1094,7 +1191,17 @@ def _generate_whole_map_with_retry(*, api_key: str, payload: dict[str, Any], con
             logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_start attempt=%s", attempt)
             model = WholeTrackMapResponse.model_validate(raw)
             logger.info("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_done valid=true attempt=%s", attempt)
-            diagnostics.append({"stage": "whole_map", "attempt": attempt, "response_schema_enabled": True, "context_state": context.get("context_state")})
+            diagnostics.append(
+                {
+                    "stage": "whole_map",
+                    "attempt": attempt,
+                    "response_schema_enabled": True,
+                    "context_state": context.get("context_state"),
+                    "full_audio_attached": bool(context.get("audio_media_attached")),
+                    "full_audio_bytes": int(call_diag.get("audio_part_size_bytes") or 0),
+                    "refs_total_size_bytes": int(call_diag.get("refs_total_size_bytes") or 0),
+                }
+            )
             return model, call_diag, diagnostics
         except ValidationError as exc:
             logger.warning("[CLIP PIPELINE GEMINI] stage=whole_map event=parse_done valid=false attempt=%s", attempt)
@@ -1113,7 +1220,7 @@ def _generate_chunk_with_retry(*, api_key: str, req: ChunkStoryboardRequest, who
     last_error: ClipPipelineError | None = None
     for attempt in range(1, CHUNK_RETRY_COUNT + 1):
         try:
-            body = _build_chunk_request(req=req, whole_map=whole_map, context=context)
+            body, transport_diag = _build_chunk_request(req=req, whole_map=whole_map, context=context)
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_start attempt=%s", req.chunk_id, attempt)
             parsed_chunk, call_diag = _call_gemini_json(api_key=api_key, body=body, retry_count=2, stage="chunk", chunk_id=req.chunk_id, request_started=True)
             logger.info("[CLIP PIPELINE GEMINI] stage=chunk chunk_id=%s event=request_done status=ok attempt=%s", req.chunk_id, attempt)
@@ -1132,6 +1239,7 @@ def _generate_chunk_with_retry(*, api_key: str, req: ChunkStoryboardRequest, who
                     "gemini_retries": call_diag.get("retries") if isinstance(call_diag, dict) else None,
                     "canonicalSceneIdApplied": canonical_diag.get("canonicalSceneIdApplied", 0),
                     "canonicalSceneIdMap": canonical_diag.get("canonicalSceneIdMap", {}),
+                    "transportDiagnostics": transport_diag,
                 }
             )
             return chunk, diagnostics
@@ -1156,6 +1264,12 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
     retry_diagnostics: list[dict[str, Any]] = []
     schema_diagnostics = {"whole_map_schema_enabled": True, "chunk_schema_enabled": True, "repair_schema_enabled": True}
     context_diagnostics = [_build_context_diagnostics(context, stage="stage_0_context_prepare")]
+    total_started = perf_counter()
+    whole_map_started = 0.0
+    chunk_secs: list[float] = []
+    merge_started = 0.0
+    merge_sec = 0.0
+    retry_count = 0
     last_seen: dict[str, Any] = {
         "stage": "context_prepare",
         "attempt": 0,
@@ -1164,10 +1278,13 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
         "request_finished": False,
     }
     try:
+        whole_map_started = perf_counter()
         last_seen.update({"stage": "whole_map", "attempt": 1, "request_started": True, "request_finished": False})
         whole_map, map_diag, map_retry = _generate_whole_map_with_retry(api_key=api_key, payload=payload, context=context)
         last_seen.update({"stage": "whole_map", "request_finished": True})
         retry_diagnostics.extend(map_retry)
+        retry_count += len(map_retry)
+        whole_map_sec = round(max(0.0, perf_counter() - whole_map_started), 3)
 
         state_history.append("track_mapped")
         chunks = _plan_chunks(whole_map)
@@ -1177,7 +1294,8 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
         continuity_tail = ContinuityTailState()
         for boundary in chunks:
             state_history.append("chunk_running")
-            last_seen.update({"stage": "chunk", "chunk_id": boundary.chunk_id, "request_started": True, "request_finished": False})
+            chunk_started = perf_counter()
+            last_seen.update({"stage": f"chunk_{boundary.chunk_id}", "chunk_id": boundary.chunk_id, "request_started": True, "request_finished": False})
             section_ids = [sec.section_id for sec in whole_map.sections if not (sec.t1 <= boundary.t0 or sec.t0 >= boundary.t1)]
             recurring_ids = list(dict.fromkeys([sec.recurring_group_id for sec in whole_map.sections if sec.recurring_group_id]))
             req = ChunkStoryboardRequest(
@@ -1190,14 +1308,20 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 creative_note=str((payload.get("metadata") or {}).get("creativeNote") or "") if isinstance(payload.get("metadata"), dict) else "",
             )
             chunk, chunk_retry = _generate_chunk_with_retry(api_key=api_key, req=req, whole_map=whole_map, context=context)
-            last_seen.update({"stage": "chunk", "chunk_id": boundary.chunk_id, "request_finished": True})
+            last_seen.update({"stage": f"chunk_{boundary.chunk_id}", "chunk_id": boundary.chunk_id, "request_finished": True})
             retry_diagnostics.extend(chunk_retry)
+            retry_count += len(chunk_retry)
+            chunk_secs.append(round(max(0.0, perf_counter() - chunk_started), 3))
             continuity_tail = ContinuityTailState.model_validate(chunk.continuity_out if isinstance(chunk.continuity_out, dict) else {})
             chunk_results.append(chunk)
             state_history.append("chunk_done")
 
         state_history.append("merging")
+        merge_started = perf_counter()
+        last_seen.update({"stage": "merge", "request_started": True, "request_finished": False, "chunk_id": None})
         merged, issues, merge_diag = _local_merge(whole_map.track_id, chunk_results)
+        merge_sec = round(max(0.0, perf_counter() - merge_started), 3)
+        last_seen.update({"stage": "merge", "request_finished": True})
         merged_validation = _validate_merged_storyboard(merged)
         if not merged_validation.get("valid"):
             raise ClipPipelineError("retryable_fail", "merged storyboard validation failed", details={"errors": merged_validation.get("errors")})
@@ -1244,8 +1368,9 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 creative_note="TAIL COVERAGE REPAIR: ensure last scene reaches track end.",
             )
             repaired_last_chunk, tail_retry_diag = _generate_chunk_with_retry(api_key=api_key, req=repair_req, whole_map=whole_map, context=context)
-            last_seen.update({"stage": "chunk", "chunk_id": last_boundary.chunk_id, "request_finished": True})
+            last_seen.update({"stage": f"chunk_{last_boundary.chunk_id}", "chunk_id": last_boundary.chunk_id, "request_finished": True})
             retry_diagnostics.extend(tail_retry_diag)
+            retry_count += len(tail_retry_diag)
             chunk_results[-1] = repaired_last_chunk
             merged, issues, merge_diag = _local_merge(whole_map.track_id, chunk_results)
             merged, route_mix_diag = _apply_clip_route_mix_policy(merged, whole_map)
@@ -1278,6 +1403,12 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
             len(chunk_results),
         )
         state_history.append("complete")
+        scene_durations = [
+            max(0.0, float(scene.get("t1") or 0.0) - float(scene.get("t0") or 0.0))
+            for scene in (merged.get("scenes") if isinstance(merged.get("scenes"), list) else [])
+            if isinstance(scene, dict)
+        ]
+        total_sec = round(max(0.0, perf_counter() - total_started), 3)
         return {
             "ok": True,
             "mode": "clip",
@@ -1317,6 +1448,19 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 "repairValidationDiagnostics": repair_validation_diag,
                 "schemaDiagnostics": schema_diagnostics,
                 "contextDiagnostics": context_diagnostics,
+                "timingDiagnostics": {
+                    "total_sec": total_sec,
+                    "whole_map_sec": whole_map_sec,
+                    "chunk_secs": chunk_secs,
+                    "merge_sec": merge_sec,
+                },
+                "resultDiagnostics": {
+                    "scene_count": len(merged.get("scenes") or []),
+                    "chunk_count": len(chunk_results),
+                    "retry_count": retry_count,
+                    "scenes_below_3_sec_count": sum(1 for d in scene_durations if d < 3.0),
+                    "scenes_above_8_sec_count": sum(1 for d in scene_durations if d > 8.0),
+                },
             },
         }
     except ClipPipelineError as exc:
