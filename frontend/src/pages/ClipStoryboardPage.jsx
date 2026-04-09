@@ -15093,6 +15093,36 @@ onClipSec: (nodeId, value) => {
                       normalizedStageOutputs: normalizedOutputs,
                     },
                   };
+                }).map((nodeItem) => {
+                  if (!source || nodeItem.id !== source.id || nodeItem.type !== "comfyNarrative") return nodeItem;
+                  const nextStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
+                    ? response.storyboardPackage
+                    : {};
+                  const generatedAt = new Date().toISOString();
+                  const nextRevision = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                  const normalizedPending = {
+                    ...(normalizedOutputs && typeof normalizedOutputs === "object" ? normalizedOutputs : {}),
+                    storyboardOut: normalizedOutputs?.storyboardOut && typeof normalizedOutputs.storyboardOut === "object" ? normalizedOutputs.storyboardOut : {},
+                    directorOutput: {
+                      ...(normalizedOutputs?.directorOutput && typeof normalizedOutputs.directorOutput === "object" ? normalizedOutputs.directorOutput : {}),
+                      pipeline: "scenario_stage_v1",
+                      storyboardPackage: nextStoryboardPackage,
+                      executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
+                    },
+                    scenarioPackage: nextStoryboardPackage,
+                  };
+                  return {
+                    ...nodeItem,
+                    data: {
+                      ...nodeItem.data,
+                      pendingOutputs: normalizedPending,
+                      pendingRawResponse: response && typeof response === "object" ? response : null,
+                      pendingStoryboardOut: normalizedPending.storyboardOut,
+                      pendingDirectorOutput: normalizedPending.directorOutput,
+                      pendingGeneratedAt: generatedAt,
+                      pendingScenarioRevision: nextRevision,
+                    },
+                  };
                 })));
               },
             },
