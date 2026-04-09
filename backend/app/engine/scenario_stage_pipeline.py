@@ -20,6 +20,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.static_paths import ASSETS_DIR
 from app.engine.audio_analyzer import analyze_audio
+from app.engine.audio_transcript_aligner import resolve_transcript_alignment
 from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
@@ -858,6 +859,14 @@ def _build_phrase_units_from_alignment(
     duration_sec: float,
     transcript_text: str,
 ) -> list[dict[str, Any]]:
+    return _build_phrase_units_from_approximate_alignment(analysis, duration_sec, transcript_text)
+
+
+def _build_phrase_units_from_approximate_alignment(
+    analysis: dict[str, Any],
+    duration_sec: float,
+    transcript_text: str,
+) -> list[dict[str, Any]]:
     vocal_phrases = [item for item in _safe_list(analysis.get("vocalPhrases")) if isinstance(item, dict)]
     if not vocal_phrases:
         return []
@@ -908,9 +917,118 @@ def _build_phrase_units_from_alignment(
                 "word_count": len(phrase_words),
                 "can_cut_after": True,
                 "semantic_weight": _semantic_weight_for_phrase(text, len(phrase_words), is_last=idx == len(spans)),
+                "words": [],
                 "word_timestamps": [],
             }
         )
+    return phrase_units
+
+
+def _extract_input_alignment_payload(input_pkg: dict[str, Any]) -> dict[str, Any]:
+    alignment = _safe_dict(input_pkg.get("transcript_alignment"))
+    if alignment:
+        return alignment
+    alignment = _safe_dict(input_pkg.get("transcriptAlignment"))
+    if alignment:
+        return alignment
+    words = _safe_list(input_pkg.get("word_timestamps") or input_pkg.get("wordTimestamps"))
+    phrases = _safe_list(input_pkg.get("phrase_timestamps") or input_pkg.get("phraseTimestamps"))
+    if words:
+        return {
+            "transcript_text": str(input_pkg.get("transcript_text") or input_pkg.get("transcriptText") or "").strip(),
+            "words": words,
+            "phrases": phrases,
+            "source": "input_payload_word_timestamps",
+        }
+    return {}
+
+
+def _build_phrase_units_from_real_alignment(
+    alignment: dict[str, Any],
+    duration_sec: float,
+) -> list[dict[str, Any]]:
+    def _append_phrase_chunk(words_chunk: list[dict[str, Any]], preferred_text: str, is_last: bool) -> None:
+        if not words_chunk:
+            return
+        resolved_t0 = float(words_chunk[0].get("t0") or 0.0)
+        resolved_t1 = float(words_chunk[-1].get("t1") or resolved_t0)
+        text = preferred_text or " ".join(str(word.get("text") or "") for word in words_chunk).strip()
+        phrase_units.append(
+            {
+                "id": f"ph_{len(phrase_units) + 1}",
+                "t0": round(resolved_t0, 3),
+                "t1": round(resolved_t1, 3),
+                "text": text,
+                "word_count": len(words_chunk),
+                "words": words_chunk,
+                "word_timestamps": words_chunk,
+                "can_cut_after": True,
+                "semantic_weight": _semantic_weight_for_phrase(text, len(words_chunk), is_last=is_last),
+            }
+        )
+
+    words = [
+        item
+        for item in _safe_list(alignment.get("words"))
+        if isinstance(item, dict) and float(item.get("t1") or 0.0) > float(item.get("t0") or 0.0)
+    ]
+    if not words:
+        return []
+
+    phrases_raw = [
+        item
+        for item in _safe_list(alignment.get("phrases"))
+        if isinstance(item, dict) and float(item.get("t1") or 0.0) > float(item.get("t0") or 0.0)
+    ]
+    if not phrases_raw:
+        min_t0 = float(words[0].get("t0") or 0.0)
+        max_t1 = float(words[-1].get("t1") or min_t0)
+        phrases_raw = [{"text": str(alignment.get("transcript_text") or "").strip(), "t0": min_t0, "t1": max_t1}]
+
+    phrase_units: list[dict[str, Any]] = []
+    word_idx = 0
+    for phrase_idx, phrase in enumerate(phrases_raw, start=1):
+        t0 = _clamp_time(float(phrase.get("t0") or 0.0), duration_sec)
+        t1 = _clamp_time(float(phrase.get("t1") or 0.0), duration_sec)
+        if t1 - t0 < 0.12:
+            continue
+        phrase_words: list[dict[str, Any]] = []
+        while word_idx < len(words):
+            word = words[word_idx]
+            w0 = float(word.get("t0") or 0.0)
+            w1 = float(word.get("t1") or 0.0)
+            if w1 <= t0:
+                word_idx += 1
+                continue
+            if w0 >= t1:
+                break
+            phrase_words.append(
+                {
+                    "text": str(word.get("text") or "").strip(),
+                    "t0": round(_clamp_time(w0, duration_sec), 3),
+                    "t1": round(_clamp_time(w1, duration_sec), 3),
+                }
+            )
+            word_idx += 1
+        if not phrase_words:
+            continue
+        phrase_text = str(phrase.get("text") or "").strip() or " ".join(str(word.get("text") or "") for word in phrase_words).strip()
+        phrase_span = float(phrase_words[-1].get("t1") or 0.0) - float(phrase_words[0].get("t0") or 0.0)
+        if phrase_span <= 8.0 or len(phrase_words) <= 3:
+            _append_phrase_chunk(phrase_words, phrase_text, is_last=phrase_idx == len(phrases_raw))
+            continue
+        # Aggressive split for oversized phrase: cut only at real word boundaries.
+        chunk: list[dict[str, Any]] = []
+        for w_idx, word in enumerate(phrase_words):
+            chunk.append(word)
+            chunk_span = float(chunk[-1].get("t1") or 0.0) - float(chunk[0].get("t0") or 0.0)
+            is_last_word = w_idx == len(phrase_words) - 1
+            if chunk_span >= 6.0 or (chunk_span >= 3.0 and is_last_word):
+                _append_phrase_chunk(chunk, "", is_last=is_last_word and phrase_idx == len(phrases_raw))
+                chunk = []
+        if chunk:
+            _append_phrase_chunk(chunk, "", is_last=phrase_idx == len(phrases_raw))
+
     return phrase_units
 
 
@@ -925,12 +1043,26 @@ def _build_scene_candidate_windows(
     if not phrase_units:
         return []
     windows: list[dict[str, Any]] = []
+
+    def _append_window(start_idx: int, end_idx: int) -> None:
+        win_start = _clamp_time(float(phrase_units[start_idx].get("t0") or 0.0), duration_sec)
+        win_end = _clamp_time(float(phrase_units[end_idx].get("t1") or win_start), duration_sec)
+        windows.append(
+            {
+                "id": f"sc_{len(windows) + 1}",
+                "t0": round(win_start, 3),
+                "t1": round(win_end, 3),
+                "duration_sec": round(max(0.0, win_end - win_start), 3),
+                "phrase_ids": [str(phrase_units[k].get("id") or "") for k in range(start_idx, end_idx + 1)],
+                "cut_after_phrase_id": str(phrase_units[end_idx].get("id") or ""),
+            }
+        )
+
     idx = 0
     while idx < len(phrase_units):
         start = float(phrase_units[idx].get("t0") or 0.0)
         best_j = idx
         best_score = -1e9
-        end = start
         for j in range(idx, len(phrase_units)):
             end = float(phrase_units[j].get("t1") or start)
             span = end - start
@@ -941,30 +1073,70 @@ def _build_scene_candidate_windows(
             center_target = (target_min + target_max) * 0.5
             closeness = -abs(span - center_target)
             in_target_bonus = 1.2 if target_min <= span <= target_max else 0.0
-            overweight_penalty = -2.0 if span > hard_max else 0.0
+            near_hard_cap_penalty = -0.8 if span > target_max else 0.0
             semantic_bonus = 0.35 if str(phrase_units[j].get("semantic_weight") or "") == "high" else 0.0
-            score = closeness + in_target_bonus + overweight_penalty + semantic_bonus
+            score = closeness + in_target_bonus + near_hard_cap_penalty + semantic_bonus
             if span >= target_min and score > best_score:
                 best_score = score
                 best_j = j
+
         if best_j < idx:
             best_j = idx
-        win_start = _clamp_time(float(phrase_units[idx].get("t0") or 0.0), duration_sec)
-        win_end = _clamp_time(float(phrase_units[best_j].get("t1") or win_start), duration_sec)
-        if win_end - win_start < 0.2 and idx + 1 < len(phrase_units):
-            win_end = _clamp_time(float(phrase_units[idx + 1].get("t1") or win_start), duration_sec)
-            best_j = idx + 1
-        windows.append(
-            {
-                "id": f"sc_{len(windows) + 1}",
-                "t0": round(win_start, 3),
-                "t1": round(win_end, 3),
-                "duration_sec": round(max(0.0, win_end - win_start), 3),
-                "phrase_ids": [str(phrase_units[k].get("id") or "") for k in range(idx, best_j + 1)],
-                "cut_after_phrase_id": str(phrase_units[best_j].get("id") or ""),
-            }
-        )
+        _append_window(idx, best_j)
         idx = best_j + 1
+
+    # Aggressive post-split if any window is over hard cap: split only on phrase boundaries (never mid-word).
+    normalized: list[dict[str, Any]] = []
+    for win in windows:
+        span = float(win.get("duration_sec") or 0.0)
+        if span <= hard_max:
+            normalized.append(win)
+            continue
+        phrase_ids = [str(item) for item in _safe_list(win.get("phrase_ids")) if str(item)]
+        if len(phrase_ids) <= 1:
+            normalized.append(win)
+            continue
+        current: list[str] = []
+        current_t0 = float(win.get("t0") or 0.0)
+        for phrase_id in phrase_ids:
+            phrase = next((item for item in phrase_units if str(item.get("id") or "") == phrase_id), None)
+            if not phrase:
+                continue
+            proposed = current + [phrase_id]
+            proposed_t1 = float(phrase.get("t1") or current_t0)
+            proposed_span = proposed_t1 - current_t0
+            if current and proposed_span > hard_max:
+                end_phrase = next((item for item in phrase_units if str(item.get("id") or "") == current[-1]), None)
+                end_t1 = float((end_phrase or {}).get("t1") or current_t0)
+                normalized.append(
+                    {
+                        "id": f"sc_{len(normalized) + 1}",
+                        "t0": round(current_t0, 3),
+                        "t1": round(end_t1, 3),
+                        "duration_sec": round(max(0.0, end_t1 - current_t0), 3),
+                        "phrase_ids": current,
+                        "cut_after_phrase_id": str(current[-1]),
+                    }
+                )
+                current = [phrase_id]
+                current_t0 = float(phrase.get("t0") or current_t0)
+            else:
+                current = proposed
+        if current:
+            end_phrase = next((item for item in phrase_units if str(item.get("id") or "") == current[-1]), None)
+            end_t1 = float((end_phrase or {}).get("t1") or current_t0)
+            normalized.append(
+                {
+                    "id": f"sc_{len(normalized) + 1}",
+                    "t0": round(current_t0, 3),
+                    "t1": round(end_t1, 3),
+                    "duration_sec": round(max(0.0, end_t1 - current_t0), 3),
+                    "phrase_ids": current,
+                    "cut_after_phrase_id": str(current[-1]),
+                }
+            )
+    if normalized:
+        return normalized
     return windows
 
 
@@ -974,17 +1146,17 @@ def _build_phrase_first_audio_map(
     analysis: dict[str, Any],
     transcript_text: str,
 ) -> dict[str, Any] | None:
-    phrase_units = _build_phrase_units_from_alignment(analysis, duration_sec, transcript_text)
+    phrase_units = _build_phrase_units_from_approximate_alignment(analysis, duration_sec, transcript_text)
     if not phrase_units:
         return None
-    base_map = _build_audio_map_from_dynamics(duration_sec, story_core, analysis, analysis_mode="transcript_alignment_v1")
+    base_map = _build_audio_map_from_dynamics(duration_sec, story_core, analysis, analysis_mode="approximate_phrase_grouping_v1")
     scene_windows = _build_scene_candidate_windows(phrase_units, duration_sec)
     phrase_boundaries = [
         round(float(item.get("t1") or 0.0), 3)
         for item in phrase_units
         if 0.0 < float(item.get("t1") or 0.0) < duration_sec
     ]
-    base_map["analysis_mode"] = "transcript_alignment_v1"
+    base_map["analysis_mode"] = "approximate_phrase_grouping_v1"
     base_map["transcript_available"] = True
     base_map["phrase_units"] = phrase_units
     base_map["scene_candidate_windows"] = scene_windows
@@ -1005,6 +1177,63 @@ def _build_phrase_first_audio_map(
         "phrase_points_count": len(phrase_boundaries),
         "energy_peaks_count": len(_safe_list(analysis.get("energyPeaks"))),
         "detected_sections_count": len(_safe_list(analysis.get("sections"))),
+    }
+    return base_map
+
+
+def _build_audio_map_from_real_alignment(
+    duration_sec: float,
+    story_core: dict[str, Any],
+    analysis: dict[str, Any],
+    alignment: dict[str, Any],
+) -> dict[str, Any] | None:
+    phrase_units = _build_phrase_units_from_real_alignment(alignment, duration_sec)
+    if not phrase_units:
+        return None
+    base_map = _build_audio_map_from_dynamics(duration_sec, story_core, analysis, analysis_mode="transcript_alignment_v2")
+    scene_windows = _build_scene_candidate_windows(phrase_units, duration_sec)
+    phrase_boundaries = [round(float(item.get("t1") or 0.0), 3) for item in phrase_units if 0.0 < float(item.get("t1") or 0.0) < duration_sec]
+    no_split_ranges = []
+    for phrase in phrase_units:
+        words = [word for word in _safe_list(phrase.get("words")) if isinstance(word, dict)]
+        if len(words) >= 3:
+            center_idx = len(words) // 2
+            center_word = words[center_idx]
+            no_split_ranges.append(
+                {
+                    "t0": round(_clamp_time(float(center_word.get("t0") or 0.0) - 0.12, duration_sec), 3),
+                    "t1": round(_clamp_time(float(center_word.get("t1") or 0.0) + 0.12, duration_sec), 3),
+                    "reason": f"phrase_core:{phrase.get('id')}",
+                }
+            )
+    base_map["analysis_mode"] = "transcript_alignment_v2"
+    base_map["transcript_available"] = bool(str(alignment.get("transcript_text") or "").strip())
+    base_map["transcript_text"] = str(alignment.get("transcript_text") or "").strip()
+    base_map["transcript_alignment"] = {
+        "transcript_text": str(alignment.get("transcript_text") or "").strip(),
+        "words": _safe_list(alignment.get("words")),
+        "phrases": _safe_list(alignment.get("phrases")),
+        "source": str(alignment.get("source") or ""),
+    }
+    base_map["phrase_units"] = phrase_units
+    base_map["scene_candidate_windows"] = scene_windows
+    base_map["phrase_endpoints_sec"] = sorted(set(phrase_boundaries))
+    base_map["candidate_cut_points_sec"] = sorted(set(phrase_boundaries))
+    base_map["no_split_ranges"] = sorted(
+        [item for item in _safe_list(base_map.get("no_split_ranges")) if isinstance(item, dict)] + no_split_ranges,
+        key=lambda item: float(item.get("t0") or 0.0),
+    )
+    base_map["cut_policy"] = {
+        "min_scene_sec": 3,
+        "target_scene_sec_min": 3,
+        "target_scene_sec_max": 6,
+        "hard_max_scene_sec": 8,
+        "max_scene_sec_forbidden": 8,
+        "no_mid_word_cut": True,
+        "prefer_phrase_endings": True,
+        "prefer_semantic_boundaries": True,
+        "requires_word_aligned_cut_points": True,
+        "alignment_source": str(alignment.get("source") or "unknown"),
     }
     return base_map
 
@@ -1251,7 +1480,9 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_analysis_mode"] = "timing_heuristics_v1"
     diagnostics["audio_map_used_fallback"] = False
     diagnostics["audio_map_phrase_mode"] = "audio_dynamics_v2"
+    diagnostics["audio_map_alignment_source"] = ""
     diagnostics["transcript_available"] = False
+    diagnostics["word_timestamp_count"] = 0
     diagnostics["phrase_unit_count"] = 0
     diagnostics["scene_candidate_count"] = 0
     package["diagnostics"] = diagnostics
@@ -1270,6 +1501,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     used_fallback = False
     analysis_mode = "timing_heuristics_v1"
     transcript_text = _extract_audio_transcript_text(input_pkg)
+    provided_alignment = _extract_input_alignment_payload(input_pkg)
     try:
         if audio_url:
             analysis_path = ""
@@ -1279,18 +1511,35 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 if not analysis_path:
                     raise ValueError("audio_source_unavailable_for_dynamics")
                 raw_analysis = analyze_audio(analysis_path, debug=False)
-                phrase_first_map = _build_phrase_first_audio_map(duration_sec, story_core, raw_analysis, transcript_text)
-                if phrase_first_map:
-                    analysis_mode = "transcript_alignment_v1"
-                    audio_map = phrase_first_map
+                alignment = resolve_transcript_alignment(
+                    audio_path=analysis_path,
+                    duration_sec=duration_sec,
+                    transcript_hint=transcript_text,
+                    provided_alignment=provided_alignment,
+                )
+                if alignment:
+                    analysis_mode = "transcript_alignment_v2"
+                    audio_map = _build_audio_map_from_real_alignment(duration_sec, story_core, raw_analysis, alignment) or {}
                 else:
-                    analysis_mode = "audio_dynamics_v2"
-                    audio_map = _build_audio_map_from_dynamics(
-                        duration_sec,
-                        story_core,
-                        raw_analysis,
-                        analysis_mode=analysis_mode,
-                    )
+                    phrase_first_map = _build_phrase_first_audio_map(duration_sec, story_core, raw_analysis, transcript_text)
+                    if phrase_first_map:
+                        analysis_mode = "approximate_phrase_grouping_v1"
+                        audio_map = phrase_first_map
+                        audio_map["analysis_mode"] = "approximate_phrase_grouping_v1"
+                        audio_map["transcript_available"] = bool(transcript_text)
+                        audio_map["audio_map_alignment_source"] = "approximate_transcript_grouping"
+                    else:
+                        analysis_mode = "audio_dynamics_v2"
+                        audio_map = _build_audio_map_from_dynamics(
+                            duration_sec,
+                            story_core,
+                            raw_analysis,
+                            analysis_mode=analysis_mode,
+                        )
+                if analysis_mode == "transcript_alignment_v2":
+                    audio_map["audio_map_alignment_source"] = str(_safe_dict(audio_map.get("transcript_alignment")).get("source") or "")
+                else:
+                    audio_map.setdefault("audio_map_alignment_source", "")
             finally:
                 if cleanup_path:
                     try:
@@ -1315,9 +1564,13 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_map["content_type"] = content_type
     audio_map["story_core_mode"] = story_core_mode
     audio_map["story_core_arc_ref"] = str(story_core.get("global_arc") or "")
-    audio_map.setdefault("transcript_available", bool(transcript_text and audio_map.get("analysis_mode") == "transcript_alignment_v1"))
+    audio_map.setdefault(
+        "transcript_available",
+        bool(transcript_text and str(audio_map.get("analysis_mode") or "") in {"transcript_alignment_v2", "approximate_phrase_grouping_v1"}),
+    )
     audio_map.setdefault("phrase_units", [])
     audio_map.setdefault("scene_candidate_windows", [])
+    audio_map.setdefault("audio_map_alignment_source", "")
     audio_map.setdefault(
         "cut_policy",
         {
@@ -1336,12 +1589,12 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     diagnostics["audio_map_analysis_mode"] = analysis_mode
     diagnostics["audio_map_used_fallback"] = bool(used_fallback)
-    diagnostics["audio_map_phrase_mode"] = (
-        "transcript_alignment_v1" if str(audio_map.get("analysis_mode") or "") == "transcript_alignment_v1" else "audio_dynamics_v2"
-    )
+    diagnostics["audio_map_phrase_mode"] = str(audio_map.get("analysis_mode") or analysis_mode or "timing_heuristics_v1")
     diagnostics["transcript_available"] = bool(audio_map.get("transcript_available"))
+    diagnostics["word_timestamp_count"] = len(_safe_list(_safe_dict(audio_map.get("transcript_alignment")).get("words")))
     diagnostics["phrase_unit_count"] = len(_safe_list(audio_map.get("phrase_units")))
     diagnostics["scene_candidate_count"] = len(_safe_list(audio_map.get("scene_candidate_windows")))
+    diagnostics["audio_map_alignment_source"] = str(audio_map.get("audio_map_alignment_source") or "")
     package["diagnostics"] = diagnostics
     package["audio_map"] = audio_map
     _append_diag_event(package, "audio_map generated", stage_id="audio_map")
