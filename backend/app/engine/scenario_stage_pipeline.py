@@ -286,10 +286,22 @@ def _default_story_core(input_pkg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _detect_story_core_mode(input_pkg: dict[str, Any]) -> str:
+    narrative_fields = (
+        input_pkg.get("text"),
+        input_pkg.get("story_text"),
+        input_pkg.get("note"),
+        input_pkg.get("director_note"),
+    )
+    has_directive = any(bool(str(value or "").strip()) for value in narrative_fields)
+    return "directed" if has_directive else "creative"
+
+
 def _build_story_core_prompt(
     input_pkg: dict[str, Any],
     refs_inventory: dict[str, Any],
     assigned_roles: dict[str, Any],
+    story_core_mode: str,
 ) -> str:
     compact_input = {
         "audio_url": str(input_pkg.get("audio_url") or ""),
@@ -304,6 +316,23 @@ def _build_story_core_prompt(
         "refs_by_role": _safe_dict(input_pkg.get("refs_by_role")),
         "connected_context_summary": _safe_dict(input_pkg.get("connected_context_summary")),
     }
+    mode = "directed" if story_core_mode == "directed" else "creative"
+    mode_instructions = (
+        "MODE: DIRECTED MODE\n"
+        "- User text is the mandatory narrative source of truth for the plot.\n"
+        "- Do NOT replace user plot with a different premise.\n"
+        "- Preserve explicitly specified world, actions, relationships, and narrative direction.\n"
+        "- You may only structure, clarify, improve wording, increase cinematic visuality, and fill missing connective tissue.\n"
+        "- Do NOT ignore clearly stated user events.\n"
+    )
+    if mode == "creative":
+        mode_instructions = (
+            "MODE: CREATIVE MODE\n"
+            "- User did not provide narrative directive text.\n"
+            "- Invent an original story core.\n"
+            "- Be cinematic, emotionally clear, visually strong, and compelling.\n"
+            "- Use audio, hero, world/location, style, and props references to shape concept, arc, mood, opening, ending, and emotional journey.\n"
+        )
     return (
         "You are STORY CORE stage of a scenario pipeline.\n"
         "Return STRICT JSON only, no markdown.\n"
@@ -317,6 +346,8 @@ def _build_story_core_prompt(
         "Keep each field compact and actionable.\n"
         "Required keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock.\n"
         "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
+        f"{mode_instructions}\n"
+        f"story_core_mode={mode}\n\n"
         f"INPUT_SUMMARY:\n{json.dumps(compact_input, ensure_ascii=False)[:3500]}\n\n"
         f"ASSIGNED_ROLES:\n{json.dumps(assigned_roles, ensure_ascii=False)[:1200]}\n\n"
         f"CONTEXT_REFS:\n{json.dumps(refs_inventory, ensure_ascii=False)[:2200]}\n"
@@ -385,6 +416,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "errors": [],
             "stale_reason": "",
             "last_action": "",
+            "story_core_mode": "creative",
             "story_core_used_fallback": False,
             "story_core_character_ref_attached": False,
             "story_core_character_ref_source": "",
@@ -460,9 +492,11 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     assigned_roles = _safe_dict(package.get("assigned_roles"))
+    story_core_mode = _detect_story_core_mode(input_pkg)
     fallback = _default_story_core(input_pkg)
-    prompt = _build_story_core_prompt(input_pkg, refs_inventory, assigned_roles)
+    prompt = _build_story_core_prompt(input_pkg, refs_inventory, assigned_roles, story_core_mode)
     diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["story_core_mode"] = story_core_mode
     diagnostics["story_core_character_ref_attached"] = False
     diagnostics["story_core_character_ref_source"] = ""
     diagnostics["story_core_character_ref_error"] = ""
