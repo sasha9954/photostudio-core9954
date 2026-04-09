@@ -99,6 +99,150 @@ def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, A
     return lookup
 
 
+def _compact_join(parts: list[str], *, sep: str = "; ", max_len: int = 600) -> str:
+    text = sep.join([p.strip() for p in parts if str(p or "").strip()])
+    return text[:max_len]
+
+
+def _build_identity_lock_summary(story_core: dict[str, Any]) -> str:
+    identity_lock = _safe_dict(story_core.get("identity_lock"))
+    direct_summary = str(identity_lock.get("summary") or "").strip()
+    if direct_summary:
+        return direct_summary[:600]
+
+    hero = _safe_dict(identity_lock.get("hero"))
+    name = str(hero.get("name") or "").strip()
+    appearance = str(hero.get("appearance_notes") or "").strip()
+    core_trait = str(hero.get("core_trait") or "").strip()
+
+    parts: list[str] = []
+    if name:
+        parts.append(f"Hero: {name}")
+    if appearance:
+        parts.append(f"Appearance: {appearance}")
+    if core_trait:
+        parts.append(f"Core trait: {core_trait}")
+    return _compact_join(parts, max_len=600)
+
+
+def _build_world_lock_summary(story_core: dict[str, Any]) -> str:
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    direct_summary = str(world_lock.get("summary") or "").strip()
+    if direct_summary:
+        return direct_summary[:600]
+
+    setting = str(world_lock.get("setting") or "").strip()
+    setting_description = str(world_lock.get("setting_description") or "").strip()
+    rules = str(world_lock.get("rules") or "").strip()
+    mood_and_tone = str(world_lock.get("mood_and_tone") or "").strip()
+    social_mood = str(world_lock.get("social_mood") or "").strip()
+    key_locations = ", ".join([str(v).strip() for v in _safe_list(world_lock.get("key_locations")) if str(v).strip()])
+    key_themes = ", ".join([str(v).strip() for v in _safe_list(world_lock.get("key_themes")) if str(v).strip()])
+
+    parts: list[str] = []
+    if setting:
+        parts.append(f"Setting: {setting}")
+    if setting_description:
+        parts.append(f"Setting details: {setting_description}")
+    if rules:
+        parts.append(f"World rules: {rules}")
+    if social_mood:
+        parts.append(f"Social mood: {social_mood}")
+    if mood_and_tone:
+        parts.append(f"Mood/tone: {mood_and_tone}")
+    if key_locations:
+        parts.append(f"Key locations: {key_locations}")
+    if key_themes:
+        parts.append(f"Key themes: {key_themes}")
+    return _compact_join(parts, max_len=600)
+
+
+def _build_style_lock_summary(story_core: dict[str, Any]) -> str:
+    style_lock = _safe_dict(story_core.get("style_lock"))
+    direct_summary = str(style_lock.get("summary") or "").strip()
+    if direct_summary:
+        return direct_summary[:600]
+
+    visual_style = str(style_lock.get("visual_style") or "").strip()
+    visual_style_tags = ", ".join([str(v).strip() for v in _safe_list(style_lock.get("visual_style_tags")) if str(v).strip()])
+    visual_mood = str(style_lock.get("visual_mood") or "").strip()
+    color_palette = str(style_lock.get("color_palette") or "").strip()
+    lighting = str(style_lock.get("lighting") or "").strip()
+    camera_work = str(style_lock.get("camera_work") or "").strip()
+    mood_and_tone = str(style_lock.get("mood_and_tone") or style_lock.get("overall_tone") or "").strip()
+    audio_style = str(style_lock.get("audio_style") or "").strip()
+    has_negative_style = bool(style_lock.get("negative_prompts") or style_lock.get("negative_style_tags"))
+
+    parts: list[str] = []
+    if visual_style:
+        parts.append(f"Visual style: {visual_style}")
+    if visual_style_tags:
+        parts.append(f"Style tags: {visual_style_tags}")
+    if visual_mood:
+        parts.append(f"Visual mood: {visual_mood}")
+    if color_palette:
+        parts.append(f"Palette: {color_palette}")
+    if lighting:
+        parts.append(f"Lighting: {lighting}")
+    if camera_work:
+        parts.append(f"Camera: {camera_work}")
+    if mood_and_tone:
+        parts.append(f"Tone: {mood_and_tone}")
+    if audio_style:
+        parts.append(f"Audio style: {audio_style}")
+    if has_negative_style:
+        parts.append("Respect negative style constraints")
+    return _compact_join(parts, max_len=600)
+
+
+def _build_human_subject_label(role_row: dict[str, Any], story_core: dict[str, Any], scene_plan_row: dict[str, Any]) -> str:
+    hero = _safe_dict(_safe_dict(story_core.get("identity_lock")).get("hero"))
+    hero_name = str(hero.get("name") or "").strip()
+    if hero_name:
+        return hero_name
+
+    age_bracket = str(hero.get("age_bracket") or "").strip().lower()
+    gender = str(hero.get("gender_presentation") or "").strip().lower()
+    appearance = str(hero.get("appearance_notes") or "").strip()
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    setting = str(world_lock.get("setting") or world_lock.get("setting_description") or "").strip()
+
+    age_hint = "young" if "young" in age_bracket else ""
+    gender_hint = ""
+    if "female" in gender or "woman" in gender:
+        gender_hint = "woman"
+    elif "male" in gender or "man" in gender:
+        gender_hint = "man"
+    elif gender:
+        gender_hint = "person"
+
+    setting_token = ""
+    setting_lower = setting.lower()
+    for token in ["iranian", "persian", "arab", "european", "asian", "latin", "african"]:
+        if token in setting_lower:
+            setting_token = token
+            break
+
+    descriptor = " ".join([p for p in [age_hint, setting_token, gender_hint] if p]).strip()
+    if descriptor:
+        return f"a {descriptor}"
+
+    if appearance:
+        if "woman" in appearance.lower():
+            return "a woman"
+        if "man" in appearance.lower():
+            return "a man"
+        return "a protagonist with distinctive appearance"
+
+    primary_role = str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip()
+    if primary_role and primary_role != "character_1":
+        return primary_role
+
+    if gender_hint:
+        return f"{gender_hint} protagonist"
+    return "the protagonist"
+
+
 def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
@@ -119,9 +263,9 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
             "opening_anchor": str(story_core.get("opening_anchor") or "")[:600],
             "ending_callback_rule": str(story_core.get("ending_callback_rule") or "")[:600],
             "global_arc": str(story_core.get("global_arc") or "")[:600],
-            "identity_lock_summary": str(_safe_dict(story_core.get("identity_lock")).get("summary") or "")[:600],
-            "world_lock_summary": str(_safe_dict(story_core.get("world_lock")).get("summary") or "")[:600],
-            "style_lock_summary": str(_safe_dict(story_core.get("style_lock")).get("summary") or "")[:600],
+            "identity_lock_summary": _build_identity_lock_summary(story_core),
+            "world_lock_summary": _build_world_lock_summary(story_core),
+            "style_lock_summary": _build_style_lock_summary(story_core),
         },
         "audio_map": {
             "scene_windows": scene_windows,
@@ -228,7 +372,7 @@ def _build_fallback_scene_prompts(
     if route not in ALLOWED_ROUTES:
         route = "i2v"
 
-    primary_role = str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "character_1")
+    primary_role = _build_human_subject_label(role_row, story_core, scene_plan_row)
     scene_function = str(scene_plan_row.get("scene_function") or "scene beat")
     emotional = str(scene_plan_row.get("emotional_intent") or "grounded emotion")
     motion_intent = str(scene_plan_row.get("motion_intent") or "subtle motion")
