@@ -768,6 +768,7 @@ export function buildScenarioStageManualPayload({
   stageId = "",
   autoRun = false,
   storyboardPackage = {},
+  requestSource = "scenario_storyboard:manual_stage",
 } = {}) {
   const basePayload = buildScenarioDirectorRequestPayload(sourceState) || {};
   const source = sourceState && typeof sourceState === "object" ? sourceState : {};
@@ -816,7 +817,7 @@ export function buildScenarioStageManualPayload({
       ...(basePayload?.metadata && typeof basePayload.metadata === "object" ? basePayload.metadata : {}),
       ...(source?.metadata && typeof source.metadata === "object" ? source.metadata : {}),
       pipelineMode: "scenario_stage_v1",
-      requestSource: "scenario_storyboard:manual_stage",
+      requestSource: normalizeText(requestSource) || "scenario_storyboard:manual_stage",
       contentType: normalizeText(source?.contentType || target?.scenarioMode) || "music_video",
       format: normalizeText(source?.format || target?.format) || "9:16",
     },

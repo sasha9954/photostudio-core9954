@@ -304,8 +304,6 @@ export default function ScenarioStoryboardEditor({
   onUpdateMusic,
   onGenerateMusic,
   onExtractSceneAudio,
-  storyboardPackage = null,
-  onRunPipelineStage,
 }) {
   const [activeSelectionType, setActiveSelectionType] = useState("scene");
   const [activeSelectionId, setActiveSelectionId] = useState("");
@@ -317,7 +315,6 @@ export default function ScenarioStoryboardEditor({
   const [scenarioLightboxSceneId, setScenarioLightboxSceneId] = useState("");
   const [scenarioLightboxDownloading, setScenarioLightboxDownloading] = useState(false);
   const [scenarioLightboxDownloadError, setScenarioLightboxDownloadError] = useState("");
-  const [pipelineBusyStage, setPipelineBusyStage] = useState("");
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
   const phrasePlaybackRef = useRef({ sceneId: "", phraseIndex: -1, t0: 0, t1: 0 });
@@ -327,47 +324,6 @@ export default function ScenarioStoryboardEditor({
   const stopNodeDragEvent = (event) => event.stopPropagation();
 
   const safeScenes = Array.isArray(scenes) ? scenes : [];
-  const pipelineStageStatuses = useMemo(() => (
-    storyboardPackage && typeof storyboardPackage === "object" && storyboardPackage.stage_statuses && typeof storyboardPackage.stage_statuses === "object"
-      ? storyboardPackage.stage_statuses
-      : {}
-  ), [storyboardPackage]);
-  const pipelineStoryCore = useMemo(() => (
-    storyboardPackage && typeof storyboardPackage === "object" && storyboardPackage.story_core && typeof storyboardPackage.story_core === "object"
-      ? storyboardPackage.story_core
-      : {}
-  ), [storyboardPackage]);
-  const pipelineStages = [
-    { id: "story_core", label: "CORE" },
-    { id: "audio_map", label: "AUDIO" },
-    { id: "role_plan", label: "ROLES" },
-    { id: "scene_plan", label: "SCENES" },
-    { id: "scene_prompts", label: "PROMPTS" },
-    { id: "finalize", label: "FINAL" },
-  ];
-  const pipelineStageChips = pipelineStages.map((stage) => {
-    const stageMeta = pipelineStageStatuses?.[stage.id] && typeof pipelineStageStatuses[stage.id] === "object" ? pipelineStageStatuses[stage.id] : {};
-    const status = String(stageMeta?.status || "idle").trim().toLowerCase() || "idle";
-    const error = String(stageMeta?.error || stageMeta?.message || "").trim();
-    const colorByStatus = {
-      idle: "#94a3b8",
-      running: "#0ea5e9",
-      done: "#22c55e",
-      stale: "#f59e0b",
-      error: "#ef4444",
-    };
-    const statusColor = colorByStatus[status] || colorByStatus.idle;
-    return { ...stage, status, error, statusColor };
-  });
-  const runPipelineStage = async (stageId, autoRun = false) => {
-    if (typeof onRunPipelineStage !== "function") return;
-    setPipelineBusyStage(stageId || (autoRun ? "auto" : ""));
-    try {
-      await onRunPipelineStage(nodeId, { stageId, autoRun });
-    } finally {
-      setPipelineBusyStage("");
-    }
-  };
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
   const normalizedScenes = useMemo(
     () => safeScenes.map((scene, idx) => {
@@ -1004,7 +960,6 @@ export default function ScenarioStoryboardEditor({
     selectedSceneId,
     selectedSceneRuntime: selectedRuntime,
     audioData: safeAudioData,
-    storyboardPackage: storyboardPackage || {},
   }, null, 2);
   const scenarioRawJson = useMemo(() => (
     activeTab === "debug" ? formatRawForCopy() : ""
@@ -1148,10 +1103,6 @@ export default function ScenarioStoryboardEditor({
           onMouseDown={stopNodeDragEvent}
           onPointerDown={stopNodeDragEvent}
         >
-          <details style={{ marginBottom: 8 }}>
-            <summary className="clipSB_copySelectable nodrag nopan" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent}>Storyboard package</summary>
-            <pre className="clipSB_pre">{JSON.stringify(storyboardPackage || {}, null, 2)}</pre>
-          </details>
           <button
             className="clipSB_scenarioJsonCopyBtn nodrag nopan nowheel"
             type="button"
@@ -1210,29 +1161,6 @@ export default function ScenarioStoryboardEditor({
         {masterAudioUrl ? <audio key={masterAudioUrl} ref={masterAudioRef} src={masterAudioUrl} preload="metadata" style={{ display: "none" }} /> : null}
 
         <div className="clipSB_scenarioEditorTopTabs">
-          <div className="clipSB_scenarioEditorBtnRow" style={{ marginBottom: 8, flexWrap: "wrap" }}>
-            {pipelineStages.map((stage) => {
-              return (
-                <button key={stage.id} className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!!pipelineBusyStage} onClick={() => runPipelineStage(stage.id, false)}>
-                  {stage.label}
-                </button>
-              );
-            })}
-            <button className="clipSB_btn" type="button" disabled={!!pipelineBusyStage} onClick={() => runPipelineStage("", true)}>AUTO (placeholder)</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!!pipelineBusyStage} onClick={() => setActiveTab("debug")}>JSON</button>
-          </div>
-          <div className="clipSB_scenarioEditorBtnRow" style={{ marginBottom: 8, gap: 6, flexWrap: "wrap" }}>
-            {pipelineStageChips.map((stage) => (
-              <span
-                key={`${stage.id}-status`}
-                className="clipSB_tag clipSB_tagStatus"
-                title={stage.error || `${stage.label}: ${stage.status}`}
-                style={{ borderColor: stage.statusColor, color: stage.statusColor }}
-              >
-                {stage.label}:{stage.status}
-              </span>
-            ))}
-          </div>
           <div className="clipSB_scenarioEditorTabsRow">
             {TOP_TABS.map((tab) => (
               <button
@@ -1424,20 +1352,9 @@ export default function ScenarioStoryboardEditor({
             ) : !selectedScene ? (
               <div className="clipSB_scenarioEditorBlock">
                 <div className="clipSB_scenarioEditorBlockHead">
-                  <h4>STAGE OUTPUT</h4>
+                  <h4>SCENE OUTPUT</h4>
                 </div>
-                {String(pipelineStoryCore?.story_summary || "").trim() ? (
-                  <div className="clipSB_storyboardKv"><span>story_summary</span><strong>{String(pipelineStoryCore.story_summary || "").trim()}</strong></div>
-                ) : null}
-                {String(pipelineStoryCore?.opening_anchor || "").trim() ? (
-                  <div className="clipSB_storyboardKv"><span>opening_anchor</span><strong>{String(pipelineStoryCore.opening_anchor || "").trim()}</strong></div>
-                ) : null}
-                {String(pipelineStoryCore?.ending_callback_rule || "").trim() ? (
-                  <div className="clipSB_storyboardKv"><span>ending_callback_rule</span><strong>{String(pipelineStoryCore.ending_callback_rule || "").trim()}</strong></div>
-                ) : null}
-                {!String(pipelineStoryCore?.story_summary || "").trim() ? (
-                  <div className="clipSB_empty">Нет сцен и ещё нет story_core. Запусти CORE или AUTO.</div>
-                ) : null}
+                <div className="clipSB_empty">Нет выбранной сцены. Выберите сцену слева.</div>
               </div>
             ) : (
               <>
