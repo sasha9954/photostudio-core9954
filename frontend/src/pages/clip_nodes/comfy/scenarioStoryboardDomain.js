@@ -1491,13 +1491,23 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   const inputScenesFromFinalStoryboard = Array.isArray(storyboardOut?.final_storyboard?.scenes)
     ? storyboardOut.final_storyboard.scenes
     : [];
-  const inputSceneCandidates = inputScenesFromStoryboardOut.length
-    ? inputScenesFromStoryboardOut
-    : inputScenesFromFinalStoryboard;
-  const inputSceneCount = inputSceneCandidates.length;
-  const canonicalScenesRaw = Array.isArray(directorOutput?.scenes) && directorOutput.scenes.length
+  const inputScenesFromDirectorOutput = Array.isArray(directorOutput?.scenes)
     ? directorOutput.scenes
-    : (Array.isArray(storyboardOut?.scenes) ? storyboardOut.scenes : []);
+    : [];
+  const inputSceneCandidates = inputScenesFromDirectorOutput.length
+    ? inputScenesFromDirectorOutput
+    : inputScenesFromStoryboardOut.length
+      ? inputScenesFromStoryboardOut
+      : inputScenesFromFinalStoryboard;
+  const inputSceneCount = inputSceneCandidates.length;
+  const canonicalSceneSource = inputScenesFromDirectorOutput.length
+    ? "directorOutput.scenes"
+    : inputScenesFromStoryboardOut.length
+      ? "storyboardOut.scenes"
+      : inputScenesFromFinalStoryboard.length
+        ? "storyboardOut.final_storyboard.scenes"
+        : "empty";
+  const canonicalScenesRaw = inputSceneCandidates;
   const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
   const globalCameraProfile = buildGlobalCameraProfile(storyboardOut || {}, directorOutput || {});
   const format = resolveFormatAlias(
@@ -1615,7 +1625,7 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   const normalizedPackage = {
     canonicalSceneContract: scenes,
     sceneContractVersion: "v1",
-    sceneContractSource: Array.isArray(directorOutput?.scenes) && directorOutput.scenes.length ? "directorOutput.scenes" : "storyboardOut.scenes",
+    sceneContractSource: canonicalSceneSource,
     scenes,
     format,
     storySummaryRu: storySummary.ru,
@@ -1688,6 +1698,7 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   }
   const firstInputScene = Array.isArray(inputSceneCandidates) && inputSceneCandidates.length ? inputSceneCandidates[0] : null;
   console.debug("[SCENARIO NORMALIZE PACKAGE]", {
+    sceneContractSource: canonicalSceneSource,
     inputHasScenes: inputSceneCount > 0,
     inputSceneCount,
     outputSceneCount: Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0,

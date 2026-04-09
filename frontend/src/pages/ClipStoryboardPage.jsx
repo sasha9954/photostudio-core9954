@@ -15108,7 +15108,12 @@ onClipSec: (nodeId, value) => {
             ? directorOutput.storyboardPackage
             : (base?.data?.storyboardPackage && typeof base.data.storyboardPackage === "object" ? base.data.storyboardPackage : {});
           const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
-            storyboardOut: sourceStoryboardOut || storyboardPackage || base?.data?.storyboardOut || null,
+            storyboardOut:
+              sourceStoryboardOut
+              || storyboardPackage?.final_storyboard
+              || directorOutput?.storyboardPackage?.final_storyboard
+              || base?.data?.storyboardOut
+              || null,
             directorOutput,
           });
           const storyboardSceneCount = Array.isArray(normalizedStoryboardOut?.scenes) ? normalizedStoryboardOut.scenes.length : 0;
@@ -15226,15 +15231,58 @@ onClipSec: (nodeId, value) => {
                   const nextDirectorOutput = normalizedOutputs?.directorOutput && typeof normalizedOutputs.directorOutput === "object"
                     ? normalizedOutputs.directorOutput
                     : (nodeItem?.data?.directorOutput || {});
+                  const hasNormalizedStoryboardOut = !!(
+                    normalizedOutputs?.storyboardOut
+                    && typeof normalizedOutputs.storyboardOut === "object"
+                    && !Array.isArray(normalizedOutputs.storyboardOut)
+                  );
+                  const normalizedStoryboardOutSceneCount = Array.isArray(normalizedOutputs?.storyboardOut?.scenes)
+                    ? normalizedOutputs.storyboardOut.scenes.length
+                    : 0;
+                  const packageFinalStoryboard = nextStoryboardPackage?.final_storyboard
+                    && typeof nextStoryboardPackage.final_storyboard === "object"
+                    && !Array.isArray(nextStoryboardPackage.final_storyboard)
+                    ? nextStoryboardPackage.final_storyboard
+                    : null;
+                  const hasPackageFinalStoryboard = !!packageFinalStoryboard;
+                  const packageFinalStoryboardSceneCount = Array.isArray(packageFinalStoryboard?.scenes)
+                    ? packageFinalStoryboard.scenes.length
+                    : 0;
+                  const directorPackageFinalStoryboard = nextDirectorOutput?.storyboardPackage?.final_storyboard
+                    && typeof nextDirectorOutput.storyboardPackage.final_storyboard === "object"
+                    && !Array.isArray(nextDirectorOutput.storyboardPackage.final_storyboard)
+                    ? nextDirectorOutput.storyboardPackage.final_storyboard
+                    : null;
+                  const hasDirectorPackageFinalStoryboard = !!directorPackageFinalStoryboard;
+                  const directorPackageFinalStoryboardSceneCount = Array.isArray(directorPackageFinalStoryboard?.scenes)
+                    ? directorPackageFinalStoryboard.scenes.length
+                    : 0;
+                  const chosenSource = hasNormalizedStoryboardOut
+                    ? "normalized_storyboard_out"
+                    : hasPackageFinalStoryboard
+                      ? "package_final_storyboard"
+                      : hasDirectorPackageFinalStoryboard
+                        ? "director_package_final_storyboard"
+                        : "empty";
+                  const effectiveStoryboardOut = normalizedOutputs?.storyboardOut
+                    || packageFinalStoryboard
+                    || directorPackageFinalStoryboard
+                    || {};
+                  console.debug("[SCENARIO FINAL STORYBOARD SOURCE]", {
+                    hasNormalizedStoryboardOut,
+                    normalizedStoryboardOutSceneCount,
+                    hasPackageFinalStoryboard,
+                    packageFinalStoryboardSceneCount,
+                    hasDirectorPackageFinalStoryboard,
+                    directorPackageFinalStoryboardSceneCount,
+                    chosenSource,
+                  });
                   const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
-                    storyboardOut: normalizedOutputs?.storyboardOut || nextStoryboardPackage || {},
+                    storyboardOut: effectiveStoryboardOut,
                     directorOutput: nextDirectorOutput || {},
                   });
                   const storedStoryboardOutSceneCount = Array.isArray(normalizedStoryboardOut?.scenes)
                     ? normalizedStoryboardOut.scenes.length
-                    : 0;
-                  const packageFinalStoryboardSceneCount = Array.isArray(nextStoryboardPackage?.final_storyboard?.scenes)
-                    ? nextStoryboardPackage.final_storyboard.scenes.length
                     : 0;
                   console.debug("[PIPELINE DEBUG STORED STORYBOARD]", {
                     normalizedStoryboardOutSceneCount,
