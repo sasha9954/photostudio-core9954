@@ -18,11 +18,37 @@ DEFAULT_ASR_COMPUTE_TYPE = "int8"
 DEFAULT_ASR_DEVICE = "auto"
 
 
+def _format_exception_detail(exc: Exception) -> str:
+    exc_type = type(exc).__name__
+    exc_text = str(exc).strip()
+    return f"{exc_type}: {exc_text}" if exc_text else exc_type
+
+
+def faster_whisper_backend_self_check() -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        "backend": "faster_whisper",
+        "usable": False,
+        "reason": "",
+        "error_detail": "",
+    }
+    try:
+        import faster_whisper as faster_whisper_module  # type: ignore
+    except Exception as exc:
+        diagnostics["reason"] = "faster_whisper_import_failed"
+        diagnostics["error_detail"] = _format_exception_detail(exc)
+        return diagnostics
+
+    diagnostics["usable"] = True
+    diagnostics["module_path"] = str(getattr(faster_whisper_module, "__file__", "") or "")
+    return diagnostics
+
+
 def _base_alignment_diagnostics() -> dict[str, Any]:
     return {
         "attempted": False,
         "backend": "",
         "reason": "",
+        "error_detail": "",
         "transcript_hint_used": False,
         "transcript_hint_ignored": False,
         "provided_alignment_used": False,
@@ -98,8 +124,9 @@ def _whisper_word_alignment(audio_path: str, *, transcript_hint: str = "") -> tu
 
     try:
         from faster_whisper import WhisperModel  # type: ignore
-    except Exception:
+    except Exception as exc:
         diagnostics["reason"] = "faster_whisper_import_failed"
+        diagnostics["error_detail"] = _format_exception_detail(exc)
         return None, diagnostics
 
     # Keep defaults lightweight/safe for local/dev setups and allow explicit env overrides.
@@ -112,8 +139,9 @@ def _whisper_word_alignment(audio_path: str, *, transcript_hint: str = "") -> tu
 
     try:
         model = WhisperModel(model_name, device=device, compute_type=compute_type)
-    except Exception:
+    except Exception as exc:
         diagnostics["reason"] = "faster_whisper_model_init_failed"
+        diagnostics["error_detail"] = _format_exception_detail(exc)
         return None, diagnostics
 
     try:
@@ -125,8 +153,9 @@ def _whisper_word_alignment(audio_path: str, *, transcript_hint: str = "") -> tu
             best_of=1,
             initial_prompt=normalized_hint[:500] if normalized_hint else None,
         )
-    except Exception:
+    except Exception as exc:
         diagnostics["reason"] = "faster_whisper_transcribe_failed"
+        diagnostics["error_detail"] = _format_exception_detail(exc)
         return None, diagnostics
 
     words: list[dict[str, Any]] = []

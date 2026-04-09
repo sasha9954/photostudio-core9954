@@ -11,6 +11,7 @@ from app.api.router import api_router
 from app.db.sqlite import init_db
 from app.core.static_paths import STATIC_DIR, ASSETS_DIR, ensure_static_dirs
 from app.core.config import settings, is_localhost_url
+from app.engine.audio_transcript_aligner import faster_whisper_backend_self_check
 
 
 def _normalize_origin(value: str | None) -> str:
@@ -169,6 +170,7 @@ def engine_status():
     veo_model = getattr(cfg, "veo_model", None)
     veo_aspect_default = getattr(cfg, "veo_aspect_ratio", None)
     veo_duration_default = getattr(cfg, "veo_duration_sec", None)
+    asr_backend_status = faster_whisper_backend_self_check()
 
     return {
         "ok": True,
@@ -196,6 +198,9 @@ def engine_status():
         "veo_model": veo_model,
         "veo_aspect_default": veo_aspect_default,
         "veo_duration_default": veo_duration_default,
+        "asr_backends": {
+            "faster_whisper": asr_backend_status,
+        },
 
         "time": datetime.now(timezone.utc).isoformat(),
     }

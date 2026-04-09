@@ -13,6 +13,8 @@ uvicorn app.main:app --reload --port 8000
 Quick checks:
 - curl http://127.0.0.1:8000/engine/status
 - open http://127.0.0.1:8000/docs
+- backend ASR import check:
+  - `backend/.venv/bin/python -c "from app.engine.audio_transcript_aligner import faster_whisper_backend_self_check as c; print(c())"`
 
 ## Frontend
 cd frontend

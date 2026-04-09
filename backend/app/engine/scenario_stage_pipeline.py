@@ -1486,6 +1486,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_alignment_backend"] = ""
     diagnostics["audio_map_alignment_attempted"] = False
     diagnostics["audio_map_alignment_unavailable_reason"] = ""
+    diagnostics["audio_map_alignment_error_detail"] = ""
     diagnostics["transcript_available"] = False
     diagnostics["word_timestamp_count"] = 0
     diagnostics["phrase_unit_count"] = 0
@@ -1526,12 +1527,14 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["audio_map_alignment_backend"] = str(alignment_diag.get("backend") or "")
                 diagnostics["audio_map_alignment_attempted"] = bool(alignment_diag.get("attempted"))
                 diagnostics["audio_map_alignment_unavailable_reason"] = alignment_reason
+                diagnostics["audio_map_alignment_error_detail"] = str(alignment_diag.get("error_detail") or "")
                 if alignment:
                     aligned_map = _build_audio_map_from_real_alignment(duration_sec, story_core, raw_analysis, alignment)
                     if aligned_map and _is_usable_audio_map(aligned_map):
                         analysis_mode = "transcript_alignment_v2"
                         audio_map = aligned_map
                         diagnostics["audio_map_alignment_unavailable_reason"] = ""
+                        diagnostics["audio_map_alignment_error_detail"] = ""
                         _append_diag_event(package, "audio_map transcript alignment resolved", stage_id="audio_map")
                     else:
                         diagnostics["audio_map_alignment_unavailable_reason"] = "aligned_audio_map_unusable"
@@ -1630,6 +1633,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_alignment_backend"] = str(diagnostics.get("audio_map_alignment_backend") or "")
     diagnostics["audio_map_alignment_attempted"] = bool(diagnostics.get("audio_map_alignment_attempted"))
     diagnostics["audio_map_alignment_unavailable_reason"] = str(diagnostics.get("audio_map_alignment_unavailable_reason") or "")
+    diagnostics["audio_map_alignment_error_detail"] = str(diagnostics.get("audio_map_alignment_error_detail") or "")
     package["diagnostics"] = diagnostics
     package["audio_map"] = audio_map
     _append_diag_event(package, "audio_map generated", stage_id="audio_map")
