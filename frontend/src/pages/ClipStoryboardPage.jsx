@@ -1280,6 +1280,14 @@ function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
       status: normalizeStoryboardGenerationStatus(prevValue.status),
       imageStatus: String(prevValue.imageStatus || ""),
       imageError: String(prevValue.imageError || ""),
+      lastRejectedImageUrl: String(prevValue.lastRejectedImageUrl || ""),
+      lastRejectedReason: String(prevValue.lastRejectedReason || ""),
+      lastRejectedAt: String(prevValue.lastRejectedAt || ""),
+      lastApiEngine: String(prevValue.lastApiEngine || ""),
+      lastApiHint: String(prevValue.lastApiHint || ""),
+      lastApiDegradeReason: String(prevValue.lastApiDegradeReason || ""),
+      lastApiResultStatus: String(prevValue.lastApiResultStatus || ""),
+      lastApiImageUrlPresent: prevValue.lastApiImageUrlPresent === true,
       startFrameStatus: String(prevValue.startFrameStatus || ""),
       startFrameError: String(prevValue.startFrameError || ""),
       endFrameStatus: String(prevValue.endFrameStatus || ""),
@@ -10795,18 +10803,46 @@ Aspect ratio: ${imageFormat}`,
           refs: refsForImageRequest,
         },
       });
+      const responseSceneId = String(out?.sceneId || "").trim();
+      const generatedImageUrl = String(out?.imageUrl || "").trim();
+      const resultStatus = String(out?.resultStatus || "").trim();
+      const responseEngine = String(out?.engine || "").trim();
+      const responseHint = String(out?.hint || "").trim();
+      const responseDegradeReason = String(out?.degradeReason || "").trim();
+      const responseDegraded = Boolean(
+        out?.degraded
+        || resultStatus.toLowerCase() === "degraded"
+        || responseEngine.toLowerCase() === "mock"
+      );
+      const scenarioImageApiResultLog = {
+        requestedSceneId: sceneId,
+        responseSceneId: responseSceneId || sceneId,
+        ok: Boolean(out?.ok),
+        engine: responseEngine,
+        imageUrl: generatedImageUrl,
+        resultStatus,
+        degraded: responseDegraded,
+        degradeReason: responseDegradeReason,
+        hint: responseHint,
+        slot: normalizedSlot,
+      };
+      if (out?.ok) {
+        console.debug("[SCENARIO IMAGE API RESULT]", scenarioImageApiResultLog);
+      } else {
+        console.warn("[SCENARIO IMAGE API RESULT]", scenarioImageApiResultLog);
+      }
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
         console.debug("[SCENARIO IMAGE RESPONSE RECEIVED]", {
           requestedSceneId: sceneId,
           responseOk: Boolean(out?.ok),
-          responseSceneId: String(out?.sceneId || "").trim(),
-          hasImageUrl: !!String(out?.imageUrl || "").trim(),
-          resultStatus: String(out?.resultStatus || "").trim(),
-          degraded: Boolean(out?.degraded || String(out?.engine || "").trim().toLowerCase() === "mock"),
+          responseSceneId,
+          hasImageUrl: !!generatedImageUrl,
+          resultStatus,
+          degraded: responseDegraded,
           slot: normalizedSlot,
         });
       }
-      if (!out?.ok || !out?.imageUrl) {
+      if (!out?.ok || !generatedImageUrl) {
         const responseError = new Error(String(out?.hint || out?.message || out?.code || "image_generation_failed"));
         responseError.code = String(out?.code || "").trim();
         responseError.hint = String(out?.hint || "").trim();
@@ -10815,14 +10851,8 @@ Aspect ratio: ${imageFormat}`,
         throw responseError;
       }
 
-      const generatedImageUrl = String(out?.imageUrl || "");
-      const imageDegraded = Boolean(
-        out?.degraded
-        || String(out?.resultStatus || "").trim().toLowerCase() === "degraded"
-        || String(out?.engine || "").trim().toLowerCase() === "mock"
-      );
+      const imageDegraded = responseDegraded;
       const imageDegradeReason = String(out?.degradeReason || out?.hint || "").trim();
-      const responseSceneId = String(out?.sceneId || "").trim();
       const liveBinding = resolveScenarioLiveBinding(sceneId, { nodeId: targetNodeId });
       const liveSceneStableSignature = String(buildScenarioSceneStableSignature(liveBinding?.scene || {}) || "").trim();
       const reasonIgnored = [];
@@ -10840,6 +10870,23 @@ Aspect ratio: ${imageFormat}`,
         reasonIgnored.push("scene_signature_mismatch");
       }
       const applyAccepted = reasonIgnored.length === 0;
+      const applyCheckLog = {
+        requestedSceneId: sceneId,
+        responseSceneId: responseSceneId || sceneId,
+        applyAccepted,
+        reasonIgnored: reasonIgnored.join("|") || "",
+        requestStoryboardRevision,
+        liveStoryboardRevision: String(liveBinding?.storyboardRevision || "").trim(),
+        requestSceneSignature: String(requestSceneSignature || "").trim(),
+        liveSceneSignature: String(liveBinding?.sceneSignature || "").trim(),
+        imageUrl: generatedImageUrl,
+        slot: normalizedSlot,
+      };
+      if (applyAccepted) {
+        console.debug("[SCENARIO IMAGE APPLY CHECK]", applyCheckLog);
+      } else {
+        console.warn("[SCENARIO IMAGE APPLY CHECK]", applyCheckLog);
+      }
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
         console.debug("[SCENARIO IMAGE RESPONSE APPLY]", {
           requestedSceneId: sceneId,
@@ -10879,12 +10926,23 @@ Aspect ratio: ${imageFormat}`,
         }
       }
       if (!applyAccepted) {
+        const rejectedReason = reasonIgnored.join("|") || "apply_rejected";
         const runtimeResetPatch = normalizedSlot === "start"
           ? { startFrameStatus: "idle", startFrameError: "" }
           : normalizedSlot === "end"
             ? { endFrameStatus: "idle", endFrameError: "" }
             : { imageStatus: "idle", imageError: "" };
-        updateScenarioSceneGenerationRuntime(sceneId, runtimeResetPatch, { nodeId: targetNodeId });
+        updateScenarioSceneGenerationRuntime(sceneId, {
+          ...runtimeResetPatch,
+          lastRejectedImageUrl: generatedImageUrl,
+          lastRejectedReason: rejectedReason,
+          lastRejectedAt: new Date().toISOString(),
+          lastApiEngine: responseEngine,
+          lastApiHint: responseHint,
+          lastApiDegradeReason: responseDegradeReason,
+          lastApiResultStatus: resultStatus,
+          lastApiImageUrlPresent: Boolean(generatedImageUrl),
+        }, { nodeId: targetNodeId });
         if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
           const selectedPreviewSources = resolveScenarioScenePreviewSources(scenarioSelected, scenarioPreviousScene);
           console.debug("[SCENARIO IMAGE E2E TRACE]", {
@@ -10970,6 +11028,16 @@ Aspect ratio: ${imageFormat}`,
         };
       }
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        lastRejectedImageUrl: "",
+        lastRejectedReason: "",
+        lastRejectedAt: "",
+        lastApiEngine: responseEngine,
+        lastApiHint: responseHint,
+        lastApiDegradeReason: responseDegradeReason,
+        lastApiResultStatus: resultStatus,
+        lastApiImageUrlPresent: Boolean(generatedImageUrl),
+      }, { nodeId: targetNodeId });
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
         console.debug("[SCENARIO IMAGE SCENE PATCHED]", {
           sceneId,
@@ -14811,9 +14879,9 @@ onClipSec: (nodeId, value) => {
                   const currentMap = nodeItem?.data?.sceneGeneration && typeof nodeItem.data.sceneGeneration === "object" ? nodeItem.data.sceneGeneration : {};
                   const currentRuntime = currentMap[resolvedSceneId] && typeof currentMap[resolvedSceneId] === "object" ? currentMap[resolvedSceneId] : {};
                   const runtimePatch = {
-                    image: { imageStatus: "loading", imageError: "" },
-                    start_frame: { startFrameStatus: "loading", startFrameError: "" },
-                    end_frame: { endFrameStatus: "loading", endFrameError: "" },
+                    image: { imageStatus: "loading", imageError: "", lastRejectedImageUrl: "", lastRejectedReason: "", lastRejectedAt: "" },
+                    start_frame: { startFrameStatus: "loading", startFrameError: "", lastRejectedImageUrl: "", lastRejectedReason: "", lastRejectedAt: "" },
+                    end_frame: { endFrameStatus: "loading", endFrameError: "", lastRejectedImageUrl: "", lastRejectedReason: "", lastRejectedAt: "" },
                     video: { videoStatus: "loading", videoError: "" },
                     scene: { videoStatus: "loading", videoError: "" },
                   };

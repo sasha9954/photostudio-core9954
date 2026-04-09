@@ -4606,8 +4606,19 @@ def _mock_scene_image(scene_id: str, width: int, height: int) -> str:
     text = f"MOCK\n{scene_id or 'scene'}"
     draw.multiline_text((32, 32), text, fill=(230, 235, 245), spacing=8)
     filename = f"clip_scene_mock_{uuid4().hex}.png"
-    img.save(os.path.join(str(ASSETS_DIR), filename), format="PNG")
-    return _asset_url(filename)
+    absolute_path = os.path.join(str(ASSETS_DIR), filename)
+    img.save(absolute_path, format="PNG")
+    image_url = _asset_url(filename)
+    exists_on_disk = os.path.isfile(absolute_path)
+    logger.info(
+        "[SCENARIO MOCK IMAGE SAVED] sceneId=%s filename=%s absolutePath=%s existsOnDisk=%s imageUrl=%s",
+        scene_id,
+        filename,
+        absolute_path,
+        exists_on_disk,
+        image_url,
+    )
+    return image_url
 
 
 def _decode_gemini_image(resp: dict) -> tuple[bytes, str] | None:
@@ -12262,6 +12273,16 @@ def clip_image(payload: ClipImageIn):
         if decoded:
             raw, ext = decoded
             image_url = _save_bytes_as_asset(raw, ext)
+            logger.info(
+                "[SCENARIO IMAGE RESULT] sceneId=%s engine=gemini imageUrl=%s modelUsed=%s generationMode=%s httpStatus=%s imagePartCount=%s decodedImageFound=%s",
+                scene_id,
+                image_url,
+                model,
+                generation_mode,
+                response_summary.get("status"),
+                response_summary.get("imagePartCount"),
+                True,
+            )
             return {
                 "ok": True,
                 "sceneId": scene_id,
@@ -12277,6 +12298,19 @@ def clip_image(payload: ClipImageIn):
         print("[CLIP IMAGE GEMINI] fallback chosen=" + json.dumps({"reason": fallback_reason, "sceneId": scene_id}, ensure_ascii=False))
         print("[CLIP IMAGE GEMINI] fallback debug=" + json.dumps(fallback_debug, ensure_ascii=False))
         image_url = _mock_scene_image(scene_id, width, height)
+        logger.warning(
+            "[SCENARIO IMAGE RESULT] sceneId=%s engine=mock imageUrl=%s hint=%s degradeReason=%s modelUsed=%s generationMode=%s httpStatus=%s httpError=%s imagePartCount=%s decodedImageFound=%s",
+            scene_id,
+            image_url,
+            "gemini_no_image",
+            fallback_reason,
+            model,
+            generation_mode,
+            response_summary.get("status"),
+            bool(response_summary.get("httpError")),
+            response_summary.get("imagePartCount"),
+            False,
+        )
         return {
             "ok": True,
             "sceneId": scene_id,
@@ -12295,8 +12329,28 @@ def clip_image(payload: ClipImageIn):
     except ValueError as e:
         return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": str(e)[:300]})
     except Exception as e:
+        logger.exception(
+            "[SCENARIO IMAGE EXCEPTION] sceneId=%s error=%s modelUsed=%s generationMode=%s",
+            scene_id,
+            str(e)[:500],
+            model if 'model' in locals() else None,
+            generation_mode if 'generation_mode' in locals() else "baseline_only",
+        )
         try:
             image_url = _mock_scene_image(scene_id, width, height)
+            logger.warning(
+                "[SCENARIO IMAGE RESULT] sceneId=%s engine=mock imageUrl=%s hint=%s degradeReason=%s modelUsed=%s generationMode=%s httpStatus=%s httpError=%s imagePartCount=%s decodedImageFound=%s",
+                scene_id,
+                image_url,
+                f"gemini_error:{str(e)[:200]}",
+                "gemini_error",
+                model if 'model' in locals() else None,
+                generation_mode if 'generation_mode' in locals() else "baseline_only",
+                None,
+                True,
+                None,
+                False,
+            )
             return {
                 "ok": True,
                 "sceneId": scene_id,

@@ -759,6 +759,18 @@ export default function ScenarioStoryboardEditor({
     assetUrl: selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
   });
   const imageErrorText = String(selectedScene?.imageError || selectedRuntime?.imageError || "").trim();
+  const imageDebugEngine = String(selectedRuntime?.lastApiEngine || selectedScene?.imageEngine || "").trim();
+  const imageDebugDegradeReason = String(
+    selectedScene?.imageDegradeReason
+    || selectedRuntime?.lastApiDegradeReason
+    || ""
+  ).trim();
+  const imageDebugHint = String(selectedScene?.imageHint || selectedRuntime?.lastApiHint || "").trim();
+  const imageDebugApplyRejectedReason = String(selectedRuntime?.lastRejectedReason || "").trim();
+  const imageDebugUrlPresent = Boolean(
+    String(selectedScene?.imageUrl || "").trim()
+    || String(selectedRuntime?.lastRejectedImageUrl || "").trim()
+  );
   const startFrameErrorText = String(selectedScene?.startFrameError || selectedRuntime?.startFrameError || selectedRuntime?.imageError || "").trim();
   const endFrameErrorText = String(selectedScene?.endFrameError || selectedRuntime?.endFrameError || selectedRuntime?.imageError || "").trim();
   const videoStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.videoStatus || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
@@ -1440,6 +1452,16 @@ export default function ScenarioStoryboardEditor({
                               Ошибка генерации изображения: {imageErrorText}
                             </div>
                           ) : null}
+                          <div className="clipSB_hint" style={{ marginTop: 8, opacity: 0.85 }}>
+                            <div><strong>Scenario image debug:</strong></div>
+                            <div>engine: {imageDebugEngine || "unknown"}</div>
+                            <div>degradeReason: {imageDebugDegradeReason || "none"}</div>
+                            <div>hint: {imageDebugHint || "none"}</div>
+                            <div>imageUrl: {imageDebugUrlPresent ? "present" : "absent"}</div>
+                            {imageDebugApplyRejectedReason ? (
+                              <div>applyRejectedReason: {imageDebugApplyRejectedReason}</div>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                     </>
