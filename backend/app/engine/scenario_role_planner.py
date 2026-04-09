@@ -280,6 +280,82 @@ def _extract_country_or_region(*parts: str) -> str:
     return ""
 
 
+def _build_world_lock_text(story_core: dict[str, Any]) -> str:
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    key_locations = [
+        str(item).strip()
+        for item in _safe_list(world_lock.get("key_locations"))
+        if str(item).strip()
+    ]
+    parts = [
+        world_lock.get("setting"),
+        world_lock.get("rules"),
+        world_lock.get("setting_description"),
+        world_lock.get("socio_cultural_context"),
+        world_lock.get("rule"),
+        world_lock.get("summary"),
+        " ".join(key_locations),
+    ]
+    return " ".join(str(part).strip() for part in parts if str(part).strip())
+
+
+def _build_style_anchor_text(story_core: dict[str, Any]) -> str:
+    style_lock = _safe_dict(story_core.get("style_lock"))
+    visual_style_tags = [
+        str(item).strip()
+        for item in _safe_list(style_lock.get("visual_style_tags"))
+        if str(item).strip()
+    ]
+    core_parts = [
+        style_lock.get("visual_mood"),
+        ", ".join(visual_style_tags),
+        style_lock.get("mood_and_tone"),
+        style_lock.get("summary"),
+        style_lock.get("rule"),
+    ]
+    secondary_parts = [
+        style_lock.get("audio_style"),
+        style_lock.get("audio_mood"),
+    ]
+    negative_tags = [
+        str(item).strip()
+        for item in _safe_list(style_lock.get("negative_style_tags"))
+        if str(item).strip()
+    ]
+    negative_prompts = str(style_lock.get("negative_prompts") or "").strip()
+    parts: list[str] = [str(part).strip() for part in core_parts if str(part).strip()]
+    parts.extend(str(part).strip() for part in secondary_parts if str(part).strip())
+    if negative_tags:
+        parts.append(f"avoid: {', '.join(negative_tags[:4])}")
+    elif negative_prompts:
+        parts.append(f"avoid: {negative_prompts[:120]}")
+    return " | ".join(parts)
+
+
+def _extract_world_lock_key_locations(story_core: dict[str, Any]) -> list[str]:
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    return [
+        str(item).strip()
+        for item in _safe_list(world_lock.get("key_locations"))
+        if str(item).strip()
+    ]
+
+
+def _infer_time_of_day_base(*parts: str) -> str:
+    merged = " ".join(str(part or "") for part in parts).lower()
+    if "dusk" in merged or "evening" in merged:
+        return "dusk"
+    if "night" in merged:
+        return "night"
+    if "morning" in merged:
+        return "morning"
+    if "afternoon" in merged:
+        return "afternoon"
+    if "daylight" in merged or re.search(r"\bday\b", merged):
+        return "day"
+    return "late afternoon"
+
+
 def _infer_environment_family(story_summary: str, country_or_region: str) -> str:
     story = str(story_summary or "").lower()
     if country_or_region == "Iran":
@@ -291,19 +367,25 @@ def _infer_environment_family(story_summary: str, country_or_region: str) -> str
 
 def _normalize_world_continuity(raw_world: Any, *, input_pkg: dict[str, Any], story_core: dict[str, Any], has_world_refs: bool) -> dict[str, Any]:
     row = _safe_dict(raw_world)
+    world_lock_text = _build_world_lock_text(story_core)
+    style_anchor_fallback = _build_style_anchor_text(story_core)
+    key_locations_fallback = _extract_world_lock_key_locations(story_core)
 
     fallback_country = _extract_country_or_region(
         input_pkg.get("note"),
         input_pkg.get("story_text"),
         input_pkg.get("director_note"),
         story_core.get("story_summary"),
-        _safe_dict(story_core.get("world_lock")).get("rule"),
+        world_lock_text,
     )
-    style_lock_summary = str(
-        _safe_dict(story_core.get("style_lock")).get("summary")
-        or _safe_dict(story_core.get("style_lock")).get("rule")
-        or ""
-    ).strip()
+    inferred_time_of_day = _infer_time_of_day_base(
+        input_pkg.get("note"),
+        input_pkg.get("story_text"),
+        input_pkg.get("director_note"),
+        story_core.get("story_summary"),
+        world_lock_text,
+        style_anchor_fallback,
+    )
 
     mode_raw = str(row.get("world_anchor_mode") or "").strip().lower()
     world_anchor_mode = "ref_locked" if has_world_refs else "inferred"
@@ -312,7 +394,7 @@ def _normalize_world_continuity(raw_world: Any, *, input_pkg: dict[str, Any], st
 
     lighting = _safe_dict(row.get("lighting_continuity"))
     lighting_normalized = {
-        "time_of_day_base": str(lighting.get("time_of_day_base") or "").strip() or "late afternoon",
+        "time_of_day_base": str(lighting.get("time_of_day_base") or "").strip() or inferred_time_of_day,
         "allowed_progression": str(lighting.get("allowed_progression") or "").strip() or "local realistic progression",
         "forbidden_shifts": [str(item).strip() for item in _safe_list(lighting.get("forbidden_shifts")) if str(item).strip()],
     }
@@ -329,15 +411,21 @@ def _normalize_world_continuity(raw_world: Any, *, input_pkg: dict[str, Any], st
         "environment_family": str(row.get("environment_family") or "").strip()
         or _infer_environment_family(story_core.get("story_summary") or "", fallback_country),
         "location_progression": [str(item).strip() for item in _safe_list(row.get("location_progression")) if str(item).strip()],
-        "style_anchor": str(row.get("style_anchor") or "").strip() or style_lock_summary,
+        "style_anchor": str(row.get("style_anchor") or "").strip() or style_anchor_fallback,
         "realism_contract": str(row.get("realism_contract") or "").strip()
         or "Always grounded and realistic continuity. No cross-country or cross-style drift.",
         "lighting_continuity": lighting_normalized,
         "continuity_rules": [str(item).strip() for item in _safe_list(row.get("continuity_rules")) if str(item).strip()],
     }
 
+    if not normalized["style_anchor"]:
+        normalized["style_anchor"] = "naturalistic observational realism, restrained tone"
+
     if not normalized["location_progression"]:
-        normalized["location_progression"] = ["establishing street", "adjacent passage", "nearby interior"]
+        if len(key_locations_fallback) >= 2:
+            normalized["location_progression"] = key_locations_fallback[:6]
+        else:
+            normalized["location_progression"] = ["establishing street", "adjacent passage", "nearby interior"]
 
     if not normalized["continuity_rules"]:
         normalized["continuity_rules"] = [
