@@ -90,6 +90,18 @@ export default function ScenarioPipelineDebugEditor({
   const alignmentAttempted = Boolean(allDiagnostics?.audio_map_alignment_attempted ?? false);
   const alignmentUnavailableReason = String(allDiagnostics?.audio_map_alignment_unavailable_reason || "—");
 
+  const rolePlanSceneRoles = Array.isArray(rolePlan?.scene_roles) ? rolePlan.scene_roles : [];
+  const worldContinuity = rolePlan?.world_continuity || null;
+  const presenceModeDistribution = rolePlanSceneRoles.reduce((acc, row) => {
+    const key = String(row?.scene_presence_mode || "unspecified").trim() || "unspecified";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const performanceFocusDistribution = rolePlanSceneRoles.reduce((acc, row) => {
+    const key = row?.performance_focus ? "true" : "false";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
   const contentByTab = {
     story_core: (
       <div>
@@ -138,12 +150,18 @@ export default function ScenarioPipelineDebugEditor({
     role_plan: Object.keys(rolePlan || {}).length ? (
       <div>
         <div className="clipSB_storyboardKv"><span>global_roles</span><strong>{Object.keys(rolePlan?.global_roles || {}).length ? "present" : "—"}</strong></div>
-        <div className="clipSB_storyboardKv"><span>scene_roles</span><strong>{Array.isArray(rolePlan?.scene_roles) ? rolePlan.scene_roles.length : 0}</strong></div>
+        <div className="clipSB_storyboardKv"><span>world_continuity</span><strong>{worldContinuity ? "present" : "empty"}</strong></div>
+        <div className="clipSB_storyboardKv"><span>scene_roles</span><strong>{rolePlanSceneRoles.length}</strong></div>
+        <div className="clipSB_storyboardKv"><span>presence_mode_distribution</span><strong>{Object.keys(presenceModeDistribution).length ? toJson(presenceModeDistribution) : "{}"}</strong></div>
+        <div className="clipSB_storyboardKv"><span>performance_focus_distribution</span><strong>{Object.keys(performanceFocusDistribution).length ? toJson(performanceFocusDistribution) : "{}"}</strong></div>
         <div className="clipSB_storyboardKv"><span>role_arc_summary</span><strong>{String(rolePlan?.role_arc_summary || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>continuity_notes</span><strong>{Array.isArray(rolePlan?.continuity_notes) ? rolePlan.continuity_notes.length : 0}</strong></div>
         <pre className="clipSB_pre">{toJson({
           global_roles: rolePlan?.global_roles || {},
-          scene_roles: rolePlan?.scene_roles || [],
+          world_continuity: worldContinuity,
+          scene_presence_mode_distribution: presenceModeDistribution,
+          performance_focus_distribution: performanceFocusDistribution,
+          scene_roles: rolePlanSceneRoles,
           role_arc_summary: rolePlan?.role_arc_summary || "",
           continuity_notes: rolePlan?.continuity_notes || [],
         })}</pre>

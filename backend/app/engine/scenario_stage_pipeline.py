@@ -1728,6 +1728,11 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_present_roles"] = []
     diagnostics["role_plan_character_roles_count"] = 0
     diagnostics["role_plan_world_roles_count"] = 0
+    diagnostics["role_plan_world_anchor_mode"] = ""
+    diagnostics["role_plan_country_or_region"] = ""
+    diagnostics["role_plan_presence_modes"] = []
+    diagnostics["role_plan_presence_flat"] = False
+    diagnostics["role_plan_performance_focus_flat"] = False
     diagnostics["role_plan_skipped"] = False
     diagnostics["role_plan_skip_reason"] = ""
     diagnostics["role_plan_empty"] = False
@@ -1760,6 +1765,11 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_present_roles"] = _safe_list(role_diag.get("present_roles"))
     diagnostics["role_plan_character_roles_count"] = int(role_diag.get("character_roles_count") or 0)
     diagnostics["role_plan_world_roles_count"] = int(role_diag.get("world_roles_count") or 0)
+    diagnostics["role_plan_world_anchor_mode"] = str(role_diag.get("role_plan_world_anchor_mode") or "")
+    diagnostics["role_plan_country_or_region"] = str(role_diag.get("role_plan_country_or_region") or "")
+    diagnostics["role_plan_presence_modes"] = _safe_list(role_diag.get("role_plan_presence_modes"))
+    diagnostics["role_plan_presence_flat"] = bool(role_diag.get("role_plan_presence_flat"))
+    diagnostics["role_plan_performance_focus_flat"] = bool(role_diag.get("role_plan_performance_focus_flat"))
     diagnostics["role_plan_error"] = str(result.get("error") or "")
     diagnostics["role_plan_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["validation_error"] = str(result.get("validation_error") or "")
@@ -1770,6 +1780,10 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     if role_plan and _safe_list(role_plan.get("scene_roles")):
         _append_diag_event(package, "role_plan generated", stage_id="role_plan")
+        if diagnostics.get("role_plan_presence_flat"):
+            _append_diag_event(package, "role_plan_presence_flat warning", stage_id="role_plan")
+        if diagnostics.get("role_plan_performance_focus_flat"):
+            _append_diag_event(package, "role_plan_performance_focus_flat warning", stage_id="role_plan")
     else:
         _append_diag_event(package, "role_plan empty", stage_id="role_plan")
     return package

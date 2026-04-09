@@ -1,17 +1,44 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
 
-ROLE_PLAN_PROMPT_VERSION = "role_plan_v1"
+ROLE_PLAN_PROMPT_VERSION = "role_plan_v2"
 
 _BASE_ROLES = ["character_1", "character_2", "character_3", "location", "props", "style"]
 ALLOWED_SCENE_ROLES = set(_BASE_ROLES)
 _CHARACTER_ROLES = ["character_1", "character_2", "character_3"]
 _WORLD_ROLES = ["location", "style"]
 _PROP_ROLES = ["props"]
+
+ALLOWED_SCENE_PRESENCE_MODES = {
+    "solo_performance",
+    "solo_observational",
+    "environment_anchor",
+    "transit",
+    "private_release",
+}
+
+_COUNTRY_HINTS = {
+    "iran": "Iran",
+    "iranian": "Iran",
+    "иран": "Iran",
+    "tehran": "Iran",
+    "usa": "USA",
+    "united states": "USA",
+    "america": "USA",
+    "new york": "USA",
+    "uk": "United Kingdom",
+    "england": "United Kingdom",
+    "london": "United Kingdom",
+    "france": "France",
+    "paris": "France",
+    "japan": "Japan",
+    "tokyo": "Japan",
+}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -184,6 +211,9 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
         "present_roles": roles_inventory.get("present_roles") or [],
         "character_roles_present": character_roles_present,
         "world_roles_present": world_roles_present,
+        "input_pkg": input_pkg,
+        "story_core": story_core,
+        "roles_inventory": roles_inventory,
     }
     return compact_context, aux
 
@@ -201,14 +231,36 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "location is a world anchor, not necessarily scene subject.\n"
         "props should appear only where useful.\n"
         "style is global style anchor, not a scene object.\n"
-        "No scene prompts, no camera routes, no i2v/ia2v assignment.\n"
-        "Keep choices watchable, emotionally coherent, clip-friendly.\n\n"
+        "No scene prompts, no camera routes, no i2v/ia2v assignment.\n\n"
+        "CLIP WATCHABILITY (MANDATORY):\n"
+        "- This is clip mode; scenes must feel watchable, rhythm-aware, emotionally coherent.\n"
+        "- Avoid making all scenes functionally identical.\n\n"
+        "ROLE VARIETY (MANDATORY):\n"
+        "- scene_presence_mode must be one of: solo_performance, solo_observational, environment_anchor, transit, private_release.\n"
+        "- Even with one hero, vary scene_presence_mode across scenes when feasible.\n"
+        "- Do NOT mark every scene as performer-centered.\n"
+        "- performance_focus=true only for genuinely performer-driven scenes.\n"
+        "- For clip pacing target about 2-4 performance_focus=true scenes when scene count allows; avoid flat distribution.\n\n"
+        "WORLD CONTINUITY (MANDATORY):\n"
+        "- Maintain one coherent world across all scenes.\n"
+        "- If location/style refs exist, lock to them: world_anchor_mode=ref_locked.\n"
+        "- location ref defines geographic/architectural/environmental anchor.\n"
+        "- style ref defines visual/tonal/aesthetic anchor.\n"
+        "- Both anchors must remain stable across scenes; variation only inside same world/style family.\n"
+        "- If no location ref is provided, infer one coherent realistic world anchor from note/story/story_core and keep all scenes inside that same country/city/environment logic.\n"
+        "- Allow only natural local progression inside the same world (street -> alley -> courtyard -> apartment), not random cross-country or cross-style jumps.\n"
+        "- If no explicit time-of-day is given, choose a baseline in scene 1 and keep believable lighting progression.\n\n"
+        "REALISM (MANDATORY):\n"
+        "- Always stay realistic and grounded by default.\n"
+        "- No fantasy, no surreal jumps, no cross-country drift, no random aesthetic teleportation.\n"
+        "- Lighting continuity must be plausible; no unmotivated day/night/style teleports.\n\n"
         "Return EXACT contract keys:\n"
         "{\n"
-        '  "plan_version": "role_plan_v1",\n'
+        '  "plan_version": "role_plan_v2",\n'
         '  "mode": "clip",\n'
         '  "global_roles": {"primary_character_roles": [], "support_character_roles": [], "world_roles": [], "prop_roles": []},\n'
-        '  "scene_roles": [{"scene_id": "sc_1", "t0": 0.0, "t1": 1.0, "primary_role": "character_1", "secondary_roles": [], "active_roles": ["character_1", "location", "style"], "inactive_roles": ["character_2", "character_3", "props"], "character_presence": "solo", "performance_focus": true, "role_reason": ""}],\n'
+        '  "world_continuity": {"world_anchor_mode": "inferred", "country_or_region": "", "environment_family": "", "location_progression": [], "style_anchor": "", "realism_contract": "", "lighting_continuity": {"time_of_day_base": "", "allowed_progression": "", "forbidden_shifts": []}, "continuity_rules": []},\n'
+        '  "scene_roles": [{"scene_id": "sc_1", "t0": 0.0, "t1": 1.0, "primary_role": "character_1", "secondary_roles": [], "active_roles": ["character_1", "location", "style"], "inactive_roles": ["character_2", "character_3", "props"], "character_presence": "solo", "scene_presence_mode": "solo_observational", "performance_focus": false, "role_reason": ""}],\n'
         '  "role_arc_summary": "",\n'
         '  "continuity_notes": [""]\n'
         "}\n\n"
@@ -220,9 +272,105 @@ def _normalize_role_list(values: Any, allowed_roles: set[str]) -> list[str]:
     return list(dict.fromkeys([role for role in [str(item).strip() for item in _safe_list(values)] if role in allowed_roles]))
 
 
-def _default_scene_role_row(scene_window: dict[str, Any], *, hero_role: str, world_anchors: list[str], all_roles: list[str]) -> dict[str, Any]:
+def _extract_country_or_region(*parts: str) -> str:
+    merged = " ".join(str(part or "") for part in parts).lower()
+    for hint, country in _COUNTRY_HINTS.items():
+        if re.search(rf"\b{re.escape(hint)}\b", merged):
+            return country
+    return ""
+
+
+def _infer_environment_family(story_summary: str, country_or_region: str) -> str:
+    story = str(story_summary or "").lower()
+    if country_or_region == "Iran":
+        return "realistic contemporary Iranian urban life"
+    if "urban" in story or "street" in story:
+        return "grounded contemporary urban environment"
+    return "grounded realistic world"
+
+
+def _normalize_world_continuity(raw_world: Any, *, input_pkg: dict[str, Any], story_core: dict[str, Any], has_world_refs: bool) -> dict[str, Any]:
+    row = _safe_dict(raw_world)
+
+    fallback_country = _extract_country_or_region(
+        input_pkg.get("note"),
+        input_pkg.get("story_text"),
+        input_pkg.get("director_note"),
+        story_core.get("story_summary"),
+        _safe_dict(story_core.get("world_lock")).get("rule"),
+    )
+    style_lock_summary = str(
+        _safe_dict(story_core.get("style_lock")).get("summary")
+        or _safe_dict(story_core.get("style_lock")).get("rule")
+        or ""
+    ).strip()
+
+    mode_raw = str(row.get("world_anchor_mode") or "").strip().lower()
+    world_anchor_mode = "ref_locked" if has_world_refs else "inferred"
+    if mode_raw in {"inferred", "ref_locked"}:
+        world_anchor_mode = mode_raw
+
+    lighting = _safe_dict(row.get("lighting_continuity"))
+    lighting_normalized = {
+        "time_of_day_base": str(lighting.get("time_of_day_base") or "").strip() or "late afternoon",
+        "allowed_progression": str(lighting.get("allowed_progression") or "").strip() or "local realistic progression",
+        "forbidden_shifts": [str(item).strip() for item in _safe_list(lighting.get("forbidden_shifts")) if str(item).strip()],
+    }
+    if not lighting_normalized["forbidden_shifts"]:
+        lighting_normalized["forbidden_shifts"] = [
+            "unmotivated day/night teleport",
+            "unmotivated studio-light jump",
+            "random unrelated lighting style switch",
+        ]
+
+    normalized = {
+        "world_anchor_mode": world_anchor_mode,
+        "country_or_region": str(row.get("country_or_region") or "").strip() or fallback_country,
+        "environment_family": str(row.get("environment_family") or "").strip()
+        or _infer_environment_family(story_core.get("story_summary") or "", fallback_country),
+        "location_progression": [str(item).strip() for item in _safe_list(row.get("location_progression")) if str(item).strip()],
+        "style_anchor": str(row.get("style_anchor") or "").strip() or style_lock_summary,
+        "realism_contract": str(row.get("realism_contract") or "").strip()
+        or "Always grounded and realistic continuity. No cross-country or cross-style drift.",
+        "lighting_continuity": lighting_normalized,
+        "continuity_rules": [str(item).strip() for item in _safe_list(row.get("continuity_rules")) if str(item).strip()],
+    }
+
+    if not normalized["location_progression"]:
+        normalized["location_progression"] = ["establishing street", "adjacent passage", "nearby interior"]
+
+    if not normalized["continuity_rules"]:
+        normalized["continuity_rules"] = [
+            "Keep all scenes inside one coherent country/city/environment logic.",
+            "Allow only local plausible movement between spaces.",
+            "Keep style and realism stable unless explicit refs require otherwise.",
+        ]
+    return normalized
+
+
+def _default_scene_presence_mode(idx: int, total: int, has_hero: bool) -> str:
+    if not has_hero:
+        return "environment_anchor"
+    if total <= 1:
+        return "solo_performance"
+    if idx == total - 1 and total >= 4:
+        return "private_release"
+    pattern = ["solo_observational", "solo_performance", "transit", "environment_anchor"]
+    return pattern[idx % len(pattern)]
+
+
+def _default_scene_role_row(
+    scene_window: dict[str, Any],
+    *,
+    hero_role: str,
+    world_anchors: list[str],
+    all_roles: list[str],
+    idx: int,
+    total_scenes: int,
+) -> dict[str, Any]:
     active_roles = [*([hero_role] if hero_role else []), *world_anchors]
     active_roles = list(dict.fromkeys([role for role in active_roles if role]))
+    scene_presence_mode = _default_scene_presence_mode(idx, total_scenes, bool(hero_role))
     return {
         "scene_id": str(scene_window.get("id") or ""),
         "t0": _round3(scene_window.get("t0")),
@@ -232,7 +380,8 @@ def _default_scene_role_row(scene_window: dict[str, Any], *, hero_role: str, wor
         "active_roles": active_roles,
         "inactive_roles": [role for role in all_roles if role not in active_roles],
         "character_presence": "solo" if hero_role else "none",
-        "performance_focus": bool(hero_role),
+        "scene_presence_mode": scene_presence_mode,
+        "performance_focus": bool(hero_role and scene_presence_mode == "solo_performance"),
         "role_reason": "fallback_scene_completion",
     }
 
@@ -244,6 +393,8 @@ def _normalize_role_plan(
     present_roles: list[str],
     character_roles_present: list[str],
     world_roles_present: list[str],
+    input_pkg: dict[str, Any],
+    story_core: dict[str, Any],
 ) -> tuple[dict[str, Any], bool, str]:
     allowed_roles = set(present_roles)
     known_scene_ids = {str(row.get("id") or ""): row for row in scene_windows}
@@ -260,6 +411,14 @@ def _normalize_role_plan(
         global_roles["support_character_roles"] = [
             role for role in global_roles["support_character_roles"] if role not in set(global_roles["primary_character_roles"])
         ]
+
+    has_world_refs = "location" in world_roles_present or "style" in world_roles_present
+    world_continuity = _normalize_world_continuity(
+        raw_plan.get("world_continuity"),
+        input_pkg=input_pkg,
+        story_core=story_core,
+        has_world_refs=has_world_refs,
+    )
 
     scene_roles_by_id: dict[str, dict[str, Any]] = {}
     for row_raw in _safe_list(raw_plan.get("scene_roles")):
@@ -287,6 +446,14 @@ def _normalize_role_plan(
         if character_presence not in {"solo", "duo", "ensemble", "none"}:
             character_presence = "solo" if primary_role else "none"
 
+        scene_presence_mode = str(row.get("scene_presence_mode") or "").strip().lower()
+        if scene_presence_mode not in ALLOWED_SCENE_PRESENCE_MODES:
+            scene_presence_mode = _default_scene_presence_mode(len(scene_roles_by_id), len(scene_windows), bool(primary_role))
+
+        performance_focus = bool(row.get("performance_focus")) if primary_role else False
+        if scene_presence_mode in {"environment_anchor", "transit", "solo_observational"}:
+            performance_focus = False
+
         scene_roles_by_id[scene_id] = {
             "scene_id": scene_id,
             "t0": _round3(window.get("t0")),
@@ -296,13 +463,15 @@ def _normalize_role_plan(
             "active_roles": active_roles,
             "inactive_roles": [role for role in present_roles if role not in active_roles],
             "character_presence": character_presence,
-            "performance_focus": bool(row.get("performance_focus")) if primary_role else False,
+            "scene_presence_mode": scene_presence_mode,
+            "performance_focus": performance_focus,
             "role_reason": str(row.get("role_reason") or "").strip() or "scene_role_distribution",
         }
 
     used_fallback = False
     normalized_scene_roles: list[dict[str, Any]] = []
-    for window in scene_windows:
+    total_scenes = len(scene_windows)
+    for idx, window in enumerate(scene_windows):
         scene_id = str(window.get("id") or "")
         if scene_id in scene_roles_by_id:
             normalized_scene_roles.append(scene_roles_by_id[scene_id])
@@ -314,6 +483,8 @@ def _normalize_role_plan(
                     hero_role=first_character_role,
                     world_anchors=world_roles_present,
                     all_roles=present_roles,
+                    idx=idx,
+                    total_scenes=total_scenes,
                 )
             )
 
@@ -326,6 +497,7 @@ def _normalize_role_plan(
         "plan_version": ROLE_PLAN_PROMPT_VERSION,
         "mode": "clip",
         "global_roles": global_roles,
+        "world_continuity": world_continuity,
         "scene_roles": normalized_scene_roles,
         "role_arc_summary": role_arc_summary,
         "continuity_notes": continuity_notes,
@@ -334,12 +506,32 @@ def _normalize_role_plan(
     return plan, used_fallback, validation_error
 
 
+def _presence_diagnostics(scene_roles: list[dict[str, Any]], world_continuity: dict[str, Any]) -> dict[str, Any]:
+    presence_modes = [
+        str(_safe_dict(row).get("scene_presence_mode") or "").strip()
+        for row in scene_roles
+        if str(_safe_dict(row).get("scene_presence_mode") or "").strip()
+    ]
+    performance_values = [bool(_safe_dict(row).get("performance_focus")) for row in scene_roles]
+    unique_presence = sorted(set(presence_modes))
+    unique_performance = sorted(set(performance_values))
+    return {
+        "role_plan_world_anchor_mode": str(world_continuity.get("world_anchor_mode") or ""),
+        "role_plan_country_or_region": str(world_continuity.get("country_or_region") or ""),
+        "role_plan_presence_modes": unique_presence,
+        "role_plan_presence_flat": bool(scene_roles) and len(unique_presence) <= 1,
+        "role_plan_performance_focus_flat": bool(scene_roles) and len(unique_performance) <= 1,
+    }
+
+
 def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
     context, aux = _build_role_planning_context(package)
     scene_windows = _safe_list(aux.get("scene_windows"))
     present_roles = [str(role) for role in _safe_list(aux.get("present_roles")) if str(role).strip()]
     character_roles_present = [str(role) for role in _safe_list(aux.get("character_roles_present")) if str(role).strip()]
     world_roles_present = [str(role) for role in _safe_list(aux.get("world_roles_present")) if str(role).strip()]
+    input_pkg = _safe_dict(aux.get("input_pkg"))
+    story_core = _safe_dict(aux.get("story_core"))
 
     diagnostics = {
         "prompt_version": ROLE_PLAN_PROMPT_VERSION,
@@ -356,7 +548,10 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             present_roles=present_roles,
             character_roles_present=character_roles_present,
             world_roles_present=world_roles_present,
+            input_pkg=input_pkg,
+            story_core=story_core,
         )
+        diagnostics.update(_presence_diagnostics(_safe_list(plan.get("scene_roles")), _safe_dict(plan.get("world_continuity"))))
         return {
             "ok": False,
             "role_plan": plan,
@@ -387,7 +582,10 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             present_roles=present_roles,
             character_roles_present=character_roles_present,
             world_roles_present=world_roles_present,
+            input_pkg=input_pkg,
+            story_core=story_core,
         )
+        diagnostics.update(_presence_diagnostics(_safe_list(role_plan.get("scene_roles")), _safe_dict(role_plan.get("world_continuity"))))
         return {
             "ok": bool(role_plan.get("scene_roles")),
             "role_plan": role_plan,
@@ -403,7 +601,10 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             present_roles=present_roles,
             character_roles_present=character_roles_present,
             world_roles_present=world_roles_present,
+            input_pkg=input_pkg,
+            story_core=story_core,
         )
+        diagnostics.update(_presence_diagnostics(_safe_list(role_plan.get("scene_roles")), _safe_dict(role_plan.get("world_continuity"))))
         return {
             "ok": bool(role_plan.get("scene_roles")),
             "role_plan": role_plan,
