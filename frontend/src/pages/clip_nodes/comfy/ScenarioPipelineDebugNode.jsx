@@ -21,6 +21,9 @@ export default function ScenarioPipelineDebugNode({ id, data }) {
   const hasAudio = Boolean(data?.hasAudio);
   const isConnectedToDirector = Boolean(data?.isConnectedToDirector);
   const statusSummary = countByStatus(data?.stageStatuses && typeof data.stageStatuses === "object" ? data.stageStatuses : {});
+  const storyboardSceneCount = Number(data?.storyboardSceneCount || 0) || 0;
+  const storyboardOutStatus = String(data?.storyboardOutStatus || "").trim().toLowerCase()
+    || (data?.storyboardOut ? "ready" : "waiting");
 
   return (
     <>
@@ -34,7 +37,8 @@ export default function ScenarioPipelineDebugNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Audio</span><strong>{hasAudio ? "yes" : "no"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Source</span><strong>{isConnectedToDirector ? "Director" : "Not connected"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Done</span><strong>{statusSummary.done}/6</strong></div>
-          <div className="clipSB_assemblyRow"><span>storyboard_out</span><strong>{data?.storyboardOut ? "ready" : "waiting"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>storyboard_out</span><strong>{storyboardOutStatus}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Scenes</span><strong>{storyboardSceneCount}</strong></div>
         </div>
         <div className="clipSB_selectHint" style={{ marginTop: 8 }}>Stage-by-stage pipeline lab.</div>
         <button className="clipSB_btn" style={{ marginTop: 10 }} type="button" onClick={() => data?.onOpenScenarioPipelineDebug?.(id)}>

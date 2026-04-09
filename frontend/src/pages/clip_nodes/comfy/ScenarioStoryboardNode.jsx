@@ -152,7 +152,9 @@ export default function ScenarioStoryboardNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Статус</span><strong>{status}</strong></div>
         </div>
 
-        <div className="clipSB_selectHint" style={{ marginTop: 8 }}>Сцены готовы. Можно открыть editor.</div>
+        <div className="clipSB_selectHint" style={{ marginTop: 8 }}>
+          {totalScenes === 0 ? "Storyboard ещё не получен." : "Сцены готовы. Можно открыть editor."}
+        </div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button
             className={`clipSB_btn clipSB_storyboardOpenEditorBtn${totalScenes === 0 ? " isDisabled" : ""}`}
