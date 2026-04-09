@@ -78,7 +78,13 @@ def _extract_json_obj(text: str) -> dict[str, Any]:
 
 
 def _default_story_core(input_pkg: dict[str, Any]) -> dict[str, Any]:
-    source_note = str(input_pkg.get("note") or input_pkg.get("text") or "").strip()
+    source_note = str(
+        input_pkg.get("note")
+        or input_pkg.get("story_text")
+        or input_pkg.get("director_note")
+        or input_pkg.get("text")
+        or ""
+    ).strip()
     source_note = source_note[:800]
     return {
         "story_summary": source_note or "Music-driven visual story with continuity locks.",
@@ -91,14 +97,45 @@ def _default_story_core(input_pkg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_story_core_prompt(input_pkg: dict[str, Any], refs_inventory: dict[str, Any]) -> str:
+def _build_story_core_prompt(
+    input_pkg: dict[str, Any],
+    refs_inventory: dict[str, Any],
+    assigned_roles: dict[str, Any],
+) -> str:
+    compact_input = {
+        "audio_url": str(input_pkg.get("audio_url") or ""),
+        "audio_duration_sec": float(input_pkg.get("audio_duration_sec") or 0.0),
+        "text": str(input_pkg.get("text") or ""),
+        "story_text": str(input_pkg.get("story_text") or ""),
+        "note": str(input_pkg.get("note") or ""),
+        "director_note": str(input_pkg.get("director_note") or ""),
+        "content_type": str(input_pkg.get("content_type") or "music_video"),
+        "format": str(input_pkg.get("format") or "9:16"),
+        "selected_refs": _safe_dict(input_pkg.get("selected_refs")),
+        "refs_by_role": _safe_dict(input_pkg.get("refs_by_role")),
+        "connected_context_summary": _safe_dict(input_pkg.get("connected_context_summary")),
+    }
     return (
-        "You are building STORY CORE for a stage-based music-video pipeline. Return strict JSON only.\n"
-        "Do NOT output scenes/prompts/full storyboard.\n"
-        "Required keys: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock.\n"
-        "Keep concise but production-usable.\n\n"
-        f"INPUT:\n{json.dumps(input_pkg, ensure_ascii=False)[:3000]}\n\n"
-        f"REFS_INVENTORY:\n{json.dumps(refs_inventory, ensure_ascii=False)[:3000]}\n"
+        "You are STORY CORE stage of a scenario pipeline.\n"
+        "Return STRICT JSON only, no markdown.\n"
+        "story_core is source of truth for arc/identity/world/style, not a storyboard.\n"
+        "Do NOT output scenes, prompts, shot list, or giant plan.\n"
+        "Use roles/refs/content type to infer protagonist and supporting cast.\n"
+        "Keep each field compact and actionable.\n"
+        "Required keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock.\n"
+        "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
+        f"INPUT_SUMMARY:\n{json.dumps(compact_input, ensure_ascii=False)[:3500]}\n\n"
+        f"ASSIGNED_ROLES:\n{json.dumps(assigned_roles, ensure_ascii=False)[:1200]}\n\n"
+        f"CONTEXT_REFS:\n{json.dumps(refs_inventory, ensure_ascii=False)[:2200]}\n"
+    )
+
+
+def _is_usable_story_core(story_core: dict[str, Any]) -> bool:
+    if not isinstance(story_core, dict):
+        return False
+    return all(
+        bool(str(story_core.get(key) or "").strip())
+        for key in ("story_summary", "opening_anchor", "ending_callback_rule")
     )
 
 
@@ -121,11 +158,22 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "updated_at": _utc_iso(),
         "input": {
             "text": str(req.get("text") or "").strip(),
+            "story_text": str(req.get("storyText") or "").strip(),
             "note": str(req.get("note") or req.get("storyText") or "").strip(),
+            "director_note": str(req.get("directorNote") or "").strip(),
             "source": _safe_dict(req.get("source")),
             "audio_url": str(req.get("audioUrl") or "").strip(),
             "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),
             "content_type": str(_safe_dict(req.get("director_controls")).get("contentType") or "music_video"),
+            "format": str(_safe_dict(req.get("director_controls")).get("format") or req.get("format") or "9:16"),
+            "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
+            "refs_by_role": _safe_dict(req.get("refsByRole")),
+            "selected_refs": {
+                "character_1": str(req.get("selectedCharacterRefUrl") or "").strip(),
+                "style": str(req.get("selectedStyleRefUrl") or "").strip(),
+                "location": str(req.get("selectedLocationRefUrl") or "").strip(),
+                "props": [str(item).strip() for item in _safe_list(req.get("selectedPropsRefUrls")) if str(item).strip()],
+            },
         },
         "refs_inventory": _safe_dict(req.get("context_refs")),
         "assigned_roles": _safe_dict(req.get("roleTypeByRole")),
@@ -211,8 +259,9 @@ def _append_diag_event(package: dict[str, Any], message: str, *, stage_id: str =
 def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
+    assigned_roles = _safe_dict(package.get("assigned_roles"))
     fallback = _default_story_core(input_pkg)
-    prompt = _build_story_core_prompt(input_pkg, refs_inventory)
+    prompt = _build_story_core_prompt(input_pkg, refs_inventory, assigned_roles)
     try:
         response = post_generate_content(
             {
@@ -232,14 +281,23 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
             "world_lock": _safe_dict(parsed.get("world_lock")) or fallback["world_lock"],
             "style_lock": _safe_dict(parsed.get("style_lock")) or fallback["style_lock"],
         }
+        if not _is_usable_story_core(story_core):
+            raise ValueError("story_core_unusable_after_parse")
         package["story_core"] = story_core
         _append_diag_event(package, "story_core generated", stage_id="story_core")
         return package
     except Exception as exc:  # noqa: BLE001
         logger.exception("[scenario_stage_pipeline] story_core failed")
-        package["story_core"] = fallback
-        _append_diag_event(package, f"story_core fallback used: {exc}", stage_id="story_core")
-        return package
+        if _is_usable_story_core(fallback):
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            warnings = _safe_list(diagnostics.get("warnings"))
+            warnings.append({"stage_id": "story_core", "message": f"fallback_used:{exc}"})
+            diagnostics["warnings"] = warnings[-80:]
+            package["diagnostics"] = diagnostics
+            package["story_core"] = fallback
+            _append_diag_event(package, f"story_core fallback used: {exc}", stage_id="story_core")
+            return package
+        raise RuntimeError(f"story_core_failed_no_fallback:{exc}") from exc
 
 
 def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
