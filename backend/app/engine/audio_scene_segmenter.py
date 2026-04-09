@@ -13,7 +13,7 @@ from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
 
-GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_segmentation_v1"
+GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_segmentation_v2"
 _MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
 _SCENE_WINDOWS_MAX_START_GAP_SEC = 1.0
 _SCENE_WINDOWS_MAX_END_GAP_SEC = 1.2
@@ -110,6 +110,27 @@ def _build_prompt(
         "8) If there is a long instrumental tail, split into 2 useful edit windows when natural.\n"
         "9) Avoid mechanical equal-time grids. Prefer semantic/music-aware cuts.\n"
         "10) Use exact overall_duration_sec close to the provided duration_sec.\n\n"
+        "SCENE FUNCTION LABELS (use ONLY this set):\n"
+        "- setup = first establishing phrase or opening hook.\n"
+        "- build = momentum grows.\n"
+        "- turn = emotional or lyrical shift.\n"
+        "- release = phrase resolves.\n"
+        "- afterimage = outro, fading residue, reflective tail.\n"
+        "- bridge = connective transition.\n"
+        "- accent = short emphatic highlight.\n"
+        "- climax = strongest peak or final push.\n"
+        "Distribute scene_function labels meaningfully across the track timeline. Do not overuse a single label without a clear reason.\n"
+        "Choose labels based on both lyric structure and energy role of each window.\n\n"
+        "PHRASE semantic_weight guidance:\n"
+        "- high: hook, repeated motif, or emotionally important phrase.\n"
+        "- medium: connective or descriptive phrase.\n"
+        "- low: weak transition, filler, or low-information tail.\n"
+        "Avoid flat labeling; use low/medium/high contrast that is useful for downstream scene planning.\n\n"
+        "transcript_confidence guidance (for scene_windows and phrase_units):\n"
+        "- high only if words are clearly audible.\n"
+        "- medium if wording is probable but not perfectly clear.\n"
+        "- low if phrase is uncertain / guessed from unclear audio.\n"
+        "Do not overstate confidence.\n\n"
         "Return EXACT contract keys and structure:\n"
         "{\n"
         '  "transcript_available": true,\n'
@@ -206,6 +227,22 @@ def _normalize_gemini_payload(payload: dict[str, Any], duration_sec: float) -> d
 
     if normalized["overall_duration_sec"] <= 0 and duration > 0:
         normalized["overall_duration_sec"] = _round3(duration)
+
+    warnings = normalized["global_notes"]["warnings"]
+    scene_functions = [str(row.get("scene_function") or "").strip().lower() for row in scene_windows if str(row.get("scene_function") or "").strip()]
+    semantic_weights = [str(row.get("semantic_weight") or "").strip().lower() for row in phrase_units if str(row.get("semantic_weight") or "").strip()]
+    transcript_confidences = [
+        str(row.get("transcript_confidence") or "").strip().lower()
+        for row in [*scene_windows, *phrase_units]
+        if str(row.get("transcript_confidence") or "").strip()
+    ]
+    if len(set(scene_functions)) == 1 and scene_functions:
+        warnings.append(f"scene_function_flat:{scene_functions[0]}")
+    if len(set(semantic_weights)) == 1 and semantic_weights:
+        warnings.append(f"semantic_weight_flat:{semantic_weights[0]}")
+    if len(set(transcript_confidences)) == 1 and transcript_confidences:
+        warnings.append(f"transcript_confidence_flat:{transcript_confidences[0]}")
+    normalized["global_notes"]["warnings"] = list(dict.fromkeys(warnings))
 
     # Optional post-split of too-long outro, if a natural cut point exists.
     if scene_windows:
