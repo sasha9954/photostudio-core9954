@@ -1177,8 +1177,13 @@ function extractNarrativeStoryboardOut({ sourceNode = null, sourceHandle = "" } 
 function extractScenarioPipelineStoryboardOut({ sourceNode = null, sourceHandle = "" } = {}) {
   if (!sourceNode || sourceNode.type !== "scenarioPipelineDebug" || String(sourceHandle || "") !== "storyboard_out") return null;
   const data = sourceNode?.data && typeof sourceNode.data === "object" ? sourceNode.data : {};
-  const candidate = data?.storyboardOut || data?.storyboardPackage || data?.directorOutput?.storyboardPackage || null;
-  return candidate && typeof candidate === "object" && !Array.isArray(candidate) ? candidate : null;
+  const storyboardOut = data?.storyboardOut;
+  if (storyboardOut && typeof storyboardOut === "object" && !Array.isArray(storyboardOut)) return storyboardOut;
+  const packageFinalStoryboard = data?.storyboardPackage?.final_storyboard;
+  if (packageFinalStoryboard && typeof packageFinalStoryboard === "object" && !Array.isArray(packageFinalStoryboard)) return packageFinalStoryboard;
+  const directorPackageFinalStoryboard = data?.directorOutput?.storyboardPackage?.final_storyboard;
+  if (directorPackageFinalStoryboard && typeof directorPackageFinalStoryboard === "object" && !Array.isArray(directorPackageFinalStoryboard)) return directorPackageFinalStoryboard;
+  return null;
 }
 
 function toStoryboardTimeSec(value, fallback = 0) {
@@ -14086,6 +14091,40 @@ onClipSec: (nodeId, value) => {
             && sourceConnectedContextFingerprint !== previousConnectedContextFingerprint;
           const sourceScenarioContextStale = Boolean(sourceNode?.data?.scenarioContextStale);
           const normalizedPackage = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
+          if (isDirectPipelineSource) {
+            const sourceData = sourceNode?.data && typeof sourceNode.data === "object" ? sourceNode.data : {};
+            const sourceDataStoryboardOut = sourceData?.storyboardOut && typeof sourceData.storyboardOut === "object" && !Array.isArray(sourceData.storyboardOut)
+              ? sourceData.storyboardOut
+              : null;
+            const sourceDataStoryboardPackage = sourceData?.storyboardPackage && typeof sourceData.storyboardPackage === "object" && !Array.isArray(sourceData.storyboardPackage)
+              ? sourceData.storyboardPackage
+              : null;
+            const sourceDataDirectorStoryboardPackage = sourceData?.directorOutput?.storyboardPackage
+              && typeof sourceData.directorOutput.storyboardPackage === "object"
+              && !Array.isArray(sourceData.directorOutput.storyboardPackage)
+              ? sourceData.directorOutput.storyboardPackage
+              : null;
+            const finalStoryboard = sourceDataStoryboardPackage?.final_storyboard && typeof sourceDataStoryboardPackage.final_storyboard === "object" && !Array.isArray(sourceDataStoryboardPackage.final_storyboard)
+              ? sourceDataStoryboardPackage.final_storyboard
+              : (sourceDataDirectorStoryboardPackage?.final_storyboard && typeof sourceDataDirectorStoryboardPackage.final_storyboard === "object" && !Array.isArray(sourceDataDirectorStoryboardPackage.final_storyboard)
+                ? sourceDataDirectorStoryboardPackage.final_storyboard
+                : null);
+            const storyboardOutSceneCount = Array.isArray(sourceDataStoryboardOut?.scenes) ? sourceDataStoryboardOut.scenes.length : 0;
+            const finalStoryboardSceneCount = Array.isArray(finalStoryboard?.scenes) ? finalStoryboard.scenes.length : 0;
+            const normalizedPackageSceneCount = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0;
+            if (normalizedPackageSceneCount === 0) {
+              console.debug("[SCENARIO HANDOFF EMPTY SCENES]", {
+                sourceNodeType: String(sourceNode?.type || ""),
+                sourceHandle,
+                hasDataStoryboardOut: !!sourceDataStoryboardOut,
+                hasStoryboardPackage: !!(sourceDataStoryboardPackage || sourceDataDirectorStoryboardPackage),
+                hasFinalStoryboard: !!finalStoryboard,
+                storyboardOutSceneCount,
+                finalStoryboardSceneCount,
+                normalizedPackageSceneCount,
+              });
+            }
+          }
           if (CLIP_TRACE_SCENARIO_GRAPH) {
             console.debug("[SCENARIO GRAPH STRICT] storyboard source", {
               sourceNodeType: String(sourceNode?.type || ""),
@@ -15072,6 +15111,10 @@ onClipSec: (nodeId, value) => {
             storyboardOut: sourceStoryboardOut || storyboardPackage || base?.data?.storyboardOut || null,
             directorOutput,
           });
+          const storyboardSceneCount = Array.isArray(normalizedStoryboardOut?.scenes) ? normalizedStoryboardOut.scenes.length : 0;
+          const storyboardOutStatus = validScenarioSource
+            ? (storyboardSceneCount > 0 ? "ready" : "empty")
+            : "waiting";
           const stageStatuses = storyboardPackage?.stage_statuses && typeof storyboardPackage.stage_statuses === "object"
             ? storyboardPackage.stage_statuses
             : (base?.data?.stageStatuses && typeof base.data.stageStatuses === "object" ? base.data.stageStatuses : {});
@@ -15082,7 +15125,9 @@ onClipSec: (nodeId, value) => {
             ...base,
             data: {
               ...base.data,
-              status: validScenarioSource ? "ready" : "idle",
+              status: storyboardOutStatus,
+              storyboardOutStatus,
+              storyboardSceneCount,
               isConnectedToDirector: validScenarioSource,
               sourceConnectionLabel: validScenarioSource ? "Director" : "Not connected",
               contentType: String(sourceNode?.data?.contentType || base?.data?.contentType || "story").trim(),
