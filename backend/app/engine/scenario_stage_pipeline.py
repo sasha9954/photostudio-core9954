@@ -6,6 +6,7 @@ import logging
 import math
 import mimetypes
 import os
+import re
 import socket
 import tempfile
 import urllib.error
@@ -385,6 +386,9 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "source": _safe_dict(req.get("source")),
         "audio_url": str(req.get("audioUrl") or "").strip(),
         "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),
+        "transcript_text": str(req.get("transcriptText") or req.get("transcript") or "").strip(),
+        "lyrics_text": str(req.get("lyricsText") or req.get("lyrics") or "").strip(),
+        "spoken_text_hint": str(req.get("spokenTextHint") or "").strip(),
         "content_type": str(_safe_dict(req.get("director_controls")).get("contentType") or "music_video"),
         "format": str(_safe_dict(req.get("director_controls")).get("format") or req.get("format") or "9:16"),
         "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
@@ -818,6 +822,193 @@ def _float_points(values: Any, duration_sec: float, *, min_t: float = 0.0, max_t
     return dedup
 
 
+def _extract_audio_transcript_text(input_pkg: dict[str, Any]) -> str:
+    candidates = (
+        input_pkg.get("transcript_text"),
+        input_pkg.get("transcriptText"),
+        input_pkg.get("transcript"),
+        input_pkg.get("lyrics_text"),
+        input_pkg.get("lyricsText"),
+        input_pkg.get("lyrics"),
+        input_pkg.get("spoken_text_hint"),
+        input_pkg.get("spokenTextHint"),
+    )
+    for item in candidates:
+        text = str(item or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _words_from_text(text: str) -> list[str]:
+    return [token for token in re.findall(r"[^\s]+", str(text or "").strip()) if token]
+
+
+def _semantic_weight_for_phrase(text: str, word_count: int, *, is_last: bool) -> str:
+    clean = str(text or "").strip()
+    if is_last or any(mark in clean for mark in ("!", "?", "…", "...", "—")):
+        return "high"
+    if word_count >= 9 or "," in clean or ";" in clean or ":" in clean:
+        return "medium"
+    return "low"
+
+
+def _build_phrase_units_from_alignment(
+    analysis: dict[str, Any],
+    duration_sec: float,
+    transcript_text: str,
+) -> list[dict[str, Any]]:
+    vocal_phrases = [item for item in _safe_list(analysis.get("vocalPhrases")) if isinstance(item, dict)]
+    if not vocal_phrases:
+        return []
+    words = _words_from_text(transcript_text)
+    if not words:
+        return []
+
+    ordered = sorted(vocal_phrases, key=lambda item: float(item.get("start") or 0.0))
+    spans: list[tuple[float, float]] = []
+    for phrase in ordered:
+        t0 = _clamp_time(float(phrase.get("start") or 0.0), duration_sec)
+        t1 = _clamp_time(float(phrase.get("end") or 0.0), duration_sec)
+        if t1 - t0 < 0.2:
+            continue
+        spans.append((t0, t1))
+    if not spans:
+        return []
+
+    durations = [max(0.2, t1 - t0) for t0, t1 in spans]
+    total_duration = max(0.001, sum(durations))
+    remaining = len(words)
+    allocations: list[int] = []
+    for idx, span_duration in enumerate(durations):
+        if idx == len(durations) - 1:
+            count = remaining
+        else:
+            ratio = span_duration / total_duration
+            count = max(1, int(round(len(words) * ratio)))
+            remaining_after = len(durations) - idx - 1
+            count = min(count, max(1, remaining - remaining_after))
+        allocations.append(count)
+        remaining -= count
+
+    phrase_units: list[dict[str, Any]] = []
+    cursor = 0
+    for idx, ((t0, t1), count) in enumerate(zip(spans, allocations, strict=False), start=1):
+        phrase_words = words[cursor : cursor + count]
+        cursor += count
+        if not phrase_words:
+            continue
+        text = " ".join(phrase_words).strip()
+        phrase_units.append(
+            {
+                "id": f"ph_{idx}",
+                "t0": round(t0, 3),
+                "t1": round(t1, 3),
+                "text": text,
+                "word_count": len(phrase_words),
+                "can_cut_after": True,
+                "semantic_weight": _semantic_weight_for_phrase(text, len(phrase_words), is_last=idx == len(spans)),
+                "word_timestamps": [],
+            }
+        )
+    return phrase_units
+
+
+def _build_scene_candidate_windows(
+    phrase_units: list[dict[str, Any]],
+    duration_sec: float,
+    *,
+    target_min: float = 3.0,
+    target_max: float = 6.0,
+    hard_max: float = 8.0,
+) -> list[dict[str, Any]]:
+    if not phrase_units:
+        return []
+    windows: list[dict[str, Any]] = []
+    idx = 0
+    while idx < len(phrase_units):
+        start = float(phrase_units[idx].get("t0") or 0.0)
+        best_j = idx
+        best_score = -1e9
+        end = start
+        for j in range(idx, len(phrase_units)):
+            end = float(phrase_units[j].get("t1") or start)
+            span = end - start
+            if span <= 0:
+                continue
+            if span > hard_max and j > idx:
+                break
+            center_target = (target_min + target_max) * 0.5
+            closeness = -abs(span - center_target)
+            in_target_bonus = 1.2 if target_min <= span <= target_max else 0.0
+            overweight_penalty = -2.0 if span > hard_max else 0.0
+            semantic_bonus = 0.35 if str(phrase_units[j].get("semantic_weight") or "") == "high" else 0.0
+            score = closeness + in_target_bonus + overweight_penalty + semantic_bonus
+            if span >= target_min and score > best_score:
+                best_score = score
+                best_j = j
+        if best_j < idx:
+            best_j = idx
+        win_start = _clamp_time(float(phrase_units[idx].get("t0") or 0.0), duration_sec)
+        win_end = _clamp_time(float(phrase_units[best_j].get("t1") or win_start), duration_sec)
+        if win_end - win_start < 0.2 and idx + 1 < len(phrase_units):
+            win_end = _clamp_time(float(phrase_units[idx + 1].get("t1") or win_start), duration_sec)
+            best_j = idx + 1
+        windows.append(
+            {
+                "id": f"sc_{len(windows) + 1}",
+                "t0": round(win_start, 3),
+                "t1": round(win_end, 3),
+                "duration_sec": round(max(0.0, win_end - win_start), 3),
+                "phrase_ids": [str(phrase_units[k].get("id") or "") for k in range(idx, best_j + 1)],
+                "cut_after_phrase_id": str(phrase_units[best_j].get("id") or ""),
+            }
+        )
+        idx = best_j + 1
+    return windows
+
+
+def _build_phrase_first_audio_map(
+    duration_sec: float,
+    story_core: dict[str, Any],
+    analysis: dict[str, Any],
+    transcript_text: str,
+) -> dict[str, Any] | None:
+    phrase_units = _build_phrase_units_from_alignment(analysis, duration_sec, transcript_text)
+    if not phrase_units:
+        return None
+    base_map = _build_audio_map_from_dynamics(duration_sec, story_core, analysis, analysis_mode="transcript_alignment_v1")
+    scene_windows = _build_scene_candidate_windows(phrase_units, duration_sec)
+    phrase_boundaries = [
+        round(float(item.get("t1") or 0.0), 3)
+        for item in phrase_units
+        if 0.0 < float(item.get("t1") or 0.0) < duration_sec
+    ]
+    base_map["analysis_mode"] = "transcript_alignment_v1"
+    base_map["transcript_available"] = True
+    base_map["phrase_units"] = phrase_units
+    base_map["scene_candidate_windows"] = scene_windows
+    base_map["phrase_endpoints_sec"] = sorted(set(phrase_boundaries))
+    base_map["candidate_cut_points_sec"] = sorted(set(phrase_boundaries))
+    base_map["cut_policy"] = {
+        "min_scene_sec": 3,
+        "target_scene_sec_min": 3,
+        "target_scene_sec_max": 6,
+        "hard_max_scene_sec": 8,
+        "no_mid_word_cut": True,
+        "prefer_phrase_endings": True,
+        "prefer_semantic_boundaries": True,
+    }
+    base_map["audio_dynamics_summary"] = {
+        **_safe_dict(base_map.get("audio_dynamics_summary")),
+        "pause_points_count": len(_safe_list(analysis.get("pausePoints"))),
+        "phrase_points_count": len(phrase_boundaries),
+        "energy_peaks_count": len(_safe_list(analysis.get("energyPeaks"))),
+        "detected_sections_count": len(_safe_list(analysis.get("sections"))),
+    }
+    return base_map
+
+
 def _add_scored_candidate(
     score_by_point: dict[float, float],
     point: float,
@@ -1059,6 +1250,10 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_source_audio_url"] = audio_url
     diagnostics["audio_map_analysis_mode"] = "timing_heuristics_v1"
     diagnostics["audio_map_used_fallback"] = False
+    diagnostics["audio_map_phrase_mode"] = "audio_dynamics_v2"
+    diagnostics["transcript_available"] = False
+    diagnostics["phrase_unit_count"] = 0
+    diagnostics["scene_candidate_count"] = 0
     package["diagnostics"] = diagnostics
 
     if not _is_usable_story_core(story_core):
@@ -1074,6 +1269,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     used_fallback = False
     analysis_mode = "timing_heuristics_v1"
+    transcript_text = _extract_audio_transcript_text(input_pkg)
     try:
         if audio_url:
             analysis_path = ""
@@ -1083,13 +1279,18 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 if not analysis_path:
                     raise ValueError("audio_source_unavailable_for_dynamics")
                 raw_analysis = analyze_audio(analysis_path, debug=False)
-                analysis_mode = "audio_dynamics_v2"
-                audio_map = _build_audio_map_from_dynamics(
-                    duration_sec,
-                    story_core,
-                    raw_analysis,
-                    analysis_mode=analysis_mode,
-                )
+                phrase_first_map = _build_phrase_first_audio_map(duration_sec, story_core, raw_analysis, transcript_text)
+                if phrase_first_map:
+                    analysis_mode = "transcript_alignment_v1"
+                    audio_map = phrase_first_map
+                else:
+                    analysis_mode = "audio_dynamics_v2"
+                    audio_map = _build_audio_map_from_dynamics(
+                        duration_sec,
+                        story_core,
+                        raw_analysis,
+                        analysis_mode=analysis_mode,
+                    )
             finally:
                 if cleanup_path:
                     try:
@@ -1114,6 +1315,20 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_map["content_type"] = content_type
     audio_map["story_core_mode"] = story_core_mode
     audio_map["story_core_arc_ref"] = str(story_core.get("global_arc") or "")
+    audio_map.setdefault("transcript_available", bool(transcript_text and audio_map.get("analysis_mode") == "transcript_alignment_v1"))
+    audio_map.setdefault("phrase_units", [])
+    audio_map.setdefault("scene_candidate_windows", [])
+    audio_map.setdefault(
+        "cut_policy",
+        {
+            "min_scene_sec": 3,
+            "target_scene_sec_min": 3,
+            "target_scene_sec_max": 6,
+            "hard_max_scene_sec": 8,
+            "no_mid_word_cut": True,
+            "prefer_phrase_endings": True,
+        },
+    )
     if not audio_url:
         warnings = _safe_list(diagnostics.get("warnings"))
         warnings.append({"stage_id": "audio_map", "message": "audio_url_missing_used_duration_only"})
@@ -1121,6 +1336,12 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     diagnostics["audio_map_analysis_mode"] = analysis_mode
     diagnostics["audio_map_used_fallback"] = bool(used_fallback)
+    diagnostics["audio_map_phrase_mode"] = (
+        "transcript_alignment_v1" if str(audio_map.get("analysis_mode") or "") == "transcript_alignment_v1" else "audio_dynamics_v2"
+    )
+    diagnostics["transcript_available"] = bool(audio_map.get("transcript_available"))
+    diagnostics["phrase_unit_count"] = len(_safe_list(audio_map.get("phrase_units")))
+    diagnostics["scene_candidate_count"] = len(_safe_list(audio_map.get("scene_candidate_windows")))
     package["diagnostics"] = diagnostics
     package["audio_map"] = audio_map
     _append_diag_event(package, "audio_map generated", stage_id="audio_map")
