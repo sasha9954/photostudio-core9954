@@ -14090,7 +14090,30 @@ onClipSec: (nodeId, value) => {
             && !!previousConnectedContextFingerprint
             && sourceConnectedContextFingerprint !== previousConnectedContextFingerprint;
           const sourceScenarioContextStale = Boolean(sourceNode?.data?.scenarioContextStale);
-          const normalizedPackage = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
+          const directFinalStoryboard = (
+            sourceNode?.data?.storyboardPackage?.final_storyboard
+            || sourceNode?.data?.directorOutput?.storyboardPackage?.final_storyboard
+            || null
+          );
+          let normalizedPackage = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
+          const normalizedPackageScenesCount = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0;
+          const directFinalStoryboardScenesCount = Array.isArray(directFinalStoryboard?.scenes) ? directFinalStoryboard.scenes.length : 0;
+          if (normalizedPackageScenesCount === 0 && directFinalStoryboardScenesCount > 0) {
+            normalizedPackage = normalizeScenarioStoryboardPackage({
+              storyboardOut: directFinalStoryboard,
+              directorOutput,
+            });
+            if (CLIP_TRACE_SCENARIO_GRAPH || isDirectPipelineSource) {
+              console.debug("[SCENARIO STORYBOARD FINAL FALLBACK]", {
+                sourceNodeType: String(sourceNode?.type || ""),
+                sourceHandle,
+                fallbackApplied: true,
+                directFinalStoryboardScenesCount,
+                normalizedPackageScenesCountBefore: normalizedPackageScenesCount,
+                normalizedPackageScenesCountAfter: Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0,
+              });
+            }
+          }
           if (isDirectPipelineSource) {
             const sourceData = sourceNode?.data && typeof sourceNode.data === "object" ? sourceNode.data : {};
             const sourceDataStoryboardOut = sourceData?.storyboardOut && typeof sourceData.storyboardOut === "object" && !Array.isArray(sourceData.storyboardOut)
@@ -14111,8 +14134,8 @@ onClipSec: (nodeId, value) => {
                 : null);
             const storyboardOutSceneCount = Array.isArray(sourceDataStoryboardOut?.scenes) ? sourceDataStoryboardOut.scenes.length : 0;
             const finalStoryboardSceneCount = Array.isArray(finalStoryboard?.scenes) ? finalStoryboard.scenes.length : 0;
-            const normalizedPackageSceneCount = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0;
-            if (normalizedPackageSceneCount === 0) {
+            const currentNormalizedPackageSceneCount = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0;
+            if (currentNormalizedPackageSceneCount === 0) {
               console.debug("[SCENARIO HANDOFF EMPTY SCENES]", {
                 sourceNodeType: String(sourceNode?.type || ""),
                 sourceHandle,
@@ -14121,7 +14144,7 @@ onClipSec: (nodeId, value) => {
                 hasFinalStoryboard: !!finalStoryboard,
                 storyboardOutSceneCount,
                 finalStoryboardSceneCount,
-                normalizedPackageSceneCount,
+                normalizedPackageSceneCount: currentNormalizedPackageSceneCount,
               });
             }
           }
@@ -14583,6 +14606,7 @@ onClipSec: (nodeId, value) => {
               ),
               sceneGeneration,
               scenarioPackage: normalizedPackage,
+              sceneContractSource: String(normalizedPackage?.sceneContractSource || "").trim(),
               rawScenarioResponse,
               storyboardOut,
               directorOutput,

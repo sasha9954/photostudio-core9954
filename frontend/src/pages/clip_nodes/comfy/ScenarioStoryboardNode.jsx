@@ -57,9 +57,11 @@ function resolveScenarioModeBadge(modeValue = "") {
 export default function ScenarioStoryboardNode({ id, data }) {
   const storyboardRevision = String(data?.storyboardRevision || "");
   const scenes = Array.isArray(data?.scenes) ? data.scenes : [];
+  const packageScenes = Array.isArray(data?.scenarioPackage?.scenes) ? data.scenarioPackage.scenes : [];
   const generationMap = data?.sceneGeneration && typeof data.sceneGeneration === "object" ? data.sceneGeneration : {};
   const audioData = data?.audioData && typeof data.audioData === "object" ? data.audioData : {};
-  const totalScenes = scenes.length;
+  const totalScenes = scenes.length > 0 ? scenes.length : (packageScenes.length > 0 ? packageScenes.length : 0);
+  const sceneContractSource = String(data?.sceneContractSource || "").trim();
   const generatedImages = scenes.filter((scene, idx) => {
     const key = String(scene?.sceneId || `S${idx + 1}`);
     const runtime = generationMap[key] && typeof generationMap[key] === "object" ? generationMap[key] : {};
@@ -96,6 +98,7 @@ export default function ScenarioStoryboardNode({ id, data }) {
   const scenarioModeRaw = data?.incomingMode || data?.scenarioMode || data?.contentType || "";
   const scenarioFormat = String(data?.incomingFormat || data?.format || "").trim();
   const modeBadge = resolveScenarioModeBadge(scenarioModeRaw);
+  // NOTE: preview/static asset 404 is handled separately and should not gate editor availability.
   const status = String(data?.status || "").trim().toLowerCase() || (totalScenes === 0 ? "idle" : (hasGenerationInProgress ? "generating" : "ready"));
 
   React.useEffect(() => {
@@ -150,10 +153,17 @@ export default function ScenarioStoryboardNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Фото</span><strong>{generatedImages}/{totalScenes || 0}</strong></div>
           <div className="clipSB_assemblyRow"><span>Видео</span><strong>{generatedVideos}/{totalScenes || 0}</strong></div>
           <div className="clipSB_assemblyRow"><span>Статус</span><strong>{status}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Source scenes</span><strong>{totalScenes}</strong></div>
+          <div className="clipSB_assemblyRow">
+            <span>scene source</span>
+            <strong>{sceneContractSource || "empty"}</strong>
+          </div>
         </div>
 
         <div className="clipSB_selectHint" style={{ marginTop: 8 }}>
-          {totalScenes === 0 ? "Storyboard ещё не получен." : "Сцены готовы. Можно открыть editor."}
+          {totalScenes === 0
+            ? (sceneContractSource ? "Scenes не дошли из pipeline." : "Storyboard ещё не получен.")
+            : "Сцены готовы. Можно открыть editor."}
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button
