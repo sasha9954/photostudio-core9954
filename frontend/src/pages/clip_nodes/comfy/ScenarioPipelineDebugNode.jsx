@@ -19,6 +19,7 @@ export default function ScenarioPipelineDebugNode({ id, data }) {
   const refsCount = Number(data?.refsCount || 0) || 0;
   const rolesCount = Number(data?.rolesCount || 0) || 0;
   const hasAudio = Boolean(data?.hasAudio);
+  const isConnectedToDirector = Boolean(data?.isConnectedToDirector);
   const statusSummary = countByStatus(data?.stageStatuses && typeof data.stageStatuses === "object" ? data.stageStatuses : {});
 
   return (
@@ -30,6 +31,7 @@ export default function ScenarioPipelineDebugNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Format</span><strong>{format || "—"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Refs / Roles</span><strong>{refsCount} / {rolesCount}</strong></div>
           <div className="clipSB_assemblyRow"><span>Audio</span><strong>{hasAudio ? "yes" : "no"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Source</span><strong>{isConnectedToDirector ? "Director" : "Not connected"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Done</span><strong>{statusSummary.done}/6</strong></div>
         </div>
         <div className="clipSB_selectHint" style={{ marginTop: 8 }}>Stage-by-stage pipeline lab.</div>
