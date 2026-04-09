@@ -194,11 +194,28 @@ class ScenarioDirectorGenerateIn(BaseModel):
 def _sanitize_context_refs(raw_context_refs: Any) -> dict[str, Any]:
     if not isinstance(raw_context_refs, dict):
         return {}
+    def _normalize_refs(raw_refs: Any) -> list[str]:
+        if not isinstance(raw_refs, list):
+            return []
+        normalized: list[str] = []
+        for item in raw_refs:
+            if isinstance(item, str):
+                url = item.strip()
+            elif isinstance(item, dict):
+                url = str(item.get("url") or item.get("value") or "").strip()
+            else:
+                url = str(item or "").strip()
+            if url:
+                normalized.append(url)
+        return normalized
+
     sanitized: dict[str, Any] = {}
     for key, value in raw_context_refs.items():
         if value is None or not isinstance(value, dict):
             continue
-        sanitized[str(key)] = value
+        next_value = dict(value)
+        next_value["refs"] = _normalize_refs(next_value.get("refs"))
+        sanitized[str(key)] = next_value
     return sanitized
 
 

@@ -205,8 +205,46 @@ const normalizeText = (value) => String(value || "").trim();
 function sanitizeContextRefs(contextRefs = {}) {
   if (!contextRefs || typeof contextRefs !== "object") return {};
   return Object.fromEntries(
-    Object.entries(contextRefs).filter(([, value]) => value && typeof value === "object")
+    Object.entries(contextRefs)
+      .map(([key, value]) => {
+        if (!value || typeof value !== "object") return null;
+        return [key, sanitizeContextRefItem(value)];
+      })
+      .filter((entry) => Array.isArray(entry) && !!entry[1])
   );
+}
+
+function normalizeRefUrls(refs = []) {
+  if (!Array.isArray(refs)) return [];
+  return refs
+    .map((item) => {
+      if (typeof item === "string") return normalizeText(item);
+      if (!item || typeof item !== "object") return "";
+      return normalizeText(item.url) || normalizeText(item.value);
+    })
+    .filter(Boolean);
+}
+
+function sanitizeContextRefItem(item = {}) {
+  if (!item || typeof item !== "object") return null;
+  const refs = normalizeRefUrls(item.refs);
+  const value = normalizeText(item.value) || normalizeText(refs[0]);
+  const preview = normalizeText(item.preview) || value;
+  const label = normalizeText(item.label);
+  const sourceLabel = normalizeText(item.source_label || item.sourceLabel);
+  const count = Math.max(Number(item.count) || 0, refs.length || (value ? 1 : 0));
+  const meta = item.meta && typeof item.meta === "object" ? { ...item.meta } : {};
+  if (!value && !refs.length && !preview) return null;
+  return {
+    ...item,
+    refs,
+    value,
+    preview,
+    count,
+    ...(label ? { label } : {}),
+    ...(sourceLabel ? { source_label: sourceLabel } : {}),
+    ...(Object.keys(meta).length ? { meta } : { meta: {} }),
+  };
 }
 
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC_SYNTH = false;
@@ -369,7 +407,7 @@ function buildReferencePayload(input, fallbackLabel) {
           const url = normalizeText(item);
           return url ? { url, roleType: "" } : null;
         }
-        const url = normalizeText(item?.url || item);
+        const url = normalizeText(item?.url || item?.value || item);
         if (!url) return null;
         const roleType = normalizeText(item?.roleType).toLowerCase();
         return { url, roleType };
