@@ -4226,7 +4226,24 @@ body.ps_clip_fullscreen .mainCol {
   padding: 10px 14px;
   border-bottom: 1px solid rgba(255,255,255,0.08);
   display: grid;
-  gap: 8px;
+  gap: 6px;
+}
+
+.clipSB_scenarioEditorStageButtonsRow {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.clipSB_scenarioEditorStageBtn {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.clipSB_scenarioEditorStageStatusRow {
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .clipSB_scenarioEditorTabsRow {
@@ -4440,7 +4457,9 @@ body.ps_clip_fullscreen .mainCol {
   flex-direction: column;
   gap: 10px;
   align-items: stretch;
+  flex: 1;
   min-height: 0;
+  margin: 8px 14px 14px;
   overflow-y: auto;
   overflow-x: hidden;
 }

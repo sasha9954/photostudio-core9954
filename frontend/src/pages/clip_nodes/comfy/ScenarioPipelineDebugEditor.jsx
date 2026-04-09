@@ -96,14 +96,14 @@ export default function ScenarioPipelineDebugEditor({
         </div>
 
         <div className="clipSB_scenarioEditorTopTabs">
-          <div className="clipSB_scenarioEditorBtnRow" style={{ marginBottom: 8, flexWrap: "wrap" }}>
+          <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorStageButtonsRow">
             {STAGE_BUTTONS.map((stage) => (
-              <button key={stage.id} className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!!busyStage} onClick={() => runStage(stage.id, false)}>{stage.label}</button>
+              <button key={stage.id} className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn" type="button" disabled={!!busyStage} onClick={() => runStage(stage.id, false)}>{stage.label}</button>
             ))}
-            <button className="clipSB_btn" type="button" disabled={!!busyStage} onClick={() => runStage("", true)}>AUTO</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setActiveTab("raw")}>JSON</button>
+            <button className="clipSB_btn clipSB_scenarioEditorStageBtn" type="button" disabled={!!busyStage} onClick={() => runStage("", true)}>AUTO</button>
+            <button className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn" type="button" onClick={() => setActiveTab("raw")}>JSON</button>
           </div>
-          <div className="clipSB_scenarioEditorBtnRow" style={{ marginBottom: 8, gap: 6, flexWrap: "wrap" }}>
+          <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorStageStatusRow">
             {chips.map((stage) => (
               <span key={`${stage.id}-status`} className="clipSB_tag clipSB_tagStatus" title={stage.error || `${stage.label}: ${stage.status}`} style={{ borderColor: stage.statusColor, color: stage.statusColor }}>
                 {stage.label}:{stage.status}
@@ -119,7 +119,7 @@ export default function ScenarioPipelineDebugEditor({
           </div>
         </div>
 
-        <div className="clipSB_scenarioEditorWork" style={{ maxHeight: "60vh", overflow: "auto", marginTop: 8 }}>
+        <div className="clipSB_scenarioEditorWork">
           {contentByTab[activeTab] || null}
         </div>
       </div>
