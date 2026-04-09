@@ -86,6 +86,9 @@ export default function ScenarioPipelineDebugEditor({
   const alignmentSource = String(
     audioMap?.audio_map_alignment_source || allDiagnostics?.audio_map_alignment_source || transcriptAlignment?.source || "—"
   );
+  const alignmentBackend = String(allDiagnostics?.audio_map_alignment_backend || "—");
+  const alignmentAttempted = Boolean(allDiagnostics?.audio_map_alignment_attempted ?? false);
+  const alignmentUnavailableReason = String(allDiagnostics?.audio_map_alignment_unavailable_reason || "—");
 
   const contentByTab = {
     story_core: (
@@ -110,6 +113,9 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>phrase_unit_count</span><strong>{phraseUnitCount}</strong></div>
         <div className="clipSB_storyboardKv"><span>scene_candidate_count</span><strong>{sceneCandidateCount}</strong></div>
         <div className="clipSB_storyboardKv"><span>audio_map_alignment_source</span><strong>{alignmentSource}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_map_alignment_backend</span><strong>{alignmentBackend}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_map_alignment_attempted</span><strong>{String(alignmentAttempted)}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_map_alignment_unavailable_reason</span><strong>{alignmentUnavailableReason}</strong></div>
         <pre className="clipSB_pre">{toJson({
           sections: audioSections,
           phrase_endpoints_sec: phraseEndpoints,
