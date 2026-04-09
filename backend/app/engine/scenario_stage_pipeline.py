@@ -25,6 +25,7 @@ from app.engine.audio_scene_segmenter import build_gemini_audio_segmentation
 from app.engine.gemini_rest import post_generate_content
 from app.engine.scenario_role_planner import ROLE_PLAN_PROMPT_VERSION, build_gemini_role_plan
 from app.engine.scenario_scene_planner import SCENE_PLAN_PROMPT_VERSION, build_gemini_scene_plan
+from app.engine.scenario_scene_prompter import SCENE_PROMPTS_PROMPT_VERSION, build_gemini_scene_prompts
 
 logger = logging.getLogger(__name__)
 
@@ -1843,6 +1844,50 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     return package
 
 
+
+
+def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_prompts_backend"] = "gemini"
+    diagnostics["scene_prompts_prompt_version"] = SCENE_PROMPTS_PROMPT_VERSION
+    diagnostics["scene_prompts_used_fallback"] = False
+    diagnostics["scene_prompts_scene_count"] = 0
+    diagnostics["scene_prompts_missing_photo_count"] = 0
+    diagnostics["scene_prompts_missing_video_count"] = 0
+    diagnostics["scene_prompts_ia2v_audio_driven_count"] = 0
+    diagnostics["scene_prompts_validation_error"] = ""
+    diagnostics["scene_prompts_error"] = ""
+    diagnostics["scene_prompts_empty"] = False
+    package["diagnostics"] = diagnostics
+
+    result = build_gemini_scene_prompts(
+        api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+        package=package,
+    )
+
+    scene_prompts = _safe_dict(result.get("scene_prompts"))
+    package["scene_prompts"] = scene_prompts
+
+    prompts_diag = _safe_dict(result.get("diagnostics"))
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_prompts_backend"] = "gemini"
+    diagnostics["scene_prompts_prompt_version"] = str(prompts_diag.get("prompt_version") or SCENE_PROMPTS_PROMPT_VERSION)
+    diagnostics["scene_prompts_used_fallback"] = bool(result.get("used_fallback"))
+    diagnostics["scene_prompts_scene_count"] = int(prompts_diag.get("scene_count") or len(_safe_list(scene_prompts.get("scenes"))))
+    diagnostics["scene_prompts_missing_photo_count"] = int(prompts_diag.get("missing_photo_count") or 0)
+    diagnostics["scene_prompts_missing_video_count"] = int(prompts_diag.get("missing_video_count") or 0)
+    diagnostics["scene_prompts_ia2v_audio_driven_count"] = int(prompts_diag.get("ia2v_audio_driven_count") or 0)
+    diagnostics["scene_prompts_validation_error"] = str(result.get("validation_error") or "")
+    diagnostics["scene_prompts_error"] = str(result.get("error") or "")
+    diagnostics["scene_prompts_empty"] = not bool(scene_prompts and _safe_list(scene_prompts.get("scenes")))
+    package["diagnostics"] = diagnostics
+
+    if scene_prompts and _safe_list(scene_prompts.get("scenes")):
+        _append_diag_event(package, "scene_prompts generated", stage_id="scene_prompts")
+    else:
+        _append_diag_event(package, "scene_prompts empty", stage_id="scene_prompts")
+    return package
+
 def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
@@ -1870,7 +1915,7 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         elif stage_id == "scene_plan":
             pkg = _run_scene_plan_stage(pkg)
         elif stage_id == "scene_prompts":
-            pkg["scene_prompts"] = pkg.get("scene_prompts") or {"scenes": []}
+            pkg = _run_scene_prompts_stage(pkg)
         elif stage_id == "finalize":
             pkg["final_storyboard"] = pkg.get("final_storyboard") or {"scenes": []}
         _set_stage_status(pkg, stage_id, "done")

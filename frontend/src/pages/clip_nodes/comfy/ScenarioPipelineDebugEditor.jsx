@@ -63,6 +63,7 @@ export default function ScenarioPipelineDebugEditor({
   const rolePlan = storyboardPackage?.role_plan || {};
   const scenePlan = storyboardPackage?.scene_plan || {};
   const prompts = storyboardPackage?.scene_prompts || {};
+  const promptScenes = Array.isArray(prompts?.scenes) ? prompts.scenes : [];
   const finalStoryboard = storyboardPackage?.final_storyboard || {};
   const allDiagnostics = Object.keys(diagnostics || {}).length ? diagnostics : (storyboardPackage?.diagnostics || {});
 
@@ -194,7 +195,26 @@ export default function ScenarioPipelineDebugEditor({
     ) : (
       <div className="clipSB_storyboardKv"><span>SCENE PLAN</span><strong>scene_plan empty</strong></div>
     ),
-    scene_prompts: <pre className="clipSB_pre">{toJson(prompts)}</pre>,
+    scene_prompts: promptScenes.length ? (
+      <div>
+        <div className="clipSB_storyboardKv"><span>scene_count</span><strong>{promptScenes.length}</strong></div>
+        <pre className="clipSB_pre">{toJson(promptScenes.map((row) => ({
+          scene_id: row?.scene_id,
+          route: row?.route,
+          photo_prompt: row?.photo_prompt,
+          video_prompt: row?.video_prompt,
+          negative_prompt: row?.negative_prompt,
+          prompt_notes: row?.prompt_notes || {},
+        })))}</pre>
+        <pre className="clipSB_pre">{toJson({
+          plan_version: prompts?.plan_version,
+          mode: prompts?.mode,
+          global_prompt_rules: prompts?.global_prompt_rules || [],
+        })}</pre>
+      </div>
+    ) : (
+      <div className="clipSB_storyboardKv"><span>SCENE PROMPTS</span><strong>scene_prompts empty</strong></div>
+    ),
     final: <pre className="clipSB_pre">{toJson(finalStoryboard?.scenes || [])}</pre>,
     diagnostics: <pre className="clipSB_pre">{toJson(allDiagnostics)}</pre>,
     raw: <pre className="clipSB_pre">{toJson({ contextSummary, executedStages, directorOutput, storyboardPackage })}</pre>,
