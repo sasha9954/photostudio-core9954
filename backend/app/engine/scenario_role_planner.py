@@ -8,6 +8,7 @@ from app.engine.gemini_rest import post_generate_content
 ROLE_PLAN_PROMPT_VERSION = "role_plan_v1"
 
 _BASE_ROLES = ["character_1", "character_2", "character_3", "location", "props", "style"]
+ALLOWED_SCENE_ROLES = set(_BASE_ROLES)
 _CHARACTER_ROLES = ["character_1", "character_2", "character_3"]
 _WORLD_ROLES = ["location", "style"]
 _PROP_ROLES = ["props"]
@@ -67,11 +68,13 @@ def _role_from_ref_key(key: str) -> str:
 def _collect_refs_present_by_role(input_pkg: dict[str, Any], refs_inventory: dict[str, Any]) -> dict[str, list[str]]:
     summary = _safe_dict(input_pkg.get("connected_context_summary"))
     from_summary = _safe_dict(summary.get("connectedRefsPresentByRole"))
+    if not from_summary:
+        from_summary = _safe_dict(summary.get("refsPresentByRole"))
     out: dict[str, list[str]] = {}
 
     for role, raw in from_summary.items():
         role_name = str(role or "").strip()
-        if not role_name:
+        if not role_name or role_name not in ALLOWED_SCENE_ROLES:
             continue
         if isinstance(raw, list):
             values = [str(item).strip() for item in raw if str(item).strip()]
@@ -82,6 +85,8 @@ def _collect_refs_present_by_role(input_pkg: dict[str, Any], refs_inventory: dic
 
     for key, value in refs_inventory.items():
         role_name = _role_from_ref_key(key)
+        if role_name not in ALLOWED_SCENE_ROLES:
+            continue
         row = _safe_dict(value)
         refs = [str(item).strip() for item in _safe_list(row.get("refs")) if str(item).strip()]
         if not refs:
@@ -96,8 +101,7 @@ def _collect_refs_present_by_role(input_pkg: dict[str, Any], refs_inventory: dic
 
 def _build_roles_inventory(input_pkg: dict[str, Any], refs_inventory: dict[str, Any], assigned_roles: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]:
     refs_present_by_role = _collect_refs_present_by_role(input_pkg, refs_inventory)
-    present_roles = sorted([role for role, refs in refs_present_by_role.items() if refs])
-    present_roles = list(dict.fromkeys([*_BASE_ROLES, *present_roles]))
+    present_roles = [role for role in _BASE_ROLES if refs_present_by_role.get(role)]
 
     refs_inventory_summary: list[dict[str, Any]] = []
     for role in present_roles:

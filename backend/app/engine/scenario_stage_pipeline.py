@@ -1728,13 +1728,18 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_present_roles"] = []
     diagnostics["role_plan_character_roles_count"] = 0
     diagnostics["role_plan_world_roles_count"] = 0
+    diagnostics["role_plan_skipped"] = False
+    diagnostics["role_plan_skip_reason"] = ""
+    diagnostics["role_plan_empty"] = False
     package["diagnostics"] = diagnostics
 
-    if content_type and content_type not in {"music_video", "clip"}:
+    if content_type and content_type not in {"music_video", "clip", "story"}:
         package["role_plan"] = {}
         diagnostics = _safe_dict(package.get("diagnostics"))
         diagnostics["role_plan_error"] = f"unsupported_content_type:{content_type}"
         diagnostics["role_plan_used_fallback"] = True
+        diagnostics["role_plan_skipped"] = True
+        diagnostics["role_plan_skip_reason"] = f"unsupported_content_type:{content_type}"
         package["diagnostics"] = diagnostics
         _append_diag_event(package, f"role_plan skipped for content_type={content_type}", stage_id="role_plan")
         return package
@@ -1758,6 +1763,9 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_error"] = str(result.get("error") or "")
     diagnostics["role_plan_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["validation_error"] = str(result.get("validation_error") or "")
+    diagnostics["role_plan_skipped"] = False
+    diagnostics["role_plan_skip_reason"] = ""
+    diagnostics["role_plan_empty"] = not bool(role_plan and _safe_list(role_plan.get("scene_roles")))
     package["diagnostics"] = diagnostics
 
     if role_plan and _safe_list(role_plan.get("scene_roles")):
