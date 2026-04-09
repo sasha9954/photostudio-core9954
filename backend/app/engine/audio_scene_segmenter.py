@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import logging
 import mimetypes
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from app.engine.gemini_rest import post_generate_content
 
@@ -13,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_segmentation_v1"
 _MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
+_SCENE_WINDOWS_MAX_START_GAP_SEC = 1.0
+_SCENE_WINDOWS_MAX_END_GAP_SEC = 1.2
+_SCENE_WINDOWS_MAX_INTER_GAP_SEC = 1.2
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -257,6 +262,8 @@ def _validate_gemini_payload(payload: dict[str, Any], duration_sec: float) -> st
         return "scene_windows_missing"
 
     prev_t1 = -1.0
+    first_t0 = -1.0
+    last_t1 = -1.0
     for idx, raw in enumerate(scene_windows):
         row = _safe_dict(raw)
         t0 = _coerce_float(row.get("t0"), -1.0)
@@ -273,9 +280,21 @@ def _validate_gemini_payload(payload: dict[str, Any], duration_sec: float) -> st
         span = t1 - t0
         if span > 8.0:
             return f"scene_window_too_long_{idx}"
+        if idx == 0:
+            first_t0 = t0
+        else:
+            gap = t0 - prev_t1
+            if gap > _SCENE_WINDOWS_MAX_INTER_GAP_SEC:
+                return f"scene_windows_gap_too_large_{idx}"
         if prev_t1 >= 0 and t0 + 0.12 < prev_t1:
             return f"scene_window_overlap_{idx}"
         prev_t1 = t1
+        last_t1 = t1
+
+    if first_t0 > _SCENE_WINDOWS_MAX_START_GAP_SEC:
+        return "scene_windows_start_gap_too_large"
+    if duration > 0 and (duration - last_t1) > _SCENE_WINDOWS_MAX_END_GAP_SEC:
+        return "scene_windows_end_gap_too_large"
 
     for idx, value in enumerate(_safe_list(payload.get("candidate_cut_points_sec"))):
         point = _coerce_float(value, -1.0)
@@ -283,6 +302,30 @@ def _validate_gemini_payload(payload: dict[str, Any], duration_sec: float) -> st
             return f"candidate_cut_point_out_of_range_{idx}"
 
     return ""
+
+
+def _is_local_or_private_url(url: str) -> bool:
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return True
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        return True
+    if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+        return True
+    if host.endswith(".local") or host.endswith(".internal") or host.endswith(".lan") or host.endswith(".home") or host.endswith(".ts.net"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return not ip.is_global
+    except Exception:
+        return False
 
 
 def _guess_audio_mime(audio_path: str) -> str:
@@ -339,7 +382,7 @@ def build_gemini_audio_segmentation(
                         }
                     }
                 )
-            elif audio_url:
+            elif audio_url and not _is_local_or_private_url(audio_url):
                 parts.append(
                     {
                         "fileData": {
@@ -351,7 +394,7 @@ def build_gemini_audio_segmentation(
             else:
                 return {
                     "ok": False,
-                    "error": "audio_too_large_no_url",
+                    "error": "audio_too_large_no_public_url",
                     "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION,
                 }
         except Exception as exc:  # noqa: BLE001
@@ -361,10 +404,10 @@ def build_gemini_audio_segmentation(
                 "error": f"audio_attach_failed:{exc}",
                 "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION,
             }
-    elif audio_url:
+    elif audio_url and not _is_local_or_private_url(audio_url):
         parts.append({"fileData": {"mimeType": "audio/mpeg", "fileUri": str(audio_url).strip()}})
     else:
-        return {"ok": False, "error": "audio_source_missing", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION}
+        return {"ok": False, "error": "audio_source_missing_or_private_url", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION}
 
     body = {
         "contents": [{"role": "user", "parts": parts}],
