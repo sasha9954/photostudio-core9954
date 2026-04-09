@@ -7,6 +7,7 @@ from app.engine.gemini_rest import post_generate_content
 
 SCENE_PLAN_PROMPT_VERSION = "scene_plan_v1"
 ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
+GENERIC_ENVIRONMENT_FAMILIES = {"urban", "city", "interior", "outdoor"}
 TURN_FUNCTION_HINTS = {
     "turn",
     "reveal",
@@ -96,12 +97,60 @@ def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, A
     return lookup
 
 
+def _build_scene_world_summary(role_plan: dict[str, Any], story_core: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    world = _safe_dict(role_plan.get("world_continuity"))
+    environment_family = str(world.get("environment_family") or "").strip()
+    country = str(world.get("country_or_region") or "").strip()
+    location_progression = [str(item).strip() for item in _safe_list(world.get("location_progression")) if str(item).strip()]
+    style_anchor = str(world.get("style_anchor") or "").strip()
+    realism_contract = str(world.get("realism_contract") or "").strip()
+    story_summary = str(story_core.get("story_summary") or "").strip()
+    opening_anchor = str(story_core.get("opening_anchor") or "").strip()
+
+    is_generic_env = environment_family.lower() in GENERIC_ENVIRONMENT_FAMILIES or len(environment_family) < 5
+    strengthened_environment_family = environment_family
+    world_planning_summary = environment_family
+    used_strengthened_summary = False
+
+    if is_generic_env:
+        summary_parts: list[str] = []
+        if realism_contract:
+            summary_parts.append(realism_contract)
+        if country:
+            summary_parts.append(f"{country} setting")
+        if location_progression:
+            summary_parts.append(f"location flow: {' -> '.join(location_progression[:4])}")
+        if style_anchor:
+            summary_parts.append(style_anchor)
+        if opening_anchor:
+            summary_parts.append(f"opening anchor: {opening_anchor}")
+        if story_summary:
+            summary_parts.append(f"story arc: {story_summary}")
+        world_planning_summary = "; ".join(summary_parts)[:700] or "grounded contemporary public-to-private progression"
+        strengthened_environment_family = world_planning_summary
+        used_strengthened_summary = True
+
+    return (
+        {
+            "environment_family": environment_family,
+            "strengthened_environment_family": strengthened_environment_family[:400],
+            "world_planning_summary": world_planning_summary,
+            "country_or_region": country,
+            "location_progression": location_progression,
+            "style_anchor": style_anchor,
+            "realism_contract": realism_contract,
+        },
+        used_strengthened_summary,
+    )
+
+
 def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
     audio_map = _safe_dict(package.get("audio_map"))
     role_plan = _safe_dict(package.get("role_plan"))
     scene_windows = _build_scene_windows(audio_map)
+    world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
 
     context = {
         "mode": "clip",
@@ -122,6 +171,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         "role_plan": {
             "global_roles": _safe_dict(role_plan.get("global_roles")),
             "world_continuity": _safe_dict(role_plan.get("world_continuity")),
+            "world_summary": world_summary,
             "scene_roles": _safe_list(role_plan.get("scene_roles")),
             "role_arc_summary": str(role_plan.get("role_arc_summary") or ""),
             "continuity_notes": _safe_list(role_plan.get("continuity_notes")),
@@ -133,7 +183,11 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "first_last_definition": "explicit state transition A->B for reveal/turn/payoff/release/callback scenes",
         },
     }
-    aux = {"scene_windows": scene_windows, "role_lookup": _build_scene_role_lookup(role_plan)}
+    aux = {
+        "scene_windows": scene_windows,
+        "role_lookup": _build_scene_role_lookup(role_plan),
+        "world_summary_used": world_summary_used,
+    }
     return context, aux
 
 
@@ -148,6 +202,9 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "For 8 scenes target route mix 4 i2v / 2 ia2v / 2 first_last unless there is a strong reason.\\n"
         "Do NOT assign ia2v to every performance scene. Do NOT flatten all scenes into one route.\\n"
         "Preserve realism and coherent lighting/world progression from role_plan world continuity.\\n\\n"
+        "WATCHABILITY ROLE (MANDATORY): viewer-facing clip function of the scene, not role name.\\n"
+        "Each scene.watchability_role must be a short phrase that says why this scene matters to the viewer/clip arc.\\n"
+        "Avoid weak labels (hero/main character/character_1/route names/raw scene_function duplicates).\\n\\n"
         "ROUTE SEMANTICS (MANDATORY):\\n"
         "- i2v: baseline clip scene for observation/transit/environment/connective motion.\\n"
         "- ia2v: emotional performance shot, readable face, smooth motion, minimal abrupt full-body action.\\n"
@@ -233,6 +290,59 @@ def _default_route(scene: dict[str, Any], idx: int, total: int) -> str:
     return max(("i2v", "ia2v", "first_last"), key=lambda route: (scores[route], route == "i2v"))
 
 
+def _is_weak_watchability_role(value: str, *, route: str, scene_function: str) -> bool:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return True
+    weak_exact = {
+        "character_1",
+        "character 1",
+        "hero",
+        "main character",
+        "protagonist",
+        "lead",
+        "i2v",
+        "ia2v",
+        "first_last",
+    }
+    if raw in weak_exact:
+        return True
+    if raw == str(route or "").strip().lower():
+        return True
+    fnorm = str(scene_function or "").strip().lower()
+    return bool(fnorm and raw == fnorm)
+
+
+def _infer_watchability_role(scene: dict[str, Any], idx: int, total: int) -> str:
+    scene_function = str(scene.get("scene_function") or "").strip().lower()
+    presence_mode = str(scene.get("scene_presence_mode") or "").strip().lower()
+    route = str(scene.get("route") or "").strip().lower()
+    performance_focus = bool(scene.get("performance_focus"))
+    is_final = idx == max(total - 1, 0)
+
+    if "environment_anchor" in presence_mode or "environment_anchor" in scene_function:
+        return "anchor world and atmosphere"
+    if "transit" in presence_mode or "transit" in scene_function:
+        return "carry momentum between spaces"
+    if ("setup" in scene_function or idx == 0) and "observational" in presence_mode:
+        return "establish hero in public world"
+    if route == "ia2v" and (performance_focus or any(k in scene_function for k in {"tension", "conflict", "pressure"})):
+        return "deepen emotional connection through performance"
+    if route == "first_last" and any(k in scene_function for k in {"reveal", "turn", "transform", "transition", "callback"}):
+        return "mark visual transformation"
+    if "private_release" in presence_mode or "private_release" in scene_function:
+        return "deliver cathartic release"
+    if is_final and any(k in scene_function for k in {"release", "afterimage", "resolution", "payoff"}):
+        return "close arc with emotional payoff"
+    if is_final:
+        return "close arc with calm payoff"
+    if route == "ia2v":
+        return "deepen emotional connection through performance"
+    if route == "first_last":
+        return "mark transition into the next emotional state"
+    return "sustain watchable continuity and momentum"
+
+
 def _rebalance_routes(scenes: list[dict[str, Any]], target: dict[str, int]) -> bool:
     if not scenes:
         return False
@@ -276,7 +386,7 @@ def _rebalance_routes(scenes: list[dict[str, Any]], target: dict[str, int]) -> b
     return changed
 
 
-def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[str, Any]], role_lookup: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], bool, str]:
+def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[str, Any]], role_lookup: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], bool, str, int]:
     known_ids = {str(row.get("scene_id") or ""): row for row in scene_windows}
     raw_scenes_by_id: dict[str, dict[str, Any]] = {}
     for row_raw in _safe_list(raw_plan.get("scenes")):
@@ -286,6 +396,7 @@ def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[
             raw_scenes_by_id[scene_id] = row
 
     used_fallback = False
+    watchability_fallback_count = 0
     normalized_scenes: list[dict[str, Any]] = []
     for idx, window in enumerate(scene_windows):
         scene_id = str(window.get("scene_id") or "")
@@ -307,24 +418,29 @@ def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[
 
         scene_presence_mode = str(raw_row.get("scene_presence_mode") or role_row.get("scene_presence_mode") or "solo_observational").strip()
 
-        normalized_scenes.append(
-            {
-                "scene_id": scene_id,
-                "t0": _round3(window.get("t0")),
-                "t1": _round3(window.get("t1")),
-                "duration_sec": _round3(window.get("duration_sec") or (_round3(window.get("t1")) - _round3(window.get("t0")))),
-                "primary_role": primary_role,
-                "active_roles": active_roles,
-                "scene_presence_mode": scene_presence_mode,
-                "scene_function": str(raw_row.get("scene_function") or window.get("scene_function") or "montage_progression").strip() or "montage_progression",
-                "route": route,
-                "route_reason": str(raw_row.get("route_reason") or "").strip() or "route_selected_by_policy",
-                "emotional_intent": str(raw_row.get("emotional_intent") or "").strip() or "emotionally coherent clip beat",
-                "motion_intent": str(raw_row.get("motion_intent") or "").strip() or "watchable realistic movement",
-                "watchability_role": str(raw_row.get("watchability_role") or "").strip() or "maintain clip rhythm and visual continuity",
-                "performance_focus": bool(role_row.get("performance_focus")),
-            }
-        )
+        scene_function = str(raw_row.get("scene_function") or window.get("scene_function") or "montage_progression").strip() or "montage_progression"
+        watchability_role_raw = str(raw_row.get("watchability_role") or "").strip()
+        scene_row = {
+            "scene_id": scene_id,
+            "t0": _round3(window.get("t0")),
+            "t1": _round3(window.get("t1")),
+            "duration_sec": _round3(window.get("duration_sec") or (_round3(window.get("t1")) - _round3(window.get("t0")))),
+            "primary_role": primary_role,
+            "active_roles": active_roles,
+            "scene_presence_mode": scene_presence_mode,
+            "scene_function": scene_function,
+            "route": route,
+            "route_reason": str(raw_row.get("route_reason") or "").strip() or "route_selected_by_policy",
+            "emotional_intent": str(raw_row.get("emotional_intent") or "").strip() or "emotionally coherent clip beat",
+            "motion_intent": str(raw_row.get("motion_intent") or "").strip() or "watchable realistic movement",
+            "watchability_role": watchability_role_raw,
+            "performance_focus": bool(role_row.get("performance_focus")),
+        }
+        if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
+            scene_row["watchability_role"] = _infer_watchability_role(scene_row, idx, len(scene_windows))
+            watchability_fallback_count += 1
+            used_fallback = True
+        normalized_scenes.append(scene_row)
 
     target_budget = _target_route_budget(len(normalized_scenes))
     if _rebalance_routes(normalized_scenes, target_budget):
@@ -373,26 +489,34 @@ def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[
     }
 
     validation_error = "" if normalized_scenes else "scene_plan_empty_after_normalization"
-    return plan, used_fallback, validation_error
+    return plan, used_fallback, validation_error, watchability_fallback_count
 
 
 def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
     context, aux = _build_scene_planning_context(package)
     scene_windows = _safe_list(aux.get("scene_windows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
+    world_summary_used = bool(aux.get("world_summary_used"))
 
     diagnostics = {
         "prompt_version": SCENE_PLAN_PROMPT_VERSION,
         "scene_count": len(scene_windows),
+        "watchability_fallback_count": 0,
+        "world_summary_used": world_summary_used,
     }
 
     if not scene_windows:
-        plan, used_fallback, validation_error = _normalize_scene_plan({}, scene_windows=scene_windows, role_lookup=role_lookup)
+        plan, used_fallback, validation_error, watchability_fallback_count = _normalize_scene_plan(
+            {},
+            scene_windows=scene_windows,
+            role_lookup=role_lookup,
+        )
         diagnostics.update(
             {
                 "route_counts": _safe_dict(_safe_dict(plan.get("route_mix_summary"))),
                 "presence_modes": [],
                 "route_flat": False,
+                "watchability_fallback_count": int(watchability_fallback_count),
             }
         )
         return {
@@ -419,7 +543,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
 
         parsed = _extract_json_obj(_extract_gemini_text(response))
-        scene_plan, used_fallback, validation_error = _normalize_scene_plan(
+        scene_plan, used_fallback, validation_error, watchability_fallback_count = _normalize_scene_plan(
             parsed,
             scene_windows=scene_windows,
             role_lookup=role_lookup,
@@ -442,6 +566,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                 "route_counts": route_counts,
                 "presence_modes": presence_modes,
                 "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
+                "watchability_fallback_count": int(watchability_fallback_count),
             }
         )
         return {
@@ -453,7 +578,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             "diagnostics": diagnostics,
         }
     except Exception as exc:  # noqa: BLE001
-        scene_plan, used_fallback, validation_error = _normalize_scene_plan(
+        scene_plan, used_fallback, validation_error, watchability_fallback_count = _normalize_scene_plan(
             {},
             scene_windows=scene_windows,
             role_lookup=role_lookup,
@@ -475,6 +600,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                     - {""}
                 ),
                 "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
+                "watchability_fallback_count": int(watchability_fallback_count),
             }
         )
         return {

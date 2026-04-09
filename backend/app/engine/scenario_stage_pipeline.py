@@ -1799,6 +1799,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_counts"] = {"i2v": 0, "ia2v": 0, "first_last": 0}
     diagnostics["scene_plan_presence_modes"] = []
     diagnostics["scene_plan_route_flat"] = False
+    diagnostics["scene_plan_watchability_fallback_count"] = 0
+    diagnostics["scene_plan_world_summary_used"] = False
     diagnostics["scene_plan_validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
@@ -1825,6 +1827,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     }
     diagnostics["scene_plan_presence_modes"] = _safe_list(scene_diag.get("presence_modes"))
     diagnostics["scene_plan_route_flat"] = bool(scene_diag.get("route_flat"))
+    diagnostics["scene_plan_watchability_fallback_count"] = int(scene_diag.get("watchability_fallback_count") or 0)
+    diagnostics["scene_plan_world_summary_used"] = bool(scene_diag.get("world_summary_used"))
     diagnostics["scene_plan_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
     diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("scenes")))
