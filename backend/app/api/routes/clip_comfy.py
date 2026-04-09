@@ -223,6 +223,15 @@ def _has_legacy_single_call_shape(resp: dict[str, Any]) -> bool:
 
 
 def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
+    context_refs = req.get("context_refs") if isinstance(req.get("context_refs"), dict) else {}
+    audio_in = context_refs.get("audio_in") if isinstance(context_refs.get("audio_in"), dict) else {}
+    audio_in_meta = audio_in.get("meta") if isinstance(audio_in.get("meta"), dict) else {}
+    audio_url = str(req.get("audioUrl") or "").strip() or str(audio_in.get("value") or "").strip() or str(audio_in_meta.get("url") or "").strip()
+    source = req.get("source") if isinstance(req.get("source"), dict) else {}
+    source_value = str(source.get("source_value") or source.get("sourceValue") or "").strip() or audio_url
+    normalized_source = dict(source)
+    if source_value:
+        normalized_source["source_value"] = source_value
     controls = req.get("director_controls") if isinstance(req.get("director_controls"), dict) else {}
     selected_props = [
         str(item).strip()
@@ -234,8 +243,8 @@ def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
         "story_text": str(req.get("storyText") or "").strip(),
         "note": str(req.get("note") or req.get("storyText") or req.get("directorNote") or "").strip(),
         "director_note": str(req.get("directorNote") or "").strip(),
-        "source": req.get("source") if isinstance(req.get("source"), dict) else {},
-        "audio_url": str(req.get("audioUrl") or "").strip(),
+        "source": normalized_source,
+        "audio_url": audio_url,
         "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),
         "content_type": str(controls.get("contentType") or "music_video"),
         "format": str(controls.get("format") or req.get("format") or "9:16"),
