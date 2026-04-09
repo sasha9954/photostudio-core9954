@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import mimetypes
 import os
 import socket
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +18,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.static_paths import ASSETS_DIR
+from app.engine.audio_analyzer import analyze_audio
 from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
@@ -762,6 +765,279 @@ def _build_audio_map_from_duration(
     }
 
 
+def _resolve_audio_analysis_path(audio_url: str) -> tuple[str, str | None]:
+    local_rel_path = _extract_local_static_asset_relative_path(audio_url)
+    if local_rel_path:
+        try:
+            decoded_rel_path = urllib.parse.unquote(local_rel_path)
+            assets_root = Path(ASSETS_DIR).resolve()
+            file_path = (assets_root / decoded_rel_path).resolve()
+            if assets_root in file_path.parents and file_path.exists() and file_path.is_file():
+                return str(file_path), None
+        except Exception:
+            return "", None
+
+    resolved = _resolve_reference_url(audio_url)
+    if not resolved:
+        return "", None
+
+    parsed = urllib.parse.urlparse(resolved)
+    suffix = Path(parsed.path or "").suffix or ".audio"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp_path = tmp.name
+    tmp.close()
+    req = urllib.request.Request(resolved, headers={"User-Agent": "photostudio-audio-map/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp, open(tmp_path, "wb") as fh:
+            fh.write(resp.read())
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return "", None
+    return tmp_path, tmp_path
+
+
+def _float_points(values: Any, duration_sec: float, *, min_t: float = 0.0, max_t: float | None = None) -> list[float]:
+    max_bound = duration_sec if max_t is None else max_t
+    points: list[float] = []
+    for value in _safe_list(values):
+        try:
+            t = float(value)
+        except Exception:
+            continue
+        if t < min_t or t > max_bound:
+            continue
+        points.append(round(t, 3))
+    points.sort()
+    dedup: list[float] = []
+    for point in points:
+        if not dedup or abs(point - dedup[-1]) >= 0.18:
+            dedup.append(point)
+    return dedup
+
+
+def _add_scored_candidate(
+    score_by_point: dict[float, float],
+    point: float,
+    score: float,
+    duration_sec: float,
+    *,
+    edge_padding_sec: float = 0.65,
+) -> None:
+    t = _clamp_time(point, duration_sec)
+    if not (edge_padding_sec <= t <= max(0.0, duration_sec - edge_padding_sec)):
+        return
+    key = round(t, 3)
+    score_by_point[key] = max(score_by_point.get(key, 0.0), float(score))
+
+
+def _choose_section_boundaries(
+    duration_sec: float,
+    segment_count: int,
+    score_by_point: dict[float, float],
+) -> list[float]:
+    if duration_sec <= 0:
+        return [0.0]
+    target_boundaries = max(0, segment_count - 1)
+    if target_boundaries <= 0:
+        return [0.0, round(duration_sec, 3)]
+    min_gap = max(2.4, min(6.0, duration_sec / (segment_count * 1.8)))
+    sorted_candidates = sorted(score_by_point.items(), key=lambda item: item[0])
+    boundaries = [0.0]
+    for idx in range(1, target_boundaries + 1):
+        ideal = duration_sec * idx / segment_count
+        best: tuple[float, float] | None = None
+        for point, base_score in sorted_candidates:
+            if point <= boundaries[-1] + min_gap or point >= duration_sec - min_gap:
+                continue
+            distance_penalty = abs(point - ideal) / max(0.001, duration_sec)
+            score = base_score - distance_penalty
+            if best is None or score > best[1]:
+                best = (point, score)
+        if best is None:
+            fallback = round(_clamp_time(ideal, duration_sec), 3)
+            if fallback <= boundaries[-1] + min_gap:
+                fallback = round(min(duration_sec - min_gap, boundaries[-1] + min_gap), 3)
+            boundaries.append(fallback)
+        else:
+            boundaries.append(round(best[0], 3))
+    cleaned = [0.0]
+    for value in sorted(set(boundaries[1:])):
+        if value - cleaned[-1] >= min_gap:
+            cleaned.append(value)
+    if cleaned[-1] < duration_sec - min_gap * 0.5:
+        cleaned.append(round(duration_sec, 3))
+    else:
+        cleaned[-1] = round(duration_sec, 3)
+    if len(cleaned) < 2:
+        return [0.0, round(duration_sec, 3)]
+    return cleaned
+
+
+def _build_audio_map_from_dynamics(
+    duration_sec: float,
+    story_core: dict[str, Any],
+    analysis: dict[str, Any],
+    *,
+    analysis_mode: str,
+) -> dict[str, Any]:
+    duration = _coerce_duration_sec(duration_sec)
+    segment_count = _segment_count_for_duration(duration)
+    labels = _labels_for_segment_count(segment_count)
+    moods = _mood_curve_from_story_core(story_core, segment_count)
+
+    score_by_point: dict[float, float] = {}
+    sections_analysis = _safe_list(analysis.get("sections"))
+    pause_points = _float_points(analysis.get("pausePoints"), duration, min_t=0.15, max_t=max(0.0, duration - 0.15))
+    phrase_points = _float_points(analysis.get("phraseBoundaries"), duration, min_t=0.15, max_t=max(0.0, duration - 0.15))
+    energy_peaks = _float_points(analysis.get("energyPeaks"), duration, min_t=0.15, max_t=max(0.0, duration - 0.15))
+    downbeats = _float_points(analysis.get("downbeats"), duration, min_t=0.15, max_t=max(0.0, duration - 0.15))
+
+    for section in sections_analysis:
+        t0 = _coerce_duration_sec(section.get("start"))
+        t1 = _coerce_duration_sec(section.get("end"))
+        if t1 - t0 < 0.9:
+            continue
+        _add_scored_candidate(score_by_point, t0, 0.62, duration)
+        _add_scored_candidate(score_by_point, t1, 0.98, duration)
+    for point in pause_points:
+        _add_scored_candidate(score_by_point, point, 1.0, duration)
+    for point in phrase_points:
+        _add_scored_candidate(score_by_point, point, 0.72, duration)
+    for point in energy_peaks:
+        _add_scored_candidate(score_by_point, point, 0.55, duration)
+    for point in downbeats:
+        _add_scored_candidate(score_by_point, point, 0.42, duration)
+
+    boundaries = _choose_section_boundaries(duration, segment_count, score_by_point)
+    if len(boundaries) < 2:
+        raise ValueError("audio_dynamics_v2_boundaries_missing")
+
+    sections: list[dict[str, Any]] = []
+    section_energies: list[float] = []
+    for idx in range(len(boundaries) - 1):
+        t0 = round(boundaries[idx], 3)
+        t1 = round(boundaries[idx + 1], 3)
+        section_mid = (t0 + t1) * 0.5
+        density_score = 0.0
+        for point in energy_peaks:
+            if t0 <= point <= t1:
+                density_score += 1.0
+        for point in pause_points:
+            if t0 <= point <= t1:
+                density_score -= 0.5
+        density_score += 0.15 * math.sin(section_mid / max(duration, 1.0) * math.pi)
+        section_energies.append(density_score)
+        sections.append(
+            {
+                "id": f"sec_{idx + 1}",
+                "t0": t0,
+                "t1": t1,
+                "label": labels[idx] if idx < len(labels) else f"part_{idx + 1}",
+                "mood": moods[idx] if idx < len(moods) else "neutral",
+            }
+        )
+
+    if section_energies:
+        low_thr = float(sorted(section_energies)[max(0, int(len(section_energies) * 0.3) - 1)])
+        high_thr = float(sorted(section_energies)[min(len(section_energies) - 1, int(len(section_energies) * 0.7))])
+    else:
+        low_thr = high_thr = 0.0
+    for idx, section in enumerate(sections):
+        energy_value = section_energies[idx] if idx < len(section_energies) else 0.0
+        if energy_value <= low_thr:
+            section["energy"] = "low"
+        elif energy_value >= high_thr:
+            section["energy"] = "high"
+        else:
+            section["energy"] = "medium"
+
+    phrase_endpoints = sorted(
+        set(
+            [
+                point
+                for point in (pause_points + phrase_points + [round(float(s.get("t1") or 0.0), 3) for s in sections])
+                if 0.0 < point < duration
+            ]
+        )
+    )
+
+    no_split_ranges: list[dict[str, Any]] = []
+    if duration > 0:
+        no_split_ranges.append({"t0": 0.0, "t1": round(min(1.2, duration), 3), "reason": "intro_protection"})
+        tail_start = round(max(0.0, duration - 1.2), 3)
+        if tail_start < duration:
+            no_split_ranges.append({"t0": tail_start, "t1": round(duration, 3), "reason": "outro_tail_protection"})
+    for peak in energy_peaks:
+        no_split_ranges.append(
+            {
+                "t0": round(max(0.0, peak - 0.28), 3),
+                "t1": round(min(duration, peak + 0.28), 3),
+                "reason": "energy_core_protection",
+            }
+        )
+
+    candidate_cut_points: list[float] = []
+    for point in sorted(score_by_point.keys()):
+        if point <= 0.0 or point >= duration:
+            continue
+        inside_blocked = any(float(r.get("t0") or 0.0) <= point <= float(r.get("t1") or 0.0) for r in no_split_ranges)
+        if inside_blocked:
+            continue
+        if score_by_point.get(point, 0.0) >= 0.58:
+            candidate_cut_points.append(point)
+
+    mood_progression = [
+        {
+            "t0": float(section.get("t0") or 0.0),
+            "t1": float(section.get("t1") or 0.0),
+            "mood": str(section.get("mood") or "neutral"),
+            "energy": str(section.get("energy") or "medium"),
+        }
+        for section in sections
+    ]
+    energy_counts = {"low": 0, "medium": 0, "high": 0}
+    for section in sections:
+        energy = str(section.get("energy") or "medium").lower()
+        if energy in energy_counts:
+            energy_counts[energy] += 1
+    dominant_energy = max(energy_counts.items(), key=lambda item: item[1])[0] if sections else "medium"
+
+    lip_sync_ranges: list[dict[str, float]] = []
+    content_hint = str(story_core.get("story_summary") or "").lower()
+    if "speak" in content_hint or "sing" in content_hint or "vocal" in content_hint:
+        for section in sections:
+            if str(section.get("energy") or "").lower() in {"medium", "high"}:
+                lip_sync_ranges.append({"t0": round(float(section.get("t0") or 0.0), 3), "t1": round(float(section.get("t1") or 0.0), 3)})
+
+    arc_short = str(story_core.get("global_arc") or "").strip() or "unknown_arc"
+    return {
+        "duration_sec": round(duration, 3),
+        "analysis_mode": analysis_mode,
+        "sections": sections,
+        "phrase_endpoints_sec": phrase_endpoints,
+        "no_split_ranges": no_split_ranges,
+        "candidate_cut_points_sec": sorted(set(candidate_cut_points)),
+        "pacing_profile": {
+            "segment_count": len(sections),
+            "dominant_energy": dominant_energy,
+            "candidate_density": round(len(score_by_point) / max(duration, 1.0), 3),
+        },
+        "mood_progression": mood_progression,
+        "audio_arc_summary": f"Audio map follows story_core arc '{arc_short}' and aligns sections to detected dynamics/pause anchors.",
+        "section_summary": [f"{sec.get('label')}:{sec.get('energy')}/{sec.get('mood')}" for sec in sections],
+        "lip_sync_candidate_ranges": lip_sync_ranges,
+        "audio_dynamics_summary": {
+            "pause_points_count": len(pause_points),
+            "phrase_points_count": len(phrase_points),
+            "energy_peaks_count": len(energy_peaks),
+            "detected_sections_count": len(sections_analysis),
+        },
+    }
+
+
 def _is_usable_audio_map(audio_map: dict[str, Any]) -> bool:
     if not isinstance(audio_map, dict):
         return False
@@ -799,12 +1075,34 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     used_fallback = False
     analysis_mode = "timing_heuristics_v1"
     try:
-        audio_map = _build_audio_map_from_duration(duration_sec, story_core, analysis_mode=analysis_mode)
+        if audio_url:
+            analysis_path = ""
+            cleanup_path: str | None = None
+            try:
+                analysis_path, cleanup_path = _resolve_audio_analysis_path(audio_url)
+                if not analysis_path:
+                    raise ValueError("audio_source_unavailable_for_dynamics")
+                raw_analysis = analyze_audio(analysis_path, debug=False)
+                analysis_mode = "audio_dynamics_v2"
+                audio_map = _build_audio_map_from_dynamics(
+                    duration_sec,
+                    story_core,
+                    raw_analysis,
+                    analysis_mode=analysis_mode,
+                )
+            finally:
+                if cleanup_path:
+                    try:
+                        os.unlink(cleanup_path)
+                    except OSError:
+                        pass
+        else:
+            audio_map = _build_audio_map_from_duration(duration_sec, story_core, analysis_mode=analysis_mode)
         if not _is_usable_audio_map(audio_map):
             raise ValueError("audio_map_unusable_primary")
     except Exception as exc:  # noqa: BLE001
         used_fallback = True
-        analysis_mode = "duration_fallback_v1"
+        analysis_mode = "timing_heuristics_v1"
         audio_map = _build_audio_map_from_duration(duration_sec, story_core, analysis_mode=analysis_mode)
         if not _is_usable_audio_map(audio_map):
             raise RuntimeError(f"audio_map_failed_no_fallback:{exc}") from exc
