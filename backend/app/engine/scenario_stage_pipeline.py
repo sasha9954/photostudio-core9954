@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -46,6 +47,39 @@ def _safe_dict(value: Any) -> dict[str, Any]:
 
 def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _extract_audio_url_from_refs(refs_inventory: dict[str, Any]) -> str:
+    audio_in = _safe_dict(refs_inventory.get("audio_in"))
+    meta = _safe_dict(audio_in.get("meta"))
+    candidates = (
+        audio_in.get("value"),
+        meta.get("url"),
+        audio_in.get("preview"),
+    )
+    for item in candidates:
+        value = str(item or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _normalize_input_audio_source(input_payload: dict[str, Any], refs_inventory: dict[str, Any]) -> dict[str, Any]:
+    normalized = deepcopy(_safe_dict(input_payload))
+    audio_url = str(normalized.get("audio_url") or "").strip()
+    refs_audio_url = _extract_audio_url_from_refs(refs_inventory)
+    if not audio_url and refs_audio_url:
+        audio_url = refs_audio_url
+    normalized["audio_url"] = audio_url
+
+    source = _safe_dict(normalized.get("source"))
+    source_value = str(source.get("source_value") or source.get("sourceValue") or "").strip()
+    if not source_value:
+        source_value = audio_url
+    if source_value:
+        source["source_value"] = source_value
+    normalized["source"] = source
+    return normalized
 
 
 def _extract_gemini_text(resp: dict[str, Any]) -> str:
@@ -142,6 +176,27 @@ def _is_usable_story_core(story_core: dict[str, Any]) -> bool:
 def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     req = _safe_dict(payload)
     metadata = _safe_dict(req.get("metadata"))
+    refs_inventory = _safe_dict(req.get("context_refs"))
+    base_input = {
+        "text": str(req.get("text") or "").strip(),
+        "story_text": str(req.get("storyText") or "").strip(),
+        "note": str(req.get("note") or req.get("storyText") or "").strip(),
+        "director_note": str(req.get("directorNote") or "").strip(),
+        "source": _safe_dict(req.get("source")),
+        "audio_url": str(req.get("audioUrl") or "").strip(),
+        "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),
+        "content_type": str(_safe_dict(req.get("director_controls")).get("contentType") or "music_video"),
+        "format": str(_safe_dict(req.get("director_controls")).get("format") or req.get("format") or "9:16"),
+        "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
+        "refs_by_role": _safe_dict(req.get("refsByRole")),
+        "selected_refs": {
+            "character_1": str(req.get("selectedCharacterRefUrl") or "").strip(),
+            "style": str(req.get("selectedStyleRefUrl") or "").strip(),
+            "location": str(req.get("selectedLocationRefUrl") or "").strip(),
+            "props": [str(item).strip() for item in _safe_list(req.get("selectedPropsRefUrls")) if str(item).strip()],
+        },
+    }
+    normalized_input = _normalize_input_audio_source(base_input, refs_inventory)
     stages = {
         stage_id: {
             "status": "idle",
@@ -156,26 +211,8 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "pipeline_mode": str(metadata.get("pipelineMode") or "scenario_stage_v1"),
         "created_at": _utc_iso(),
         "updated_at": _utc_iso(),
-        "input": {
-            "text": str(req.get("text") or "").strip(),
-            "story_text": str(req.get("storyText") or "").strip(),
-            "note": str(req.get("note") or req.get("storyText") or "").strip(),
-            "director_note": str(req.get("directorNote") or "").strip(),
-            "source": _safe_dict(req.get("source")),
-            "audio_url": str(req.get("audioUrl") or "").strip(),
-            "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),
-            "content_type": str(_safe_dict(req.get("director_controls")).get("contentType") or "music_video"),
-            "format": str(_safe_dict(req.get("director_controls")).get("format") or req.get("format") or "9:16"),
-            "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
-            "refs_by_role": _safe_dict(req.get("refsByRole")),
-            "selected_refs": {
-                "character_1": str(req.get("selectedCharacterRefUrl") or "").strip(),
-                "style": str(req.get("selectedStyleRefUrl") or "").strip(),
-                "location": str(req.get("selectedLocationRefUrl") or "").strip(),
-                "props": [str(item).strip() for item in _safe_list(req.get("selectedPropsRefUrls")) if str(item).strip()],
-            },
-        },
-        "refs_inventory": _safe_dict(req.get("context_refs")),
+        "input": normalized_input,
+        "refs_inventory": refs_inventory,
         "assigned_roles": _safe_dict(req.get("roleTypeByRole")),
         "story_core": {},
         "audio_map": {},
@@ -189,6 +226,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "errors": [],
             "stale_reason": "",
             "last_action": "",
+            "story_core_used_fallback": False,
         },
         "stage_statuses": stages,
         "contracts": {
@@ -263,14 +301,19 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     fallback = _default_story_core(input_pkg)
     prompt = _build_story_core_prompt(input_pkg, refs_inventory, assigned_roles)
     try:
+        api_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+        }
         response = post_generate_content(
-            {
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
-            },
+            api_key=api_key,
             model="gemini-2.5-pro",
+            body=body,
             timeout=90,
         )
+        if isinstance(response, dict) and response.get("__http_error__"):
+            raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
         parsed = _extract_json_obj(_extract_gemini_text(response))
         story_core = {
             "story_summary": str(parsed.get("story_summary") or fallback["story_summary"]).strip(),
@@ -284,6 +327,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         if not _is_usable_story_core(story_core):
             raise ValueError("story_core_unusable_after_parse")
         package["story_core"] = story_core
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["story_core_used_fallback"] = False
+        package["diagnostics"] = diagnostics
         _append_diag_event(package, "story_core generated", stage_id="story_core")
         return package
     except Exception as exc:  # noqa: BLE001
@@ -293,6 +339,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
             warnings = _safe_list(diagnostics.get("warnings"))
             warnings.append({"stage_id": "story_core", "message": f"fallback_used:{exc}"})
             diagnostics["warnings"] = warnings[-80:]
+            diagnostics["story_core_used_fallback"] = True
             package["diagnostics"] = diagnostics
             package["story_core"] = fallback
             _append_diag_event(package, f"story_core fallback used: {exc}", stage_id="story_core")
@@ -301,8 +348,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
-    package["input"] = _safe_dict(package.get("input"))
-    package["refs_inventory"] = _safe_dict(package.get("refs_inventory"))
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
+    package["refs_inventory"] = refs_inventory
+    package["input"] = _normalize_input_audio_source(_safe_dict(package.get("input")), refs_inventory)
     _append_diag_event(package, "input_package normalized", stage_id="input_package")
     return package
 
