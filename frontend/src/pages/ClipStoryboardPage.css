@@ -505,6 +505,23 @@
   box-shadow: inset 0 0 0 1px rgba(77, 216, 255, 0.24);
 }
 
+.clipSB_storyboardOpenEditorBtn:disabled,
+.clipSB_storyboardOpenEditorBtn.isDisabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.clipSB_storyboardOpenEditorBtn:disabled:hover,
+.clipSB_storyboardOpenEditorBtn.isDisabled:hover,
+.clipSB_storyboardOpenEditorBtn:disabled:active,
+.clipSB_storyboardOpenEditorBtn.isDisabled:active {
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  transform: none;
+}
+
 .clipSB_btnLink {
   display: inline-flex;
   align-items: center;
@@ -3095,9 +3112,9 @@ body.ps_clip_fullscreen .mainCol {
   --node-accent-header: var(--family-narrative-header);
   --node-accent-glow: var(--family-narrative-glow);
   --node-accent-active: var(--family-narrative-active);
-  width: 860px;
-  min-width: 820px;
-  max-width: min(860px, calc(100vw - 72px));
+  width: 620px;
+  min-width: 580px;
+  max-width: min(620px, calc(100vw - 72px));
 }
 
 .clipSB_nodeTester {
@@ -3545,11 +3562,10 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_narrativeLayout {
   display: grid;
-  grid-template-columns: minmax(340px, 0.92fr) minmax(380px, 1.08fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
   margin-top: 10px;
-  min-height: 252px;
 }
 
 .clipSB_narrativeControlColumn {
@@ -4121,7 +4137,7 @@ body.ps_clip_fullscreen .mainCol {
 
 @media (max-width: 900px) {
   .clipSB_nodeNarrative {
-    width: min(860px, calc(100vw - 56px));
+    width: min(620px, calc(100vw - 56px));
     min-width: 0;
   }
 

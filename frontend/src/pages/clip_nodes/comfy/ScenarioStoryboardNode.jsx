@@ -154,7 +154,14 @@ export default function ScenarioStoryboardNode({ id, data }) {
 
         <div className="clipSB_selectHint" style={{ marginTop: 8 }}>Сцены готовы. Можно открыть editor.</div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-          <button className="clipSB_btn" onClick={() => data?.onOpenScenarioStoryboard?.(id)} disabled={totalScenes === 0} type="button">Открыть editor</button>
+          <button
+            className={`clipSB_btn clipSB_storyboardOpenEditorBtn${totalScenes === 0 ? " isDisabled" : ""}`}
+            onClick={() => data?.onOpenScenarioStoryboard?.(id)}
+            disabled={totalScenes === 0}
+            type="button"
+          >
+            Открыть editor
+          </button>
         </div>
       </NodeShell>
     </>
