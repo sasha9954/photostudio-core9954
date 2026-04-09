@@ -1183,20 +1183,52 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
   if (String(response?.pipeline || "").trim() === "scenario_stage_v1") {
     const storyboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : {};
     const storyCore = storyboardPackage?.story_core && typeof storyboardPackage.story_core === "object" ? storyboardPackage.story_core : {};
-    const scenes = Array.isArray(storyboardPackage?.final_storyboard?.scenes)
-      ? storyboardPackage.final_storyboard.scenes
+    const finalStoryboard = storyboardPackage?.final_storyboard && typeof storyboardPackage.final_storyboard === "object"
+      ? storyboardPackage.final_storyboard
+      : {};
+    const scenes = Array.isArray(finalStoryboard?.scenes)
+      ? finalStoryboard.scenes
       : (Array.isArray(storyboardPackage?.scene_plan?.scenes) ? storyboardPackage.scene_plan.scenes : []);
+    const storySummary = normalizeText(finalStoryboard?.story_summary || storyCore?.story_summary);
+    const directorSummary = normalizeText(finalStoryboard?.director_summary || storyCore?.director_summary || storyCore?.story_summary);
     const storyboardOut = {
+      ...finalStoryboard,
       scenes,
       contentType: "music_video",
       format: normalizeText(state?.format) || "9:16",
-      story_summary: normalizeText(storyCore?.story_summary),
-      opening_anchor: normalizeText(storyCore?.opening_anchor),
-      ending_callback_rule: normalizeText(storyCore?.ending_callback_rule),
+      story_summary: storySummary,
+      director_summary: directorSummary,
+      opening_anchor: normalizeText(finalStoryboard?.opening_anchor || storyCore?.opening_anchor),
+      ending_callback_rule: normalizeText(finalStoryboard?.ending_callback_rule || storyCore?.ending_callback_rule),
+      audioUrl: normalizeText(finalStoryboard?.audioUrl || finalStoryboard?.audio_url || storyboardPackage?.input?.audio_url || state?.audioUrl || state?.masterAudioUrl),
+      audioDurationSec: Number(finalStoryboard?.audioDurationSec || finalStoryboard?.audio_duration_sec || storyboardPackage?.input?.audio_duration_sec || state?.audioDurationSec || 0) || 0,
+      refsByRole: finalStoryboard?.refsByRole && typeof finalStoryboard.refsByRole === "object"
+        ? finalStoryboard.refsByRole
+        : (storyboardPackage?.input?.refs_by_role && typeof storyboardPackage.input.refs_by_role === "object" ? storyboardPackage.input.refs_by_role : {}),
+      roleTypeByRole: finalStoryboard?.roleTypeByRole && typeof finalStoryboard.roleTypeByRole === "object"
+        ? finalStoryboard.roleTypeByRole
+        : (storyboardPackage?.assigned_roles && typeof storyboardPackage.assigned_roles === "object" ? storyboardPackage.assigned_roles : {}),
+      context_refs: finalStoryboard?.context_refs && typeof finalStoryboard.context_refs === "object"
+        ? finalStoryboard.context_refs
+        : (storyboardPackage?.refs_inventory && typeof storyboardPackage.refs_inventory === "object" ? storyboardPackage.refs_inventory : {}),
+      connected_context_summary: finalStoryboard?.connected_context_summary && typeof finalStoryboard.connected_context_summary === "object"
+        ? finalStoryboard.connected_context_summary
+        : (storyboardPackage?.input?.connected_context_summary && typeof storyboardPackage.input.connected_context_summary === "object" ? storyboardPackage.input.connected_context_summary : {}),
+      world_continuity: finalStoryboard?.world_continuity && typeof finalStoryboard.world_continuity === "object"
+        ? finalStoryboard.world_continuity
+        : (storyboardPackage?.role_plan?.world_continuity && typeof storyboardPackage.role_plan.world_continuity === "object" ? storyboardPackage.role_plan.world_continuity : {}),
+      story_locks: finalStoryboard?.story_locks && typeof finalStoryboard.story_locks === "object"
+        ? finalStoryboard.story_locks
+        : {
+          identity_lock: storyCore?.identity_lock || {},
+          world_lock: storyCore?.world_lock || {},
+          style_lock: storyCore?.style_lock || {},
+          narrative_locks: storyCore?.narrative_locks || {},
+        },
     };
     return {
       storyboardOut,
-      scenario: normalizeText(storyCore?.story_summary),
+      scenario: storySummary,
       voiceScript: "",
       scenarioPackage: storyboardPackage,
       brainPackage: null,
@@ -1209,6 +1241,18 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         diagnostics: storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object" ? storyboardPackage.diagnostics : {},
         executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
         scenes: storyboardOut.scenes,
+        story_summary: storyboardOut.story_summary,
+        director_summary: storyboardOut.director_summary,
+        opening_anchor: storyboardOut.opening_anchor,
+        ending_callback_rule: storyboardOut.ending_callback_rule,
+        audioUrl: storyboardOut.audioUrl,
+        audioDurationSec: storyboardOut.audioDurationSec,
+        refsByRole: storyboardOut.refsByRole,
+        roleTypeByRole: storyboardOut.roleTypeByRole,
+        context_refs: storyboardOut.context_refs,
+        connected_context_summary: storyboardOut.connected_context_summary,
+        world_continuity: storyboardOut.world_continuity,
+        story_locks: storyboardOut.story_locks,
       },
       raw: response,
     };
