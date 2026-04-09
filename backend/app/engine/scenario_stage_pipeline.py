@@ -1492,6 +1492,8 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_segmentation_used_fallback"] = False
     diagnostics["audio_map_segmentation_validation_error"] = ""
     diagnostics["audio_map_segmentation_prompt_version"] = ""
+    diagnostics["audio_map_segmentation_error"] = ""
+    diagnostics["audio_map_segmentation_error_detail"] = ""
     diagnostics["transcript_available"] = False
     diagnostics["word_timestamp_count"] = 0
     diagnostics["phrase_unit_count"] = 0
@@ -1564,18 +1566,16 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                     audio_map["no_split_ranges"] = _safe_list(payload.get("no_split_ranges"))
                     audio_map["audio_map_alignment_source"] = "gemini_semantic_segmentation"
                     analysis_mode = "gemini_semantic_segmentation_v1"
-                    diagnostics["audio_map_alignment_backend"] = "gemini"
-                    diagnostics["audio_map_alignment_attempted"] = True
-                    diagnostics["audio_map_alignment_unavailable_reason"] = ""
-                    diagnostics["audio_map_alignment_error_detail"] = ""
+                    diagnostics["audio_map_segmentation_backend"] = "gemini"
+                    diagnostics["audio_map_segmentation_error"] = ""
+                    diagnostics["audio_map_segmentation_error_detail"] = ""
                     _append_diag_event(package, "audio_map gemini segmentation resolved", stage_id="audio_map")
                 else:
                     gemini_error = str(gemini_result.get("error") or "gemini_segmentation_failed")
                     diagnostics["audio_map_segmentation_used_fallback"] = True
-                    diagnostics["audio_map_alignment_backend"] = "gemini"
-                    diagnostics["audio_map_alignment_attempted"] = True
-                    diagnostics["audio_map_alignment_unavailable_reason"] = gemini_error
-                    diagnostics["audio_map_alignment_error_detail"] = str(gemini_result.get("validation_error") or "")
+                    diagnostics["audio_map_segmentation_backend"] = "gemini"
+                    diagnostics["audio_map_segmentation_error"] = gemini_error
+                    diagnostics["audio_map_segmentation_error_detail"] = str(gemini_result.get("validation_error") or "")
                     _append_diag_event(
                         package,
                         f"audio_map gemini segmentation invalid, falling back to local splitter: {gemini_error}",
@@ -1590,7 +1590,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                     alignment_reason = str(alignment_diag.get("reason") or "").strip()
                     diagnostics["audio_map_alignment_backend"] = str(alignment_diag.get("backend") or "local")
                     diagnostics["audio_map_alignment_attempted"] = bool(alignment_diag.get("attempted"))
-                    diagnostics["audio_map_alignment_unavailable_reason"] = alignment_reason or gemini_error
+                    diagnostics["audio_map_alignment_unavailable_reason"] = alignment_reason
                     diagnostics["audio_map_alignment_error_detail"] = str(alignment_diag.get("error_detail") or "")
                     if alignment:
                         aligned_map = _build_audio_map_from_real_alignment(duration_sec, story_core, raw_analysis, alignment)
@@ -1688,11 +1688,15 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     diagnostics["audio_map_analysis_mode"] = analysis_mode
     diagnostics["audio_map_used_fallback"] = bool(used_fallback)
-    diagnostics["audio_map_segmentation_backend"] = "gemini" if analysis_mode == "gemini_semantic_segmentation_v1" else "local_fallback"
+    diagnostics["audio_map_segmentation_backend"] = (
+        "gemini" if analysis_mode == "gemini_semantic_segmentation_v1" else "local_fallback"
+    )
     diagnostics["audio_map_segmentation_used_fallback"] = bool(
         diagnostics.get("audio_map_segmentation_used_fallback")
         or analysis_mode in {"transcript_alignment_v2", "approximate_phrase_grouping_v1", "audio_dynamics_v2", "timing_heuristics_v1"}
     )
+    diagnostics["audio_map_segmentation_error"] = str(diagnostics.get("audio_map_segmentation_error") or "")
+    diagnostics["audio_map_segmentation_error_detail"] = str(diagnostics.get("audio_map_segmentation_error_detail") or "")
     diagnostics["audio_map_phrase_mode"] = str(audio_map.get("analysis_mode") or analysis_mode or "timing_heuristics_v1")
     diagnostics["transcript_available"] = bool(audio_map.get("transcript_available"))
     diagnostics["word_timestamp_count"] = len(_safe_list(_safe_dict(audio_map.get("transcript_alignment")).get("words")))
