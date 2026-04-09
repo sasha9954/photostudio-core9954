@@ -25,6 +25,7 @@ export default function ScenarioPipelineDebugNode({ id, data }) {
   return (
     <>
       <Handle type="target" position={Position.Left} id="scenario_pipeline_debug_in" className="clipSB_handle" style={handleStyle("scenario_pipeline_debug_in")} />
+      <Handle type="source" position={Position.Right} id="storyboard_out" className="clipSB_handle" style={handleStyle("storyboard_out")} />
       <NodeShell title="SCENARIO PIPELINE DEBUG" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧪</span>} className="clipSB_nodeStoryboard">
         <div className="clipSB_assemblyStats" style={{ marginTop: 4 }}>
           <div className="clipSB_assemblyRow"><span>Mode</span><strong>{contentType || "—"}</strong></div>
@@ -33,6 +34,7 @@ export default function ScenarioPipelineDebugNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Audio</span><strong>{hasAudio ? "yes" : "no"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Source</span><strong>{isConnectedToDirector ? "Director" : "Not connected"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Done</span><strong>{statusSummary.done}/6</strong></div>
+          <div className="clipSB_assemblyRow"><span>storyboard_out</span><strong>{data?.storyboardOut ? "ready" : "waiting"}</strong></div>
         </div>
         <div className="clipSB_selectHint" style={{ marginTop: 8 }}>Stage-by-stage pipeline lab.</div>
         <button className="clipSB_btn" style={{ marginTop: 10 }} type="button" onClick={() => data?.onOpenScenarioPipelineDebug?.(id)}>

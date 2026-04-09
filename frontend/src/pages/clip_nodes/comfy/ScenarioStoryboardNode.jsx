@@ -93,7 +93,8 @@ export default function ScenarioStoryboardNode({ id, data }) {
     const runtime = generationMap[key] && typeof generationMap[key] === "object" ? generationMap[key] : {};
     return ["generating", "queued", "pending"].includes(String(runtime?.status || runtime?.imageStatus || runtime?.videoStatus || "").trim().toLowerCase());
   });
-  const scenarioModeRaw = data?.scenarioMode || data?.contentType || "";
+  const scenarioModeRaw = data?.incomingMode || data?.scenarioMode || data?.contentType || "";
+  const scenarioFormat = String(data?.incomingFormat || data?.format || "").trim();
   const modeBadge = resolveScenarioModeBadge(scenarioModeRaw);
   const status = String(data?.status || "").trim().toLowerCase() || (totalScenes === 0 ? "idle" : (hasGenerationInProgress ? "generating" : "ready"));
 
@@ -144,6 +145,7 @@ export default function ScenarioStoryboardNode({ id, data }) {
               {modeBadge.displayLabel}
             </strong>
           </div>
+          <div className="clipSB_assemblyRow"><span>Format</span><strong>{scenarioFormat || "—"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Сцен</span><strong>{totalScenes}</strong></div>
           <div className="clipSB_assemblyRow"><span>Фото</span><strong>{generatedImages}/{totalScenes || 0}</strong></div>
           <div className="clipSB_assemblyRow"><span>Видео</span><strong>{generatedVideos}/{totalScenes || 0}</strong></div>

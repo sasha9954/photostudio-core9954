@@ -1174,6 +1174,13 @@ function extractNarrativeStoryboardOut({ sourceNode = null, sourceHandle = "" } 
   return storyboardOut && typeof storyboardOut === "object" && !Array.isArray(storyboardOut) ? storyboardOut : null;
 }
 
+function extractScenarioPipelineStoryboardOut({ sourceNode = null, sourceHandle = "" } = {}) {
+  if (!sourceNode || sourceNode.type !== "scenarioPipelineDebug" || String(sourceHandle || "") !== "storyboard_out") return null;
+  const data = sourceNode?.data && typeof sourceNode.data === "object" ? sourceNode.data : {};
+  const candidate = data?.storyboardOut || data?.storyboardPackage || data?.directorOutput?.storyboardPackage || null;
+  return candidate && typeof candidate === "object" && !Array.isArray(candidate) ? candidate : null;
+}
+
 function toStoryboardTimeSec(value, fallback = 0) {
   const direct = Number(value);
   if (Number.isFinite(direct)) return direct;
@@ -1487,6 +1494,7 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
   if (targetType === "comfyNarrative" && isNarrativeInput(targetHandle)) return targetHandle;
   if (sourceType === "comfyBrain" && isComfyBrainInput(sourceHandle)) return sourceHandle;
   if (sourceType === "comfyNarrative" && ["storyboard_out", "preview_out", "scenario_out", "voice_script_out", "brain_package_out", "bg_music_prompt_out"].includes(String(sourceHandle || ""))) return sourceHandle;
+  if (sourceType === "scenarioPipelineDebug" && sourceHandle === "storyboard_out" && targetType === "scenarioStoryboard" && targetHandle === "scenario_storyboard_in") return "scenario_storyboard_in";
 
   if (targetType === "introFrame" && targetHandle === INTRO_FRAME_STORY_HANDLE) return "intro_context";
 
@@ -1520,6 +1528,10 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
 
   if (sourceType === "comfyNarrative" && sourceHandle === "storyboard_out" && targetType === "scenarioPipelineDebug" && targetHandle === "scenario_pipeline_debug_in") {
     return "scenario_pipeline_debug_in";
+  }
+
+  if (sourceType === "scenarioPipelineDebug" && sourceHandle === "storyboard_out" && targetType === "scenarioStoryboard" && targetHandle === "scenario_storyboard_in") {
+    return "scenario_storyboard_in";
   }
 
   if (sourceType === "comfyNarrative" && sourceHandle === "preview_out" && targetType === "comfyVideoPreview" && targetHandle === "scenario_preview_in") {
@@ -14034,22 +14046,37 @@ onClipSec: (nodeId, value) => {
 
         if (n.type === "scenarioStoryboard") {
           const nodesById = new Map((Array.isArray(effectiveNodes) ? effectiveNodes : []).map((nodeItem) => [nodeItem.id, nodeItem]));
-          const incomingEdge = [...effectiveEdges]
+          const scenarioIncomingEdges = [...effectiveEdges]
+            .filter((edge) => edge?.target === n.id && String(edge?.targetHandle || "") === "scenario_storyboard_in");
+          const incomingEdge = [...scenarioIncomingEdges]
             .reverse()
-            .find((edge) => edge?.target === n.id && String(edge?.targetHandle || "") === "scenario_storyboard_in") || null;
+            .find((edge) => {
+              const srcNode = edge?.source ? nodesById.get(edge.source) : null;
+              return srcNode?.type === "scenarioPipelineDebug" && String(edge?.sourceHandle || "") === "storyboard_out";
+            })
+            || [...scenarioIncomingEdges].reverse()[0]
+            || null;
           const sourceNode = incomingEdge?.source ? (nodesById.get(incomingEdge.source) || null) : null;
           const sourceHandle = String(incomingEdge?.sourceHandle || "");
-          const validScenarioSource = sourceNode?.type === "comfyNarrative" && sourceHandle === "storyboard_out";
+          const isDirectPipelineSource = sourceNode?.type === "scenarioPipelineDebug" && sourceHandle === "storyboard_out";
+          const isLegacyNarrativeSource = sourceNode?.type === "comfyNarrative" && sourceHandle === "storyboard_out";
+          const validScenarioSource = isDirectPipelineSource || isLegacyNarrativeSource;
           const sourceIsGenerating = validScenarioSource && sourceNode?.data?.isGenerating === true;
-          const hasPendingScenarioOutputs = validScenarioSource && !!sourceNode?.data?.pendingOutputs;
-          const storyboardOut = validScenarioSource ? extractNarrativeStoryboardOut({ sourceNode, sourceHandle }) : null;
-          const directorOutput = validScenarioSource
-            ? (sourceNode?.data?.pendingOutputs?.directorOutput || sourceNode?.data?.outputs?.directorOutput || null)
-            : null;
-          const rawScenarioResponse = validScenarioSource ? (sourceNode?.data?.pendingRawResponse || null) : null;
-          const sourceScenarioRevision = validScenarioSource
-            ? String(sourceNode?.data?.pendingScenarioRevision || sourceNode?.data?.scenarioRevision || "")
-            : "";
+          const hasPendingScenarioOutputs = isLegacyNarrativeSource && !!sourceNode?.data?.pendingOutputs;
+          const directPipelineStoryboardOut = isDirectPipelineSource ? extractScenarioPipelineStoryboardOut({ sourceNode, sourceHandle }) : null;
+          const narrativeStoryboardOut = isLegacyNarrativeSource ? extractNarrativeStoryboardOut({ sourceNode, sourceHandle }) : null;
+          const storyboardOut = directPipelineStoryboardOut || narrativeStoryboardOut;
+          const directorOutput = isDirectPipelineSource
+            ? (sourceNode?.data?.directorOutput || null)
+            : isLegacyNarrativeSource
+              ? (sourceNode?.data?.pendingOutputs?.directorOutput || sourceNode?.data?.outputs?.directorOutput || null)
+              : null;
+          const rawScenarioResponse = isLegacyNarrativeSource ? (sourceNode?.data?.pendingRawResponse || null) : null;
+          const sourceScenarioRevision = isDirectPipelineSource
+            ? String(sourceNode?.data?.scenarioRevision || "")
+            : isLegacyNarrativeSource
+              ? String(sourceNode?.data?.pendingScenarioRevision || sourceNode?.data?.scenarioRevision || "")
+              : "";
           const sourceConnectedContextFingerprint = validScenarioSource
             ? String(sourceNode?.data?.connectedContextFingerprint || "")
             : "";
@@ -14524,8 +14551,32 @@ onClipSec: (nodeId, value) => {
                 directorOutput?.storyboardPackage
                 && typeof directorOutput.storyboardPackage === "object"
               ) ? directorOutput.storyboardPackage : (base?.data?.storyboardPackage || null),
+              incomingMode: String(
+                normalizedPackage?.mode
+                || normalizedPackage?.contentType
+                || normalizedPackage?.content_type
+                || directorOutput?.mode
+                || directorOutput?.contentType
+                || storyboardOut?.mode
+                || storyboardOut?.contentType
+                || sourceNode?.data?.contentType
+                || base?.data?.incomingMode
+                || "story"
+              ).trim(),
+              incomingFormat: String(
+                normalizedPackage?.format
+                || directorOutput?.format
+                || storyboardOut?.format
+                || sourceNode?.data?.format
+                || base?.data?.incomingFormat
+                || "9:16"
+              ).trim(),
               scenarioMode: String(
-                sourceNode?.data?.contentType
+                normalizedPackage?.mode
+                || normalizedPackage?.contentType
+                || normalizedPackage?.content_type
+                || directorOutput?.mode
+                || sourceNode?.data?.contentType
                 || directorOutput?.contentType
                 || storyboardOut?.contentType
                 || normalizedPackage?.contentType
@@ -15009,11 +15060,18 @@ onClipSec: (nodeId, value) => {
           const sourceDirectorOutput = validScenarioSource
             ? (sourceNode?.data?.pendingOutputs?.directorOutput || sourceNode?.data?.outputs?.directorOutput || sourceNode?.data?.directorOutput || null)
             : null;
+          const sourceStoryboardOut = validScenarioSource
+            ? (sourceNode?.data?.pendingOutputs?.storyboardOut || sourceNode?.data?.outputs?.storyboardOut || null)
+            : null;
           const persistedDirectorOutput = base?.data?.directorOutput && typeof base.data.directorOutput === "object" ? base.data.directorOutput : {};
           const directorOutput = sourceDirectorOutput && typeof sourceDirectorOutput === "object" ? sourceDirectorOutput : persistedDirectorOutput;
           const storyboardPackage = directorOutput?.storyboardPackage && typeof directorOutput.storyboardPackage === "object"
             ? directorOutput.storyboardPackage
             : (base?.data?.storyboardPackage && typeof base.data.storyboardPackage === "object" ? base.data.storyboardPackage : {});
+          const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
+            storyboardOut: sourceStoryboardOut || storyboardPackage || base?.data?.storyboardOut || null,
+            directorOutput,
+          });
           const stageStatuses = storyboardPackage?.stage_statuses && typeof storyboardPackage.stage_statuses === "object"
             ? storyboardPackage.stage_statuses
             : (base?.data?.stageStatuses && typeof base.data.stageStatuses === "object" ? base.data.stageStatuses : {});
@@ -15057,6 +15115,13 @@ onClipSec: (nodeId, value) => {
                 master_output: sourceNode?.data?.master_output || {},
               },
               storyboardPackage,
+              storyboardOut: normalizedStoryboardOut,
+              scenarioRevision: String(
+                sourceNode?.data?.pendingScenarioRevision
+                || sourceNode?.data?.scenarioRevision
+                || base?.data?.scenarioRevision
+                || ""
+              ),
               directorOutput,
               executedStages: Array.isArray(directorOutput?.executedStages)
                 ? directorOutput.executedStages
@@ -15102,6 +15167,11 @@ onClipSec: (nodeId, value) => {
                     data: {
                       ...nodeItem.data,
                       storyboardPackage: nextStoryboardPackage,
+                      storyboardOut: normalizeScenarioStoryboardPackage({
+                        storyboardOut: normalizedOutputs?.storyboardOut || nextStoryboardPackage || {},
+                        directorOutput: nextDirectorOutput || {},
+                      }),
+                      scenarioRevision: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                       directorOutput: {
                         ...nextDirectorOutput,
                         pipeline: "scenario_stage_v1",
@@ -18009,6 +18079,25 @@ const hydrate = useCallback((source = "unknown") => {
           refreshNodeBindingsForEdges(nextEdges, isScenarioStoryboardRoute
             ? "edges:connect:scenario-storyboard"
             : (isScenarioPipelineDebugRoute ? "edges:connect:scenario-pipeline-debug" : "edges:connect:narrative-storyboard"));
+          return nextEdges;
+        }
+
+        if (src.type === "scenarioPipelineDebug" && (params.sourceHandle || "") === "storyboard_out") {
+          const targetHandle = params.targetHandle || "";
+          const isScenarioStoryboardRoute = dst.type === "scenarioStoryboard" && targetHandle === "scenario_storyboard_in";
+          if (!isScenarioStoryboardRoute) {
+            traceScenarioGraphConnect("rejected", {
+              sourceType: src.type,
+              sourceHandle: params.sourceHandle || "",
+              targetType: dst.type,
+              targetHandle,
+            });
+            return eds;
+          }
+          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === targetHandle));
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect:scenario-pipeline-storyboard");
           return nextEdges;
         }
 
