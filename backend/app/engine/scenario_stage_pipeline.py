@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.core.static_paths import ASSETS_DIR
 from app.engine.audio_analyzer import analyze_audio
 from app.engine.audio_transcript_aligner import resolve_transcript_alignment_with_diagnostics
+from app.engine.audio_scene_segmenter import build_gemini_audio_segmentation
 from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
@@ -1487,6 +1488,10 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_alignment_attempted"] = False
     diagnostics["audio_map_alignment_unavailable_reason"] = ""
     diagnostics["audio_map_alignment_error_detail"] = ""
+    diagnostics["audio_map_segmentation_backend"] = "gemini"
+    diagnostics["audio_map_segmentation_used_fallback"] = False
+    diagnostics["audio_map_segmentation_validation_error"] = ""
+    diagnostics["audio_map_segmentation_prompt_version"] = ""
     diagnostics["transcript_available"] = False
     diagnostics["word_timestamp_count"] = 0
     diagnostics["phrase_unit_count"] = 0
@@ -1517,64 +1522,123 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 if not analysis_path:
                     raise ValueError("audio_source_unavailable_for_dynamics")
                 raw_analysis = analyze_audio(analysis_path, debug=False)
-                alignment, alignment_diag = resolve_transcript_alignment_with_diagnostics(
+                _append_diag_event(package, "audio_map gemini segmentation requested", stage_id="audio_map")
+                gemini_result = build_gemini_audio_segmentation(
+                    api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
                     audio_path=analysis_path,
+                    audio_url=audio_url,
                     duration_sec=duration_sec,
-                    transcript_hint=transcript_text,
-                    provided_alignment=provided_alignment,
+                    story_core=story_core,
+                    content_type=content_type,
+                    story_core_mode=story_core_mode,
+                    narrative_directive=transcript_text,
+                    director_note=str(input_pkg.get("director_note") or input_pkg.get("note") or ""),
                 )
-                alignment_reason = str(alignment_diag.get("reason") or "").strip()
-                diagnostics["audio_map_alignment_backend"] = str(alignment_diag.get("backend") or "")
-                diagnostics["audio_map_alignment_attempted"] = bool(alignment_diag.get("attempted"))
-                diagnostics["audio_map_alignment_unavailable_reason"] = alignment_reason
-                diagnostics["audio_map_alignment_error_detail"] = str(alignment_diag.get("error_detail") or "")
-                if alignment:
-                    aligned_map = _build_audio_map_from_real_alignment(duration_sec, story_core, raw_analysis, alignment)
-                    if aligned_map and _is_usable_audio_map(aligned_map):
-                        analysis_mode = "transcript_alignment_v2"
-                        audio_map = aligned_map
-                        diagnostics["audio_map_alignment_unavailable_reason"] = ""
-                        diagnostics["audio_map_alignment_error_detail"] = ""
-                        _append_diag_event(package, "audio_map transcript alignment resolved", stage_id="audio_map")
-                    else:
-                        diagnostics["audio_map_alignment_unavailable_reason"] = "aligned_audio_map_unusable"
-                        alignment = None
-                if not alignment:
-                    failure_reason = str(diagnostics.get("audio_map_alignment_unavailable_reason") or "alignment_unavailable")
+                diagnostics["audio_map_segmentation_prompt_version"] = str(gemini_result.get("prompt_version") or "")
+                diagnostics["audio_map_segmentation_validation_error"] = str(gemini_result.get("validation_error") or "")
+                if bool(gemini_result.get("ok")):
+                    payload = _safe_dict(gemini_result.get("payload"))
+                    scene_windows = _safe_list(payload.get("scene_windows"))
+                    phrase_units = _safe_list(payload.get("phrase_units"))
+                    audio_map = _build_audio_map_from_dynamics(
+                        duration_sec,
+                        story_core,
+                        raw_analysis,
+                        analysis_mode="gemini_semantic_segmentation_v1",
+                    )
+                    audio_map["analysis_mode"] = "gemini_semantic_segmentation_v1"
+                    audio_map["transcript_available"] = bool(payload.get("transcript_available"))
+                    audio_map["track_type"] = str(payload.get("track_type") or "unknown")
+                    audio_map["overall_duration_sec"] = float(payload.get("overall_duration_sec") or duration_sec)
+                    audio_map["global_notes"] = _safe_dict(payload.get("global_notes"))
+                    audio_map["phrase_units"] = phrase_units
+                    audio_map["scene_candidate_windows"] = scene_windows
+                    audio_map["candidate_cut_points_sec"] = _safe_list(payload.get("candidate_cut_points_sec"))
+                    audio_map["phrase_endpoints_sec"] = sorted(
+                        {
+                            round(float(item.get("t1") or 0.0), 3)
+                            for item in phrase_units
+                            if 0.0 < float(item.get("t1") or 0.0) < duration_sec
+                        }
+                    )
+                    audio_map["no_split_ranges"] = _safe_list(payload.get("no_split_ranges"))
+                    audio_map["audio_map_alignment_source"] = "gemini_semantic_segmentation"
+                    analysis_mode = "gemini_semantic_segmentation_v1"
+                    diagnostics["audio_map_alignment_backend"] = "gemini"
+                    diagnostics["audio_map_alignment_attempted"] = True
+                    diagnostics["audio_map_alignment_unavailable_reason"] = ""
+                    diagnostics["audio_map_alignment_error_detail"] = ""
+                    _append_diag_event(package, "audio_map gemini segmentation resolved", stage_id="audio_map")
+                else:
+                    gemini_error = str(gemini_result.get("error") or "gemini_segmentation_failed")
+                    diagnostics["audio_map_segmentation_used_fallback"] = True
+                    diagnostics["audio_map_alignment_backend"] = "gemini"
+                    diagnostics["audio_map_alignment_attempted"] = True
+                    diagnostics["audio_map_alignment_unavailable_reason"] = gemini_error
+                    diagnostics["audio_map_alignment_error_detail"] = str(gemini_result.get("validation_error") or "")
                     _append_diag_event(
                         package,
-                        f"audio_map transcript alignment failed: {failure_reason}",
+                        f"audio_map gemini segmentation invalid, falling back to local splitter: {gemini_error}",
                         stage_id="audio_map",
                     )
-                    phrase_first_map = _build_phrase_first_audio_map(duration_sec, story_core, raw_analysis, transcript_text)
-                    if phrase_first_map:
-                        analysis_mode = "approximate_phrase_grouping_v1"
-                        audio_map = phrase_first_map
-                        audio_map["analysis_mode"] = "approximate_phrase_grouping_v1"
-                        audio_map["transcript_available"] = bool(transcript_text)
-                        audio_map["audio_map_alignment_source"] = "approximate_transcript_grouping"
+                    alignment, alignment_diag = resolve_transcript_alignment_with_diagnostics(
+                        audio_path=analysis_path,
+                        duration_sec=duration_sec,
+                        transcript_hint=transcript_text,
+                        provided_alignment=provided_alignment,
+                    )
+                    alignment_reason = str(alignment_diag.get("reason") or "").strip()
+                    diagnostics["audio_map_alignment_backend"] = str(alignment_diag.get("backend") or "local")
+                    diagnostics["audio_map_alignment_attempted"] = bool(alignment_diag.get("attempted"))
+                    diagnostics["audio_map_alignment_unavailable_reason"] = alignment_reason or gemini_error
+                    diagnostics["audio_map_alignment_error_detail"] = str(alignment_diag.get("error_detail") or "")
+                    if alignment:
+                        aligned_map = _build_audio_map_from_real_alignment(duration_sec, story_core, raw_analysis, alignment)
+                        if aligned_map and _is_usable_audio_map(aligned_map):
+                            analysis_mode = "transcript_alignment_v2"
+                            audio_map = aligned_map
+                            diagnostics["audio_map_alignment_unavailable_reason"] = ""
+                            diagnostics["audio_map_alignment_error_detail"] = ""
+                            _append_diag_event(package, "audio_map transcript alignment resolved", stage_id="audio_map")
+                        else:
+                            diagnostics["audio_map_alignment_unavailable_reason"] = "aligned_audio_map_unusable"
+                            alignment = None
+                    if not alignment:
+                        failure_reason = str(diagnostics.get("audio_map_alignment_unavailable_reason") or "alignment_unavailable")
                         _append_diag_event(
                             package,
-                            "audio_map transcript alignment unavailable, falling back to approximate phrase grouping",
+                            f"audio_map transcript alignment failed: {failure_reason}",
                             stage_id="audio_map",
                         )
+                        phrase_first_map = _build_phrase_first_audio_map(duration_sec, story_core, raw_analysis, transcript_text)
+                        if phrase_first_map:
+                            analysis_mode = "approximate_phrase_grouping_v1"
+                            audio_map = phrase_first_map
+                            audio_map["analysis_mode"] = "approximate_phrase_grouping_v1"
+                            audio_map["transcript_available"] = bool(transcript_text)
+                            audio_map["audio_map_alignment_source"] = "approximate_transcript_grouping"
+                            _append_diag_event(
+                                package,
+                                "audio_map transcript alignment unavailable, falling back to approximate phrase grouping",
+                                stage_id="audio_map",
+                            )
+                        else:
+                            analysis_mode = "audio_dynamics_v2"
+                            audio_map = _build_audio_map_from_dynamics(
+                                duration_sec,
+                                story_core,
+                                raw_analysis,
+                                analysis_mode=analysis_mode,
+                            )
+                            _append_diag_event(
+                                package,
+                                "audio_map transcript alignment unavailable, falling back to audio_dynamics_v2",
+                                stage_id="audio_map",
+                            )
+                    if analysis_mode == "transcript_alignment_v2":
+                        audio_map["audio_map_alignment_source"] = str(_safe_dict(audio_map.get("transcript_alignment")).get("source") or "")
                     else:
-                        analysis_mode = "audio_dynamics_v2"
-                        audio_map = _build_audio_map_from_dynamics(
-                            duration_sec,
-                            story_core,
-                            raw_analysis,
-                            analysis_mode=analysis_mode,
-                        )
-                        _append_diag_event(
-                            package,
-                            "audio_map transcript alignment unavailable, falling back to audio_dynamics_v2",
-                            stage_id="audio_map",
-                        )
-                if analysis_mode == "transcript_alignment_v2":
-                    audio_map["audio_map_alignment_source"] = str(_safe_dict(audio_map.get("transcript_alignment")).get("source") or "")
-                else:
-                    audio_map.setdefault("audio_map_alignment_source", "")
+                        audio_map.setdefault("audio_map_alignment_source", "")
             finally:
                 if cleanup_path:
                     try:
@@ -1624,6 +1688,11 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     diagnostics["audio_map_analysis_mode"] = analysis_mode
     diagnostics["audio_map_used_fallback"] = bool(used_fallback)
+    diagnostics["audio_map_segmentation_backend"] = "gemini" if analysis_mode == "gemini_semantic_segmentation_v1" else "local_fallback"
+    diagnostics["audio_map_segmentation_used_fallback"] = bool(
+        diagnostics.get("audio_map_segmentation_used_fallback")
+        or analysis_mode in {"transcript_alignment_v2", "approximate_phrase_grouping_v1", "audio_dynamics_v2", "timing_heuristics_v1"}
+    )
     diagnostics["audio_map_phrase_mode"] = str(audio_map.get("analysis_mode") or analysis_mode or "timing_heuristics_v1")
     diagnostics["transcript_available"] = bool(audio_map.get("transcript_available"))
     diagnostics["word_timestamp_count"] = len(_safe_list(_safe_dict(audio_map.get("transcript_alignment")).get("words")))
