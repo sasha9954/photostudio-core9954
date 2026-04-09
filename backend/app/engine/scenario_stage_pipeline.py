@@ -577,6 +577,258 @@ def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
     return package
 
 
+def _coerce_duration_sec(value: Any) -> float:
+    try:
+        duration = float(value)
+    except Exception:
+        duration = 0.0
+    if duration < 0.0:
+        return 0.0
+    return duration
+
+
+def _clamp_time(value: float, duration_sec: float) -> float:
+    if duration_sec <= 0:
+        return max(0.0, float(value))
+    return max(0.0, min(float(value), duration_sec))
+
+
+def _segment_count_for_duration(duration_sec: float) -> int:
+    if duration_sec <= 30:
+        return 3
+    if duration_sec <= 70:
+        return 4
+    if duration_sec <= 130:
+        return 5
+    return 6
+
+
+def _split_duration_evenly(duration_sec: float, segments: int) -> list[tuple[float, float]]:
+    safe_segments = max(1, int(segments or 1))
+    if duration_sec <= 0:
+        return [(0.0, 0.0)]
+    result: list[tuple[float, float]] = []
+    for idx in range(safe_segments):
+        t0 = (duration_sec * idx) / safe_segments
+        t1 = (duration_sec * (idx + 1)) / safe_segments
+        result.append((round(t0, 3), round(t1, 3)))
+    return result
+
+
+def _labels_for_segment_count(segment_count: int) -> list[str]:
+    if segment_count <= 3:
+        return ["intro", "turn", "release"]
+    if segment_count == 4:
+        return ["intro", "rise", "turn", "release"]
+    if segment_count == 5:
+        return ["intro", "rise", "turn", "release", "outro"]
+    return ["intro", "rise", "turn", "release", "afterglow", "outro"]
+
+
+def _energy_curve_for_count(segment_count: int) -> list[str]:
+    if segment_count <= 3:
+        return ["low", "high", "medium"]
+    if segment_count == 4:
+        return ["low", "medium", "high", "medium"]
+    if segment_count == 5:
+        return ["low", "medium", "high", "medium", "low"]
+    return ["low", "medium", "high", "high", "medium", "low"]
+
+
+def _mood_curve_from_story_core(story_core: dict[str, Any], segment_count: int) -> list[str]:
+    arc = str(story_core.get("global_arc") or "").strip().lower()
+    if "setup" in arc and "afterimage" in arc:
+        base = ["anticipation", "momentum", "tension", "release", "afterimage"]
+        if segment_count <= len(base):
+            return base[:segment_count]
+        return base + ["calm"] * (segment_count - len(base))
+    if segment_count <= 3:
+        return ["calm", "intense", "resolved"]
+    if segment_count == 4:
+        return ["calm", "building", "intense", "resolved"]
+    if segment_count == 5:
+        return ["calm", "building", "intense", "resolved", "afterglow"]
+    return ["calm", "building", "intense", "urgent", "resolved", "afterglow"]
+
+
+def _build_audio_map_from_duration(
+    duration_sec: float,
+    story_core: dict[str, Any],
+    *,
+    analysis_mode: str,
+) -> dict[str, Any]:
+    duration = _coerce_duration_sec(duration_sec)
+    segment_count = _segment_count_for_duration(duration)
+    windows = _split_duration_evenly(duration, segment_count)
+    labels = _labels_for_segment_count(segment_count)
+    energies = _energy_curve_for_count(segment_count)
+    moods = _mood_curve_from_story_core(story_core, segment_count)
+
+    sections: list[dict[str, Any]] = []
+    for idx, (t0, t1) in enumerate(windows):
+        sections.append(
+            {
+                "id": f"sec_{idx + 1}",
+                "t0": round(t0, 3),
+                "t1": round(t1, 3),
+                "label": labels[idx] if idx < len(labels) else f"part_{idx + 1}",
+                "energy": energies[idx] if idx < len(energies) else "medium",
+                "mood": moods[idx] if idx < len(moods) else "neutral",
+            }
+        )
+
+    # phrase endpoints: section boundaries + regular phrase cadence inside each section.
+    phrase_step = 4.0 if duration <= 90 else 6.0
+    phrase_points: list[float] = []
+    if duration > 0:
+        cursor = phrase_step
+        while cursor < max(0.0, duration - 0.001):
+            phrase_points.append(round(cursor, 3))
+            cursor += phrase_step
+    for sec in sections:
+        boundary = _clamp_time(float(sec.get("t1") or 0.0), duration)
+        if 0.0 < boundary < duration:
+            phrase_points.append(round(boundary, 3))
+    phrase_endpoints = sorted(set(phrase_points))
+
+    no_split_ranges: list[dict[str, Any]] = []
+    if duration > 0:
+        no_split_ranges.append({"t0": 0.0, "t1": round(min(1.5, duration), 3), "reason": "intro_protection"})
+        tail_start = round(max(0.0, duration - 1.5), 3)
+        if tail_start < duration:
+            no_split_ranges.append({"t0": tail_start, "t1": round(duration, 3), "reason": "outro_tail_protection"})
+    for sec in sections:
+        t0 = float(sec.get("t0") or 0.0)
+        t1 = float(sec.get("t1") or 0.0)
+        if (t1 - t0) >= 5.0:
+            pivot = round(t0 + (t1 - t0) * 0.5, 3)
+            no_split_ranges.append(
+                {"t0": round(max(t0, pivot - 0.35), 3), "t1": round(min(t1, pivot + 0.35), 3), "reason": "phrase_core_window"}
+            )
+
+    candidate_cut_points: list[float] = []
+    for point in phrase_endpoints:
+        if point <= 0.0 or point >= duration:
+            continue
+        inside_blocked = any(float(r.get("t0") or 0.0) <= point <= float(r.get("t1") or 0.0) for r in no_split_ranges)
+        if not inside_blocked:
+            candidate_cut_points.append(point)
+
+    mood_progression = [
+        {
+            "t0": float(section.get("t0") or 0.0),
+            "t1": float(section.get("t1") or 0.0),
+            "mood": str(section.get("mood") or "neutral"),
+            "energy": str(section.get("energy") or "medium"),
+        }
+        for section in sections
+    ]
+    energy_counts = {"low": 0, "medium": 0, "high": 0}
+    for section in sections:
+        energy = str(section.get("energy") or "medium").lower()
+        if energy in energy_counts:
+            energy_counts[energy] += 1
+    dominant_energy = max(energy_counts.items(), key=lambda item: item[1])[0] if sections else "medium"
+
+    lip_sync_ranges: list[dict[str, float]] = []
+    content_hint = str(story_core.get("story_summary") or "").lower()
+    if "speak" in content_hint or "sing" in content_hint or "vocal" in content_hint:
+        for section in sections:
+            if str(section.get("energy") or "").lower() in {"medium", "high"}:
+                lip_sync_ranges.append(
+                    {
+                        "t0": round(float(section.get("t0") or 0.0), 3),
+                        "t1": round(float(section.get("t1") or 0.0), 3),
+                    }
+                )
+
+    arc_short = str(story_core.get("global_arc") or "").strip() or "unknown_arc"
+    return {
+        "duration_sec": round(duration, 3),
+        "analysis_mode": analysis_mode,
+        "sections": sections,
+        "phrase_endpoints_sec": phrase_endpoints,
+        "no_split_ranges": no_split_ranges,
+        "candidate_cut_points_sec": sorted(set(candidate_cut_points)),
+        "pacing_profile": {
+            "segment_count": len(sections),
+            "phrase_step_sec": phrase_step,
+            "dominant_energy": dominant_energy,
+        },
+        "mood_progression": mood_progression,
+        "audio_arc_summary": f"Audio map follows story_core arc '{arc_short}' with {len(sections)} timing sections.",
+        "section_summary": [f"{sec.get('label')}:{sec.get('energy')}/{sec.get('mood')}" for sec in sections],
+        "lip_sync_candidate_ranges": lip_sync_ranges,
+    }
+
+
+def _is_usable_audio_map(audio_map: dict[str, Any]) -> bool:
+    if not isinstance(audio_map, dict):
+        return False
+    duration = _coerce_duration_sec(audio_map.get("duration_sec"))
+    sections = _safe_list(audio_map.get("sections"))
+    return duration > 0 and bool(sections)
+
+
+def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
+    input_pkg = _safe_dict(package.get("input"))
+    story_core = _safe_dict(package.get("story_core"))
+    diagnostics = _safe_dict(package.get("diagnostics"))
+
+    audio_url = str(input_pkg.get("audio_url") or "").strip()
+    duration_sec = _coerce_duration_sec(input_pkg.get("audio_duration_sec"))
+    content_type = str(input_pkg.get("content_type") or "").strip().lower() or "music_video"
+    story_core_mode = str(diagnostics.get("story_core_mode") or _detect_story_core_mode(input_pkg)).strip().lower() or "creative"
+
+    diagnostics["audio_map_source_audio_url"] = audio_url
+    diagnostics["audio_map_analysis_mode"] = "timing_heuristics_v1"
+    diagnostics["audio_map_used_fallback"] = False
+    package["diagnostics"] = diagnostics
+
+    if not _is_usable_story_core(story_core):
+        raise RuntimeError("audio_map_requires_story_core")
+
+    if duration_sec <= 0:
+        warnings = _safe_list(diagnostics.get("warnings"))
+        warnings.append({"stage_id": "audio_map", "message": "audio_duration_missing_or_invalid"})
+        diagnostics["warnings"] = warnings[-80:]
+        diagnostics["audio_map_used_fallback"] = True
+        package["diagnostics"] = diagnostics
+        raise RuntimeError("audio_map_duration_missing")
+
+    used_fallback = False
+    analysis_mode = "timing_heuristics_v1"
+    try:
+        audio_map = _build_audio_map_from_duration(duration_sec, story_core, analysis_mode=analysis_mode)
+        if not _is_usable_audio_map(audio_map):
+            raise ValueError("audio_map_unusable_primary")
+    except Exception as exc:  # noqa: BLE001
+        used_fallback = True
+        analysis_mode = "duration_fallback_v1"
+        audio_map = _build_audio_map_from_duration(duration_sec, story_core, analysis_mode=analysis_mode)
+        if not _is_usable_audio_map(audio_map):
+            raise RuntimeError(f"audio_map_failed_no_fallback:{exc}") from exc
+        warnings = _safe_list(diagnostics.get("warnings"))
+        warnings.append({"stage_id": "audio_map", "message": f"fallback_used:{exc}"})
+        diagnostics["warnings"] = warnings[-80:]
+        _append_diag_event(package, f"audio_map fallback used: {exc}", stage_id="audio_map")
+
+    audio_map["content_type"] = content_type
+    audio_map["story_core_mode"] = story_core_mode
+    audio_map["story_core_arc_ref"] = str(story_core.get("global_arc") or "")
+    if not audio_url:
+        warnings = _safe_list(diagnostics.get("warnings"))
+        warnings.append({"stage_id": "audio_map", "message": "audio_url_missing_used_duration_only"})
+        diagnostics["warnings"] = warnings[-80:]
+
+    diagnostics["audio_map_analysis_mode"] = analysis_mode
+    diagnostics["audio_map_used_fallback"] = bool(used_fallback)
+    package["diagnostics"] = diagnostics
+    package["audio_map"] = audio_map
+    _append_diag_event(package, "audio_map generated", stage_id="audio_map")
+    return package
+
+
 def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
@@ -598,7 +850,7 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         elif stage_id == "story_core":
             pkg = _run_story_core_stage(pkg)
         elif stage_id == "audio_map":
-            pkg["audio_map"] = pkg.get("audio_map") or {"status": "placeholder"}
+            pkg = _run_audio_map_stage(pkg)
         elif stage_id == "role_plan":
             pkg["role_plan"] = pkg.get("role_plan") or {"status": "placeholder"}
         elif stage_id == "scene_plan":

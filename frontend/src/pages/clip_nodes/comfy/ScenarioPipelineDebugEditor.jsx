@@ -66,6 +66,11 @@ export default function ScenarioPipelineDebugEditor({
   const finalStoryboard = storyboardPackage?.final_storyboard || {};
   const allDiagnostics = Object.keys(diagnostics || {}).length ? diagnostics : (storyboardPackage?.diagnostics || {});
 
+  const audioSections = Array.isArray(audioMap?.sections) ? audioMap.sections : [];
+  const phraseEndpoints = Array.isArray(audioMap?.phrase_endpoints_sec) ? audioMap.phrase_endpoints_sec : [];
+  const noSplitRanges = Array.isArray(audioMap?.no_split_ranges) ? audioMap.no_split_ranges : [];
+  const cutPoints = Array.isArray(audioMap?.candidate_cut_points_sec) ? audioMap.candidate_cut_points_sec : [];
+
   const contentByTab = {
     story_core: (
       <div>
@@ -75,7 +80,22 @@ export default function ScenarioPipelineDebugEditor({
         <pre className="clipSB_pre">{toJson(storyCore)}</pre>
       </div>
     ),
-    audio_map: <pre className="clipSB_pre">{toJson(audioMap)}</pre>,
+    audio_map: (
+      <div>
+        <div className="clipSB_storyboardKv"><span>duration_sec</span><strong>{String(audioMap?.duration_sec ?? "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>sections</span><strong>{audioSections.length}</strong></div>
+        <div className="clipSB_storyboardKv"><span>phrase_endpoints_sec</span><strong>{phraseEndpoints.length}</strong></div>
+        <div className="clipSB_storyboardKv"><span>candidate_cut_points_sec</span><strong>{cutPoints.length}</strong></div>
+        <div className="clipSB_storyboardKv"><span>no_split_ranges</span><strong>{noSplitRanges.length}</strong></div>
+        <pre className="clipSB_pre">{toJson({
+          sections: audioSections,
+          phrase_endpoints_sec: phraseEndpoints,
+          no_split_ranges: noSplitRanges,
+          candidate_cut_points_sec: cutPoints,
+        })}</pre>
+        <pre className="clipSB_pre">{toJson(audioMap)}</pre>
+      </div>
+    ),
     role_plan: <pre className="clipSB_pre">{toJson(rolePlan)}</pre>,
     scene_plan: <pre className="clipSB_pre">{toJson(scenePlan?.scenes || [])}</pre>,
     scene_prompts: <pre className="clipSB_pre">{toJson(prompts)}</pre>,
