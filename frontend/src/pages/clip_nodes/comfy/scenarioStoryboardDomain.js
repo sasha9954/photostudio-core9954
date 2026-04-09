@@ -1484,6 +1484,17 @@ function buildGlobalCameraProfile(storyboardOut = {}, directorOutput = {}) {
 }
 
 export function normalizeScenarioStoryboardPackage({ storyboardOut = null, directorOutput = null } = {}) {
+  const storyboardInputKeys = storyboardOut && typeof storyboardOut === "object" ? Object.keys(storyboardOut) : [];
+  const inputScenesFromStoryboardOut = Array.isArray(storyboardOut?.scenes)
+    ? storyboardOut.scenes
+    : [];
+  const inputScenesFromFinalStoryboard = Array.isArray(storyboardOut?.final_storyboard?.scenes)
+    ? storyboardOut.final_storyboard.scenes
+    : [];
+  const inputSceneCandidates = inputScenesFromStoryboardOut.length
+    ? inputScenesFromStoryboardOut
+    : inputScenesFromFinalStoryboard;
+  const inputSceneCount = inputSceneCandidates.length;
   const canonicalScenesRaw = Array.isArray(directorOutput?.scenes) && directorOutput.scenes.length
     ? directorOutput.scenes
     : (Array.isArray(storyboardOut?.scenes) ? storyboardOut.scenes : []);
@@ -1675,6 +1686,14 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
       normalizedGlobalMusicPromptLength: globalMusicPrompt.length,
     });
   }
+  const firstInputScene = Array.isArray(inputSceneCandidates) && inputSceneCandidates.length ? inputSceneCandidates[0] : null;
+  console.debug("[SCENARIO NORMALIZE PACKAGE]", {
+    inputHasScenes: inputSceneCount > 0,
+    inputSceneCount,
+    outputSceneCount: Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0,
+    inputKeys: storyboardInputKeys,
+    firstSceneKeys: firstInputScene && typeof firstInputScene === "object" ? Object.keys(firstInputScene) : [],
+  });
   console.debug("[SCENARIO STORYBOARD PACKAGE]", {
     status: "package normalized successfully",
     packageMergeStrategy: "safe_nested_map_merge",

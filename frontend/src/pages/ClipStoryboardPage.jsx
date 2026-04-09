@@ -15199,6 +15199,25 @@ onClipSec: (nodeId, value) => {
                   body: payload,
                 });
                 const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, debugNode?.data || {});
+                const responseStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
+                  ? response.storyboardPackage
+                  : {};
+                const responseFinalStoryboard = responseStoryboardPackage?.final_storyboard && typeof responseStoryboardPackage.final_storyboard === "object"
+                  ? responseStoryboardPackage.final_storyboard
+                  : {};
+                const responseFinalStoryboardSceneCount = Array.isArray(responseFinalStoryboard?.scenes)
+                  ? responseFinalStoryboard.scenes.length
+                  : 0;
+                const normalizedStoryboardOutSceneCount = Array.isArray(normalizedOutputs?.storyboardOut?.scenes)
+                  ? normalizedOutputs.storyboardOut.scenes.length
+                  : 0;
+                console.debug("[SCENARIO PIPELINE DEBUG FETCH]", {
+                  responseStoryboardPackageKeys: Object.keys(responseStoryboardPackage || {}),
+                  responseFinalStoryboardKeys: Object.keys(responseFinalStoryboard || {}),
+                  responseFinalStoryboardSceneCount,
+                  normalizedStoryboardOutKeys: Object.keys(normalizedOutputs?.storyboardOut || {}),
+                  normalizedStoryboardOutSceneCount,
+                });
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioPipelineDebug") return nodeItem;
                   const nextStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
@@ -15207,15 +15226,31 @@ onClipSec: (nodeId, value) => {
                   const nextDirectorOutput = normalizedOutputs?.directorOutput && typeof normalizedOutputs.directorOutput === "object"
                     ? normalizedOutputs.directorOutput
                     : (nodeItem?.data?.directorOutput || {});
+                  const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
+                    storyboardOut: normalizedOutputs?.storyboardOut || nextStoryboardPackage || {},
+                    directorOutput: nextDirectorOutput || {},
+                  });
+                  const storedStoryboardOutSceneCount = Array.isArray(normalizedStoryboardOut?.scenes)
+                    ? normalizedStoryboardOut.scenes.length
+                    : 0;
+                  const packageFinalStoryboardSceneCount = Array.isArray(nextStoryboardPackage?.final_storyboard?.scenes)
+                    ? nextStoryboardPackage.final_storyboard.scenes.length
+                    : 0;
+                  console.debug("[PIPELINE DEBUG STORED STORYBOARD]", {
+                    normalizedStoryboardOutSceneCount,
+                    packageFinalStoryboardSceneCount,
+                    storedStoryboardOutSceneCount,
+                    stageStatuses: nextStoryboardPackage?.stage_statuses && typeof nextStoryboardPackage.stage_statuses === "object"
+                      ? nextStoryboardPackage.stage_statuses
+                      : {},
+                    executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
+                  });
                   return {
                     ...nodeItem,
                     data: {
                       ...nodeItem.data,
                       storyboardPackage: nextStoryboardPackage,
-                      storyboardOut: normalizeScenarioStoryboardPackage({
-                        storyboardOut: normalizedOutputs?.storyboardOut || nextStoryboardPackage || {},
-                        directorOutput: nextDirectorOutput || {},
-                      }),
+                      storyboardOut: normalizedStoryboardOut,
                       scenarioRevision: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                       directorOutput: {
                         ...nextDirectorOutput,

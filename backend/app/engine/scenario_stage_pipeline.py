@@ -769,6 +769,14 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         "connected_context_summary": _safe_dict(input_pkg.get("connected_context_summary")),
         "scenes": final_scenes,
     }
+    logger.info(
+        "[FINALIZE STORYBOARD BUILD] planSceneCount=%s promptSceneCount=%s roleSceneCount=%s finalSceneCount=%s sceneIds=%s",
+        len(plan_by_scene),
+        len(prompts_by_scene),
+        len(role_by_scene),
+        len(final_scenes),
+        scene_ids,
+    )
     package["final_storyboard"] = final_storyboard
 
     diagnostics = _safe_dict(package.get("diagnostics"))
