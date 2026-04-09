@@ -1187,9 +1187,9 @@ function toStoryboardTimeSec(value, fallback = 0) {
 
 function normalizeStoryboardOutScene(scene, index) {
   const source = scene && typeof scene === "object" ? scene : {};
-  const t0 = toStoryboardTimeSec(source.time_start, index * 5);
-  const duration = Math.max(0, toStoryboardTimeSec(source.duration, 5));
-  const t1 = Math.max(t0, toStoryboardTimeSec(source.time_end, t0 + duration));
+  const t0 = toStoryboardTimeSec(source.t0 ?? source.time_start, index * 5);
+  const duration = Math.max(0, toStoryboardTimeSec(source.duration_sec ?? source.duration, 5));
+  const t1 = Math.max(t0, toStoryboardTimeSec(source.t1 ?? source.time_end, t0 + duration));
   const ltxMode = String(source.ltx_mode || "").trim();
   const sceneId = String(source.scene_id || `S${index + 1}`);
   const displayIndexRaw = Number(source.display_index ?? source.displayIndex);
