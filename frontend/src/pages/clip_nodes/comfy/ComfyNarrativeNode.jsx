@@ -26,7 +26,6 @@ export default function ComfyNarrativeNode({ id, data }) {
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
   const activeSourceMode = resolvedSource?.mode || null;
   const hasConnectedSource = resolvedSource?.origin === "connected" && !!String(resolvedSource?.value || "").trim();
-  const isGenerating = data?.isGenerating === true;
   const rawError = String(data?.error || "").trim();
   const errorMessage = rawError === "NO_SOURCE"
     ? "Подключите один active source-of-truth: audio, video_file или video_link."
@@ -203,12 +202,6 @@ export default function ComfyNarrativeNode({ id, data }) {
                 </div>
               </div>
             </section>
-
-            <div className="clipSB_narrativeActions">
-              <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => data?.onGenerateScenario?.(id)} disabled={!hasConnectedSource || isGenerating}>
-                {isGenerating ? "ОБНОВЛЯЕМ PIPELINE..." : "ОБНОВИТЬ PIPELINE"}
-              </button>
-            </div>
 
             <label className="clipSB_narrativeField clipSB_narrativeFormatField">
               <div className="clipSB_brainLabel">FORMAT</div>
