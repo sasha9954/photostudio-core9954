@@ -24,6 +24,7 @@ from app.engine.audio_transcript_aligner import resolve_transcript_alignment_wit
 from app.engine.audio_scene_segmenter import build_gemini_audio_segmentation
 from app.engine.gemini_rest import post_generate_content
 from app.engine.scenario_role_planner import ROLE_PLAN_PROMPT_VERSION, build_gemini_role_plan
+from app.engine.scenario_scene_planner import SCENE_PLAN_PROMPT_VERSION, build_gemini_scene_plan
 
 logger = logging.getLogger(__name__)
 
@@ -1789,6 +1790,55 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     return package
 
 
+def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_plan_backend"] = "gemini"
+    diagnostics["scene_plan_prompt_version"] = SCENE_PLAN_PROMPT_VERSION
+    diagnostics["scene_plan_used_fallback"] = False
+    diagnostics["scene_plan_scene_count"] = 0
+    diagnostics["scene_plan_route_counts"] = {"i2v": 0, "ia2v": 0, "first_last": 0}
+    diagnostics["scene_plan_presence_modes"] = []
+    diagnostics["scene_plan_route_flat"] = False
+    diagnostics["scene_plan_validation_error"] = ""
+    diagnostics["scene_plan_error"] = ""
+    diagnostics["scene_plan_empty"] = False
+    package["diagnostics"] = diagnostics
+
+    result = build_gemini_scene_plan(
+        api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+        package=package,
+    )
+    scene_plan = _safe_dict(result.get("scene_plan"))
+    package["scene_plan"] = scene_plan
+
+    scene_diag = _safe_dict(result.get("diagnostics"))
+    route_counts = _safe_dict(scene_diag.get("route_counts"))
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_plan_backend"] = "gemini"
+    diagnostics["scene_plan_prompt_version"] = str(scene_diag.get("prompt_version") or SCENE_PLAN_PROMPT_VERSION)
+    diagnostics["scene_plan_used_fallback"] = bool(result.get("used_fallback"))
+    diagnostics["scene_plan_scene_count"] = int(scene_diag.get("scene_count") or len(_safe_list(scene_plan.get("scenes"))))
+    diagnostics["scene_plan_route_counts"] = {
+        "i2v": int(route_counts.get("i2v") or _safe_dict(scene_plan.get("route_mix_summary")).get("i2v") or 0),
+        "ia2v": int(route_counts.get("ia2v") or _safe_dict(scene_plan.get("route_mix_summary")).get("ia2v") or 0),
+        "first_last": int(route_counts.get("first_last") or _safe_dict(scene_plan.get("route_mix_summary")).get("first_last") or 0),
+    }
+    diagnostics["scene_plan_presence_modes"] = _safe_list(scene_diag.get("presence_modes"))
+    diagnostics["scene_plan_route_flat"] = bool(scene_diag.get("route_flat"))
+    diagnostics["scene_plan_validation_error"] = str(result.get("validation_error") or "")
+    diagnostics["scene_plan_error"] = str(result.get("error") or "")
+    diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("scenes")))
+    package["diagnostics"] = diagnostics
+
+    if scene_plan and _safe_list(scene_plan.get("scenes")):
+        _append_diag_event(package, "scene_plan generated", stage_id="scene_plan")
+        if diagnostics.get("scene_plan_route_flat"):
+            _append_diag_event(package, "scene_plan_route_flat warning", stage_id="scene_plan")
+    else:
+        _append_diag_event(package, "scene_plan empty", stage_id="scene_plan")
+    return package
+
+
 def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
@@ -1814,7 +1864,7 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         elif stage_id == "role_plan":
             pkg = _run_role_plan_stage(pkg)
         elif stage_id == "scene_plan":
-            pkg["scene_plan"] = pkg.get("scene_plan") or {"scenes": []}
+            pkg = _run_scene_plan_stage(pkg)
         elif stage_id == "scene_prompts":
             pkg["scene_prompts"] = pkg.get("scene_prompts") or {"scenes": []}
         elif stage_id == "finalize":

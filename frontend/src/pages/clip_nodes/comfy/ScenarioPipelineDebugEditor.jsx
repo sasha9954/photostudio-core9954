@@ -91,6 +91,13 @@ export default function ScenarioPipelineDebugEditor({
   const alignmentUnavailableReason = String(allDiagnostics?.audio_map_alignment_unavailable_reason || "—");
 
   const rolePlanSceneRoles = Array.isArray(rolePlan?.scene_roles) ? rolePlan.scene_roles : [];
+  const scenePlanScenes = Array.isArray(scenePlan?.scenes) ? scenePlan.scenes : [];
+  const scenePlanRouteMix = scenePlan?.route_mix_summary || {};
+  const scenePlanRouteCounts = scenePlanScenes.reduce((acc, row) => {
+    const key = String(row?.route || "unknown").trim() || "unknown";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
   const worldContinuity = rolePlan?.world_continuity || null;
   const presenceModeDistribution = rolePlanSceneRoles.reduce((acc, row) => {
     const key = String(row?.scene_presence_mode || "unspecified").trim() || "unspecified";
@@ -169,7 +176,24 @@ export default function ScenarioPipelineDebugEditor({
     ) : (
       <div className="clipSB_storyboardKv"><span>ROLE PLAN</span><strong>role_plan empty</strong></div>
     ),
-    scene_plan: <pre className="clipSB_pre">{toJson(scenePlan?.scenes || [])}</pre>,
+    scene_plan: scenePlanScenes.length ? (
+      <div>
+        <div className="clipSB_storyboardKv"><span>route_mix_summary</span><strong>{toJson(scenePlanRouteMix)}</strong></div>
+        <div className="clipSB_storyboardKv"><span>count_per_route</span><strong>{toJson(scenePlanRouteCounts)}</strong></div>
+        <div className="clipSB_storyboardKv"><span>scene_count</span><strong>{scenePlanScenes.length}</strong></div>
+        <pre className="clipSB_pre">{toJson(scenePlanScenes.map((row) => ({
+          scene_id: row?.scene_id,
+          route: row?.route,
+          route_reason: row?.route_reason,
+          emotional_intent: row?.emotional_intent,
+          motion_intent: row?.motion_intent,
+          watchability_role: row?.watchability_role,
+        })))}</pre>
+        <pre className="clipSB_pre">{toJson(scenePlan)}</pre>
+      </div>
+    ) : (
+      <div className="clipSB_storyboardKv"><span>SCENE PLAN</span><strong>scene_plan empty</strong></div>
+    ),
     scene_prompts: <pre className="clipSB_pre">{toJson(prompts)}</pre>,
     final: <pre className="clipSB_pre">{toJson(finalStoryboard?.scenes || [])}</pre>,
     diagnostics: <pre className="clipSB_pre">{toJson(allDiagnostics)}</pre>,
