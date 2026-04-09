@@ -1077,6 +1077,7 @@ function isComfyBrainInput(handleId) {
 function isNarrativeInput(handleId) {
   return [
     "audio_in",
+    "text_in",
     "video_file_in",
     "video_link_in",
     "ref_character_1",
@@ -1089,7 +1090,7 @@ function isNarrativeInput(handleId) {
 }
 
 function isNarrativeSourceInput(handleId) {
-  return ["audio_in", "video_file_in", "video_link_in"].includes(String(handleId || ""));
+  return ["audio_in", "text_in", "video_file_in", "video_link_in"].includes(String(handleId || ""));
 }
 
 const NARRATIVE_TESTER_NODE_CONFIG = {
@@ -4053,6 +4054,19 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
+  if (targetHandle === "text_in" && sourceNode.type === "textNode" && sourceHandle === "text") {
+    const textValue = String(sourceNode?.data?.textValue || "").trim();
+    if (!textValue) return null;
+    return {
+      value: textValue,
+      preview: textValue,
+      sourceLabel: "TEXT node",
+      meta: {
+        kind: "text_node",
+      },
+    };
+  }
+
   if (targetHandle === "video_link_in" && sourceNode.type === "linkNode" && sourceHandle === "link") {
     const savedPayload = getLinkNodeSavedPayload(sourceNode?.data);
     const payload = savedPayload || buildLinkNodePayload(sourceNode?.data?.urlValue || sourceNode?.data?.draftUrl || "");
@@ -4255,6 +4269,7 @@ function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(
   if (!node?.id) {
     return {
       audio_in: null,
+      text_in: null,
       video_file_in: null,
       video_link_in: null,
       ref_character_1: null,
@@ -4268,7 +4283,7 @@ function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(
     };
   }
 
-  return ["audio_in", "video_file_in", "video_link_in", "ref_character_1", "ref_character_2", "ref_character_3", "ref_animal", "ref_group", "ref_props", "ref_location", "ref_style"].reduce((acc, handleId) => {
+  return ["audio_in", "text_in", "video_file_in", "video_link_in", "ref_character_1", "ref_character_2", "ref_character_3", "ref_animal", "ref_group", "ref_props", "ref_location", "ref_style"].reduce((acc, handleId) => {
     const edge = getLatestIncomingEdgeForHandle({ targetNodeId: node.id, targetHandle: handleId, edges });
     const sourceNode = edge ? (nodesById.get(edge.source) || null) : null;
     const extracted = extractNarrativeConnectedValue({
@@ -17862,6 +17877,7 @@ const hydrate = useCallback((source = "unknown") => {
           const sourceHandle = params.sourceHandle || "";
           const ok =
             (h === "audio_in" && src.type === "audioNode" && sourceHandle === "audio") ||
+            (h === "text_in" && src.type === "textNode" && sourceHandle === "text") ||
             (h === "video_link_in" && src.type === "linkNode" && sourceHandle === "link") ||
             (h === "video_file_in" && src.type === "videoRefNode" && sourceHandle === "video_ref") ||
             (h === "video_file_in" && src.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE) ||

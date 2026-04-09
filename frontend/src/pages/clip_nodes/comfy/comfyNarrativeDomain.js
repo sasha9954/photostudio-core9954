@@ -1,5 +1,6 @@
 export const NARRATIVE_SOURCE_OPTIONS = [
   { value: "AUDIO", labelRu: "Аудио" },
+  { value: "TEXT", labelRu: "Текст" },
   { value: "VIDEO_FILE", labelRu: "Видео файл" },
   { value: "VIDEO_LINK", labelRu: "Ссылка на видео" },
 ];
@@ -185,6 +186,7 @@ export const NARRATIVE_RESULT_TABS = [
 
 export const NARRATIVE_INPUT_HANDLES = [
   { id: "audio_in", labelRu: "Аудио", mode: "AUDIO", kind: "story_source" },
+  { id: "text_in", labelRu: "Текст", mode: "TEXT", kind: "story_source" },
   { id: "video_file_in", labelRu: "Видео файл", mode: "VIDEO_FILE", kind: "story_source" },
   { id: "video_link_in", labelRu: "Ссылка на видео", mode: "VIDEO_LINK", kind: "story_source" },
   { id: "ref_character_1", labelRu: "Персонаж 1", mode: "CONTEXT", kind: "context", role: "character_1" },
@@ -330,9 +332,26 @@ function deriveFirstLastPrompts(scene = {}) {
 
 function normalizeNarrativeSourceMode(mode) {
   const clean = String(mode || "").trim().toUpperCase();
+  if (clean === "TEXT") return "text";
   if (clean === "VIDEO_FILE") return "video_file";
   if (clean === "VIDEO_LINK") return "video_link";
   return "audio";
+}
+
+function resolveNarrativeDirectiveFields(state = {}) {
+  const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
+  const connectedText = normalizeText(connectedInputs?.text_in?.value);
+  const localDirectorNote = normalizeText(state?.directorNote || state?.director_note);
+  const localNarrative = normalizeText(state?.note || state?.storyText || state?.story_text || state?.text);
+  const primaryDirectiveText = connectedText || localDirectorNote || localNarrative;
+  return {
+    primaryDirectiveText,
+    text: normalizeText(state?.text) || primaryDirectiveText,
+    storyText: normalizeText(state?.storyText || state?.story_text) || primaryDirectiveText,
+    note: normalizeText(state?.note) || primaryDirectiveText,
+    directorNote: normalizeText(state?.directorNote || state?.director_note) || primaryDirectiveText,
+    source: connectedText ? "text_in" : ((localDirectorNote || localNarrative) ? "local_director_note" : ""),
+  };
 }
 
 
@@ -592,6 +611,7 @@ export function summarizeNarrativeConnectedContext(state = {}) {
     .map(([role]) => role);
   const sourceByHandle = {
     audio_in: getConnectedInputCount(connectedInputs?.audio_in) > 0,
+    text_in: getConnectedInputCount(connectedInputs?.text_in) > 0,
     video_file_in: getConnectedInputCount(connectedInputs?.video_file_in) > 0,
     video_link_in: getConnectedInputCount(connectedInputs?.video_link_in) > 0,
   };
@@ -626,6 +646,7 @@ export function getDefaultNarrativeNodeData() {
     directorNote: "",
     connectedInputs: {
       audio_in: null,
+      text_in: null,
       video_file_in: null,
       video_link_in: null,
       ref_character_1: null,
@@ -699,6 +720,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   const resolvedSource = resolveNarrativeSource(state);
   const sourceValue = normalizeText(resolvedSource.value);
   if (!sourceValue) return null;
+  const narrativeDirective = resolveNarrativeDirectiveFields(state);
 
   const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
   const connectedContextSummary = summarizeNarrativeConnectedContext({ ...state, resolvedSource });
@@ -761,6 +783,10 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     context_refs: Object.fromEntries(Object.entries(contextRefs).filter(([, value]) => !!value)),
     source_origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
     audioDurationSec: audioContext.audioDurationSec,
+    text: narrativeDirective.text,
+    storyText: narrativeDirective.storyText,
+    note: narrativeDirective.note,
+    directorNote: narrativeDirective.directorNote,
     director_controls: {
       contentType: safeContentType,
       format,
@@ -783,6 +809,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
         origin: audioContext.audioOrigin || "audio_node",
       },
       format,
+      narrativeDirectiveSource: narrativeDirective.source,
     },
   };
 
@@ -828,6 +855,11 @@ export function buildScenarioStageManualPayload({
     ? source.connectedInputs
     : (basePayload?.context_refs || {});
   const sanitizedContextRefs = sanitizeContextRefs(rawContextRefs);
+  const narrativeDirective = resolveNarrativeDirectiveFields({
+    ...target,
+    ...source,
+    connectedInputs: source?.connectedInputs || target?.connectedInputs || {},
+  });
 
   return {
     ...basePayload,
@@ -836,10 +868,10 @@ export function buildScenarioStageManualPayload({
     stageId: normalizeText(stageId),
     autoRun: Boolean(autoRun),
     storyboardPackage: existingStoryboardPackage,
-    text: normalizeText(source?.text || target?.text || basePayload?.text),
-    storyText: normalizeText(source?.storyText || target?.storyText),
-    note: normalizeText(source?.note || source?.storyText || target?.note || target?.storyText),
-    directorNote: normalizeText(source?.directorNote || target?.directorNote),
+    text: narrativeDirective.text || normalizeText(basePayload?.text),
+    storyText: narrativeDirective.storyText,
+    note: narrativeDirective.note,
+    directorNote: narrativeDirective.directorNote,
     audioUrl: normalizeText(source?.audioUrl || source?.masterAudioUrl || target?.audioUrl || basePayload?.audioUrl),
     audioDurationSec: Number(source?.audioDurationSec || target?.audioDurationSec || basePayload?.audioDurationSec || 0) || 0,
     source: source?.resolvedSource && typeof source.resolvedSource === "object" ? source.resolvedSource : (basePayload?.source || {}),

@@ -367,11 +367,18 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
     req = _safe_dict(payload)
     metadata = _safe_dict(req.get("metadata"))
     refs_inventory = _safe_dict(req.get("context_refs"))
+    source = _safe_dict(req.get("source"))
+    source_mode = str(source.get("source_mode") or source.get("sourceMode") or "").strip().lower()
+    source_text = str(source.get("source_value") or source.get("sourceValue") or "").strip() if source_mode == "text" else ""
+    text_in = _safe_dict(refs_inventory.get("text_in"))
+    connected_text = str(text_in.get("value") or "").strip()
+    local_text = str(req.get("directorNote") or req.get("director_note") or req.get("note") or "").strip()
+    primary_narrative_text = connected_text or local_text or source_text
     base_input = {
-        "text": str(req.get("text") or "").strip(),
-        "story_text": str(req.get("storyText") or "").strip(),
-        "note": str(req.get("note") or req.get("storyText") or "").strip(),
-        "director_note": str(req.get("directorNote") or "").strip(),
+        "text": str(req.get("text") or "").strip() or primary_narrative_text,
+        "story_text": str(req.get("storyText") or req.get("story_text") or "").strip() or primary_narrative_text,
+        "note": str(req.get("note") or "").strip() or primary_narrative_text,
+        "director_note": str(req.get("directorNote") or req.get("director_note") or "").strip() or primary_narrative_text,
         "source": _safe_dict(req.get("source")),
         "audio_url": str(req.get("audioUrl") or "").strip(),
         "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),

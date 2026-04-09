@@ -152,7 +152,7 @@ class ScenarioDirectorSourceIn(BaseModel):
     @classmethod
     def validate_source_mode(cls, value: Any) -> str:
         normalized = str(value or "audio").strip().lower()
-        return normalized if normalized in {"audio", "video_file", "video_link"} else "audio"
+        return normalized if normalized in {"audio", "text", "video_file", "video_link"} else "audio"
 
 
 class ScenarioDirectorControlsIn(BaseModel):
@@ -174,6 +174,11 @@ class ScenarioDirectorGenerateIn(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     audioUrl: str = ""
     text: str = ""
+    storyText: str = ""
+    note: str = ""
+    directorNote: str = ""
+    story_text: str = ""
+    director_note: str = ""
     refsByRole: dict[str, list[str]] = Field(default_factory=dict)
     selectedCharacterRefUrl: str = ""
     selectedStyleRefUrl: str = ""
@@ -255,11 +260,19 @@ def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
         for item in (req.get("selectedPropsRefUrls") if isinstance(req.get("selectedPropsRefUrls"), list) else [])
         if str(item).strip()
     ]
+    source_mode = str(source.get("source_mode") or source.get("sourceMode") or "").strip().lower()
+    source_text = str(source.get("source_value") or source.get("sourceValue") or "").strip() if source_mode == "text" else ""
+    connected_text = ""
+    text_in = context_refs.get("text_in") if isinstance(context_refs.get("text_in"), dict) else {}
+    if isinstance(text_in, dict):
+        connected_text = str(text_in.get("value") or "").strip()
+    local_text = str(req.get("directorNote") or req.get("director_note") or req.get("note") or "").strip()
+    primary_narrative_text = connected_text or local_text or source_text
     return {
-        "text": str(req.get("text") or "").strip(),
-        "story_text": str(req.get("storyText") or "").strip(),
-        "note": str(req.get("note") or req.get("storyText") or req.get("directorNote") or "").strip(),
-        "director_note": str(req.get("directorNote") or "").strip(),
+        "text": str(req.get("text") or "").strip() or primary_narrative_text,
+        "story_text": str(req.get("storyText") or req.get("story_text") or "").strip() or primary_narrative_text,
+        "note": str(req.get("note") or "").strip() or primary_narrative_text,
+        "director_note": str(req.get("directorNote") or req.get("director_note") or "").strip() or primary_narrative_text,
         "source": normalized_source,
         "audio_url": audio_url,
         "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),
