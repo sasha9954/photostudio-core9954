@@ -14989,6 +14989,8 @@ onClipSec: (nodeId, value) => {
             data: {
               ...base.data,
               status: validScenarioSource ? "ready" : "idle",
+              isConnectedToDirector: validScenarioSource,
+              sourceConnectionLabel: validScenarioSource ? "Director" : "Not connected",
               contentType: String(sourceNode?.data?.contentType || base?.data?.contentType || "story").trim(),
               format: String(sourceNode?.data?.format || base?.data?.format || "9:16").trim(),
               hasAudio: Boolean(String(sourceNode?.data?.audioUrl || sourceNode?.data?.masterAudioUrl || "").trim()),
@@ -19264,6 +19266,7 @@ const hydrate = useCallback((source = "unknown") => {
               <div className="clipSB_drawerGroupTitle">COMFY FLOW</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyNarrative")}>📚 Сценарий</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyBrain")}>🧠 COMFY BRAIN</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioPipelineDebug")}>🧪 Scenario Pipeline Debug</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">DEBUG / TEST / SERVICE</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioOutputTester")}>🧪 ТЕСТЕР СЦЕНАРИЯ</button>
@@ -19272,7 +19275,6 @@ const hydrate = useCallback((source = "unknown") => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("musicPromptTester")}>⚡ ТЕСТЕР МУЗЫКИ</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyStoryboard")}>🧩 COMFY STORYBOARD</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioStoryboard")}>🎞️ SCENARIO STORYBOARD</button>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioPipelineDebug")}>🧪 SCENARIO PIPELINE DEBUG</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyVideoPreview")}>🎬 COMFY VIDEO PREVIEW</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">COMFY CAST / REFS</div>
