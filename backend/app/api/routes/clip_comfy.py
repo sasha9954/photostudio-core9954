@@ -213,13 +213,31 @@ def _has_legacy_single_call_shape(resp: dict[str, Any]) -> bool:
 
 def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
     controls = req.get("director_controls") if isinstance(req.get("director_controls"), dict) else {}
+    selected_props = [
+        str(item).strip()
+        for item in (req.get("selectedPropsRefUrls") if isinstance(req.get("selectedPropsRefUrls"), list) else [])
+        if str(item).strip()
+    ]
     return {
         "text": str(req.get("text") or "").strip(),
+        "story_text": str(req.get("storyText") or "").strip(),
         "note": str(req.get("note") or req.get("storyText") or req.get("directorNote") or "").strip(),
+        "director_note": str(req.get("directorNote") or "").strip(),
         "source": req.get("source") if isinstance(req.get("source"), dict) else {},
         "audio_url": str(req.get("audioUrl") or "").strip(),
         "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),
         "content_type": str(controls.get("contentType") or "music_video"),
+        "format": str(controls.get("format") or req.get("format") or "9:16"),
+        "connected_context_summary": (
+            req.get("connected_context_summary") if isinstance(req.get("connected_context_summary"), dict) else {}
+        ),
+        "refs_by_role": req.get("refsByRole") if isinstance(req.get("refsByRole"), dict) else {},
+        "selected_refs": {
+            "character_1": str(req.get("selectedCharacterRefUrl") or "").strip(),
+            "style": str(req.get("selectedStyleRefUrl") or "").strip(),
+            "location": str(req.get("selectedLocationRefUrl") or "").strip(),
+            "props": selected_props,
+        },
     }
 
 
