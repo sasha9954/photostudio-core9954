@@ -4,6 +4,19 @@ import os
 import re
 from typing import Any
 
+"""
+Transcript alignment resolver for audio_map.
+
+Environment overrides (all optional):
+- AUDIO_MAP_ASR_MODEL: faster-whisper model name. Default: "tiny".
+- AUDIO_MAP_ASR_COMPUTE_TYPE: faster-whisper compute type. Default: "int8".
+- AUDIO_MAP_ASR_DEVICE: execution device. Default: "auto".
+"""
+
+DEFAULT_ASR_MODEL = "tiny"
+DEFAULT_ASR_COMPUTE_TYPE = "int8"
+DEFAULT_ASR_DEVICE = "auto"
+
 
 def _clean_token(token: str) -> str:
     text = str(token or "").strip()
@@ -70,9 +83,10 @@ def _whisper_word_alignment(audio_path: str, *, transcript_hint: str = "") -> di
     except Exception:
         return None
 
-    model_name = os.getenv("AUDIO_MAP_ASR_MODEL", "tiny")
-    compute_type = os.getenv("AUDIO_MAP_ASR_COMPUTE_TYPE", "int8")
-    device = os.getenv("AUDIO_MAP_ASR_DEVICE", "auto")
+    # Keep defaults lightweight/safe for local/dev setups and allow explicit env overrides.
+    model_name = os.getenv("AUDIO_MAP_ASR_MODEL", DEFAULT_ASR_MODEL)
+    compute_type = os.getenv("AUDIO_MAP_ASR_COMPUTE_TYPE", DEFAULT_ASR_COMPUTE_TYPE)
+    device = os.getenv("AUDIO_MAP_ASR_DEVICE", DEFAULT_ASR_DEVICE)
 
     model = WhisperModel(model_name, device=device, compute_type=compute_type)
     segments, _info = model.transcribe(
@@ -140,6 +154,11 @@ def resolve_transcript_alignment(
     Priority:
     1) externally provided alignment with word timestamps
     2) ASR backend with real word timestamps
+
+    ASR env knobs:
+    - AUDIO_MAP_ASR_MODEL
+    - AUDIO_MAP_ASR_COMPUTE_TYPE
+    - AUDIO_MAP_ASR_DEVICE
     """
     provided = provided_alignment if isinstance(provided_alignment, dict) else {}
     provided_words = _normalize_word_rows(

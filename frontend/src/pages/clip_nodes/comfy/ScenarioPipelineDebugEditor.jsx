@@ -70,6 +70,22 @@ export default function ScenarioPipelineDebugEditor({
   const phraseEndpoints = Array.isArray(audioMap?.phrase_endpoints_sec) ? audioMap.phrase_endpoints_sec : [];
   const noSplitRanges = Array.isArray(audioMap?.no_split_ranges) ? audioMap.no_split_ranges : [];
   const cutPoints = Array.isArray(audioMap?.candidate_cut_points_sec) ? audioMap.candidate_cut_points_sec : [];
+  const phraseUnits = Array.isArray(audioMap?.phrase_units) ? audioMap.phrase_units : [];
+  const sceneCandidateWindows = Array.isArray(audioMap?.scene_candidate_windows) ? audioMap.scene_candidate_windows : [];
+  const transcriptAlignment = audioMap?.transcript_alignment || {};
+  const analysisMode = String(audioMap?.analysis_mode || allDiagnostics?.audio_map_analysis_mode || "—");
+  const phraseMode = String(audioMap?.analysis_mode || allDiagnostics?.audio_map_phrase_mode || "—");
+  const transcriptAvailable = Boolean(
+    audioMap?.transcript_available ?? allDiagnostics?.transcript_available ?? false
+  );
+  const wordTimestampCount = Number(
+    allDiagnostics?.word_timestamp_count ?? (Array.isArray(transcriptAlignment?.words) ? transcriptAlignment.words.length : 0)
+  );
+  const phraseUnitCount = Number(allDiagnostics?.phrase_unit_count ?? phraseUnits.length);
+  const sceneCandidateCount = Number(allDiagnostics?.scene_candidate_count ?? sceneCandidateWindows.length);
+  const alignmentSource = String(
+    audioMap?.audio_map_alignment_source || allDiagnostics?.audio_map_alignment_source || transcriptAlignment?.source || "—"
+  );
 
   const contentByTab = {
     story_core: (
@@ -87,12 +103,29 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>phrase_endpoints_sec</span><strong>{phraseEndpoints.length}</strong></div>
         <div className="clipSB_storyboardKv"><span>candidate_cut_points_sec</span><strong>{cutPoints.length}</strong></div>
         <div className="clipSB_storyboardKv"><span>no_split_ranges</span><strong>{noSplitRanges.length}</strong></div>
+        <div className="clipSB_storyboardKv"><span>analysis_mode</span><strong>{analysisMode}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_map_phrase_mode</span><strong>{phraseMode}</strong></div>
+        <div className="clipSB_storyboardKv"><span>transcript_available</span><strong>{String(transcriptAvailable)}</strong></div>
+        <div className="clipSB_storyboardKv"><span>word_timestamp_count</span><strong>{wordTimestampCount}</strong></div>
+        <div className="clipSB_storyboardKv"><span>phrase_unit_count</span><strong>{phraseUnitCount}</strong></div>
+        <div className="clipSB_storyboardKv"><span>scene_candidate_count</span><strong>{sceneCandidateCount}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_map_alignment_source</span><strong>{alignmentSource}</strong></div>
         <pre className="clipSB_pre">{toJson({
           sections: audioSections,
           phrase_endpoints_sec: phraseEndpoints,
           no_split_ranges: noSplitRanges,
           candidate_cut_points_sec: cutPoints,
         })}</pre>
+        <div className="clipSB_storyboardKv"><span>phrase_units</span><strong>{phraseUnits.length}</strong></div>
+        <pre className="clipSB_pre">{toJson(phraseUnits)}</pre>
+        <div className="clipSB_storyboardKv"><span>scene_candidate_windows</span><strong>{sceneCandidateWindows.length}</strong></div>
+        <pre className="clipSB_pre">{toJson(sceneCandidateWindows)}</pre>
+        {transcriptAlignment?.source ? (
+          <>
+            <div className="clipSB_storyboardKv"><span>transcript_alignment.source</span><strong>{String(transcriptAlignment.source)}</strong></div>
+            <pre className="clipSB_pre">{toJson(transcriptAlignment)}</pre>
+          </>
+        ) : null}
         <pre className="clipSB_pre">{toJson(audioMap)}</pre>
       </div>
     ),

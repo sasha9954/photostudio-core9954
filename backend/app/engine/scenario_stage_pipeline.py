@@ -1207,7 +1207,9 @@ def _build_audio_map_from_real_alignment(
                 }
             )
     base_map["analysis_mode"] = "transcript_alignment_v2"
-    base_map["transcript_available"] = bool(str(alignment.get("transcript_text") or "").strip())
+    base_map["transcript_available"] = bool(
+        str(alignment.get("transcript_text") or "").strip() or _safe_list(alignment.get("words"))
+    )
     base_map["transcript_text"] = str(alignment.get("transcript_text") or "").strip()
     base_map["transcript_alignment"] = {
         "transcript_text": str(alignment.get("transcript_text") or "").strip(),
@@ -1518,9 +1520,14 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                     provided_alignment=provided_alignment,
                 )
                 if alignment:
-                    analysis_mode = "transcript_alignment_v2"
-                    audio_map = _build_audio_map_from_real_alignment(duration_sec, story_core, raw_analysis, alignment) or {}
-                else:
+                    aligned_map = _build_audio_map_from_real_alignment(duration_sec, story_core, raw_analysis, alignment)
+                    if aligned_map and _is_usable_audio_map(aligned_map):
+                        analysis_mode = "transcript_alignment_v2"
+                        audio_map = aligned_map
+                        _append_diag_event(package, "audio_map transcript alignment resolved", stage_id="audio_map")
+                    else:
+                        alignment = None
+                if not alignment:
                     phrase_first_map = _build_phrase_first_audio_map(duration_sec, story_core, raw_analysis, transcript_text)
                     if phrase_first_map:
                         analysis_mode = "approximate_phrase_grouping_v1"
@@ -1528,6 +1535,11 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                         audio_map["analysis_mode"] = "approximate_phrase_grouping_v1"
                         audio_map["transcript_available"] = bool(transcript_text)
                         audio_map["audio_map_alignment_source"] = "approximate_transcript_grouping"
+                        _append_diag_event(
+                            package,
+                            "audio_map transcript alignment unavailable, falling back to approximate phrase grouping",
+                            stage_id="audio_map",
+                        )
                     else:
                         analysis_mode = "audio_dynamics_v2"
                         audio_map = _build_audio_map_from_dynamics(
@@ -1535,6 +1547,11 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                             story_core,
                             raw_analysis,
                             analysis_mode=analysis_mode,
+                        )
+                        _append_diag_event(
+                            package,
+                            "audio_map transcript alignment unavailable, falling back to audio_dynamics_v2",
+                            stage_id="audio_map",
                         )
                 if analysis_mode == "transcript_alignment_v2":
                     audio_map["audio_map_alignment_source"] = str(_safe_dict(audio_map.get("transcript_alignment")).get("source") or "")
