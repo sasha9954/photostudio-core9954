@@ -585,6 +585,16 @@ function normalizeScenarioRoleName(value = "") {
 }
 
 const SCENARIO_IMAGE_ROLE_KEYS = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
+const SCENARIO_IMAGE_ROLE_TO_HANDLE = {
+  character_1: "ref_character_1",
+  character_2: "ref_character_2",
+  character_3: "ref_character_3",
+  animal: "ref_animal",
+  group: "ref_group",
+  location: "ref_location",
+  style: "ref_style",
+  props: "ref_props",
+};
 
 function extractScenarioRefsByRoleFromSource(source = null) {
   if (!source || typeof source !== "object") return Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
@@ -767,22 +777,12 @@ function extractRefsInventoryLikeByRole(source = null) {
 }
 
 function buildScenarioConnectedInputsSummaryFromRefs(...sources) {
-  const roleToHandle = {
-    character_1: "ref_character_1",
-    character_2: "ref_character_2",
-    character_3: "ref_character_3",
-    animal: "ref_animal",
-    group: "ref_group",
-    location: "ref_location",
-    style: "ref_style",
-    props: "ref_props",
-  };
   const mergedRefs = mergeScenarioRefsByRole(
     ...sources.map((source) => extractScenarioRefsByRoleFromSource(source)),
     ...sources.map((source) => extractRefsInventoryLikeByRole(source)),
   );
   const connectedInputs = {};
-  Object.entries(roleToHandle).forEach(([role, handle]) => {
+  Object.entries(SCENARIO_IMAGE_ROLE_TO_HANDLE).forEach(([role, handle]) => {
     const urls = Array.isArray(mergedRefs?.[role]) ? mergedRefs[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
     if (!urls.length) return;
     connectedInputs[handle] = {
@@ -11107,84 +11107,85 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         targetNode?.data?.connectedInputs,
         targetNode?.data?.connected_inputs,
       ].find((candidate) => candidate && typeof candidate === "object" && Object.keys(candidate).length > 0) || connectedInputsFromContextFallback);
-      const locationRefsFromConnectedInput = (() => {
-        const input = connectedInputsFallback?.ref_location;
-        if (!input) return [];
-        if (Array.isArray(input)) {
-          return input.map((value) => String(value || "").trim()).filter(Boolean);
-        }
-        if (typeof input === "string") {
-          const normalized = String(input || "").trim();
+      const extractUrlsFromConnectedInputValue = (value) => {
+        if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+        if (typeof value === "string") {
+          const normalized = String(value || "").trim();
           return normalized ? [normalized] : [];
         }
-        if (typeof input === "object") {
-          const toUrls = (value) => {
-            if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
-            if (typeof value === "string") {
-              const normalized = String(value || "").trim();
-              return normalized ? [normalized] : [];
-            }
-            if (value && typeof value === "object") {
-              return [
-                ...toUrls(value?.refs),
-                ...toUrls(value?.value),
-                ...toUrls(value?.url),
-                ...toUrls(value?.src),
-                ...toUrls(value?.imageUrl),
-              ];
-            }
-            return [];
-          };
-          return [...new Set(toUrls(input))];
+        if (value && typeof value === "object") {
+          return [...new Set([
+            ...extractUrlsFromConnectedInputValue(value?.refs),
+            ...extractUrlsFromConnectedInputValue(value?.value),
+            ...extractUrlsFromConnectedInputValue(value?.url),
+            ...extractUrlsFromConnectedInputValue(value?.src),
+            ...extractUrlsFromConnectedInputValue(value?.imageUrl),
+            ...extractUrlsFromConnectedInputValue(value?.images),
+            ...extractUrlsFromConnectedInputValue(value?.urls),
+          ])];
         }
         return [];
-      })();
+      };
+      const connectedInputRefsByRole = Object.fromEntries(
+        SCENARIO_IMAGE_ROLE_KEYS.map((role) => {
+          const handle = SCENARIO_IMAGE_ROLE_TO_HANDLE?.[role];
+          const urls = handle ? extractUrlsFromConnectedInputValue(connectedInputsFallback?.[handle]) : [];
+          return [role, [...new Set(urls)]];
+        })
+      );
+      const mergedRefsByRole = mergeScenarioRefsByRole(
+        refsForImageRequest?.refsByRole,
+        refsByRoleForImage,
+        refsFallbackFromContext,
+        contextRefsMergedByRole,
+        connectedInputRefsByRole,
+      );
       const refsByRoleEffective = hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {})
-        ? refsForImageRequest.refsByRole
-        : (hasNonEmptyRefsByRole(refsByRoleForImage || {}) ? refsByRoleForImage : refsFallbackFromContext);
-      if (
-        (!Array.isArray(refsByRoleEffective?.location) || refsByRoleEffective.location.length === 0)
-        && (
-          (Array.isArray(contextRefsMergedByRole?.location) && contextRefsMergedByRole.location.length > 0)
-          || locationRefsFromConnectedInput.length > 0
-        )
-      ) {
-        refsByRoleEffective.location = [...new Set([
-          ...(Array.isArray(contextRefsMergedByRole?.location) ? contextRefsMergedByRole.location : []),
-          ...locationRefsFromConnectedInput,
-        ])];
-      }
-      if (
-        (!connectedInputsFallback?.ref_location || typeof connectedInputsFallback.ref_location !== "object")
-        && Array.isArray(refsByRoleEffective?.location)
-        && refsByRoleEffective.location.length > 0
-      ) {
-        connectedInputsFallback.ref_location = {
-          count: refsByRoleEffective.location.length,
-          refs: refsByRoleEffective.location,
-          value: refsByRoleEffective.location[0] || "",
-          source: "derived_from_refs_by_role",
+        ? mergeScenarioRefsByRole(refsForImageRequest.refsByRole, mergedRefsByRole)
+        : mergedRefsByRole;
+      const connectedInputsEffective = {
+        ...(connectedInputsFallback && typeof connectedInputsFallback === "object" ? connectedInputsFallback : {}),
+      };
+      SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
+        const handle = SCENARIO_IMAGE_ROLE_TO_HANDLE?.[role];
+        if (!handle) return;
+        const urls = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
+        if (!urls.length) return;
+        const existingUrls = extractUrlsFromConnectedInputValue(connectedInputsEffective?.[handle]);
+        if (existingUrls.length > 0) return;
+        connectedInputsEffective[handle] = {
+          count: urls.length,
+          refs: urls,
+          value: urls[0] || "",
+          source: "derived_from_context_refs",
         };
-      }
-      const refsUsedByRoleEffective = isNonEmptyRoleMap(refsUsedByRoleFallback)
-        ? refsUsedByRoleFallback
-        : Object.fromEntries(
-          Object.entries(refsByRoleEffective || {})
-            .filter(([, urls]) => Array.isArray(urls) && urls.length > 0)
-            .map(([role, urls]) => [role, urls.map(() => "required")])
-        );
+      });
+      const refsUsedByRoleEffective = { ...(isNonEmptyRoleMap(refsUsedByRoleFallback) ? refsUsedByRoleFallback : {}) };
+      SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
+        const urls = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].filter(Boolean) : [];
+        if (!urls.length) return;
+        const existing = Array.isArray(refsUsedByRoleEffective?.[role]) ? refsUsedByRoleEffective[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
+        refsUsedByRoleEffective[role] = existing.length ? existing : urls.map(() => "required");
+      });
       const mustAppearEffective = Array.isArray(refsForImageRequest?.mustAppear)
         ? refsForImageRequest.mustAppear
         : (Array.isArray(derivedRoleContract?.mustAppear) ? derivedRoleContract.mustAppear : []);
       const ensuredMustAppear = [...new Set([
         ...mustAppearEffective,
-        ...(Array.isArray(refsByRoleEffective?.character_1) && refsByRoleEffective.character_1.length > 0 ? ["character_1"] : []),
-        ...(Array.isArray(refsByRoleEffective?.location) && refsByRoleEffective.location.length > 0 ? ["location"] : []),
+        ...SCENARIO_IMAGE_ROLE_KEYS.filter((role) => (
+          role !== "style"
+          && Array.isArray(refsByRoleEffective?.[role])
+          && refsByRoleEffective[role].length > 0
+        )),
       ])];
       const sceneActiveRolesEffective = [...new Set([
         ...(Array.isArray(refsForImageRequest?.sceneActiveRoles) ? refsForImageRequest.sceneActiveRoles : []),
         ...(Array.isArray(derivedRoleContract?.sceneActiveRoles) ? derivedRoleContract.sceneActiveRoles : []),
-        ...(Array.isArray(refsByRoleEffective?.location) && refsByRoleEffective.location.length > 0 ? ["location"] : []),
+        ...SCENARIO_IMAGE_ROLE_KEYS.filter((role) => (
+          role !== "style"
+          && Array.isArray(refsByRoleEffective?.[role])
+          && refsByRoleEffective[role].length > 0
+        )),
       ])];
       const primaryRoleEffective = String(refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "character_1").trim();
       const heroEntityIdEffective = String(
@@ -11197,7 +11198,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         ...refsForImageRequest,
         refsByRole: refsByRoleEffective,
         refsUsedByRole: refsUsedByRoleEffective,
-        connectedInputs: connectedInputsFallback,
+        connectedInputs: connectedInputsEffective,
         primaryRole: primaryRoleEffective,
         sceneActiveRoles: sceneActiveRolesEffective,
         mustAppear: ensuredMustAppear,
@@ -11257,6 +11258,15 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         mustAppear: refsPayloadForRequest?.mustAppear || [],
         heroEntityId: refsPayloadForRequest?.heroEntityId || "",
       });
+      console.debug("[SCENARIO IMAGE CONNECTED ROLE MAP]", {
+        sceneId,
+        mergedRefsByRole: summarizeRefsByRole(mergedRefsByRole),
+        connectedInputHandles: Object.keys(connectedInputsEffective || {}),
+        refsByRoleEffective: summarizeRefsByRole(refsByRoleEffective || {}),
+        refsUsedByRoleKeys: Object.keys(refsUsedByRoleEffective || {}),
+        mustAppear: ensuredMustAppear,
+        sceneActiveRoles: sceneActiveRolesEffective,
+      });
       if (String(sceneId || "").trim().toLowerCase() === "sc_1") {
         console.debug("[SCENARIO IMAGE REQUEST BODY.REFS sc_1]", refsPayloadForRequest);
       }
@@ -11264,7 +11274,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         ...scenarioContractPayloadSanitized,
         refsByRole: refsByRoleEffective,
         refsUsedByRole: refsUsedByRoleEffective,
-        connectedInputs: connectedInputsFallback,
+        connectedInputs: connectedInputsEffective,
         context_refs: contextRefsFallback,
         connected_context_summary: targetScene?.connected_context_summary || targetScene?.connectedContextSummary || scenarioPackageForImage?.connected_context_summary || scenarioPackageForImage?.connectedContextSummary || {},
         sceneGoal: sceneGoalEffective,

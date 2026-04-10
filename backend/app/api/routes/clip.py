@@ -9105,15 +9105,22 @@ def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[s
                 if canonical == role and src.get(alias_key) is not None:
                     items = src.get(alias_key)
                     break
-        urls: list[str] = []
-        if isinstance(items, list):
-            for item in items:
-                if isinstance(item, dict):
-                    url = str(item.get("url") or "").strip()
-                else:
-                    url = str(item or "").strip()
-                if url:
-                    urls.append(url)
+        if isinstance(items, dict):
+            items = (
+                items.get("refs")
+                or items.get("images")
+                or items.get("urls")
+                or items.get("items")
+                or items.get("list")
+                or items.get("value")
+                or items.get("url")
+                or items.get("src")
+                or items.get("imageUrl")
+                or []
+            )
+        if isinstance(items, str):
+            items = [items]
+        urls: list[str] = _normalize_ref_list(items if isinstance(items, list) else [items])
         out[role] = list(dict.fromkeys(urls))
     human_roles = ["character_1", "character_2", "character_3"]
     shared_group_urls = set(out.get("group") or [])
@@ -9156,6 +9163,35 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
     out: dict[str, list[str]] = {role: [] for role in COMFY_REF_ROLES}
     if not isinstance(source, dict):
         return out
+    def _extract_urls_from_any(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            urls: list[str] = []
+            for item in value:
+                urls.extend(_extract_urls_from_any(item))
+            return list(dict.fromkeys(urls))
+        if isinstance(value, str):
+            return _normalize_ref_list([value])
+        if isinstance(value, dict):
+            return list(dict.fromkeys(_normalize_ref_list([
+                value.get("url"),
+                value.get("src"),
+                value.get("imageUrl"),
+                value.get("value"),
+                value.get("preview"),
+            ]) + _extract_urls_from_any(value.get("refs")) + _extract_urls_from_any(value.get("images")) + _extract_urls_from_any(value.get("urls")) + _extract_urls_from_any(value.get("items"))))
+        return _normalize_ref_list([value])
+    connected_inputs = source.get("connectedInputs") if isinstance(source.get("connectedInputs"), dict) else (
+        source.get("connected_inputs") if isinstance(source.get("connected_inputs"), dict) else {}
+    )
+    refs_inventory_like = source.get("refs_inventory") if source.get("refs_inventory") is not None else (
+        source.get("refsInventory")
+        or source.get("referenceInventory")
+        or source.get("reference_inventory")
+        or source.get("context_refs_inventory")
+        or source.get("contextRefsInventory")
+    )
     nested_ref_containers = [
         source.get("refsByRole"),
         source.get("refs_by_role"),
@@ -9163,6 +9199,8 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
         source.get("refs_used_by_role"),
         source.get("context_refs"),
         source.get("contextRefs"),
+        refs_inventory_like,
+        connected_inputs,
     ]
     for container in nested_ref_containers:
         if not isinstance(container, dict):
@@ -9175,14 +9213,29 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
         role = role_aliases.get(role, role)
         if role not in COMFY_REF_ROLES:
             continue
-        values = raw_value if isinstance(raw_value, list) else (
-            raw_value.get("refs")
-            if isinstance(raw_value, dict) and isinstance(raw_value.get("refs"), list)
-            else [raw_value]
-        )
-        urls = _normalize_ref_list(values)
+        urls = _extract_urls_from_any(raw_value)
         if urls:
             out[role] = list(dict.fromkeys([*out.get(role, []), *urls]))
+    if isinstance(refs_inventory_like, dict):
+        for raw_role, raw_value in refs_inventory_like.items():
+            normalized_role = role_aliases.get(str(raw_role or "").strip().lower(), "")
+            if normalized_role not in COMFY_REF_ROLES:
+                continue
+            urls = _extract_urls_from_any(raw_value)
+            if urls:
+                out[normalized_role] = list(dict.fromkeys([*out.get(normalized_role, []), *urls]))
+    if isinstance(connected_inputs, dict):
+        for raw_role, canonical_role in role_aliases.items():
+            if not raw_role.startswith("ref_"):
+                continue
+            if canonical_role not in COMFY_REF_ROLES:
+                continue
+            raw_value = connected_inputs.get(raw_role)
+            if raw_value is None:
+                continue
+            urls = _extract_urls_from_any(raw_value)
+            if urls:
+                out[canonical_role] = list(dict.fromkeys([*out.get(canonical_role, []), *urls]))
     return out
 
 
