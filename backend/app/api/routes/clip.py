@@ -9083,6 +9083,13 @@ If any of the required descriptive fields are returned in English, the output is
 def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[str]]:
     src = refs_by_role if isinstance(refs_by_role, dict) else {}
     role_aliases = {
+        "ref_character_1": "character_1",
+        "ref_character_2": "character_2",
+        "ref_character_3": "character_3",
+        "ref_location": "location",
+        "ref_style": "style",
+        "ref_animal": "animal",
+        "ref_group": "group",
         "ref_props": "props",
         "ref_items": "props",
         "items": "props",
@@ -9130,6 +9137,13 @@ def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[s
 
 def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str]]:
     role_aliases = {
+        "ref_character_1": "character_1",
+        "ref_character_2": "character_2",
+        "ref_character_3": "character_3",
+        "ref_location": "location",
+        "ref_style": "style",
+        "ref_animal": "animal",
+        "ref_group": "group",
         "ref_props": "props",
         "ref_items": "props",
         "items": "props",
@@ -9157,7 +9171,7 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
         for role in COMFY_REF_ROLES:
             out[role] = list(dict.fromkeys([*(out.get(role) or []), *(nested.get(role) or [])]))
     for raw_role, raw_value in source.items():
-        role = str(raw_role or "").strip()
+        role = str(raw_role or "").strip().lower()
         role = role_aliases.get(role, role)
         if role not in COMFY_REF_ROLES:
             continue

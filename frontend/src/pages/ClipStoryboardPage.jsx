@@ -559,12 +559,21 @@ function normalizeScenarioRoleName(value = "") {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "";
   const aliases = {
+    ref_character_1: "character_1",
+    ref_character_2: "character_2",
+    ref_character_3: "character_3",
+    ref_location: "location",
+    ref_style: "style",
+    ref_animal: "animal",
+    ref_group: "group",
     char_1: "character_1",
     character1: "character_1",
     char_2: "character_2",
     character2: "character_2",
     char_3: "character_3",
     character3: "character_3",
+    character: "character_1",
+    world: "location",
     ref_props: "props",
     ref_items: "props",
     items: "props",
@@ -667,6 +676,7 @@ function extractRefsInventoryLikeByRole(source = null) {
     ref_location: "location",
     ref_style: "style",
     ref_props: "props",
+    ref_items: "props",
     ref_group: "group",
     ref_animal: "animal",
   };
@@ -754,6 +764,35 @@ function extractRefsInventoryLikeByRole(source = null) {
     });
   }
   return roleMap;
+}
+
+function buildScenarioConnectedInputsSummaryFromRefs(...sources) {
+  const roleToHandle = {
+    character_1: "ref_character_1",
+    character_2: "ref_character_2",
+    character_3: "ref_character_3",
+    animal: "ref_animal",
+    group: "ref_group",
+    location: "ref_location",
+    style: "ref_style",
+    props: "ref_props",
+  };
+  const mergedRefs = mergeScenarioRefsByRole(
+    ...sources.map((source) => extractScenarioRefsByRoleFromSource(source)),
+    ...sources.map((source) => extractRefsInventoryLikeByRole(source)),
+  );
+  const connectedInputs = {};
+  Object.entries(roleToHandle).forEach(([role, handle]) => {
+    const urls = Array.isArray(mergedRefs?.[role]) ? mergedRefs[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
+    if (!urls.length) return;
+    connectedInputs[handle] = {
+      count: urls.length,
+      refs: urls,
+      value: urls[0] || "",
+      source: "derived_from_context_refs",
+    };
+  });
+  return connectedInputs;
 }
 
 function collectScenarioNarrativeRefs({ sourceNode = null } = {}) {
@@ -11022,6 +11061,28 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         scenarioPackageForImage?.connected_context_summary?.refsByRole,
         scenarioPackageForImage?.connected_context_summary?.refs_by_role,
       ].find((candidate) => isNonEmptyRoleMap(candidate)) || {});
+      const contextRefsFallback = (
+        targetScene?.context_refs
+        || targetScene?.contextRefs
+        || targetScene?.connected_context_summary?.context_refs
+        || targetScene?.connected_context_summary?.contextRefs
+        || targetScene?.connectedContextSummary?.context_refs
+        || targetScene?.connectedContextSummary?.contextRefs
+        || scenarioPackageForImage?.context_refs
+        || scenarioPackageForImage?.contextRefs
+        || scenarioPackageForImage?.connected_context_summary?.context_refs
+        || scenarioPackageForImage?.connected_context_summary?.contextRefs
+        || scenarioPackageForImage?.connectedContextSummary?.context_refs
+        || scenarioPackageForImage?.connectedContextSummary?.contextRefs
+        || {}
+      );
+      const connectedInputsFromContextFallback = buildScenarioConnectedInputsSummaryFromRefs(
+        contextRefsFallback,
+        targetScene?.connected_context_summary,
+        targetScene?.connectedContextSummary,
+        scenarioPackageForImage?.connected_context_summary,
+        scenarioPackageForImage?.connectedContextSummary,
+      );
       const connectedInputsFallback = ([
         refsForImageRequest?.connectedInputs,
         targetScene?.connectedInputs,
@@ -11038,22 +11099,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         scenarioPackageForImage?.connected_context_summary?.connected_inputs,
         targetNode?.data?.connectedInputs,
         targetNode?.data?.connected_inputs,
-      ].find((candidate) => candidate && typeof candidate === "object" && Object.keys(candidate).length > 0) || {});
-      const contextRefsFallback = (
-        targetScene?.context_refs
-        || targetScene?.contextRefs
-        || targetScene?.connected_context_summary?.context_refs
-        || targetScene?.connected_context_summary?.contextRefs
-        || targetScene?.connectedContextSummary?.context_refs
-        || targetScene?.connectedContextSummary?.contextRefs
-        || scenarioPackageForImage?.context_refs
-        || scenarioPackageForImage?.contextRefs
-        || scenarioPackageForImage?.connected_context_summary?.context_refs
-        || scenarioPackageForImage?.connected_context_summary?.contextRefs
-        || scenarioPackageForImage?.connectedContextSummary?.context_refs
-        || scenarioPackageForImage?.connectedContextSummary?.contextRefs
-        || {}
-      );
+      ].find((candidate) => candidate && typeof candidate === "object" && Object.keys(candidate).length > 0) || connectedInputsFromContextFallback);
       const refsByRoleEffective = hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {})
         ? refsForImageRequest.refsByRole
         : (hasNonEmptyRefsByRole(refsByRoleForImage || {}) ? refsByRoleForImage : refsFallbackFromContext);
