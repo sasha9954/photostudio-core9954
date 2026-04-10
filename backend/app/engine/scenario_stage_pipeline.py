@@ -2318,6 +2318,26 @@ def _build_audio_map_from_gemini_payload(payload: dict[str, Any], duration_sec: 
     }
 
 
+def _summarize_audio_map_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    sections = [item for item in _safe_list(payload.get("sections")) if isinstance(item, dict)]
+    phrase_units = [item for item in _safe_list(payload.get("phrase_units")) if isinstance(item, dict)]
+    scene_windows = [item for item in _safe_list(payload.get("scene_candidate_windows")) if isinstance(item, dict)]
+    all_rows = sections + phrase_units + scene_windows
+    t0_values = [_to_float(item.get("t0"), -1.0) for item in all_rows]
+    t1_values = [_to_float(item.get("t1"), -1.0) for item in all_rows]
+    first_t0 = min((v for v in t0_values if v >= 0.0), default=None)
+    last_t1 = max((v for v in t1_values if v >= 0.0), default=None)
+    return {
+        "sections_count": len(sections),
+        "phrase_units_count": len(phrase_units),
+        "scene_candidate_windows_count": len(scene_windows),
+        "phrase_endpoints_count": len(_safe_list(payload.get("phrase_endpoints_sec"))),
+        "first_t0": round(first_t0, 3) if first_t0 is not None else None,
+        "last_t1": round(last_t1, 3) if last_t1 is not None else None,
+        "overall_duration_sec": _to_float(payload.get("overall_duration_sec"), 0.0),
+    }
+
+
 def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
@@ -2344,6 +2364,11 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_segmentation_prompt_version"] = ""
     diagnostics["audio_map_segmentation_error"] = ""
     diagnostics["audio_map_segmentation_error_detail"] = ""
+    diagnostics["audio_map_segmentation_payload_summary"] = {}
+    diagnostics["audio_map_segmentation_normalized_summary"] = {}
+    diagnostics["audio_map_stage_branch"] = ""
+    diagnostics["audio_map_primary_fallback_reason"] = ""
+    diagnostics["audio_map_dynamics_error"] = ""
     diagnostics["audio_map_primary_source"] = "fallback"
     diagnostics["audio_map_model_led_segmentation"] = False
     diagnostics["audio_map_validation_flags"] = []
@@ -2376,6 +2401,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("audio_map_duration_missing")
 
     used_fallback = False
+    fallback_reason = ""
     primary_source = "fallback"
     model_led_segmentation = False
     analysis_mode = "timing_heuristics_v1"
@@ -2385,11 +2411,27 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         if audio_url:
             analysis_path = ""
             cleanup_path: str | None = None
+            raw_analysis: dict[str, Any] = {}
             try:
                 analysis_path, cleanup_path = _resolve_audio_analysis_path(audio_url)
                 if not analysis_path:
-                    raise ValueError("audio_source_unavailable_for_dynamics")
-                raw_analysis = analyze_audio(analysis_path, debug=False)
+                    diagnostics["audio_map_dynamics_error"] = "audio_source_unavailable_for_dynamics"
+                    _append_diag_event(
+                        package,
+                        "audio_map dynamics unavailable: source not resolved; proceeding with gemini segmentation",
+                        stage_id="audio_map",
+                    )
+                else:
+                    try:
+                        raw_analysis = analyze_audio(analysis_path, debug=False)
+                    except Exception as analysis_exc:  # noqa: BLE001
+                        diagnostics["audio_map_dynamics_error"] = str(analysis_exc)
+                        raw_analysis = {}
+                        _append_diag_event(
+                            package,
+                            f"audio_map dynamics analysis failed; proceeding with gemini segmentation: {analysis_exc}",
+                            stage_id="audio_map",
+                        )
                 _append_diag_event(package, "audio_map gemini segmentation requested", stage_id="audio_map")
                 gemini_result = build_gemini_audio_segmentation(
                     api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
@@ -2405,8 +2447,21 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["audio_map_segmentation_prompt_version"] = str(gemini_result.get("prompt_version") or "")
                 diagnostics["audio_map_used_model"] = str(gemini_result.get("used_model") or diagnostics.get("audio_map_used_model") or "")
                 diagnostics["audio_map_segmentation_validation_error"] = str(gemini_result.get("validation_error") or "")
+                diagnostics["audio_map_segmentation_payload_summary"] = _safe_dict(gemini_result.get("payload_summary"))
+                diagnostics["audio_map_segmentation_normalized_summary"] = _safe_dict(gemini_result.get("normalized_summary"))
+                _append_diag_event(
+                    package,
+                    "audio_map gemini result "
+                    f"ok={bool(gemini_result.get('ok'))} "
+                    f"prompt={diagnostics.get('audio_map_segmentation_prompt_version') or ''} "
+                    f"model={diagnostics.get('audio_map_used_model') or ''} "
+                    f"validation_error={diagnostics.get('audio_map_segmentation_validation_error') or ''} "
+                    f"error={str(gemini_result.get('error') or '')}",
+                    stage_id="audio_map",
+                )
                 if bool(gemini_result.get("ok")):
                     payload = _safe_dict(gemini_result.get("payload"))
+                    diagnostics["audio_map_segmentation_normalized_summary"] = _summarize_audio_map_payload(payload)
                     audio_map = _build_audio_map_from_gemini_payload(
                         payload,
                         duration_sec,
@@ -2418,6 +2473,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                     diagnostics["audio_map_segmentation_backend"] = "gemini"
                     diagnostics["audio_map_segmentation_error"] = ""
                     diagnostics["audio_map_segmentation_error_detail"] = ""
+                    diagnostics["audio_map_stage_branch"] = "gemini_primary"
                     _append_diag_event(package, "audio_map gemini segmentation resolved", stage_id="audio_map")
                 else:
                     gemini_error = str(gemini_result.get("error") or "gemini_segmentation_failed")
@@ -2425,25 +2481,40 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                     diagnostics["audio_map_segmentation_backend"] = "gemini"
                     diagnostics["audio_map_segmentation_error"] = gemini_error
                     diagnostics["audio_map_segmentation_error_detail"] = str(gemini_result.get("validation_error") or "")
+                    diagnostics["audio_map_stage_branch"] = "fallback_after_gemini_failure"
                     _append_diag_event(
                         package,
                         f"audio_map gemini segmentation invalid, falling back to local splitter: {gemini_error}",
                         stage_id="audio_map",
                     )
                     if content_type == "music_video":
-                        analysis_mode = "music_video_emergency_fallback_v1"
-                        audio_map = _build_audio_map_from_dynamics(
-                            duration_sec,
-                            story_core,
-                            raw_analysis,
-                            analysis_mode=analysis_mode,
-                        )
-                        diagnostics["audio_map_backend_repair_applied"] = True
-                        _append_diag_event(
-                            package,
-                            "audio_map emergency fallback applied (music_video)",
-                            stage_id="audio_map",
-                        )
+                        if raw_analysis:
+                            analysis_mode = "music_video_emergency_fallback_v1"
+                            audio_map = _build_audio_map_from_dynamics(
+                                duration_sec,
+                                story_core,
+                                raw_analysis,
+                                analysis_mode=analysis_mode,
+                            )
+                            diagnostics["audio_map_backend_repair_applied"] = True
+                            _append_diag_event(
+                                package,
+                                "audio_map emergency fallback applied (music_video dynamics)",
+                                stage_id="audio_map",
+                            )
+                        else:
+                            analysis_mode = "timing_heuristics_v1"
+                            audio_map = _build_audio_map_from_duration(
+                                duration_sec,
+                                story_core,
+                                analysis_mode=analysis_mode,
+                                content_type=content_type,
+                            )
+                            _append_diag_event(
+                                package,
+                                "audio_map emergency fallback applied (music_video duration-only)",
+                                stage_id="audio_map",
+                            )
                     else:
                         alignment, alignment_diag = resolve_transcript_alignment_with_diagnostics(
                             audio_path=analysis_path,
@@ -2500,6 +2571,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                     except OSError:
                         pass
         else:
+            diagnostics["audio_map_stage_branch"] = "duration_only_no_audio_url"
             audio_map = _build_audio_map_from_duration(
                 duration_sec,
                 story_core,
@@ -2510,6 +2582,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("audio_map_unusable_primary")
     except Exception as exc:  # noqa: BLE001
         used_fallback = True
+        fallback_reason = str(exc)
         analysis_mode = "timing_heuristics_v1"
         audio_map = _build_audio_map_from_duration(
             duration_sec,
@@ -2570,6 +2643,13 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     diagnostics["audio_map_analysis_mode"] = analysis_mode
     diagnostics["audio_map_used_fallback"] = bool(used_fallback)
+    if not fallback_reason and primary_source != "gemini":
+        fallback_reason = (
+            str(diagnostics.get("audio_map_segmentation_error") or "")
+            or str(diagnostics.get("audio_map_dynamics_error") or "")
+            or str(analysis_mode or "timing_heuristics_v1")
+        )
+    diagnostics["audio_map_primary_fallback_reason"] = fallback_reason
     diagnostics["audio_map_segmentation_backend"] = "gemini" if primary_source == "gemini" else "local_fallback"
     diagnostics["audio_map_segmentation_used_fallback"] = bool(
         diagnostics.get("audio_map_segmentation_used_fallback")
