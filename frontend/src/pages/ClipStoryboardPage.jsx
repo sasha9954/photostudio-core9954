@@ -2529,6 +2529,73 @@ function buildScenarioClearImagePatch({ transitionType = "single", slot = "singl
   };
 }
 
+function buildScenarioClearRuntimeImagePatch({ transitionType = "single", slot = "single" } = {}) {
+  const normalizedTransition = String(transitionType || "").trim().toLowerCase();
+  const normalizedSlot = slot === "start" || slot === "end" ? slot : "single";
+  const basePatch = {
+    imageStatus: "",
+    imageError: "",
+    startFrameStatus: "",
+    startFrameError: "",
+    endFrameStatus: "",
+    endFrameError: "",
+    lastImageApiResult: null,
+    lastRejectedImageUrl: "",
+    lastRejectedReason: "",
+    lastRejectedAt: "",
+    lastApiEngine: "",
+    lastApiHint: "",
+    lastApiDegradeReason: "",
+    lastApiResultStatus: "",
+    lastApiImageUrlPresent: false,
+  };
+  const clearSharedImageAndVideoFields = {
+    imageUrl: "",
+    videoSourceImageUrl: "",
+    videoUrl: "",
+  };
+  if (normalizedTransition !== "continuous") {
+    return {
+      ...basePatch,
+      ...clearSharedImageAndVideoFields,
+      startImageUrl: "",
+      endImageUrl: "",
+      startFrameImageUrl: "",
+      endFrameImageUrl: "",
+      startFramePreviewUrl: "",
+      endFramePreviewUrl: "",
+    };
+  }
+  if (normalizedSlot === "start") {
+    return {
+      ...basePatch,
+      ...clearSharedImageAndVideoFields,
+      startImageUrl: "",
+      startFrameImageUrl: "",
+      startFramePreviewUrl: "",
+    };
+  }
+  if (normalizedSlot === "end") {
+    return {
+      ...basePatch,
+      ...clearSharedImageAndVideoFields,
+      endImageUrl: "",
+      endFrameImageUrl: "",
+      endFramePreviewUrl: "",
+    };
+  }
+  return {
+    ...basePatch,
+    ...clearSharedImageAndVideoFields,
+    startImageUrl: "",
+    endImageUrl: "",
+    startFrameImageUrl: "",
+    endFrameImageUrl: "",
+    startFramePreviewUrl: "",
+    endFramePreviewUrl: "",
+  };
+}
+
 function buildScenarioScenePackageSignature(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const displayTime = resolveSceneDisplayTime(source);
@@ -3999,7 +4066,7 @@ function resolveScenarioScenePreviewSources(scene, previousScene = null) {
   const resolvedEndPreviewSrc = String(resolveAssetUrl(frameUrls.endImageUrl || "") || "").trim();
   const resolvedSinglePreviewSrc = String(resolveAssetUrl(scene?.imageUrl || frameUrls.fallbackImageUrl || "") || "").trim();
   const resolvedPreviewSrc = transitionType === "continuous"
-    ? (resolvedStartPreviewSrc || resolvedEndPreviewSrc || resolvedSinglePreviewSrc)
+    ? (resolvedEndPreviewSrc || resolvedStartPreviewSrc || resolvedSinglePreviewSrc)
     : (resolvedSinglePreviewSrc || resolvedStartPreviewSrc || resolvedEndPreviewSrc);
   return {
     imageStrategy,
@@ -4020,7 +4087,8 @@ function getEffectiveSceneStartImage(scene, previousScene) {
 function getSceneVideoPoster(scene, previousScene = null) {
   const transitionType = resolveSceneTransitionType(scene);
   if (transitionType === "continuous") {
-    return String(getEffectiveSceneStartImage(scene, previousScene) || scene?.endImageUrl || scene?.imageUrl || "").trim();
+    const { effectiveStartImageUrl, endImageUrl, fallbackImageUrl } = resolveSceneFrameUrls(scene, previousScene);
+    return String(endImageUrl || effectiveStartImageUrl || fallbackImageUrl || "").trim();
   }
   return String(scene?.imageUrl || "").trim();
 }
@@ -4028,7 +4096,8 @@ function getSceneVideoPoster(scene, previousScene = null) {
 function getSceneListThumb(scene, previousScene = null) {
   const transitionType = resolveSceneTransitionType(scene);
   if (transitionType === "continuous") {
-    return String(getEffectiveSceneStartImage(scene, previousScene) || scene?.endImageUrl || scene?.imageUrl || "").trim();
+    const { effectiveStartImageUrl, endImageUrl, fallbackImageUrl } = resolveSceneFrameUrls(scene, previousScene);
+    return String(endImageUrl || effectiveStartImageUrl || fallbackImageUrl || "").trim();
   }
   return String(scene?.imageUrl || "").trim();
 }
@@ -11961,66 +12030,9 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     const clearPatch = buildScenarioClearImagePatch({ transitionType, slot: normalizedSlot });
-    if (transitionType === "continuous" && normalizedSlot === "start") {
-      updateScenarioScene(scenarioSelectedIndex, clearPatch);
-      updateScenarioSceneGenerationRuntime(sceneId, {
-        startFrameStatus: "",
-        startFrameError: "",
-        imageStatus: "",
-        imageError: "",
-        lastImageApiResult: null,
-        lastRejectedImageUrl: "",
-        lastRejectedReason: "",
-        lastRejectedAt: "",
-        lastApiEngine: "",
-        lastApiHint: "",
-        lastApiDegradeReason: "",
-        lastApiResultStatus: "",
-        lastApiImageUrlPresent: false,
-      });
-      clearActiveVideoJob(sceneId);
-      setScenarioVideoOpen(false);
-      return;
-    }
-    if (transitionType === "continuous" && normalizedSlot === "end") {
-      updateScenarioScene(scenarioSelectedIndex, clearPatch);
-      updateScenarioSceneGenerationRuntime(sceneId, {
-        endFrameStatus: "",
-        endFrameError: "",
-        imageStatus: "",
-        imageError: "",
-        lastImageApiResult: null,
-        lastRejectedImageUrl: "",
-        lastRejectedReason: "",
-        lastRejectedAt: "",
-        lastApiEngine: "",
-        lastApiHint: "",
-        lastApiDegradeReason: "",
-        lastApiResultStatus: "",
-        lastApiImageUrlPresent: false,
-      });
-      clearActiveVideoJob(sceneId);
-      setScenarioVideoOpen(false);
-      return;
-    }
+    const runtimeClearPatch = buildScenarioClearRuntimeImagePatch({ transitionType, slot: normalizedSlot });
     updateScenarioScene(scenarioSelectedIndex, clearPatch);
-    updateScenarioSceneGenerationRuntime(sceneId, {
-      imageStatus: "",
-      imageError: "",
-      startFrameStatus: "",
-      startFrameError: "",
-      endFrameStatus: "",
-      endFrameError: "",
-      lastImageApiResult: null,
-      lastRejectedImageUrl: "",
-      lastRejectedReason: "",
-      lastRejectedAt: "",
-      lastApiEngine: "",
-      lastApiHint: "",
-      lastApiDegradeReason: "",
-      lastApiResultStatus: "",
-      lastApiImageUrlPresent: false,
-    });
+    updateScenarioSceneGenerationRuntime(sceneId, runtimeClearPatch);
     clearActiveVideoJob(sceneId);
     setScenarioVideoOpen(false);
   }, [clearActiveVideoJob, scenarioSelected, scenarioSelectedIndex, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
