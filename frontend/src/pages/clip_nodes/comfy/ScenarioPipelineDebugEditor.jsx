@@ -58,14 +58,33 @@ export default function ScenarioPipelineDebugEditor({
 
   if (!open) return null;
 
-  const storyCore = storyboardPackage?.story_core || {};
-  const audioMap = storyboardPackage?.audio_map || {};
-  const rolePlan = storyboardPackage?.role_plan || {};
-  const scenePlan = storyboardPackage?.scene_plan || {};
-  const prompts = storyboardPackage?.scene_prompts || {};
+  const resolvedStoryboardPackage = (
+    storyboardPackage && typeof storyboardPackage === "object" && Object.keys(storyboardPackage).length
+      ? storyboardPackage
+      : (
+        directorOutput?.storyboardPackage
+        && typeof directorOutput.storyboardPackage === "object"
+        && Object.keys(directorOutput.storyboardPackage).length
+      )
+        ? directorOutput.storyboardPackage
+        : (
+          directorOutput?.storyboardOut
+          && typeof directorOutput.storyboardOut === "object"
+          && directorOutput.storyboardOut?.storyboardPackage
+          && typeof directorOutput.storyboardOut.storyboardPackage === "object"
+        )
+          ? directorOutput.storyboardOut.storyboardPackage
+          : {}
+  );
+
+  const storyCore = resolvedStoryboardPackage?.story_core || {};
+  const audioMap = resolvedStoryboardPackage?.audio_map || {};
+  const rolePlan = resolvedStoryboardPackage?.role_plan || {};
+  const scenePlan = resolvedStoryboardPackage?.scene_plan || {};
+  const prompts = resolvedStoryboardPackage?.scene_prompts || {};
   const promptScenes = Array.isArray(prompts?.scenes) ? prompts.scenes : [];
-  const finalStoryboard = storyboardPackage?.final_storyboard || {};
-  const allDiagnostics = Object.keys(diagnostics || {}).length ? diagnostics : (storyboardPackage?.diagnostics || {});
+  const finalStoryboard = resolvedStoryboardPackage?.final_storyboard || {};
+  const allDiagnostics = Object.keys(diagnostics || {}).length ? diagnostics : (resolvedStoryboardPackage?.diagnostics || {});
 
   const audioSections = Array.isArray(audioMap?.sections) ? audioMap.sections : [];
   const phraseEndpoints = Array.isArray(audioMap?.phrase_endpoints_sec) ? audioMap.phrase_endpoints_sec : [];
@@ -217,7 +236,7 @@ export default function ScenarioPipelineDebugEditor({
     ),
     final: <pre className="clipSB_pre">{toJson(finalStoryboard?.scenes || [])}</pre>,
     diagnostics: <pre className="clipSB_pre">{toJson(allDiagnostics)}</pre>,
-    raw: <pre className="clipSB_pre">{toJson({ contextSummary, executedStages, directorOutput, storyboardPackage })}</pre>,
+    raw: <pre className="clipSB_pre">{toJson({ contextSummary, executedStages, directorOutput, storyboardPackage: resolvedStoryboardPackage })}</pre>,
   };
 
   return (
