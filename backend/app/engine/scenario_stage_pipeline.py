@@ -2281,6 +2281,87 @@ def _is_usable_audio_map(audio_map: dict[str, Any]) -> bool:
     return duration > 0 and bool(sections)
 
 
+def _normalize_audio_rows_for_music_video(rows: list[dict[str, Any]], duration_sec: float) -> list[dict[str, Any]]:
+    duration = _coerce_duration_sec(duration_sec)
+    normalized: list[dict[str, Any]] = []
+    cursor = 0.0
+    for row in sorted(rows, key=lambda item: (_to_float(item.get("t0"), 0.0), _to_float(item.get("t1"), 0.0))):
+        t0 = round(_clamp_time(_to_float(row.get("t0"), 0.0), duration), 3)
+        t1 = round(_clamp_time(_to_float(row.get("t1"), t0), duration), 3)
+        t0 = max(t0, round(cursor, 3))
+        if t1 <= t0:
+            continue
+        fixed = dict(row)
+        fixed["t0"] = t0
+        fixed["t1"] = t1
+        fixed["duration_sec"] = round(max(0.0, t1 - t0), 3)
+        normalized.append(fixed)
+        cursor = t1
+    return normalized
+
+
+def _finalize_music_video_model_led_audio_map(audio_map: dict[str, Any], duration_sec: float) -> tuple[dict[str, Any], str]:
+    duration = _coerce_duration_sec(duration_sec)
+    if duration <= 0:
+        return audio_map, "duration_missing"
+
+    phrase_units_raw = [item for item in _safe_list(audio_map.get("phrase_units")) if isinstance(item, dict)]
+    scene_windows_raw = [item for item in _safe_list(audio_map.get("scene_candidate_windows")) if isinstance(item, dict)]
+    if not phrase_units_raw and not scene_windows_raw:
+        return audio_map, "segmentation_units_missing"
+
+    phrase_units = _normalize_audio_rows_for_music_video(phrase_units_raw, duration)
+    scene_windows = _normalize_audio_rows_for_music_video(scene_windows_raw, duration)
+    if not phrase_units and not scene_windows:
+        return audio_map, "segmentation_units_invalid_after_normalization"
+
+    coverage_rows = scene_windows or phrase_units
+    first_t0 = _to_float(coverage_rows[0].get("t0"), 0.0) if coverage_rows else 0.0
+    last_t1 = _to_float(coverage_rows[-1].get("t1"), 0.0) if coverage_rows else 0.0
+    covered_span = max(0.0, last_t1 - first_t0)
+    min_required_coverage = max(1.0, duration * 0.35)
+    if covered_span < min_required_coverage:
+        return audio_map, "segmentation_coverage_too_low"
+
+    sections = [item for item in _safe_list(audio_map.get("sections")) if isinstance(item, dict)]
+    normalized_sections = _normalize_audio_rows_for_music_video(sections, duration)
+    if not normalized_sections:
+        source_rows = scene_windows or phrase_units
+        normalized_sections = [
+            {
+                "id": f"sec_{idx + 1}",
+                "t0": float(item.get("t0") or 0.0),
+                "t1": float(item.get("t1") or 0.0),
+                "label": str(item.get("scene_function") or item.get("label") or f"part_{idx + 1}"),
+                "energy": str(item.get("energy") or "medium"),
+                "mood": str(item.get("mood") or "neutral"),
+            }
+            for idx, item in enumerate(source_rows)
+        ]
+
+    finalized = dict(audio_map)
+    finalized["duration_sec"] = round(duration, 3)
+    finalized["overall_duration_sec"] = round(duration, 3)
+    finalized["phrase_units"] = phrase_units
+    finalized["scene_candidate_windows"] = scene_windows
+    finalized["sections"] = normalized_sections
+    finalized["phrase_endpoints_sec"] = sorted(
+        {
+            round(_to_float(item.get("t1"), 0.0), 3)
+            for item in phrase_units
+            if 0.0 < _to_float(item.get("t1"), 0.0) < duration
+        }
+    )
+    finalized["candidate_cut_points_sec"] = sorted(
+        {
+            round(_to_float(value, -1.0), 3)
+            for value in _safe_list(finalized.get("candidate_cut_points_sec"))
+            if 0.0 < _to_float(value, -1.0) < duration
+        }
+    )
+    return finalized, ""
+
+
 def _build_audio_map_from_gemini_payload(payload: dict[str, Any], duration_sec: float, *, analysis_mode: str) -> dict[str, Any]:
     duration = _coerce_duration_sec(duration_sec)
     phrase_units = [item for item in _safe_list(payload.get("phrase_units")) if isinstance(item, dict)]
@@ -2459,20 +2540,36 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                     f"error={str(gemini_result.get('error') or '')}",
                     stage_id="audio_map",
                 )
-                if bool(gemini_result.get("ok")):
-                    payload = _safe_dict(gemini_result.get("payload"))
+                gemini_payload = _safe_dict(gemini_result.get("payload"))
+                has_segmentation_rows = bool(
+                    _safe_list(gemini_payload.get("scene_candidate_windows")) or _safe_list(gemini_payload.get("phrase_units"))
+                )
+                can_try_music_video_direct_accept = bool(
+                    content_type == "music_video"
+                    and gemini_payload
+                    and has_segmentation_rows
+                )
+                if bool(gemini_result.get("ok")) or can_try_music_video_direct_accept:
+                    payload = gemini_payload
                     diagnostics["audio_map_segmentation_normalized_summary"] = _summarize_audio_map_payload(payload)
-                    audio_map = _build_audio_map_from_gemini_payload(
+                    candidate_map = _build_audio_map_from_gemini_payload(
                         payload,
                         duration_sec,
                         analysis_mode="gemini_semantic_segmentation_v1",
                     )
+                    hard_validation_error = ""
+                    if content_type == "music_video":
+                        candidate_map, hard_validation_error = _finalize_music_video_model_led_audio_map(candidate_map, duration_sec)
+                        if hard_validation_error:
+                            raise ValueError(f"gemini_hard_validation_failed:{hard_validation_error}")
+                    audio_map = candidate_map
                     analysis_mode = "gemini_semantic_segmentation_v1"
                     primary_source = "gemini"
                     model_led_segmentation = True
                     diagnostics["audio_map_segmentation_backend"] = "gemini"
                     diagnostics["audio_map_segmentation_error"] = ""
                     diagnostics["audio_map_segmentation_error_detail"] = ""
+                    diagnostics["audio_map_segmentation_validation_error"] = hard_validation_error
                     diagnostics["audio_map_stage_branch"] = "gemini_primary"
                     _append_diag_event(package, "audio_map gemini segmentation resolved", stage_id="audio_map")
                 else:
