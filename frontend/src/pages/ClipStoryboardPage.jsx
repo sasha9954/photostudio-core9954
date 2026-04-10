@@ -4042,14 +4042,17 @@ function shouldSuppressInheritedStartPreview(scene) {
 function resolveSceneFrameUrls(scene, previousScene = null) {
   const sourceScene = scene && typeof scene === "object" ? scene : {};
   const sourcePreviousScene = previousScene && typeof previousScene === "object" ? previousScene : {};
+  const transitionType = resolveSceneTransitionType(sourceScene);
+  const suppressInheritedStartPreview = transitionType === "continuous" && shouldSuppressInheritedStartPreview(sourceScene);
   const previousEndImageUrl = String(sourcePreviousScene?.endImageUrl || sourcePreviousScene?.endFrameImageUrl || "").trim();
   const startImageUrl = String(sourceScene?.startImageUrl || sourceScene?.startFrameImageUrl || sourceScene?.startFramePreviewUrl || "").trim();
   const fallbackImageUrl = String(sourceScene?.imageUrl || "").trim();
   const endImageUrl = String(sourceScene?.endImageUrl || sourceScene?.endFrameImageUrl || sourceScene?.endFramePreviewUrl || "").trim();
   const startSource = getSceneStartImageSource(sourceScene, sourcePreviousScene);
+  const allowSingleFallbackToStart = !(transitionType === "continuous" && suppressInheritedStartPreview);
   const effectiveStartImageUrl = startSource === "previous_end"
     ? previousEndImageUrl
-    : (startImageUrl || fallbackImageUrl);
+    : (startImageUrl || (allowSingleFallbackToStart ? fallbackImageUrl : ""));
   return {
     effectiveStartImageUrl,
     endImageUrl,
@@ -4072,7 +4075,9 @@ function resolveScenarioScenePreviewSources(scene, previousScene = null) {
   const resolvedEndPreviewSrc = String(resolveAssetUrl(frameUrls.endImageUrl || "") || "").trim();
   const resolvedSinglePreviewSrc = String(resolveAssetUrl(scene?.imageUrl || frameUrls.fallbackImageUrl || "") || "").trim();
   const resolvedPreviewSrc = transitionType === "continuous"
-    ? (resolvedEndPreviewSrc || (suppressInheritedStartPreview ? "" : resolvedStartPreviewSrc) || resolvedSinglePreviewSrc)
+    ? (suppressInheritedStartPreview
+      ? (resolvedEndPreviewSrc || "")
+      : (resolvedEndPreviewSrc || resolvedStartPreviewSrc || resolvedSinglePreviewSrc))
     : (resolvedSinglePreviewSrc || resolvedStartPreviewSrc || resolvedEndPreviewSrc);
   return {
     imageStrategy,
@@ -4096,7 +4101,8 @@ function getSceneVideoPoster(scene, previousScene = null) {
   if (transitionType === "continuous") {
     const { effectiveStartImageUrl, endImageUrl, fallbackImageUrl } = resolveSceneFrameUrls(scene, previousScene);
     const suppressInheritedStartPreview = shouldSuppressInheritedStartPreview(scene);
-    return String(endImageUrl || (suppressInheritedStartPreview ? "" : effectiveStartImageUrl) || fallbackImageUrl || "").trim();
+    if (suppressInheritedStartPreview) return String(endImageUrl || "").trim();
+    return String(endImageUrl || effectiveStartImageUrl || fallbackImageUrl || "").trim();
   }
   return String(scene?.imageUrl || "").trim();
 }
@@ -4106,7 +4112,8 @@ function getSceneListThumb(scene, previousScene = null) {
   if (transitionType === "continuous") {
     const { effectiveStartImageUrl, endImageUrl, fallbackImageUrl } = resolveSceneFrameUrls(scene, previousScene);
     const suppressInheritedStartPreview = shouldSuppressInheritedStartPreview(scene);
-    return String(endImageUrl || (suppressInheritedStartPreview ? "" : effectiveStartImageUrl) || fallbackImageUrl || "").trim();
+    if (suppressInheritedStartPreview) return String(endImageUrl || "").trim();
+    return String(endImageUrl || effectiveStartImageUrl || fallbackImageUrl || "").trim();
   }
   return String(scene?.imageUrl || "").trim();
 }
@@ -11887,9 +11894,12 @@ Aspect ratio: ${imageFormat}`,
       let runtimeImagePatch = {};
       if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
         updateScenarioScene(sceneId, {
+          imageUrl: "",
           startImageUrl: generatedImageUrl,
           startFrameImageUrl: generatedImageUrl,
           suppressInheritedStartPreview: false,
+          imageStatus: "",
+          imageError: "",
           imageDegraded,
           imageDegradeReason,
           imageHint: String(out?.hint || "").trim(),
@@ -11919,9 +11929,12 @@ Aspect ratio: ${imageFormat}`,
           throw new Error("first_last_end_image_matches_start_asset");
         }
         updateScenarioScene(sceneId, {
+          imageUrl: "",
           endImageUrl: generatedImageUrl,
           endFrameImageUrl: generatedImageUrl,
           suppressInheritedStartPreview: false,
+          imageStatus: "",
+          imageError: "",
           imageDegraded,
           imageDegradeReason,
           imageHint: String(out?.hint || "").trim(),
