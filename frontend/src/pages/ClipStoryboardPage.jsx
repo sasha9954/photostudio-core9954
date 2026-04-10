@@ -5664,7 +5664,11 @@ function serializeNodesForStorage(nodes) {
         contentType: String(serialNode?.data?.contentType || "story").trim(),
         format: String(serialNode?.data?.format || "9:16").trim(),
       });
-      serialNode.data.storyboardPackage = serialNode.data.storyboardOut;
+      serialNode.data.storyboardPackage = (
+        serialNode?.data?.storyboardPackage
+        && typeof serialNode.data.storyboardPackage === "object"
+        && !Array.isArray(serialNode.data.storyboardPackage)
+      ) ? serialNode.data.storyboardPackage : {};
       delete serialNode.data.rawScenarioResponse;
       delete serialNode.data.normalizedStageOutputs;
     }
@@ -15364,7 +15368,7 @@ onClipSec: (nodeId, value) => {
                 timeWindow: sourceNode?.data?.timeWindow || {},
                 master_output: sourceNode?.data?.master_output || {},
               },
-              storyboardPackage: leanStoryboardOut,
+              storyboardPackage: storyboardPackage,
               debugStoryboardPackage: storyboardPackage,
               storyboardOut: leanStoryboardOut,
               scenarioRevision: String(
@@ -15502,7 +15506,7 @@ onClipSec: (nodeId, value) => {
                     ...nodeItem,
                     data: {
                       ...nodeItem.data,
-                      storyboardPackage: runtimeStoryboard,
+                      storyboardPackage: nextStoryboardPackage,
                       debugStoryboardPackage: nextStoryboardPackage,
                       storyboardOut: normalizedStoryboardOut,
                       scenarioRevision: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
