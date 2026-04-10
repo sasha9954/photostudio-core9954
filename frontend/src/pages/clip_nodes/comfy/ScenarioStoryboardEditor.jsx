@@ -787,7 +787,12 @@ export default function ScenarioStoryboardEditor({
   const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || derivedFramePrompts.start || "");
   const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
   const previewSources = resolveScenePreviewSources(selectedScene || {});
-  const sourceImageUrl = previewSources.resolvedPreviewSrc;
+  const runtimeFallbackImageUrl = String(
+    selectedRuntime?.lastRejectedImageUrl
+    || imageApiResult?.imageUrl
+    || ""
+  ).trim();
+  const sourceImageUrl = previewSources.resolvedPreviewSrc || runtimeFallbackImageUrl;
   const startFrameSourceUrl = previewSources.resolvedStartPreviewSrc;
   const endFrameSourceUrl = previewSources.resolvedEndPreviewSrc;
   const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();

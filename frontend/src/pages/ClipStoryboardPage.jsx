@@ -735,18 +735,26 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
 
   appendFromSource(scenarioBrainRefs?.refsByRole);
   appendFromSource(scene?.refsByRole);
+  appendFromSource(scene?.refsUsedByRole);
+  appendFromSource(scene?.refs_used_by_role);
   appendFromSource(scene?.connectedRefsByRole);
   appendFromSource(scene?.contextRefs);
   appendFromSource(scene?.context_refs);
+  appendFromSource(scene?.connectedContextSummary?.contextRefs);
   appendFromSource(scene?.connectedContextSummary?.context_refs);
+  appendFromSource(scene?.connected_context_summary?.contextRefs);
   appendFromSource(scene?.connected_context_summary?.context_refs);
   appendFromSource(scene?.sceneMeta?.connected_context_summary?.context_refs);
   appendFromSource(scene?.scene_meta?.connected_context_summary?.context_refs);
   appendFromSource(scenarioPackage?.refsByRole);
+  appendFromSource(scenarioPackage?.refsUsedByRole);
+  appendFromSource(scenarioPackage?.refs_used_by_role);
   appendFromSource(scenarioPackage?.connectedRefsByRole);
   appendFromSource(scenarioPackage?.cast?.refsByRole);
   appendFromSource(scenarioPackage?.history?.refsByRole);
   appendFromSource(scenarioPackage?.context_refs);
+  appendFromSource(scenarioPackage?.contextRefs);
+  appendFromSource(scenarioPackage?.connected_context_summary?.contextRefs);
   appendFromSource(scenarioPackage?.connected_context_summary?.context_refs);
 
   roleMap.location = [...new Set([...(roleMap.location || []), ...toUrlList(scenarioBrainRefs?.location)])];
