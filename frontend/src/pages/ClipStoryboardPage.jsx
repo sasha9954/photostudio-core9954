@@ -11183,6 +11183,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       console.debug("[SCENARIO IMAGE TRACE B sceneContractForRequest]", sceneContractForRequest);
       console.debug("[SCENARIO IMAGE TRACE C refsPayloadForRequest]", refsPayloadForRequest);
       const finalRequestBody = {
+        ...scenarioContractPayload,
         sceneId,
         sceneDelta: `${finalSceneDelta}
 Aspect ratio: ${imageFormat}`,
@@ -11203,7 +11204,6 @@ Aspect ratio: ${imageFormat}`,
           videoPrompt: videoPromptEffective,
           promptNotes: promptNotesEffective,
         },
-        ...scenarioContractPayload,
         primaryRole: scenarioContractPayload?.primaryRole || refsPayloadForRequest?.primaryRole || "",
         secondaryRoles: (Array.isArray(scenarioContractPayload?.secondaryRoles) && scenarioContractPayload.secondaryRoles.length)
           ? scenarioContractPayload.secondaryRoles
@@ -11233,6 +11233,15 @@ Aspect ratio: ${imageFormat}`,
       };
       console.debug("[SCENARIO IMAGE TRACE D finalRequestBody]", finalRequestBody);
       const finalRefsByRoleCounts = summarizeRefsByRole(finalRequestBody?.refs?.refsByRole || {});
+      console.debug("[SCENARIO IMAGE TRACE E authoritative body check]", {
+        sceneContractIsAuthoritativeRef: finalRequestBody?.sceneContract === sceneContractForRequest,
+        sceneContractStructurallyEqual: JSON.stringify(finalRequestBody?.sceneContract || {}) === JSON.stringify(sceneContractForRequest || {}),
+        sceneGoal: finalRequestBody?.sceneGoal || "",
+        promptSource: finalRequestBody?.promptSource || "",
+        sceneText: finalRequestBody?.sceneText || "",
+        hasCharacter1Ref: Number(finalRefsByRoleCounts?.character_1 || 0) > 0,
+        hasLocationRef: Number(finalRefsByRoleCounts?.location || 0) > 0,
+      });
       console.debug("[SCENARIO IMAGE FINAL REQUEST BODY]", {
         sceneId,
         refsByRoleCounts: finalRefsByRoleCounts,
