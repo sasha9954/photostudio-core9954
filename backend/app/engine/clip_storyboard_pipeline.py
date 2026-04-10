@@ -37,6 +37,17 @@ CLIP_DURATION_TARGET_MIN_SEC = 3.0
 CLIP_DURATION_TARGET_MAX_SEC = 6.0
 CLIP_DURATION_RARE_MAX_SEC = 8.0
 CLIP_DURATION_HARD_MAX_SEC = 10.0
+CLIP_SEGMENTATION_MIN_PHRASE_HIT_RATIO = 0.45
+CLIP_SEGMENTATION_MAX_NEAR_FOUR_RATIO = 0.5
+CLIP_SEGMENTATION_MAX_EQUAL_DURATION_STREAK = 3
+CLIP_SEGMENTATION_MAX_EQUAL_ADJACENT_PAIRS = 2
+CLIP_SEGMENTATION_MIN_SCENES_FOR_GRID_GATE = 4
+CLIP_SEGMENTATION_RETRY_HINT = (
+    "SEGMENTATION REPAIR REQUIRED: equal-time grid is invalid for music-video clip montage. "
+    "Rebuild scene cuts around vocal/semantic phrase endings and musical transitions. "
+    "Break uniform ~4-second rhythm. Keep montage feel and variety without chaos. "
+    "Keep usual scene lengths mostly 3-6s, and do not cut mid-phrase unless forced by constraints."
+)
 
 
 class ClipPipelineError(Exception):
@@ -1347,6 +1358,9 @@ def _build_chunk_request(
         {"text": "Final scene of full track should rhyme with opening anchor via meaning/emotion/visual callback."},
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
+    creative_note = str(req.creative_note or "").strip()
+    if creative_note:
+        parts.append({"text": f"Creative repair note (must follow): {creative_note}"})
     chunk_audio_part, chunk_audio_diag = _build_chunk_audio_slice(
         decoded_audio_cache=decoded_audio_cache,
         chunk_t0=req.t0,
@@ -1679,6 +1693,7 @@ def _compute_directorial_diagnostics(merged: dict[str, Any], whole_map: WholeTra
     max_equal_duration_streak = max(max_equal_duration_streak, current_streak)
     total_cuts = len(scene_cuts)
     return {
+        "scene_count": len(scenes),
         "scenes_in_target_3_6_sec_count": sum(1 for d in durations if CLIP_DURATION_TARGET_MIN_SEC <= d <= CLIP_DURATION_TARGET_MAX_SEC),
         "scenes_6_8_sec_count": sum(1 for d in durations if CLIP_DURATION_TARGET_MAX_SEC < d <= CLIP_DURATION_RARE_MAX_SEC),
         "scenes_below_3_sec_count": sum(1 for d in durations if d < 3.0),
@@ -1691,6 +1706,46 @@ def _compute_directorial_diagnostics(merged: dict[str, Any], whole_map: WholeTra
         "scenes_near_4_sec_ratio": round(near_four_sec_count / len(durations), 3) if durations else 0.0,
         "equal_duration_adjacent_pairs": equal_duration_adjacent_pairs,
         "max_equal_duration_streak": max_equal_duration_streak,
+    }
+
+
+def _evaluate_segmentation_quality_gate(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    scene_count = int(diagnostics.get("scene_count") or 0)
+    phrase_hit_ratio = float(diagnostics.get("phrase_boundary_hit_ratio") or 0.0)
+    near_four_ratio = float(diagnostics.get("scenes_near_4_sec_ratio") or 0.0)
+    equal_pairs = int(diagnostics.get("equal_duration_adjacent_pairs") or 0)
+    equal_streak = int(diagnostics.get("max_equal_duration_streak") or 0)
+    fail_flags: list[str] = []
+
+    if scene_count >= CLIP_SEGMENTATION_MIN_SCENES_FOR_GRID_GATE:
+        if phrase_hit_ratio < CLIP_SEGMENTATION_MIN_PHRASE_HIT_RATIO:
+            fail_flags.append("low_phrase_boundary_hit_ratio")
+        if near_four_ratio > CLIP_SEGMENTATION_MAX_NEAR_FOUR_RATIO:
+            fail_flags.append("high_near_4_sec_ratio")
+        if equal_streak >= CLIP_SEGMENTATION_MAX_EQUAL_DURATION_STREAK:
+            fail_flags.append("high_equal_duration_streak")
+        if equal_pairs > CLIP_SEGMENTATION_MAX_EQUAL_ADJACENT_PAIRS:
+            fail_flags.append("high_equal_adjacent_duration_pairs")
+
+    hard_grid_pattern = (
+        scene_count >= CLIP_SEGMENTATION_MIN_SCENES_FOR_GRID_GATE
+        and near_four_ratio > CLIP_SEGMENTATION_MAX_NEAR_FOUR_RATIO
+        and (
+            equal_streak >= CLIP_SEGMENTATION_MAX_EQUAL_DURATION_STREAK
+            or equal_pairs > CLIP_SEGMENTATION_MAX_EQUAL_ADJACENT_PAIRS
+        )
+    )
+    weak_phrase_alignment = (
+        scene_count >= CLIP_SEGMENTATION_MIN_SCENES_FOR_GRID_GATE
+        and phrase_hit_ratio < CLIP_SEGMENTATION_MIN_PHRASE_HIT_RATIO
+        and near_four_ratio > CLIP_SEGMENTATION_MAX_NEAR_FOUR_RATIO
+    )
+    return {
+        "passed": not (hard_grid_pattern or weak_phrase_alignment),
+        "scene_count": scene_count,
+        "fail_flags": fail_flags,
+        "hard_grid_pattern": hard_grid_pattern,
+        "weak_phrase_alignment": weak_phrase_alignment,
     }
 
 
@@ -2070,6 +2125,79 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 },
             )
 
+        segmentation_quality_retry_used = False
+        segmentation_quality_retry_reason = ""
+        segmentation_quality_fail_flags: list[str] = []
+        segmentation_quality_before = _compute_directorial_diagnostics(merged, whole_map)
+        segmentation_quality_eval = _evaluate_segmentation_quality_gate(segmentation_quality_before)
+        segmentation_quality_after = dict(segmentation_quality_before)
+        if not segmentation_quality_eval.get("passed"):
+            segmentation_quality_retry_used = True
+            segmentation_quality_fail_flags = list(segmentation_quality_eval.get("fail_flags") or [])
+            segmentation_quality_retry_reason = (
+                "segmentation_grid_like_or_phrase_misaligned:"
+                + ",".join(segmentation_quality_fail_flags or ["quality_gate_failed"])
+            )
+            try:
+                state_history.append("segmentation_retry")
+                retry_chunk_results: list[ChunkStoryboardResponse] = []
+                retry_continuity_tail = ContinuityTailState()
+                base_note = str((payload.get("metadata") or {}).get("creativeNote") or "") if isinstance(payload.get("metadata"), dict) else ""
+                retry_note = f"{base_note}\n{CLIP_SEGMENTATION_RETRY_HINT}".strip()
+                for boundary in chunks:
+                    section_ids = [sec.section_id for sec in whole_map.sections if not (sec.t1 <= boundary.t0 or sec.t0 >= boundary.t1)]
+                    recurring_ids = list(dict.fromkeys([sec.recurring_group_id for sec in whole_map.sections if sec.recurring_group_id]))
+                    retry_req = ChunkStoryboardRequest(
+                        track_id=whole_map.track_id,
+                        chunk_id=boundary.chunk_id,
+                        t0=boundary.t0,
+                        t1=boundary.t1,
+                        global_map_ref=ChunkMapRef(section_ids=section_ids, recurring_group_ids=[x for x in recurring_ids if x]),
+                        continuity_in=ContinuityIn(previous_chunk_id=retry_chunk_results[-1].chunk_id if retry_chunk_results else None, tail_state=retry_continuity_tail),
+                        creative_note=retry_note,
+                    )
+                    retry_chunk, retry_chunk_diag = _generate_chunk_with_retry(
+                        api_key=api_key,
+                        req=retry_req,
+                        whole_map=whole_map,
+                        context=context,
+                        decoded_audio_cache=decoded_audio_cache,
+                    )
+                    retry_diagnostics.extend(retry_chunk_diag)
+                    retry_count += len(retry_chunk_diag)
+                    retry_continuity_tail = ContinuityTailState.model_validate(
+                        retry_chunk.continuity_out if isinstance(retry_chunk.continuity_out, dict) else {}
+                    )
+                    retry_chunk_results.append(retry_chunk)
+                retry_merged, retry_issues, retry_merge_diag = _local_merge(whole_map.track_id, retry_chunk_results)
+                retry_merged, retry_route_mix_diag = _apply_clip_route_mix_policy(retry_merged, whole_map)
+                retry_validation = _validate_merged_storyboard(retry_merged)
+                retry_final_scene_end = _final_scene_end(retry_merged)
+                retry_full_coverage = retry_final_scene_end >= max(0.0, audio_duration_sec - FULL_COVERAGE_TOLERANCE_SEC)
+                if retry_validation.get("valid") and retry_full_coverage:
+                    chunk_results = retry_chunk_results
+                    merged = retry_merged
+                    issues = retry_issues
+                    merge_diag = retry_merge_diag
+                    route_mix_diag = retry_route_mix_diag
+                    merged_validation = retry_validation
+                    final_scene_end = retry_final_scene_end
+                    full_coverage_achieved = retry_full_coverage
+                    segmentation_quality_after = _compute_directorial_diagnostics(merged, whole_map)
+                else:
+                    segmentation_quality_retry_reason = (
+                        f"{segmentation_quality_retry_reason}|retry_result_invalid_or_uncovered"
+                    )
+                    segmentation_quality_after = dict(segmentation_quality_before)
+            except ClipPipelineError as exc:
+                segmentation_quality_retry_reason = f"{segmentation_quality_retry_reason}|retry_failed:{exc.code}"
+                segmentation_quality_after = dict(segmentation_quality_before)
+        directorial_diagnostics = _compute_directorial_diagnostics(merged, whole_map)
+        directorial_quality_eval = _evaluate_segmentation_quality_gate(directorial_diagnostics)
+        segmentation_quality_gate_passed = bool(directorial_quality_eval.get("passed"))
+        if not segmentation_quality_fail_flags:
+            segmentation_quality_fail_flags = list(directorial_quality_eval.get("fail_flags") or [])
+
         logger.warning(
             "[CLIP PIPELINE BACKEND RESPONSE SUMMARY] pipeline=%s scene_count=%s final_scene_end=%s audio_duration=%s whole_map_sections=%s chunk_count=%s",
             "clip_chunked_v1",
@@ -2080,7 +2208,6 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
             len(chunk_results),
         )
         state_history.append("complete")
-        directorial_diagnostics = _compute_directorial_diagnostics(merged, whole_map)
         total_sec = round(max(0.0, perf_counter() - total_started), 3)
         return {
             "ok": True,
@@ -2119,6 +2246,12 @@ def run_clip_storyboard_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
                 "routeMixDiagnostics": route_mix_diag,
                 "repairApplyDiagnostics": repair_apply_diag,
                 "repairValidationDiagnostics": repair_validation_diag,
+                "segmentation_quality_gate_passed": segmentation_quality_gate_passed,
+                "segmentation_quality_retry_used": segmentation_quality_retry_used,
+                "segmentation_quality_retry_reason": segmentation_quality_retry_reason,
+                "segmentation_quality_fail_flags": segmentation_quality_fail_flags,
+                "segmentation_quality_before": segmentation_quality_before,
+                "segmentation_quality_after": segmentation_quality_after,
                 "schemaDiagnostics": schema_diagnostics,
                 "contextDiagnostics": context_diagnostics,
                 "timingDiagnostics": {
