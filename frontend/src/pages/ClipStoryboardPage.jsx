@@ -182,6 +182,7 @@ const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = true;
 const CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD = false;
 const CLIP_TRACE_SCENARIO_SCENE_ASSETS = false;
 const CLIP_TRACE_SCENARIO_IMAGE_E2E = false;
+const CLIP_TRACE_SC2_GHOST_IMAGE = true;
 const CLIP_TRACE_ROLE_CONTRACT_SCENE_ID = "TRACE_SCENE_2P_001";
 console.warn("[CLIP PIPELINE FRONTEND BUILD MARKER] v=clip_pipeline_debug_01");
 
@@ -4034,6 +4035,10 @@ function getSceneStartImageSource(scene, previousScene) {
   return "none";
 }
 
+function shouldSuppressInheritedStartPreview(scene) {
+  return !!scene?.inheritPreviousEndAsStart && !!scene?.suppressInheritedStartPreview;
+}
+
 function resolveSceneFrameUrls(scene, previousScene = null) {
   const sourceScene = scene && typeof scene === "object" ? scene : {};
   const sourcePreviousScene = previousScene && typeof previousScene === "object" ? previousScene : {};
@@ -4062,15 +4067,17 @@ function resolveScenarioScenePreviewSources(scene, previousScene = null) {
   const transitionType = resolveSceneTransitionType(scene);
   const imageStrategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase() || "single";
   const frameUrls = resolveSceneFrameUrls(scene, previousScene);
+  const suppressInheritedStartPreview = transitionType === "continuous" && shouldSuppressInheritedStartPreview(scene);
   const resolvedStartPreviewSrc = String(resolveAssetUrl(frameUrls.effectiveStartImageUrl || frameUrls.fallbackImageUrl || "") || "").trim();
   const resolvedEndPreviewSrc = String(resolveAssetUrl(frameUrls.endImageUrl || "") || "").trim();
   const resolvedSinglePreviewSrc = String(resolveAssetUrl(scene?.imageUrl || frameUrls.fallbackImageUrl || "") || "").trim();
   const resolvedPreviewSrc = transitionType === "continuous"
-    ? (resolvedEndPreviewSrc || resolvedStartPreviewSrc || resolvedSinglePreviewSrc)
+    ? (resolvedEndPreviewSrc || (suppressInheritedStartPreview ? "" : resolvedStartPreviewSrc) || resolvedSinglePreviewSrc)
     : (resolvedSinglePreviewSrc || resolvedStartPreviewSrc || resolvedEndPreviewSrc);
   return {
     imageStrategy,
     transitionType,
+    suppressInheritedStartPreview,
     resolvedPreviewSrc,
     resolvedStartPreviewSrc,
     resolvedEndPreviewSrc,
@@ -4088,7 +4095,8 @@ function getSceneVideoPoster(scene, previousScene = null) {
   const transitionType = resolveSceneTransitionType(scene);
   if (transitionType === "continuous") {
     const { effectiveStartImageUrl, endImageUrl, fallbackImageUrl } = resolveSceneFrameUrls(scene, previousScene);
-    return String(endImageUrl || effectiveStartImageUrl || fallbackImageUrl || "").trim();
+    const suppressInheritedStartPreview = shouldSuppressInheritedStartPreview(scene);
+    return String(endImageUrl || (suppressInheritedStartPreview ? "" : effectiveStartImageUrl) || fallbackImageUrl || "").trim();
   }
   return String(scene?.imageUrl || "").trim();
 }
@@ -4097,7 +4105,8 @@ function getSceneListThumb(scene, previousScene = null) {
   const transitionType = resolveSceneTransitionType(scene);
   if (transitionType === "continuous") {
     const { effectiveStartImageUrl, endImageUrl, fallbackImageUrl } = resolveSceneFrameUrls(scene, previousScene);
-    return String(endImageUrl || effectiveStartImageUrl || fallbackImageUrl || "").trim();
+    const suppressInheritedStartPreview = shouldSuppressInheritedStartPreview(scene);
+    return String(endImageUrl || (suppressInheritedStartPreview ? "" : effectiveStartImageUrl) || fallbackImageUrl || "").trim();
   }
   return String(scene?.imageUrl || "").trim();
 }
@@ -8085,6 +8094,63 @@ useEffect(() => {
     finalSourceImageUrl: scenarioSelectedResolvedPreviewSrc,
   });
 }, [scenarioSelected?.sceneId, scenarioSelected?.imageUrl, scenarioSelectedEffectiveStartImageUrl, scenarioSelectedEndImageUrl, scenarioSelectedRuntimeImageApiResult?.imageUrl, scenarioSelectedRuntimeFallbackImageUrl, scenarioSelectedResolvedPreviewSrc]);
+useEffect(() => {
+  if (!CLIP_TRACE_SC2_GHOST_IMAGE) return;
+  const selectedSceneId = String(scenarioSelected?.sceneId || "").trim();
+  const shouldTrace = scenarioSelectedIndex === 1 || selectedSceneId === "SC_2";
+  if (!shouldTrace) return;
+  console.debug("[SC2 GHOST TRACE] selected_scene_lifecycle", {
+    sceneId: selectedSceneId,
+    sceneIndex: scenarioSelectedIndex,
+    transitionType: scenarioSelectedTransitionType,
+    imageStrategy: scenarioSelectedImageStrategy,
+    inheritPreviousEndAsStart: !!scenarioSelected?.inheritPreviousEndAsStart,
+    suppressInheritedStartPreview: !!scenarioSelected?.suppressInheritedStartPreview,
+    ownImageFields: {
+      imageUrl: String(scenarioSelected?.imageUrl || "").trim(),
+      startImageUrl: String(scenarioSelected?.startImageUrl || scenarioSelected?.startFrameImageUrl || "").trim(),
+      endImageUrl: String(scenarioSelected?.endImageUrl || scenarioSelected?.endFrameImageUrl || "").trim(),
+    },
+    runtimeImageFields: {
+      imageStatus: String(scenarioSelectedRuntime?.imageStatus || "").trim(),
+      startFrameStatus: String(scenarioSelectedRuntime?.startFrameStatus || "").trim(),
+      endFrameStatus: String(scenarioSelectedRuntime?.endFrameStatus || "").trim(),
+      lastRejectedImageUrl: String(scenarioSelectedRuntime?.lastRejectedImageUrl || "").trim(),
+      lastImageApiResultImageUrl: String(scenarioSelectedRuntimeImageApiResult?.imageUrl || "").trim(),
+    },
+    previousSceneEndFields: {
+      previousSceneId: String(scenarioPreviousScene?.sceneId || "").trim(),
+      endImageUrl: String(scenarioPreviousScene?.endImageUrl || "").trim(),
+      endFrameImageUrl: String(scenarioPreviousScene?.endFrameImageUrl || "").trim(),
+    },
+    resolvedPreview: {
+      resolvedStartPreviewSrc: scenarioSelectedResolvedStartPreviewSrc,
+      resolvedEndPreviewSrc: scenarioSelectedResolvedEndPreviewSrc,
+      runtimeFallbackImageUrl: scenarioSelectedRuntimeFallbackImageUrl,
+      finalResolvedPreviewSrc: scenarioSelectedResolvedPreviewSrc,
+      startImageSource: scenarioSelectedStartImageSource,
+      previewWinner: scenarioSelectedResolvedEndPreviewSrc
+        ? "end_preview"
+        : (scenarioSelectedPreviewSources.suppressInheritedStartPreview
+          ? "none_due_to_inherit_suppression"
+          : (scenarioSelectedResolvedStartPreviewSrc ? "start_preview" : (scenarioSelectedRuntimeFallbackImageUrl ? "runtime_fallback" : "none"))),
+    },
+  });
+}, [
+  scenarioSelected,
+  scenarioSelectedIndex,
+  scenarioSelectedTransitionType,
+  scenarioSelectedImageStrategy,
+  scenarioSelectedRuntime,
+  scenarioSelectedRuntimeImageApiResult?.imageUrl,
+  scenarioPreviousScene,
+  scenarioSelectedResolvedStartPreviewSrc,
+  scenarioSelectedResolvedEndPreviewSrc,
+  scenarioSelectedRuntimeFallbackImageUrl,
+  scenarioSelectedResolvedPreviewSrc,
+  scenarioSelectedStartImageSource,
+  scenarioSelectedPreviewSources.suppressInheritedStartPreview,
+]);
 const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   ? "endImageUrl"
   : scenarioPreviousScene?.endFrameImageUrl
@@ -11823,6 +11889,7 @@ Aspect ratio: ${imageFormat}`,
         updateScenarioScene(sceneId, {
           startImageUrl: generatedImageUrl,
           startFrameImageUrl: generatedImageUrl,
+          suppressInheritedStartPreview: false,
           imageDegraded,
           imageDegradeReason,
           imageHint: String(out?.hint || "").trim(),
@@ -11854,6 +11921,7 @@ Aspect ratio: ${imageFormat}`,
         updateScenarioScene(sceneId, {
           endImageUrl: generatedImageUrl,
           endFrameImageUrl: generatedImageUrl,
+          suppressInheritedStartPreview: false,
           imageDegraded,
           imageDegradeReason,
           imageHint: String(out?.hint || "").trim(),
@@ -11881,6 +11949,7 @@ Aspect ratio: ${imageFormat}`,
       } else {
         updateScenarioScene(sceneId, {
           imageUrl: generatedImageUrl,
+          suppressInheritedStartPreview: false,
           imageStatus: imageDegraded ? "degraded" : "done",
           imageDegraded,
           imageDegradeReason,
@@ -12030,7 +12099,29 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     const clearPatch = buildScenarioClearImagePatch({ transitionType, slot: normalizedSlot });
+    if (
+      transitionType === "continuous"
+      && !!scenarioSelected?.inheritPreviousEndAsStart
+      && (normalizedSlot === "single" || normalizedSlot === "end")
+    ) {
+      clearPatch.suppressInheritedStartPreview = true;
+    }
     const runtimeClearPatch = buildScenarioClearRuntimeImagePatch({ transitionType, slot: normalizedSlot });
+    if (CLIP_TRACE_SC2_GHOST_IMAGE) {
+      console.debug("[SC2 GHOST TRACE] clear_image", {
+        sceneId,
+        sceneIndex: scenarioSelectedIndex,
+        transitionType,
+        normalizedSlot,
+        inheritPreviousEndAsStart: !!scenarioSelected?.inheritPreviousEndAsStart,
+        ownImageFieldsBefore: {
+          imageUrl: String(scenarioSelected?.imageUrl || "").trim(),
+          startImageUrl: String(scenarioSelected?.startImageUrl || scenarioSelected?.startFrameImageUrl || "").trim(),
+          endImageUrl: String(scenarioSelected?.endImageUrl || scenarioSelected?.endFrameImageUrl || "").trim(),
+        },
+        suppressInheritedStartPreviewNext: Boolean(clearPatch?.suppressInheritedStartPreview),
+      });
+    }
     updateScenarioScene(scenarioSelectedIndex, clearPatch);
     updateScenarioSceneGenerationRuntime(sceneId, runtimeClearPatch);
     clearActiveVideoJob(sceneId);
@@ -19609,6 +19700,7 @@ const hydrate = useCallback((source = "unknown") => {
                                 onChange={(e) => updateScenarioScene(scenarioEditor.selected, {
                                   inheritPreviousEndAsStart: !!e.target.checked,
                                   startFrameSource: e.target.checked ? "previous_end" : "manual",
+                                  suppressInheritedStartPreview: false,
                                 })}
                                 disabled={!scenarioSelectedCanInheritPreviousEnd}
                               />
