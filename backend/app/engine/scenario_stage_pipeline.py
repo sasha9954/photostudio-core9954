@@ -1038,11 +1038,45 @@ def _build_audio_map_from_duration(
                 )
 
     arc_short = str(story_core.get("global_arc") or "").strip() or "unknown_arc"
+    phrase_units: list[dict[str, Any]] = []
+    prev_t = 0.0
+    for idx, t1 in enumerate(phrase_endpoints, start=1):
+        current_t1 = _clamp_time(float(t1), duration)
+        if current_t1 <= prev_t:
+            continue
+        phrase_units.append(
+            {
+                "id": f"ph_{idx}",
+                "t0": round(prev_t, 3),
+                "t1": round(current_t1, 3),
+                "duration_sec": round(current_t1 - prev_t, 3),
+                "text": "",
+                "word_count": 0,
+                "semantic_weight": "medium",
+            }
+        )
+        prev_t = current_t1
+    if duration > prev_t:
+        phrase_units.append(
+            {
+                "id": f"ph_{len(phrase_units) + 1}",
+                "t0": round(prev_t, 3),
+                "t1": round(duration, 3),
+                "duration_sec": round(max(0.0, duration - prev_t), 3),
+                "text": "",
+                "word_count": 0,
+                "semantic_weight": "medium",
+            }
+        )
+    scene_windows = _build_scene_candidate_windows(phrase_units, duration) if phrase_units else []
+
     return {
         "duration_sec": round(duration, 3),
         "analysis_mode": analysis_mode,
         "sections": sections,
         "phrase_endpoints_sec": phrase_endpoints,
+        "phrase_units": phrase_units,
+        "scene_candidate_windows": scene_windows,
         "no_split_ranges": no_split_ranges,
         "candidate_cut_points_sec": sorted(set(candidate_cut_points)),
         "pacing_profile": {

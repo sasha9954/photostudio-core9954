@@ -13,6 +13,19 @@ def _safe_float(value: float) -> float:
     return float(np.round(float(value), 4))
 
 
+def _safe_scalar(value: object, default: float = 0.0) -> float:
+    try:
+        arr = np.asarray(value, dtype=float)
+        if arr.size == 0:
+            return float(default)
+        return float(arr.reshape(-1)[0])
+    except Exception:
+        try:
+            return float(value)  # type: ignore[arg-type]
+        except Exception:
+            return float(default)
+
+
 def _merge_segments(segments: List[Dict[str, float]], max_gap: float = 0.25) -> List[Dict[str, float]]:
     if not segments:
         return []
@@ -268,7 +281,8 @@ def analyze_audio(path: str, debug: bool = False) -> dict:
     beats = librosa.frames_to_time(beat_frames, sr=sr).tolist() if len(beat_frames) else []
 
     beats = [_safe_float(t) for t in beats]
-    bpm = _safe_float(float(tempo)) if np.isfinite(tempo) else 0.0
+    tempo_scalar = _safe_scalar(tempo, 0.0)
+    bpm = _safe_float(tempo_scalar) if np.isfinite(tempo_scalar) else 0.0
 
     downbeats, bars = _estimate_downbeats_and_bars(
         beats=beats,
