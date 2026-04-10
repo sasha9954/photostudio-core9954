@@ -2447,6 +2447,12 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_segmentation_error_detail"] = ""
     diagnostics["audio_map_segmentation_payload_summary"] = {}
     diagnostics["audio_map_segmentation_normalized_summary"] = {}
+    diagnostics["audio_segmentation_source_mode"] = "none"
+    diagnostics["audio_segmentation_local_path_found"] = False
+    diagnostics["audio_segmentation_inline_attempted"] = False
+    diagnostics["audio_segmentation_inline_bytes_size"] = 0
+    diagnostics["audio_segmentation_url_used"] = ""
+    diagnostics["audio_segmentation_transport_error"] = ""
     diagnostics["audio_map_stage_branch"] = ""
     diagnostics["audio_map_primary_fallback_reason"] = ""
     diagnostics["audio_map_dynamics_error"] = ""
@@ -2530,12 +2536,25 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["audio_map_segmentation_validation_error"] = str(gemini_result.get("validation_error") or "")
                 diagnostics["audio_map_segmentation_payload_summary"] = _safe_dict(gemini_result.get("payload_summary"))
                 diagnostics["audio_map_segmentation_normalized_summary"] = _safe_dict(gemini_result.get("normalized_summary"))
+                transport_meta = _safe_dict(gemini_result.get("transport_meta"))
+                diagnostics["audio_segmentation_source_mode"] = str(transport_meta.get("audio_segmentation_source_mode") or "none")
+                diagnostics["audio_segmentation_local_path_found"] = bool(transport_meta.get("audio_segmentation_local_path_found"))
+                diagnostics["audio_segmentation_inline_attempted"] = bool(transport_meta.get("audio_segmentation_inline_attempted"))
+                diagnostics["audio_segmentation_inline_bytes_size"] = int(transport_meta.get("audio_segmentation_inline_bytes_size") or 0)
+                diagnostics["audio_segmentation_url_used"] = str(transport_meta.get("audio_segmentation_url_used") or "")
+                diagnostics["audio_segmentation_transport_error"] = str(transport_meta.get("audio_segmentation_transport_error") or "")
                 _append_diag_event(
                     package,
                     "audio_map gemini result "
                     f"ok={bool(gemini_result.get('ok'))} "
                     f"prompt={diagnostics.get('audio_map_segmentation_prompt_version') or ''} "
                     f"model={diagnostics.get('audio_map_used_model') or ''} "
+                    f"source_mode={diagnostics.get('audio_segmentation_source_mode') or ''} "
+                    f"local_path_found={bool(diagnostics.get('audio_segmentation_local_path_found'))} "
+                    f"inline_attempted={bool(diagnostics.get('audio_segmentation_inline_attempted'))} "
+                    f"inline_bytes={int(diagnostics.get('audio_segmentation_inline_bytes_size') or 0)} "
+                    f"url_used={diagnostics.get('audio_segmentation_url_used') or ''} "
+                    f"transport_error={diagnostics.get('audio_segmentation_transport_error') or ''} "
                     f"validation_error={diagnostics.get('audio_map_segmentation_validation_error') or ''} "
                     f"error={str(gemini_result.get('error') or '')}",
                     stage_id="audio_map",
