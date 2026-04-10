@@ -609,8 +609,11 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
     scene_rows = _safe_list(aux.get("scene_rows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
 
+    used_model = "gemini-3-flash-preview"
+
     diagnostics = {
         "prompt_version": SCENE_PROMPTS_PROMPT_VERSION,
+        "used_model": used_model,
         "scene_count": len(scene_rows),
         "missing_photo_count": 0,
         "missing_video_count": 0,
@@ -638,7 +641,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
     try:
         response = post_generate_content(
             api_key=str(api_key or "").strip(),
-            model="gemini-2.5-pro",
+            model=used_model,
             body={
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
