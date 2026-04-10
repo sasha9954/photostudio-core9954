@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 PRIMARY_GEMINI_PLANNER_MODEL = "gemini-3.1-pro-preview"
-FALLBACK_GEMINI_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+FALLBACK_GEMINI_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-3-flash-preview").strip() or "gemini-3-flash-preview"
 RAW_GEMINI_FALLBACK_CHAIN = str(getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK_CHAIN", "") or "").strip()
 GEMINI_ONLY_PLANNER_MODEL_FALLBACKS = [
     model.strip()
