@@ -1274,11 +1274,14 @@ def _build_whole_track_map_request(payload: dict[str, Any], context: dict[str, A
         {"text": "Build WholeTrackMapResponse JSON for clip mode only."},
         {"text": "Story-first music-video director mode: setup starts from first seconds even in instrumental intro."},
         {"text": "Single-hero + single-world lock: character_1 is default protagonist, one location means one world. No identity/environment drift."},
-        {"text": "Scene duration canon: target 3.0-6.0s, rare allowed 6.0-8.0s, above 8.0s is oversized and should be split, above 10.0s is forbidden."},
+        {"text": "This is a MUSIC VIDEO storyboard: segment like real clip editing, not by equal-time slicing."},
+        {"text": "Segmentation source-of-truth priority: (1) vocal phrase endings, (2) musical phrase/transition/accent boundaries, (3) dramatic visual beats, (4) only then duration preference."},
+        {"text": "Scene duration canon: usual working range 3.0-6.0s (guideline, not fixed grid). Fast inserts 2.0-3.0s are allowed for accents/reactions/punch reveals. 6.0-8.0s are rare and only for meaningful continuation/performance/atmosphere hold. Above 8.0s is oversized split candidate, above 10.0s is forbidden."},
         {"text": "Do not map one full verse/section into one long static scene; subdivide long sections into meaningful beat-level progression scenes."},
         {"text": "Even instrumental intro must progress story beat-to-beat; avoid emotional hold shots unless intentionally rare."},
         {"text": "Brick-wall loop/repeated same-mood shots are forbidden."},
-        {"text": "Split policy anchors: phrase ends + beat accents; avoid cutting mid-vocal-line unless unavoidable."},
+        {"text": "Do not cut in the middle of a vocal phrase/word unless forced. Phrase boundary wins over equal duration."},
+        {"text": "Avoid repeating many same-length scenes in a row without clear musical reason. 4.0/4.0/4.0/4.0 style grid is invalid for clip montage."},
         {"text": "Core required and must be valid: track_id, mode, duration_sec, sections, opening_anchor, ending_callback_rule, identity_lock, world_lock, style_lock, phrase_endpoints, no_split_ranges."},
         {"text": "Enrich fields are optional nice-to-have: recurring_visual_motifs, chorus_visual_policy, lip_sync_phrase_ranges, target_route_mix_per_30s, suggested_chunk_boundaries, expanded global_arc details."},
         {"text": "Default route mix prior per ~30s: ia2v=2, first_last=2, i2v=4 (adapt to section type, but keep as baseline)."},
@@ -1327,16 +1330,20 @@ def _build_chunk_request(
     parts: list[dict[str, Any]] = [
         {"text": "Return ChunkStoryboardResponse JSON for CLIP mode only."},
         {"text": "Allowed routes only: i2v, ia2v, first_last. No transcript/audioStructure/semanticTimeline."},
+        {"text": "This is MUSIC VIDEO clip montage planning: build scenes as musical/semantic edit units, not as equal time containers."},
+        {"text": "Boundary priority: vocal phrase end > musical phrase/transition/accent > visual dramatic beat > duration preference."},
         {"text": "Route canon: ia2v=lip-sync performance only (readable face+mouth, medium/three-quarter, slight front angle, soft orbit/push/pull/side move, emotional delivery)."},
         {"text": "Route canon: i2v=story/world/action progression; never static brick-wall duplicate shots."},
         {"text": "Route canon: first_last=controlled transition/episode bridge/start-end callback; never dump route."},
         {"text": "Scene contract per scene: scene_goal, scene_story_role, route, hero_present, world_anchor, lip_sync, frame_prompt, camera_prompt, motion_prompt, continuity_tokens."},
         {"text": "Continuity contract: adjacent scenes inside episode must feel like progression (same hero/world/light/emotion line unless explicit route bridge)."},
-        {"text": "Duration canon per scene: target 3.0-6.0s, rare allowed 6.0-8.0s, >8.0s oversized split candidate, >10.0s forbidden."},
+        {"text": "Duration canon per scene: usually 3.0-6.0s (guideline, not timer grid). 2.0-3.0s only for short insert/accent/reaction/punch beats. 6.0-8.0s only for meaningful continuation/performance/atmosphere hold. >8.0s oversized split candidate, >10.0s forbidden."},
         {"text": "If section is long, split into multiple meaningful beats; do not output long static emotional holding scenes."},
-        {"text": "Lip-sync scenes must be punchy phrase-delivery moments, not long static vocal blocks."},
+        {"text": "Lip-sync follows the same musical-semantic segmentation logic. Prefer whole vocal phrases or natural phrase chunks; do not cut mid-word or awkwardly mid-thought."},
+        {"text": "Lip-sync scenes are performance beats (not just moving mouth): usually 3.0-6.0s, shorter only for hard accents, longer only when phrase/performance truly demands hold."},
         {"text": "Brick-wall loop/repeated same mood shots is forbidden."},
-        {"text": "Do not cut inside vocal line unless forced by no_split constraints; prefer phrase endpoints and beat accents."},
+        {"text": "Do not cut inside vocal line unless forced by no_split constraints; phrase boundary fitness is more important than equal lengths."},
+        {"text": "Avoid uniform duration runs without musical reason; if output looks like equal 4s grid, rebuild segmentation with more montage variety."},
         {"text": "Final scene of full track should rhyme with opening anchor via meaning/emotion/visual callback."},
         {"text": f"Runtime={json.dumps(runtime, ensure_ascii=False)}"},
     ]
@@ -1658,6 +1665,19 @@ def _compute_directorial_diagnostics(merged: dict[str, Any], whole_map: WholeTra
     for cut in scene_cuts:
         if any((r0 + tolerance) < cut < (r1 - tolerance) for r0, r1 in no_split_ranges):
             mid_phrase_forced += 1
+    near_four_sec_count = sum(1 for d in durations if 3.7 <= d <= 4.3)
+    equal_duration_adjacent_pairs = 0
+    max_equal_duration_streak = 1 if durations else 0
+    current_streak = 1 if durations else 0
+    for idx in range(1, len(durations)):
+        if abs(durations[idx] - durations[idx - 1]) <= 0.2:
+            equal_duration_adjacent_pairs += 1
+            current_streak += 1
+        else:
+            max_equal_duration_streak = max(max_equal_duration_streak, current_streak)
+            current_streak = 1
+    max_equal_duration_streak = max(max_equal_duration_streak, current_streak)
+    total_cuts = len(scene_cuts)
     return {
         "scenes_in_target_3_6_sec_count": sum(1 for d in durations if CLIP_DURATION_TARGET_MIN_SEC <= d <= CLIP_DURATION_TARGET_MAX_SEC),
         "scenes_6_8_sec_count": sum(1 for d in durations if CLIP_DURATION_TARGET_MAX_SEC < d <= CLIP_DURATION_RARE_MAX_SEC),
@@ -1665,7 +1685,12 @@ def _compute_directorial_diagnostics(merged: dict[str, Any], whole_map: WholeTra
         "scenes_above_8_sec_count": sum(1 for d in durations if d > 8.0),
         "scenes_above_10_sec_count": sum(1 for d in durations if d > 10.0),
         "phrase_boundary_hits": phrase_hits,
+        "phrase_boundary_hit_ratio": round(phrase_hits / total_cuts, 3) if total_cuts else 0.0,
         "mid_phrase_forced_splits": mid_phrase_forced,
+        "scenes_near_4_sec_count": near_four_sec_count,
+        "scenes_near_4_sec_ratio": round(near_four_sec_count / len(durations), 3) if durations else 0.0,
+        "equal_duration_adjacent_pairs": equal_duration_adjacent_pairs,
+        "max_equal_duration_streak": max_equal_duration_streak,
     }
 
 
