@@ -2212,11 +2212,36 @@ function preserveScenarioCanonicalResult(prevScene = {}, nextScene = {}) {
   const prev = prevScene && typeof prevScene === "object" ? prevScene : {};
   const next = nextScene && typeof nextScene === "object" ? nextScene : {};
   const merged = { ...next };
+  const sceneId = String(merged?.sceneId || prev?.sceneId || "").trim();
+  const suppressImageRehydrate = Boolean(merged?.suppressAssetRehydrate || prev?.suppressAssetRehydrate);
+  const copiedSourceFields = [];
   SCENARIO_VIDEO_SOURCE_FIELDS.forEach((field) => {
     if (String(merged?.[field] || "").trim()) return;
     const prevValue = String(prev?.[field] || "").trim();
-    if (prevValue) merged[field] = prev[field];
+    if (!prevValue) return;
+    merged[field] = prev[field];
+    copiedSourceFields.push(field);
   });
+  if (CLIP_TRACE_SC2_GHOST_IMAGE) {
+    const imageFieldsAfter = Object.fromEntries(
+      SCENARIO_IMAGE_SOURCE_FIELDS.map((field) => [field, String(merged?.[field] || "").trim()])
+    );
+    console.debug("[SC2 GHOST TRACE] preserve_canonical", {
+      sceneId,
+      suppressImageRehydrate,
+      copiedSourceFields,
+      imageFieldsBefore: Object.fromEntries(
+        SCENARIO_IMAGE_SOURCE_FIELDS.map((field) => [field, String(prev?.[field] || "").trim()])
+      ),
+      imageFieldsAfter,
+      marker: {
+        prevSuppressAssetRehydrate: Boolean(prev?.suppressAssetRehydrate),
+        nextSuppressAssetRehydrate: Boolean(next?.suppressAssetRehydrate),
+        prevImageClearedAt: String(prev?.imageClearedAt || "").trim(),
+        nextImageClearedAt: String(next?.imageClearedAt || "").trim(),
+      },
+    });
+  }
   const prevDone = String(prev?.videoStatus || "").trim().toLowerCase() === "done" && String(prev?.videoUrl || "").trim();
   const nextMissingTerminal = !String(merged?.videoUrl || "").trim() && String(merged?.videoStatus || "").trim().toLowerCase() !== "done";
   if (prevDone && nextMissingTerminal) {
@@ -2442,11 +2467,14 @@ const SCENARIO_GENERATED_ASSET_FIELDS = [
   "videoPanelActivated",
 ];
 
-const SCENARIO_VIDEO_SOURCE_FIELDS = [
+const SCENARIO_IMAGE_SOURCE_FIELDS = [
   "imageUrl",
   "startImageUrl",
   "endImageUrl",
   "videoSourceImageUrl",
+];
+
+const SCENARIO_VIDEO_SOURCE_FIELDS = [
   "audioSliceUrl",
 ];
 
@@ -8544,6 +8572,27 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
       const mergedSceneRaw = { ...sceneAtIdx, ...normalizedPatch };
       const canonicalAudioResult = enforceCanonicalAudioSliceState(mergedSceneRaw);
       const mergedScene = canonicalAudioResult.scene;
+      if (CLIP_TRACE_SC2_GHOST_IMAGE) {
+        console.debug("[SC2 GHOST TRACE] update_scene", {
+          sceneId: String(sceneAtIdx?.sceneId || ""),
+          actionName: actionName || "scene_patch",
+          patchKeys: Object.keys(normalizedPatch || {}),
+          before: {
+            imageUrl: String(sceneAtIdx?.imageUrl || "").trim(),
+            startImageUrl: String(sceneAtIdx?.startImageUrl || sceneAtIdx?.startFrameImageUrl || "").trim(),
+            endImageUrl: String(sceneAtIdx?.endImageUrl || sceneAtIdx?.endFrameImageUrl || "").trim(),
+            suppressAssetRehydrate: Boolean(sceneAtIdx?.suppressAssetRehydrate),
+            imageClearedAt: String(sceneAtIdx?.imageClearedAt || "").trim(),
+          },
+          after: {
+            imageUrl: String(mergedScene?.imageUrl || "").trim(),
+            startImageUrl: String(mergedScene?.startImageUrl || mergedScene?.startFrameImageUrl || "").trim(),
+            endImageUrl: String(mergedScene?.endImageUrl || mergedScene?.endFrameImageUrl || "").trim(),
+            suppressAssetRehydrate: Boolean(mergedScene?.suppressAssetRehydrate),
+            imageClearedAt: String(mergedScene?.imageClearedAt || "").trim(),
+          },
+        });
+      }
       const canonicalAudioReady = Boolean(canonicalAudioResult.canonicalAudioReady);
       if (Object.prototype.hasOwnProperty.call(normalizedPatch, "audioSliceUrl")) {
         console.info("[SCENARIO AUDIO SLICE CANONICAL MERGE]", {
@@ -11962,6 +12011,14 @@ Aspect ratio: ${imageFormat}`,
       } else {
         updateScenarioScene(sceneId, {
           imageUrl: generatedImageUrl,
+          startImageUrl: "",
+          endImageUrl: "",
+          startFrameImageUrl: "",
+          endFrameImageUrl: "",
+          startFramePreviewUrl: "",
+          endFramePreviewUrl: "",
+          suppressAssetRehydrate: false,
+          imageClearedAt: "",
           suppressInheritedStartPreview: false,
           imageStatus: imageDegraded ? "degraded" : "done",
           imageDegraded,
@@ -12112,6 +12169,10 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     const clearPatch = buildScenarioClearImagePatch({ transitionType, slot: normalizedSlot });
+    if (normalizedSlot === "single") {
+      clearPatch.imageClearedAt = new Date().toISOString();
+      clearPatch.suppressAssetRehydrate = true;
+    }
     if (
       transitionType === "continuous"
       && !!scenarioSelected?.inheritPreviousEndAsStart
@@ -15261,6 +15322,31 @@ onClipSec: (nodeId, value) => {
             const preservedScene = preserveScenarioCanonicalResult(persistedScene || {}, rebuiltScene || {});
             const canonicalAudioResult = enforceCanonicalAudioSliceState(preservedScene || {});
             const hydratedScene = canonicalAudioResult.scene;
+            if (CLIP_TRACE_SC2_GHOST_IMAGE) {
+              console.debug("[SC2 GHOST TRACE] rebuild_scene", {
+                sceneId,
+                shouldPreserveAssets,
+                semanticChanged,
+                storyboardRunChanged,
+                persisted: {
+                  imageUrl: String(persistedScene?.imageUrl || "").trim(),
+                  startImageUrl: String(persistedScene?.startImageUrl || persistedScene?.startFrameImageUrl || "").trim(),
+                  endImageUrl: String(persistedScene?.endImageUrl || persistedScene?.endFrameImageUrl || "").trim(),
+                  suppressAssetRehydrate: Boolean(persistedScene?.suppressAssetRehydrate),
+                  imageClearedAt: String(persistedScene?.imageClearedAt || "").trim(),
+                },
+                rebuilt: {
+                  imageUrl: String(rebuiltScene?.imageUrl || "").trim(),
+                  startImageUrl: String(rebuiltScene?.startImageUrl || rebuiltScene?.startFrameImageUrl || "").trim(),
+                  endImageUrl: String(rebuiltScene?.endImageUrl || rebuiltScene?.endFrameImageUrl || "").trim(),
+                },
+                hydrated: {
+                  imageUrl: String(hydratedScene?.imageUrl || "").trim(),
+                  startImageUrl: String(hydratedScene?.startImageUrl || hydratedScene?.startFrameImageUrl || "").trim(),
+                  endImageUrl: String(hydratedScene?.endImageUrl || hydratedScene?.endFrameImageUrl || "").trim(),
+                },
+              });
+            }
             console.info("[SCENARIO HYDRATE/REBUILD CANONICAL CHECK]", {
               sceneId,
               videoUrlBefore: String(persistedScene?.videoUrl || "").trim(),
