@@ -14,6 +14,7 @@ from app.engine.gemini_rest import post_generate_content
 logger = logging.getLogger(__name__)
 
 GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_segmentation_v2"
+GEMINI_SEGMENTATION_MODEL = "gemini-3.1-pro-preview"
 _MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
 _SCENE_WINDOWS_MAX_START_GAP_SEC = 1.0
 _SCENE_WINDOWS_MAX_END_GAP_SEC = 1.2
@@ -392,9 +393,9 @@ def build_gemini_audio_segmentation(
     director_note: str = "",
 ) -> dict[str, Any]:
     if not api_key:
-        return {"ok": False, "error": "gemini_api_key_missing", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION}
+        return {"ok": False, "error": "gemini_api_key_missing", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION, "used_model": GEMINI_SEGMENTATION_MODEL}
     if duration_sec <= 0:
-        return {"ok": False, "error": "duration_missing", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION}
+        return {"ok": False, "error": "duration_missing", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION, "used_model": GEMINI_SEGMENTATION_MODEL}
 
     prompt = _build_prompt(
         duration_sec=duration_sec,
@@ -433,6 +434,7 @@ def build_gemini_audio_segmentation(
                     "ok": False,
                     "error": "audio_too_large_no_public_url",
                     "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION,
+                    "used_model": GEMINI_SEGMENTATION_MODEL,
                 }
         except Exception as exc:  # noqa: BLE001
             logger.exception("[audio_scene_segmenter] failed to attach audio")
@@ -440,11 +442,12 @@ def build_gemini_audio_segmentation(
                 "ok": False,
                 "error": f"audio_attach_failed:{exc}",
                 "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION,
+                "used_model": GEMINI_SEGMENTATION_MODEL,
             }
     elif audio_url and not _is_local_or_private_url(audio_url):
         parts.append({"fileData": {"mimeType": "audio/mpeg", "fileUri": str(audio_url).strip()}})
     else:
-        return {"ok": False, "error": "audio_source_missing_or_private_url", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION}
+        return {"ok": False, "error": "audio_source_missing_or_private_url", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION, "used_model": GEMINI_SEGMENTATION_MODEL}
 
     body = {
         "contents": [{"role": "user", "parts": parts}],
@@ -455,17 +458,18 @@ def build_gemini_audio_segmentation(
         },
     }
 
-    response = post_generate_content(api_key=api_key, model="gemini-3.1-pro-preview", body=body, timeout=120)
+    response = post_generate_content(api_key=api_key, model=GEMINI_SEGMENTATION_MODEL, body=body, timeout=120)
     if isinstance(response, dict) and response.get("__http_error__"):
         return {
             "ok": False,
             "error": f"gemini_http_error:{response.get('status')}:{response.get('text')}",
             "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION,
+            "used_model": GEMINI_SEGMENTATION_MODEL,
         }
 
     parsed = _extract_json_obj(_extract_gemini_text(response))
     if not parsed:
-        return {"ok": False, "error": "gemini_json_parse_failed", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION}
+        return {"ok": False, "error": "gemini_json_parse_failed", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION, "used_model": GEMINI_SEGMENTATION_MODEL}
 
     normalized = _normalize_gemini_payload(parsed, duration_sec)
     validation_error = _validate_gemini_payload(normalized, duration_sec)
@@ -476,10 +480,12 @@ def build_gemini_audio_segmentation(
             "validation_error": validation_error,
             "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION,
             "payload": normalized,
+            "used_model": GEMINI_SEGMENTATION_MODEL,
         }
 
     return {
         "ok": True,
         "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION,
         "payload": normalized,
+        "used_model": GEMINI_SEGMENTATION_MODEL,
     }

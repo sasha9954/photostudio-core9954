@@ -6,6 +6,7 @@ from typing import Any
 from app.engine.gemini_rest import post_generate_content
 
 SCENE_PLAN_PROMPT_VERSION = "scene_plan_v1"
+SCENE_PLAN_MODEL = "gemini-3.1-pro-preview"
 ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
 GENERIC_ENVIRONMENT_FAMILIES = {"urban", "city", "interior", "outdoor"}
 TURN_FUNCTION_HINTS = {
@@ -585,6 +586,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
 
     diagnostics = {
         "prompt_version": SCENE_PLAN_PROMPT_VERSION,
+        "used_model": SCENE_PLAN_MODEL,
         "scene_count": len(scene_windows),
         "watchability_fallback_count": 0,
         "world_summary_used": world_summary_used,
@@ -617,7 +619,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
     try:
         response = post_generate_content(
             api_key=str(api_key or "").strip(),
-            model="gemini-3.1-pro-preview",
+            model=SCENE_PLAN_MODEL,
             body={
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},

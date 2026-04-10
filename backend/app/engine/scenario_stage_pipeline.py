@@ -798,6 +798,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     prompt = _build_story_core_prompt(input_pkg, refs_inventory, assigned_roles, story_core_mode)
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["story_core_mode"] = story_core_mode
+    diagnostics["story_core_used_model"] = "gemini-3.1-pro-preview"
     diagnostics["story_core_character_ref_attached"] = False
     diagnostics["story_core_character_ref_source"] = ""
     diagnostics["story_core_character_ref_error"] = ""
@@ -1765,6 +1766,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     story_core_mode = str(diagnostics.get("story_core_mode") or _detect_story_core_mode(input_pkg)).strip().lower() or "creative"
 
     diagnostics["audio_map_source_audio_url"] = audio_url
+    diagnostics["audio_map_used_model"] = ""
     diagnostics["audio_map_analysis_mode"] = "timing_heuristics_v1"
     diagnostics["audio_map_used_fallback"] = False
     diagnostics["audio_map_phrase_mode"] = "audio_dynamics_v2"
@@ -1822,6 +1824,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                     director_note=str(input_pkg.get("director_note") or input_pkg.get("note") or ""),
                 )
                 diagnostics["audio_map_segmentation_prompt_version"] = str(gemini_result.get("prompt_version") or "")
+                diagnostics["audio_map_used_model"] = str(gemini_result.get("used_model") or diagnostics.get("audio_map_used_model") or "")
                 diagnostics["audio_map_segmentation_validation_error"] = str(gemini_result.get("validation_error") or "")
                 if bool(gemini_result.get("ok")):
                     payload = _safe_dict(gemini_result.get("payload"))
@@ -2077,6 +2080,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_plan_backend"] = "gemini"
     diagnostics["scene_plan_prompt_version"] = SCENE_PLAN_PROMPT_VERSION
+    diagnostics["scene_plan_used_model"] = ""
     diagnostics["scene_plan_used_fallback"] = False
     diagnostics["scene_plan_scene_count"] = 0
     diagnostics["scene_plan_route_counts"] = {"i2v": 0, "ia2v": 0, "first_last": 0}
@@ -2104,6 +2108,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_plan_backend"] = "gemini"
     diagnostics["scene_plan_prompt_version"] = str(scene_diag.get("prompt_version") or SCENE_PLAN_PROMPT_VERSION)
+    diagnostics["scene_plan_used_model"] = str(scene_diag.get("used_model") or diagnostics.get("scene_plan_used_model") or "")
     diagnostics["scene_plan_used_fallback"] = bool(result.get("used_fallback"))
     diagnostics["scene_plan_scene_count"] = int(scene_diag.get("scene_count") or len(_safe_list(scene_plan.get("scenes"))))
     diagnostics["scene_plan_route_counts"] = {

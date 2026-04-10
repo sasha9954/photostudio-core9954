@@ -35,7 +35,7 @@ from app.engine.gemini_rest import post_generate_content
 logger = logging.getLogger(__name__)
 
 
-PRIMARY_GEMINI_PLANNER_MODEL = "gemini-3.1-pro-preview"
+PRIMARY_GEMINI_PLANNER_MODEL = (settings.GEMINI_TEXT_MODEL or "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 FALLBACK_GEMINI_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-3-flash-preview").strip() or "gemini-3-flash-preview"
 RAW_GEMINI_FALLBACK_CHAIN = str(getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK_CHAIN", "") or "").strip()
 GEMINI_ONLY_PLANNER_MODEL_FALLBACKS = [
@@ -2060,6 +2060,8 @@ def _call_gemini_plan(api_key: str, model: str, body: dict[str, Any]) -> tuple[d
     diagnostics = {
         "requestedModel": model,
         "effectiveModel": model,
+        "usedModel": model,
+        "used_model": model,
         "httpStatus": http_status,
         "rawPreview": raw_preview,
         "errorText": str((resp or {}).get("text") or "")[:3000] if isinstance(resp, dict) else "",
@@ -2088,6 +2090,8 @@ def _call_gemini_plan_with_model_fallback(api_key: str, requested_model: str, bo
     last_diagnostics: dict[str, Any] = {
         "requestedModel": requested_model,
         "effectiveModel": requested_model,
+        "usedModel": requested_model,
+        "used_model": requested_model,
         "httpStatus": None,
         "rawPreview": "",
         "errorText": "",
@@ -4312,6 +4316,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "fallbackFrom": diagnostics.get("fallbackFrom"),
             "fallbackTo": diagnostics.get("fallbackTo"),
             "effectiveModel": diagnostics.get("effectiveModel") or requested_model,
+            "usedModel": diagnostics.get("effectiveModel") or requested_model,
+            "used_model": diagnostics.get("effectiveModel") or requested_model,
             "httpStatus": diagnostics.get("httpStatus"),
             "rawPreview": diagnostics.get("rawPreview") or "",
             "errorText": diagnostics.get("errorText") or "",
@@ -4757,6 +4763,8 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "moduleFile": module_file,
             "requestedModel": diagnostics.get("requestedModel") or requested_model,
             "effectiveModel": diagnostics.get("effectiveModel") or requested_model,
+            "usedModel": diagnostics.get("effectiveModel") or requested_model,
+            "used_model": diagnostics.get("effectiveModel") or requested_model,
             "httpStatus": diagnostics.get("httpStatus"),
             "rawPreview": diagnostics.get("rawPreview") or "",
             "normalizedPayload": normalized,
