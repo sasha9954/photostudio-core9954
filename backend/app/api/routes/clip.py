@@ -4347,23 +4347,30 @@ def _resolve_audio_asset_path(audio_url: str) -> str | None:
         return None
 
     parsed = urlparse(audio_url)
-    path = parsed.path
-    if path.startswith("/static/assets/"):
-        filename = os.path.basename(path[len("/static/assets/"):])
-    elif path.startswith("/assets/"):
-        filename = os.path.basename(path[len("/assets/"):])
+    raw_path = str(parsed.path or "").strip()
+    if not raw_path and str(audio_url).strip().startswith("static/assets/"):
+        raw_path = "/" + str(audio_url).strip()
+    path = "/" + raw_path.lstrip("/")
+    normalized_path = re.sub(r"/+", "/", path)
+    if normalized_path.startswith("/static/assets/"):
+        relative_asset_path = normalized_path[len("/static/assets/"):].strip("/")
+    elif normalized_path.startswith("/assets/"):
+        relative_asset_path = normalized_path[len("/assets/"):].strip("/")
     else:
         return None
 
-    if not filename:
+    if not relative_asset_path:
         return None
 
+    filename = os.path.basename(relative_asset_path)
+    if not filename:
+        return None
     base = os.path.splitext(filename)[0]
     if not base:
         return None
 
     dirs = [ASSETS_DIR]
-    names = [filename, base, f"{base}.mp3", f"{base}.wav", f"{base}.ogg", f"{base}.m4a"]
+    names = [relative_asset_path, filename, base, f"{base}.mp3", f"{base}.wav", f"{base}.ogg", f"{base}.m4a"]
     seen = set()
     candidates: list[str] = []
     for d in dirs:
@@ -10898,8 +10905,16 @@ def clip_image(payload: ClipImageIn):
     if not entity_scale_anchors:
         entity_scale_anchors = _default_entity_scale_anchors(world_scale_context)
     entity_scale_anchor_text = _format_entity_scale_anchors(entity_scale_anchors)
-    previous_continuity_memory = _sanitize_continuity_memory(getattr(refs_obj, "previousContinuityMemory", None))
-    previous_scene_image_url = str(getattr(refs_obj, "previousSceneImageUrl", "") or "").strip()
+    previous_continuity_memory = _sanitize_continuity_memory(
+        getattr(refs_obj, "previousContinuityMemory", None)
+        or (raw_scene_contract.get("previousContinuityMemory") if isinstance(raw_scene_contract, dict) else None)
+    )
+    previous_scene_image_url = str(
+        getattr(refs_obj, "previousSceneImageUrl", "")
+        or (raw_scene_contract.get("previousSceneImageUrl") if isinstance(raw_scene_contract, dict) else "")
+        or (raw_scene_contract.get("previous_scene_image_url") if isinstance(raw_scene_contract, dict) else "")
+        or ""
+    ).strip()
     previous_confirmed_stable_identity_memory = str(getattr(refs_obj, "previousConfirmedStableIdentityMemory", "") or "").strip()
     previous_confirmed_stable_outfit_memory = str(getattr(refs_obj, "previousConfirmedStableOutfitMemory", "") or "").strip()
     previous_confirmed_stable_image_url = str(getattr(refs_obj, "previousConfirmedStableImageUrl", "") or "").strip()
@@ -10908,6 +10923,10 @@ def clip_image(payload: ClipImageIn):
     first_frame_reference_url = str(
         getattr(refs_obj, "firstFrameReferenceUrl", None)
         or getattr(refs_obj, "currentSceneStartImageUrl", None)
+        or (raw_scene_contract.get("firstFrameReferenceUrl") if isinstance(raw_scene_contract, dict) else None)
+        or (raw_scene_contract.get("currentSceneStartImageUrl") if isinstance(raw_scene_contract, dict) else None)
+        or (raw_scene_contract.get("first_frame_reference_url") if isinstance(raw_scene_contract, dict) else None)
+        or (raw_scene_contract.get("current_scene_start_image_url") if isinstance(raw_scene_contract, dict) else None)
         or ""
     ).strip()
     first_frame_reference_inline = _load_reference_image_inline(first_frame_reference_url) if first_frame_reference_url else None
@@ -10937,8 +10956,8 @@ def clip_image(payload: ClipImageIn):
         "Change only moment progression: pose, emotion, body orientation, hand placement, distance, and interaction intensity."
     )
 
-    raw_refs_by_role_incoming = getattr(refs_obj, "refsByRole", None)
-    raw_refs_used_by_role_incoming = getattr(refs_obj, "refsUsedByRole", None)
+    raw_refs_by_role_incoming = getattr(refs_obj, "refsByRole", None) or getattr(refs_obj, "refs_by_role", None)
+    raw_refs_used_by_role_incoming = getattr(refs_obj, "refsUsedByRole", None) or getattr(refs_obj, "refs_used_by_role", None)
     raw_scene_contract_refs_by_role = raw_scene_contract.get("refsByRole") if isinstance(raw_scene_contract, dict) else {}
     raw_scene_contract_refs_used_by_role = raw_scene_contract.get("refsUsedByRole") if isinstance(raw_scene_contract, dict) else {}
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole=" + json.dumps(raw_refs_by_role_incoming, ensure_ascii=False))
@@ -10959,6 +10978,22 @@ def clip_image(payload: ClipImageIn):
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole.character_2=" + json.dumps(incoming_character_2, ensure_ascii=False))
 
     comfy_refs_by_role_merged: dict[str, list[str]] = _extract_refs_by_role_from_generic_source(raw_refs_by_role_incoming)
+    raw_refs_payload_map = refs_obj.model_dump(mode="json") if isinstance(refs_obj, BaseModel) else (refs_obj if isinstance(refs_obj, dict) else {})
+    incoming_ref_sources = [
+        raw_refs_by_role_incoming,
+        raw_refs_used_by_role_incoming,
+        raw_refs_payload_map.get("refsByRole") if isinstance(raw_refs_payload_map, dict) else {},
+        raw_refs_payload_map.get("refs_by_role") if isinstance(raw_refs_payload_map, dict) else {},
+        raw_refs_payload_map.get("refsUsedByRole") if isinstance(raw_refs_payload_map, dict) else {},
+        raw_refs_payload_map.get("refs_used_by_role") if isinstance(raw_refs_payload_map, dict) else {},
+    ]
+    for incoming_source in incoming_ref_sources:
+        incoming_refs = _extract_refs_by_role_from_generic_source(incoming_source)
+        for role in COMFY_REF_ROLES:
+            comfy_refs_by_role_merged[role] = list(dict.fromkeys([
+                *(comfy_refs_by_role_merged.get(role) or []),
+                *(incoming_refs.get(role) or []),
+            ]))
     refs_fallback_by_role = {
         "character_1": character_refs,
         "location": location_refs,
@@ -10972,6 +11007,9 @@ def clip_image(payload: ClipImageIn):
         raw_scene_contract_refs_by_role,
         raw_scene_contract_refs_used_by_role,
         raw_scene_contract.get("refs_used_by_role") if isinstance(raw_scene_contract, dict) else {},
+        raw_scene_contract.get("scene") if isinstance(raw_scene_contract, dict) else {},
+        (raw_scene_contract.get("scene") or {}).get("refsUsedByRole") if isinstance(raw_scene_contract.get("scene"), dict) else {},
+        (raw_scene_contract.get("scene") or {}).get("refsByRole") if isinstance(raw_scene_contract.get("scene"), dict) else {},
         raw_scene_contract.get("context_refs") if isinstance(raw_scene_contract, dict) else {},
         raw_scene_contract.get("contextRefs") if isinstance(raw_scene_contract, dict) else {},
         (raw_scene_contract.get("connected_context_summary") or {}).get("refsByRole") if isinstance(raw_scene_contract.get("connected_context_summary"), dict) else {},
@@ -11010,7 +11048,14 @@ def clip_image(payload: ClipImageIn):
     comfy_roles = COMFY_REF_ROLES
 
     scene_refs_used = getattr(refs_obj, "refsUsed", None)
-    scene_refs_used_by_role = getattr(refs_obj, "refsUsedByRole", None)
+    scene_refs_used_by_role = (
+        getattr(refs_obj, "refsUsedByRole", None)
+        or getattr(refs_obj, "refs_used_by_role", None)
+        or raw_scene_contract.get("refsUsedByRole")
+        or raw_scene_contract.get("refs_used_by_role")
+        or (raw_scene_contract.get("scene") or {}).get("refsUsedByRole")
+        or (raw_scene_contract.get("scene") or {}).get("refs_used_by_role")
+    )
     scene_ref_directives = getattr(refs_obj, "refDirectives", None)
     scene_participants = getattr(refs_obj, "participants", None)
     scene_primary_role = str(getattr(refs_obj, "primaryRole", "") or "").strip()
@@ -11190,12 +11235,20 @@ def clip_image(payload: ClipImageIn):
         for role in (scene_contract.get("activeRoles") or [])
         if str(role or "").strip() in comfy_roles
     ]
+    contract_scene_active_roles = [
+        str(role or "").strip()
+        for role in (raw_scene_contract.get("sceneActiveRoles") or raw_scene_contract.get("activeRoles") or [])
+        if str(role or "").strip() in comfy_roles
+    ] if isinstance(raw_scene_contract, dict) else []
     incoming_scene_active_roles = [
         str(role or "").strip()
         for role in (getattr(refs_obj, "sceneActiveRoles", None) or [])
         if str(role or "").strip() in comfy_roles
     ]
     for role in incoming_scene_active_roles:
+        if role not in scene_active_roles:
+            scene_active_roles.append(role)
+    for role in contract_scene_active_roles:
         if role not in scene_active_roles:
             scene_active_roles.append(role)
     if not scene_active_roles:
@@ -11250,18 +11303,27 @@ def clip_image(payload: ClipImageIn):
     if "group" in must_not_appear_roles:
         support_entity_ids = [role for role in support_entity_ids if role != "group"]
 
+    must_appear_candidates = [
+        *(scene_contract.get("mustAppear") or []),
+        *(raw_scene_contract.get("mustAppear") or [] if isinstance(raw_scene_contract, dict) else []),
+    ]
     must_appear_roles = [
         str(role or "").strip()
-        for role in (scene_contract.get("mustAppear") or [])
-        if str(role or "").strip() in scene_active_roles
+        for role in must_appear_candidates
+        if str(role or "").strip() in comfy_roles and str(role or "").strip() not in must_not_appear_roles
     ]
     if not must_appear_roles:
         must_appear_roles = [hero_entity_id] + support_entity_ids if hero_entity_id else list(scene_active_roles)
-    must_appear_roles = list(dict.fromkeys([role for role in must_appear_roles if role in scene_active_roles]))
+    must_appear_roles = list(dict.fromkeys([role for role in must_appear_roles if role in comfy_roles]))
     if "group" in must_not_appear_roles:
         must_appear_roles = [role for role in must_appear_roles if role != "group"]
     if incoming_scene_active_roles and not must_appear_roles:
         must_appear_roles = list(dict.fromkeys([role for role in incoming_scene_active_roles if role in scene_active_roles]))
+    for role in must_appear_roles:
+        if role in comfy_roles and role not in scene_active_roles and role not in must_not_appear_roles:
+            scene_active_roles.append(role)
+    if "location" in must_appear_roles and "location" not in must_not_appear_roles and "location" not in scene_active_roles:
+        scene_active_roles.append("location")
 
     scene_contract["heroEntityId"] = hero_entity_id
     scene_contract["supportEntityIds"] = support_entity_ids
@@ -11297,6 +11359,7 @@ def clip_image(payload: ClipImageIn):
             scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
     if not scene_contract.get("heroAppearanceContract") and has_character_1_ref and (character_1_is_active or is_lip_sync_route):
         scene_contract["heroAppearanceContract"] = _build_hero_appearance_contract(scene_contract)
+    scene_contract["activeRoles"] = scene_active_roles
     scene_contract["active_connected_character_roles"] = [
         role for role in ("character_1", "character_2", "character_3")
         if bool(comfy_refs_by_role.get(role)) and (role in scene_active_roles or role in must_appear_roles)
@@ -11413,6 +11476,11 @@ def clip_image(payload: ClipImageIn):
         or "props" in refs_used_roles
         or (isinstance(scene_ref_directives, dict) and isinstance(scene_ref_directives.get("props"), dict) and bool(scene_ref_directives.get("props")))
     )
+    refs_used_by_role_roles = {
+        str(role or "").strip()
+        for role in ((scene_refs_used_by_role or {}).keys() if isinstance(scene_refs_used_by_role, dict) else [])
+        if str(role or "").strip() in comfy_roles
+    }
 
     selected_view_hint = _infer_selected_view_hint(scene_delta, scene_text, prompt)
 
@@ -11451,12 +11519,19 @@ def clip_image(payload: ClipImageIn):
     essential_roles_for_image: set[str] = set()
     for role_candidate in [scene_primary_role, hero_entity_id]:
         role = str(role_candidate or "").strip()
-        if role in COMFY_CAST_ROLES and (comfy_refs_by_role.get(role) or []):
+        if role in COMFY_REF_ROLES and (comfy_refs_by_role.get(role) or []):
             essential_roles_for_image.add(role)
     for role in must_appear_roles:
-        if role in COMFY_CAST_ROLES and (comfy_refs_by_role.get(role) or []):
+        if role in COMFY_REF_ROLES and (comfy_refs_by_role.get(role) or []):
+            essential_roles_for_image.add(role)
+    for role in refs_used_by_role_roles:
+        if role in COMFY_REF_ROLES and (comfy_refs_by_role.get(role) or []):
             essential_roles_for_image.add(role)
     if (comfy_refs_by_role.get("location") or []) and "location" not in must_not_appear_roles:
+        essential_roles_for_image.add("location")
+    if first_frame_reference_url:
+        essential_roles_for_image.add("location")
+    if previous_scene_image_url:
         essential_roles_for_image.add("location")
 
     allowed_roles_for_image = (set(scene_cast_roles) | set(world_anchor_roles) | essential_roles_for_image)
@@ -11634,11 +11709,13 @@ def clip_image(payload: ClipImageIn):
     source_outfit_preserved = bool(task_execution.get("preserve_source_outfit", True))
     source_outfit_replaced = bool(task_execution.get("source_outfit_replaced", False))
 
+    normalized_character_ref_count = sum(len(comfy_refs_by_role.get(role) or []) for role in ("character_1", "character_2", "character_3"))
+    normalized_location_ref_count = len(comfy_refs_by_role.get("location") or [])
     refs_debug = {
-        "characterRefCount": len(character_refs),
-        "characterImagesAttached": len(character_images),
-        "locationRefCount": len(location_refs),
-        "locationImagesAttached": len(location_images),
+        "characterRefCount": normalized_character_ref_count,
+        "characterImagesAttached": sum(len(comfy_inline_parts_by_role.get(role) or []) for role in ("character_1", "character_2", "character_3")),
+        "locationRefCount": normalized_location_ref_count,
+        "locationImagesAttached": len(comfy_inline_parts_by_role.get("location") or []),
         "styleRefCount": len(style_refs),
         "styleImagesAttached": len(style_images),
         "propsRefCount": len(props_refs),
@@ -11698,6 +11775,7 @@ def clip_image(payload: ClipImageIn):
         "attachedWorldAnchorRoles": [role for role in world_anchor_roles if len(comfy_refs_by_role.get(role) or []) > 0],
         "allowedRolesForImage": sorted(list(allowed_roles_for_image)),
         "filteredOutBySceneContract": filtered_out_by_scene_contract,
+        "incomingRefsByRoleCounts": {role: len(comfy_refs_by_role_merged.get(role) or []) for role in comfy_roles},
         "incomingReadyRefsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
         "rawRefsByRole": {role: len((getattr(refs_obj, "refsByRole", {}) or {}).get(role) or []) for role in comfy_roles},
         "filteredRefsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
@@ -11709,6 +11787,15 @@ def clip_image(payload: ClipImageIn):
         "attachedViewLabelsByRole": attached_view_labels_by_role,
         "selectedPrimaryViewByRole": selected_primary_view_by_role,
         "selectedViewMatchModeByRole": selected_view_match_mode_by_role,
+        "identityLockReason": (
+            "character_1_reference_present"
+            if bool(scene_contract.get("identityLockApplied"))
+            else (
+                "missing_character_1_reference"
+                if not has_character_1_ref
+                else "character_1_not_active"
+            )
+        ),
         "promptDebug": {
             "sceneId": scene_id,
             "sceneGoal": scene_goal_input or None,
@@ -12350,6 +12437,10 @@ def clip_image(payload: ClipImageIn):
         }
         refs_debug["attachOrder"] = role_attach_order
         refs_debug["attachedCountsByRole"] = attached_counts_by_role
+        refs_debug["characterImagesAttached"] = sum(attached_counts_by_role.get(role, 0) for role in ("character_1", "character_2", "character_3"))
+        refs_debug["locationImagesAttached"] = attached_counts_by_role.get("location", 0)
+        refs_debug["characterRefCount"] = sum(len(comfy_refs_by_role.get(role) or []) for role in ("character_1", "character_2", "character_3"))
+        refs_debug["locationRefCount"] = len(comfy_refs_by_role.get("location") or [])
         refs_debug["heroAttached"] = hero_attached
         refs_debug["heroEntityId"] = hero_entity_id or None
         refs_debug["inlineLoadFailuresByRole"] = inline_load_failures_by_role
