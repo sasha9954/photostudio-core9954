@@ -352,6 +352,30 @@ def _validate_gemini_payload(payload: dict[str, Any], duration_sec: float) -> st
     return ""
 
 
+def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    sections = [item for item in _safe_list(payload.get("sections")) if isinstance(item, dict)]
+    phrase_units = [item for item in _safe_list(payload.get("phrase_units")) if isinstance(item, dict)]
+    scene_windows = [
+        item
+        for item in (_safe_list(payload.get("scene_candidate_windows")) or _safe_list(payload.get("scene_windows")))
+        if isinstance(item, dict)
+    ]
+    all_rows = sections + phrase_units + scene_windows
+    t0_values = [_coerce_float(row.get("t0"), -1.0) for row in all_rows]
+    t1_values = [_coerce_float(row.get("t1"), -1.0) for row in all_rows]
+    first_t0 = min((v for v in t0_values if v >= 0.0), default=None)
+    last_t1 = max((v for v in t1_values if v >= 0.0), default=None)
+    return {
+        "sections_count": len(sections),
+        "phrase_units_count": len(phrase_units),
+        "scene_candidate_windows_count": len(scene_windows),
+        "phrase_endpoints_count": len(_safe_list(payload.get("phrase_endpoints_sec"))),
+        "first_t0": _round3(first_t0) if first_t0 is not None else None,
+        "last_t1": _round3(last_t1) if last_t1 is not None else None,
+        "overall_duration_sec": _coerce_float(payload.get("overall_duration_sec"), 0.0),
+    }
+
+
 def _is_local_or_private_url(url: str) -> bool:
     raw = str(url or "").strip()
     if not raw:
@@ -480,9 +504,25 @@ def build_gemini_audio_segmentation(
     parsed = _extract_json_obj(_extract_gemini_text(response))
     if not parsed:
         return {"ok": False, "error": "gemini_json_parse_failed", "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION, "used_model": GEMINI_SEGMENTATION_MODEL}
+    raw_summary = _payload_summary(parsed)
+    logger.info(
+        "[audio_scene_segmenter] gemini parsed payload summary ok=%s model=%s prompt=%s summary=%s",
+        True,
+        GEMINI_SEGMENTATION_MODEL,
+        GEMINI_SEGMENTATION_PROMPT_VERSION,
+        raw_summary,
+    )
 
     normalized = _normalize_gemini_payload(parsed, duration_sec)
+    normalized_summary = _payload_summary(normalized)
     validation_error = _validate_gemini_payload(normalized, duration_sec)
+    logger.info(
+        "[audio_scene_segmenter] gemini payload normalized summary model=%s prompt=%s validation_error=%s summary=%s",
+        GEMINI_SEGMENTATION_MODEL,
+        GEMINI_SEGMENTATION_PROMPT_VERSION,
+        validation_error or "",
+        normalized_summary,
+    )
     if validation_error:
         return {
             "ok": False,
@@ -490,6 +530,8 @@ def build_gemini_audio_segmentation(
             "validation_error": validation_error,
             "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION,
             "payload": normalized,
+            "payload_summary": raw_summary,
+            "normalized_summary": normalized_summary,
             "used_model": GEMINI_SEGMENTATION_MODEL,
         }
 
@@ -497,5 +539,7 @@ def build_gemini_audio_segmentation(
         "ok": True,
         "prompt_version": GEMINI_SEGMENTATION_PROMPT_VERSION,
         "payload": normalized,
+        "payload_summary": raw_summary,
+        "normalized_summary": normalized_summary,
         "used_model": GEMINI_SEGMENTATION_MODEL,
     }
