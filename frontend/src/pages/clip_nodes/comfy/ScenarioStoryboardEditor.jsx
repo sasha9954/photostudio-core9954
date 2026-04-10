@@ -225,6 +225,58 @@ function toPrintable(value) {
   return text || "—";
 }
 
+const ROLE_LABELS = {
+  character_1: "Hero (character_1)",
+  character_2: "Support (character_2)",
+  character_3: "Character 3",
+  animal: "Animal",
+  group: "Group",
+  location: "Location",
+  props: "Props",
+  style: "Style",
+};
+
+function normalizeRole(value = "") {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function buildStoryboardSceneDisplayModel(scene = {}, runtime = {}) {
+  const refsByRole = scene?.refsByRole && typeof scene.refsByRole === "object" ? scene.refsByRole : {};
+  const refsUsedByRole = scene?.refsUsedByRole && typeof scene.refsUsedByRole === "object" ? scene.refsUsedByRole : {};
+  const roles = new Set(
+    [
+      scene?.primaryRole,
+      ...(Array.isArray(scene?.secondaryRoles) ? scene.secondaryRoles : []),
+      ...(Array.isArray(scene?.sceneActiveRoles) ? scene.sceneActiveRoles : []),
+      ...(Array.isArray(scene?.mustAppear) ? scene.mustAppear : []),
+      ...Object.keys(refsByRole || {}),
+      ...Object.keys(refsUsedByRole || {}),
+    ].map(normalizeRole).filter(Boolean)
+  );
+  const castOrder = ["character_1", "character_2", "character_3", "animal", "group"];
+  const worldOrder = ["location", "props", "style"];
+  const actors = castOrder.filter((role) => roles.has(role)).map((role) => ROLE_LABELS[role] || role);
+  const contextRoles = worldOrder.filter((role) => roles.has(role) || (Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0) || (Array.isArray(refsUsedByRole?.[role]) && refsUsedByRole[role].length > 0));
+  const contextItems = [
+    ...contextRoles.map((role) => ROLE_LABELS[role] || role),
+    String(scene?.connected_context_summary?.summary || scene?.connectedContextSummary?.summary || "").trim(),
+    String(scene?.sceneGoalRu || scene?.sceneGoalEn || scene?.sceneGoal || "").trim(),
+    String(scene?.sceneNarrativeStepRu || scene?.sceneNarrativeStepEn || scene?.sceneNarrativeStep || "").trim(),
+    String(scene?.emotionRu || scene?.emotionEn || scene?.emotion || "").trim(),
+    selectedDurationText(scene),
+  ].filter(Boolean);
+  return {
+    actors,
+    context: Array.from(new Set(contextItems)),
+    imageStatus: String(runtime?.imageStatus || scene?.imageStatus || "").trim(),
+  };
+}
+
+function selectedDurationText(scene = {}) {
+  const duration = safeSceneDuration(scene);
+  return Number.isFinite(duration) ? `Duration: ${fmtSec(duration)}s` : "";
+}
+
 function resolveSceneId(scene = {}, idx = 0) {
   const direct = String(scene?.sceneId || "").trim();
   if (direct) return direct;
@@ -540,6 +592,10 @@ export default function ScenarioStoryboardEditor({
   const selectedDisplayTime = resolveSceneDisplayTime(selectedScene);
   const selectedSceneId = String(selectedScene?.sceneId || "").trim();
   const selectedRuntime = safeGeneration[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object" ? safeGeneration[selectedSceneId] : {};
+  const selectedSceneDisplayModel = useMemo(
+    () => buildStoryboardSceneDisplayModel(selectedScene || {}, selectedRuntime || {}),
+    [selectedRuntime, selectedScene]
+  );
   const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || normalizedScenes[idx]?.sceneId || "").trim();
   const selectedPhraseIndex = phrasesForUi.findIndex((phrase, idx) => resolvePhraseSceneId(phrase, idx) === selectedSceneId);
   const generateMeta = {
@@ -1057,16 +1113,21 @@ export default function ScenarioStoryboardEditor({
     if (activeTab === "context") {
       return (
         <div className="clipSB_scenarioEditorTabBody">
-          <div className="clipSB_storyboardKv"><span>locationRu</span><strong>{selectedScene?.locationRu || "—"}</strong></div>
-          <div className="clipSB_storyboardKv"><span>emotionRu</span><strong>{selectedScene?.emotionRu || "—"}</strong></div>
+          <div className="clipSB_storyboardKv"><span>locationRu</span><strong>{selectedScene?.locationRu || selectedScene?.locationEn || "—"}</strong></div>
+          <div className="clipSB_storyboardKv"><span>emotionRu</span><strong>{selectedScene?.emotionRu || selectedScene?.emotionEn || "—"}</strong></div>
           <div className="clipSB_storyboardKv"><span>duration</span><strong>{selectedScene ? `${fmtSec(safeSceneDuration(selectedScene))}s` : "—"}</strong></div>
+          {selectedSceneDisplayModel.context.length ? (
+            <div className="clipSB_storyboardKv"><span>contextSummary</span><strong>{selectedSceneDisplayModel.context.join(" • ")}</strong></div>
+          ) : (
+            <div className="clipSB_hint">Контекст пока не собран.</div>
+          )}
         </div>
       );
     }
     if (activeTab === "actors") {
       return (
         <div className="clipSB_scenarioEditorTabBody">
-          {Array.isArray(selectedScene?.actors) && selectedScene.actors.length ? selectedScene.actors.map((actor, idx) => (
+          {selectedSceneDisplayModel.actors.length ? selectedSceneDisplayModel.actors.map((actor, idx) => (
             <div key={`${actor}-${idx}`} className="clipSB_scenarioEditorSimpleRow">• {actor}</div>
           )) : <div className="clipSB_hint">Актеры не указаны.</div>}
         </div>

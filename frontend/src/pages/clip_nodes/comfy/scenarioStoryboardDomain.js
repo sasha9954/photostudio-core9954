@@ -437,24 +437,41 @@ function ensureDistinctStartEndPrompts(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const startRaw = sanitizeVisiblePromptText(source.startFramePromptEn || source.startFramePromptRu || "");
   const endRaw = sanitizeVisiblePromptText(source.endFramePromptEn || source.endFramePromptRu || "");
+  const imageStrategy = deriveScenarioImageStrategy(source);
+  const isFirstLast = imageStrategy === "first_last";
   const overlap = tokenOverlapRatio(startRaw, endRaw);
   const isLipSync = Boolean(source.lipSync || source.requiresAudioSensitiveVideo || source.renderMode === "lip_sync_music");
-  if (startRaw && endRaw && overlap < 0.82) {
+  if (startRaw && endRaw && overlap < 0.82 && !isFirstLast) {
     return { startFramePrompt: startRaw, endFramePrompt: endRaw };
   }
 
   const identity = sanitizeVisiblePromptText(source.focalSubject || source.summaryEn || source.summaryRu || "same performer");
   const composition = sanitizeVisiblePromptText(source.cameraEn || source.cameraRu || "medium close shot");
   const atmosphere = sanitizeVisiblePromptText(source.locationEn || source.locationRu || source.environmentMotion || "club background with moving lights");
+  const continuityLock = sanitizeVisiblePromptText(
+    "Hard continuity lock: same exact woman as character_1 reference, same hairstyle family, same top category and neckline silhouette, same jeans/footwear when visible, same exact location geometry, same camera family and lens family, no actress change, no wardrobe redesign, no location redesign."
+  );
+  const semanticBlob = [
+    source.sceneGoal, source.scene_goal, source.sceneNarrativeStep, source.scene_narrative_step,
+    source.videoPromptRu, source.videoPromptEn, source.summaryRu, source.summaryEn, source.transitionActionPrompt,
+  ].map((value) => normalizeText(value).toLowerCase()).filter(Boolean).join(" ");
+  const isMagicContactScene = /contact|touch|crack|glow|bloom|reveal|activation|activate|wall|касани|контакт|трещин|свеч/i.test(semanticBlob);
   const startAction = isLipSync
     ? "mouth just opening on first sung syllable, face fully readable"
-    : "movement starting, body still compact";
+    : (isFirstLast
+      ? "PRE-EVENT state: before the key event, hand/action just about to happen, pose compact, guarded anticipation, minimal emitted light"
+      : "movement starting, body still compact");
   const endAction = isLipSync
     ? "final sung syllable, visibly progressed from opening frame, changed pose, changed head angle, changed hand placement, emotion progressed, face remains readable"
-    : "visibly progressed from opening frame, changed pose, changed head angle, changed hand placement, evolved emotion, transformed motion state clearly visible";
+    : (isFirstLast
+      ? "POST-EVENT state: clearly later beat after the event, visible contact progression, changed pose, changed hand placement, changed head angle/gaze, emotion progressed, visible world response and stronger light/emission on skin/clothes/environment"
+      : "visibly progressed from opening frame, changed pose, changed head angle, changed hand placement, evolved emotion, transformed motion state clearly visible");
+  const magicContactDelta = isMagicContactScene
+    ? "Magic-contact delta required: start frame = pre-activation with no visible response; end frame = post-activation with visible glow/energy response from wall/object."
+    : "";
   return {
-    startFramePrompt: sanitizeVisiblePromptText(`${identity}, ${startAction}, ${composition}, ${atmosphere}`),
-    endFramePrompt: sanitizeVisiblePromptText(`${identity}, ${endAction}, ${composition}, ${atmosphere}, intensified particles and light`),
+    startFramePrompt: sanitizeVisiblePromptText(`${identity}, ${startAction}, ${composition}, ${atmosphere}, ${continuityLock}`),
+    endFramePrompt: sanitizeVisiblePromptText(`${identity}, ${endAction}, ${composition}, ${atmosphere}, intensified particles and light, ${continuityLock}, ${magicContactDelta}`),
   };
 }
 
@@ -488,10 +505,13 @@ function buildTransitionPromptPatch(scene = {}, index = 0) {
     startFramePromptRu: startBase,
     endFramePromptRu: endBase,
   });
+  const firstLastHardRule = imageStrategy === "first_last"
+    ? "FIRST_LAST HARD RULE: start frame must be PRE-EVENT and end frame must be POST-EVENT with causal progression. Difference must come from action/contact/light/emotion progression, not identity/outfit/location/camera-world drift."
+    : "";
 
   return {
-    startFramePromptRu: distinct.startFramePrompt,
-    endFramePromptRu: distinct.endFramePrompt,
+    startFramePromptRu: sanitizeVisiblePromptText(`${distinct.startFramePrompt}. ${firstLastHardRule}`),
+    endFramePromptRu: sanitizeVisiblePromptText(`${distinct.endFramePrompt}. ${firstLastHardRule}`),
     continuationFromPrevious: Boolean(source.continuationFromPrevious ?? source.continuation_from_previous ?? source.continuation ?? source.requiresContinuation),
   };
 }
