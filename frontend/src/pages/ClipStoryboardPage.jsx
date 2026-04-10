@@ -598,7 +598,34 @@ const SCENARIO_IMAGE_ROLE_TO_HANDLE = {
 
 function extractScenarioRefsByRoleFromSource(source = null) {
   if (!source || typeof source !== "object") return Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
-  const toUrlList = (items) => {
+  const NON_URL_REF_MARKERS = new Set(["required", "omit", "present", "true", "false", "hero", "location"]);
+  const REJECT_DEBUG_LIMIT = 12;
+  let rejectedMarkerDebugCount = 0;
+  const isUrlLikeScenarioRefValue = (value) => {
+    const normalized = String(value || "").trim();
+    if (!normalized) return false;
+    const lowered = normalized.toLowerCase();
+    if (NON_URL_REF_MARKERS.has(lowered)) return false;
+    if (/^(https?:\/\/)/i.test(normalized)) return true;
+    if (/^\/?static\//i.test(normalized)) return true;
+    if (/^data:image\//i.test(normalized)) return true;
+    if (/\.(?:jpe?g|png|webp)(?:[?#].*)?$/i.test(normalized)) return true;
+    if (/^[a-z0-9_-]{1,24}$/i.test(normalized)) return false;
+    return false;
+  };
+  const normalizeUrlLikeScenarioRef = (value, role = "") => {
+    const normalized = String(value || "").trim();
+    if (!normalized) return "";
+    if (!isUrlLikeScenarioRefValue(normalized)) {
+      if (rejectedMarkerDebugCount < REJECT_DEBUG_LIMIT) {
+        rejectedMarkerDebugCount += 1;
+        console.debug("[SCENARIO IMAGE REF FILTER]", { role, rawValue: normalized, reason: "non_url_marker" });
+      }
+      return "";
+    }
+    return normalized;
+  };
+  const toUrlList = (items, role = "") => {
     if (Array.isArray(items)) {
       return items
         .map((item) => {
@@ -608,11 +635,11 @@ function extractScenarioRefsByRoleFromSource(source = null) {
           }
           return "";
         })
-        .map((value) => String(value || "").trim())
+        .map((value) => normalizeUrlLikeScenarioRef(value, role))
         .filter(Boolean);
     }
     if (typeof items === "string") {
-      const normalized = String(items || "").trim();
+      const normalized = normalizeUrlLikeScenarioRef(items, role);
       return normalized ? [normalized] : [];
     }
     if (items && typeof items === "object") {
@@ -627,13 +654,14 @@ function extractScenarioRefsByRoleFromSource(source = null) {
         ?? items?.url
         ?? items?.src
         ?? items?.imageUrl
-        ?? []
+        ?? [],
+        role
       );
     }
     return [];
   };
-  const pullRefsFromRoleValue = (roleValue) => {
-    if (Array.isArray(roleValue)) return toUrlList(roleValue);
+  const pullRefsFromRoleValue = (roleValue, role = "") => {
+    if (Array.isArray(roleValue)) return toUrlList(roleValue, role);
     if (roleValue && typeof roleValue === "object") {
       return toUrlList(
         roleValue.refs
@@ -646,10 +674,11 @@ function extractScenarioRefsByRoleFromSource(source = null) {
         ?? roleValue.src
         ?? roleValue.imageUrl
         ?? roleValue.list
-        ?? []
+        ?? [],
+        role
       );
     }
-    if (typeof roleValue === "string") return toUrlList(roleValue);
+    if (typeof roleValue === "string") return toUrlList(roleValue, role);
     return [];
   };
   const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
@@ -662,7 +691,7 @@ function extractScenarioRefsByRoleFromSource(source = null) {
   const extractFromConnectedInputs = (connectedInputs = null) => {
     if (!connectedInputs || typeof connectedInputs !== "object") return;
     Object.entries(SCENARIO_IMAGE_ROLE_TO_HANDLE).forEach(([role, handle]) => {
-      appendRoleUrls(role, pullRefsFromRoleValue(connectedInputs?.[handle]));
+      appendRoleUrls(role, pullRefsFromRoleValue(connectedInputs?.[handle], role));
     });
   };
   const visitSource = (candidate) => {
@@ -674,15 +703,13 @@ function extractScenarioRefsByRoleFromSource(source = null) {
     Object.entries(candidate).forEach(([rawRole, roleValue]) => {
       const role = normalizeScenarioRoleName(rawRole);
       if (!SCENARIO_IMAGE_ROLE_KEYS.includes(role)) return;
-      appendRoleUrls(role, pullRefsFromRoleValue(roleValue));
+      appendRoleUrls(role, pullRefsFromRoleValue(roleValue, role));
     });
     extractFromConnectedInputs(candidate?.connectedInputs);
     extractFromConnectedInputs(candidate?.connected_inputs);
     [
       candidate?.refsByRole,
       candidate?.refs_by_role,
-      candidate?.refsUsedByRole,
-      candidate?.refs_used_by_role,
       candidate?.context_refs,
       candidate?.contextRefs,
       candidate?.connected_context_summary,
@@ -953,8 +980,6 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
 
   appendFromSource(scenarioBrainRefs?.refsByRole);
   appendFromSource(scene?.refsByRole);
-  appendFromSource(scene?.refsUsedByRole);
-  appendFromSource(scene?.refs_used_by_role);
   appendFromSource(scene?.connectedRefsByRole);
   appendFromSource(scene?.contextRefs);
   appendFromSource(scene?.context_refs);
@@ -973,8 +998,6 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
   appendFromSource(scene?.scene_meta?.connected_context_summary?.refsByRole);
   appendFromSource(scene?.scene_meta?.connected_context_summary?.refs_by_role);
   appendFromSource(scenarioPackage?.refsByRole);
-  appendFromSource(scenarioPackage?.refsUsedByRole);
-  appendFromSource(scenarioPackage?.refs_used_by_role);
   appendFromSource(scenarioPackage?.connectedRefsByRole);
   appendFromSource(scenarioPackage?.cast?.refsByRole);
   appendFromSource(scenarioPackage?.history?.refsByRole);

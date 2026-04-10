@@ -9163,6 +9163,25 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
     out: dict[str, list[str]] = {role: [] for role in COMFY_REF_ROLES}
     if not isinstance(source, dict):
         return out
+    non_url_ref_markers = {"required", "omit", "present", "true", "false", "hero", "location"}
+    def _is_url_like_ref_string(value: str) -> bool:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return False
+        lowered = normalized.lower()
+        if lowered in non_url_ref_markers:
+            return False
+        if re.match(r"^https?://", normalized, re.IGNORECASE):
+            return True
+        if re.match(r"^/?static/", normalized, re.IGNORECASE):
+            return True
+        if re.match(r"^data:image/", normalized, re.IGNORECASE):
+            return True
+        if re.search(r"\.(?:jpe?g|png|webp)(?:[?#].*)?$", normalized, re.IGNORECASE):
+            return True
+        return False
+    def _filter_url_like_refs(values: list[str]) -> list[str]:
+        return [value for value in values if _is_url_like_ref_string(value)]
     def _extract_urls_from_any(value: Any) -> list[str]:
         if value is None:
             return []
@@ -9172,16 +9191,16 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
                 urls.extend(_extract_urls_from_any(item))
             return list(dict.fromkeys(urls))
         if isinstance(value, str):
-            return _normalize_ref_list([value])
+            return _filter_url_like_refs(_normalize_ref_list([value]))
         if isinstance(value, dict):
-            return list(dict.fromkeys(_normalize_ref_list([
+            return list(dict.fromkeys(_filter_url_like_refs(_normalize_ref_list([
                 value.get("url"),
                 value.get("src"),
                 value.get("imageUrl"),
                 value.get("value"),
                 value.get("preview"),
-            ]) + _extract_urls_from_any(value.get("refs")) + _extract_urls_from_any(value.get("images")) + _extract_urls_from_any(value.get("urls")) + _extract_urls_from_any(value.get("items"))))
-        return _normalize_ref_list([value])
+            ])) + _extract_urls_from_any(value.get("refs")) + _extract_urls_from_any(value.get("images")) + _extract_urls_from_any(value.get("urls")) + _extract_urls_from_any(value.get("items"))))
+        return _filter_url_like_refs(_normalize_ref_list([value]))
     connected_inputs = source.get("connectedInputs") if isinstance(source.get("connectedInputs"), dict) else (
         source.get("connected_inputs") if isinstance(source.get("connected_inputs"), dict) else {}
     )
@@ -9195,8 +9214,6 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
     nested_ref_containers = [
         source.get("refsByRole"),
         source.get("refs_by_role"),
-        source.get("refsUsedByRole"),
-        source.get("refs_used_by_role"),
         source.get("context_refs"),
         source.get("contextRefs"),
         source.get("connected_context_summary"),
