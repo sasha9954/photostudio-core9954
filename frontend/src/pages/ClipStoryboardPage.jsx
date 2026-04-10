@@ -624,9 +624,14 @@ function mergeScenarioRefsByRole(...sources) {
   return roleMap;
 }
 
+function isNonEmptyRoleMap(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+  return Object.values(obj).some((urls) => Array.isArray(urls) && urls.some((url) => String(url || "").trim().length > 0));
+}
+
 function extractRefsInventoryLikeByRole(source = null) {
   const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
-  const inventory = Array.isArray(source)
+  const inventoryLike = Array.isArray(source)
     ? source
     : (source && typeof source === "object"
       ? (
@@ -640,11 +645,38 @@ function extractRefsInventoryLikeByRole(source = null) {
         || []
       )
       : []);
-  if (!Array.isArray(inventory)) return roleMap;
-  inventory.forEach((entry) => {
+  const toUrls = (value) => {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => {
+          if (typeof item === "string") return item;
+          if (item && typeof item === "object") return item?.url || item?.src || item?.imageUrl || "";
+          return "";
+        })
+        .map((raw) => String(raw || "").trim())
+        .filter(Boolean);
+    }
+    if (typeof value === "string") return String(value || "").trim() ? [String(value || "").trim()] : [];
+    if (value && typeof value === "object") {
+      return [
+        ...toUrls(value?.value),
+        ...toUrls(value?.refs),
+        ...toUrls(value?.images),
+        ...toUrls(value?.urls),
+        ...toUrls(value?.meta?.url),
+      ];
+    }
+    return [];
+  };
+  const resolveRoleFromRaw = (rawRole = "") => {
+    const normalizedRole = normalizeScenarioRoleName(rawRole);
+    if (SCENARIO_IMAGE_ROLE_KEYS.includes(normalizedRole)) return normalizedRole;
+    return /location|place|environment|world|background/i.test(rawRole) ? "location" : "character_1";
+  };
+  if (Array.isArray(inventoryLike)) inventoryLike.forEach((entry) => {
     if (!entry || typeof entry !== "object") return;
-    const url = String(entry?.url || entry?.src || entry?.imageUrl || "").trim();
-    if (!url) return;
+    const urls = toUrls(entry);
+    if (!urls.length) return;
     const rawRole = String(
       entry?.role
       || entry?.entityRole
@@ -655,12 +687,18 @@ function extractRefsInventoryLikeByRole(source = null) {
       || entry?.type
       || ""
     ).trim();
-    const normalizedRole = normalizeScenarioRoleName(rawRole);
-    const role = SCENARIO_IMAGE_ROLE_KEYS.includes(normalizedRole)
-      ? normalizedRole
-      : (/location|place|environment|world|background/i.test(rawRole) ? "location" : "character_1");
-    roleMap[role] = [...new Set([...(roleMap[role] || []), url])];
+    const role = resolveRoleFromRaw(rawRole);
+    roleMap[role] = [...new Set([...(roleMap[role] || []), ...urls])];
   });
+  else if (inventoryLike && typeof inventoryLike === "object") {
+    Object.entries(inventoryLike).forEach(([rawKey, entry]) => {
+      const normalizedKey = String(rawKey || "").trim().replace(/^ref_/i, "");
+      const role = resolveRoleFromRaw(normalizedKey);
+      const urls = toUrls(entry);
+      if (!urls.length) return;
+      roleMap[role] = [...new Set([...(roleMap[role] || []), ...urls])];
+    });
+  }
   return roleMap;
 }
 
@@ -10801,22 +10839,21 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           hasCharacter2InSceneActiveRoles: Array.isArray(finalTargetSceneForImage.sceneActiveRoles) && finalTargetSceneForImage.sceneActiveRoles.includes("character_2"),
         });
       }
-      const refsUsedByRoleFallback = (
-        refsForImageRequest?.refsUsedByRole
-        || targetScene?.refsUsedByRole
-        || targetScene?.refs_used_by_role
-        || targetScene?.connectedContextSummary?.refsByRole
-        || targetScene?.connectedContextSummary?.refs_by_role
-        || targetScene?.connected_context_summary?.refsByRole
-        || targetScene?.connected_context_summary?.refs_by_role
-        || scenarioPackageForImage?.refsUsedByRole
-        || scenarioPackageForImage?.refs_used_by_role
-        || scenarioPackageForImage?.connectedContextSummary?.refsByRole
-        || scenarioPackageForImage?.connectedContextSummary?.refs_by_role
-        || scenarioPackageForImage?.connected_context_summary?.refsByRole
-        || scenarioPackageForImage?.connected_context_summary?.refs_by_role
-        || {}
-      );
+      const refsUsedByRoleFallback = ([
+        refsForImageRequest?.refsUsedByRole,
+        targetScene?.refsUsedByRole,
+        targetScene?.refs_used_by_role,
+        targetScene?.connectedContextSummary?.refsByRole,
+        targetScene?.connectedContextSummary?.refs_by_role,
+        targetScene?.connected_context_summary?.refsByRole,
+        targetScene?.connected_context_summary?.refs_by_role,
+        scenarioPackageForImage?.refsUsedByRole,
+        scenarioPackageForImage?.refs_used_by_role,
+        scenarioPackageForImage?.connectedContextSummary?.refsByRole,
+        scenarioPackageForImage?.connectedContextSummary?.refs_by_role,
+        scenarioPackageForImage?.connected_context_summary?.refsByRole,
+        scenarioPackageForImage?.connected_context_summary?.refs_by_role,
+      ].find((candidate) => isNonEmptyRoleMap(candidate)) || {});
       const refsPayloadForRequest = {
         ...refsForImageRequest,
         refsByRole: refsForImageRequest?.refsByRole || refsByRoleForImage || {},
