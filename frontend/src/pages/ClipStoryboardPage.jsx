@@ -11061,20 +11061,27 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         scenarioPackageForImage?.connected_context_summary?.refsByRole,
         scenarioPackageForImage?.connected_context_summary?.refs_by_role,
       ].find((candidate) => isNonEmptyRoleMap(candidate)) || {});
-      const contextRefsFallback = (
-        targetScene?.context_refs
-        || targetScene?.contextRefs
-        || targetScene?.connected_context_summary?.context_refs
-        || targetScene?.connected_context_summary?.contextRefs
-        || targetScene?.connectedContextSummary?.context_refs
-        || targetScene?.connectedContextSummary?.contextRefs
-        || scenarioPackageForImage?.context_refs
-        || scenarioPackageForImage?.contextRefs
-        || scenarioPackageForImage?.connected_context_summary?.context_refs
-        || scenarioPackageForImage?.connected_context_summary?.contextRefs
-        || scenarioPackageForImage?.connectedContextSummary?.context_refs
-        || scenarioPackageForImage?.connectedContextSummary?.contextRefs
-        || {}
+      const contextRefsSourcesForImage = [
+        targetScene?.context_refs,
+        targetScene?.contextRefs,
+        targetScene?.connected_context_summary?.context_refs,
+        targetScene?.connected_context_summary?.contextRefs,
+        targetScene?.connectedContextSummary?.context_refs,
+        targetScene?.connectedContextSummary?.contextRefs,
+        scenarioPackageForImage?.context_refs,
+        scenarioPackageForImage?.contextRefs,
+        scenarioPackageForImage?.connected_context_summary?.context_refs,
+        scenarioPackageForImage?.connected_context_summary?.contextRefs,
+        scenarioPackageForImage?.connectedContextSummary?.context_refs,
+        scenarioPackageForImage?.connectedContextSummary?.contextRefs,
+      ];
+      const contextRefsFallback = contextRefsSourcesForImage.find((candidate) => candidate && typeof candidate === "object") || {};
+      const contextRefsMergedByRole = mergeScenarioRefsByRole(
+        ...contextRefsSourcesForImage,
+        targetScene?.connected_context_summary,
+        targetScene?.connectedContextSummary,
+        scenarioPackageForImage?.connected_context_summary,
+        scenarioPackageForImage?.connectedContextSummary,
       );
       const connectedInputsFromContextFallback = buildScenarioConnectedInputsSummaryFromRefs(
         contextRefsFallback,
@@ -11100,9 +11107,65 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         targetNode?.data?.connectedInputs,
         targetNode?.data?.connected_inputs,
       ].find((candidate) => candidate && typeof candidate === "object" && Object.keys(candidate).length > 0) || connectedInputsFromContextFallback);
+      const locationRefsFromConnectedInput = (() => {
+        const input = connectedInputsFallback?.ref_location;
+        if (!input) return [];
+        if (Array.isArray(input)) {
+          return input.map((value) => String(value || "").trim()).filter(Boolean);
+        }
+        if (typeof input === "string") {
+          const normalized = String(input || "").trim();
+          return normalized ? [normalized] : [];
+        }
+        if (typeof input === "object") {
+          const toUrls = (value) => {
+            if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+            if (typeof value === "string") {
+              const normalized = String(value || "").trim();
+              return normalized ? [normalized] : [];
+            }
+            if (value && typeof value === "object") {
+              return [
+                ...toUrls(value?.refs),
+                ...toUrls(value?.value),
+                ...toUrls(value?.url),
+                ...toUrls(value?.src),
+                ...toUrls(value?.imageUrl),
+              ];
+            }
+            return [];
+          };
+          return [...new Set(toUrls(input))];
+        }
+        return [];
+      })();
       const refsByRoleEffective = hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {})
         ? refsForImageRequest.refsByRole
         : (hasNonEmptyRefsByRole(refsByRoleForImage || {}) ? refsByRoleForImage : refsFallbackFromContext);
+      if (
+        (!Array.isArray(refsByRoleEffective?.location) || refsByRoleEffective.location.length === 0)
+        && (
+          (Array.isArray(contextRefsMergedByRole?.location) && contextRefsMergedByRole.location.length > 0)
+          || locationRefsFromConnectedInput.length > 0
+        )
+      ) {
+        refsByRoleEffective.location = [...new Set([
+          ...(Array.isArray(contextRefsMergedByRole?.location) ? contextRefsMergedByRole.location : []),
+          ...locationRefsFromConnectedInput,
+        ])];
+      }
+      if (
+        (!connectedInputsFallback?.ref_location || typeof connectedInputsFallback.ref_location !== "object")
+        && Array.isArray(refsByRoleEffective?.location)
+        && refsByRoleEffective.location.length > 0
+      ) {
+        connectedInputsFallback.ref_location = {
+          count: refsByRoleEffective.location.length,
+          refs: refsByRoleEffective.location,
+          value: refsByRoleEffective.location[0] || "",
+          source: "derived_from_refs_by_role",
+        };
+      }
       const refsUsedByRoleEffective = isNonEmptyRoleMap(refsUsedByRoleFallback)
         ? refsUsedByRoleFallback
         : Object.fromEntries(
@@ -11118,6 +11181,11 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         ...(Array.isArray(refsByRoleEffective?.character_1) && refsByRoleEffective.character_1.length > 0 ? ["character_1"] : []),
         ...(Array.isArray(refsByRoleEffective?.location) && refsByRoleEffective.location.length > 0 ? ["location"] : []),
       ])];
+      const sceneActiveRolesEffective = [...new Set([
+        ...(Array.isArray(refsForImageRequest?.sceneActiveRoles) ? refsForImageRequest.sceneActiveRoles : []),
+        ...(Array.isArray(derivedRoleContract?.sceneActiveRoles) ? derivedRoleContract.sceneActiveRoles : []),
+        ...(Array.isArray(refsByRoleEffective?.location) && refsByRoleEffective.location.length > 0 ? ["location"] : []),
+      ])];
       const primaryRoleEffective = String(refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "character_1").trim();
       const heroEntityIdEffective = String(
         refsForImageRequest?.heroEntityId
@@ -11131,6 +11199,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         refsUsedByRole: refsUsedByRoleEffective,
         connectedInputs: connectedInputsFallback,
         primaryRole: primaryRoleEffective,
+        sceneActiveRoles: sceneActiveRolesEffective,
         mustAppear: ensuredMustAppear,
         heroEntityId: heroEntityIdEffective,
         context_refs: contextRefsFallback,
