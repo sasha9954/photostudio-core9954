@@ -18,12 +18,8 @@ import { getScenarioMusicApiConfig, requestScenarioBackgroundMusic } from "../se
 import { useAuth } from "../app/AuthContext";
 import { useNavigate } from "react-router-dom";
 import {
-  BrainPackageTesterNode,
-  ComfyBrainNode,
   ComfyNarrativeNode,
-  ComfyStoryboardNode,
   ComfyVideoPreviewNode,
-  MusicPromptTesterNode,
   RefAnimalNode,
   RefCharacter2Node,
   RefCharacter3Node,
@@ -31,8 +27,6 @@ import {
   RefLiteNode,
   ScenarioStoryboardNode,
   ScenarioPipelineDebugNode,
-  ScenarioOutputTesterNode,
-  VoiceOutputTesterNode,
 } from "./clip_nodes/comfy";
 import VideoRefNode from "./clip_nodes/VideoRefNode";
 import {
@@ -173,6 +167,17 @@ const COMFY_BRAIN_REF_HANDLE_CONFIG = {
 const COMFY_STORYBOARD_MAIN_HANDLE = "comfy_scene_video_out";
 const COMFY_STORYBOARD_INTRO_HANDLE = "comfy_storyboard_intro_out";
 const INTRO_FRAME_STORY_HANDLE = "story_context";
+
+const REMOVED_LEGACY_NODE_TYPES = new Set([
+  "brainNode",
+  "storyboardNode",
+  "comfyBrain",
+  "scenarioOutputTesterNode",
+  "voiceOutputTesterNode",
+  "brainPackageTesterNode",
+  "musicPromptTesterNode",
+  "comfyStoryboard",
+]);
 
 const CLIP_TRACE_PERSIST = false;
 const CLIP_TRACE_VIDEO_POLLING = false;
@@ -1529,37 +1534,14 @@ const EDGE_STYLE_BY_KIND = {
 };
 
 function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "", targetType = "", existingKind = "" }) {
-  if (targetType === "brainNode" && isBrainInput(targetHandle)) return targetHandle;
-  if (targetType === "comfyBrain" && isComfyBrainInput(targetHandle)) return targetHandle;
   if (targetType === "comfyNarrative" && isNarrativeInput(targetHandle)) return targetHandle;
-  if (sourceType === "comfyBrain" && isComfyBrainInput(sourceHandle)) return sourceHandle;
   if (sourceType === "comfyNarrative" && ["storyboard_out", "preview_out", "scenario_out", "voice_script_out", "brain_package_out", "bg_music_prompt_out"].includes(String(sourceHandle || ""))) return sourceHandle;
   if (sourceType === "scenarioPipelineDebug" && sourceHandle === "storyboard_out" && targetType === "scenarioStoryboard" && targetHandle === "scenario_storyboard_in") return "scenario_storyboard_in";
 
   if (targetType === "introFrame" && targetHandle === INTRO_FRAME_STORY_HANDLE) return "intro_context";
 
-  if (sourceType === "comfyBrain" && sourceHandle === "comfy_plan" && targetType === "comfyStoryboard" && targetHandle === "comfy_plan") {
-    return "comfy_plan";
-  }
-
-  if (sourceType === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE && targetType === "comfyVideoPreview" && targetHandle === COMFY_STORYBOARD_MAIN_HANDLE) {
-    return "comfy_video";
-  }
-
-  if (sourceType === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE && targetType === "assemblyNode") {
-    return "storyboard_to_assembly";
-  }
-
   if (sourceType === "introFrame" && sourceHandle === "intro_frame_out" && targetType === "assemblyNode" && targetHandle === "assembly_intro") {
     return "intro_to_assembly";
-  }
-
-  if (sourceType === "brainNode" && sourceHandle === "plan" && targetType === "storyboardNode" && targetHandle === "plan_in") {
-    return "plan";
-  }
-
-  if (sourceType === "comfyNarrative" && sourceHandle === "storyboard_out" && targetType === "storyboardNode" && targetHandle === "plan_in") {
-    return "storyboard_out";
   }
 
   if (sourceType === "comfyNarrative" && sourceHandle === "storyboard_out" && targetType === "scenarioStoryboard" && targetHandle === "scenario_storyboard_in") {
@@ -1578,15 +1560,9 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
     return "scenario_preview_in";
   }
 
-  if (sourceType === "storyboardNode" && sourceHandle === "plan_out" && targetType === "assemblyNode") {
-    return "storyboard_to_assembly";
-  }
-
   if (sourceType === "scenarioStoryboard" && sourceHandle === "scenario_storyboard_out" && targetType === "assemblyNode") {
     return "storyboard_to_assembly";
   }
-
-  if (sourceType === "brainNode" && targetType === "assemblyNode") return "brain_to_assembly";
   if (existingKind && EDGE_STYLE_BY_KIND[existingKind]) return existingKind;
   if (targetType === "assemblyNode") return "assembly";
   return "default";
@@ -1602,18 +1578,6 @@ function normalizeClipStoryboardEdgeHandles(edge = {}, nodesById = new Map()) {
   const targetHandle = String(edge?.targetHandle || "");
 
   if (targetType === "introFrame" && targetHandle === "title_context") return null;
-
-  if (
-    sourceType === "comfyStoryboard"
-    && targetType === "introFrame"
-    && targetHandle === INTRO_FRAME_STORY_HANDLE
-    && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE
-  ) {
-    return {
-      ...edge,
-      sourceHandle: COMFY_STORYBOARD_INTRO_HANDLE,
-    };
-  }
 
   return edge;
 }
@@ -3389,8 +3353,7 @@ function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16", int
 function extractStoryboardScenesFromNodes(nodes = []) {
   const scenarioStoryboardNode = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "scenarioStoryboard") || null;
   if (Array.isArray(scenarioStoryboardNode?.data?.scenes)) return scenarioStoryboardNode.data.scenes;
-  const storyboardNode = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "storyboardNode") || null;
-  return Array.isArray(storyboardNode?.data?.scenes) ? storyboardNode.data.scenes : [];
+  return [];
 }
 
 function normalizeComfyScenesForAssembly(scenes = [], fallbackFormat = DEFAULT_SCENE_IMAGE_FORMAT) {
@@ -3417,9 +3380,7 @@ function normalizeComfyScenesForAssembly(scenes = [], fallbackFormat = DEFAULT_S
 }
 
 function getAssemblySourceLabel(scenesSource = "none") {
-  if (scenesSource === "comfyStoryboard") return "COMFY STORYBOARD";
   if (scenesSource === "scenarioStoryboard") return "SCENARIO STORYBOARD";
-  if (scenesSource === "storyboard") return "STORYBOARD";
   return "НЕ ПОДКЛЮЧЕНО";
 }
 
@@ -3438,13 +3399,7 @@ function removeAssemblyIncomingSourceEdges(edges = [], assemblyNodeId = "", targ
 }
 
 function extractComfyScenesFromNodes(nodes = []) {
-  const comfyStoryboardNode = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "comfyStoryboard") || null;
-  const fallbackFormat = resolvePreferredSceneFormat(
-    comfyStoryboardNode?.data?.format,
-    comfyStoryboardNode?.data?.plannerMeta?.format,
-    comfyStoryboardNode?.data?.plannerMeta?.plannerInput?.format
-  );
-  return normalizeComfyScenesForAssembly(comfyStoryboardNode?.data?.mockScenes, fallbackFormat);
+  return [];
 }
 
 function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } = {}) {
@@ -3460,7 +3415,7 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       if (edge?.target !== effectiveAssemblyNodeId) return false;
       if (String(edge?.targetHandle || "") !== "assembly_in") return false;
       const sourceType = String(nodesById.get(edge?.source)?.type || "");
-      return sourceType === "storyboardNode" || sourceType === "scenarioStoryboard" || sourceType === "comfyStoryboard";
+      return sourceType === "scenarioStoryboard";
     })
     : [];
   const incomingEdge = incomingSourceEdges.length ? incomingSourceEdges[incomingSourceEdges.length - 1] : null;
@@ -3503,20 +3458,6 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
     });
   }
 
-  if (sourceNode?.type === "storyboardNode") {
-    const scenes = Array.isArray(sourceNode?.data?.scenes) ? sourceNode.data.scenes : [];
-    return {
-      assemblyNodeId: effectiveAssemblyNodeId,
-      sourceNodeId: String(sourceNode?.id || ""),
-      sourceNodeType: "storyboardNode",
-      scenesSource: "storyboard",
-      scenes,
-      introSourceNodeId: String(introFrame?.nodeId || ""),
-      introSourceNodeType: introFrame?.nodeType || "",
-      introFrame,
-    };
-  }
-
   if (sourceNode?.type === "scenarioStoryboard") {
     const scenes = Array.isArray(sourceNode?.data?.scenes) ? sourceNode.data.scenes : [];
     return {
@@ -3525,26 +3466,6 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       sourceNodeType: "scenarioStoryboard",
       scenesSource: "scenarioStoryboard",
       scenes,
-      introSourceNodeId: String(introFrame?.nodeId || ""),
-      introSourceNodeType: introFrame?.nodeType || "",
-      introFrame,
-    };
-  }
-
-  if (sourceNode?.type === "comfyStoryboard") {
-    const sourceFormat = resolvePreferredSceneFormat(
-      sourceNode?.data?.format,
-      sourceNode?.data?.plannerMeta?.format,
-      sourceNode?.data?.plannerMeta?.plannerInput?.format
-    );
-    const scenes = normalizeComfyScenesForAssembly(sourceNode?.data?.mockScenes, sourceFormat);
-    return {
-      assemblyNodeId: effectiveAssemblyNodeId,
-      sourceNodeId: String(sourceNode?.id || ""),
-      sourceNodeType: "comfyStoryboard",
-      scenesSource: "comfyStoryboard",
-      scenes,
-      scenarioFormat: sourceFormat,
       introSourceNodeId: String(introFrame?.nodeId || ""),
       introSourceNodeType: introFrame?.nodeType || "",
       introFrame,
@@ -17503,6 +17424,13 @@ const hydrate = useCallback((source = "unknown") => {
       const savedComfySignature = String(parsed?.comfySceneSignature || "");
 
       if (!savedNodes || !savedEdges) throw new Error("bad_format");
+
+      const droppedLegacyNodeIds = new Set(
+        savedNodes
+          .filter((nodeItem) => REMOVED_LEGACY_NODE_TYPES.has(String(nodeItem?.type || "")))
+          .map((nodeItem) => String(nodeItem?.id || "").trim())
+          .filter(Boolean)
+      );
       if (shouldInvalidateClipStoryboardStorage(parsed)) {
         console.warn("[CLIP STORAGE] hydrated payload invalidated", {
           accountKey,
@@ -17520,6 +17448,7 @@ const hydrate = useCallback((source = "unknown") => {
       // sanitize
       const cleanNodes = savedNodes
         .filter((n) => n && typeof n.id === "string" && typeof n.type === "string" && n.position)
+        .filter((n) => !REMOVED_LEGACY_NODE_TYPES.has(String(n?.type || "")))
         .map((n) => {
           const data = { ...(n.data || {}) };
 
@@ -17725,6 +17654,7 @@ const hydrate = useCallback((source = "unknown") => {
       const cleanNodesById = new Map(cleanNodes.map((nodeItem) => [nodeItem.id, nodeItem]));
       const cleanEdges = savedEdges
         .filter((e) => e && typeof e.id === "string" && e.source && e.target)
+        .filter((e) => !droppedLegacyNodeIds.has(String(e?.source || "")) && !droppedLegacyNodeIds.has(String(e?.target || "")))
         .map((e) => normalizeClipStoryboardEdgeHandles(e, cleanNodesById))
         .filter(Boolean)
         .map((e) => {
@@ -17749,6 +17679,13 @@ const hydrate = useCallback((source = "unknown") => {
             data: { ...(e.data || {}), kind: presentation.kind },
           };
         });
+
+      if (droppedLegacyNodeIds.size > 0) {
+        console.info("[CLIP HYDRATE] dropped legacy nodes", {
+          droppedNodeCount: droppedLegacyNodeIds.size,
+          droppedNodeIds: Array.from(droppedLegacyNodeIds),
+        });
+      }
 
       const hydratedNodes = cleanNodes.length ? cleanNodes : defaultNodes;
       const hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
@@ -17950,8 +17887,6 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "linkNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { draftUrl: "", urlValue: "", urlStatus: "empty", urlError: "", savedPayload: null, outputPayload: null } };
     } else if (type === "videoRef") {
       node = { id, type: "videoRefNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { fileName: "", assetUrl: "", url: "", durationSec: null, mime: "", size: 0, posterUrl: "", previewImage: "", width: 0, height: 0, uploading: false, uploadError: "", savedPayload: null, outputPayload: null } };
-    } else if (type === "brain") {
-      node = { id, type: "brainNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: "clip", scenarioKey: "clip", shootKey: "cinema", styleKey: "realism", freezeStyle: false, clipSec: 30 } };
     } else if (type === "ref_character") {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПЕРСОНАЖ", icon: "🧍", kind: "ref_character", refs: [], roleType: "auto", uploading: false, refStatus: "empty" } };
     } else if (type === "ref_location") {
@@ -17960,8 +17895,6 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — СТИЛЬ", icon: "🎨", kind: "ref_style", refs: [], uploading: false, refStatus: "empty" } };
     } else if (type === "ref_items") {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПРЕДМЕТЫ", icon: "📦", kind: "ref_items", refs: [], uploading: false, refStatus: "empty" } };
-    } else if (type === "storyboard") {
-      node = { id, type: "storyboardNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { scenes: [], sceneGeneration: {} } };
     } else if (type === "introFrame") {
       node = {
         id,
@@ -17973,18 +17906,6 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else if (type === "comfyNarrative") {
       node = { id, type: "comfyNarrative", position: { x: centerX + jitterX, y: centerY + jitterY }, data: getDefaultNarrativeNodeData() };
-    } else if (type === "scenarioOutputTester") {
-      node = { id, type: "scenarioOutputTesterNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { testerType: "scenarioOutputTesterNode" } };
-    } else if (type === "voiceOutputTester") {
-      node = { id, type: "voiceOutputTesterNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { testerType: "voiceOutputTesterNode" } };
-    } else if (type === "brainPackageTester") {
-      node = { id, type: "brainPackageTesterNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { testerType: "brainPackageTesterNode" } };
-    } else if (type === "musicPromptTester") {
-      node = { id, type: "musicPromptTesterNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { testerType: "musicPromptTesterNode" } };
-    } else if (type === "comfyBrain") {
-      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', plannerMode: 'legacy', output: 'comfy image', format: DEFAULT_SCENE_IMAGE_FORMAT, genre: '', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
-    } else if (type === "comfyStoryboard") {
-      node = { id, type: "comfyStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mockScenes: [], sceneCount: 0, mode: 'clip', parseStatus: 'idle' } };
     } else if (type === "scenarioStoryboard") {
       node = { id, type: "scenarioStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { scenes: [], sceneGeneration: {} } };
     } else if (type === "scenarioPipelineDebug") {
@@ -18278,18 +18199,10 @@ const hydrate = useCallback((source = "unknown") => {
       textNode: TextNode,
       linkNode: LinkNode,
       videoRefNode: VideoRefNode,
-      brainNode: BrainNode,
       refNode: RefNode,
-      storyboardNode: StoryboardPlanNode,
       introFrame: IntroFrameNode,
       assemblyNode: AssemblyNode,
       comfyNarrative: ComfyNarrativeNode,
-      scenarioOutputTesterNode: ScenarioOutputTesterNode,
-      voiceOutputTesterNode: VoiceOutputTesterNode,
-      brainPackageTesterNode: BrainPackageTesterNode,
-      musicPromptTesterNode: MusicPromptTesterNode,
-      comfyBrain: ComfyBrainNode,
-      comfyStoryboard: ComfyStoryboardNode,
       scenarioStoryboard: ScenarioStoryboardNode,
       scenarioPipelineDebug: ScenarioPipelineDebugNode,
       comfyVideoPreview: ComfyVideoPreviewNode,
@@ -18310,40 +18223,6 @@ const hydrate = useCallback((source = "unknown") => {
         if (!src || !dst) return eds;
         let nextEdges = eds;
 
-        if (dst.type === "brainNode") {
-          const h = params.targetHandle || "";
-          const ok =
-            (h === "audio" && src.type === "audioNode" && (params.sourceHandle || "") === "audio") ||
-            (h === "text" && src.type === "textNode" && (params.sourceHandle || "") === "text") ||
-            (h === "ref_character" && src.type === "refNode" && (params.sourceHandle || "") === "ref_character") ||
-            (h === "ref_location" && src.type === "refNode" && (params.sourceHandle || "") === "ref_location") ||
-            (h === "ref_style" && src.type === "refNode" && (params.sourceHandle || "") === "ref_style") ||
-            (h === "ref_items" && src.type === "refNode" && (params.sourceHandle || "") === "ref_items");
-          if (!ok) return eds;
-          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === h));
-          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: h, sourceType: src.type, targetType: dst.type });
-          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
-          return nextEdges;
-        }
-
-        if (dst.type === 'comfyBrain') {
-          const h = params.targetHandle || '';
-          const sourceHandle = params.sourceHandle || '';
-          const refCfg = COMFY_BRAIN_REF_HANDLE_CONFIG[h];
-          const ok =
-            (h === 'brain_package' && src.type === 'comfyNarrative' && sourceHandle === 'brain_package_out') ||
-            (h === 'audio' && src.type === 'audioNode' && sourceHandle === 'audio') ||
-            (h === 'text' && src.type === 'textNode' && sourceHandle === 'text') ||
-            (!!refCfg && src.type === refCfg.sourceType && sourceHandle === refCfg.sourceHandle);
-          if (!ok) return eds;
-          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === h));
-          const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
-          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          refreshNodeBindingsForEdges(nextEdges, h === 'brain_package' ? "edges:connect:narrative-brain-package" : "edges:connect");
-          return nextEdges;
-        }
-
         if (dst.type === "comfyNarrative") {
           const h = params.targetHandle || "";
           const sourceHandle = params.sourceHandle || "";
@@ -18352,7 +18231,6 @@ const hydrate = useCallback((source = "unknown") => {
             (h === "text_in" && src.type === "textNode" && sourceHandle === "text") ||
             (h === "video_link_in" && src.type === "linkNode" && sourceHandle === "link") ||
             (h === "video_file_in" && src.type === "videoRefNode" && sourceHandle === "video_ref") ||
-            (h === "video_file_in" && src.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE) ||
             (h === "ref_character_1" && src.type === "refNode" && sourceHandle === "ref_character") ||
             (h === "ref_character_2" && src.type === "refCharacter2" && sourceHandle === "ref_character_2") ||
             (h === "ref_character_3" && src.type === "refCharacter3" && sourceHandle === "ref_character_3") ||
@@ -18369,38 +18247,11 @@ const hydrate = useCallback((source = "unknown") => {
           return nextEdges;
         }
 
-        if (isNarrativeTesterNodeType(dst.type)) {
-          const targetHandle = params.targetHandle || "";
-          const sourceHandle = params.sourceHandle || "";
-          const testerConfig = getNarrativeTesterConfig(dst.type);
-          const ok = src.type === "comfyNarrative"
-            && sourceHandle === String(testerConfig?.acceptHandle || "")
-            && targetHandle === String(testerConfig?.acceptHandle || "");
-          if (!ok) return eds;
-          const cleaned = eds.filter((e) => !(e.target === dst.id && String(e.targetHandle || "") === targetHandle));
-          const presentation = getEdgePresentation({ sourceHandle, targetHandle, sourceType: src.type, targetType: dst.type });
-          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          refreshNodeBindingsForEdges(nextEdges, "edges:connect:narrative-tester");
-          return nextEdges;
-        }
-
-        if (src.type === "brainNode" && (params.sourceHandle || "") === "plan") {
-          if (dst.type === "storyboardNode" && (params.targetHandle || "") === "plan_in") {
-            const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === "plan_in"));
-            const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
-            nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-            refreshNodeBindingsForEdges(nextEdges, "edges:connect");
-            return nextEdges;
-          }
-          return eds;
-        }
-
         if (src.type === "comfyNarrative" && (params.sourceHandle || "") === "storyboard_out") {
           const targetHandle = params.targetHandle || "";
-          const isLegacyStoryboardRoute = dst.type === "storyboardNode" && targetHandle === "plan_in";
           const isScenarioStoryboardRoute = dst.type === "scenarioStoryboard" && targetHandle === "scenario_storyboard_in";
           const isScenarioPipelineDebugRoute = dst.type === "scenarioPipelineDebug" && targetHandle === "scenario_pipeline_debug_in";
-          if (!isLegacyStoryboardRoute && !isScenarioStoryboardRoute && !isScenarioPipelineDebugRoute) {
+          if (!isScenarioStoryboardRoute && !isScenarioPipelineDebugRoute) {
             traceScenarioGraphConnect("rejected", {
               sourceType: src.type,
               sourceHandle: params.sourceHandle || "",
@@ -18419,17 +18270,10 @@ const hydrate = useCallback((source = "unknown") => {
               targetType: dst.type,
               targetHandle,
             });
-          } else if (CLIP_TRACE_SCENARIO_GRAPH) {
-            console.debug("[SCENARIO GRAPH] legacy storyboard route accepted", {
-              sourceType: src.type,
-              sourceHandle: params.sourceHandle || "",
-              targetType: dst.type,
-              targetHandle,
-            });
           }
           refreshNodeBindingsForEdges(nextEdges, isScenarioStoryboardRoute
             ? "edges:connect:scenario-storyboard"
-            : (isScenarioPipelineDebugRoute ? "edges:connect:scenario-pipeline-debug" : "edges:connect:narrative-storyboard"));
+            : "edges:connect:scenario-pipeline-debug");
           return nextEdges;
         }
 
@@ -18490,15 +18334,6 @@ const hydrate = useCallback((source = "unknown") => {
           return nextEdges;
         }
 
-        if (src.type === 'comfyBrain' && (params.sourceHandle || '') === 'comfy_plan') {
-          if (dst.type !== 'comfyStoryboard' || (params.targetHandle || '') !== 'comfy_plan') return eds;
-          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === 'comfy_plan'));
-          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
-          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
-          return nextEdges;
-        }
-
         if (dst.type === "introFrame") {
           const targetHandle = params.targetHandle || "";
           const sourceHandle = params.sourceHandle || "";
@@ -18537,23 +18372,7 @@ const hydrate = useCallback((source = "unknown") => {
           return eds;
         }
 
-        if (src.type === 'comfyStoryboard' && (params.sourceHandle || '') === COMFY_STORYBOARD_MAIN_HANDLE) {
-          if (dst.type === 'assemblyNode' && (params.targetHandle || '') === 'assembly_in') {
-            const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_in");
-            const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
-            nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-            refreshNodeBindingsForEdges(nextEdges, "edges:connect");
-            return nextEdges;
-          }
-          if (dst.type !== 'comfyVideoPreview' || (params.targetHandle || '') !== COMFY_STORYBOARD_MAIN_HANDLE) return eds;
-          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === COMFY_STORYBOARD_MAIN_HANDLE));
-          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || '', targetHandle: params.targetHandle || '', sourceType: src.type, targetType: dst.type });
-          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
-          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
-          return nextEdges;
-        }
-
-        if (src.type === 'comfyStoryboard' || src.type === 'comfyBrain' || src.type === 'comfyVideoPreview' || dst.type === 'comfyStoryboard' || dst.type === 'comfyBrain' || dst.type === 'comfyVideoPreview') {
+        if ((src.type === 'comfyVideoPreview' || dst.type === 'comfyVideoPreview') && (src.type !== 'comfyNarrative' && dst.type !== 'comfyNarrative')) {
           return eds;
         }
 
@@ -18576,15 +18395,6 @@ const hydrate = useCallback((source = "unknown") => {
             targetType: dst.type,
             targetHandle: params.targetHandle || "",
           });
-          refreshNodeBindingsForEdges(nextEdges, "edges:connect");
-          return nextEdges;
-        }
-
-        if (src.type === "storyboardNode" && (params.sourceHandle || "") === "plan_out") {
-          if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_in") return eds;
-          const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_in");
-          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
-          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
           refreshNodeBindingsForEdges(nextEdges, "edges:connect");
           return nextEdges;
         }
@@ -19762,7 +19572,6 @@ const hydrate = useCallback((source = "unknown") => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("text")}>📄 Текст</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("link")}>🔗 Ссылка</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("videoRef")}>🎬 Видео</button>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("brain")}>🧠 Мозг</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">ОБЫЧНЫЕ REFS</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_character")}>🧍 REF — Персонаж</button>
@@ -19772,15 +19581,9 @@ const hydrate = useCallback((source = "unknown") => {
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">COMFY FLOW</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyNarrative")}>📚 Сценарий</button>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyBrain")}>🧠 COMFY BRAIN</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioPipelineDebug")}>🧪 Scenario Pipeline Debug</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">DEBUG / TEST / SERVICE</div>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioOutputTester")}>🧪 ТЕСТЕР СЦЕНАРИЯ</button>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("voiceOutputTester")}>📡 ТЕСТЕР ОЗВУЧКИ</button>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("brainPackageTester")}>🔬 ТЕСТЕР LEGACY PLANNER</button>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("musicPromptTester")}>⚡ ТЕСТЕР МУЗЫКИ</button>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyStoryboard")}>🧩 COMFY STORYBOARD</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioStoryboard")}>🎞️ SCENARIO STORYBOARD</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyVideoPreview")}>🎬 COMFY VIDEO PREVIEW</button>
               <div className="clipSB_drawerSep" />
@@ -19791,7 +19594,6 @@ const hydrate = useCallback((source = "unknown") => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("refGroup")}>👥 GROUP / COLLECTIVE</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">СЦЕНЫ / СБОРКА</div>
-              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("storyboard")}>🎞️ Storyboard</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("introFrame")}>🖼️ Intro Frame</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("assembly")}>🎬 Сборка</button>
             </div>
