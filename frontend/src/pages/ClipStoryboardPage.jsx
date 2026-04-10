@@ -11090,6 +11090,50 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         context_refs: contextRefsFallback,
         connected_context_summary: targetScene?.connected_context_summary || targetScene?.connectedContextSummary || scenarioPackageForImage?.connected_context_summary || scenarioPackageForImage?.connectedContextSummary || {},
       };
+      const sceneGoalEffective = String(
+        targetScene?.sceneGoalRu
+        || targetScene?.sceneGoalEn
+        || targetScene?.sceneGoal
+        || ""
+      ).trim();
+      const sceneNarrativeStepEffective = String(
+        targetScene?.sceneNarrativeStepRu
+        || targetScene?.sceneNarrativeStepEn
+        || targetScene?.sceneNarrativeStep
+        || targetScene?.sceneAction
+        || ""
+      ).trim();
+      const promptSourceEffective = String(
+        scenarioContractPayload?.promptSource
+        || refsForImageRequest?.promptSource
+        || targetScene?.promptSource
+        || "unknown"
+      ).trim();
+      const imagePromptEffective = String(
+        targetScene?.imagePromptRu
+        || targetScene?.imagePromptEn
+        || targetScene?.imagePrompt
+        || ""
+      ).trim();
+      const videoPromptEffective = String(
+        targetScene?.videoPromptRu
+        || targetScene?.videoPromptEn
+        || targetScene?.videoPrompt
+        || ""
+      ).trim();
+      const promptNotesEffective = String(
+        targetScene?.promptNotesRu
+        || targetScene?.promptNotesEn
+        || targetScene?.promptNotes
+        || ""
+      ).trim();
+      refsPayloadForRequest.sceneGoal = sceneGoalEffective;
+      refsPayloadForRequest.sceneNarrativeStep = sceneNarrativeStepEffective;
+      refsPayloadForRequest.promptSource = promptSourceEffective;
+      refsPayloadForRequest.sceneText = sceneText;
+      refsPayloadForRequest.image_prompt = imagePromptEffective;
+      refsPayloadForRequest.video_prompt = videoPromptEffective;
+      refsPayloadForRequest.prompt_notes = promptNotesEffective;
       console.debug("[SCENARIO IMAGE REQUEST PAYLOAD]", {
         sceneId,
         refsByRoleCounts: summarizeRefsByRole(refsPayloadForRequest?.refsByRole || {}),
@@ -11108,7 +11152,36 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         connectedInputs: connectedInputsFallback,
         context_refs: contextRefsFallback,
         connected_context_summary: targetScene?.connected_context_summary || targetScene?.connectedContextSummary || scenarioPackageForImage?.connected_context_summary || scenarioPackageForImage?.connectedContextSummary || {},
+        sceneGoal: sceneGoalEffective,
+        sceneNarrativeStep: sceneNarrativeStepEffective,
+        sceneText,
+        promptSource: promptSourceEffective,
+        image_prompt: imagePromptEffective,
+        video_prompt: videoPromptEffective,
+        prompt_notes: promptNotesEffective,
       };
+      console.debug("[SCENARIO IMAGE TRACE A finalScene]", {
+        sceneId: String(targetScene?.sceneId || "").trim(),
+        primaryRole: targetScene?.primaryRole || "",
+        mustAppear: targetScene?.mustAppear || [],
+        refsByRole: targetScene?.refsByRole || targetScene?.connectedRefsByRole || {},
+        refsUsedByRole: targetScene?.refsUsedByRole || targetScene?.refs_used_by_role || {},
+        connectedInputs: targetScene?.connectedInputs || targetScene?.connected_inputs || {},
+        context_refs: targetScene?.context_refs || targetScene?.contextRefs || {},
+        connected_context_summary: targetScene?.connected_context_summary || targetScene?.connectedContextSummary || {},
+        sceneGoal: targetScene?.sceneGoalRu || targetScene?.sceneGoalEn || targetScene?.sceneGoal || "",
+        sceneNarrativeStep: targetScene?.sceneNarrativeStepRu || targetScene?.sceneNarrativeStepEn || targetScene?.sceneNarrativeStep || "",
+        sceneText: targetScene?.sceneText || targetScene?.visualDescription || "",
+        promptSource: targetScene?.promptSource || "",
+        image_prompt: targetScene?.imagePromptRu || targetScene?.imagePromptEn || targetScene?.imagePrompt || "",
+        video_prompt: targetScene?.videoPromptRu || targetScene?.videoPromptEn || targetScene?.videoPrompt || "",
+        prompt_notes: targetScene?.promptNotesRu || targetScene?.promptNotesEn || targetScene?.promptNotes || "",
+        sceneDelta: sceneDelta,
+        hasCharacter1Ref: Number(summarizeRefsByRole(extractScenarioRefsByRoleFromSource(targetScene?.refsByRole || targetScene?.context_refs || {}))?.character_1 || 0) > 0,
+        hasLocationRef: Number(summarizeRefsByRole(extractScenarioRefsByRoleFromSource(targetScene?.refsByRole || targetScene?.context_refs || {}))?.location || 0) > 0,
+      });
+      console.debug("[SCENARIO IMAGE TRACE B sceneContractForRequest]", sceneContractForRequest);
+      console.debug("[SCENARIO IMAGE TRACE C refsPayloadForRequest]", refsPayloadForRequest);
       const finalRequestBody = {
         sceneId,
         sceneDelta: `${finalSceneDelta}
@@ -11121,6 +11194,15 @@ Aspect ratio: ${imageFormat}`,
         sceneSignature: requestSceneSignature,
         slot: normalizedSlot,
         sceneContract: sceneContractForRequest,
+        promptDebug: {
+          promptSource: promptSourceEffective,
+          sceneGoal: sceneGoalEffective,
+          sceneNarrativeStep: sceneNarrativeStepEffective,
+          sceneText,
+          imagePrompt: imagePromptEffective,
+          videoPrompt: videoPromptEffective,
+          promptNotes: promptNotesEffective,
+        },
         ...scenarioContractPayload,
         primaryRole: scenarioContractPayload?.primaryRole || refsPayloadForRequest?.primaryRole || "",
         secondaryRoles: (Array.isArray(scenarioContractPayload?.secondaryRoles) && scenarioContractPayload.secondaryRoles.length)
@@ -11135,8 +11217,21 @@ Aspect ratio: ${imageFormat}`,
         mustAppear: (Array.isArray(scenarioContractPayload?.mustAppear) && scenarioContractPayload.mustAppear.length)
           ? scenarioContractPayload.mustAppear
           : (refsPayloadForRequest?.mustAppear || []),
+        refsByRole: refsPayloadForRequest?.refsByRole || {},
+        refsUsedByRole: refsPayloadForRequest?.refsUsedByRole || {},
+        connectedInputs: refsPayloadForRequest?.connectedInputs || {},
+        context_refs: refsPayloadForRequest?.context_refs || {},
+        connected_context_summary: refsPayloadForRequest?.connected_context_summary || {},
+        heroEntityId: refsPayloadForRequest?.heroEntityId || "",
+        sceneGoal: sceneGoalEffective,
+        sceneNarrativeStep: sceneNarrativeStepEffective,
+        promptSource: promptSourceEffective,
+        image_prompt: imagePromptEffective,
+        video_prompt: videoPromptEffective,
+        prompt_notes: promptNotesEffective,
         refs: refsPayloadForRequest,
       };
+      console.debug("[SCENARIO IMAGE TRACE D finalRequestBody]", finalRequestBody);
       const finalRefsByRoleCounts = summarizeRefsByRole(finalRequestBody?.refs?.refsByRole || {});
       console.debug("[SCENARIO IMAGE FINAL REQUEST BODY]", {
         sceneId,
