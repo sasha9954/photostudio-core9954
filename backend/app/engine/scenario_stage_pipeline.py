@@ -707,6 +707,13 @@ def _append_diag_event(package: dict[str, Any], message: str, *, stage_id: str =
 
 def _to_float(value: Any, fallback: float = 0.0) -> float:
     try:
+        if hasattr(value, "item") and callable(getattr(value, "item")):
+            value = value.item()
+        elif isinstance(value, (list, tuple)) and value:
+            value = value[0]
+        elif hasattr(value, "__len__") and hasattr(value, "__getitem__") and not isinstance(value, (str, bytes)):
+            if len(value) == 1:
+                value = value[0]
         parsed = float(value)
         if math.isfinite(parsed):
             return round(parsed, 3)
@@ -1128,6 +1135,13 @@ def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
 
 def _coerce_duration_sec(value: Any) -> float:
     try:
+        if hasattr(value, "item") and callable(getattr(value, "item")):
+            value = value.item()
+        elif isinstance(value, (list, tuple)) and value:
+            value = value[0]
+        elif hasattr(value, "__len__") and hasattr(value, "__getitem__") and not isinstance(value, (str, bytes)):
+            if len(value) == 1:
+                value = value[0]
         duration = float(value)
     except Exception:
         duration = 0.0
@@ -1205,6 +1219,7 @@ def _build_audio_map_from_duration(
     story_core: dict[str, Any],
     *,
     analysis_mode: str,
+    content_type: str = "",
 ) -> dict[str, Any]:
     duration = _coerce_duration_sec(duration_sec)
     segment_count = _segment_count_for_duration(duration)
@@ -1226,10 +1241,23 @@ def _build_audio_map_from_duration(
             }
         )
 
-    # phrase endpoints: section boundaries + regular phrase cadence inside each section.
+    # phrase endpoints: keep section boundaries and use non-grid cadence for music_video fallback.
+    is_music_video = str(content_type or "").strip().lower() == "music_video"
     phrase_step = 4.0 if duration <= 90 else 6.0
     phrase_points: list[float] = []
-    if duration > 0:
+    if duration > 0 and is_music_video:
+        cursor = 0.0
+        seq_idx = 0
+        while cursor < max(0.0, duration - 0.001):
+            step = 4.2 + 1.05 * math.sin((seq_idx + 1) * 1.31 + duration * 0.021)
+            step = max(2.6, min(6.4, step))
+            next_point = cursor + step
+            if next_point >= duration - 1.8:
+                break
+            phrase_points.append(round(next_point, 3))
+            cursor = next_point
+            seq_idx += 1
+    elif duration > 0:
         cursor = phrase_step
         while cursor < max(0.0, duration - 0.001):
             phrase_points.append(round(cursor, 3))
@@ -1335,7 +1363,7 @@ def _build_audio_map_from_duration(
         "candidate_cut_points_sec": sorted(set(candidate_cut_points)),
         "pacing_profile": {
             "segment_count": len(sections),
-            "phrase_step_sec": phrase_step,
+            "phrase_step_sec": None if is_music_video else phrase_step,
             "dominant_energy": dominant_energy,
         },
         "mood_progression": mood_progression,
@@ -1607,6 +1635,109 @@ def _build_phrase_units_from_real_alignment(
     return phrase_units
 
 
+def _build_phrase_units_from_music_dynamics(
+    duration_sec: float,
+    analysis: dict[str, Any],
+) -> list[dict[str, Any]]:
+    duration = _coerce_duration_sec(duration_sec)
+    if duration <= 0:
+        return []
+
+    pause_points = _float_points(analysis.get("pausePoints"), duration, min_t=0.2, max_t=max(0.0, duration - 0.2))
+    phrase_points = _float_points(analysis.get("phraseBoundaries"), duration, min_t=0.2, max_t=max(0.0, duration - 0.2))
+    section_edges = []
+    for section in _safe_list(analysis.get("sections")):
+        if not isinstance(section, dict):
+            continue
+        end_point = _coerce_duration_sec(section.get("end"))
+        if 0.2 <= end_point <= max(0.0, duration - 0.2):
+            section_edges.append(round(end_point, 3))
+    section_points = _float_points(section_edges, duration, min_t=0.2, max_t=max(0.0, duration - 0.2))
+    energy_peaks = _float_points(analysis.get("energyPeaks"), duration, min_t=0.2, max_t=max(0.0, duration - 0.2))
+
+    score_by_point: dict[float, float] = {}
+    for point in pause_points:
+        score_by_point[point] = max(score_by_point.get(point, 0.0), 1.0)
+    for point in phrase_points:
+        score_by_point[point] = max(score_by_point.get(point, 0.0), 0.9)
+    for point in section_points:
+        score_by_point[point] = max(score_by_point.get(point, 0.0), 0.82)
+    for point in energy_peaks:
+        score_by_point[point] = max(score_by_point.get(point, 0.0), 0.66)
+
+    boundaries: list[float] = [0.0]
+    min_phrase = 2.0
+    pref_min = 3.0
+    pref_max = 6.0
+    hard_max = 8.0
+    prev_span = 0.0
+    phrase_idx = 0
+    candidates = sorted(score_by_point.keys())
+
+    while boundaries[-1] < duration - 0.12:
+        start = boundaries[-1]
+        best_t = None
+        best_score = -1e9
+        for point in candidates:
+            if point <= start + min_phrase:
+                continue
+            span = point - start
+            if span > hard_max:
+                break
+            score = score_by_point.get(point, 0.0)
+            if pref_min <= span <= pref_max:
+                score += 0.75
+            score -= abs(span - 4.4) * 0.22
+            if prev_span > 0 and abs(span - prev_span) <= 0.12:
+                score -= 0.65
+            if abs(span - 4.0) <= 0.05:
+                score -= 0.2
+            if score > best_score:
+                best_score = score
+                best_t = point
+
+        if best_t is None:
+            varied_span = 4.3 + 0.95 * math.sin((phrase_idx + 1) * 1.27 + duration * 0.03)
+            varied_span = max(2.5, min(6.3, varied_span))
+            best_t = _clamp_time(start + varied_span, duration)
+
+        if duration - best_t < 1.8:
+            best_t = duration
+        if best_t <= start + 0.15:
+            break
+        prev_span = max(0.0, best_t - start)
+        boundaries.append(round(best_t, 3))
+        phrase_idx += 1
+        if boundaries[-1] >= duration - 0.001:
+            boundaries[-1] = round(duration, 3)
+            break
+
+    if boundaries[-1] < duration:
+        boundaries.append(round(duration, 3))
+
+    phrase_units: list[dict[str, Any]] = []
+    for idx in range(1, len(boundaries)):
+        t0 = boundaries[idx - 1]
+        t1 = boundaries[idx]
+        span = t1 - t0
+        if span <= 0.15:
+            continue
+        boundary_strength = score_by_point.get(round(t1, 3), 0.0)
+        semantic_weight = "high" if boundary_strength >= 0.9 else "medium" if boundary_strength >= 0.7 else "low"
+        phrase_units.append(
+            {
+                "id": f"ph_{len(phrase_units) + 1}",
+                "t0": round(t0, 3),
+                "t1": round(t1, 3),
+                "duration_sec": round(span, 3),
+                "text": "",
+                "word_count": 0,
+                "semantic_weight": semantic_weight,
+            }
+        )
+    return phrase_units
+
+
 def _build_scene_candidate_windows(
     phrase_units: list[dict[str, Any]],
     duration_sec: float,
@@ -1634,6 +1765,7 @@ def _build_scene_candidate_windows(
         )
 
     idx = 0
+    prev_window_duration = 0.0
     while idx < len(phrase_units):
         start = float(phrase_units[idx].get("t0") or 0.0)
         best_j = idx
@@ -1650,7 +1782,11 @@ def _build_scene_candidate_windows(
             in_target_bonus = 1.2 if target_min <= span <= target_max else 0.0
             near_hard_cap_penalty = -0.8 if span > target_max else 0.0
             semantic_bonus = 0.35 if str(phrase_units[j].get("semantic_weight") or "") == "high" else 0.0
-            score = closeness + in_target_bonus + near_hard_cap_penalty + semantic_bonus
+            equal_prev_penalty = -0.8 if prev_window_duration > 0 and abs(span - prev_window_duration) <= 0.1 else 0.0
+            near_four_run_penalty = (
+                -0.45 if prev_window_duration > 0 and abs(prev_window_duration - 4.0) <= 0.1 and abs(span - 4.0) <= 0.1 else 0.0
+            )
+            score = closeness + in_target_bonus + near_hard_cap_penalty + semantic_bonus + equal_prev_penalty + near_four_run_penalty
             if span >= target_min and score > best_score:
                 best_score = score
                 best_j = j
@@ -1658,6 +1794,8 @@ def _build_scene_candidate_windows(
         if best_j < idx:
             best_j = idx
         _append_window(idx, best_j)
+        if windows:
+            prev_window_duration = float(windows[-1].get("duration_sec") or 0.0)
         idx = best_j + 1
 
     # Aggressive post-split if any window is over hard cap: split only on phrase boundaries (never mid-word).
@@ -1713,6 +1851,56 @@ def _build_scene_candidate_windows(
     if normalized:
         return normalized
     return windows
+
+
+def _max_equal_duration_streak(durations: list[float], *, tolerance: float = 0.08) -> int:
+    if not durations:
+        return 0
+    best = 1
+    current = 1
+    for idx in range(1, len(durations)):
+        if abs(durations[idx] - durations[idx - 1]) <= tolerance:
+            current += 1
+            best = max(best, current)
+        else:
+            current = 1
+    return best
+
+
+def _audio_map_grid_metrics(audio_map: dict[str, Any]) -> dict[str, Any]:
+    phrase_durations = [
+        float(item.get("duration_sec") or max(0.0, float(item.get("t1") or 0.0) - float(item.get("t0") or 0.0)))
+        for item in _safe_list(audio_map.get("phrase_units"))
+        if isinstance(item, dict)
+    ]
+    scene_durations = [
+        float(item.get("duration_sec") or max(0.0, float(item.get("t1") or 0.0) - float(item.get("t0") or 0.0)))
+        for item in _safe_list(audio_map.get("scene_candidate_windows"))
+        if isinstance(item, dict)
+    ]
+    phrase_near_4 = [d for d in phrase_durations if abs(d - 4.0) <= 0.15]
+    scene_near_4 = [d for d in scene_durations if abs(d - 4.0) <= 0.15]
+    equal_phrase_pairs = sum(
+        1 for idx in range(1, len(phrase_durations)) if abs(phrase_durations[idx] - phrase_durations[idx - 1]) <= 0.08
+    )
+    max_equal_phrase_streak = _max_equal_duration_streak(phrase_durations)
+    max_equal_scene_streak = _max_equal_duration_streak(scene_durations)
+    phrase_near_4_ratio = (len(phrase_near_4) / len(phrase_durations)) if phrase_durations else 0.0
+    scene_near_4_ratio = (len(scene_near_4) / len(scene_durations)) if scene_durations else 0.0
+    grid_like = bool(
+        (len(phrase_durations) >= 4 and phrase_near_4_ratio >= 0.72 and max_equal_phrase_streak >= 3)
+        or (len(scene_durations) >= 4 and scene_near_4_ratio >= 0.72 and max_equal_scene_streak >= 3)
+    )
+    return {
+        "phrase_near_4_sec_count": len(phrase_near_4),
+        "phrase_near_4_sec_ratio": round(phrase_near_4_ratio, 3),
+        "equal_phrase_duration_adjacent_pairs": equal_phrase_pairs,
+        "max_equal_phrase_duration_streak": max_equal_phrase_streak,
+        "scene_near_4_sec_count": len(scene_near_4),
+        "scene_near_4_sec_ratio": round(scene_near_4_ratio, 3),
+        "max_equal_scene_duration_streak": max_equal_scene_streak,
+        "audio_map_grid_like_segmentation": grid_like,
+    }
 
 
 def _build_phrase_first_audio_map(
@@ -2009,12 +2197,25 @@ def _build_audio_map_from_dynamics(
             if str(section.get("energy") or "").lower() in {"medium", "high"}:
                 lip_sync_ranges.append({"t0": round(float(section.get("t0") or 0.0), 3), "t1": round(float(section.get("t1") or 0.0), 3)})
 
+    phrase_units = _build_phrase_units_from_music_dynamics(duration, analysis)
+    if phrase_units:
+        phrase_endpoints = sorted(
+            {
+                round(float(item.get("t1") or 0.0), 3)
+                for item in phrase_units
+                if 0.0 < float(item.get("t1") or 0.0) < duration
+            }
+        )
+    scene_windows = _build_scene_candidate_windows(phrase_units, duration) if phrase_units else []
+
     arc_short = str(story_core.get("global_arc") or "").strip() or "unknown_arc"
     return {
         "duration_sec": round(duration, 3),
         "analysis_mode": analysis_mode,
         "sections": sections,
         "phrase_endpoints_sec": phrase_endpoints,
+        "phrase_units": phrase_units,
+        "scene_candidate_windows": scene_windows,
         "no_split_ranges": no_split_ranges,
         "candidate_cut_points_sec": sorted(set(candidate_cut_points)),
         "pacing_profile": {
@@ -2069,6 +2270,16 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_segmentation_prompt_version"] = ""
     diagnostics["audio_map_segmentation_error"] = ""
     diagnostics["audio_map_segmentation_error_detail"] = ""
+    diagnostics["phrase_near_4_sec_count"] = 0
+    diagnostics["phrase_near_4_sec_ratio"] = 0.0
+    diagnostics["equal_phrase_duration_adjacent_pairs"] = 0
+    diagnostics["max_equal_phrase_duration_streak"] = 0
+    diagnostics["scene_near_4_sec_count"] = 0
+    diagnostics["scene_near_4_sec_ratio"] = 0.0
+    diagnostics["max_equal_scene_duration_streak"] = 0
+    diagnostics["audio_map_grid_like_segmentation"] = False
+    diagnostics["audio_map_music_signal_mode"] = "none"
+    diagnostics["audio_map_dynamics_available"] = False
     diagnostics["transcript_available"] = False
     diagnostics["word_timestamp_count"] = 0
     diagnostics["phrase_unit_count"] = 0
@@ -2222,13 +2433,23 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                     except OSError:
                         pass
         else:
-            audio_map = _build_audio_map_from_duration(duration_sec, story_core, analysis_mode=analysis_mode)
+            audio_map = _build_audio_map_from_duration(
+                duration_sec,
+                story_core,
+                analysis_mode=analysis_mode,
+                content_type=content_type,
+            )
         if not _is_usable_audio_map(audio_map):
             raise ValueError("audio_map_unusable_primary")
     except Exception as exc:  # noqa: BLE001
         used_fallback = True
         analysis_mode = "timing_heuristics_v1"
-        audio_map = _build_audio_map_from_duration(duration_sec, story_core, analysis_mode=analysis_mode)
+        audio_map = _build_audio_map_from_duration(
+            duration_sec,
+            story_core,
+            analysis_mode=analysis_mode,
+            content_type=content_type,
+        )
         if not _is_usable_audio_map(audio_map):
             raise RuntimeError(f"audio_map_failed_no_fallback:{exc}") from exc
         warnings = _safe_list(diagnostics.get("warnings"))
@@ -2262,6 +2483,19 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         warnings.append({"stage_id": "audio_map", "message": "audio_url_missing_used_duration_only"})
         diagnostics["warnings"] = warnings[-80:]
 
+    grid_metrics = _audio_map_grid_metrics(audio_map)
+    audio_dynamics_summary = _safe_dict(audio_map.get("audio_dynamics_summary"))
+    dynamics_available = bool(
+        int(audio_dynamics_summary.get("pause_points_count") or 0)
+        or int(audio_dynamics_summary.get("phrase_points_count") or 0)
+        or int(audio_dynamics_summary.get("energy_peaks_count") or 0)
+        or int(audio_dynamics_summary.get("detected_sections_count") or 0)
+    )
+    music_signal_mode = "dynamics+phrase_like_boundaries" if dynamics_available else "duration_fallback_non_grid"
+    audio_map.update(grid_metrics)
+    audio_map["audio_map_music_signal_mode"] = music_signal_mode
+    audio_map["audio_map_dynamics_available"] = dynamics_available
+
     diagnostics["audio_map_analysis_mode"] = analysis_mode
     diagnostics["audio_map_used_fallback"] = bool(used_fallback)
     diagnostics["audio_map_segmentation_backend"] = (
@@ -2283,6 +2517,9 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_alignment_attempted"] = bool(diagnostics.get("audio_map_alignment_attempted"))
     diagnostics["audio_map_alignment_unavailable_reason"] = str(diagnostics.get("audio_map_alignment_unavailable_reason") or "")
     diagnostics["audio_map_alignment_error_detail"] = str(diagnostics.get("audio_map_alignment_error_detail") or "")
+    diagnostics.update(grid_metrics)
+    diagnostics["audio_map_music_signal_mode"] = music_signal_mode
+    diagnostics["audio_map_dynamics_available"] = dynamics_available
     package["diagnostics"] = diagnostics
     package["audio_map"] = audio_map
     _append_diag_event(package, "audio_map generated", stage_id="audio_map")
