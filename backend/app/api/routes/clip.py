@@ -9199,6 +9199,8 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
         source.get("refs_used_by_role"),
         source.get("context_refs"),
         source.get("contextRefs"),
+        source.get("connected_context_summary"),
+        source.get("connectedContextSummary"),
         refs_inventory_like,
         connected_inputs,
     ]
@@ -9222,6 +9224,26 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
             if normalized_role not in COMFY_REF_ROLES:
                 continue
             urls = _extract_urls_from_any(raw_value)
+            if urls:
+                out[normalized_role] = list(dict.fromkeys([*out.get(normalized_role, []), *urls]))
+    if isinstance(refs_inventory_like, list):
+        for entry in refs_inventory_like:
+            if not isinstance(entry, dict):
+                continue
+            raw_role = (
+                entry.get("role")
+                or entry.get("entityRole")
+                or entry.get("refRole")
+                or entry.get("targetRole")
+                or entry.get("bucket")
+                or entry.get("category")
+                or entry.get("type")
+                or ""
+            )
+            normalized_role = role_aliases.get(str(raw_role or "").strip().lower(), str(raw_role or "").strip().lower())
+            if normalized_role not in COMFY_REF_ROLES:
+                continue
+            urls = _extract_urls_from_any(entry)
             if urls:
                 out[normalized_role] = list(dict.fromkeys([*out.get(normalized_role, []), *urls]))
     if isinstance(connected_inputs, dict):

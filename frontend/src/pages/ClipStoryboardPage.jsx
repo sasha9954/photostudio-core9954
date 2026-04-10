@@ -653,11 +653,49 @@ function extractScenarioRefsByRoleFromSource(source = null) {
     return [];
   };
   const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
-  Object.entries(source || {}).forEach(([rawRole, roleValue]) => {
-    const role = normalizeScenarioRoleName(rawRole);
+  const appendRoleUrls = (role, urls = []) => {
     if (!SCENARIO_IMAGE_ROLE_KEYS.includes(role)) return;
-    roleMap[role] = [...new Set([...(roleMap[role] || []), ...pullRefsFromRoleValue(roleValue)])];
-  });
+    const normalizedUrls = Array.isArray(urls) ? urls.map((value) => String(value || "").trim()).filter(Boolean) : [];
+    if (!normalizedUrls.length) return;
+    roleMap[role] = [...new Set([...(roleMap[role] || []), ...normalizedUrls])];
+  };
+  const extractFromConnectedInputs = (connectedInputs = null) => {
+    if (!connectedInputs || typeof connectedInputs !== "object") return;
+    Object.entries(SCENARIO_IMAGE_ROLE_TO_HANDLE).forEach(([role, handle]) => {
+      appendRoleUrls(role, pullRefsFromRoleValue(connectedInputs?.[handle]));
+    });
+  };
+  const visitSource = (candidate) => {
+    if (!candidate || typeof candidate !== "object") return;
+    if (Array.isArray(candidate)) {
+      candidate.forEach((entry) => visitSource(entry));
+      return;
+    }
+    Object.entries(candidate).forEach(([rawRole, roleValue]) => {
+      const role = normalizeScenarioRoleName(rawRole);
+      if (!SCENARIO_IMAGE_ROLE_KEYS.includes(role)) return;
+      appendRoleUrls(role, pullRefsFromRoleValue(roleValue));
+    });
+    extractFromConnectedInputs(candidate?.connectedInputs);
+    extractFromConnectedInputs(candidate?.connected_inputs);
+    [
+      candidate?.refsByRole,
+      candidate?.refs_by_role,
+      candidate?.refsUsedByRole,
+      candidate?.refs_used_by_role,
+      candidate?.context_refs,
+      candidate?.contextRefs,
+      candidate?.connected_context_summary,
+      candidate?.connectedContextSummary,
+      candidate?.refs_inventory,
+      candidate?.refsInventory,
+      candidate?.referenceInventory,
+      candidate?.reference_inventory,
+      candidate?.context_refs_inventory,
+      candidate?.contextRefsInventory,
+    ].forEach((nested) => visitSource(nested));
+  };
+  visitSource(source);
   return roleMap;
 }
 
@@ -744,7 +782,15 @@ function extractRefsInventoryLikeByRole(source = null) {
   const resolveRoleFromRaw = (rawRole = "") => {
     const normalizedRole = normalizeScenarioRoleName(rawRole);
     if (SCENARIO_IMAGE_ROLE_KEYS.includes(normalizedRole)) return normalizedRole;
-    return /location|place|environment|world|background/i.test(rawRole) ? "location" : "character_1";
+    if (/location|place|environment|world|background/i.test(rawRole)) return "location";
+    if (/style|look|mood|grade|palette/i.test(rawRole)) return "style";
+    if (/prop|item|object|asset/i.test(rawRole)) return "props";
+    if (/animal|pet|creature/i.test(rawRole)) return "animal";
+    if (/group|crowd|team/i.test(rawRole)) return "group";
+    if (/character.?2|char.?2|secondary/i.test(rawRole)) return "character_2";
+    if (/character.?3|char.?3|tertiary/i.test(rawRole)) return "character_3";
+    if (/character|char|hero|person/i.test(rawRole)) return "character_1";
+    return "";
   };
   if (Array.isArray(inventoryLike)) inventoryLike.forEach((entry) => {
     if (!entry || typeof entry !== "object") return;
@@ -761,6 +807,7 @@ function extractRefsInventoryLikeByRole(source = null) {
       || ""
     ).trim();
     const role = resolveRoleFromRaw(rawRole);
+    if (!role) return;
     roleMap[role] = [...new Set([...(roleMap[role] || []), ...urls])];
   });
   else if (inventoryLike && typeof inventoryLike === "object") {
