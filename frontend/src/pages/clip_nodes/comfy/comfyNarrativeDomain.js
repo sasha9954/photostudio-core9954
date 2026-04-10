@@ -203,6 +203,62 @@ export const NARRATIVE_CONTEXT_INPUT_HANDLES = NARRATIVE_INPUT_HANDLES.filter((i
 const lookupLabel = (options, value, fallback) => options.find((option) => option.value === value)?.labelRu || fallback;
 
 const normalizeText = (value) => String(value || "").trim();
+const LEAN_SCENE_FIELDS = [
+  "scene_id", "sceneId",
+  "t0", "t1", "time_start", "time_end", "duration",
+  "summary", "scene_goal", "narrative_function",
+  "route", "ltx_mode", "render_mode", "transition_type",
+  "lip_sync", "needs_two_frames",
+  "image_prompt", "video_prompt", "negative_prompt",
+  "first_frame_prompt", "last_frame_prompt",
+  "audio_slice_start_sec", "audio_slice_end_sec", "audio_slice_expected_duration_sec",
+  "primary_role", "secondary_roles", "active_roles",
+  "mustAppear", "mustNotAppear", "refsUsed",
+];
+const LEAN_RUNTIME_FIELDS = [
+  "mode", "contentType", "format",
+  "audioUrl", "audioDurationSec",
+  "story_summary", "director_summary", "opening_anchor", "ending_callback_rule",
+  "refsByRole", "roleTypeByRole",
+  "context_refs", "connected_context_summary",
+  "world_continuity", "story_locks",
+];
+
+function buildLeanScene(scene = {}, index = 0) {
+  if (!scene || typeof scene !== "object") return null;
+  const clean = {};
+  LEAN_SCENE_FIELDS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(scene, key)) clean[key] = scene[key];
+  });
+  if (!clean.sceneId && !clean.scene_id) {
+    const fallbackId = normalizeText(scene?.sceneId || scene?.scene_id || scene?.id || `S${index + 1}`);
+    if (fallbackId) {
+      clean.sceneId = fallbackId;
+      clean.scene_id = fallbackId;
+    }
+  }
+  return clean;
+}
+
+export function buildLeanRuntimeStoryboardContract(rawStoryboard = {}, fallback = {}) {
+  const source = rawStoryboard && typeof rawStoryboard === "object" ? rawStoryboard : {};
+  const fallbackSource = fallback && typeof fallback === "object" ? fallback : {};
+  const lean = {};
+  LEAN_RUNTIME_FIELDS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(source, key)) lean[key] = source[key];
+    else if (Object.prototype.hasOwnProperty.call(fallbackSource, key)) lean[key] = fallbackSource[key];
+  });
+  const scenesRaw = Array.isArray(source?.scenes)
+    ? source.scenes
+    : (Array.isArray(fallbackSource?.scenes) ? fallbackSource.scenes : []);
+  lean.scenes = scenesRaw
+    .map((scene, index) => buildLeanScene(scene, index))
+    .filter(Boolean);
+  if (!lean.mode) lean.mode = normalizeText(source?.mode || fallbackSource?.mode || source?.contentType || fallbackSource?.contentType || "story");
+  if (!lean.contentType) lean.contentType = normalizeText(source?.contentType || fallbackSource?.contentType || lean.mode || "story");
+  if (!lean.format) lean.format = normalizeText(source?.format || fallbackSource?.format || "9:16");
+  return lean;
+}
 
 function sanitizeContextRefs(contextRefs = {}) {
   if (!contextRefs || typeof contextRefs !== "object") return {};
@@ -1208,7 +1264,9 @@ function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
 
 export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) {
   if (String(response?.pipeline || "").trim() === "scenario_stage_v1") {
-    const storyboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : {};
+    const storyboardPackage = response?.debugStoryboardPackage && typeof response.debugStoryboardPackage === "object"
+      ? response.debugStoryboardPackage
+      : (response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : {});
     const storyCore = storyboardPackage?.story_core && typeof storyboardPackage.story_core === "object" ? storyboardPackage.story_core : {};
     const finalStoryboard = storyboardPackage?.final_storyboard && typeof storyboardPackage.final_storyboard === "object"
       ? storyboardPackage.final_storyboard
@@ -1218,6 +1276,9 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       : (Array.isArray(storyboardPackage?.scene_plan?.scenes) ? storyboardPackage.scene_plan.scenes : []);
     const storySummary = normalizeText(finalStoryboard?.story_summary || storyCore?.story_summary);
     const directorSummary = normalizeText(finalStoryboard?.director_summary || storyCore?.director_summary || storyCore?.story_summary);
+    const runtimeStoryboardFromResponse = response?.runtimeStoryboard && typeof response.runtimeStoryboard === "object"
+      ? response.runtimeStoryboard
+      : null;
     const storyboardOut = {
       ...finalStoryboard,
       scenes,
@@ -1253,11 +1314,21 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
           narrative_locks: storyCore?.narrative_locks || {},
         },
     };
+    const runtimeStoryboard = buildLeanRuntimeStoryboardContract(runtimeStoryboardFromResponse || storyboardOut, {
+      mode: "music_video",
+      contentType: "music_video",
+      format: normalizeText(state?.format) || "9:16",
+    });
+    const diagnosticsSummary = response?.diagnostics && typeof response.diagnostics === "object"
+      ? response.diagnostics
+      : (storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object" ? storyboardPackage.diagnostics : {});
     return {
-      storyboardOut,
+      storyboardOut: runtimeStoryboard,
+      runtimeStoryboard,
       scenario: storySummary,
       voiceScript: "",
-      scenarioPackage: storyboardPackage,
+      scenarioPackage: runtimeStoryboard,
+      debugStoryboardPackage: storyboardPackage,
       brainPackage: null,
       bgMusicPrompt: "",
       globalMusicPrompt: "",
@@ -1281,6 +1352,7 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         world_continuity: storyboardOut.world_continuity,
         story_locks: storyboardOut.story_locks,
       },
+      diagnostics: diagnosticsSummary,
       raw: response,
     };
   }
@@ -1338,6 +1410,10 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       contentType: "music_video",
       format: normalizeText(response?.job?.format || state?.format) || "9:16",
     };
+    const runtimeStoryboard = buildLeanRuntimeStoryboardContract(storyboardOut, {
+      mode: "music_video",
+      contentType: "music_video",
+    });
     const directorOutput = {
       scenes: normalizedScenes,
       contentType: "music_video",
@@ -1363,13 +1439,15 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       audioDurationSec: response?.meta?.audioDurationSec,
     });
     return {
-      storyboardOut,
+      storyboardOut: runtimeStoryboard,
+      runtimeStoryboard,
       scenario: "",
       voiceScript: "",
       brainPackage: null,
       bgMusicPrompt: "",
       globalMusicPrompt: "",
       directorOutput,
+      debugStoryboardPackage: response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : null,
       raw: response,
     };
   }
@@ -1787,8 +1865,14 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       mustAppear: Array.isArray(scene?.mustAppear) ? scene.mustAppear : [],
     })),
   });
+  const runtimeStoryboard = buildLeanRuntimeStoryboardContract(normalizedStoryboardOut || storyboardOut || {}, {
+    mode: normalizeText(response?.mode || storyboardOut?.mode || storyboardOut?.contentType || "story"),
+    contentType: normalizeText(response?.contentType || storyboardOut?.contentType || "story"),
+    format: resolvedFormat,
+  });
   return {
-    storyboardOut: normalizedStoryboardOut,
+    storyboardOut: runtimeStoryboard,
+    runtimeStoryboard,
     scenario: normalizeText(response?.scenario) || normalizeText(storyboardOut?.full_scenario),
     voiceScript: normalizeText(response?.voiceScript) || normalizeText(storyboardOut?.voice_script),
     brainPackage: response?.brainPackage && typeof response.brainPackage === "object" ? response.brainPackage : null,
@@ -1804,6 +1888,8 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         globalMusicPrompt: normalizeText(directorOutput?.music?.globalMusicPrompt) || globalMusicPrompt,
       },
     },
+    debugStoryboardPackage: response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : null,
+    raw: response,
   };
 }
 

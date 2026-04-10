@@ -759,16 +759,21 @@ export default function ScenarioStoryboardEditor({
     assetUrl: selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
   });
   const imageErrorText = String(selectedScene?.imageError || selectedRuntime?.imageError || "").trim();
-  const imageDebugEngine = String(selectedRuntime?.lastApiEngine || selectedScene?.imageEngine || "").trim();
+  const imageApiResult = selectedRuntime?.lastImageApiResult && typeof selectedRuntime.lastImageApiResult === "object"
+    ? selectedRuntime.lastImageApiResult
+    : {};
+  const imageDebugEngine = String(imageApiResult?.engine || selectedRuntime?.lastApiEngine || selectedScene?.imageEngine || "").trim();
   const imageDebugDegradeReason = String(
     selectedScene?.imageDegradeReason
+    || imageApiResult?.degradeReason
     || selectedRuntime?.lastApiDegradeReason
     || ""
   ).trim();
-  const imageDebugHint = String(selectedScene?.imageHint || selectedRuntime?.lastApiHint || "").trim();
-  const imageDebugApplyRejectedReason = String(selectedRuntime?.lastRejectedReason || "").trim();
+  const imageDebugHint = String(selectedScene?.imageHint || imageApiResult?.hint || selectedRuntime?.lastApiHint || "").trim();
+  const imageDebugApplyRejectedReason = String(imageApiResult?.rejectedReason || selectedRuntime?.lastRejectedReason || "").trim();
   const imageDebugUrlPresent = Boolean(
     String(selectedScene?.imageUrl || "").trim()
+    || String(imageApiResult?.imageUrl || "").trim()
     || String(selectedRuntime?.lastRejectedImageUrl || "").trim()
   );
   const startFrameErrorText = String(selectedScene?.startFrameError || selectedRuntime?.startFrameError || selectedRuntime?.imageError || "").trim();
@@ -1455,6 +1460,8 @@ export default function ScenarioStoryboardEditor({
                           <div className="clipSB_hint" style={{ marginTop: 8, opacity: 0.85 }}>
                             <div><strong>Scenario image debug:</strong></div>
                             <div>engine: {imageDebugEngine || "unknown"}</div>
+                            <div>resultStatus: {String(imageApiResult?.resultStatus || selectedRuntime?.lastApiResultStatus || "unknown")}</div>
+                            <div>applyAccepted: {imageApiResult?.applyAccepted === true ? "yes" : imageApiResult?.applyAccepted === false ? "no" : "unknown"}</div>
                             <div>degradeReason: {imageDebugDegradeReason || "none"}</div>
                             <div>hint: {imageDebugHint || "none"}</div>
                             <div>imageUrl: {imageDebugUrlPresent ? "present" : "absent"}</div>

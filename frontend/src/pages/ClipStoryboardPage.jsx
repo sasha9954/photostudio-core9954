@@ -51,7 +51,7 @@ import {
   PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
-import { buildScenarioDirectorRequestPayload, buildScenarioStageManualPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
+import { buildLeanRuntimeStoryboardContract, buildScenarioDirectorRequestPayload, buildScenarioStageManualPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 import {
   buildScenarioHumanVisualAnchors,
   buildScenarioPreviewInput,
@@ -273,6 +273,33 @@ function normalizeScenarioStringList(value) {
 
 function mergeScenarioStringLists(...lists) {
   return Array.from(new Set(lists.flatMap((list) => normalizeScenarioStringList(list)).filter(Boolean)));
+}
+
+function buildScenarioImageApiRuntimeResult({
+  ok = false,
+  imageUrl = "",
+  engine = "",
+  hint = "",
+  degradeReason = "",
+  resultStatus = "",
+  applyAccepted = false,
+  rejectedReason = "",
+  slot = "scene",
+} = {}) {
+  const imageUrlText = String(imageUrl || "").trim();
+  return {
+    ok: Boolean(ok),
+    imageUrl: imageUrlText,
+    engine: String(engine || "").trim(),
+    hint: String(hint || "").trim(),
+    degradeReason: String(degradeReason || "").trim(),
+    resultStatus: String(resultStatus || "").trim().toLowerCase(),
+    applyAccepted: Boolean(applyAccepted),
+    rejectedReason: String(rejectedReason || "").trim(),
+    slot: String(slot || "scene").trim().toLowerCase(),
+    timestamp: new Date().toISOString(),
+    imageUrlPresent: Boolean(imageUrlText),
+  };
 }
 
 function stringifyScenarioLockValue(value) {
@@ -5621,6 +5648,46 @@ function serializeNodesForStorage(nodes) {
       delete serialNode.data.onPickImage;
       delete serialNode.data.onClearImage;
     }
+    if (nodeType === "scenarioStoryboard") {
+      serialNode.data.scenarioPackage = buildLeanRuntimeStoryboardContract(serialNode?.data?.scenarioPackage || serialNode?.data?.storyboardOut || {}, {
+        mode: String(serialNode?.data?.scenarioMode || "story").trim(),
+        contentType: String(serialNode?.data?.scenarioMode || "story").trim(),
+        format: String(serialNode?.data?.format || "9:16").trim(),
+      });
+      serialNode.data.storyboardOut = serialNode.data.scenarioPackage;
+      delete serialNode.data.storyboardPackage;
+      delete serialNode.data.rawScenarioResponse;
+    }
+    if (nodeType === "scenarioPipelineDebug") {
+      serialNode.data.storyboardOut = buildLeanRuntimeStoryboardContract(serialNode?.data?.storyboardOut || serialNode?.data?.storyboardPackage || {}, {
+        mode: String(serialNode?.data?.contentType || "story").trim(),
+        contentType: String(serialNode?.data?.contentType || "story").trim(),
+        format: String(serialNode?.data?.format || "9:16").trim(),
+      });
+      serialNode.data.storyboardPackage = serialNode.data.storyboardOut;
+      delete serialNode.data.rawScenarioResponse;
+      delete serialNode.data.normalizedStageOutputs;
+    }
+    if (nodeType === "comfyNarrative") {
+      if (serialNode?.data?.outputs && typeof serialNode.data.outputs === "object") {
+        const runtimeStoryboard = buildLeanRuntimeStoryboardContract(
+          serialNode.data.outputs.runtimeStoryboard || serialNode.data.outputs.storyboardOut || {},
+          { format: String(serialNode?.data?.format || "9:16").trim() }
+        );
+        serialNode.data.outputs.storyboardOut = runtimeStoryboard;
+        serialNode.data.outputs.runtimeStoryboard = runtimeStoryboard;
+        serialNode.data.outputs.scenarioPackage = runtimeStoryboard;
+      }
+      if (serialNode?.data?.pendingOutputs && typeof serialNode.data.pendingOutputs === "object") {
+        const pendingRuntime = buildLeanRuntimeStoryboardContract(
+          serialNode.data.pendingOutputs.runtimeStoryboard || serialNode.data.pendingOutputs.storyboardOut || {},
+          { format: String(serialNode?.data?.format || "9:16").trim() }
+        );
+        serialNode.data.pendingOutputs.storyboardOut = pendingRuntime;
+        serialNode.data.pendingOutputs.runtimeStoryboard = pendingRuntime;
+        serialNode.data.pendingOutputs.scenarioPackage = pendingRuntime;
+      }
+    }
 
     acc.push(serialNode);
     return acc;
@@ -10870,6 +10937,18 @@ Aspect ratio: ${imageFormat}`,
         reasonIgnored.push("scene_signature_mismatch");
       }
       const applyAccepted = reasonIgnored.length === 0;
+      const rejectedReason = reasonIgnored.join("|") || (applyAccepted ? "" : "apply_rejected");
+      const imageApiRuntimeResult = buildScenarioImageApiRuntimeResult({
+        ok: out?.ok,
+        imageUrl: generatedImageUrl,
+        engine: responseEngine,
+        hint: responseHint,
+        degradeReason: responseDegradeReason,
+        resultStatus,
+        applyAccepted,
+        rejectedReason,
+        slot: normalizedSlot,
+      });
       const applyCheckLog = {
         requestedSceneId: sceneId,
         responseSceneId: responseSceneId || sceneId,
@@ -10926,7 +11005,6 @@ Aspect ratio: ${imageFormat}`,
         }
       }
       if (!applyAccepted) {
-        const rejectedReason = reasonIgnored.join("|") || "apply_rejected";
         const runtimeResetPatch = normalizedSlot === "start"
           ? { startFrameStatus: "idle", startFrameError: "" }
           : normalizedSlot === "end"
@@ -10934,6 +11012,7 @@ Aspect ratio: ${imageFormat}`,
             : { imageStatus: "idle", imageError: "" };
         updateScenarioSceneGenerationRuntime(sceneId, {
           ...runtimeResetPatch,
+          lastImageApiResult: imageApiRuntimeResult,
           lastRejectedImageUrl: generatedImageUrl,
           lastRejectedReason: rejectedReason,
           lastRejectedAt: new Date().toISOString(),
@@ -11029,6 +11108,7 @@ Aspect ratio: ${imageFormat}`,
       }
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
       updateScenarioSceneGenerationRuntime(sceneId, {
+        lastImageApiResult: imageApiRuntimeResult,
         lastRejectedImageUrl: "",
         lastRejectedReason: "",
         lastRejectedAt: "",
@@ -14182,6 +14262,28 @@ onClipSec: (nodeId, value) => {
               });
             }
           }
+          const leanRuntimeStoryboard = buildLeanRuntimeStoryboardContract(storyboardOut || normalizedPackage || {}, {
+            mode: String(
+              normalizedPackage?.mode
+              || normalizedPackage?.contentType
+              || storyboardOut?.mode
+              || storyboardOut?.contentType
+              || sourceNode?.data?.contentType
+              || "story"
+            ).trim(),
+            contentType: String(
+              normalizedPackage?.contentType
+              || storyboardOut?.contentType
+              || sourceNode?.data?.contentType
+              || "story"
+            ).trim(),
+            format: String(
+              normalizedPackage?.format
+              || storyboardOut?.format
+              || sourceNode?.data?.format
+              || "9:16"
+            ).trim(),
+          });
           if (isDirectPipelineSource) {
             const sourceData = sourceNode?.data && typeof sourceNode.data === "object" ? sourceNode.data : {};
             const sourceDataStoryboardOut = sourceData?.storyboardOut && typeof sourceData.storyboardOut === "object" && !Array.isArray(sourceData.storyboardOut)
@@ -14673,10 +14775,11 @@ onClipSec: (nodeId, value) => {
                 base.data?.format
               ),
               sceneGeneration,
-              scenarioPackage: normalizedPackage,
+              scenarioPackage: leanRuntimeStoryboard,
+              debugStoryboardPackage: normalizedPackage,
               sceneContractSource: String(normalizedPackage?.sceneContractSource || "").trim(),
               rawScenarioResponse,
-              storyboardOut,
+              storyboardOut: leanRuntimeStoryboard,
               directorOutput,
               storyboardPackage: (
                 directorOutput?.storyboardPackage
@@ -15208,6 +15311,11 @@ onClipSec: (nodeId, value) => {
               || null,
             directorOutput,
           });
+          const leanStoryboardOut = buildLeanRuntimeStoryboardContract(sourceStoryboardOut || normalizedStoryboardOut || {}, {
+            mode: String(sourceNode?.data?.contentType || base?.data?.contentType || "story").trim(),
+            contentType: String(sourceNode?.data?.contentType || base?.data?.contentType || "story").trim(),
+            format: String(sourceNode?.data?.format || base?.data?.format || "9:16").trim(),
+          });
           const storyboardSceneCount = Array.isArray(normalizedStoryboardOut?.scenes) ? normalizedStoryboardOut.scenes.length : 0;
           const storyboardOutStatus = validScenarioSource
             ? (storyboardSceneCount > 0 ? "ready" : "empty")
@@ -15256,8 +15364,9 @@ onClipSec: (nodeId, value) => {
                 timeWindow: sourceNode?.data?.timeWindow || {},
                 master_output: sourceNode?.data?.master_output || {},
               },
-              storyboardPackage,
-              storyboardOut: normalizedStoryboardOut,
+              storyboardPackage: leanStoryboardOut,
+              debugStoryboardPackage: storyboardPackage,
+              storyboardOut: leanStoryboardOut,
               scenarioRevision: String(
                 sourceNode?.data?.pendingScenarioRevision
                 || sourceNode?.data?.scenarioRevision
@@ -15296,6 +15405,10 @@ onClipSec: (nodeId, value) => {
                   body: payload,
                 });
                 const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, debugNode?.data || {});
+                const runtimeStoryboard = buildLeanRuntimeStoryboardContract(
+                  normalizedOutputs?.runtimeStoryboard || normalizedOutputs?.storyboardOut || {},
+                  { format: String(debugNode?.data?.format || "9:16").trim() }
+                );
                 const responseStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
                   ? response.storyboardPackage
                   : {};
@@ -15356,7 +15469,7 @@ onClipSec: (nodeId, value) => {
                       : hasDirectorPackageFinalStoryboard
                         ? "director_package_final_storyboard"
                         : "empty";
-                  const effectiveStoryboardOut = normalizedOutputs?.storyboardOut
+                  const effectiveStoryboardOut = runtimeStoryboard
                     || packageFinalStoryboard
                     || directorPackageFinalStoryboard
                     || {};
@@ -15389,7 +15502,8 @@ onClipSec: (nodeId, value) => {
                     ...nodeItem,
                     data: {
                       ...nodeItem.data,
-                      storyboardPackage: nextStoryboardPackage,
+                      storyboardPackage: runtimeStoryboard,
+                      debugStoryboardPackage: nextStoryboardPackage,
                       storyboardOut: normalizedStoryboardOut,
                       scenarioRevision: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                       directorOutput: {
@@ -15401,6 +15515,7 @@ onClipSec: (nodeId, value) => {
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                       diagnostics: nextStoryboardPackage?.diagnostics && typeof nextStoryboardPackage.diagnostics === "object" ? nextStoryboardPackage.diagnostics : {},
                       stageStatuses: nextStoryboardPackage?.stage_statuses && typeof nextStoryboardPackage.stage_statuses === "object" ? nextStoryboardPackage.stage_statuses : {},
+                      rawScenarioResponse: response && typeof response === "object" ? response : null,
                       normalizedStageOutputs: normalizedOutputs,
                     },
                   };
@@ -15413,14 +15528,16 @@ onClipSec: (nodeId, value) => {
                   const nextRevision = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
                   const normalizedPending = {
                     ...(normalizedOutputs && typeof normalizedOutputs === "object" ? normalizedOutputs : {}),
-                    storyboardOut: normalizedOutputs?.storyboardOut && typeof normalizedOutputs.storyboardOut === "object" ? normalizedOutputs.storyboardOut : {},
+                    storyboardOut: runtimeStoryboard,
+                    runtimeStoryboard,
                     directorOutput: {
                       ...(normalizedOutputs?.directorOutput && typeof normalizedOutputs.directorOutput === "object" ? normalizedOutputs.directorOutput : {}),
                       pipeline: "scenario_stage_v1",
                       storyboardPackage: nextStoryboardPackage,
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                     },
-                    scenarioPackage: nextStoryboardPackage,
+                    scenarioPackage: runtimeStoryboard,
+                    debugStoryboardPackage: nextStoryboardPackage,
                   };
                   return {
                     ...nodeItem,
@@ -15933,6 +16050,10 @@ onClipSec: (nodeId, value) => {
                     sceneCount: Array.isArray(response?.merged_storyboard?.scenes) ? response.merged_storyboard.scenes.length : null,
                   });
                   const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, refreshedNode?.data || {});
+                  const runtimeStoryboard = buildLeanRuntimeStoryboardContract(
+                    normalizedOutputs?.runtimeStoryboard || normalizedOutputs?.storyboardOut || {},
+                    { format: String(refreshedNode?.data?.format || "9:16").trim() }
+                  );
                   console.debug("[CLIP PIPELINE UI RESPONSE]", {
                     pipelineUsed: response?.meta?.pipelineUsed || response?.pipeline || "legacy",
                     sceneCount: Array.isArray(response?.merged_storyboard?.scenes) ? response.merged_storyboard.scenes.length : 0,
@@ -15953,9 +16074,15 @@ onClipSec: (nodeId, value) => {
                           error: null,
                           isGenerating: false,
                           activeResultTab: 'history',
-                          pendingOutputs: normalizedOutputs,
+                          pendingOutputs: {
+                            ...(normalizedOutputs && typeof normalizedOutputs === "object" ? normalizedOutputs : {}),
+                            storyboardOut: runtimeStoryboard,
+                            runtimeStoryboard,
+                            scenarioPackage: runtimeStoryboard,
+                            debugStoryboardPackage: normalizedOutputs?.debugStoryboardPackage || response?.storyboardPackage || null,
+                          },
                           pendingRawResponse: response && typeof response === "object" ? response : null,
-                          pendingStoryboardOut: normalizedOutputs?.storyboardOut || null,
+                          pendingStoryboardOut: runtimeStoryboard,
                           pendingDirectorOutput: normalizedOutputs?.directorOutput || null,
                           pendingGeneratedAt: new Date().toISOString(),
                           pendingScenarioRevision: nextRevision,
@@ -19266,7 +19393,7 @@ const hydrate = useCallback((source = "unknown") => {
           setActiveScenarioPipelineDebugId(null);
         }}
         contextSummary={activeScenarioPipelineDebugNode?.data?.contextSummary || {}}
-        storyboardPackage={activeScenarioPipelineDebugNode?.data?.storyboardPackage || {}}
+        storyboardPackage={activeScenarioPipelineDebugNode?.data?.debugStoryboardPackage || activeScenarioPipelineDebugNode?.data?.storyboardPackage || {}}
         stageStatuses={activeScenarioPipelineDebugNode?.data?.stageStatuses || {}}
         directorOutput={activeScenarioPipelineDebugNode?.data?.directorOutput || {}}
         diagnostics={activeScenarioPipelineDebugNode?.data?.diagnostics || {}}
