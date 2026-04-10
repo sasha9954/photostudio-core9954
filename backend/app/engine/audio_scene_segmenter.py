@@ -455,7 +455,7 @@ def build_gemini_audio_segmentation(
         },
     }
 
-    response = post_generate_content(api_key=api_key, model="gemini-2.5-pro", body=body, timeout=120)
+    response = post_generate_content(api_key=api_key, model="gemini-3.1-pro-preview", body=body, timeout=120)
     if isinstance(response, dict) and response.get("__http_error__"):
         return {
             "ok": False,

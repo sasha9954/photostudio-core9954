@@ -617,7 +617,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
     try:
         response = post_generate_content(
             api_key=str(api_key or "").strip(),
-            model="gemini-2.5-pro",
+            model="gemini-3.1-pro-preview",
             body={
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
