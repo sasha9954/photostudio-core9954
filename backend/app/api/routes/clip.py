@@ -10888,7 +10888,13 @@ def clip_image(payload: ClipImageIn):
     )
 
     raw_refs_by_role_incoming = getattr(refs_obj, "refsByRole", None)
+    raw_refs_used_by_role_incoming = getattr(refs_obj, "refsUsedByRole", None)
+    raw_scene_contract_refs_by_role = raw_scene_contract.get("refsByRole") if isinstance(raw_scene_contract, dict) else {}
+    raw_scene_contract_refs_used_by_role = raw_scene_contract.get("refsUsedByRole") if isinstance(raw_scene_contract, dict) else {}
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole=" + json.dumps(raw_refs_by_role_incoming, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] incoming refs.raw.refsUsedByRole=" + json.dumps(raw_refs_used_by_role_incoming, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] incoming sceneContract.raw.refsByRole=" + json.dumps(raw_scene_contract_refs_by_role, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] incoming sceneContract.raw.refsUsedByRole=" + json.dumps(raw_scene_contract_refs_used_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] incoming refs.raw.character=" + json.dumps(getattr(refs_obj, "character", None), ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] incoming refs.raw.heroEntityId=" + json.dumps(getattr(refs_obj, "heroEntityId", None), ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsUsed=" + json.dumps(getattr(refs_obj, "refsUsed", None), ensure_ascii=False))
@@ -10902,7 +10908,7 @@ def clip_image(payload: ClipImageIn):
         incoming_character_2 = raw_refs_by_role_incoming.get("character_2") or []
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole.character_2=" + json.dumps(incoming_character_2, ensure_ascii=False))
 
-    comfy_refs_by_role = _clean_refs_by_role_for_image(raw_refs_by_role_incoming)
+    comfy_refs_by_role_merged: dict[str, list[str]] = _extract_refs_by_role_from_generic_source(raw_refs_by_role_incoming)
     refs_fallback_by_role = {
         "character_1": character_refs,
         "location": location_refs,
@@ -10910,28 +10916,36 @@ def clip_image(payload: ClipImageIn):
         "props": props_refs,
     }
     for role, fallback_urls in refs_fallback_by_role.items():
-        if fallback_urls and not (comfy_refs_by_role.get(role) or []):
-            comfy_refs_by_role[role] = list(dict.fromkeys([str(url or "").strip() for url in fallback_urls if str(url or "").strip()]))
+        if fallback_urls and not (comfy_refs_by_role_merged.get(role) or []):
+            comfy_refs_by_role_merged[role] = list(dict.fromkeys([str(url or "").strip() for url in fallback_urls if str(url or "").strip()]))
     contract_ref_sources = [
-        raw_scene_contract.get("refsByRole") if isinstance(raw_scene_contract, dict) else {},
-        raw_scene_contract.get("refsUsedByRole") if isinstance(raw_scene_contract, dict) else {},
+        raw_scene_contract_refs_by_role,
+        raw_scene_contract_refs_used_by_role,
         raw_scene_contract.get("refs_used_by_role") if isinstance(raw_scene_contract, dict) else {},
         raw_scene_contract.get("context_refs") if isinstance(raw_scene_contract, dict) else {},
         raw_scene_contract.get("contextRefs") if isinstance(raw_scene_contract, dict) else {},
+        (raw_scene_contract.get("connected_context_summary") or {}).get("refsByRole") if isinstance(raw_scene_contract.get("connected_context_summary"), dict) else {},
+        (raw_scene_contract.get("connected_context_summary") or {}).get("refs_by_role") if isinstance(raw_scene_contract.get("connected_context_summary"), dict) else {},
         (raw_scene_contract.get("connected_context_summary") or {}).get("context_refs") if isinstance(raw_scene_contract.get("connected_context_summary"), dict) else {},
         (raw_scene_contract.get("connected_context_summary") or {}).get("contextRefs") if isinstance(raw_scene_contract.get("connected_context_summary"), dict) else {},
+        (raw_scene_contract.get("connectedContextSummary") or {}).get("refsByRole") if isinstance(raw_scene_contract.get("connectedContextSummary"), dict) else {},
+        (raw_scene_contract.get("connectedContextSummary") or {}).get("refs_by_role") if isinstance(raw_scene_contract.get("connectedContextSummary"), dict) else {},
         (raw_scene_contract.get("connectedContextSummary") or {}).get("context_refs") if isinstance(raw_scene_contract.get("connectedContextSummary"), dict) else {},
         (raw_scene_contract.get("connectedContextSummary") or {}).get("contextRefs") if isinstance(raw_scene_contract.get("connectedContextSummary"), dict) else {},
-        getattr(refs_obj, "refsUsedByRole", None),
+        raw_refs_used_by_role_incoming,
     ]
-    for contract_source in contract_ref_sources:
+    print("[COMFY IMAGE DEBUG] refs merge source count=" + str(len(contract_ref_sources) + 1))
+    for source_idx, contract_source in enumerate(contract_ref_sources):
         contract_refs_by_role = _extract_refs_by_role_from_generic_source(contract_source)
+        print("[COMFY IMAGE DEBUG] refs merge source[" + str(source_idx) + "] counts=" + json.dumps({role: len(contract_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}, ensure_ascii=False))
         for role in COMFY_REF_ROLES:
             merged_role_urls = list(dict.fromkeys([
-                *(comfy_refs_by_role.get(role) or []),
+                *(comfy_refs_by_role_merged.get(role) or []),
                 *(contract_refs_by_role.get(role) or []),
             ]))
-            comfy_refs_by_role[role] = merged_role_urls
+            comfy_refs_by_role_merged[role] = merged_role_urls
+    print("[COMFY IMAGE DEBUG] merged refsByRole before clean=" + json.dumps(comfy_refs_by_role_merged, ensure_ascii=False))
+    comfy_refs_by_role = _clean_refs_by_role_for_image(comfy_refs_by_role_merged)
     print("[COMFY IMAGE DEBUG] cleaned refsByRole=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole counts=" + json.dumps({role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_1=" + json.dumps(comfy_refs_by_role.get("character_1") or [], ensure_ascii=False))

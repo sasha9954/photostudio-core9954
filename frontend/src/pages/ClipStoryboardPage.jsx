@@ -624,6 +624,46 @@ function mergeScenarioRefsByRole(...sources) {
   return roleMap;
 }
 
+function extractRefsInventoryLikeByRole(source = null) {
+  const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
+  const inventory = Array.isArray(source)
+    ? source
+    : (source && typeof source === "object"
+      ? (
+        source?.refs_inventory
+        || source?.refsInventory
+        || source?.referenceInventory
+        || source?.reference_inventory
+        || source?.context_refs_inventory
+        || source?.contextRefsInventory
+        || source?.refs
+        || []
+      )
+      : []);
+  if (!Array.isArray(inventory)) return roleMap;
+  inventory.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const url = String(entry?.url || entry?.src || entry?.imageUrl || "").trim();
+    if (!url) return;
+    const rawRole = String(
+      entry?.role
+      || entry?.entityRole
+      || entry?.refRole
+      || entry?.targetRole
+      || entry?.bucket
+      || entry?.category
+      || entry?.type
+      || ""
+    ).trim();
+    const normalizedRole = normalizeScenarioRoleName(rawRole);
+    const role = SCENARIO_IMAGE_ROLE_KEYS.includes(normalizedRole)
+      ? normalizedRole
+      : (/location|place|environment|world|background/i.test(rawRole) ? "location" : "character_1");
+    roleMap[role] = [...new Set([...(roleMap[role] || []), url])];
+  });
+  return roleMap;
+}
+
 function collectScenarioNarrativeRefs({ sourceNode = null } = {}) {
   const emptyResult = {
     character: [],
@@ -770,6 +810,16 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
   appendFromSource(scenarioPackage?.connectedContextSummary?.context_refs);
   appendFromSource(scenarioPackage?.connectedContextSummary?.refsByRole);
   appendFromSource(scenarioPackage?.connectedContextSummary?.refs_by_role);
+  appendFromSource(extractRefsInventoryLikeByRole(scene));
+  appendFromSource(extractRefsInventoryLikeByRole(scene?.connectedContextSummary));
+  appendFromSource(extractRefsInventoryLikeByRole(scene?.connected_context_summary));
+  appendFromSource(extractRefsInventoryLikeByRole(scene?.sceneMeta));
+  appendFromSource(extractRefsInventoryLikeByRole(scene?.scene_meta));
+  appendFromSource(extractRefsInventoryLikeByRole(scenarioPackage));
+  appendFromSource(extractRefsInventoryLikeByRole(scenarioPackage?.connectedContextSummary));
+  appendFromSource(extractRefsInventoryLikeByRole(scenarioPackage?.connected_context_summary));
+  appendFromSource(extractRefsInventoryLikeByRole(scenarioPackage?.cast));
+  appendFromSource(extractRefsInventoryLikeByRole(scenarioPackage?.history));
 
   roleMap.location = [...new Set([...(roleMap.location || []), ...toUrlList(scenarioBrainRefs?.location)])];
   roleMap.style = [...new Set([...(roleMap.style || []), ...toUrlList(scenarioBrainRefs?.style)])];
@@ -10751,10 +10801,26 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           hasCharacter2InSceneActiveRoles: Array.isArray(finalTargetSceneForImage.sceneActiveRoles) && finalTargetSceneForImage.sceneActiveRoles.includes("character_2"),
         });
       }
+      const refsUsedByRoleFallback = (
+        refsForImageRequest?.refsUsedByRole
+        || targetScene?.refsUsedByRole
+        || targetScene?.refs_used_by_role
+        || targetScene?.connectedContextSummary?.refsByRole
+        || targetScene?.connectedContextSummary?.refs_by_role
+        || targetScene?.connected_context_summary?.refsByRole
+        || targetScene?.connected_context_summary?.refs_by_role
+        || scenarioPackageForImage?.refsUsedByRole
+        || scenarioPackageForImage?.refs_used_by_role
+        || scenarioPackageForImage?.connectedContextSummary?.refsByRole
+        || scenarioPackageForImage?.connectedContextSummary?.refs_by_role
+        || scenarioPackageForImage?.connected_context_summary?.refsByRole
+        || scenarioPackageForImage?.connected_context_summary?.refs_by_role
+        || {}
+      );
       const refsPayloadForRequest = {
         ...refsForImageRequest,
         refsByRole: refsForImageRequest?.refsByRole || refsByRoleForImage || {},
-        refsUsedByRole: refsForImageRequest?.refsUsedByRole || targetScene?.refsUsedByRole || targetScene?.refs_used_by_role || {},
+        refsUsedByRole: refsUsedByRoleFallback,
         primaryRole: refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "",
         mustAppear: Array.isArray(refsForImageRequest?.mustAppear)
           ? refsForImageRequest.mustAppear
@@ -10769,6 +10835,9 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         mustAppear: refsPayloadForRequest?.mustAppear || [],
         heroEntityId: refsPayloadForRequest?.heroEntityId || "",
       });
+      if (String(sceneId || "").trim().toLowerCase() === "sc_1") {
+        console.debug("[SCENARIO IMAGE REQUEST BODY.REFS sc_1]", refsPayloadForRequest);
+      }
       const out = await fetchJson(`/api/clip/image`, {
         method: "POST",
         body: {
