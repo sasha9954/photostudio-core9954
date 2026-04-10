@@ -849,11 +849,15 @@ export default function ScenarioStoryboardEditor({
     if (!CLIP_TRACE_SCENARIO_EDITOR_DEBUG) return;
     console.debug("[SCENARIO EDITOR PREVIEW SRC FINAL]", {
       sceneId: selectedSceneId,
+      selectedSceneImageUrl: String(selectedScene?.imageUrl || "").trim(),
+      imageApiResultImageUrl: String(imageApiResult?.imageUrl || "").trim(),
+      runtimeImageUrlUsedForPreview: runtimeFallbackImageUrl,
+      finalSourceImageUrl: sourceImageUrl,
       single: sourceImageUrl,
       start: startFrameSourceUrl,
       end: endFrameSourceUrl,
     });
-  }, [selectedSceneId, sourceImageUrl, startFrameSourceUrl, endFrameSourceUrl]);
+  }, [selectedScene?.imageUrl, imageApiResult?.imageUrl, runtimeFallbackImageUrl, selectedSceneId, sourceImageUrl, startFrameSourceUrl, endFrameSourceUrl]);
   useEffect(() => {
     if (!open || !selectedScene) return;
     console.debug("[SCENARIO UI ROUTE TRACE]", {

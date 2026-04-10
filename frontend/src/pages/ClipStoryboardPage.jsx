@@ -742,10 +742,18 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
   appendFromSource(scene?.context_refs);
   appendFromSource(scene?.connectedContextSummary?.contextRefs);
   appendFromSource(scene?.connectedContextSummary?.context_refs);
+  appendFromSource(scene?.connectedContextSummary?.refsByRole);
+  appendFromSource(scene?.connectedContextSummary?.refs_by_role);
   appendFromSource(scene?.connected_context_summary?.contextRefs);
   appendFromSource(scene?.connected_context_summary?.context_refs);
+  appendFromSource(scene?.connected_context_summary?.refsByRole);
+  appendFromSource(scene?.connected_context_summary?.refs_by_role);
   appendFromSource(scene?.sceneMeta?.connected_context_summary?.context_refs);
   appendFromSource(scene?.scene_meta?.connected_context_summary?.context_refs);
+  appendFromSource(scene?.sceneMeta?.connected_context_summary?.refsByRole);
+  appendFromSource(scene?.sceneMeta?.connected_context_summary?.refs_by_role);
+  appendFromSource(scene?.scene_meta?.connected_context_summary?.refsByRole);
+  appendFromSource(scene?.scene_meta?.connected_context_summary?.refs_by_role);
   appendFromSource(scenarioPackage?.refsByRole);
   appendFromSource(scenarioPackage?.refsUsedByRole);
   appendFromSource(scenarioPackage?.refs_used_by_role);
@@ -756,6 +764,12 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
   appendFromSource(scenarioPackage?.contextRefs);
   appendFromSource(scenarioPackage?.connected_context_summary?.contextRefs);
   appendFromSource(scenarioPackage?.connected_context_summary?.context_refs);
+  appendFromSource(scenarioPackage?.connected_context_summary?.refsByRole);
+  appendFromSource(scenarioPackage?.connected_context_summary?.refs_by_role);
+  appendFromSource(scenarioPackage?.connectedContextSummary?.contextRefs);
+  appendFromSource(scenarioPackage?.connectedContextSummary?.context_refs);
+  appendFromSource(scenarioPackage?.connectedContextSummary?.refsByRole);
+  appendFromSource(scenarioPackage?.connectedContextSummary?.refs_by_role);
 
   roleMap.location = [...new Set([...(roleMap.location || []), ...toUrlList(scenarioBrainRefs?.location)])];
   roleMap.style = [...new Set([...(roleMap.style || []), ...toUrlList(scenarioBrainRefs?.style)])];
@@ -7516,6 +7530,15 @@ const recommendedNextSceneIndex = useMemo(() => {
 }, [scenarioScenes, scenarioSelectedIndex]);
 
 const scenarioSelected = scenarioSelectedIndex >= 0 ? (scenarioScenes[scenarioSelectedIndex] || null) : null;
+const scenarioSceneGenerationMap = activeScenarioStoryboardNode?.data?.sceneGeneration && typeof activeScenarioStoryboardNode.data.sceneGeneration === "object"
+  ? activeScenarioStoryboardNode.data.sceneGeneration
+  : {};
+const scenarioSelectedRuntime = useMemo(() => {
+  const sceneId = String(scenarioSelected?.sceneId || "").trim();
+  if (!sceneId) return {};
+  const runtimeValue = scenarioSceneGenerationMap?.[sceneId];
+  return runtimeValue && typeof runtimeValue === "object" ? runtimeValue : {};
+}, [scenarioSceneGenerationMap, scenarioSelected?.sceneId]);
 const scenarioSelectedImageStrategy = String(scenarioSelected?.imageStrategy || deriveScenarioImageStrategy(scenarioSelected)).trim().toLowerCase() || "single";
 const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelected);
 const scenarioSelectedIsLipSync = isLipSyncScene(scenarioSelected);
@@ -7536,7 +7559,16 @@ const scenarioSelectedWorkflowLabel = scenarioSelectedActualWorkflowMode === "i2
 const scenarioPreviousScene = scenarioSelectedIndex > 0 ? scenarioScenes[scenarioSelectedIndex - 1] : null;
 const scenarioSelectedFrameUrls = resolveSceneFrameUrls(scenarioSelected, scenarioPreviousScene);
 const scenarioSelectedPreviewSources = resolveScenarioScenePreviewSources(scenarioSelected, scenarioPreviousScene);
-const scenarioSelectedResolvedPreviewSrc = scenarioSelectedPreviewSources.resolvedPreviewSrc;
+const scenarioSelectedRuntimeImageApiResult = scenarioSelectedRuntime?.lastImageApiResult && typeof scenarioSelectedRuntime.lastImageApiResult === "object"
+  ? scenarioSelectedRuntime.lastImageApiResult
+  : {};
+const scenarioSelectedRuntimeFallbackImageUrl = String(
+  scenarioSelectedRuntime?.lastRejectedImageUrl
+  || scenarioSelectedRuntimeImageApiResult?.imageUrl
+  || ""
+).trim();
+const scenarioSelectedResolvedPreviewSrc = scenarioSelectedPreviewSources.resolvedPreviewSrc
+  || String(resolveAssetUrl(scenarioSelectedRuntimeFallbackImageUrl) || "").trim();
 const scenarioSelectedResolvedStartPreviewSrc = scenarioSelectedPreviewSources.resolvedStartPreviewSrc;
 const scenarioSelectedResolvedEndPreviewSrc = scenarioSelectedPreviewSources.resolvedEndPreviewSrc;
 const scenarioSelectedCanInheritPreviousEnd = scenarioSelectedTransitionType === "continuous"
@@ -7588,8 +7620,11 @@ useEffect(() => {
     videoUrl: String(scenarioSelected?.videoUrl || "").trim(),
     imageStatus: String(scenarioSelected?.imageStatus || "").trim(),
     videoStatus: String(scenarioSelected?.videoStatus || "").trim(),
+    runtimeLastImageApiResultUrl: String(scenarioSelectedRuntimeImageApiResult?.imageUrl || "").trim(),
+    runtimeFallbackImageUrl: scenarioSelectedRuntimeFallbackImageUrl,
+    finalPreviewSrc: scenarioSelectedResolvedPreviewSrc,
   });
-}, [scenarioSelected]);
+}, [scenarioSelected, scenarioSelectedResolvedPreviewSrc, scenarioSelectedRuntimeFallbackImageUrl, scenarioSelectedRuntimeImageApiResult?.imageUrl]);
 useEffect(() => {
   if (!CLIP_TRACE_SCENARIO_SCENE_ASSETS) return;
   console.debug("[SCENARIO PREVIEW SRC FINAL]", {
@@ -7597,8 +7632,11 @@ useEffect(() => {
     single: resolveAssetUrl(scenarioSelected?.imageUrl),
     start: resolveAssetUrl(scenarioSelectedEffectiveStartImageUrl),
     end: resolveAssetUrl(scenarioSelectedEndImageUrl),
+    runtimeLastImageApiResultUrl: String(resolveAssetUrl(scenarioSelectedRuntimeImageApiResult?.imageUrl || "") || "").trim(),
+    runtimeFallbackImageUrl: String(resolveAssetUrl(scenarioSelectedRuntimeFallbackImageUrl) || "").trim(),
+    finalSourceImageUrl: scenarioSelectedResolvedPreviewSrc,
   });
-}, [scenarioSelected?.sceneId, scenarioSelected?.imageUrl, scenarioSelectedEffectiveStartImageUrl, scenarioSelectedEndImageUrl]);
+}, [scenarioSelected?.sceneId, scenarioSelected?.imageUrl, scenarioSelectedEffectiveStartImageUrl, scenarioSelectedEndImageUrl, scenarioSelectedRuntimeImageApiResult?.imageUrl, scenarioSelectedRuntimeFallbackImageUrl, scenarioSelectedResolvedPreviewSrc]);
 const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   ? "endImageUrl"
   : scenarioPreviousScene?.endFrameImageUrl
@@ -10472,6 +10510,16 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         currentSceneStartImageUrl,
         heroEntityId: targetScene?.heroEntityId || derivedRoleContract?.primaryRole || "",
       });
+      const selectedSceneRefsDebug = {
+        sceneId,
+        refsUsedByRole: targetScene?.refsUsedByRole,
+        refs_used_by_role: targetScene?.refs_used_by_role,
+        contextRefs: targetScene?.contextRefs,
+        context_refs: targetScene?.context_refs,
+        connectedContextSummary: targetScene?.connectedContextSummary,
+        connected_context_summary: targetScene?.connected_context_summary,
+      };
+      console.debug("[SCENARIO IMAGE SCENE REF INPUT]", selectedSceneRefsDebug);
       if (applyFirstLastContinuityContract) {
         console.info("[FIRST_LAST END REQUEST SOURCE]", {
           sceneId,
@@ -10703,6 +10751,24 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           hasCharacter2InSceneActiveRoles: Array.isArray(finalTargetSceneForImage.sceneActiveRoles) && finalTargetSceneForImage.sceneActiveRoles.includes("character_2"),
         });
       }
+      const refsPayloadForRequest = {
+        ...refsForImageRequest,
+        refsByRole: refsForImageRequest?.refsByRole || refsByRoleForImage || {},
+        refsUsedByRole: refsForImageRequest?.refsUsedByRole || targetScene?.refsUsedByRole || targetScene?.refs_used_by_role || {},
+        primaryRole: refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "",
+        mustAppear: Array.isArray(refsForImageRequest?.mustAppear)
+          ? refsForImageRequest.mustAppear
+          : (Array.isArray(derivedRoleContract?.mustAppear) ? derivedRoleContract.mustAppear : []),
+        heroEntityId: String(refsForImageRequest?.heroEntityId || targetScene?.heroEntityId || derivedRoleContract?.primaryRole || "").trim(),
+      };
+      console.debug("[SCENARIO IMAGE REQUEST PAYLOAD]", {
+        sceneId,
+        refsByRoleCounts: summarizeRefsByRole(refsPayloadForRequest?.refsByRole || {}),
+        refsUsedByRoleKeys: Object.keys(refsPayloadForRequest?.refsUsedByRole || {}),
+        primaryRole: refsPayloadForRequest?.primaryRole || "",
+        mustAppear: refsPayloadForRequest?.mustAppear || [],
+        heroEntityId: refsPayloadForRequest?.heroEntityId || "",
+      });
       const out = await fetchJson(`/api/clip/image`, {
         method: "POST",
         body: {
@@ -10736,7 +10802,7 @@ Aspect ratio: ${imageFormat}`,
           mustAppear: (Array.isArray(scenarioContractPayload?.mustAppear) && scenarioContractPayload.mustAppear.length)
             ? scenarioContractPayload.mustAppear
             : (refsForImageRequest?.mustAppear || []),
-          refs: refsForImageRequest,
+          refs: refsPayloadForRequest,
         },
       });
       const responseSceneId = String(out?.sceneId || "").trim();
