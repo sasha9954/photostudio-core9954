@@ -254,14 +254,21 @@ def _build_scene_anchor_bundle(
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     active_roles = [str(role).strip() for role in _safe_list(role_row.get("active_roles")) if str(role).strip()]
     hero_ref_hint = "same heroine from character_1 reference" if _safe_dict(refs_inventory.get("ref_character_1")) else ""
-    location_ref_hint = "same location from reference" if _safe_dict(refs_inventory.get("location")) else ""
+    location_ref_hint = "same location from reference" if _safe_dict(refs_inventory.get("ref_location")) else ""
 
     identity_lock = _safe_dict(story_core.get("identity_lock"))
-    hero = _safe_dict(identity_lock.get("hero"))
-    age_band = str(hero.get("age_bracket") or "").strip()
-    hair = str(hero.get("hair_signature") or hero.get("appearance_notes") or "").strip()
-    outfit = str(hero.get("outfit_essentials") or "").strip()
-    identity_parts = [hero_ref_hint, "same hero identity continuity", age_band, hair, outfit]
+    hero_raw = identity_lock.get("hero")
+    identity_parts: list[str] = [hero_ref_hint, "same hero identity continuity"]
+    if isinstance(hero_raw, dict):
+        hero = _safe_dict(hero_raw)
+        age_band = str(hero.get("age_bracket") or "").strip()
+        hair = str(hero.get("hair_signature") or hero.get("appearance_notes") or "").strip()
+        outfit = str(hero.get("outfit_essentials") or "").strip()
+        identity_parts.extend([age_band, hair, outfit])
+    elif isinstance(hero_raw, str):
+        hero_compact = " ".join(hero_raw.strip().split())[:140]
+        if hero_compact:
+            identity_parts.append(hero_compact)
     identity_anchor = ", ".join([part for part in identity_parts if part])[:220]
 
     world_lock = _safe_dict(story_core.get("world_lock"))

@@ -110,6 +110,55 @@ def _extract_audio_url_from_refs(refs_inventory: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_ref_urls(ref_node: Any) -> list[str]:
+    if isinstance(ref_node, str):
+        value = ref_node.strip()
+        return [value] if value else []
+    node = _safe_dict(ref_node)
+    urls: list[str] = []
+    for candidate in (
+        node.get("value"),
+        node.get("preview"),
+        _safe_dict(node.get("meta")).get("url"),
+    ):
+        value = str(candidate or "").strip()
+        if value:
+            urls.append(value)
+    for ref in _safe_list(node.get("refs")):
+        value = str(ref or "").strip()
+        if value:
+            urls.append(value)
+    return list(dict.fromkeys(urls))
+
+
+def _role_to_ref_key(role: str) -> str:
+    clean = str(role or "").strip()
+    if not clean:
+        return ""
+    return clean if clean.startswith("ref_") else f"ref_{clean}"
+
+
+def _build_refs_by_role_fallback(
+    refs_inventory: dict[str, Any],
+    active_roles: list[Any],
+    primary_role: str,
+) -> dict[str, list[str]]:
+    roles = [
+        str(role).strip()
+        for role in [primary_role, *active_roles]
+        if str(role).strip()
+    ]
+    resolved: dict[str, list[str]] = {}
+    for role in roles:
+        ref_key = _role_to_ref_key(role)
+        if not ref_key:
+            continue
+        urls = _extract_ref_urls(refs_inventory.get(ref_key))
+        if urls:
+            resolved[role] = urls
+    return resolved
+
+
 def _normalize_input_audio_source(input_payload: dict[str, Any], refs_inventory: dict[str, Any]) -> dict[str, Any]:
     normalized = deepcopy(_safe_dict(input_payload))
     audio_url = str(normalized.get("audio_url") or "").strip()
@@ -696,24 +745,27 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         active_roles = _safe_list(role_row.get("active_roles"))
         secondary_roles = _safe_list(role_row.get("secondary_roles"))
-        refs_used = [
-            role for role in active_roles
-            if isinstance(role, str) and role.strip() and role in refs_inventory
-        ]
+        primary_role = str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip()
         must_appear = list(
             dict.fromkeys(
                 [
-                    str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip(),
+                    primary_role,
                     *[str(role).strip() for role in active_roles if str(role).strip()],
                 ]
             )
         )
         refs_by_role_input = _safe_dict(input_pkg.get("refs_by_role"))
-        refs_used_by_role = {
+        refs_used_by_role_from_input = {
             role: _safe_list(refs_by_role_input.get(role))
-            for role in refs_used
+            for role in must_appear
             if _safe_list(refs_by_role_input.get(role))
         }
+        refs_used_by_role = (
+            refs_used_by_role_from_input
+            if refs_used_by_role_from_input
+            else _build_refs_by_role_fallback(refs_inventory, active_roles, primary_role)
+        )
+        refs_used = list(refs_used_by_role.keys())
         audio_slice_start_sec = t0 if route_contract["route"] == "ia2v" else 0.0
         audio_slice_end_sec = t1 if route_contract["route"] == "ia2v" else 0.0
         audio_slice_expected_duration_sec = max(0.0, audio_slice_end_sec - audio_slice_start_sec)
@@ -753,7 +805,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "transition_type": route_contract["transition_type"],
             "lip_sync": bool(route_contract["lip_sync"]),
             "needs_two_frames": bool(route_contract["needs_two_frames"]),
-            "primary_role": str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip(),
+            "primary_role": primary_role,
             "secondary_roles": secondary_roles,
             "active_roles": active_roles,
             "mustAppear": must_appear,
