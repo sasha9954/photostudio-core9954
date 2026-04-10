@@ -631,6 +631,16 @@ function isNonEmptyRoleMap(obj) {
 
 function extractRefsInventoryLikeByRole(source = null) {
   const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
+  const DICT_INVENTORY_ROLE_KEY_MAP = {
+    ref_character_1: "character_1",
+    ref_character_2: "character_2",
+    ref_character_3: "character_3",
+    ref_location: "location",
+    ref_style: "style",
+    ref_props: "props",
+    ref_group: "group",
+    ref_animal: "animal",
+  };
   const inventoryLike = Array.isArray(source)
     ? source
     : (source && typeof source === "object"
@@ -645,6 +655,14 @@ function extractRefsInventoryLikeByRole(source = null) {
         || []
       )
       : []);
+  const isImageLikeUrl = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return false;
+    const normalized = raw.toLowerCase();
+    if (normalized.startsWith("data:image/")) return true;
+    const withoutQuery = normalized.split(/[?#]/)[0];
+    return /\.(jpg|jpeg|png|webp)$/.test(withoutQuery);
+  };
   const toUrls = (value) => {
     if (Array.isArray(value)) {
       return value
@@ -654,11 +672,17 @@ function extractRefsInventoryLikeByRole(source = null) {
           return "";
         })
         .map((raw) => String(raw || "").trim())
-        .filter(Boolean);
+        .filter((raw) => isImageLikeUrl(raw));
     }
-    if (typeof value === "string") return String(value || "").trim() ? [String(value || "").trim()] : [];
+    if (typeof value === "string") {
+      const normalized = String(value || "").trim();
+      return isImageLikeUrl(normalized) ? [normalized] : [];
+    }
     if (value && typeof value === "object") {
       return [
+        ...toUrls(value?.imageUrl),
+        ...toUrls(value?.url),
+        ...toUrls(value?.src),
         ...toUrls(value?.value),
         ...toUrls(value?.refs),
         ...toUrls(value?.images),
@@ -692,8 +716,9 @@ function extractRefsInventoryLikeByRole(source = null) {
   });
   else if (inventoryLike && typeof inventoryLike === "object") {
     Object.entries(inventoryLike).forEach(([rawKey, entry]) => {
-      const normalizedKey = String(rawKey || "").trim().replace(/^ref_/i, "");
-      const role = resolveRoleFromRaw(normalizedKey);
+      const normalizedKey = String(rawKey || "").trim().toLowerCase();
+      const role = DICT_INVENTORY_ROLE_KEY_MAP[normalizedKey];
+      if (!role) return;
       const urls = toUrls(entry);
       if (!urls.length) return;
       roleMap[role] = [...new Set([...(roleMap[role] || []), ...urls])];
