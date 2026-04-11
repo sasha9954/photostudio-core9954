@@ -2469,13 +2469,55 @@ const SCENARIO_GENERATED_ASSET_FIELDS = [
 
 const SCENARIO_IMAGE_SOURCE_FIELDS = [
   "imageUrl",
+  "generatedImageUrl",
+  "resultImageUrl",
+  "finalImageUrl",
+  "previewImageUrl",
+  "selectedImageUrl",
+  "image_url",
+  "generated_image_url",
+  "result_image_url",
+  "final_image_url",
+  "photoUrl",
+  "assetUrl",
   "startImageUrl",
+  "startFrameImageUrl",
+  "firstFrameImageUrl",
   "endImageUrl",
+  "endFrameImageUrl",
+  "lastFrameImageUrl",
+  "startFramePreviewUrl",
+  "endFramePreviewUrl",
   "videoSourceImageUrl",
 ];
 
 const SCENARIO_VIDEO_SOURCE_FIELDS = [
+  ...SCENARIO_IMAGE_SOURCE_FIELDS,
   "audioSliceUrl",
+];
+
+const SCENARIO_VIDEO_DELETE_FIELDS = [
+  "videoUrl",
+  "videoStatus",
+  "videoError",
+  "videoJobId",
+  "videoTaskId",
+  "providerJobId",
+  "videoProvider",
+  "videoMeta",
+  "videoDebug",
+  "videoUpdatedAt",
+  "videoCompletedAt",
+  "videoPanelActivated",
+  "videoProgress",
+  "videoDuration",
+  "videoDurationSec",
+  "videoPrompt",
+  "videoPanelOpen",
+  "videoReady",
+  "videoStartedAt",
+  "videoFinishedAt",
+  "videoQueuePosition",
 ];
 
 const SCENARIO_VIDEO_RESULT_FIELDS = [
@@ -2491,6 +2533,50 @@ function stripScenarioGeneratedAssets(scene = {}) {
     if (Object.prototype.hasOwnProperty.call(base, key)) delete base[key];
   });
   return base;
+}
+
+function buildScenarioVideoDeletePatch(scene = {}) {
+  const baseScene = scene && typeof scene === "object" ? scene : {};
+  const patch = {
+    videoUrl: "",
+    videoStatus: "",
+    videoError: "",
+    videoJobId: "",
+    videoPanelActivated: false,
+  };
+  const clearedVideoFields = [];
+  SCENARIO_VIDEO_DELETE_FIELDS.forEach((field) => {
+    if (field === "videoPanelActivated") {
+      if (baseScene?.[field] === false && !Object.prototype.hasOwnProperty.call(baseScene, field)) return;
+      patch[field] = false;
+      clearedVideoFields.push(field);
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(baseScene, field) && !Object.prototype.hasOwnProperty.call(patch, field)) return;
+    const prevValue = baseScene?.[field];
+    if (typeof prevValue === "boolean") {
+      patch[field] = false;
+    } else if (typeof prevValue === "number") {
+      patch[field] = 0;
+    } else if (prevValue != null && typeof prevValue === "object") {
+      patch[field] = null;
+    } else {
+      patch[field] = "";
+    }
+    clearedVideoFields.push(field);
+  });
+  const mergedPreview = { ...baseScene, ...patch };
+  const preservedImageFields = SCENARIO_IMAGE_SOURCE_FIELDS.filter((field) => {
+    const before = String(baseScene?.[field] || "").trim();
+    const after = String(mergedPreview?.[field] || "").trim();
+    return Boolean(before) && Boolean(after);
+  });
+  return {
+    patch,
+    mergedPreview,
+    clearedVideoFields,
+    preservedImageFields,
+  };
 }
 
 function buildScenarioClearImagePatch({ transitionType = "single", slot = "single" } = {}) {
@@ -13616,22 +13702,26 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoError("");
     const sceneId = String(scenarioSelected?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
-    const preservedSourceFields = {
-      videoSourceImageUrl: Boolean(String(scenarioSelected?.videoSourceImageUrl || "").trim()),
-      startImageUrl: Boolean(String(scenarioSelectedEffectiveStartImageUrl || "").trim()),
-      imageUrl: Boolean(String(scenarioSelected?.imageUrl || "").trim()),
-      endImageUrl: Boolean(String(scenarioSelected?.endImageUrl || "").trim()),
-      audioSliceUrl: Boolean(String(scenarioSelected?.audioSliceUrl || "").trim()),
-    };
-    console.info("[SCENARIO VIDEO UI DEBUG]", {
+    const deletePatchMeta = buildScenarioVideoDeletePatch(scenarioSelected || {});
+    const previewAfterDelete = deletePatchMeta.mergedPreview || {};
+    console.info("[SCENARIO VIDEO DELETE PATCH]", {
       sceneId,
-      videoStatus: String(scenarioSelected?.videoStatus || "").trim(),
-      deletePreservedSourceFields: true,
-      preservedSourceFields,
+      clearedVideoFields: deletePatchMeta.clearedVideoFields,
+      preservedImageFields: deletePatchMeta.preservedImageFields,
+      hasImageAfterDelete: Boolean(String(previewAfterDelete?.imageUrl || previewAfterDelete?.generatedImageUrl || previewAfterDelete?.resultImageUrl || previewAfterDelete?.finalImageUrl || previewAfterDelete?.previewImageUrl || previewAfterDelete?.selectedImageUrl || previewAfterDelete?.image_url || previewAfterDelete?.generated_image_url || previewAfterDelete?.result_image_url || previewAfterDelete?.final_image_url || previewAfterDelete?.photoUrl || previewAfterDelete?.assetUrl || "").trim()),
+      hasStartAfterDelete: Boolean(String(previewAfterDelete?.startImageUrl || previewAfterDelete?.startFrameImageUrl || previewAfterDelete?.firstFrameImageUrl || previewAfterDelete?.startFramePreviewUrl || "").trim()),
+      hasEndAfterDelete: Boolean(String(previewAfterDelete?.endImageUrl || previewAfterDelete?.endFrameImageUrl || previewAfterDelete?.lastFrameImageUrl || previewAfterDelete?.endFramePreviewUrl || "").trim()),
     });
     clearActiveVideoJob(sceneId);
-    updateScenarioScene(scenarioEditor.selected, { videoUrl: "", videoStatus: "", videoError: "", videoJobId: "" }, { actionName: "clear_video", preserveSourceFieldsInVideoActions: true });
-  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected?.audioSliceUrl, scenarioSelected?.endImageUrl, scenarioSelected?.imageUrl, scenarioSelected?.sceneId, scenarioSelected?.videoSourceImageUrl, scenarioSelected?.videoStatus, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
+    updateScenarioScene(scenarioEditor.selected, deletePatchMeta.patch, { actionName: "clear_video", preserveSourceFieldsInVideoActions: true });
+    console.info("[SCENARIO VIDEO DELETE RESULT]", {
+      sceneId,
+      videoUrlAfter: String(previewAfterDelete?.videoUrl || "").trim(),
+      imageUrlAfter: String(previewAfterDelete?.imageUrl || previewAfterDelete?.generatedImageUrl || previewAfterDelete?.resultImageUrl || previewAfterDelete?.finalImageUrl || previewAfterDelete?.previewImageUrl || previewAfterDelete?.selectedImageUrl || previewAfterDelete?.image_url || previewAfterDelete?.generated_image_url || previewAfterDelete?.result_image_url || previewAfterDelete?.final_image_url || previewAfterDelete?.photoUrl || previewAfterDelete?.assetUrl || "").trim(),
+      startImageUrlAfter: String(previewAfterDelete?.startImageUrl || previewAfterDelete?.startFrameImageUrl || previewAfterDelete?.firstFrameImageUrl || previewAfterDelete?.startFramePreviewUrl || "").trim(),
+      endImageUrlAfter: String(previewAfterDelete?.endImageUrl || previewAfterDelete?.endFrameImageUrl || previewAfterDelete?.lastFrameImageUrl || previewAfterDelete?.endFramePreviewUrl || "").trim(),
+    });
+  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
 
   const handleScenarioAddToVideo = useCallback(() => {
     const scrollToVideoBlock = (attemptsLeft = 3) => {
