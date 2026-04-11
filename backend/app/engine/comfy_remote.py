@@ -1744,6 +1744,50 @@ def _walk_upstream_to_load_images(workflow: dict, start_node_id: str) -> list[st
     return load_image_ids
 
 
+def _walk_upstream_to_load_images_for_first_last_guide(workflow: dict, guide_node_id: str) -> list[str]:
+    guide_id = str(guide_node_id or "").strip()
+    if not guide_id:
+        return []
+    guide_node = workflow.get(guide_id)
+    if not isinstance(guide_node, dict):
+        return []
+    guide_inputs = guide_node.get("inputs")
+    if not isinstance(guide_inputs, dict):
+        return []
+
+    image_input = guide_inputs.get("image")
+    queue: deque[str] = deque(_extract_linked_node_ids(image_input))
+    visited: set[str] = {guide_id}
+    load_image_ids: list[str] = []
+
+    while queue:
+        node_id = str(queue.popleft())
+        if not node_id or node_id in visited:
+            continue
+        visited.add(node_id)
+
+        node = workflow.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        if class_type == "loadimage":
+            load_image_ids.append(node_id)
+            continue
+        if class_type == "ltxvaddguide":
+            # Guardrail: do not collapse first/last branches by traversing through a sibling guide.
+            continue
+
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for input_value in inputs.values():
+            for upstream_id in _extract_linked_node_ids(input_value):
+                if upstream_id and upstream_id not in visited:
+                    queue.append(upstream_id)
+
+    return load_image_ids
+
+
 def _verify_first_last_frame_patch(
     workflow: dict,
     *,
@@ -1859,14 +1903,14 @@ def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image
             guide_end_ids.append(str(node_id))
 
     for guide_id in guide_start_ids:
-        for load_node_id in _walk_upstream_to_load_images(workflow, guide_id):
+        for load_node_id in _walk_upstream_to_load_images_for_first_last_guide(workflow, guide_id):
             load_node = workflow.get(str(load_node_id))
             load_inputs = load_node.get("inputs") if isinstance(load_node, dict) else None
             if isinstance(load_inputs, dict):
                 load_inputs["image"] = start_image_name
                 start_node_ids.extend([str(guide_id), str(load_node_id)])
     for guide_id in guide_end_ids:
-        for load_node_id in _walk_upstream_to_load_images(workflow, guide_id):
+        for load_node_id in _walk_upstream_to_load_images_for_first_last_guide(workflow, guide_id):
             load_node = workflow.get(str(load_node_id))
             load_inputs = load_node.get("inputs") if isinstance(load_node, dict) else None
             if isinstance(load_inputs, dict):
