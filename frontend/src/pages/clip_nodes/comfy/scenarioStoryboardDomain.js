@@ -11,6 +11,36 @@ function shouldTraceScenarioRoleScene(sceneId = "") {
   if (!needle) return false;
   return normalizeText(sceneId) === needle;
 }
+
+function resolveScenarioNegativePrompt(source = {}) {
+  const sceneContract = source?.sceneContract && typeof source.sceneContract === "object" ? source.sceneContract : {};
+  return normalizeText(
+    source?.videoNegativePrompt
+    ?? source?.video_negative_prompt
+    ?? source?.negativeVideoPrompt
+    ?? source?.negative_video_prompt
+    ?? source?.negativePrompt
+    ?? source?.negative_prompt
+    ?? sceneContract?.videoNegativePrompt
+    ?? sceneContract?.video_negative_prompt
+    ?? sceneContract?.negativeVideoPrompt
+    ?? sceneContract?.negative_video_prompt
+    ?? sceneContract?.negativePrompt
+    ?? sceneContract?.negative_prompt
+  );
+}
+
+function buildNegativePromptTraceSnapshot(scene = {}) {
+  return {
+    sceneId: normalizeText(scene?.sceneId ?? scene?.scene_id),
+    negative_prompt: normalizeText(scene?.negative_prompt),
+    negativePrompt: normalizeText(scene?.negativePrompt),
+    negative_video_prompt: normalizeText(scene?.negative_video_prompt),
+    negativeVideoPrompt: normalizeText(scene?.negativeVideoPrompt),
+    videoNegativePrompt: normalizeText(scene?.videoNegativePrompt),
+    video_negative_prompt: normalizeText(scene?.video_negative_prompt),
+  };
+}
 export const SCENARIO_LTX_WORKFLOW_MAP = {
   i2v: "i2v",
   f_l: "f_l",
@@ -1079,7 +1109,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ru: source.videoPromptRu ?? source.video_prompt_ru ?? source.videoPrompt ?? source.video_prompt,
     en: source.videoPromptEn ?? source.video_prompt_en ?? source.videoPrompt ?? source.video_prompt,
   });
-  const videoNegativePrompt = normalizeText(source.videoNegativePrompt ?? source.video_negative_prompt);
+  const videoNegativePrompt = resolveScenarioNegativePrompt(source);
   const cameraDual = normalizeDualField({
     ru: source.cameraRu ?? source.camera_ru ?? source.cameraIdea ?? source.camera,
     en: source.cameraEn ?? source.camera_en ?? source.cameraIdea ?? source.camera,
@@ -1166,6 +1196,10 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     videoPromptEn: videoDual.en,
     videoNegativePrompt: videoNegativePrompt || undefined,
     video_negative_prompt: videoNegativePrompt || undefined,
+    negativeVideoPrompt: videoNegativePrompt || undefined,
+    negative_video_prompt: videoNegativePrompt || undefined,
+    negativePrompt: videoNegativePrompt || undefined,
+    negative_prompt: videoNegativePrompt || undefined,
     cameraRu: cameraDual.ru,
     cameraEn: cameraDual.en,
     emotionRu: emotionDual.ru,
@@ -1337,6 +1371,12 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     });
   }
   const resolvedRoleContract = resolveScenarioSceneRoleContract(normalizedScene, scenarioPackage || {});
+  if (videoNegativePrompt) {
+    console.info("[SCENARIO NEGATIVE PROMPT TRACE] normalizeScenarioScene", {
+      before: buildNegativePromptTraceSnapshot(source),
+      after: buildNegativePromptTraceSnapshot(normalizedScene),
+    });
+  }
   if (shouldTraceScenarioRoleScene(normalizedScene.sceneId)) {
     console.debug("[SCENARIO ROLE TRACE] resolvedRoleContract.after_resolveScenarioSceneRoleContract", {
       sceneId: normalizedScene.sceneId,

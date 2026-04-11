@@ -209,7 +209,10 @@ const LEAN_SCENE_FIELDS = [
   "summary", "scene_goal", "narrative_function",
   "route", "ltx_mode", "render_mode", "transition_type",
   "lip_sync", "needs_two_frames",
-  "image_prompt", "video_prompt", "negative_prompt",
+  "image_prompt", "video_prompt",
+  "negative_prompt", "negativePrompt",
+  "negative_video_prompt", "negativeVideoPrompt",
+  "video_negative_prompt", "videoNegativePrompt",
   "first_frame_prompt", "last_frame_prompt",
   "audio_slice_start_sec", "audio_slice_end_sec", "audio_slice_expected_duration_sec",
   "primary_role", "secondary_roles", "active_roles",
@@ -1375,6 +1378,14 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     const normalizedScenes = mergedScenesRaw.map((scene, index) => {
       const sceneId = normalizeText(scene?.scene_id) || `S${index + 1}`;
       const route = normalizeSceneRoute(scene?.route);
+      const negativePrompt = normalizeText(
+        scene?.video_negative_prompt
+        ?? scene?.videoNegativePrompt
+        ?? scene?.negative_video_prompt
+        ?? scene?.negativeVideoPrompt
+        ?? scene?.negative_prompt
+        ?? scene?.negativePrompt
+      );
       const firstFramePrompt = normalizeText(scene?.first_frame_prompt || scene?.firstFramePrompt);
       const lastFramePrompt = normalizeText(scene?.last_frame_prompt || scene?.lastFramePrompt);
       const transitionPrompt = normalizeText(scene?.transition_prompt || scene?.transitionPrompt);
@@ -1394,6 +1405,12 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         framePrompt,
         imagePrompt: framePrompt,
         frame_prompt: framePrompt,
+        videoNegativePrompt: negativePrompt,
+        video_negative_prompt: negativePrompt,
+        negativeVideoPrompt: negativePrompt,
+        negative_video_prompt: negativePrompt,
+        negativePrompt: negativePrompt,
+        negative_prompt: negativePrompt,
         camera_prompt: normalizeText(scene?.camera_prompt || scene?.cameraPrompt),
         motion_prompt: normalizeText(scene?.motion_prompt || scene?.motionPrompt),
         startFramePrompt: route === "first_last" ? firstFramePrompt : "",
