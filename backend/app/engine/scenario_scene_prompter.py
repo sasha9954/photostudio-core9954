@@ -391,17 +391,24 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "For each scene from scene_plan, write route-aware photo_prompt and video_prompt with compact production language.\\n"
         "Preserve identity/world/style continuity and realism.\\n"
         "Prompt text must be short, usable, and not overloaded.\\n"
+        "Avoid unnecessary world/geography decoration (no forced urban/industrial/location labels unless explicitly grounded in inputs).\\n"
         "Video prompts must be LTX-safe and anatomy-safe.\\n"
         "Route rules:\\n"
         "- i2v: one observable action, simple/smooth camera, safe body motion.\\n"
         "- ia2v: AUDIO-SLICE-DRIVEN singing/performance for local scene audio slice; readable face and mouth; emotionally synced vocal delivery; upper-body emphasis; stable base; smooth camera; no abrupt choreography/spins/unstable legs. ia2v is a rare accent route, not every performance beat.\\n"
-        "- first_last: controlled micro-transition only. Two near-neighbor states in same world/hero/location/outfit/lighting/framing family, with exactly one controlled action/state progression.\\n"
+        "- first_last: controlled micro-transition only. Two near-neighbor states in same world/hero/location/outfit/lighting/framing family, with exactly one controlled action/state progression. Must include TWO standalone image prompts: start_image_prompt and end_image_prompt.\\n"
         "FIRST_LAST STRICT RULES:\\n"
         "- same hero identity, same place/location family, same world continuity.\\n"
         "- same outfit continuity unless outfit change is the explicit controlled reveal.\\n"
         "- same lighting family and same camera/framing family.\\n"
         "- only one controlled action or emotional state changes.\\n"
+        "- start_image_prompt and end_image_prompt must each be production-ready standalone still-image prompts (not just notes).\\n"
         "- no location jumps, no wardrobe jump (except explicit reveal), no camera grammar jump, no chaotic pose discontinuity, no identity drift, no background teleportation.\\n"
+        "Scene-level quality beats (if scene ids exist):\\n"
+        "- sc_1: intro-observational, more static, more closed, shadow-heavy, restrained framing intent.\\n"
+        "- sc_2 (first_last): controlled internal shift. START: head lowered, gaze down, cap obscures more face. END: head slightly raised, gaze slightly higher, emotion starts to surface while cap still partially closes face.\\n"
+        "- sc_5: breather with internal defiance; quiet but tense pause with readable subtle emotional charge (not dead static).\\n"
+        "- sc_7 (first_last): START face partly under cap shadow, hand just beginning toward brim. END brim lifted, face open, direct camera gaze, culminating reveal.\\n"
         "Honor scene_plan route semantics exactly: first_last must stay strict first_last contract; ia2v must stay audio-driven singing/performance; i2v must stay simple observable action.\\n"
         "Always include compact negative_prompt with safety constraints.\\n"
         "Set prompt_notes.audio_driven=true for ia2v scenes.\\n"
@@ -409,7 +416,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "{\\n"
         '  \"plan_version\": \"scene_prompts_v1\",\\n'
         '  \"mode\": \"clip\",\\n'
-        '  \"scenes\": [{\"scene_id\": \"sc_1\", \"route\": \"i2v\", \"photo_prompt\": \"\", \"video_prompt\": \"\", \"negative_prompt\": \"\", \"prompt_notes\": {\"shot_intent\": \"\", \"continuity_anchor\": \"\", \"world_anchor\": \"\", \"identity_anchor\": \"\", \"lighting_anchor\": \"\", \"motion_safety\": \"\", \"audio_driven\": false}}],\\n'
+        '  \"scenes\": [{\"scene_id\": \"sc_1\", \"route\": \"i2v\", \"photo_prompt\": \"\", \"video_prompt\": \"\", \"negative_prompt\": \"\", \"start_image_prompt\": \"\", \"end_image_prompt\": \"\", \"prompt_notes\": {\"shot_intent\": \"\", \"continuity_anchor\": \"\", \"world_anchor\": \"\", \"identity_anchor\": \"\", \"lighting_anchor\": \"\", \"motion_safety\": \"\", \"audio_driven\": false}}],\\n'
         '  \"global_prompt_rules\": [\"\"]\\n'
         "}\\n\\n"
         f"SCENE_PROMPTS_CONTEXT:\\n{json.dumps(context, ensure_ascii=False)}"
@@ -421,7 +428,7 @@ def _prompt_notes_template(route: str) -> dict[str, Any]:
     notes = {
         "shot_intent": "",
         "continuity_anchor": "keep identity/world/style continuity from previous scene",
-        "world_anchor": "same realistic world and cultural environment",
+        "world_anchor": "same grounded world tone and atmosphere",
         "identity_anchor": "same hero face, body proportions, and wardrobe logic",
         "lighting_anchor": "plausible lighting progression within same realism family",
         "motion_safety": "single clear motion line, smooth camera, anatomy-safe body dynamics",
@@ -461,8 +468,16 @@ def _route_semantics_mismatch(scene_row: dict[str, Any]) -> bool:
                 "same_camera_family_required",
             )
         )
+        has_two_image_prompts = bool(str(scene_row.get("start_image_prompt") or "").strip()) and bool(
+            str(scene_row.get("end_image_prompt") or "").strip()
+        )
         has_transition_lang = any(token in combined for token in ("a->b", "transition", "start state", "end state", "near-neighbor"))
-        return not (continuity_flags_ok and has_transition_lang and str(notes.get("transition_contract") or "") == "controlled_micro_transition")
+        return not (
+            continuity_flags_ok
+            and has_transition_lang
+            and has_two_image_prompts
+            and str(notes.get("transition_contract") or "") == "controlled_micro_transition"
+        )
     if route == "i2v":
         return any(token in combined for token in ("audio-slice-driven", "sings", "vocal phrase")) or "controlled micro-transition" in combined
     return False
@@ -511,20 +526,65 @@ def _build_fallback_scene_prompts(
             f"One transition keyframe of {primary_role} in the same {world_anchor} scene space, hinge moment for {scene_function}, "
             "subject and environment remain stable, same outfit/light/framing family."
         )
+        start_image_prompt = (
+            f"Start frame still of {primary_role} in the same wall-side setup, head lowered and gaze down, cap brim hiding more of the face, "
+            "closed guarded emotional state, same outfit, same lighting family, same camera family."
+        )
+        end_image_prompt = (
+            f"End frame still of {primary_role} in the same wall-side setup, head slightly raised and gaze slightly higher, emotion becoming visible, "
+            "cap still partially shading the face, same outfit, same lighting family, same camera family."
+        )
+        if scene_id == "sc_2":
+            start_image_prompt = (
+                f"Start frame still of {primary_role} in the same wall-side setup, head lowered, gaze down, face more hidden under the cap brim, "
+                "closed inward emotional state, shadow-heavy continuity, same outfit/light/camera family."
+            )
+            end_image_prompt = (
+                f"End frame still of {primary_role} in the same wall-side setup, head slightly raised, gaze a little higher, emotion beginning to surface, "
+                "cap still keeps partial facial closure, same outfit/light/camera family."
+            )
+        elif scene_id == "sc_7":
+            start_image_prompt = (
+                f"Start frame still of {primary_role} in the same wall-side setup, face still partly in cap shadow, hand just initiating movement toward the brim, "
+                "contained pre-reveal tension, same outfit/light/camera family."
+            )
+            end_image_prompt = (
+                f"End frame still of {primary_role} in the same wall-side setup, brim lifted, face open and readable, direct gaze to camera, "
+                "culmination reveal while preserving same outfit/light/camera family."
+            )
         video_prompt = (
             "Controlled micro-transition in the same exact scene space. Same subject, same outfit continuity, same lighting family, "
             "same framing family. Start state and end state are near-neighbor moments of one action. "
             "Only one meaningful progression occurs. No background jump, no wardrobe jump, no identity drift, no pose discontinuity, no multi-change."
         )
     else:
-        photo_prompt = (
-            f"Realistic keyframe of {primary_role} in {world_anchor}, {scene_function} beat, clear composition, "
-            f"emotion: {emotional}, continuity with prior scenes and lighting arc."
-        )
-        video_prompt = (
-            "One observable action with a simple motion line: "
-            f"{motion_intent}. Use minimal or gentle camera move, keep body motion stable and natural, preserve identity/world/lighting continuity."
-        )
+        if scene_id == "sc_1":
+            photo_prompt = (
+                f"Intro keyframe of {primary_role}, static and observational, closed posture near the same wall, shadow-heavy composition, "
+                f"emotion: restrained {emotional}, continuity with prior scenes and lighting arc."
+            )
+            video_prompt = (
+                "Very restrained intro beat with nearly static body line and subtle breath-level motion only. "
+                "Camera intent is observational and controlled, preserving closed mood and shadow-heavy framing."
+            )
+        elif scene_id == "sc_5":
+            photo_prompt = (
+                f"Quiet tension keyframe of {primary_role} near the same wall, internal defiance gathering under stillness, "
+                "subtle but readable emotional charge in face/shoulders, continuity with prior scenes and lighting arc."
+            )
+            video_prompt = (
+                "Breather beat with micro-performance only: controlled pause, slight posture reset, contained energy building before final push. "
+                "Keep movement subtle but alive, no dead static, no chaotic motion."
+            )
+        else:
+            photo_prompt = (
+                f"Realistic keyframe of {primary_role} in {world_anchor}, {scene_function} beat, clear composition, "
+                f"emotion: {emotional}, continuity with prior scenes and lighting arc."
+            )
+            video_prompt = (
+                "One observable action with a simple motion line: "
+                f"{motion_intent}. Use minimal or gentle camera move, keep body motion stable and natural, preserve identity/world/lighting continuity."
+            )
 
     fallback_notes = _prompt_notes_template(route)
     fallback_notes["shot_intent"] = scene_function
@@ -543,6 +603,12 @@ def _build_fallback_scene_prompts(
         "route": route,
         "photo_prompt": _enrich_prompt_with_anchor(photo_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
         "video_prompt": _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
+        "start_image_prompt": _enrich_prompt_with_anchor(start_image_prompt, anchors["identity_anchor"], anchors["world_anchor"])
+        if route == "first_last"
+        else "",
+        "end_image_prompt": _enrich_prompt_with_anchor(end_image_prompt, anchors["identity_anchor"], anchors["world_anchor"])
+        if route == "first_last"
+        else "",
         "negative_prompt": _GLOBAL_NEGATIVE_PROMPT,
         "prompt_notes": fallback_notes,
     }
@@ -632,6 +698,8 @@ def _normalize_scene_prompts(
         if actual_route == "ia2v":
             normalized_notes["audio_driven"] = True
         if actual_route == "first_last":
+            start_image_prompt = str(base.get("start_image_prompt") or "").strip() or str(fallback_row.get("start_image_prompt") or "").strip()
+            end_image_prompt = str(base.get("end_image_prompt") or "").strip() or str(fallback_row.get("end_image_prompt") or "").strip()
             normalized_notes["transition_contract"] = "controlled_micro_transition"
             normalized_notes["first_state"] = str(
                 prompt_notes.get("first_state") or fallback_row["prompt_notes"].get("first_state") or "start of one controlled action"
@@ -651,12 +719,24 @@ def _normalize_scene_prompts(
             normalized_notes["same_camera_family_required"] = bool(
                 prompt_notes.get("same_camera_family_required") if "same_camera_family_required" in prompt_notes else True
             )
+            if not start_image_prompt or not end_image_prompt:
+                used_fallback = True
+                validation_errors.append(f"first_last_image_prompt_missing:{scene_id}")
+        else:
+            start_image_prompt = ""
+            end_image_prompt = ""
 
         scene_out = {
             "scene_id": scene_id,
             "route": actual_route,
             "photo_prompt": _enrich_prompt_with_anchor(photo_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
             "video_prompt": _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
+            "start_image_prompt": _enrich_prompt_with_anchor(start_image_prompt, anchors["identity_anchor"], anchors["world_anchor"])
+            if actual_route == "first_last"
+            else "",
+            "end_image_prompt": _enrich_prompt_with_anchor(end_image_prompt, anchors["identity_anchor"], anchors["world_anchor"])
+            if actual_route == "first_last"
+            else "",
             "negative_prompt": negative_prompt,
             "prompt_notes": normalized_notes,
         }
