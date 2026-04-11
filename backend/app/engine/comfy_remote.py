@@ -124,6 +124,12 @@ COMFY_WORKFLOW_FAMILY = {
     "continuation": "ltx_continuation",
     "lip_sync": "comfy_lip_sync_audio",
 }
+COMFY_WORKFLOW_FILENAME_FALLBACKS = {
+    "i2v": ("image-video.json",),
+    "f_l": ("last-first cadr.json", "imag-imag-video-bz.json", "imag-imag-video-zvuk.json"),
+    "continuation": ("image-video.json",),
+    "lip_sync": ("image-lipsink-video-music.json",),
+}
 COMFY_MODEL_GATED_WORKFLOW_KEYS = {"i2v", "f_l", "continuation"}
 MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
@@ -217,18 +223,86 @@ def _detect_continuation_asset_type(asset_url: str | None, asset_type_hint: str 
     return "unknown"
 
 
-def load_workflow_json(path: str) -> dict:
-    raw_path = str(path or "").strip()
-    if not raw_path:
+def _resolve_workflow_path(
+    *,
+    workflow_source: str,
+    workflow_key: str,
+    source_origin: str = "default",
+) -> dict:
+    raw_source = str(workflow_source or "").strip()
+    normalized_key = str(workflow_key or "").strip().lower()
+    module_base_dir = Path(__file__).resolve().parent
+    backend_root = Path(__file__).resolve().parents[2]
+    workflows_dir = backend_root / "app" / "workflows"
+    current_working_directory = Path.cwd().resolve()
+
+    candidate_paths: list[Path] = []
+    candidate_modes: list[str] = []
+
+    def _append_candidate(path: Path, mode: str) -> None:
+        resolved = path.resolve()
+        if resolved in candidate_paths:
+            return
+        candidate_paths.append(resolved)
+        candidate_modes.append(mode)
+
+    if raw_source:
+        source_path = Path(raw_source)
+        if source_path.is_absolute():
+            mode = "override" if source_origin == "override" else "absolute"
+            _append_candidate(source_path, mode)
+        else:
+            mode = "override" if source_origin == "override" else "relative"
+            _append_candidate(backend_root / source_path, mode)
+            _append_candidate(workflows_dir / source_path.name, "fallback")
+
+    expected_filenames = COMFY_WORKFLOW_FILENAME_FALLBACKS.get(normalized_key, tuple())
+    for expected_filename in expected_filenames:
+        _append_candidate(workflows_dir / expected_filename, "fallback")
+
+    if not candidate_paths:
         raise ValueError("missing_workflow_path")
 
-    workflow_path = Path(raw_path)
-    if not workflow_path.is_absolute():
-        workflow_path = Path(__file__).resolve().parents[2] / raw_path
-    workflow_path = workflow_path.resolve()
+    resolved_path = None
+    resolution_mode = "fallback"
+    for idx, candidate_path in enumerate(candidate_paths):
+        if candidate_path.exists() and candidate_path.is_file():
+            resolved_path = candidate_path
+            resolution_mode = candidate_modes[idx]
+            break
 
-    if not workflow_path.exists() or not workflow_path.is_file():
-        raise ValueError(f"workflow_not_found:{workflow_path}")
+    checked_paths = [str(path) for path in candidate_paths]
+    debug = {
+        "resolvedWorkflowKey": normalized_key,
+        "workflowFileName": Path(raw_source).name if raw_source else (expected_filenames[0] if expected_filenames else ""),
+        "workflowSourceRaw": raw_source,
+        "workflowSourceResolved": str(resolved_path or candidate_paths[0]),
+        "workflowPathExists": bool(resolved_path is not None),
+        "currentWorkingDirectory": str(current_working_directory),
+        "moduleBaseDir": str(module_base_dir),
+        "workflowsDir": str(workflows_dir),
+        "workflowResolutionMode": resolution_mode if resolved_path else "fallback",
+        "candidatePathsChecked": checked_paths,
+        "workflowsDirExists": workflows_dir.exists(),
+    }
+    if not resolved_path:
+        expected_name = debug["workflowFileName"] or "unknown"
+        raise ValueError(
+            f"workflow_not_found:key={normalized_key};expected_file={expected_name};checked_paths={checked_paths};"
+            f"workflows_dir={workflows_dir};workflows_dir_exists={workflows_dir.exists()}"
+        )
+    debug["workflowSourceResolved"] = str(resolved_path)
+    return {"path": resolved_path, "debug": debug}
+
+
+def load_workflow_json(path: str, *, workflow_key: str = "", source_origin: str = "default") -> tuple[dict, dict]:
+    resolved = _resolve_workflow_path(
+        workflow_source=path,
+        workflow_key=workflow_key,
+        source_origin=source_origin,
+    )
+    workflow_path = resolved["path"]
+    debug = resolved["debug"]
 
     try:
         data = json.loads(workflow_path.read_text(encoding="utf-8"))
@@ -237,7 +311,7 @@ def load_workflow_json(path: str) -> dict:
 
     if not isinstance(data, dict):
         raise ValueError("workflow_invalid_json_root")
-    return data
+    return data, debug
 
 
 def _build_workflow_fingerprint(*, workflow: dict, workflow_key: str, workflow_path: str) -> dict:
@@ -2981,14 +3055,22 @@ def run_comfy_image_to_video(
         seed,
     )
     workflow_source = str(workflow_path or settings.COMFY_IMAGE_VIDEO_WORKFLOW or "").strip()
+    workflow_source_origin = "override" if str(workflow_path or "").strip() else "default"
     try:
-        workflow = load_workflow_json(workflow_source)
+        workflow, workflow_resolution_debug = load_workflow_json(
+            workflow_source,
+            workflow_key=normalized_workflow_key,
+            source_origin=workflow_source_origin,
+        )
     except Exception as exc:
         return None, f"workflow_load_failed:{str(exc)[:300]}"
+    resolved_workflow_source = str(workflow_resolution_debug.get("workflowSourceResolved") or workflow_source)
+    workflow_source = resolved_workflow_source
+    logger.info("[COMFY WORKFLOW RESOLUTION] %s", workflow_resolution_debug)
     workflow_fingerprint = _build_workflow_fingerprint(
         workflow=workflow,
         workflow_key=normalized_workflow_key,
-        workflow_path=workflow_source,
+        workflow_path=resolved_workflow_source,
     )
     logger.info(
         "[COMFY WORKFLOW FINGERPRINT] %s",
@@ -3014,7 +3096,7 @@ def run_comfy_image_to_video(
             "sceneId": str(scene_id or "").strip(),
             "workflowKey": normalized_workflow_key,
             "workflowFamily": workflow_family,
-            "workflowFile": workflow_source,
+            "workflowFile": resolved_workflow_source,
             "stage": "before_upload",
             "submitReachedUpload": True,
             "submitReachedPromptCreation": False,
@@ -3052,7 +3134,7 @@ def run_comfy_image_to_video(
         requested_duration_sec=float(requested_duration_sec),
         seed=seed,
         workflow_key=normalized_workflow_key,
-        workflow_path=workflow_source,
+        workflow_path=resolved_workflow_source,
     )
     if patch_err or not patched_workflow:
         return None, f"workflow_patch_failed:{patch_err or 'unknown_patch_error'}"
@@ -3061,7 +3143,7 @@ def run_comfy_image_to_video(
         {
             "sceneId": str(scene_id or "").strip(),
             "workflowKey": normalized_workflow_key,
-            "workflow_path": workflow_source,
+            "workflow_path": resolved_workflow_source,
             "requestedDurationSec": float(requested_duration_sec),
             "providerDurationSec": float((workflow_discovery_debug or {}).get("providerDurationSec") or requested_duration_sec),
             "fps": int(fps or 0),
