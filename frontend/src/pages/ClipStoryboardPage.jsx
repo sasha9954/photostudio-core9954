@@ -376,6 +376,25 @@ function hasScenarioContractValue(value) {
   return value !== undefined && value !== null;
 }
 
+function resolveScenarioSceneNegativePrompt(scene = {}) {
+  const sceneContract = scene?.sceneContract && typeof scene.sceneContract === "object" ? scene.sceneContract : {};
+  return String(
+    scene?.videoNegativePrompt
+    ?? scene?.video_negative_prompt
+    ?? scene?.negativeVideoPrompt
+    ?? scene?.negative_video_prompt
+    ?? scene?.negativePrompt
+    ?? scene?.negative_prompt
+    ?? sceneContract?.videoNegativePrompt
+    ?? sceneContract?.video_negative_prompt
+    ?? sceneContract?.negativeVideoPrompt
+    ?? sceneContract?.negative_video_prompt
+    ?? sceneContract?.negativePrompt
+    ?? sceneContract?.negative_prompt
+    ?? ""
+  ).trim();
+}
+
 function buildScenarioSceneContractPayload(scene = {}) {
   const forbiddenInsertions = mergeScenarioStringLists(scene?.forbiddenInsertions, GLOBAL_FORBIDDEN_INSERTIONS_GUARDS);
   const forbiddenChanges = mergeScenarioStringLists(scene?.forbiddenChanges, GLOBAL_FORBIDDEN_CHANGES_GUARDS);
@@ -462,8 +481,8 @@ function buildScenarioSceneContractPayload(scene = {}) {
     globalCameraProfile: scene?.globalCameraProfile,
     modelAssignments: scene?.modelAssignments,
     providerHints: scene?.providerHints,
-    videoNegativePrompt: String(scene?.videoNegativePrompt ?? scene?.video_negative_prompt ?? "").trim(),
-    video_negative_prompt: String(scene?.videoNegativePrompt ?? scene?.video_negative_prompt ?? "").trim(),
+    videoNegativePrompt: resolveScenarioSceneNegativePrompt(scene),
+    video_negative_prompt: resolveScenarioSceneNegativePrompt(scene),
     audioSliceStartSec: scene?.audioSliceStartSec,
     audioSliceEndSec: scene?.audioSliceEndSec,
     audioDurationSec: scene?.audioDurationSec,
@@ -10679,8 +10698,8 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           audioSliceUrl: comfyLipSync && comfySendAudioToGenerator ? normalizedVideoSourceUrls.audioSliceUrl : "",
           continuationSourceAssetUrl: normalizedVideoSourceUrls.continuationSourceAssetUrl,
           videoPrompt: syncedVideoPrompt,
-          videoNegativePrompt: String(comfySceneSnapshot?.videoNegativePrompt ?? comfySceneSnapshot?.video_negative_prompt ?? "").trim(),
-          video_negative_prompt: String(comfySceneSnapshot?.videoNegativePrompt ?? comfySceneSnapshot?.video_negative_prompt ?? "").trim(),
+          videoNegativePrompt: resolveScenarioSceneNegativePrompt(comfySceneSnapshot),
+          video_negative_prompt: resolveScenarioSceneNegativePrompt(comfySceneSnapshot),
           transitionActionPrompt: contextPrompt,
           requestedDurationSec: comfyTimeframe.requestedDurationSec,
           sceneStartSec: comfyTimeframe.sceneStartSec,
@@ -13147,21 +13166,7 @@ Aspect ratio: ${imageFormat}`,
       || originalVideoPrompt
       || ""
     ).trim();
-    const strictFirstLastNegativePrompt = String(
-      targetScene?.videoNegativePrompt
-      ?? targetScene?.video_negative_prompt
-      ?? targetScene?.negativeVideoPrompt
-      ?? targetScene?.negative_video_prompt
-      ?? targetScene?.negativePrompt
-      ?? targetScene?.negative_prompt
-      ?? targetScene?.sceneContract?.videoNegativePrompt
-      ?? targetScene?.sceneContract?.video_negative_prompt
-      ?? targetScene?.sceneContract?.negativeVideoPrompt
-      ?? targetScene?.sceneContract?.negative_video_prompt
-      ?? targetScene?.sceneContract?.negativePrompt
-      ?? targetScene?.sceneContract?.negative_prompt
-      ?? ""
-    ).trim();
+    const strictFirstLastNegativePrompt = resolveScenarioSceneNegativePrompt(targetScene);
     const sceneHumanVisualAnchors = strictFirstLastMode ? [] : buildScenarioHumanVisualAnchors(targetScene);
     const humanAnchorBlock = sceneHumanVisualAnchors.length
       ? [
@@ -13318,6 +13323,32 @@ Aspect ratio: ${imageFormat}`,
         continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
         continuationSourceAssetType: safeContinuationSourceAssetType,
       };
+      const payloadNegativePrompt = strictFirstLastMode
+        ? strictFirstLastNegativePrompt
+        : resolveScenarioSceneNegativePrompt(targetScene);
+      console.info("[SCENARIO NEGATIVE PROMPT TRACE]", {
+        sceneId,
+        strictFirstLastMode,
+        targetSceneNegativePromptFields: {
+          videoNegativePrompt: String(targetScene?.videoNegativePrompt ?? "").trim(),
+          video_negative_prompt: String(targetScene?.video_negative_prompt ?? "").trim(),
+          negativeVideoPrompt: String(targetScene?.negativeVideoPrompt ?? "").trim(),
+          negative_video_prompt: String(targetScene?.negative_video_prompt ?? "").trim(),
+          negativePrompt: String(targetScene?.negativePrompt ?? "").trim(),
+          negative_prompt: String(targetScene?.negative_prompt ?? "").trim(),
+        },
+        sceneContractNegativePromptFields: {
+          videoNegativePrompt: String(targetScene?.sceneContract?.videoNegativePrompt ?? "").trim(),
+          video_negative_prompt: String(targetScene?.sceneContract?.video_negative_prompt ?? "").trim(),
+          negativeVideoPrompt: String(targetScene?.sceneContract?.negativeVideoPrompt ?? "").trim(),
+          negative_video_prompt: String(targetScene?.sceneContract?.negative_video_prompt ?? "").trim(),
+          negativePrompt: String(targetScene?.sceneContract?.negativePrompt ?? "").trim(),
+          negative_prompt: String(targetScene?.sceneContract?.negative_prompt ?? "").trim(),
+        },
+        resolvedStrictFirstLastNegativePrompt: strictFirstLastNegativePrompt,
+        payloadVideoNegativePrompt: payloadNegativePrompt,
+        payloadVideo_negative_prompt: payloadNegativePrompt,
+      });
       if (CLIP_TRACE_VISUAL_LOCK) {
         console.debug("[SCENARIO VISUAL LOCK] video prompt", {
           sceneId,
@@ -13364,12 +13395,6 @@ Aspect ratio: ${imageFormat}`,
         external_audio_used: shouldAttachAudioSlice,
         external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
         videoPrompt: finalVideoPrompt,
-        videoNegativePrompt: strictFirstLastMode
-          ? strictFirstLastNegativePrompt
-          : String(targetScene?.videoNegativePrompt ?? targetScene?.video_negative_prompt ?? "").trim(),
-        video_negative_prompt: strictFirstLastMode
-          ? strictFirstLastNegativePrompt
-          : String(targetScene?.videoNegativePrompt ?? targetScene?.video_negative_prompt ?? "").trim(),
         sceneHumanVisualAnchors,
         transitionActionPrompt,
         transitionType,
@@ -13407,6 +13432,9 @@ Aspect ratio: ${imageFormat}`,
         ),
         provider: effectiveVideoProvider,
         sceneRenderProvider: effectiveVideoProvider,
+        ...scenarioContractPayloadSanitized,
+        videoNegativePrompt: payloadNegativePrompt,
+        video_negative_prompt: payloadNegativePrompt,
         promptDebug: {
           routeAwareStrictModeApplied: strictFirstLastMode,
           resolvedStrictPositivePromptPreview: strictFirstLastMode ? strictFirstLastPositivePrompt.slice(0, 280) : "",
@@ -13416,14 +13444,9 @@ Aspect ratio: ${imageFormat}`,
           effectivePromptSource: strictFirstLastMode ? "strict_first_last_only" : "mixed",
           payloadVideoPromptPreview: String(finalVideoPrompt || "").slice(0, 280),
           payloadTransitionActionPromptPreview: String(transitionActionPrompt || "").slice(0, 280),
-          payloadVideoNegativePromptPreview: String(
-            strictFirstLastMode
-              ? strictFirstLastNegativePrompt
-              : (targetScene?.videoNegativePrompt ?? targetScene?.video_negative_prompt ?? "")
-          ).slice(0, 280),
+          payloadVideoNegativePromptPreview: String(payloadNegativePrompt || "").slice(0, 280),
         },
         sceneContract: scenarioContractPayloadSanitized,
-        ...scenarioContractPayloadSanitized,
       };
       traceScenarioVideo("[SCENARIO VIDEO TRACE 11] after_payload_build", {
         sceneId,

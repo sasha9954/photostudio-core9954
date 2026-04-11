@@ -2922,6 +2922,16 @@ def _patch_workflow_inputs(
     }
     logger.info("[COMFY WORKFLOW DISCOVERY] %s", discovery_debug)
     logger.info(
+        "[COMFY NEGATIVE PROMPT TRACE] %s",
+        {
+            "negativePromptPreview": discovery_debug.get("negativePromptPreview"),
+            "negativePromptPatchedValuePreview": discovery_debug.get("negativePromptPatchedValuePreview"),
+            "negativePromptNodePatched": bool(discovery_debug.get("negativePromptNodePatched")),
+            "resolvedNegativePromptNodeId": discovery_debug.get("resolvedNegativePromptNodeId"),
+            "negativePromptSource": discovery_debug.get("negativePromptSource"),
+        },
+    )
+    logger.info(
         "[COMFY PATCH TARGETS] %s",
         {
             "workflow_key": normalized_workflow_key,

@@ -14270,6 +14270,25 @@ def clip_video(payload: ClipVideoIn):
             workflow_key=final_workflow_key,
         )
         scene_video_negative_prompt = _resolve_scene_video_negative_prompt(payload, scene_contract_for_prompt)
+        print(
+            "[CLIP VIDEO NEGATIVE TRACE] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "workflowKey": final_workflow_key,
+                    "payload.videoNegativePrompt": str(payload.videoNegativePrompt or "").strip(),
+                    "payload.video_negative_prompt": str(payload.video_negative_prompt or "").strip(),
+                    "sceneContract.negativeVideoPrompt": str(scene_contract_for_prompt.get("negativeVideoPrompt") or "").strip(),
+                    "sceneContract.negative_video_prompt": str(scene_contract_for_prompt.get("negative_video_prompt") or "").strip(),
+                    "sceneContract.videoNegativePrompt": str(scene_contract_for_prompt.get("videoNegativePrompt") or "").strip(),
+                    "sceneContract.video_negative_prompt": str(scene_contract_for_prompt.get("video_negative_prompt") or "").strip(),
+                    "sceneContract.negativePrompt": str(scene_contract_for_prompt.get("negativePrompt") or "").strip(),
+                    "sceneContract.negative_prompt": str(scene_contract_for_prompt.get("negative_prompt") or "").strip(),
+                    "resolvedSceneVideoNegativePrompt": scene_video_negative_prompt,
+                },
+                ensure_ascii=False,
+            )
+        )
         prompt_debug["resolvedStrictNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
         prompt_debug["payloadVideoNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
         print(
