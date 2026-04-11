@@ -1356,7 +1356,9 @@ def _resolve_video_timeframe(payload: ClipVideoIn) -> tuple[float, float | None,
             boundary_duration = float(delta)
 
     resolved = requested or scene_duration or boundary_duration or 5.0
-    resolved = max(1.0, min(8.0, float(resolved)))
+    if not math.isfinite(float(resolved)):
+        resolved = 5.0
+    resolved = max(1.0, float(resolved))
     return float(resolved), scene_start, scene_end, scene_duration
 
 
@@ -13748,6 +13750,7 @@ def clip_video_start(payload: ClipVideoIn):
     scene_id = str(payload.sceneId or "").strip() or "scene"
     provider = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
     resolved_workflow_hint = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()) or "auto"
+    resolved_duration_sec, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
     job_id = uuid4().hex
     with CLIP_VIDEO_JOBS_LOCK:
         CLIP_VIDEO_JOBS[job_id] = {
@@ -13761,11 +13764,11 @@ def clip_video_start(payload: ClipVideoIn):
             "mode": None,
             "model": None,
             "workflowKey": None,
-            "requestedDurationSec": None,
+            "requestedDurationSec": float(resolved_duration_sec),
             "providerDurationSec": None,
-            "sceneStartSec": payload.sceneStartSec,
-            "sceneEndSec": payload.sceneEndSec,
-            "sceneDurationSec": payload.sceneDurationSec,
+            "sceneStartSec": scene_start_sec,
+            "sceneEndSec": scene_end_sec,
+            "sceneDurationSec": scene_duration_sec,
             "error": None,
             "requestedPromptPreview": "",
             "effectivePromptPreview": "",
@@ -14153,7 +14156,8 @@ def clip_video(payload: ClipVideoIn):
                 {
                     "sceneId": scene_id,
                     "workflowKey": final_workflow_key,
-                    "requestedDurationSec": requested_duration,
+                    "requestedDurationSec": _safe_positive_float(payload.requestedDurationSec),
+                    "resolvedDurationSec": requested_duration,
                     "sceneStartSec": scene_start_sec,
                     "sceneEndSec": scene_end_sec,
                     "sceneDurationSec": scene_duration_sec,
@@ -14702,7 +14706,7 @@ def clip_video(payload: ClipVideoIn):
             "taskId": prompt_id,
             "mode": str(comfy_out.get("mode") or mode),
             "requestedDurationSec": round(float(requested_duration), 3),
-            "providerDurationSec": round(float(comfy_out.get("requestedDurationSec") or requested_duration), 3),
+            "providerDurationSec": round(float(comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or requested_duration), 3),
             "sceneStartSec": scene_start_sec,
             "sceneEndSec": scene_end_sec,
             "sceneDurationSec": scene_duration_sec,
@@ -14726,7 +14730,7 @@ def clip_video(payload: ClipVideoIn):
                 "resolvedNegativePromptNodeId": str(comfy_debug.get("resolved_negative_prompt_node_id") or ""),
                 "negativePromptSource": str(comfy_debug.get("negative_prompt_source") or "missing"),
                 "requestedDurationSec": float(requested_duration),
-                "providerDurationSec": float(comfy_out.get("requestedDurationSec") or requested_duration),
+                "providerDurationSec": float(comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or requested_duration),
                 "sceneStartSec": scene_start_sec,
                 "sceneEndSec": scene_end_sec,
                 "sceneDurationSec": scene_duration_sec,

@@ -1335,6 +1335,143 @@ def _patch_audio_frames(workflow: dict, frames: int) -> None:
         inputs["frames_number"] = int(frames)
 
 
+def _is_linked_input(value) -> bool:
+    return isinstance(value, (list, tuple, dict))
+
+
+def _patch_duration_and_frames(
+    workflow: dict,
+    *,
+    workflow_key: str,
+    requested_duration_sec: float,
+    fps_hint: int | float | None = None,
+) -> dict:
+    requested_duration = float(requested_duration_sec)
+    resolved_fps = int(max(1, int(round(float(fps_hint or _resolve_workflow_fps(workflow))))))
+    frames = max(1, int(math.ceil(requested_duration * float(resolved_fps))))
+    duration_int = max(1, int(round(requested_duration)))
+    duration_patch_ids: list[str] = []
+    fps_patch_ids: list[str] = []
+    frames_patch_ids: list[str] = []
+
+    def _patch_primitive_value(node_id: str, value) -> bool:
+        node = workflow.get(str(node_id))
+        if not isinstance(node, dict):
+            return False
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "value" not in inputs:
+            return False
+        inputs["value"] = value
+        return True
+
+    # Priority A: explicit duration/fps primitive nodes by title/meta/name.
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "value" not in inputs:
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        title_l = _node_title_lower(node)
+        if any(hint in title_l for hint in ("fps", "frame rate")):
+            fps_value = int(max(1, int(round(float(resolved_fps)))))
+            if _patch_primitive_value(str(node_id), fps_value):
+                fps_patch_ids.append(str(node_id))
+                continue
+        if any(hint in title_l for hint in ("duration", "length", "seconds", "sec")):
+            duration_value = float(requested_duration) if class_type == "primitivefloat" else int(duration_int)
+            if _patch_primitive_value(str(node_id), duration_value):
+                duration_patch_ids.append(str(node_id))
+
+    # Priority B: graph-aware linked chain patch for linked frames_number/frames/num_frames.
+    frame_input_keys = ("frames_number", "frames", "num_frames")
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for key in frame_input_keys:
+            if key not in inputs:
+                continue
+            value = inputs.get(key)
+            if not _is_linked_input(value):
+                continue
+            linked_ids = _extract_linked_node_ids(value)
+            queue: deque[str] = deque([str(item) for item in linked_ids if str(item).strip()])
+            visited: set[str] = set()
+            chain_patched = False
+            while queue:
+                upstream_id = str(queue.popleft()).strip()
+                if not upstream_id or upstream_id in visited:
+                    continue
+                visited.add(upstream_id)
+                upstream_node = workflow.get(upstream_id)
+                if not isinstance(upstream_node, dict):
+                    continue
+                upstream_inputs = upstream_node.get("inputs")
+                if not isinstance(upstream_inputs, dict):
+                    continue
+                upstream_title_l = _node_title_lower(upstream_node)
+                upstream_class = str(upstream_node.get("class_type") or "").strip().lower()
+
+                if "value" in upstream_inputs:
+                    if any(hint in upstream_title_l for hint in ("fps", "frame rate")):
+                        upstream_inputs["value"] = int(resolved_fps)
+                        fps_patch_ids.append(upstream_id)
+                        chain_patched = True
+                    elif any(hint in upstream_title_l for hint in ("duration", "length", "seconds", "sec")):
+                        upstream_inputs["value"] = float(requested_duration) if upstream_class == "primitivefloat" else int(duration_int)
+                        duration_patch_ids.append(upstream_id)
+                        chain_patched = True
+
+                if upstream_class == "expression":
+                    for expr_key in ("a", "b"):
+                        expr_val = upstream_inputs.get(expr_key)
+                        if isinstance(expr_val, (int, float)):
+                            if expr_key == "a":
+                                upstream_inputs[expr_key] = int(duration_int)
+                            elif expr_key == "b":
+                                upstream_inputs[expr_key] = int(resolved_fps)
+                            chain_patched = True
+                    for upstream_link in upstream_inputs.values():
+                        for next_id in _extract_linked_node_ids(upstream_link):
+                            if next_id and next_id not in visited:
+                                queue.append(next_id)
+            if chain_patched:
+                frames_patch_ids.append(str(node_id))
+
+    # Priority C: fallback direct literal frame fields.
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for key in frame_input_keys:
+            if key not in inputs:
+                continue
+            if _is_linked_input(inputs.get(key)):
+                continue
+            inputs[key] = int(frames)
+            frames_patch_ids.append(str(node_id))
+
+    # Priority D: keep legacy reserve behavior.
+    _patch_audio_frames(workflow, frames)
+
+    return {
+        "requestedDurationSec": float(requested_duration),
+        "fps": int(resolved_fps),
+        "frames": int(frames),
+        "duration_patch_applied": bool(duration_patch_ids),
+        "fps_patch_applied": bool(fps_patch_ids),
+        "frames_patch_applied": bool(frames_patch_ids),
+        "patched_duration_node_ids": list(dict.fromkeys(duration_patch_ids)),
+        "patched_fps_node_ids": list(dict.fromkeys(fps_patch_ids)),
+        "patched_frames_node_ids": list(dict.fromkeys(frames_patch_ids)),
+    }
+
+
 def _extract_linked_node_ids(value) -> list[str]:
     if isinstance(value, list) and value:
         first = value[0]
@@ -2096,11 +2233,6 @@ def _patch_workflow_inputs(
         discovered_fps_id = LIPSYNC_PRIMARY_NODE_IDS["fps"]
     fps = _resolve_workflow_fps(wf, preferred_fps_node_id=discovered_fps_id)
     frames = max(1, int(math.ceil(float(requested_duration_sec) * float(fps))))
-    print("[COMFY LENGTH APPLY]", {
-        "requestedDurationSec": float(requested_duration_sec),
-        "fps": int(fps),
-        "frames": int(frames),
-    })
 
     patch_values = []
     if normalized_workflow_key == "lip_sync":
@@ -2217,7 +2349,15 @@ def _patch_workflow_inputs(
             },
         )
 
-    _patch_audio_frames(wf, frames)
+    timing_patch_debug = _patch_duration_and_frames(
+        wf,
+        workflow_key=normalized_workflow_key,
+        requested_duration_sec=float(requested_duration_sec),
+        fps_hint=fps,
+    )
+    fps = int(timing_patch_debug.get("fps") or fps)
+    frames = int(timing_patch_debug.get("frames") or frames)
+    print("[COMFY LENGTH APPLY]", timing_patch_debug)
 
     if seed is not None:
         for node_id, key in FIXED_SEED_NODES:
@@ -2255,6 +2395,12 @@ def _patch_workflow_inputs(
         "negativePromptSource": negative_prompt_source,
         "negativePromptPreview": _preview_value(effective_negative_prompt, limit=320),
         "negativePromptStaticPreview": _preview_value(workflow_static_negative_prompt, limit=220),
+        "durationPatchApplied": bool(timing_patch_debug.get("duration_patch_applied")),
+        "fpsPatchApplied": bool(timing_patch_debug.get("fps_patch_applied")),
+        "framesPatchApplied": bool(timing_patch_debug.get("frames_patch_applied")),
+        "patchedDurationNodeIds": timing_patch_debug.get("patched_duration_node_ids") or [],
+        "patchedFpsNodeIds": timing_patch_debug.get("patched_fps_node_ids") or [],
+        "patchedFramesNodeIds": timing_patch_debug.get("patched_frames_node_ids") or [],
     }
     logger.info("[COMFY WORKFLOW DISCOVERY] %s", discovery_debug)
     logger.info(
@@ -2489,6 +2635,19 @@ def run_comfy_image_to_video(
     )
     if patch_err or not patched_workflow:
         return None, f"workflow_patch_failed:{patch_err or 'unknown_patch_error'}"
+    logger.info(
+        "[COMFY VIDEO TIMING PATCH] %s",
+        {
+            "sceneId": str(scene_id or "").strip(),
+            "workflowKey": normalized_workflow_key,
+            "requestedDurationSec": float(requested_duration_sec),
+            "fps": int(fps or 0),
+            "frames": int(frame_count or 0),
+            "durationPatchApplied": bool((workflow_discovery_debug or {}).get("durationPatchApplied")),
+            "fpsPatchApplied": bool((workflow_discovery_debug or {}).get("fpsPatchApplied")),
+            "framesPatchApplied": bool((workflow_discovery_debug or {}).get("framesPatchApplied")),
+        },
+    )
     patched_model_node_ids: list[str] = []
     if effective_model_spec:
         patched_model_node_ids, model_patch_err = _apply_model_spec_to_workflow(
@@ -3257,6 +3416,7 @@ def run_comfy_image_to_video(
         "videoUrl": video_url,
         "model": normalized_model_key,
         "requestedDurationSec": float(requested_duration_sec),
+        "providerDurationSec": float(requested_duration_sec),
         "taskId": prompt_id,
         "debug": {
             "scene_id": str(scene_id or "").strip(),
@@ -3268,6 +3428,7 @@ def run_comfy_image_to_video(
             "workflow": workflow_source,
             "workflow_path": workflow_source,
             "requestedDurationSec": float(requested_duration_sec),
+            "providerDurationSec": float(requested_duration_sec),
             "workflow_family": workflow_family,
             "model_key": normalized_model_key,
             "model_ckpt_applied": str((effective_model_spec or {}).get("ckpt_name") or ""),
@@ -3276,6 +3437,15 @@ def run_comfy_image_to_video(
             "capability_skip_reason": capability_skip_reason,
             "actual_mode": normalized_workflow_key,
             "patched_node_ids": list(dict.fromkeys([*patched_model_node_ids, *first_last_start_node_ids, *first_last_end_node_ids, *audio_patch_node_ids])),
+            "timing_patched_node_ids": list(
+                dict.fromkeys(
+                    [
+                        *(((workflow_discovery_debug or {}).get("patchedDurationNodeIds")) or []),
+                        *(((workflow_discovery_debug or {}).get("patchedFpsNodeIds")) or []),
+                        *(((workflow_discovery_debug or {}).get("patchedFramesNodeIds")) or []),
+                    ]
+                )
+            ),
             "prompt_patched_node_ids": [
                 str(
                     (workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
@@ -3295,6 +3465,12 @@ def run_comfy_image_to_video(
             "start_image_used": bool(first_last_start_node_ids),
             "end_image_used": bool(first_last_end_node_ids),
             "second_frame_patch_applied": bool(first_last_applied),
+            "duration_patch_applied": bool((workflow_discovery_debug or {}).get("durationPatchApplied")),
+            "fps_patch_applied": bool((workflow_discovery_debug or {}).get("fpsPatchApplied")),
+            "frames_patch_applied": bool((workflow_discovery_debug or {}).get("framesPatchApplied")),
+            "patched_duration_node_ids": (workflow_discovery_debug or {}).get("patchedDurationNodeIds") or [],
+            "patched_fps_node_ids": (workflow_discovery_debug or {}).get("patchedFpsNodeIds") or [],
+            "patched_frames_node_ids": (workflow_discovery_debug or {}).get("patchedFramesNodeIds") or [],
             "sceneStartSec": scene_start_sec,
             "sceneEndSec": scene_end_sec,
             "sceneDurationSec": scene_duration_sec,
