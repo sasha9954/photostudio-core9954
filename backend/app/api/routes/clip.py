@@ -2293,9 +2293,62 @@ def _compose_video_effective_prompt(
     duet_lock_enabled: bool | None = None,
     duet_identity_contract: str | None = None,
     director_genre_intent: str | None = None,
+    workflow_key: str | None = None,
 ) -> tuple[str, dict]:
     base_prompt = str(video_prompt or "").strip()
     transition_prompt = str(transition_action_prompt or "").strip()
+    normalized_workflow_key = _normalize_ltx_workflow_key(workflow_key)
+    strict_first_last_mode = normalized_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS
+    strict_positive_prompt = transition_prompt or base_prompt
+    strict_negative_prompt = str(
+        (scene_contract if isinstance(scene_contract, dict) else {}).get("negativeVideoPrompt")
+        or (scene_contract if isinstance(scene_contract, dict) else {}).get("negative_video_prompt")
+        or (scene_contract if isinstance(scene_contract, dict) else {}).get("videoNegativePrompt")
+        or (scene_contract if isinstance(scene_contract, dict) else {}).get("video_negative_prompt")
+        or ""
+    ).strip()
+    if strict_first_last_mode and strict_positive_prompt:
+        effective_prompt = build_clip_video_motion_prompt(
+            base_prompt=strict_positive_prompt,
+            transition_prompt="",
+            fmt=output_format,
+            seconds=requested_duration_sec,
+        )
+        return effective_prompt, {
+            "has_humans": _looks_like_human_scene(
+                base_prompt,
+                transition_prompt,
+                scene_type,
+                shot_type,
+                scene_human_visual_anchors=scene_human_visual_anchors,
+            ),
+            "requestedPromptPreview": _prompt_preview(base_prompt, 500),
+            "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+            "effectivePromptLength": len(effective_prompt),
+            "videoPromptLength": len(base_prompt),
+            "transitionActionPromptLength": len(transition_prompt),
+            "sceneHumanVisualAnchors": [str(item or "").strip() for item in (scene_human_visual_anchors or []) if str(item or "").strip()],
+            "hardContinuityContractApplied": False,
+            "openingShot": None,
+            "identityLockApplied": False,
+            "genreHardeningApplied": False,
+            "genreHardeningSource": "strict_first_last_suppressed",
+            "genreHardeningPreview": "",
+            "ltxCanonApplied": False,
+            "ltxCanonLipSyncMode": False,
+            "duetHardeningApplied": False,
+            "duetHardeningSource": "strict_first_last_suppressed",
+            "duetContractDetected": False,
+            "duetContractPreview": {},
+            "routeAwareStrictModeApplied": True,
+            "resolvedStrictPositivePromptPreview": _prompt_preview(strict_positive_prompt, 320),
+            "resolvedStrictNegativePromptPreview": _prompt_preview(strict_negative_prompt, 320),
+            "humanAnchorsSuppressedForFirstLast": True,
+            "globalConsistencySuppressedForFirstLast": True,
+            "effectivePromptSource": "strict_first_last_only",
+            "payloadVideoPromptPreview": _prompt_preview(base_prompt, 320),
+            "payloadTransitionActionPromptPreview": _prompt_preview(transition_prompt, 320),
+        }
     base_effective_prompt = build_clip_video_motion_prompt(
         base_prompt=base_prompt,
         transition_prompt=transition_prompt,
@@ -2382,6 +2435,14 @@ def _compose_video_effective_prompt(
         "duetHardeningSource": duet_hardening_source,
         "duetContractDetected": duet_contract_detected,
         "duetContractPreview": duet_contract_preview,
+        "routeAwareStrictModeApplied": False,
+        "resolvedStrictPositivePromptPreview": "",
+        "resolvedStrictNegativePromptPreview": "",
+        "humanAnchorsSuppressedForFirstLast": False,
+        "globalConsistencySuppressedForFirstLast": False,
+        "effectivePromptSource": "mixed" if transition_prompt else "generic",
+        "payloadVideoPromptPreview": _prompt_preview(base_prompt, 320),
+        "payloadTransitionActionPromptPreview": _prompt_preview(transition_prompt, 320),
     }
 
 
@@ -14189,6 +14250,7 @@ def clip_video(payload: ClipVideoIn):
             duet_lock_enabled=payload.duetLockEnabled,
             duet_identity_contract=payload.duetIdentityContract,
             director_genre_intent=payload.directorGenreIntent,
+            workflow_key=final_workflow_key,
         )
         scene_video_negative_prompt = str(
             payload.videoNegativePrompt
@@ -14199,6 +14261,8 @@ def clip_video(payload: ClipVideoIn):
             or scene_contract_for_prompt.get("negative_video_prompt")
             or ""
         ).strip()
+        prompt_debug["resolvedStrictNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
+        prompt_debug["payloadVideoNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
         print(
             "[CLIP VIDEO PROMPT TRANSPORT] "
             f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key} source_image_url={source_image_url} "
@@ -14206,7 +14270,9 @@ def clip_video(payload: ClipVideoIn):
             f"effectivePromptLength={prompt_debug.get('effectivePromptLength')} "
             f"requestedPromptPreview={_prompt_preview(scene_video_prompt, 320)} "
             f"effectivePromptPreview={str(prompt_debug.get('effectivePromptPreview') or '')} "
-            f"videoNegativePromptPreview={_prompt_preview(scene_video_negative_prompt, 220)}"
+            f"videoNegativePromptPreview={_prompt_preview(scene_video_negative_prompt, 220)} "
+            f"effectivePromptSource={str(prompt_debug.get('effectivePromptSource') or 'generic')} "
+            f"routeAwareStrictModeApplied={bool(prompt_debug.get('routeAwareStrictModeApplied'))}"
         )
 
         try:
@@ -14734,6 +14800,15 @@ def clip_video(payload: ClipVideoIn):
                 "duetHardeningSource": prompt_debug.get("duetHardeningSource"),
                 "duetContractDetected": prompt_debug.get("duetContractDetected"),
                 "duetContractPreview": prompt_debug.get("duetContractPreview"),
+                "routeAwareStrictModeApplied": bool(prompt_debug.get("routeAwareStrictModeApplied")),
+                "resolvedStrictPositivePromptPreview": prompt_debug.get("resolvedStrictPositivePromptPreview"),
+                "resolvedStrictNegativePromptPreview": prompt_debug.get("resolvedStrictNegativePromptPreview"),
+                "humanAnchorsSuppressedForFirstLast": bool(prompt_debug.get("humanAnchorsSuppressedForFirstLast")),
+                "globalConsistencySuppressedForFirstLast": bool(prompt_debug.get("globalConsistencySuppressedForFirstLast")),
+                "effectivePromptSource": str(prompt_debug.get("effectivePromptSource") or "generic"),
+                "payloadVideoPromptPreview": prompt_debug.get("payloadVideoPromptPreview"),
+                "payloadTransitionActionPromptPreview": prompt_debug.get("payloadTransitionActionPromptPreview"),
+                "payloadVideoNegativePromptPreview": prompt_debug.get("payloadVideoNegativePromptPreview"),
                 "promptPatchedNodeIds": comfy_debug.get("prompt_patched_node_ids") or [],
                 "negativePromptNodePatched": bool(comfy_debug.get("negative_prompt_node_patched")),
                 "negativePromptPreview": str(comfy_debug.get("negative_prompt_preview") or ""),
@@ -14829,7 +14904,12 @@ def clip_video(payload: ClipVideoIn):
         duet_lock_enabled=payload.duetLockEnabled,
         duet_identity_contract=payload.duetIdentityContract,
         director_genre_intent=payload.directorGenreIntent,
+        workflow_key=final_workflow_key,
     )
+    scene_video_negative_prompt = str(payload.videoNegativePrompt or payload.video_negative_prompt or "").strip()
+    if scene_video_negative_prompt:
+        prompt_debug["resolvedStrictNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
+        prompt_debug["payloadVideoNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
     if mode == "lipsync":
         effective_prompt = _build_lipsync_avatar_prompt(effective_prompt, str(payload.shotType or ""))
     if not effective_prompt:
@@ -15156,6 +15236,15 @@ def clip_video(payload: ClipVideoIn):
             "duetHardeningSource": prompt_debug.get("duetHardeningSource"),
             "duetContractDetected": prompt_debug.get("duetContractDetected"),
             "duetContractPreview": prompt_debug.get("duetContractPreview"),
+            "routeAwareStrictModeApplied": bool(prompt_debug.get("routeAwareStrictModeApplied")),
+            "resolvedStrictPositivePromptPreview": prompt_debug.get("resolvedStrictPositivePromptPreview"),
+            "resolvedStrictNegativePromptPreview": prompt_debug.get("resolvedStrictNegativePromptPreview"),
+            "humanAnchorsSuppressedForFirstLast": bool(prompt_debug.get("humanAnchorsSuppressedForFirstLast")),
+            "globalConsistencySuppressedForFirstLast": bool(prompt_debug.get("globalConsistencySuppressedForFirstLast")),
+            "effectivePromptSource": str(prompt_debug.get("effectivePromptSource") or "generic"),
+            "payloadVideoPromptPreview": prompt_debug.get("payloadVideoPromptPreview"),
+            "payloadTransitionActionPromptPreview": prompt_debug.get("payloadTransitionActionPromptPreview"),
+            "payloadVideoNegativePromptPreview": prompt_debug.get("payloadVideoNegativePromptPreview"),
             "promptPatchedNodeIds": [],
         },
     }

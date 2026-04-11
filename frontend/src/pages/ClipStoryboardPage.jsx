@@ -13136,16 +13136,39 @@ Aspect ratio: ${imageFormat}`,
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
       : "";
+    const strictFirstLastMode = String(effectiveWorkflowKey || "").trim().toLowerCase() === "f_l";
     const originalVideoPrompt = getSceneTransitionPrompt(targetScene);
-    const sceneHumanVisualAnchors = buildScenarioHumanVisualAnchors(targetScene);
+    const strictFirstLastPositivePrompt = String(
+      targetScene?.transitionActionPrompt
+      || targetScene?.positiveVideoPrompt
+      || targetScene?.positive_video_prompt
+      || targetScene?.sceneContract?.positiveVideoPrompt
+      || targetScene?.sceneContract?.positive_video_prompt
+      || originalVideoPrompt
+      || ""
+    ).trim();
+    const strictFirstLastNegativePrompt = String(
+      targetScene?.videoNegativePrompt
+      ?? targetScene?.video_negative_prompt
+      ?? targetScene?.negativeVideoPrompt
+      ?? targetScene?.negative_video_prompt
+      ?? targetScene?.sceneContract?.videoNegativePrompt
+      ?? targetScene?.sceneContract?.video_negative_prompt
+      ?? targetScene?.sceneContract?.negativeVideoPrompt
+      ?? targetScene?.sceneContract?.negative_video_prompt
+      ?? ""
+    ).trim();
+    const sceneHumanVisualAnchors = strictFirstLastMode ? [] : buildScenarioHumanVisualAnchors(targetScene);
     const humanAnchorBlock = sceneHumanVisualAnchors.length
       ? [
         "SCENE-SPECIFIC HUMAN VISUAL ANCHORS (SOURCE FRAME):",
         ...sceneHumanVisualAnchors.map((line) => `- ${line}`),
       ].join("\n")
       : "";
-    const videoVisualGlueText = buildScenarioVideoVisualGlueText(targetScene);
-    const finalVideoPrompt = [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
+    const videoVisualGlueText = strictFirstLastMode ? "" : buildScenarioVideoVisualGlueText(targetScene);
+    const finalVideoPrompt = strictFirstLastMode
+      ? strictFirstLastPositivePrompt
+      : [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
     const sourceImageUrl = requiresTwoFrames
       ? (resolvedFirstFrameUrl || "")
       : (continuationEnabled
@@ -13280,7 +13303,7 @@ Aspect ratio: ${imageFormat}`,
       });
       const transitionActionPrompt = [
         continuityBridgePrompt,
-        getSceneTransitionPrompt(targetScene),
+        strictFirstLastMode ? strictFirstLastPositivePrompt : getSceneTransitionPrompt(targetScene),
       ].filter(Boolean).join("\n");
       const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
       const scenarioContractPayloadSanitized = {
@@ -13337,8 +13360,12 @@ Aspect ratio: ${imageFormat}`,
         external_audio_used: shouldAttachAudioSlice,
         external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
         videoPrompt: finalVideoPrompt,
-        videoNegativePrompt: String(targetScene?.videoNegativePrompt ?? targetScene?.video_negative_prompt ?? "").trim(),
-        video_negative_prompt: String(targetScene?.videoNegativePrompt ?? targetScene?.video_negative_prompt ?? "").trim(),
+        videoNegativePrompt: strictFirstLastMode
+          ? strictFirstLastNegativePrompt
+          : String(targetScene?.videoNegativePrompt ?? targetScene?.video_negative_prompt ?? "").trim(),
+        video_negative_prompt: strictFirstLastMode
+          ? strictFirstLastNegativePrompt
+          : String(targetScene?.videoNegativePrompt ?? targetScene?.video_negative_prompt ?? "").trim(),
         sceneHumanVisualAnchors,
         transitionActionPrompt,
         transitionType,
@@ -13376,6 +13403,21 @@ Aspect ratio: ${imageFormat}`,
         ),
         provider: effectiveVideoProvider,
         sceneRenderProvider: effectiveVideoProvider,
+        promptDebug: {
+          routeAwareStrictModeApplied: strictFirstLastMode,
+          resolvedStrictPositivePromptPreview: strictFirstLastMode ? strictFirstLastPositivePrompt.slice(0, 280) : "",
+          resolvedStrictNegativePromptPreview: strictFirstLastMode ? strictFirstLastNegativePrompt.slice(0, 280) : "",
+          humanAnchorsSuppressedForFirstLast: strictFirstLastMode,
+          globalConsistencySuppressedForFirstLast: strictFirstLastMode,
+          effectivePromptSource: strictFirstLastMode ? "strict_first_last_only" : "mixed",
+          payloadVideoPromptPreview: String(finalVideoPrompt || "").slice(0, 280),
+          payloadTransitionActionPromptPreview: String(transitionActionPrompt || "").slice(0, 280),
+          payloadVideoNegativePromptPreview: String(
+            strictFirstLastMode
+              ? strictFirstLastNegativePrompt
+              : (targetScene?.videoNegativePrompt ?? targetScene?.video_negative_prompt ?? "")
+          ).slice(0, 280),
+        },
         sceneContract: scenarioContractPayloadSanitized,
         ...scenarioContractPayloadSanitized,
       };
