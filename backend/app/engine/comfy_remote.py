@@ -1670,11 +1670,68 @@ def _walk_upstream_to_load_images(workflow: dict, start_node_id: str) -> list[st
     return load_image_ids
 
 
-def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image_name: str) -> tuple[bool, list[str], list[str]]:
+def _verify_first_last_frame_patch(
+    workflow: dict,
+    *,
+    start_image_name: str,
+    end_image_name: str,
+    start_node_ids: list[str],
+    end_node_ids: list[str],
+) -> dict:
+    def _resolve_image_value_from_nodes(node_ids: list[str], expected_image_name: str) -> str:
+        expected_value = str(expected_image_name or "").strip()
+        for node_id in node_ids:
+            node = workflow.get(str(node_id))
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            current_value = str(inputs.get("image") or "").strip()
+            if current_value:
+                if expected_value and current_value == expected_value:
+                    return current_value
+                if not expected_value:
+                    return current_value
+        return ""
+
+    unique_start_nodes = [str(node_id) for node_id in list(dict.fromkeys(start_node_ids or [])) if str(node_id).strip()]
+    unique_end_nodes = [str(node_id) for node_id in list(dict.fromkeys(end_node_ids or [])) if str(node_id).strip()]
+    overlap_node_ids = sorted(set(unique_start_nodes).intersection(set(unique_end_nodes)))
+
+    patched_first_image_value = _resolve_image_value_from_nodes(unique_start_nodes, start_image_name)
+    patched_second_image_value = _resolve_image_value_from_nodes(unique_end_nodes, end_image_name)
+    first_bound = bool(patched_first_image_value and patched_first_image_value == str(start_image_name or "").strip())
+    second_bound = bool(patched_second_image_value and patched_second_image_value == str(end_image_name or "").strip())
+    distinct_branches = bool(set(unique_start_nodes) and set(unique_end_nodes) and not overlap_node_ids)
+    verified = bool(first_bound and second_bound and distinct_branches)
+
+    warning = ""
+    if not verified:
+        if not second_bound:
+            warning = "end frame not bound to workflow"
+        elif not first_bound:
+            warning = "start frame not bound to workflow"
+        elif overlap_node_ids:
+            warning = "start and end frame branch collapsed to the same node(s)"
+        else:
+            warning = "first_last frame patch verification failed"
+
+    return {
+        "first_last_patch_verified": verified,
+        "first_last_patch_warning": warning,
+        "patched_first_image_value": patched_first_image_value,
+        "patched_second_image_value": patched_second_image_value,
+        "first_last_patch_overlap_node_ids": overlap_node_ids,
+    }
+
+
+def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image_name: str) -> dict:
     start_node_ids: list[str] = []
     end_node_ids: list[str] = []
     guide_start_ids: list[str] = []
     guide_end_ids: list[str] = []
+    image_patch_source = "fallback"
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
@@ -1713,7 +1770,26 @@ def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image
     start_node_ids = list(dict.fromkeys(start_node_ids))
     end_node_ids = list(dict.fromkeys(end_node_ids))
     if start_node_ids and end_node_ids:
-        return True, start_node_ids, end_node_ids
+        image_patch_source = "guide_graph"
+        verification = _verify_first_last_frame_patch(
+            workflow,
+            start_image_name=start_image_name,
+            end_image_name=end_image_name,
+            start_node_ids=start_node_ids,
+            end_node_ids=end_node_ids,
+        )
+        return {
+            "firstFrameNodePatched": bool(start_node_ids),
+            "lastFrameNodePatched": bool(end_node_ids),
+            "secondFramePatchApplied": True,
+            "first_last_start_node_ids": start_node_ids,
+            "first_last_end_node_ids": end_node_ids,
+            "first_last_guide_node_ids": list(dict.fromkeys([*guide_start_ids, *guide_end_ids])),
+            "first_last_start_guide_ids": list(dict.fromkeys(guide_start_ids)),
+            "first_last_end_guide_ids": list(dict.fromkeys(guide_end_ids)),
+            "first_last_image_patch_source": image_patch_source,
+            **verification,
+        }
 
     # Legacy label/title fallback path (reserve compatibility)
     for node_id, node in workflow.items():
@@ -1826,8 +1902,28 @@ def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image
 
     start_node_ids = list(dict.fromkeys(start_node_ids))
     end_node_ids = list(dict.fromkeys(end_node_ids))
+    if start_node_ids or end_node_ids:
+        image_patch_source = "direct_loadimage"
     second_frame_patch_applied = bool(start_node_ids and end_node_ids)
-    return second_frame_patch_applied, start_node_ids, end_node_ids
+    verification = _verify_first_last_frame_patch(
+        workflow,
+        start_image_name=start_image_name,
+        end_image_name=end_image_name,
+        start_node_ids=start_node_ids,
+        end_node_ids=end_node_ids,
+    )
+    return {
+        "firstFrameNodePatched": bool(start_node_ids),
+        "lastFrameNodePatched": bool(end_node_ids),
+        "secondFramePatchApplied": second_frame_patch_applied,
+        "first_last_start_node_ids": start_node_ids,
+        "first_last_end_node_ids": end_node_ids,
+        "first_last_guide_node_ids": list(dict.fromkeys([*guide_start_ids, *guide_end_ids])),
+        "first_last_start_guide_ids": list(dict.fromkeys(guide_start_ids)),
+        "first_last_end_guide_ids": list(dict.fromkeys(guide_end_ids)),
+        "first_last_image_patch_source": image_patch_source,
+        **verification,
+    }
 
 
 def _validate_audio_workflow_file(*, workflow_key: str, workflow_source: str) -> tuple[bool, str | None]:
@@ -2646,6 +2742,7 @@ def _patch_workflow_inputs(
         "resolvedNegativePromptNodeId": str(resolved_negative_prompt_node_id or ""),
         "negativePromptSource": negative_prompt_source,
         "negativePromptPreview": _preview_value(effective_negative_prompt, limit=320),
+        "negativePromptPatchedValuePreview": _preview_value(effective_negative_prompt, limit=320),
         "negativePromptStaticPreview": _preview_value(workflow_static_negative_prompt, limit=220),
         "durationPatchApplied": bool(timing_patch_debug.get("duration_patch_applied")),
         "fpsPatchApplied": bool(timing_patch_debug.get("fps_patch_applied")),
@@ -2948,14 +3045,33 @@ def run_comfy_image_to_video(
     first_last_applied = False
     first_last_start_node_ids: list[str] = []
     first_last_end_node_ids: list[str] = []
+    first_last_guide_node_ids: list[str] = []
+    first_last_start_guide_ids: list[str] = []
+    first_last_end_guide_ids: list[str] = []
+    first_last_image_patch_source = "fallback"
+    first_last_patch_verified = False
+    first_last_patch_warning = ""
+    patched_first_image_value = ""
+    patched_second_image_value = ""
     if normalized_workflow_key in {"f_l"}:
         if not uploaded_end_name:
             return None, "capability_error:LTX_SECOND_FRAME_REQUIRED:end_image_missing_for_first_last_workflow"
-        first_last_applied, first_last_start_node_ids, first_last_end_node_ids = _patch_first_last_images(
+        first_last_patch_debug = _patch_first_last_images(
             patched_workflow,
             start_image_name=uploaded_start_name,
             end_image_name=uploaded_end_name,
         )
+        first_last_applied = bool(first_last_patch_debug.get("secondFramePatchApplied"))
+        first_last_start_node_ids = [str(node_id) for node_id in (first_last_patch_debug.get("first_last_start_node_ids") or []) if str(node_id).strip()]
+        first_last_end_node_ids = [str(node_id) for node_id in (first_last_patch_debug.get("first_last_end_node_ids") or []) if str(node_id).strip()]
+        first_last_guide_node_ids = [str(node_id) for node_id in (first_last_patch_debug.get("first_last_guide_node_ids") or []) if str(node_id).strip()]
+        first_last_start_guide_ids = [str(node_id) for node_id in (first_last_patch_debug.get("first_last_start_guide_ids") or []) if str(node_id).strip()]
+        first_last_end_guide_ids = [str(node_id) for node_id in (first_last_patch_debug.get("first_last_end_guide_ids") or []) if str(node_id).strip()]
+        first_last_image_patch_source = str(first_last_patch_debug.get("first_last_image_patch_source") or "fallback")
+        first_last_patch_verified = bool(first_last_patch_debug.get("first_last_patch_verified"))
+        first_last_patch_warning = str(first_last_patch_debug.get("first_last_patch_warning") or "")
+        patched_first_image_value = str(first_last_patch_debug.get("patched_first_image_value") or "")
+        patched_second_image_value = str(first_last_patch_debug.get("patched_second_image_value") or "")
         logger.info(
             "[COMFY FIRST_LAST ROUTE] %s",
             {
@@ -2963,11 +3079,24 @@ def run_comfy_image_to_video(
                 "workflowPath": workflow_source,
                 "firstFrameNodePatched": bool(first_last_start_node_ids),
                 "lastFrameNodePatched": bool(first_last_end_node_ids),
+                "secondFramePatchApplied": bool(first_last_applied),
+                "first_last_patch_verified": bool(first_last_patch_verified),
+                "first_last_patch_warning": first_last_patch_warning,
+                "first_last_start_node_ids": first_last_start_node_ids,
+                "first_last_end_node_ids": first_last_end_node_ids,
+                "first_last_guide_node_ids": first_last_guide_node_ids,
+                "first_last_start_guide_ids": first_last_start_guide_ids,
+                "first_last_end_guide_ids": first_last_end_guide_ids,
+                "first_last_image_patch_source": first_last_image_patch_source,
+                "patched_first_image_value": patched_first_image_value,
+                "patched_second_image_value": patched_second_image_value,
                 "promptNodePatched": bool(FIXED_PROMPT_PATCH_NODE_IDS),
             },
         )
         if not first_last_applied:
             return None, "capability_error:LTX_FIRST_LAST_NOT_IMPLEMENTED:second_frame_patch_not_applied"
+        if not first_last_patch_verified:
+            return None, f"capability_error:LTX_FIRST_LAST_NOT_IMPLEMENTED:{first_last_patch_warning or 'end frame not bound to workflow'}"
     audio_patch_node_ids: list[str] = []
     audio_targets: list[dict] = []
     downstream_audio_nodes: list[dict] = []
@@ -3536,6 +3665,8 @@ def run_comfy_image_to_video(
             "patched_image_value": _preview_value(
                 patched_workflow.get(str((workflow_discovery_debug.get("patchedImageNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "269"), {}).get("inputs", {}).get("image")
             ),
+            "patched_first_image_value": _preview_value(patched_first_image_value),
+            "patched_second_image_value": _preview_value(patched_second_image_value),
             "patched_audio_input_value": _preview_value(effective_audio_value),
             "patched_trim_audio_inputs": _snapshot_node_inputs(
                 patched_workflow,
@@ -3761,6 +3892,17 @@ def run_comfy_image_to_video(
             "workflow_discovery": workflow_discovery_debug if isinstance(workflow_discovery_debug, dict) else {},
             "first_last_start_node_ids": first_last_start_node_ids,
             "first_last_end_node_ids": first_last_end_node_ids,
+            "first_last_guide_node_ids": first_last_guide_node_ids,
+            "first_last_start_guide_ids": first_last_start_guide_ids,
+            "first_last_end_guide_ids": first_last_end_guide_ids,
+            "first_last_image_patch_source": first_last_image_patch_source,
+            "first_last_patch_verified": bool(first_last_patch_verified),
+            "first_last_patch_warning": first_last_patch_warning,
+            "patched_first_image_value": patched_first_image_value,
+            "patched_second_image_value": patched_second_image_value,
+            "firstFrameNodePatched": bool(first_last_start_node_ids),
+            "lastFrameNodePatched": bool(first_last_end_node_ids),
+            "secondFramePatchApplied": bool(first_last_applied),
             "start_image_used": bool(first_last_start_node_ids),
             "end_image_used": bool(first_last_end_node_ids),
             "second_frame_patch_applied": bool(first_last_applied),

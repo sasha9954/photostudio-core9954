@@ -2446,6 +2446,19 @@ def _compose_video_effective_prompt(
     }
 
 
+def _resolve_scene_video_negative_prompt(payload: ClipVideoIn, scene_contract: dict[str, Any] | None = None) -> str:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    return str(
+        payload.videoNegativePrompt
+        or payload.video_negative_prompt
+        or contract.get("negativeVideoPrompt")
+        or contract.get("negative_video_prompt")
+        or contract.get("videoNegativePrompt")
+        or contract.get("video_negative_prompt")
+        or ""
+    ).strip()
+
+
 def _infer_selected_view_hint(*values: Any) -> str:
     normalized = " ".join(str(value or "").strip().lower() for value in values if str(value or "").strip())
     if not normalized:
@@ -14252,15 +14265,7 @@ def clip_video(payload: ClipVideoIn):
             director_genre_intent=payload.directorGenreIntent,
             workflow_key=final_workflow_key,
         )
-        scene_video_negative_prompt = str(
-            payload.videoNegativePrompt
-            or payload.video_negative_prompt
-            or scene_contract_for_prompt.get("videoNegativePrompt")
-            or scene_contract_for_prompt.get("video_negative_prompt")
-            or scene_contract_for_prompt.get("negativeVideoPrompt")
-            or scene_contract_for_prompt.get("negative_video_prompt")
-            or ""
-        ).strip()
+        scene_video_negative_prompt = _resolve_scene_video_negative_prompt(payload, scene_contract_for_prompt)
         prompt_debug["resolvedStrictNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
         prompt_debug["payloadVideoNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
         print(
@@ -14906,7 +14911,10 @@ def clip_video(payload: ClipVideoIn):
         director_genre_intent=payload.directorGenreIntent,
         workflow_key=final_workflow_key,
     )
-    scene_video_negative_prompt = str(payload.videoNegativePrompt or payload.video_negative_prompt or "").strip()
+    scene_video_negative_prompt = _resolve_scene_video_negative_prompt(
+        payload,
+        payload.sceneContract if isinstance(payload.sceneContract, dict) else {},
+    )
     if scene_video_negative_prompt:
         prompt_debug["resolvedStrictNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
         prompt_debug["payloadVideoNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
