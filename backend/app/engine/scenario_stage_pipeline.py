@@ -938,11 +938,27 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 scene_contract["video_prompt"] = str(scene_contract.get("positive_video_prompt") or "").strip()
             if scene_contract.get("negative_video_prompt"):
                 scene_contract["negative_prompt"] = str(scene_contract.get("negative_video_prompt") or "").strip()
+            start_image_prompt = _first_text(
+                prompt_row.get("start_image_prompt"),
+                prompt_row.get("startImagePrompt"),
+                prompt_row.get("first_frame_prompt"),
+                prompt_row.get("firstFramePrompt"),
+                prompt_row.get("photo_prompt"),
+            )
+            end_image_prompt = _first_text(
+                prompt_row.get("end_image_prompt"),
+                prompt_row.get("endImagePrompt"),
+                prompt_row.get("last_frame_prompt"),
+                prompt_row.get("lastFramePrompt"),
+                prompt_row.get("resolved_frame_prompt"),
+                prompt_row.get("resolvedFramePrompt"),
+            )
             first_frame_prompt = _first_text(
                 prompt_row.get("first_frame_prompt"),
                 prompt_row.get("firstFramePrompt"),
                 prompt_row.get("start_frame_prompt"),
                 prompt_row.get("startFramePrompt"),
+                start_image_prompt,
                 prompt_row.get("photo_prompt"),
                 prompt_row.get("image_prompt"),
                 prompt_row.get("frame_prompt"),
@@ -954,6 +970,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 prompt_row.get("lastFramePrompt"),
                 prompt_row.get("end_frame_prompt"),
                 prompt_row.get("endFramePrompt"),
+                end_image_prompt,
                 prompt_row.get("resolved_frame_prompt"),
                 prompt_row.get("resolvedFramePrompt"),
                 prompt_row.get("video_prompt"),
@@ -967,6 +984,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             scene_contract["identity_lock_required"] = bool(route_contract.get("identity_lock_required"))
             scene_contract["wardrobe_lock_required"] = bool(route_contract.get("wardrobe_lock_required"))
             scene_contract["two_frame_micro_transition"] = bool(route_contract.get("two_frame_micro_transition"))
+            scene_contract["start_image_prompt"] = start_image_prompt
+            scene_contract["end_image_prompt"] = end_image_prompt
             scene_contract["first_frame_prompt"] = first_frame_prompt
             scene_contract["last_frame_prompt"] = last_frame_prompt
 

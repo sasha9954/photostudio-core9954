@@ -314,6 +314,94 @@ def _enrich_prompt_with_anchor(prompt: str, identity_anchor: str, world_anchor: 
     return joined[:900]
 
 
+def _trim_sentence(text: str, *, max_len: int = 220) -> str:
+    clean = " ".join(str(text or "").strip().split())
+    return clean[:max_len]
+
+
+def _detect_attached_prop_token(*texts: str) -> str:
+    blob = " ".join([str(item or "").lower() for item in texts])
+    for token in ("cap", "hat", "helmet", "glasses", "mask", "scarf", "headphones"):
+        if token in blob:
+            return token
+    return ""
+
+
+def _build_first_last_start_image_prompt(
+    *,
+    primary_role: str,
+    scene_space: str,
+    first_state: str,
+    attached_prop_token: str,
+) -> str:
+    prop_clause = f", {attached_prop_token} worn and attached to the character" if attached_prop_token else ""
+    return (
+        f"Start frame still of {primary_role} in {scene_space}. Exact start-state pose: {first_state}. "
+        "Same exact wall geometry, same exact framing, same exact perspective, same exact camera distance, "
+        f"same exact clothing, same exact body proportions, same exact lighting{prop_clause}."
+    )
+
+
+def _build_first_last_end_image_prompt(
+    *,
+    primary_role: str,
+    scene_space: str,
+    last_state: str,
+    attached_prop_token: str,
+) -> str:
+    prop_clause = f", {attached_prop_token} remains attached/worn in the same logical placement" if attached_prop_token else ""
+    return (
+        f"End frame still of {primary_role} in {scene_space}. Same frame and world as start; one controlled delta only: {last_state} relative to start. "
+        "Keep same exact wall geometry, same exact framing, same exact perspective, same exact camera distance, "
+        f"same exact clothing, same exact body proportions, same exact lighting{prop_clause}."
+    )
+
+
+def _build_first_last_negative_prompt(*, attached_prop_token: str) -> str:
+    base = (
+        "camera drift, zoom, reframing, turn to camera, fast body rotation, shoulder swing, hip twist, walking, step, "
+        "object pop-in, floating prop, detached prop, wall motion, geometry morphing, identity drift, outfit drift, surreal motion, temporal instability, artifacts"
+    )
+    if not attached_prop_token:
+        return base
+    return (
+        f"{base}, detached {attached_prop_token}, floating {attached_prop_token}, {attached_prop_token} teleportation, "
+        f"{attached_prop_token} pop-in, {attached_prop_token} drift away from body"
+    )
+
+
+def _build_first_last_prompt_pair(
+    *,
+    primary_role: str,
+    scene_space: str,
+    first_state: str,
+    last_state: str,
+    attached_prop_token: str,
+) -> tuple[str, str, str, str]:
+    start_image_prompt = _build_first_last_start_image_prompt(
+        primary_role=primary_role,
+        scene_space=scene_space,
+        first_state=_trim_sentence(first_state, max_len=180),
+        attached_prop_token=attached_prop_token,
+    )
+    end_image_prompt = _build_first_last_end_image_prompt(
+        primary_role=primary_role,
+        scene_space=scene_space,
+        last_state=_trim_sentence(last_state, max_len=180),
+        attached_prop_token=attached_prop_token,
+    )
+    prop_clause = f" Keep {attached_prop_token} attached/worn with no drift or detachment." if attached_prop_token else ""
+    positive_video_prompt = (
+        "Use the first image as the exact start frame and the second image as the exact end frame. "
+        f"Locked transition for {primary_role} in {scene_space}: one controlled A→B progression only ({_trim_sentence(last_state, max_len=120)} relative to start). "
+        "Preserve same exact wall geometry, framing, perspective, camera distance, clothing, body proportions, and lighting. "
+        "No camera drift, no zoom, no reframing, no layout change, no extra objects, no geometry morphing."
+        f"{prop_clause}"
+    )
+    negative_video_prompt = _build_first_last_negative_prompt(attached_prop_token=attached_prop_token)
+    return start_image_prompt[:650], end_image_prompt[:700], positive_video_prompt[:850], negative_video_prompt
+
+
 def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
@@ -542,46 +630,33 @@ def _build_fallback_scene_prompts(
         )
         negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
     elif route == "first_last":
-        first_state = str(scene_plan_row.get("motion_intent") or "").strip() or f"{primary_role} initiates the key hinge action"
-        last_state = str(scene_plan_row.get("emotional_intent") or "").strip() or f"{primary_role} completes the same hinge action"
+        first_state = _trim_sentence(
+            str(scene_plan_row.get("motion_intent") or "").strip() or f"{primary_role} in the exact start state before the transition",
+            max_len=180,
+        )
+        last_state = _trim_sentence(
+            str(scene_plan_row.get("emotional_intent") or "").strip() or f"{primary_role} after one controlled transition relative to start",
+            max_len=180,
+        )
+        attached_prop_token = _detect_attached_prop_token(
+            first_state,
+            last_state,
+            scene_function,
+            str(scene_plan_row.get("scene_summary") or ""),
+            str(story_core.get("story_summary") or ""),
+        )
+        scene_space = _trim_sentence(f"the same {world_anchor} scene space", max_len=90)
         photo_prompt = (
             f"One transition keyframe of {primary_role} in the same {world_anchor} scene space, hinge moment for {scene_function}, "
             "subject and environment remain stable, same outfit/light/framing family."
         )
-        start_image_prompt = (
-            f"Start frame still of {primary_role} in the same wall-side setup, head lowered and gaze down, cap brim hiding more of the face, "
-            "closed guarded emotional state, same outfit, same lighting family, same camera family."
+        start_image_prompt, end_image_prompt, positive_video_prompt, negative_video_prompt = _build_first_last_prompt_pair(
+            primary_role=primary_role,
+            scene_space=scene_space,
+            first_state=first_state,
+            last_state=last_state,
+            attached_prop_token=attached_prop_token,
         )
-        end_image_prompt = (
-            f"End frame still of {primary_role} in the same wall-side setup, head slightly raised and gaze slightly higher, emotion becoming visible, "
-            "cap still partially shading the face, same outfit, same lighting family, same camera family."
-        )
-        if scene_id == "sc_2":
-            start_image_prompt = (
-                f"Start frame still of {primary_role} in the same wall-side setup, head lowered, gaze down, face more hidden under the cap brim, "
-                "closed inward emotional state, shadow-heavy continuity, same outfit/light/camera family."
-            )
-            end_image_prompt = (
-                f"End frame still of {primary_role} in the same wall-side setup, head slightly raised, gaze a little higher, emotion beginning to surface, "
-                "cap still keeps partial facial closure, same outfit/light/camera family."
-            )
-        elif scene_id == "sc_7":
-            start_image_prompt = (
-                f"Start frame still of {primary_role} in the same wall-side setup, face still partly in cap shadow, hand just initiating movement toward the brim, "
-                "contained pre-reveal tension, same outfit/light/camera family."
-            )
-            end_image_prompt = (
-                f"End frame still of {primary_role} in the same wall-side setup, brim lifted, face open and readable, direct gaze to camera, "
-                "culmination reveal while preserving same outfit/light/camera family."
-            )
-        positive_video_prompt = (
-            "Use the first image as the exact start frame and the second image as the exact end frame. "
-            f"Locked shot of {primary_role} in the same exact wall-side setup. Preserve same exact wall geometry, same exact framing, same exact perspective, "
-            "same exact camera distance, same exact body proportions, same exact clothing, and same exact lighting. "
-            "Over the full scene duration, perform only one controlled micro-transition from the start state to the end state. "
-            "Continuity must remain extremely strong. No camera drift, no layout change, no extra objects, no geometry morphing, no turn, no zoom."
-        )
-        negative_video_prompt = _FIRST_LAST_NEGATIVE_PROMPT
         video_prompt = positive_video_prompt
     else:
         if scene_id == "sc_1":
@@ -753,13 +828,36 @@ def _normalize_scene_prompts(
         if actual_route == "first_last":
             start_image_prompt = str(base.get("start_image_prompt") or "").strip() or str(fallback_row.get("start_image_prompt") or "").strip()
             end_image_prompt = str(base.get("end_image_prompt") or "").strip() or str(fallback_row.get("end_image_prompt") or "").strip()
-            normalized_notes["transition_contract"] = "controlled_micro_transition"
-            normalized_notes["first_state"] = str(
+            first_state = str(
                 prompt_notes.get("first_state") or fallback_row["prompt_notes"].get("first_state") or "start of one controlled action"
-            )
-            normalized_notes["last_state"] = str(
+            ).strip()
+            last_state = str(
                 prompt_notes.get("last_state") or fallback_row["prompt_notes"].get("last_state") or "completion of the same controlled action"
+            ).strip()
+            attached_prop_token = _detect_attached_prop_token(
+                start_image_prompt,
+                end_image_prompt,
+                first_state,
+                last_state,
+                photo_prompt,
+                str(scene.get("scene_function") or ""),
             )
+            strict_start, strict_end, strict_positive, strict_negative = _build_first_last_prompt_pair(
+                primary_role=_build_human_subject_label(role_row, story_core, scene),
+                scene_space=_trim_sentence(str(world_continuity.get("environment_family") or "the same fixed scene space"), max_len=90),
+                first_state=first_state,
+                last_state=last_state,
+                attached_prop_token=attached_prop_token,
+            )
+            start_image_prompt = strict_start
+            end_image_prompt = strict_end
+            positive_video_prompt = strict_positive
+            video_prompt = strict_positive
+            negative_video_prompt = strict_negative
+            negative_prompt = strict_negative
+            normalized_notes["transition_contract"] = "controlled_micro_transition"
+            normalized_notes["first_state"] = first_state
+            normalized_notes["last_state"] = last_state
             normalized_notes["same_world_required"] = bool(
                 prompt_notes.get("same_world_required") if "same_world_required" in prompt_notes else True
             )
@@ -772,6 +870,9 @@ def _normalize_scene_prompts(
             normalized_notes["same_camera_family_required"] = bool(
                 prompt_notes.get("same_camera_family_required") if "same_camera_family_required" in prompt_notes else True
             )
+            normalized_notes["one_transition_only"] = True
+            normalized_notes["prop_attachment_required"] = bool(attached_prop_token)
+            normalized_notes["attached_prop"] = attached_prop_token
             if not start_image_prompt or not end_image_prompt:
                 used_fallback = True
                 validation_errors.append(f"first_last_image_prompt_missing:{scene_id}")
@@ -783,19 +884,23 @@ def _normalize_scene_prompts(
             "scene_id": scene_id,
             "route": actual_route,
             "photo_prompt": _enrich_prompt_with_anchor(photo_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
-            "video_prompt": _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
-            "positive_video_prompt": _enrich_prompt_with_anchor(
-                positive_video_prompt or video_prompt,
-                anchors["identity_anchor"],
-                anchors["world_anchor"],
+            "video_prompt": (
+                video_prompt[:900]
+                if actual_route == "first_last"
+                else _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"])
+            ),
+            "positive_video_prompt": (
+                (positive_video_prompt or video_prompt)[:900]
+                if actual_route == "first_last"
+                else _enrich_prompt_with_anchor(
+                    positive_video_prompt or video_prompt,
+                    anchors["identity_anchor"],
+                    anchors["world_anchor"],
+                )
             ),
             "negative_video_prompt": negative_video_prompt,
-            "start_image_prompt": _enrich_prompt_with_anchor(start_image_prompt, anchors["identity_anchor"], anchors["world_anchor"])
-            if actual_route == "first_last"
-            else "",
-            "end_image_prompt": _enrich_prompt_with_anchor(end_image_prompt, anchors["identity_anchor"], anchors["world_anchor"])
-            if actual_route == "first_last"
-            else "",
+            "start_image_prompt": (start_image_prompt[:900] if actual_route == "first_last" else ""),
+            "end_image_prompt": (end_image_prompt[:900] if actual_route == "first_last" else ""),
             "negative_prompt": negative_prompt,
             "prompt_notes": normalized_notes,
         }
