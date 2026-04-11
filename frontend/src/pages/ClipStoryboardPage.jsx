@@ -4092,30 +4092,131 @@ function shouldSuppressInheritedStartPreview(scene) {
   return !!scene?.inheritPreviousEndAsStart && !!scene?.suppressInheritedStartPreview;
 }
 
-function resolveSceneFrameUrls(scene, previousScene = null) {
+function readScenarioAssetAliasValue(source = {}, aliasPath = "") {
+  if (!source || typeof source !== "object") return "";
+  const path = String(aliasPath || "").trim();
+  if (!path) return "";
+  const segments = path.split(".");
+  let cursor = source;
+  for (const segment of segments) {
+    if (!cursor || typeof cursor !== "object") return "";
+    cursor = cursor?.[segment];
+  }
+  return String(cursor || "").trim();
+}
+
+function resolveScenarioAssetAliasCandidates(source = {}, aliases = []) {
+  const list = Array.isArray(aliases) ? aliases : [];
+  for (const alias of list) {
+    const value = readScenarioAssetAliasValue(source, alias);
+    if (!value) continue;
+    return { value, field: alias };
+  }
+  return { value: "", field: "" };
+}
+
+function resolveScenarioVideoSourceUrls(scene, previousScene = null, options = {}) {
   const sourceScene = scene && typeof scene === "object" ? scene : {};
   const sourcePreviousScene = previousScene && typeof previousScene === "object" ? previousScene : {};
   const transitionType = resolveSceneTransitionType(sourceScene);
   const suppressInheritedStartPreview = transitionType === "continuous" && shouldSuppressInheritedStartPreview(sourceScene);
-  const previousEndImageUrl = String(sourcePreviousScene?.endImageUrl || sourcePreviousScene?.endFrameImageUrl || "").trim();
-  const startImageUrl = String(sourceScene?.startImageUrl || sourceScene?.startFrameImageUrl || sourceScene?.startFramePreviewUrl || "").trim();
-  const fallbackImageUrl = String(sourceScene?.imageUrl || "").trim();
-  const endImageUrl = String(sourceScene?.endImageUrl || sourceScene?.endFrameImageUrl || sourceScene?.endFramePreviewUrl || "").trim();
+  const workflowKey = normalizeScenarioWorkflowKeyForProduction(
+    options?.workflowKey
+    || sourceScene?.resolvedWorkflowKey
+    || resolveScenarioExplicitWorkflowKey(sourceScene)
+    || resolveScenarioWorkflowKey(sourceScene)
+    || ""
+  );
+  const singleImageAliases = [
+    "imageUrl",
+    "generatedImageUrl",
+    "image_url",
+    "generated_image_url",
+    "previewImageUrl",
+    "preview_image_url",
+    "resultImageUrl",
+    "result_image_url",
+    "finalImageUrl",
+    "final_image_url",
+    "photoUrl",
+    "photo_url",
+    "assetUrl",
+    "asset_url",
+    "selectedImageUrl",
+    "selected_image_url",
+    "image.url",
+    "result.imageUrl",
+    "output.imageUrl",
+    "assets.imageUrl",
+    "media.imageUrl",
+  ];
+  const startImageAliases = [
+    "startImageUrl",
+    "startFrameImageUrl",
+    "firstFrameImageUrl",
+    "start_image_url",
+    "startFramePreviewUrl",
+  ];
+  const endImageAliases = [
+    "endImageUrl",
+    "endFrameImageUrl",
+    "lastFrameImageUrl",
+    "end_image_url",
+    "endFramePreviewUrl",
+  ];
+  const previousEndAliases = [
+    "endImageUrl",
+    "endFrameImageUrl",
+    "lastFrameImageUrl",
+    "imageUrl",
+  ];
+  const imageHit = resolveScenarioAssetAliasCandidates(sourceScene, singleImageAliases);
+  const startHit = resolveScenarioAssetAliasCandidates(sourceScene, startImageAliases);
+  const endHit = resolveScenarioAssetAliasCandidates(sourceScene, endImageAliases);
+  const previousEndHit = resolveScenarioAssetAliasCandidates(sourcePreviousScene, previousEndAliases);
   const startSource = getSceneStartImageSource(sourceScene, sourcePreviousScene);
   const allowSingleFallbackToStart = !(transitionType === "continuous" && suppressInheritedStartPreview);
+  const fallbackImageUrl = imageHit.value;
   const effectiveStartImageUrl = startSource === "previous_end"
-    ? previousEndImageUrl
-    : (startImageUrl || (allowSingleFallbackToStart ? fallbackImageUrl : ""));
+    ? previousEndHit.value
+    : (startHit.value || (allowSingleFallbackToStart ? fallbackImageUrl : ""));
+  const continuationSourceSelection = resolveContinuationSourceFromPreviousScene(sourcePreviousScene);
+  const continuationSourceAssetUrl = String(continuationSourceSelection?.continuationSourceAssetUrl || "").trim();
+  const debugSourceFieldsUsed = {
+    imageUrl: imageHit.field || "none",
+    startImageUrl: startSource === "previous_end" ? (previousEndHit.field ? `previousScene.${previousEndHit.field}` : "none") : (startHit.field || "none"),
+    endImageUrl: endHit.field || "none",
+    fallbackImageUrl: imageHit.field || "none",
+    continuationSourceAssetUrl: continuationSourceAssetUrl ? "resolveContinuationSourceFromPreviousScene" : "none",
+    startSource,
+    workflowKey,
+  };
   return {
-    effectiveStartImageUrl,
-    endImageUrl,
+    imageUrl: fallbackImageUrl,
+    startImageUrl: startHit.value,
+    endImageUrl: endHit.value,
     fallbackImageUrl,
+    effectiveStartImageUrl,
+    continuationSourceAssetUrl,
+    debugSourceFieldsUsed,
     sourceOfTruthKeys: {
+      image: singleImageAliases.map((field) => `scene.${field}`),
       start: startSource === "previous_end"
-        ? ["previousScene.endImageUrl", "previousScene.endFrameImageUrl"]
-        : ["scene.startImageUrl", "scene.startFrameImageUrl", "scene.startFramePreviewUrl", "scene.imageUrl"],
-      end: ["scene.endImageUrl", "scene.endFrameImageUrl", "scene.endFramePreviewUrl"],
+        ? previousEndAliases.map((field) => `previousScene.${field}`)
+        : startImageAliases.map((field) => `scene.${field}`),
+      end: endImageAliases.map((field) => `scene.${field}`),
     },
+  };
+}
+
+function resolveSceneFrameUrls(scene, previousScene = null) {
+  const resolved = resolveScenarioVideoSourceUrls(scene, previousScene);
+  return {
+    effectiveStartImageUrl: resolved.effectiveStartImageUrl,
+    endImageUrl: resolved.endImageUrl,
+    fallbackImageUrl: resolved.fallbackImageUrl,
+    sourceOfTruthKeys: resolved.sourceOfTruthKeys,
+    debugSourceFieldsUsed: resolved.debugSourceFieldsUsed,
   };
 }
 
@@ -12512,15 +12613,16 @@ Aspect ratio: ${imageFormat}`,
     });
     const logScenarioVideoBlocked = (stage, reason, extra = {}) => {
       console.warn("[SCENARIO VIDEO BLOCKED]", {
-        stage,
+        stage: String(stage || "").trim(),
         sceneId: String(extra?.sceneId || "").trim(),
         reason: String(reason || "").trim(),
         workflow: String(extra?.workflow || "").trim(),
         renderMode: String(extra?.renderMode || "").trim(),
         hasImageUrl: Boolean(extra?.hasImageUrl),
-        hasStartImageUrl: Boolean(extra?.hasStartImageUrl),
-        hasEndImageUrl: Boolean(extra?.hasEndImageUrl),
+        hasStartImage: Boolean(extra?.hasStartImage ?? extra?.hasStartImageUrl),
+        hasEndImage: Boolean(extra?.hasEndImage ?? extra?.hasEndImageUrl),
         hasAudioSliceUrl: Boolean(extra?.hasAudioSliceUrl),
+        debugSourceFieldsUsed: extra?.debugSourceFieldsUsed || {},
         selectedIndex: Number.isInteger(extra?.selectedIndex) ? extra.selectedIndex : null,
       });
     };
@@ -12594,7 +12696,17 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     const targetPreviousScene = targetSceneIndex > 0 ? targetScenes[targetSceneIndex - 1] : null;
-    const { effectiveStartImageUrl, endImageUrl, fallbackImageUrl, sourceOfTruthKeys } = resolveSceneFrameUrls(targetScene, targetPreviousScene);
+    const scenarioVideoSourceUrls = resolveScenarioVideoSourceUrls(targetScene, targetPreviousScene);
+    const {
+      imageUrl: resolvedSceneImageUrl,
+      effectiveStartImageUrl,
+      startImageUrl,
+      endImageUrl,
+      fallbackImageUrl,
+      continuationSourceAssetUrl: resolverContinuationSourceAssetUrl,
+      debugSourceFieldsUsed,
+      sourceOfTruthKeys,
+    } = scenarioVideoSourceUrls;
     console.info("[SCENARIO VIDEO FLOW]", {
       stage: "source_urls",
       sceneId,
@@ -12652,28 +12764,40 @@ Aspect ratio: ${imageFormat}`,
     const transitionType = requiresTwoFrames
       ? "first_last"
       : (effectiveRequiresContinuation ? "continuous" : "single");
-    const frameImageUrl = String(fallbackImageUrl || "").trim();
+    const frameImageUrl = String(resolvedSceneImageUrl || fallbackImageUrl || "").trim();
     const resolvedFirstFrameUrl = String(targetEffectiveStartImageUrl || "").trim();
     const resolvedLastFrameUrl = String(endImageUrl || "").trim();
     const hasImageForVideo = requiresTwoFrames
       ? !!resolvedFirstFrameUrl && !!resolvedLastFrameUrl
-      : (effectiveRequiresContinuation
-        ? !!(resolvedFirstFrameUrl || frameImageUrl)
-        : !!frameImageUrl);
+      : (effectiveRequiresContinuation ? !!(resolvedFirstFrameUrl || frameImageUrl) : !!frameImageUrl);
+    console.info("[SCENARIO VIDEO SOURCE RESOLVE]", {
+      sceneId,
+      workflowKey: effectiveWorkflowKey,
+      imageUrl: frameImageUrl,
+      startImageUrl: resolvedFirstFrameUrl || String(startImageUrl || "").trim(),
+      endImageUrl: resolvedLastFrameUrl,
+      fallbackImageUrl: String(fallbackImageUrl || "").trim(),
+      hasImageForVideo,
+      debugSourceFieldsUsed,
+    });
     if (!hasImageForVideo) {
-      logScenarioVideoBlocked("validate_images", "missing_required_frame_assets", {
+      const validateReason = requiresTwoFrames
+        ? "first_last_missing_frame_pair"
+        : (effectiveWorkflowKey === "lip_sync_music" ? "lip_sync_missing_source_image" : "i2v_missing_source_image");
+      logScenarioVideoBlocked("validate_images", validateReason, {
         sceneId,
         workflow: effectiveWorkflowKey,
         renderMode: String(targetScene?.renderMode || ""),
         hasImageUrl: Boolean(frameImageUrl),
-        hasStartImageUrl: Boolean(resolvedFirstFrameUrl),
-        hasEndImageUrl: Boolean(resolvedLastFrameUrl),
+        hasStartImage: Boolean(resolvedFirstFrameUrl),
+        hasEndImage: Boolean(resolvedLastFrameUrl),
         hasAudioSliceUrl: Boolean(targetScene?.audioSliceUrl),
+        debugSourceFieldsUsed,
         selectedIndex: targetSceneIndex,
       });
       setScenarioVideoError("Для этой сцены не хватает source-кадров для video flow (см. [SCENARIO VIDEO REQUEST SUMMARY]).");
       if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "missing_required_frame_assets", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: validateReason, videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
       }
     }
 
@@ -12912,7 +13036,11 @@ Aspect ratio: ${imageFormat}`,
     const continuationSourceSelection = effectiveRequiresContinuation
       ? resolveContinuationSourceFromPreviousScene(targetPreviousScene)
       : { continuationSourceAssetUrl: "", continuationSourceAssetType: "" };
-    const continuationSourceAssetUrl = String(continuationSourceSelection.continuationSourceAssetUrl || "").trim();
+    const continuationSourceAssetUrl = String(
+      resolverContinuationSourceAssetUrl
+      || continuationSourceSelection.continuationSourceAssetUrl
+      || ""
+    ).trim();
     const continuationSourceAssetType = String(continuationSourceSelection.continuationSourceAssetType || "").trim();
     const normalizedContinuationSourceAssetUrl = normalizeVideoSourceUrl(continuationSourceAssetUrl);
     const continuationEnabled = Boolean(
