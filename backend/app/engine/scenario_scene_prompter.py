@@ -327,6 +327,71 @@ def _detect_attached_prop_token(*texts: str) -> str:
     return ""
 
 
+def _build_first_last_visual_delta(
+    *,
+    scene_plan_row: dict[str, Any],
+    primary_role: str,
+    attached_prop_token: str,
+) -> tuple[str, str, str]:
+    scene_id = str(scene_plan_row.get("scene_id") or "").strip().lower()
+    first_field = _trim_sentence(str(scene_plan_row.get("first_state") or "").strip(), max_len=180)
+    last_field = _trim_sentence(str(scene_plan_row.get("last_state") or "").strip(), max_len=180)
+    transition_action = _trim_sentence(str(scene_plan_row.get("transition_action") or "").strip(), max_len=180)
+    scene_goal = _trim_sentence(str(scene_plan_row.get("scene_goal") or "").strip(), max_len=180)
+    frame_description = _trim_sentence(str(scene_plan_row.get("frame_description") or "").strip(), max_len=180)
+    motion_intent = _trim_sentence(str(scene_plan_row.get("motion_intent") or "").strip(), max_len=180)
+    emotional_intent = _trim_sentence(str(scene_plan_row.get("emotional_intent") or "").strip(), max_len=180)
+
+    visual_hints = ("head", "gaze", "eye", "hand", "brim", "face", "shoulder", "posture", "cap", "hat", "mask", "glasses")
+    abstract_hints = ("emotion", "emotional", "mood", "tension", "defiant", "internal", "feeling")
+
+    def _is_visual(text: str) -> bool:
+        low = text.lower()
+        if not low:
+            return False
+        if any(token in low for token in visual_hints):
+            return True
+        return not any(token in low for token in abstract_hints)
+
+    source_fields = [first_field, frame_description, transition_action, scene_goal, motion_intent]
+    first_state = next((text for text in source_fields if _is_visual(text)), "") or (
+        f"{primary_role} holds the exact start pose before the controlled shift"
+    )
+
+    prop_stability = ""
+    if attached_prop_token:
+        if attached_prop_token in ("cap", "hat", "helmet"):
+            prop_stability = f"{attached_prop_token} remains worn on head"
+        elif attached_prop_token in ("glasses", "mask"):
+            prop_stability = f"{attached_prop_token} remains in place"
+        else:
+            prop_stability = f"{attached_prop_token} remains attached with no detachment"
+
+    if scene_id == "sc_2":
+        first_state = "head lowered, gaze down, face more hidden under the cap brim"
+        delta_phrase = "head lifts slightly and gaze rises slightly while the cap remains worn and the face becomes only slightly more readable, still partially shaded"
+        last_state = "head slightly raised and gaze slightly higher, with face slightly more readable under the same partially shading cap"
+    elif scene_id == "sc_7":
+        first_state = "hand only beginning to move toward the cap brim, face still partly shadowed"
+        delta_phrase = "brim lifts relative to start while the cap remains worn, the face opens more, and direct gaze becomes visible"
+        last_state = "brim lifted relative to start, face more open/readable, direct gaze revealed while cap stays attached"
+    else:
+        candidate_delta = next((text for text in [last_field, transition_action, scene_goal, frame_description, motion_intent] if _is_visual(text)), "")
+        if not candidate_delta:
+            candidate_delta = emotional_intent or "one small posture/gaze shift"
+        delta_parts = [_trim_sentence(candidate_delta, max_len=180)]
+        if prop_stability and attached_prop_token not in candidate_delta.lower():
+            delta_parts.append(prop_stability)
+        delta_phrase = " while ".join([part for part in delta_parts if part])
+        last_state = _trim_sentence(delta_phrase, max_len=180)
+
+    if prop_stability and attached_prop_token not in last_state.lower():
+        last_state = _trim_sentence(f"{last_state}; {prop_stability}", max_len=180)
+    if prop_stability and attached_prop_token not in delta_phrase.lower():
+        delta_phrase = _trim_sentence(f"{delta_phrase} while {prop_stability}", max_len=180)
+    return _trim_sentence(first_state, max_len=180), _trim_sentence(last_state, max_len=180), _trim_sentence(delta_phrase, max_len=180)
+
+
 def _build_first_last_start_image_prompt(
     *,
     primary_role: str,
@@ -376,6 +441,7 @@ def _build_first_last_prompt_pair(
     scene_space: str,
     first_state: str,
     last_state: str,
+    visual_delta: str,
     attached_prop_token: str,
 ) -> tuple[str, str, str, str]:
     start_image_prompt = _build_first_last_start_image_prompt(
@@ -393,7 +459,7 @@ def _build_first_last_prompt_pair(
     prop_clause = f" Keep {attached_prop_token} attached/worn with no drift or detachment." if attached_prop_token else ""
     positive_video_prompt = (
         "Use the first image as the exact start frame and the second image as the exact end frame. "
-        f"Locked transition for {primary_role} in {scene_space}: one controlled A→B progression only ({_trim_sentence(last_state, max_len=120)} relative to start). "
+        f"Locked transition for {primary_role} in {scene_space}: one controlled A→B progression only: {_trim_sentence(visual_delta, max_len=140)}. "
         "Preserve same exact wall geometry, framing, perspective, camera distance, clothing, body proportions, and lighting. "
         "No camera drift, no zoom, no reframing, no layout change, no extra objects, no geometry morphing."
         f"{prop_clause}"
@@ -630,20 +696,22 @@ def _build_fallback_scene_prompts(
         )
         negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
     elif route == "first_last":
-        first_state = _trim_sentence(
-            str(scene_plan_row.get("motion_intent") or "").strip() or f"{primary_role} in the exact start state before the transition",
-            max_len=180,
-        )
-        last_state = _trim_sentence(
-            str(scene_plan_row.get("emotional_intent") or "").strip() or f"{primary_role} after one controlled transition relative to start",
-            max_len=180,
-        )
         attached_prop_token = _detect_attached_prop_token(
-            first_state,
-            last_state,
+            str(scene_plan_row.get("first_state") or ""),
+            str(scene_plan_row.get("last_state") or ""),
+            str(scene_plan_row.get("transition_action") or ""),
+            str(scene_plan_row.get("scene_goal") or ""),
+            str(scene_plan_row.get("frame_description") or ""),
+            str(scene_plan_row.get("motion_intent") or ""),
+            str(scene_plan_row.get("emotional_intent") or ""),
             scene_function,
             str(scene_plan_row.get("scene_summary") or ""),
             str(story_core.get("story_summary") or ""),
+        )
+        first_state, last_state, visual_delta = _build_first_last_visual_delta(
+            scene_plan_row=scene_plan_row,
+            primary_role=primary_role,
+            attached_prop_token=attached_prop_token,
         )
         scene_space = _trim_sentence(f"the same {world_anchor} scene space", max_len=90)
         photo_prompt = (
@@ -655,6 +723,7 @@ def _build_fallback_scene_prompts(
             scene_space=scene_space,
             first_state=first_state,
             last_state=last_state,
+            visual_delta=visual_delta,
             attached_prop_token=attached_prop_token,
         )
         video_prompt = positive_video_prompt
@@ -834,19 +903,31 @@ def _normalize_scene_prompts(
             last_state = str(
                 prompt_notes.get("last_state") or fallback_row["prompt_notes"].get("last_state") or "completion of the same controlled action"
             ).strip()
+            delta_scene_row = dict(scene)
+            delta_scene_row["first_state"] = first_state
+            delta_scene_row["last_state"] = last_state
             attached_prop_token = _detect_attached_prop_token(
                 start_image_prompt,
                 end_image_prompt,
                 first_state,
                 last_state,
+                str(scene.get("transition_action") or ""),
+                str(scene.get("scene_goal") or ""),
+                str(scene.get("frame_description") or ""),
                 photo_prompt,
                 str(scene.get("scene_function") or ""),
+            )
+            first_state, last_state, visual_delta = _build_first_last_visual_delta(
+                scene_plan_row=delta_scene_row,
+                primary_role=_build_human_subject_label(role_row, story_core, scene),
+                attached_prop_token=attached_prop_token,
             )
             strict_start, strict_end, strict_positive, strict_negative = _build_first_last_prompt_pair(
                 primary_role=_build_human_subject_label(role_row, story_core, scene),
                 scene_space=_trim_sentence(str(world_continuity.get("environment_family") or "the same fixed scene space"), max_len=90),
                 first_state=first_state,
                 last_state=last_state,
+                visual_delta=visual_delta,
                 attached_prop_token=attached_prop_token,
             )
             start_image_prompt = strict_start
