@@ -1371,6 +1371,15 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     });
   }
   const resolvedRoleContract = resolveScenarioSceneRoleContract(normalizedScene, scenarioPackage || {});
+  if (normalizedScene.ltxMode === "f_l") {
+    console.info("[SCENARIO NEGATIVE PROMPT F_L TRACE] normalizeScenarioScene", {
+      sceneId: normalizedScene.sceneId,
+      sourceNegativePrompt: normalizeText(source?.negative_prompt),
+      sourceNegativeVideoPrompt: normalizeText(source?.negative_video_prompt),
+      sourceNegativeVideoPromptCamel: normalizeText(source?.negativeVideoPrompt),
+      normalizedVideoNegativePrompt: normalizeText(normalizedScene?.videoNegativePrompt),
+    });
+  }
   if (videoNegativePrompt) {
     console.info("[SCENARIO NEGATIVE PROMPT TRACE] normalizeScenarioScene", {
       before: buildNegativePromptTraceSnapshot(source),
