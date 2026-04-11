@@ -190,6 +190,9 @@ class ClipVideoIn(BaseModel):
     videoNegativePrompt: str | None = None
     video_negative_prompt: str | None = None
     requestedDurationSec: int | float | None = 5
+    sceneStartSec: int | float | None = None
+    sceneEndSec: int | float | None = None
+    sceneDurationSec: int | float | None = None
     transitionType: str | None = "single"
     startImageUrl: str | None = None
     endImageUrl: str | None = None
@@ -632,7 +635,7 @@ def _normalize_clip_video_transition_type(value: str | None) -> str:
 
 LTX_WORKFLOW_KEY_TO_FILE = {
     "i2v": "image-video.json",
-    "f_l": "imag-imag-video-bz.json",
+    "f_l": "last-first cadr.json",
     "continuation": "image-video.json",
     "lip_sync": "image-lipsink-video-music.json",
 }
@@ -685,6 +688,7 @@ DIRECT_ROUTE_RISKY_ROTATION_MARKERS = (
 LTX_WORKFLOW_FILE_TO_KEY = {
     "image-video.json": "i2v",
     "image-video-golos-zvuk.json": "i2v",
+    "last-first cadr.json": "f_l",
     "imag-imag-video-bz.json": "f_l",
     "imag-imag-video-zvuk.json": "f_l",
     "image-lipsink-video-music.json": "lip_sync",
@@ -693,7 +697,16 @@ LTX_WORKFLOW_FILE_TO_KEY = {
 LTX_SINGLE_IMAGE_WORKFLOW_KEYS = {"i2v", "lip_sync"}
 LTX_FIRST_LAST_WORKFLOW_KEYS = {"f_l"}
 LTX_CONTINUATION_WORKFLOW_KEYS = {"continuation"}
-LTX_LEGACY_WORKFLOW_ALIASES = {"i2v_as": "i2v", "f_l_as": "f_l"}
+LTX_LEGACY_WORKFLOW_ALIASES = {
+    "i2v_as": "i2v",
+    "f_l_as": "f_l",
+    "first_last": "f_l",
+    "first-last": "f_l",
+    "imag_imag_video_bz": "f_l",
+    "imag-imag-video-bz": "f_l",
+    "ia2v": "lip_sync",
+    "lip_sync_music": "lip_sync",
+}
 
 LTX_MODE_TO_WORKFLOW_KEY = {
     "i2v": "i2v",
@@ -1311,6 +1324,42 @@ def _normalize_ltx_workflow_key(candidate: str | None) -> str:
     return ""
 
 
+def _safe_positive_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(parsed) or parsed <= 0:
+        return None
+    return parsed
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _resolve_video_timeframe(payload: ClipVideoIn) -> tuple[float, float | None, float | None, float | None]:
+    requested = _safe_positive_float(payload.requestedDurationSec)
+    scene_duration = _safe_positive_float(payload.sceneDurationSec)
+    scene_start = _safe_float(payload.sceneStartSec)
+    scene_end = _safe_float(payload.sceneEndSec)
+    boundary_duration = None
+    if scene_start is not None and scene_end is not None:
+        delta = scene_end - scene_start
+        if delta > 0:
+            boundary_duration = float(delta)
+
+    resolved = requested or scene_duration or boundary_duration or 5.0
+    resolved = max(1.0, min(8.0, float(resolved)))
+    return float(resolved), scene_start, scene_end, scene_duration
+
+
 def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
     normalized_route = str(source_route or "").strip().lower()
     workflow_key = DIRECT_STORYBOARD_ROUTE_TO_WORKFLOW_KEY.get(normalized_route, "")
@@ -1745,7 +1794,9 @@ def _validate_ltx_workflow_strategy(
     elif workflow_key in LTX_SINGLE_IMAGE_WORKFLOW_KEYS:
         if normalized_strategy == "first_last":
             return "LTX_IMAGE_STRATEGY_MISMATCH", "single_image_workflow_not_compatible_with_first_last_strategy"
-        if not (has_image or has_start or has_end):
+        if workflow_key == "i2v" and not has_image:
+            return "VIDEO_SOURCE_IMAGE_REQUIRED", "imageUrl_required_for_i2v_workflow"
+        if workflow_key != "i2v" and not (has_image or has_start or has_end):
             return "VIDEO_SOURCE_IMAGE_REQUIRED", "imageUrl_or_startImageUrl_required"
 
     if workflow_key == "lip_sync" and not has_audio:
@@ -13512,6 +13563,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
     scene_id = str(payload.sceneId or "").strip() or "scene"
     provider_name_hint = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
     resolved_workflow_hint = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()) or "auto"
+    _resolved_duration, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
     print(
         "[CLIP VIDEO JOB WORKER] "
         f"start sceneId={scene_id} jobId={job_id} provider={provider_name_hint} "
@@ -13565,6 +13617,9 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "providerJobId": str(out.get("taskId") or job.get("providerJobId") or "").strip(),
                 "requestedDurationSec": out.get("requestedDurationSec"),
                 "providerDurationSec": out.get("providerDurationSec"),
+                "sceneStartSec": out.get("sceneStartSec", scene_start_sec),
+                "sceneEndSec": out.get("sceneEndSec", scene_end_sec),
+                "sceneDurationSec": out.get("sceneDurationSec", scene_duration_sec),
                 "error": None if status == "done" else str(out.get("details") or out.get("hint") or out.get("code") or f"HTTP_{status_code}"),
                 "requestedPromptPreview": str(((out.get("debug") or {}).get("requestedPromptPreview") if isinstance(out.get("debug"), dict) else "") or ""),
                 "effectivePromptPreview": str(((out.get("debug") or {}).get("effectivePromptPreview") if isinstance(out.get("debug"), dict) else "") or ""),
@@ -13708,6 +13763,9 @@ def clip_video_start(payload: ClipVideoIn):
             "workflowKey": None,
             "requestedDurationSec": None,
             "providerDurationSec": None,
+            "sceneStartSec": payload.sceneStartSec,
+            "sceneEndSec": payload.sceneEndSec,
+            "sceneDurationSec": payload.sceneDurationSec,
             "error": None,
             "requestedPromptPreview": "",
             "effectivePromptPreview": "",
@@ -14088,11 +14146,21 @@ def clip_video(payload: ClipVideoIn):
             )
 
         width, height = _resolve_clip_video_dimensions(output_format)
-        try:
-            requested_duration = float(payload.requestedDurationSec or 5)
-        except Exception:
-            requested_duration = 5.0
-        requested_duration = max(1.0, min(8.0, requested_duration))
+        requested_duration, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
+        print(
+            "[SCENARIO VIDEO TIMEFRAME] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "workflowKey": final_workflow_key,
+                    "requestedDurationSec": requested_duration,
+                    "sceneStartSec": scene_start_sec,
+                    "sceneEndSec": scene_end_sec,
+                    "sceneDurationSec": scene_duration_sec,
+                },
+                ensure_ascii=False,
+            )
+        )
 
         scene_human_visual_anchors = [str(item or "").strip() for item in (payload.sceneHumanVisualAnchors or []) if str(item or "").strip()]
         effective_prompt, prompt_debug = _compose_video_effective_prompt(
@@ -14458,6 +14526,9 @@ def clip_video(payload: ClipVideoIn):
             continuation_source_asset_url=continuation_source_asset_url,
             continuation_source_asset_type=continuation_source_asset_type,
             requested_mode=str(payload.ltxMode or ""),
+            scene_start_sec=scene_start_sec,
+            scene_end_sec=scene_end_sec,
+            scene_duration_sec=scene_duration_sec,
         )
         if comfy_err or not comfy_out:
             err_text = str(comfy_err or "comfy_remote_failed")
@@ -14632,6 +14703,9 @@ def clip_video(payload: ClipVideoIn):
             "mode": str(comfy_out.get("mode") or mode),
             "requestedDurationSec": round(float(requested_duration), 3),
             "providerDurationSec": round(float(comfy_out.get("requestedDurationSec") or requested_duration), 3),
+            "sceneStartSec": scene_start_sec,
+            "sceneEndSec": scene_end_sec,
+            "sceneDurationSec": scene_duration_sec,
             "debug": {
                 **comfy_debug,
                 "workflow_key": final_workflow_key,
@@ -14651,6 +14725,11 @@ def clip_video(payload: ClipVideoIn):
                 "negativePromptPreview": str(comfy_debug.get("negative_prompt_preview") or ""),
                 "resolvedNegativePromptNodeId": str(comfy_debug.get("resolved_negative_prompt_node_id") or ""),
                 "negativePromptSource": str(comfy_debug.get("negative_prompt_source") or "missing"),
+                "requestedDurationSec": float(requested_duration),
+                "providerDurationSec": float(comfy_out.get("requestedDurationSec") or requested_duration),
+                "sceneStartSec": scene_start_sec,
+                "sceneEndSec": scene_end_sec,
+                "sceneDurationSec": scene_duration_sec,
             },
         }
 

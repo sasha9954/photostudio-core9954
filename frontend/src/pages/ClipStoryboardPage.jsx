@@ -216,7 +216,7 @@ const normalizeDirectRouteToWorkflowKey = (value) => {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return "";
   if (["first_last", "first-last", "f_l"].includes(normalized)) return "f_l";
-  if (["lip_sync_music", "lip_sync"].includes(normalized)) return "lip_sync_music";
+  if (["lip_sync_music", "lip_sync", "ia2v"].includes(normalized)) return "lip_sync_music";
   if (["i2v", "image_video"].includes(normalized)) return "i2v";
   return "";
 };
@@ -3614,6 +3614,31 @@ function getSceneRequestedDurationSec(scene) {
   const t1 = Number(scene?.t1 ?? scene?.end ?? 0);
   const fallback = t1 - t0;
   return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
+}
+
+function resolveSceneTimeframe(scene = {}, { preferGenerationDuration = false } = {}) {
+  const t0Candidates = [scene?.t0, scene?.startSec, scene?.start];
+  const t1Candidates = [scene?.t1, scene?.endSec, scene?.end];
+  const sceneStartSec = t0Candidates.map(normalizeDurationSec).find((v) => v != null) ?? null;
+  const sceneEndSec = t1Candidates.map(normalizeDurationSec).find((v) => v != null) ?? null;
+  const delta = (
+    sceneStartSec != null
+    && sceneEndSec != null
+    && Number.isFinite(sceneEndSec - sceneStartSec)
+    && (sceneEndSec - sceneStartSec) >= 0
+  ) ? (sceneEndSec - sceneStartSec) : null;
+  const explicitRequested = normalizeDurationSec(scene?.requestedDurationSec);
+  const generationDuration = normalizeDurationSec(scene?.generationDurationSec);
+  const requestedDurationSec = preferGenerationDuration
+    ? (generationDuration ?? explicitRequested ?? delta ?? normalizeDurationSec(scene?.durationSec) ?? 3)
+    : (explicitRequested ?? delta ?? normalizeDurationSec(scene?.durationSec) ?? 3);
+  const sceneDurationSec = delta ?? normalizeDurationSec(scene?.sceneDurationSec) ?? null;
+  return {
+    requestedDurationSec: Number(requestedDurationSec),
+    sceneStartSec,
+    sceneEndSec,
+    sceneDurationSec,
+  };
 }
 
 const INTRO_FRAME_PREVIEW_KINDS = {
@@ -10425,6 +10450,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || comfySceneSnapshot?.plannedVideoGenerationRoute
         || comfySceneSnapshot?.planned_video_generation_route
       ) || "i2v";
+      const comfyTimeframe = resolveSceneTimeframe(comfySceneSnapshot, { preferGenerationDuration: true });
       const comfyLipSync = comfyRouteWorkflow === "lip_sync_music";
       const comfySendAudioToGenerator = Boolean(comfySceneSnapshot?.sendAudioToGenerator ?? comfySceneSnapshot?.send_audio_to_generator ?? comfyLipSync);
       if (comfyLipSync && comfySendAudioToGenerator && !String(rawVideoSourceUrls.audioSliceUrl || "").trim()) {
@@ -10444,6 +10470,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         original: rawVideoSourceUrls,
         normalized: normalizedVideoSourceUrls,
       });
+      console.debug("[SCENARIO VIDEO TIMEFRAME]", {
+        sceneId,
+        resolvedWorkflowKey: comfyRouteWorkflow,
+        requestedDurationSec: comfyTimeframe.requestedDurationSec,
+        sceneStartSec: comfyTimeframe.sceneStartSec,
+        sceneEndSec: comfyTimeframe.sceneEndSec,
+        sceneDurationSec: comfyTimeframe.sceneDurationSec,
+        hasAudioSlice: Boolean(comfyLipSync && comfySendAudioToGenerator && normalizedVideoSourceUrls.audioSliceUrl),
+        hasStartImage: Boolean(normalizedVideoSourceUrls.startImageUrl),
+        hasEndImage: Boolean(normalizedVideoSourceUrls.endImageUrl),
+      });
       const out = await fetchJson('/api/clip/video/start', {
         method: 'POST',
         timeoutMs: VIDEO_START_TIMEOUT_MS,
@@ -10458,7 +10495,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           videoNegativePrompt: String(comfySceneSnapshot?.videoNegativePrompt ?? comfySceneSnapshot?.video_negative_prompt ?? "").trim(),
           video_negative_prompt: String(comfySceneSnapshot?.videoNegativePrompt ?? comfySceneSnapshot?.video_negative_prompt ?? "").trim(),
           transitionActionPrompt: contextPrompt,
-          requestedDurationSec: Number(comfySceneSnapshot.generationDurationSec) || Math.ceil(Number(comfySceneSnapshot.durationSec) || 3),
+          requestedDurationSec: comfyTimeframe.requestedDurationSec,
+          sceneStartSec: comfyTimeframe.sceneStartSec,
+          sceneEndSec: comfyTimeframe.sceneEndSec,
+          sceneDurationSec: comfyTimeframe.sceneDurationSec,
           resolvedWorkflowKey: comfyRouteWorkflow,
           video_generation_route: comfyRouteWorkflow,
           lipSync: comfyLipSync,
@@ -10602,7 +10642,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           continuationSourceAssetUrl: normalizedVideoSourceUrls.continuationSourceAssetUrl,
           videoPrompt: syncedVideoPrompt,
           transitionActionPrompt: contextPrompt,
-          requestedDurationSec: Number(comfySelectedScene.generationDurationSec) || Math.ceil(Number(comfySelectedScene.durationSec) || 3),
+          requestedDurationSec: comfyTimeframe.requestedDurationSec,
+          sceneStartSec: comfyTimeframe.sceneStartSec,
+          sceneEndSec: comfyTimeframe.sceneEndSec,
+          sceneDurationSec: comfyTimeframe.sceneDurationSec,
           shotType: String(comfySelectedScene.sceneNarrativeStep || ''),
           sceneType: String(comfySelectedScene.sceneGoal || ''),
           format: comfyScenarioFormat,
@@ -12859,11 +12902,8 @@ Aspect ratio: ${imageFormat}`,
       || workflowDefaultModelMap[String(effectiveWorkflowKey || "").trim().toLowerCase()]
       || ""
     ).trim();
-    const requestedDurationSec = Number(
-      targetScene?.requestedDurationSec
-      ?? targetScene?.durationSec
-      ?? Math.max(0, Number(targetScene.t1 ?? targetScene.end ?? 0) - Number(targetScene.t0 ?? targetScene.start ?? 0))
-    ) || 0;
+    const sceneTimeframe = resolveSceneTimeframe(targetScene, { preferGenerationDuration: false });
+    const requestedDurationSec = sceneTimeframe.requestedDurationSec;
     const requiresAudioSensitiveVideo = effectiveWorkflowKey === "lip_sync_music" || Boolean(effectiveLipSync);
     const shouldAttachAudioSlice = Boolean(attachedAudioSliceUrl) && (requiresAudioSensitiveVideo || Boolean(effectiveLipSync));
     const continuationSourceSceneId = effectiveRequiresContinuation
@@ -12974,7 +13014,7 @@ Aspect ratio: ${imageFormat}`,
       provider: effectiveVideoProvider,
       sourceImageUrl,
     });
-    console.debug("[SCENE VIDEO ROUTE]", {
+      console.debug("[SCENE VIDEO ROUTE]", {
       sceneId,
       sceneIndex: targetSceneIndex,
       storyboardRevision: activeStoryboardRevision,
@@ -12991,8 +13031,19 @@ Aspect ratio: ${imageFormat}`,
       requestedDurationSec,
       startImagePresent: Boolean(effectiveStartImageUrl),
       endImagePresent: Boolean(resolvedLastFrameUrl),
-      audioSlicePresent: Boolean(targetScene?.audioSliceUrl),
-    });
+        audioSlicePresent: Boolean(targetScene?.audioSliceUrl),
+      });
+      console.debug("[SCENARIO VIDEO TIMEFRAME]", {
+        sceneId,
+        resolvedWorkflowKey: effectiveWorkflowKey,
+        requestedDurationSec: sceneTimeframe.requestedDurationSec,
+        sceneStartSec: sceneTimeframe.sceneStartSec,
+        sceneEndSec: sceneTimeframe.sceneEndSec,
+        sceneDurationSec: sceneTimeframe.sceneDurationSec,
+        hasAudioSlice: Boolean(normalizedScenarioVideoSourceUrls.audioSliceUrl),
+        hasStartImage: Boolean(normalizedScenarioVideoSourceUrls.startImageUrl),
+        hasEndImage: Boolean(normalizedScenarioVideoSourceUrls.endImageUrl),
+      });
     console.debug("[SCENARIO LTX SCENE DEBUG]", (Array.isArray(scenarioScenes) ? scenarioScenes : []).map((scene, idx) => ({
       sceneId: String(scene?.sceneId || ""),
       sceneIndex: idx,
@@ -13078,6 +13129,9 @@ Aspect ratio: ${imageFormat}`,
         transitionActionPrompt,
         transitionType,
         requestedDurationSec,
+        sceneStartSec: sceneTimeframe.sceneStartSec,
+        sceneEndSec: sceneTimeframe.sceneEndSec,
+        sceneDurationSec: sceneTimeframe.sceneDurationSec,
         lipSync: lipSyncRoute ? true : effectiveLipSync,
         renderMode: effectiveRenderMode,
         ltxMode: lipSyncRoute

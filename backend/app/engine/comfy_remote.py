@@ -104,7 +104,14 @@ COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "continuation": {"single_image": False, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": True},
     "lip_sync": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": True, "continuation": False},
 }
-COMFY_LEGACY_WORKFLOW_ALIASES = {"i2v_as": "i2v", "f_l_as": "f_l"}
+COMFY_LEGACY_WORKFLOW_ALIASES = {
+    "i2v_as": "i2v",
+    "f_l_as": "f_l",
+    "first_last": "f_l",
+    "imag-imag-video-bz": "f_l",
+    "ia2v": "lip_sync",
+    "lip_sync_music": "lip_sync",
+}
 COMFY_WORKFLOW_FAMILY = {
     "i2v": "ltx_image_video",
     "f_l": "ltx_first_last",
@@ -1328,9 +1335,94 @@ def _patch_audio_frames(workflow: dict, frames: int) -> None:
         inputs["frames_number"] = int(frames)
 
 
+def _extract_linked_node_ids(value) -> list[str]:
+    if isinstance(value, list) and value:
+        first = value[0]
+        if isinstance(first, (str, int)):
+            return [str(first)]
+    if isinstance(value, tuple) and value:
+        first = value[0]
+        if isinstance(first, (str, int)):
+            return [str(first)]
+    if isinstance(value, dict):
+        node_id = value.get("node_id")
+        if isinstance(node_id, (str, int)):
+            return [str(node_id)]
+    return []
+
+
+def _walk_upstream_to_load_images(workflow: dict, start_node_id: str) -> list[str]:
+    queue: deque[str] = deque([str(start_node_id)])
+    visited: set[str] = set()
+    load_image_ids: list[str] = []
+    while queue:
+        node_id = str(queue.popleft())
+        if not node_id or node_id in visited:
+            continue
+        visited.add(node_id)
+        node = workflow.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        if class_type == "loadimage":
+            load_image_ids.append(node_id)
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for input_value in inputs.values():
+            for upstream_id in _extract_linked_node_ids(input_value):
+                if upstream_id and upstream_id not in visited:
+                    queue.append(upstream_id)
+    return load_image_ids
+
+
 def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image_name: str) -> tuple[bool, list[str], list[str]]:
     start_node_ids: list[str] = []
     end_node_ids: list[str] = []
+    guide_start_ids: list[str] = []
+    guide_end_ids: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        if class_type != "ltxvaddguide":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        frame_idx = inputs.get("frame_idx")
+        frame_idx_value = None
+        try:
+            frame_idx_value = int(float(frame_idx))
+        except Exception:
+            frame_idx_value = None
+        if frame_idx_value == 0:
+            guide_start_ids.append(str(node_id))
+        elif frame_idx_value == -1:
+            guide_end_ids.append(str(node_id))
+
+    for guide_id in guide_start_ids:
+        for load_node_id in _walk_upstream_to_load_images(workflow, guide_id):
+            load_node = workflow.get(str(load_node_id))
+            load_inputs = load_node.get("inputs") if isinstance(load_node, dict) else None
+            if isinstance(load_inputs, dict):
+                load_inputs["image"] = start_image_name
+                start_node_ids.extend([str(guide_id), str(load_node_id)])
+    for guide_id in guide_end_ids:
+        for load_node_id in _walk_upstream_to_load_images(workflow, guide_id):
+            load_node = workflow.get(str(load_node_id))
+            load_inputs = load_node.get("inputs") if isinstance(load_node, dict) else None
+            if isinstance(load_inputs, dict):
+                load_inputs["image"] = end_image_name
+                end_node_ids.extend([str(guide_id), str(load_node_id)])
+
+    start_node_ids = list(dict.fromkeys(start_node_ids))
+    end_node_ids = list(dict.fromkeys(end_node_ids))
+    if start_node_ids and end_node_ids:
+        return True, start_node_ids, end_node_ids
+
+    # Legacy label/title fallback path (reserve compatibility)
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
@@ -1439,6 +1531,8 @@ def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image
                             [load_image_node_id, resize_mask_node_id, resize_images_node_id, preprocess_node_id, second_img2video_node_id]
                         )
 
+    start_node_ids = list(dict.fromkeys(start_node_ids))
+    end_node_ids = list(dict.fromkeys(end_node_ids))
     second_frame_patch_applied = bool(start_node_ids and end_node_ids)
     return second_frame_patch_applied, start_node_ids, end_node_ids
 
@@ -2220,6 +2314,9 @@ def run_comfy_image_to_video(
     continuation_source_asset_url: str | None = None,
     continuation_source_asset_type: str | None = None,
     requested_mode: str | None = None,
+    scene_start_sec: float | None = None,
+    scene_end_sec: float | None = None,
+    scene_duration_sec: float | None = None,
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
     raw_workflow_key = str(workflow_key or "i2v").strip().lower() or "i2v"
@@ -3159,7 +3256,7 @@ def run_comfy_image_to_video(
         "mode": normalized_workflow_key,
         "videoUrl": video_url,
         "model": normalized_model_key,
-        "requestedDurationSec": round(float(requested_duration_sec), 3),
+        "requestedDurationSec": float(requested_duration_sec),
         "taskId": prompt_id,
         "debug": {
             "scene_id": str(scene_id or "").strip(),
@@ -3170,6 +3267,7 @@ def run_comfy_image_to_video(
             "workflow_file": Path(str(workflow_source)).name,
             "workflow": workflow_source,
             "workflow_path": workflow_source,
+            "requestedDurationSec": float(requested_duration_sec),
             "workflow_family": workflow_family,
             "model_key": normalized_model_key,
             "model_ckpt_applied": str((effective_model_spec or {}).get("ckpt_name") or ""),
@@ -3197,6 +3295,9 @@ def run_comfy_image_to_video(
             "start_image_used": bool(first_last_start_node_ids),
             "end_image_used": bool(first_last_end_node_ids),
             "second_frame_patch_applied": bool(first_last_applied),
+            "sceneStartSec": scene_start_sec,
+            "sceneEndSec": scene_end_sec,
+            "sceneDurationSec": scene_duration_sec,
             "audio_used": bool(audio_patch_node_ids),
             "audio_targets_found": audio_targets_found,
             "audio_targets_summary": audio_targets[:8],
