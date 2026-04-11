@@ -2305,6 +2305,8 @@ def _compose_video_effective_prompt(
         or (scene_contract if isinstance(scene_contract, dict) else {}).get("negative_video_prompt")
         or (scene_contract if isinstance(scene_contract, dict) else {}).get("videoNegativePrompt")
         or (scene_contract if isinstance(scene_contract, dict) else {}).get("video_negative_prompt")
+        or (scene_contract if isinstance(scene_contract, dict) else {}).get("negativePrompt")
+        or (scene_contract if isinstance(scene_contract, dict) else {}).get("negative_prompt")
         or ""
     ).strip()
     if strict_first_last_mode and strict_positive_prompt:
@@ -2455,6 +2457,8 @@ def _resolve_scene_video_negative_prompt(payload: ClipVideoIn, scene_contract: d
         or contract.get("negative_video_prompt")
         or contract.get("videoNegativePrompt")
         or contract.get("video_negative_prompt")
+        or contract.get("negativePrompt")
+        or contract.get("negative_prompt")
         or ""
     ).strip()
 

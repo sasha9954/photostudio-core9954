@@ -13152,10 +13152,14 @@ Aspect ratio: ${imageFormat}`,
       ?? targetScene?.video_negative_prompt
       ?? targetScene?.negativeVideoPrompt
       ?? targetScene?.negative_video_prompt
+      ?? targetScene?.negativePrompt
+      ?? targetScene?.negative_prompt
       ?? targetScene?.sceneContract?.videoNegativePrompt
       ?? targetScene?.sceneContract?.video_negative_prompt
       ?? targetScene?.sceneContract?.negativeVideoPrompt
       ?? targetScene?.sceneContract?.negative_video_prompt
+      ?? targetScene?.sceneContract?.negativePrompt
+      ?? targetScene?.sceneContract?.negative_prompt
       ?? ""
     ).trim();
     const sceneHumanVisualAnchors = strictFirstLastMode ? [] : buildScenarioHumanVisualAnchors(targetScene);
