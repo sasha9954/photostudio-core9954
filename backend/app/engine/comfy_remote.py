@@ -1263,6 +1263,54 @@ def _discover_lip_sync_nodes(workflow: dict) -> dict:
     return discovered
 
 
+def _discover_first_last_patch_nodes(workflow: dict) -> dict:
+    discovered = {
+        "prompt_node_id": "",
+        "width_node_id": "",
+        "height_node_id": "",
+        "fps_node_id": "",
+        "length_node_id": "",
+        "image_node_ids": [],
+        "seed_node_ids": [],
+    }
+    if not isinstance(workflow, dict):
+        return discovered
+
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        title_l = _node_title_lower(node)
+
+        if "noise_seed" in inputs:
+            discovered["seed_node_ids"].append(str(node_id))
+        if class_type == "loadimage" and "image" in inputs:
+            discovered["image_node_ids"].append(str(node_id))
+        if "value" not in inputs:
+            continue
+        if class_type == "primitivestringmultiline" and ("prompt" in title_l or not discovered["prompt_node_id"]):
+            discovered["prompt_node_id"] = str(node_id)
+            continue
+        if "width" in title_l and not discovered["width_node_id"]:
+            discovered["width_node_id"] = str(node_id)
+            continue
+        if "height" in title_l and not discovered["height_node_id"]:
+            discovered["height_node_id"] = str(node_id)
+            continue
+        if "fps" in title_l and not discovered["fps_node_id"]:
+            discovered["fps_node_id"] = str(node_id)
+            continue
+        if any(hint in title_l for hint in ("length", "duration", "frame")) and not discovered["length_node_id"]:
+            discovered["length_node_id"] = str(node_id)
+
+    discovered["image_node_ids"] = list(dict.fromkeys(discovered["image_node_ids"]))
+    discovered["seed_node_ids"] = list(dict.fromkeys(discovered["seed_node_ids"]))
+    return discovered
+
+
 def _resolve_workflow_fps(workflow: dict, *, preferred_fps_node_id: str = "", default_fps: int = 24) -> int:
     fps_node_id, fps_input_key = FIXED_IMAGE_VIDEO_NODES["fps"]
     if preferred_fps_node_id:
@@ -2274,9 +2322,13 @@ def _patch_workflow_inputs(
     wf = copy.deepcopy(workflow)
     normalized_workflow_key = str(workflow_key or "").strip().lower()
     discovery = _discover_lip_sync_nodes(wf) if normalized_workflow_key == "lip_sync" else {}
+    first_last_discovery = _discover_first_last_patch_nodes(wf) if normalized_workflow_key == "f_l" else {}
     used_legacy_fallback_ids = False
+    optional_fallback_misses: list[dict[str, str]] = []
 
     discovered_fps_id = str(discovery.get("fps_node_id") or "").strip() if isinstance(discovery, dict) else ""
+    if normalized_workflow_key == "f_l" and not discovered_fps_id:
+        discovered_fps_id = str(first_last_discovery.get("fps_node_id") or "").strip()
     if normalized_workflow_key == "lip_sync" and not discovered_fps_id:
         discovered_fps_id = LIPSYNC_PRIMARY_NODE_IDS["fps"]
     fps = _resolve_workflow_fps(wf, preferred_fps_node_id=discovered_fps_id)
@@ -2341,12 +2393,50 @@ def _patch_workflow_inputs(
                     },
                 },
             )
+    elif normalized_workflow_key == "f_l":
+        if first_last_discovery.get("prompt_node_id"):
+            patch_values.append((str(first_last_discovery["prompt_node_id"]), "value", prompt))
+        if first_last_discovery.get("width_node_id"):
+            patch_values.append((str(first_last_discovery["width_node_id"]), "value", int(width)))
+        if first_last_discovery.get("height_node_id"):
+            patch_values.append((str(first_last_discovery["height_node_id"]), "value", int(height)))
+        if first_last_discovery.get("length_node_id"):
+            patch_values.append((str(first_last_discovery["length_node_id"]), "value", int(frames)))
+        if first_last_discovery.get("fps_node_id"):
+            patch_values.append((str(first_last_discovery["fps_node_id"]), "value", int(fps)))
+        if first_last_discovery.get("image_node_ids"):
+            patch_values.append((str(first_last_discovery["image_node_ids"][0]), "image", image_name))
+        fallback_patch_values = [
+            (*FIXED_IMAGE_VIDEO_NODES["image"], image_name),
+            (*FIXED_IMAGE_VIDEO_NODES["prompt"], prompt),
+            (*FIXED_IMAGE_VIDEO_NODES["width"], int(width)),
+            (*FIXED_IMAGE_VIDEO_NODES["height"], int(height)),
+            (*FIXED_IMAGE_VIDEO_NODES["length"], int(frames)),
+            (*FIXED_IMAGE_VIDEO_NODES["fps"], int(fps)),
+        ]
+        for node_id, key, value in fallback_patch_values:
+            ok, err = _set_node_input(wf, node_id, key, value)
+            if ok:
+                patch_values.append((node_id, key, value))
+                continue
+            if str(err or "").startswith("missing_node:"):
+                optional_fallback_misses.append(
+                    {
+                        "workflowKey": normalized_workflow_key,
+                        "missingNodeId": str(node_id),
+                        "inputKey": str(key),
+                        "reason": "optional_legacy_fixed_node_absent",
+                    }
+                )
+                logger.info("[COMFY F_L OPTIONAL FIXED NODE SKIP] %s", optional_fallback_misses[-1])
+                continue
+            return None, err, None, None, {}
     else:
         patch_values.extend([
             (*FIXED_IMAGE_VIDEO_NODES["image"], image_name),
             (*FIXED_IMAGE_VIDEO_NODES["prompt"], prompt),
         ])
-    if normalized_workflow_key != "lip_sync":
+    if normalized_workflow_key not in {"lip_sync", "f_l"}:
         patch_values.extend([
             (*FIXED_IMAGE_VIDEO_NODES["width"], int(width)),
             (*FIXED_IMAGE_VIDEO_NODES["height"], int(height)),
@@ -2408,9 +2498,28 @@ def _patch_workflow_inputs(
     print("[COMFY LENGTH APPLY]", timing_patch_debug)
 
     if seed is not None:
-        for node_id, key in FIXED_SEED_NODES:
+        seed_targets: list[tuple[str, str]] = []
+        if normalized_workflow_key == "f_l":
+            discovered_seed_node_ids = [str(item) for item in (first_last_discovery.get("seed_node_ids") or []) if str(item).strip()]
+            if discovered_seed_node_ids:
+                seed_targets.extend([(node_id, "noise_seed") for node_id in discovered_seed_node_ids])
+            seed_targets.extend(list(FIXED_SEED_NODES))
+        else:
+            seed_targets.extend(list(FIXED_SEED_NODES))
+        for node_id, key in list(dict.fromkeys(seed_targets)):
             ok, err = _set_node_input(wf, node_id, key, int(seed))
             if not ok:
+                if normalized_workflow_key == "f_l" and str(err or "").startswith("missing_node:"):
+                    optional_fallback_misses.append(
+                        {
+                            "workflowKey": normalized_workflow_key,
+                            "missingNodeId": str(node_id),
+                            "inputKey": str(key),
+                            "reason": "optional_seed_node_absent",
+                        }
+                    )
+                    logger.info("[COMFY F_L OPTIONAL FIXED NODE SKIP] %s", optional_fallback_misses[-1])
+                    continue
                 return None, err, None, None, {}
 
     discovery_debug = {
@@ -2429,15 +2538,23 @@ def _patch_workflow_inputs(
         "discoveredAudioEncodeNodeIds": discovery.get("audio_encode_node_ids") or [],
         "discoveredSaveVideoNodeIds": discovery.get("save_video_node_ids") or [],
         "discoveredCreateVideoNodeIds": discovery.get("create_video_node_ids") or [],
+        "discoveredFirstLastPromptNodeId": str(first_last_discovery.get("prompt_node_id") or ""),
+        "discoveredFirstLastImageNodeIds": first_last_discovery.get("image_node_ids") or [],
+        "discoveredFirstLastWidthNodeId": str(first_last_discovery.get("width_node_id") or ""),
+        "discoveredFirstLastHeightNodeId": str(first_last_discovery.get("height_node_id") or ""),
+        "discoveredFirstLastLengthNodeId": str(first_last_discovery.get("length_node_id") or ""),
+        "discoveredFirstLastFpsNodeId": str(first_last_discovery.get("fps_node_id") or ""),
+        "discoveredFirstLastSeedNodeIds": first_last_discovery.get("seed_node_ids") or [],
+        "optionalFallbackMisses": optional_fallback_misses,
         "saveVideoFilenamePrefix": str(discovery.get("save_video_filename_prefix") or ""),
         "usedLegacyFallbackIds": bool(used_legacy_fallback_ids),
-        "patchedPromptNodeId": str((patched_node_by_key.get("value") or discovery.get("prompt_text_node_id") or LIPSYNC_PRIMARY_NODE_IDS["prompt"]) if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["prompt"][0]),
-        "patchedImageNodeId": str((patched_node_by_key.get("image") or (discovery.get("image_node_ids") or [LIPSYNC_PRIMARY_NODE_IDS["image"]])[0]) if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["image"][0]),
-        "patchedDurationNodeId": str((discovery.get("duration_node_id") or LIPSYNC_PRIMARY_NODE_IDS["duration"]) if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["length"][0]),
-        "patchedFpsNodeId": str((discovery.get("fps_node_id") or LIPSYNC_PRIMARY_NODE_IDS["fps"]) if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["fps"][0]),
-        "patchedWidthNodeId": str((discovery.get("width_node_id") or FIXED_IMAGE_VIDEO_NODES["width"][0])),
-        "patchedHeightNodeId": str((discovery.get("height_node_id") or FIXED_IMAGE_VIDEO_NODES["height"][0])),
-        "patchedLengthNodeId": str((discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0])),
+        "patchedPromptNodeId": str((patched_node_by_key.get("value") or discovery.get("prompt_text_node_id") or LIPSYNC_PRIMARY_NODE_IDS["prompt"]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("value") or first_last_discovery.get("prompt_node_id") or FIXED_IMAGE_VIDEO_NODES["prompt"][0])),
+        "patchedImageNodeId": str((patched_node_by_key.get("image") or (discovery.get("image_node_ids") or [LIPSYNC_PRIMARY_NODE_IDS["image"]])[0]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("image") or (first_last_discovery.get("image_node_ids") or [FIXED_IMAGE_VIDEO_NODES["image"][0]])[0])),
+        "patchedDurationNodeId": str((discovery.get("duration_node_id") or LIPSYNC_PRIMARY_NODE_IDS["duration"]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("value") or first_last_discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0])),
+        "patchedFpsNodeId": str((discovery.get("fps_node_id") or LIPSYNC_PRIMARY_NODE_IDS["fps"]) if normalized_workflow_key == "lip_sync" else (first_last_discovery.get("fps_node_id") or FIXED_IMAGE_VIDEO_NODES["fps"][0])),
+        "patchedWidthNodeId": str((discovery.get("width_node_id") or first_last_discovery.get("width_node_id") or FIXED_IMAGE_VIDEO_NODES["width"][0])),
+        "patchedHeightNodeId": str((discovery.get("height_node_id") or first_last_discovery.get("height_node_id") or FIXED_IMAGE_VIDEO_NODES["height"][0])),
+        "patchedLengthNodeId": str((discovery.get("length_node_id") or first_last_discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0])),
         "resolvedNegativePromptNodeId": str(resolved_negative_prompt_node_id or ""),
         "negativePromptNodePatched": bool(negative_prompt_node_patched),
         "negativePromptSource": negative_prompt_source,
@@ -2471,6 +2588,23 @@ def _patch_workflow_inputs(
             ],
         },
     )
+    if normalized_workflow_key == "f_l":
+        logger.info(
+            "[COMFY F_L PATCH RESOLUTION] %s",
+            {
+                "workflowKey": normalized_workflow_key,
+                "workflowPath": workflow_path,
+                "promptNode": str(first_last_discovery.get("prompt_node_id") or ""),
+                "imageNodes": first_last_discovery.get("image_node_ids") or [],
+                "timingNodes": {
+                    "width": str(first_last_discovery.get("width_node_id") or ""),
+                    "height": str(first_last_discovery.get("height_node_id") or ""),
+                    "length": str(first_last_discovery.get("length_node_id") or ""),
+                    "fps": str(first_last_discovery.get("fps_node_id") or ""),
+                },
+                "optionalFallbackMisses": optional_fallback_misses,
+            },
+        )
     return wf, None, frames, fps, discovery_debug
 
 
