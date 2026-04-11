@@ -97,6 +97,12 @@ COMFY_DYNAMIC_DISCOVERY_CLASS_NAMES = {
     "save_video": {"savevideo"},
     "create_video": {"createvideo"},
 }
+COMFY_FIRST_LAST_PROMPT_CLASS_NAMES = {
+    "cliptextencode",
+    "primitivestringmultiline",
+    "textencode",
+    "textencodeadvanced",
+}
 
 COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "i2v": {"single_image": True, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": False},
@@ -1266,6 +1272,12 @@ def _discover_lip_sync_nodes(workflow: dict) -> dict:
 def _discover_first_last_patch_nodes(workflow: dict) -> dict:
     discovered = {
         "prompt_node_id": "",
+        "prompt_node_input_key": "",
+        "prompt_node_class": "",
+        "positive_prompt_node_id": "",
+        "positive_prompt_input_key": "",
+        "negative_prompt_node_id": "",
+        "negative_prompt_input_key": "",
         "width_node_id": "",
         "height_node_id": "",
         "fps_node_id": "",
@@ -1276,6 +1288,7 @@ def _discover_first_last_patch_nodes(workflow: dict) -> dict:
     if not isinstance(workflow, dict):
         return discovered
 
+    prompt_candidates: list[dict[str, str]] = []
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
@@ -1289,10 +1302,18 @@ def _discover_first_last_patch_nodes(workflow: dict) -> dict:
             discovered["seed_node_ids"].append(str(node_id))
         if class_type == "loadimage" and "image" in inputs:
             discovered["image_node_ids"].append(str(node_id))
+        if class_type in COMFY_FIRST_LAST_PROMPT_CLASS_NAMES:
+            prompt_input_key = "text" if "text" in inputs else ("value" if "value" in inputs else "")
+            if prompt_input_key:
+                prompt_candidates.append(
+                    {
+                        "node_id": str(node_id),
+                        "class_type": class_type,
+                        "input_key": prompt_input_key,
+                        "title_l": title_l,
+                    }
+                )
         if "value" not in inputs:
-            continue
-        if class_type == "primitivestringmultiline" and ("prompt" in title_l or not discovered["prompt_node_id"]):
-            discovered["prompt_node_id"] = str(node_id)
             continue
         if "width" in title_l and not discovered["width_node_id"]:
             discovered["width_node_id"] = str(node_id)
@@ -1306,6 +1327,45 @@ def _discover_first_last_patch_nodes(workflow: dict) -> dict:
         if any(hint in title_l for hint in ("length", "duration", "frame")) and not discovered["length_node_id"]:
             discovered["length_node_id"] = str(node_id)
 
+    node_consumers = _collect_node_output_consumers(workflow)
+    for candidate in prompt_candidates:
+        node_id = str(candidate.get("node_id") or "").strip()
+        if not node_id:
+            continue
+        candidate_class = str(candidate.get("class_type") or "")
+        for _, consumer_input_key in node_consumers.get(node_id, []):
+            normalized_key = str(consumer_input_key or "").strip().lower()
+            if normalized_key == "negative" and not discovered["negative_prompt_node_id"]:
+                discovered["negative_prompt_node_id"] = node_id
+                discovered["negative_prompt_input_key"] = str(candidate.get("input_key") or "")
+            if normalized_key in {"positive", "prompt"} and not discovered["positive_prompt_node_id"]:
+                discovered["positive_prompt_node_id"] = node_id
+                discovered["positive_prompt_input_key"] = str(candidate.get("input_key") or "")
+                discovered["prompt_node_class"] = candidate_class
+
+    if not discovered["negative_prompt_node_id"]:
+        for candidate in prompt_candidates:
+            if "negative" in str(candidate.get("title_l") or ""):
+                discovered["negative_prompt_node_id"] = str(candidate.get("node_id") or "")
+                discovered["negative_prompt_input_key"] = str(candidate.get("input_key") or "")
+                break
+    if not discovered["positive_prompt_node_id"]:
+        for candidate in prompt_candidates:
+            title_l = str(candidate.get("title_l") or "")
+            if "negative" in title_l:
+                continue
+            discovered["positive_prompt_node_id"] = str(candidate.get("node_id") or "")
+            discovered["positive_prompt_input_key"] = str(candidate.get("input_key") or "")
+            discovered["prompt_node_class"] = str(candidate.get("class_type") or "")
+            break
+    if not discovered["positive_prompt_node_id"] and prompt_candidates:
+        fallback_candidate = prompt_candidates[0]
+        discovered["positive_prompt_node_id"] = str(fallback_candidate.get("node_id") or "")
+        discovered["positive_prompt_input_key"] = str(fallback_candidate.get("input_key") or "")
+        discovered["prompt_node_class"] = str(fallback_candidate.get("class_type") or "")
+
+    discovered["prompt_node_id"] = discovered["positive_prompt_node_id"]
+    discovered["prompt_node_input_key"] = discovered["positive_prompt_input_key"]
     discovered["image_node_ids"] = list(dict.fromkeys(discovered["image_node_ids"]))
     discovered["seed_node_ids"] = list(dict.fromkeys(discovered["seed_node_ids"]))
     return discovered
@@ -2335,6 +2395,10 @@ def _patch_workflow_inputs(
     frames = max(1, int(math.ceil(float(requested_duration_sec) * float(fps))))
 
     patch_values = []
+    f_l_positive_prompt_node_id = ""
+    f_l_positive_prompt_input_key = ""
+    f_l_negative_prompt_node_id = ""
+    f_l_negative_prompt_input_key = ""
     if normalized_workflow_key == "lip_sync":
         resolved_image_node_id = _resolve_lipsync_patch_node_id(
             wf,
@@ -2394,8 +2458,14 @@ def _patch_workflow_inputs(
                 },
             )
     elif normalized_workflow_key == "f_l":
-        if first_last_discovery.get("prompt_node_id"):
-            patch_values.append((str(first_last_discovery["prompt_node_id"]), "value", prompt))
+        if first_last_discovery.get("positive_prompt_node_id"):
+            f_l_positive_prompt_node_id = str(first_last_discovery.get("positive_prompt_node_id") or "")
+            f_l_positive_prompt_input_key = str(first_last_discovery.get("positive_prompt_input_key") or "")
+            if f_l_positive_prompt_node_id and f_l_positive_prompt_input_key:
+                patch_values.append((f_l_positive_prompt_node_id, f_l_positive_prompt_input_key, prompt))
+        if first_last_discovery.get("negative_prompt_node_id"):
+            f_l_negative_prompt_node_id = str(first_last_discovery.get("negative_prompt_node_id") or "")
+            f_l_negative_prompt_input_key = str(first_last_discovery.get("negative_prompt_input_key") or "")
         if first_last_discovery.get("width_node_id"):
             patch_values.append((str(first_last_discovery["width_node_id"]), "value", int(width)))
         if first_last_discovery.get("height_node_id"):
@@ -2451,7 +2521,9 @@ def _patch_workflow_inputs(
         if str(key) not in patched_node_by_key:
             patched_node_by_key[str(key)] = str(node_id)
 
-    resolved_negative_prompt_node_id = _discover_negative_prompt_node(wf)
+    resolved_negative_prompt_node_id = (
+        f_l_negative_prompt_node_id if (normalized_workflow_key == "f_l" and f_l_negative_prompt_node_id) else _discover_negative_prompt_node(wf)
+    )
     workflow_static_negative_prompt = ""
     negative_prompt_node_patched = False
     negative_prompt_source = "missing"
@@ -2465,7 +2537,11 @@ def _patch_workflow_inputs(
                 scene_negative_prompt = str(negative_prompt or "").strip()
                 if scene_negative_prompt:
                     effective_negative_prompt = _dedupe_prompt_tokens_csv(workflow_static_negative_prompt, scene_negative_prompt)
-                    input_key = "text" if "text" in negative_inputs else ("value" if "value" in negative_inputs else "")
+                    input_key = (
+                        f_l_negative_prompt_input_key
+                        if (normalized_workflow_key == "f_l" and f_l_negative_prompt_input_key in negative_inputs)
+                        else ("text" if "text" in negative_inputs else ("value" if "value" in negative_inputs else ""))
+                    )
                     if input_key:
                         ok, err = _set_node_input(wf, resolved_negative_prompt_node_id, input_key, effective_negative_prompt)
                         if not ok:
@@ -2539,6 +2615,12 @@ def _patch_workflow_inputs(
         "discoveredSaveVideoNodeIds": discovery.get("save_video_node_ids") or [],
         "discoveredCreateVideoNodeIds": discovery.get("create_video_node_ids") or [],
         "discoveredFirstLastPromptNodeId": str(first_last_discovery.get("prompt_node_id") or ""),
+        "discoveredFirstLastPromptInputKey": str(first_last_discovery.get("prompt_node_input_key") or ""),
+        "discoveredFirstLastPromptNodeClass": str(first_last_discovery.get("prompt_node_class") or ""),
+        "discoveredFirstLastPositivePromptNodeId": str(first_last_discovery.get("positive_prompt_node_id") or ""),
+        "discoveredFirstLastPositivePromptInputKey": str(first_last_discovery.get("positive_prompt_input_key") or ""),
+        "discoveredFirstLastNegativePromptNodeId": str(first_last_discovery.get("negative_prompt_node_id") or ""),
+        "discoveredFirstLastNegativePromptInputKey": str(first_last_discovery.get("negative_prompt_input_key") or ""),
         "discoveredFirstLastImageNodeIds": first_last_discovery.get("image_node_ids") or [],
         "discoveredFirstLastWidthNodeId": str(first_last_discovery.get("width_node_id") or ""),
         "discoveredFirstLastHeightNodeId": str(first_last_discovery.get("height_node_id") or ""),
@@ -2548,7 +2630,13 @@ def _patch_workflow_inputs(
         "optionalFallbackMisses": optional_fallback_misses,
         "saveVideoFilenamePrefix": str(discovery.get("save_video_filename_prefix") or ""),
         "usedLegacyFallbackIds": bool(used_legacy_fallback_ids),
-        "patchedPromptNodeId": str((patched_node_by_key.get("value") or discovery.get("prompt_text_node_id") or LIPSYNC_PRIMARY_NODE_IDS["prompt"]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("value") or first_last_discovery.get("prompt_node_id") or FIXED_IMAGE_VIDEO_NODES["prompt"][0])),
+        "patchedPromptNodeId": str((patched_node_by_key.get("value") or discovery.get("prompt_text_node_id") or LIPSYNC_PRIMARY_NODE_IDS["prompt"]) if normalized_workflow_key == "lip_sync" else (f_l_positive_prompt_node_id if normalized_workflow_key == "f_l" else (patched_node_by_key.get("value") or first_last_discovery.get("prompt_node_id") or FIXED_IMAGE_VIDEO_NODES["prompt"][0]))),
+        "patchedPositivePromptNodeId": str(f_l_positive_prompt_node_id if normalized_workflow_key == "f_l" else ""),
+        "patchedNegativePromptNodeId": str(f_l_negative_prompt_node_id if normalized_workflow_key == "f_l" else ""),
+        "positivePromptNodePatched": bool(f_l_positive_prompt_node_id) if normalized_workflow_key == "f_l" else bool(patched_node_by_key.get("value")),
+        "negativePromptNodePatched": bool(negative_prompt_node_patched),
+        "promptPatchInputKey": str(f_l_positive_prompt_input_key if normalized_workflow_key == "f_l" else "value"),
+        "negativePromptPatchInputKey": str(f_l_negative_prompt_input_key if normalized_workflow_key == "f_l" else ""),
         "patchedImageNodeId": str((patched_node_by_key.get("image") or (discovery.get("image_node_ids") or [LIPSYNC_PRIMARY_NODE_IDS["image"]])[0]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("image") or (first_last_discovery.get("image_node_ids") or [FIXED_IMAGE_VIDEO_NODES["image"][0]])[0])),
         "patchedDurationNodeId": str((discovery.get("duration_node_id") or LIPSYNC_PRIMARY_NODE_IDS["duration"]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("value") or first_last_discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0])),
         "patchedFpsNodeId": str((discovery.get("fps_node_id") or LIPSYNC_PRIMARY_NODE_IDS["fps"]) if normalized_workflow_key == "lip_sync" else (first_last_discovery.get("fps_node_id") or FIXED_IMAGE_VIDEO_NODES["fps"][0])),
@@ -2556,7 +2644,6 @@ def _patch_workflow_inputs(
         "patchedHeightNodeId": str((discovery.get("height_node_id") or first_last_discovery.get("height_node_id") or FIXED_IMAGE_VIDEO_NODES["height"][0])),
         "patchedLengthNodeId": str((discovery.get("length_node_id") or first_last_discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0])),
         "resolvedNegativePromptNodeId": str(resolved_negative_prompt_node_id or ""),
-        "negativePromptNodePatched": bool(negative_prompt_node_patched),
         "negativePromptSource": negative_prompt_source,
         "negativePromptPreview": _preview_value(effective_negative_prompt, limit=320),
         "negativePromptStaticPreview": _preview_value(workflow_static_negative_prompt, limit=220),
@@ -2595,6 +2682,10 @@ def _patch_workflow_inputs(
                 "workflowKey": normalized_workflow_key,
                 "workflowPath": workflow_path,
                 "promptNode": str(first_last_discovery.get("prompt_node_id") or ""),
+                "positivePromptNode": str(first_last_discovery.get("positive_prompt_node_id") or ""),
+                "negativePromptNode": str(first_last_discovery.get("negative_prompt_node_id") or ""),
+                "positivePromptInputKey": str(first_last_discovery.get("positive_prompt_input_key") or ""),
+                "negativePromptInputKey": str(first_last_discovery.get("negative_prompt_input_key") or ""),
                 "imageNodes": first_last_discovery.get("image_node_ids") or [],
                 "timingNodes": {
                     "width": str(first_last_discovery.get("width_node_id") or ""),
@@ -3405,6 +3496,24 @@ def run_comfy_image_to_video(
     discovered_audio_encode_node_ids = [str(item) for item in (workflow_discovery_debug.get("discoveredAudioEncodeNodeIds") if isinstance(workflow_discovery_debug, dict) else []) or [] if str(item).strip()]
     discovered_create_video_node_ids = [str(item) for item in (workflow_discovery_debug.get("discoveredCreateVideoNodeIds") if isinstance(workflow_discovery_debug, dict) else []) or [] if str(item).strip()]
     discovered_save_video_node_ids = [str(item) for item in (workflow_discovery_debug.get("discoveredSaveVideoNodeIds") if isinstance(workflow_discovery_debug, dict) else []) or [] if str(item).strip()]
+    resolved_prompt_node_id_for_debug = str(
+        (
+            (workflow_discovery_debug.get("patchedPositivePromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
+            if normalized_workflow_key == "f_l"
+            else (workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
+        )
+        or (LIPSYNC_PRIMARY_NODE_IDS["prompt"] if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["prompt"][0])
+    )
+    resolved_prompt_input_key_for_debug = str(
+        (workflow_discovery_debug.get("promptPatchInputKey") if isinstance(workflow_discovery_debug, dict) else "")
+        or ("value" if normalized_workflow_key != "f_l" else "text")
+    )
+    prompt_patched_node_ids = [resolved_prompt_node_id_for_debug]
+    if normalized_workflow_key == "f_l":
+        resolved_negative_prompt_id = str((workflow_discovery_debug.get("patchedNegativePromptNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "")
+        if resolved_negative_prompt_id:
+            prompt_patched_node_ids.append(resolved_negative_prompt_id)
+    prompt_patched_node_ids = list(dict.fromkeys([node_id for node_id in prompt_patched_node_ids if str(node_id).strip()]))
     logger.info(
         "[COMFY PATCHED VALUE SNAPSHOT] %s",
         {
@@ -3420,12 +3529,9 @@ def run_comfy_image_to_video(
             "saveVideoFilenamePrefix": str((workflow_discovery_debug.get("saveVideoFilenamePrefix") if isinstance(workflow_discovery_debug, dict) else "") or ""),
             "patched_prompt_value_preview": _preview_value(
                 patched_workflow.get(
-                    str(
-                        (workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
-                        or (LIPSYNC_PRIMARY_NODE_IDS["prompt"] if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["prompt"][0])
-                    ),
+                    resolved_prompt_node_id_for_debug,
                     {},
-                ).get("inputs", {}).get("value")
+                ).get("inputs", {}).get(resolved_prompt_input_key_for_debug)
             ),
             "patched_image_value": _preview_value(
                 patched_workflow.get(str((workflow_discovery_debug.get("patchedImageNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "269"), {}).get("inputs", {}).get("image")
@@ -3481,12 +3587,7 @@ def run_comfy_image_to_video(
         str(scene_id or "").strip(),
         normalized_workflow_key,
         normalized_model_key,
-        [
-            str(
-                (workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
-                or (LIPSYNC_PRIMARY_NODE_IDS["prompt"] if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["prompt"][0])
-            )
-        ],
+        prompt_patched_node_ids,
         len(effective_prompt),
         effective_prompt[:500],
     )
@@ -3647,13 +3748,11 @@ def run_comfy_image_to_video(
                 )
             ),
             "prompt_patched_node_ids": [
-                str(
-                    (workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
-                    or (LIPSYNC_PRIMARY_NODE_IDS["prompt"] if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["prompt"][0])
-                )
+                node_id
+                for node_id in prompt_patched_node_ids
             ],
             "positive_prompt_node_patched": bool(
-                (workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
+                (workflow_discovery_debug.get("positivePromptNodePatched") if isinstance(workflow_discovery_debug, dict) else "")
             ),
             "negative_prompt_node_patched": bool((workflow_discovery_debug or {}).get("negativePromptNodePatched")),
             "negative_prompt_preview": str((workflow_discovery_debug or {}).get("negativePromptPreview") or ""),
@@ -3725,8 +3824,7 @@ def run_comfy_image_to_video(
                     or (LIPSYNC_PRIMARY_NODE_IDS["image"] if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["image"][0])
                 ),
                 "promptSource": str(
-                    (workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
-                    or (LIPSYNC_PRIMARY_NODE_IDS["prompt"] if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["prompt"][0])
+                    resolved_prompt_node_id_for_debug
                 ),
                 "duration": str(
                     (workflow_discovery_debug.get("patchedDurationNodeId") if isinstance(workflow_discovery_debug, dict) else "")
