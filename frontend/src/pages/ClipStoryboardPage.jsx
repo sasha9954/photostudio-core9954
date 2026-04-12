@@ -8654,6 +8654,20 @@ const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") =>
   storageVersionRef.current += 1;
 }, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, accountKey]);
 
+const stopScenarioVideoPolling = useCallback((sceneId = "") => {
+  const key = String(sceneId || "").trim();
+  if (!key) {
+    scenarioVideoPollTimersRef.current.forEach((timerId) => clearTimeout(timerId));
+    scenarioVideoPollTimersRef.current.clear();
+    return;
+  }
+  const timerId = scenarioVideoPollTimersRef.current.get(key);
+  if (timerId) {
+    clearTimeout(timerId);
+    scenarioVideoPollTimersRef.current.delete(key);
+  }
+}, []);
+
 const clearScenarioStoryboardGeneratedRuntime = useCallback((nodeData = {}, { clearScenes = false } = {}) => {
   const baseData = nodeData && typeof nodeData === "object" ? nodeData : {};
   const sourceScenes = Array.isArray(baseData?.scenes) ? baseData.scenes : [];
@@ -9193,20 +9207,6 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
       };
     }));
   }, [scenarioFlowSourceNode?.id, setNodes]);
-
-  const stopScenarioVideoPolling = useCallback((sceneId = "") => {
-    const key = String(sceneId || "").trim();
-    if (!key) {
-      scenarioVideoPollTimersRef.current.forEach((timerId) => clearTimeout(timerId));
-      scenarioVideoPollTimersRef.current.clear();
-      return;
-    }
-    const timerId = scenarioVideoPollTimersRef.current.get(key);
-    if (timerId) {
-      clearTimeout(timerId);
-      scenarioVideoPollTimersRef.current.delete(key);
-    }
-  }, []);
 
   const persistActiveVideoJob = useCallback((jobsByScene) => {
     const entries = Object.entries(jobsByScene || {}).filter(([, value]) => value?.jobId);
