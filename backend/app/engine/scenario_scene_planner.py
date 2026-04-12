@@ -634,6 +634,14 @@ def _select_i2v_motion_family(
         "pull_back_release": "pull_back",
     }
     allow_head_turn = family in {"look_reveal_follow", "tension_head_turn"}
+    allow_simple_hand_motion_by_family = {
+        "push_in_follow": True,
+        "side_tracking_walk": False,
+        "look_reveal_follow": False,
+        "baseline_forward_walk": False,
+        "tension_head_turn": False,
+        "pull_back_release": False,
+    }
     parallax_required = family in {"side_tracking_walk", "look_reveal_follow"}
 
     return {
@@ -642,7 +650,7 @@ def _select_i2v_motion_family(
         "camera_pattern": camera_pattern_by_family.get(family, "stable_follow"),
         "reveal_target": reveal_target,
         "allow_head_turn": allow_head_turn,
-        "allow_simple_hand_motion": True,
+        "allow_simple_hand_motion": bool(allow_simple_hand_motion_by_family.get(family, False)),
         "forbid_complex_hand_motion": True,
         "forbid_slow_motion_feel": True,
         "forbid_bullet_time": True,

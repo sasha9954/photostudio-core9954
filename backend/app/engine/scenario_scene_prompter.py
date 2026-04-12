@@ -727,9 +727,13 @@ def _prompt_notes_template(route: str) -> dict[str, Any]:
                 "parallax_required": False,
                 "allow_head_turn": False,
                 "allow_simple_hand_motion": True,
+                "forbid_complex_hand_motion": True,
                 "forbid_slow_motion_feel": True,
                 "forbid_bullet_time": True,
                 "forbid_stylized_action": True,
+                "require_real_time_pacing": True,
+                "max_camera_intensity": "low",
+                "i2v_prompt_duration_hint_sec": 0.0,
                 "template_built": False,
             }
         )
@@ -768,9 +772,13 @@ def _scene_plan_semantics_lock(scene_plan_row: dict[str, Any]) -> dict[str, Any]
         "parallax_required": bool(scene_plan_row.get("parallax_required")),
         "allow_head_turn": bool(scene_plan_row.get("allow_head_turn")),
         "allow_simple_hand_motion": bool(scene_plan_row.get("allow_simple_hand_motion")),
+        "forbid_complex_hand_motion": bool(scene_plan_row.get("forbid_complex_hand_motion")),
         "forbid_slow_motion_feel": bool(scene_plan_row.get("forbid_slow_motion_feel")),
         "forbid_bullet_time": bool(scene_plan_row.get("forbid_bullet_time")),
         "forbid_stylized_action": bool(scene_plan_row.get("forbid_stylized_action")),
+        "require_real_time_pacing": bool(scene_plan_row.get("require_real_time_pacing")),
+        "max_camera_intensity": str(scene_plan_row.get("max_camera_intensity") or "").strip(),
+        "i2v_prompt_duration_hint_sec": _round3(scene_plan_row.get("i2v_prompt_duration_hint_sec")),
         "motion_risk": _safe_dict(scene_plan_row.get("motion_risk")),
     }
 
@@ -918,19 +926,39 @@ def _build_i2v_base_guardrail(*, role_label: str, world_anchor: str, lighting_an
 
 def _build_i2v_motion_family_prompt(scene_plan_row: dict[str, Any]) -> tuple[str, str]:
     family = str(scene_plan_row.get("i2v_motion_family") or "").strip()
+    pace_class = str(scene_plan_row.get("pace_class") or "").strip().lower()
+    camera_pattern = str(scene_plan_row.get("camera_pattern") or "").strip().lower()
+    reveal_target = str(scene_plan_row.get("reveal_target") or "").strip().lower()
     hint_sec = _round3(scene_plan_row.get("i2v_prompt_duration_hint_sec"))
     duration_hint = f" Keep pacing real-time around ~{hint_sec:.1f}s." if hint_sec > 0 else " Keep pacing real-time."
+    pace_prefix_map = {
+        "restrained": "Restrained, controlled pacing.",
+        "purposeful": "Purposeful, readable pacing.",
+        "energetic": "Energetic but controlled pacing.",
+    }
+    camera_clause_map = {
+        "push_in": "Camera pattern: push_in with smooth forward pressure only.",
+        "side_track": "Camera pattern: side_track with stable lateral travel and coherent parallax.",
+        "follow_reveal": "Camera pattern: follow_reveal that follows attention into a clear reveal.",
+        "pull_back": "Camera pattern: pull_back opening depth while keeping framing stable.",
+        "stable_follow": "Camera pattern: stable_follow with minimal reframing spikes.",
+    }
+    reveal_clause_map = {
+        "forward_path": "Reveal target: forward_path.",
+        "side_space": "Reveal target: side_space.",
+        "noticed_object": "Reveal target: noticed_object.",
+    }
     templates = {
         "push_in_follow": (
-            "Purposeful natural forward motion. Smooth push-in from medium-full framing toward a controlled medium shot; physically natural motion with stable legs/feet, natural simple arm swing only, subtle scarf/hair response, no dramatic camera turn.",
+            "Natural forward motion line. Smooth push-in from medium-full framing toward a controlled medium shot; physically natural motion with stable legs/feet, natural simple arm swing only, subtle scarf/hair response, no dramatic camera turn.",
             "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, aggressive zoom spikes, extreme close-up crash-in",
         ),
         "side_tracking_walk": (
-            "Purposeful walk while camera tracks sideways with clearly visible but controlled parallax. Keep alley walls and scene geometry stable, physically coherent body travel, and no background collapse.",
+            "Forward walk continuation while camera tracks sideways with clearly visible but controlled parallax. Keep alley walls and scene geometry stable, physically coherent body travel, and no background collapse.",
             "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, unstable parallax, no parallax",
         ),
         "look_reveal_follow": (
-            "She keeps moving forward and shifts attention toward something ahead or to the side; slight head/upper-body turn without stopping. Camera follows attention via lateral move plus pan, opening into a side-revealed traveling view with believable parallax and stable geometry.",
+            "She keeps moving forward and shifts attention; slight head/upper-body turn without stopping. Camera follows attention via lateral move plus pan, opening a revealed traveling view with believable parallax and stable geometry.",
             "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, unstable parallax, no parallax, head turn without camera follow",
         ),
         "baseline_forward_walk": (
@@ -949,7 +977,12 @@ def _build_i2v_motion_family_prompt(scene_plan_row: dict[str, Any]) -> tuple[str
     motion_prompt, negative_prompt = templates.get("baseline_forward_walk")
     if family in templates:
         motion_prompt, negative_prompt = templates[family]
-    return f"{motion_prompt}{duration_hint}", negative_prompt
+    pace_clause = pace_prefix_map.get(pace_class, "Purposeful, readable pacing.")
+    camera_clause = camera_clause_map.get(camera_pattern, "Camera pattern: stable_follow with minimal reframing spikes.")
+    reveal_clause = ""
+    if family == "look_reveal_follow":
+        reveal_clause = f" {reveal_clause_map.get(reveal_target, 'Reveal target: forward_path.')}"
+    return f"{pace_clause} {camera_clause} {motion_prompt}{reveal_clause}{duration_hint}", negative_prompt
 
 
 def _build_i2v_negative_prompt(scene_plan_row: dict[str, Any]) -> str:
@@ -1392,9 +1425,13 @@ def _normalize_scene_prompts(
             normalized_notes["parallax_required"] = bool(scene.get("parallax_required"))
             normalized_notes["allow_head_turn"] = bool(scene.get("allow_head_turn"))
             normalized_notes["allow_simple_hand_motion"] = bool(scene.get("allow_simple_hand_motion", True))
+            normalized_notes["forbid_complex_hand_motion"] = bool(scene.get("forbid_complex_hand_motion", True))
             normalized_notes["forbid_slow_motion_feel"] = bool(scene.get("forbid_slow_motion_feel", True))
             normalized_notes["forbid_bullet_time"] = bool(scene.get("forbid_bullet_time", True))
             normalized_notes["forbid_stylized_action"] = bool(scene.get("forbid_stylized_action", True))
+            normalized_notes["require_real_time_pacing"] = bool(scene.get("require_real_time_pacing", True))
+            normalized_notes["max_camera_intensity"] = str(scene.get("max_camera_intensity") or "low")
+            normalized_notes["i2v_prompt_duration_hint_sec"] = _round3(scene.get("i2v_prompt_duration_hint_sec"))
             normalized_notes["template_built"] = True
             i2v_template_rebuilt_count += 1
             i2v_template_override_applied = True
@@ -1415,12 +1452,19 @@ def _normalize_scene_prompts(
             if end_sanitized:
                 positive_negative_leak_stripped_count += 1
         if _is_high_motion_risk(scene) and actual_route in {"i2v", "ia2v"}:
-            simplified_video = (
-                "Single readable motion line only: controlled gaze/head/shoulder shift, minimal hand emphasis, no tiny finger choreography near face, no cap-brim adjustment detail, no multistep prop manipulation. "
-                "Prefer camera settle/push/pull with continuity-first behavior."
-            )
-            video_prompt = simplified_video
-            positive_video_prompt = simplified_video
+            if actual_route == "i2v":
+                simplify_suffix = (
+                    " Keep one readable motion line only. Avoid complex hand choreography and fine-motor prop action."
+                )
+                video_prompt = f"{video_prompt.rstrip('. ')}.{simplify_suffix}".strip()
+                positive_video_prompt = f"{positive_video_prompt.rstrip('. ')}.{simplify_suffix}".strip()
+            else:
+                simplified_video = (
+                    "Single readable motion line only: controlled gaze/head/shoulder shift, minimal hand emphasis, no tiny finger choreography near face, no cap-brim adjustment detail, no multistep prop manipulation. "
+                    "Prefer camera settle/push/pull with continuity-first behavior."
+                )
+                video_prompt = simplified_video
+                positive_video_prompt = simplified_video
             normalized_notes["risk_simplified"] = True
         else:
             normalized_notes["risk_simplified"] = False
