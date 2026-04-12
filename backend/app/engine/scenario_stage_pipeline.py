@@ -720,14 +720,15 @@ def _collect_story_core_refs_by_role(
     input_pkg: dict[str, Any],
     refs_inventory: dict[str, Any],
     connected_summary: dict[str, Any],
-) -> dict[str, list[str]]:
+) -> tuple[dict[str, list[str]], list[str]]:
     normalized: dict[str, list[str]] = {}
+    sources_used: set[str] = set()
     refs_by_role = _safe_dict(input_pkg.get("refs_by_role"))
     connected_refs_by_role = _safe_dict(connected_summary.get("refsByRole"))
     connected_refs_present = _safe_dict(connected_summary.get("refsPresentByRole"))
     connected_attached_present = _safe_dict(connected_summary.get("connectedRefsPresentByRole"))
 
-    def _append(role: str, candidate: str) -> None:
+    def _append(role: str, candidate: str, source: str) -> None:
         clean_role = str(role or "").strip()
         clean_url = str(candidate or "").strip()
         if not clean_role or not clean_url:
@@ -735,29 +736,36 @@ def _collect_story_core_refs_by_role(
         bucket = normalized.setdefault(clean_role, [])
         if clean_url not in bucket:
             bucket.append(clean_url)
+            sources_used.add(source)
 
     for role, urls in refs_by_role.items():
         for value in _safe_list(urls):
-            _append(str(role), str(value))
+            _append(str(role), str(value), "refs_by_role")
     for role, urls in connected_refs_by_role.items():
         for value in _safe_list(urls):
-            _append(str(role), str(value))
+            _append(str(role), str(value), "connected_refs_by_role")
+    for role, urls in connected_refs_present.items():
+        for value in _safe_list(urls):
+            _append(str(role), str(value), "refs_present_by_role")
+    for role, urls in connected_attached_present.items():
+        for value in _safe_list(urls):
+            _append(str(role), str(value), "connected_refs_present_by_role")
     for role in ("character_1", "character_2", "character_3", "props", "location", "style", "animal", "group"):
         ref_key = _role_to_ref_key(role)
         for value in _extract_ref_urls(refs_inventory.get(ref_key)):
-            _append(role, value)
+            _append(role, value, "refs_inventory")
         selected_refs = _safe_dict(input_pkg.get("selected_refs"))
         selected_value = selected_refs.get(role)
         if isinstance(selected_value, list):
             for value in _safe_list(selected_value):
-                _append(role, str(value))
+                _append(role, str(value), "selected_refs")
         else:
-            _append(role, str(selected_value or ""))
+            _append(role, str(selected_value or ""), "selected_refs")
         if bool(connected_refs_present.get(role)) and role not in normalized:
             normalized[role] = []
         if bool(connected_attached_present.get(role)) and role not in normalized:
             normalized[role] = []
-    return normalized
+    return normalized, sorted(sources_used)
 
 
 def _build_story_core_compact_refs_manifest(
@@ -834,7 +842,7 @@ def _build_story_core_input_context(
     grounding_level: str,
 ) -> dict[str, Any]:
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
-    normalized_refs_by_role = _collect_story_core_refs_by_role(input_pkg, refs_inventory, connected_summary)
+    normalized_refs_by_role, refs_sources_used = _collect_story_core_refs_by_role(input_pkg, refs_inventory, connected_summary)
     compact_refs_manifest, attached_ref_roles = _build_story_core_compact_refs_manifest(
         refs_by_role=normalized_refs_by_role,
         ref_attachment_summary=ref_attachment_summary,
@@ -879,6 +887,7 @@ def _build_story_core_input_context(
         "story_core_attached_ref_roles": attached_ref_roles,
         "story_core_director_world_lock_summary": director_world_lock_summary,
         "story_core_compact_context_size_estimate": len(json.dumps(_compact_prompt_payload(compact_context), ensure_ascii=False)),
+        "story_core_refs_sources_used": refs_sources_used,
     }
 
 
@@ -1614,6 +1623,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_available_roles_resolved"] = []
     diagnostics["story_core_director_world_lock_summary"] = ""
     diagnostics["story_core_compact_context_size_estimate"] = 0
+    diagnostics["story_core_refs_sources_used"] = []
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "story_core audio-informed build requested", stage_id="story_core")
     try:
@@ -1653,6 +1663,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["story_core_attached_ref_roles"] = _safe_list(core_input_context.get("story_core_attached_ref_roles"))
         diagnostics["story_core_director_world_lock_summary"] = str(core_input_context.get("story_core_director_world_lock_summary") or "")
         diagnostics["story_core_compact_context_size_estimate"] = int(core_input_context.get("story_core_compact_context_size_estimate") or 0)
+        diagnostics["story_core_refs_sources_used"] = _safe_list(core_input_context.get("story_core_refs_sources_used"))
         diagnostics["story_core_payload_mode"] = "lean"
         package["diagnostics"] = diagnostics
         prompt = _build_story_core_prompt(
