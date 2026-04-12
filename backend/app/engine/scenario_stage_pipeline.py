@@ -558,6 +558,7 @@ def _build_audio_dramaturgy_summary(audio_map: dict[str, Any], input_pkg: dict[s
 
 
 def _build_story_core_rules() -> dict[str, Any]:
+    # Headwear rules must remain universal across future modes and subjects; do not overfit to baseball-cap-only scenarios.
     return {
         "audio_priority": {
             "primary_signals": [
@@ -592,11 +593,21 @@ def _build_story_core_rules() -> dict[str, Any]:
             "forbid_scene_to_scene_full_wardrobe_replacement": True,
             "limit_active_object_complexity_per_scene": True,
         },
-        "hair_headwear_compatibility": {
-            "baseball_cap_hair_should_be_believable": True,
-            "preferred_hair_arrangements_with_cap": ["long straight hair", "long loose hair", "low ponytail"],
-            "forbid_unnatural_hair_hidden_inside_cap": True,
-            "forbid_top_bun_high_bun_cap_conflict": True,
+        "headwear_hair_compatibility": {
+            "headwear_optional_not_mandatory": True,
+            "headwear_is_look_component_not_default_action_object": True,
+            "hair_must_be_physically_compatible_with_headwear": True,
+            "hair_should_remain_natural_and_readable": True,
+            "forbid_unnatural_hair_stuffing_under_headwear": True,
+            "forbid_incompatible_top_volume_conflicts": True,
+            "prefer_believable_arrangements_over_awkward_compression": True,
+            "example_believable_arrangements": [
+                "long loose hair",
+                "long straight hair",
+                "low ponytail",
+                "tucked side hair when compatible",
+            ],
+            "examples_are_guidance_not_exhaustive_law": True,
         },
         "world_lock": {
             "respect_user_world_constraints": True,
@@ -781,7 +792,11 @@ def _build_story_core_prompt(
         "Do not replace a referenced prop with a semantically related but different object.\n"
         "Clothing/accessory props must stay clothing/accessory props.\n"
         "Do not reinterpret wearable objects as weapons/tools unless explicitly stated in user text.\n"
-        "If prop is cap/hat/headwear, it must remain headwear. baseball cap is not baseball bat.\n"
+        "If prop is casual headwear (cap/hat/hood/scarf/other worn headwear), it must remain headwear.\n"
+        "Do not reinterpret headwear as weapon/tool unless explicitly stated in user text (example: baseball cap is not baseball bat).\n"
+        "Treat worn headwear as part of look continuity/silhouette, not default action object.\n"
+        "Ensure hair compatibility with headwear silhouette; preserve natural, readable hair behavior.\n"
+        "Avoid unnatural hair stuffing/compression under worn headwear and avoid incompatible top-volume conflicts.\n"
         "If character ref attachment failed, keep character visuals conservative: keep only reliable role/gender-energy hints and avoid specific visual identity claims.\n"
         "At CORE stage do not inject arbitrary accent colors or symbolic props not grounded in refs/audio/text.\n"
         "Do not output route planning (no i2v/ia2v/first_last), no final prompts, no final package assembly.\n"
