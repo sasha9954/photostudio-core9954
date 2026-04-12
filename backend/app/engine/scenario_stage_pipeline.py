@@ -907,6 +907,8 @@ def _normalize_route_contract(route_value: Any) -> dict[str, Any]:
 
 
 def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
+    # Guardrail: Final package assembly must remain local and deterministic.
+    # Do not route finalize/final_storyboard assembly through Gemini/LLM.
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
     audio_map = _safe_dict(package.get("audio_map"))
@@ -3386,6 +3388,11 @@ def run_manual_stage(stage_id: str, package: dict[str, Any], payload: dict[str, 
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
+    if stage_id == "finalize":
+        # Guardrail: pressing FINAL must not retrigger upstream creative Gemini stages.
+        # Finalize can run only from already prepared normalized outputs.
+        pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
+        return run_stage(stage_id, pkg, payload)
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
     for dep_stage in dep_sequence:
         pkg = run_stage(dep_stage, pkg, payload)
