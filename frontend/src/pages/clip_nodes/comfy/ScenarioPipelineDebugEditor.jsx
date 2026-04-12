@@ -117,20 +117,7 @@ export default function ScenarioPipelineDebugEditor({
   const resolvedStoryboardPackage = (
     storyboardPackage && typeof storyboardPackage === "object" && Object.keys(storyboardPackage).length
       ? storyboardPackage
-      : (
-        directorOutput?.storyboardPackage
-        && typeof directorOutput.storyboardPackage === "object"
-        && Object.keys(directorOutput.storyboardPackage).length
-      )
-        ? directorOutput.storyboardPackage
-        : (
-          directorOutput?.storyboardOut
-          && typeof directorOutput.storyboardOut === "object"
-          && directorOutput.storyboardOut?.storyboardPackage
-          && typeof directorOutput.storyboardOut.storyboardPackage === "object"
-        )
-          ? directorOutput.storyboardOut.storyboardPackage
-          : {}
+      : {}
   );
 
   const storyCore = resolvedStoryboardPackage?.story_core || {};

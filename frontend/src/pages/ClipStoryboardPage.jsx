@@ -16960,14 +16960,13 @@ onClipSec: (nodeId, value) => {
             : null;
           const persistedDirectorOutput = base?.data?.directorOutput && typeof base.data.directorOutput === "object" ? base.data.directorOutput : {};
           const directorOutput = sourceDirectorOutput && typeof sourceDirectorOutput === "object" ? sourceDirectorOutput : persistedDirectorOutput;
-          const storyboardPackage = directorOutput?.storyboardPackage && typeof directorOutput.storyboardPackage === "object"
-            ? directorOutput.storyboardPackage
-            : (base?.data?.storyboardPackage && typeof base.data.storyboardPackage === "object" ? base.data.storyboardPackage : {});
+          const storyboardPackage = base?.data?.storyboardPackage && typeof base.data.storyboardPackage === "object"
+            ? base.data.storyboardPackage
+            : {};
           const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
             storyboardOut:
               sourceStoryboardOut
               || storyboardPackage?.final_storyboard
-              || directorOutput?.storyboardPackage?.final_storyboard
               || base?.data?.storyboardOut
               || null,
             directorOutput,
@@ -17123,33 +17122,19 @@ onClipSec: (nodeId, value) => {
                   const packageFinalStoryboardSceneCount = Array.isArray(packageFinalStoryboard?.scenes)
                     ? packageFinalStoryboard.scenes.length
                     : 0;
-                  const directorPackageFinalStoryboard = nextDirectorOutput?.storyboardPackage?.final_storyboard
-                    && typeof nextDirectorOutput.storyboardPackage.final_storyboard === "object"
-                    && !Array.isArray(nextDirectorOutput.storyboardPackage.final_storyboard)
-                    ? nextDirectorOutput.storyboardPackage.final_storyboard
-                    : null;
-                  const hasDirectorPackageFinalStoryboard = !!directorPackageFinalStoryboard;
-                  const directorPackageFinalStoryboardSceneCount = Array.isArray(directorPackageFinalStoryboard?.scenes)
-                    ? directorPackageFinalStoryboard.scenes.length
-                    : 0;
                   const chosenSource = hasNormalizedStoryboardOut
                     ? "normalized_storyboard_out"
                     : hasPackageFinalStoryboard
                       ? "package_final_storyboard"
-                      : hasDirectorPackageFinalStoryboard
-                        ? "director_package_final_storyboard"
-                        : "empty";
+                      : "empty";
                   const effectiveStoryboardOut = runtimeStoryboard
                     || packageFinalStoryboard
-                    || directorPackageFinalStoryboard
                     || {};
                   console.debug("[SCENARIO FINAL STORYBOARD SOURCE]", {
                     hasNormalizedStoryboardOut,
                     normalizedStoryboardOutSceneCount,
                     hasPackageFinalStoryboard,
                     packageFinalStoryboardSceneCount,
-                    hasDirectorPackageFinalStoryboard,
-                    directorPackageFinalStoryboardSceneCount,
                     chosenSource,
                   });
                   const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
@@ -17179,7 +17164,6 @@ onClipSec: (nodeId, value) => {
                       directorOutput: {
                         ...nextDirectorOutput,
                         pipeline: "scenario_stage_v1",
-                        storyboardPackage: nextStoryboardPackage,
                         executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                       },
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
@@ -17203,7 +17187,6 @@ onClipSec: (nodeId, value) => {
                     directorOutput: {
                       ...(normalizedOutputs?.directorOutput && typeof normalizedOutputs.directorOutput === "object" ? normalizedOutputs.directorOutput : {}),
                       pipeline: "scenario_stage_v1",
-                      storyboardPackage: nextStoryboardPackage,
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                     },
                     scenarioPackage: runtimeStoryboard,

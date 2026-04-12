@@ -341,17 +341,98 @@ def _load_image_inline_part(url: str) -> tuple[dict[str, Any] | None, str | None
     }, None
 
 
-def _pick_story_core_character_ref(refs_inventory: dict[str, Any]) -> tuple[str, str]:
-    primary = _safe_dict(refs_inventory.get("ref_character_1"))
-    from_value = str(primary.get("value") or "").strip()
-    if from_value:
-        return from_value, "refs_inventory.ref_character_1.value"
-    refs = _safe_list(primary.get("refs"))
-    for idx, ref in enumerate(refs):
-        value = str(ref or "").strip()
-        if value:
-            return value, f"refs_inventory.ref_character_1.refs[{idx}]"
-    return "", ""
+def _pick_story_core_ref_urls_by_role(
+    *,
+    input_pkg: dict[str, Any],
+    refs_inventory: dict[str, Any],
+    max_per_role: int = 1,
+) -> dict[str, list[dict[str, str]]]:
+    selected_refs = _safe_dict(input_pkg.get("selected_refs"))
+    refs_by_role = _safe_dict(input_pkg.get("refs_by_role"))
+    role_order = ["character_1", "props", "location", "style"]
+    per_role: dict[str, list[dict[str, str]]] = {role: [] for role in role_order}
+    seen_by_role: dict[str, set[str]] = {role: set() for role in role_order}
+
+    def _add(role: str, url: str, source: str) -> None:
+        clean_url = str(url or "").strip()
+        if not clean_url or clean_url in seen_by_role[role]:
+            return
+        if len(per_role[role]) >= max_per_role:
+            return
+        per_role[role].append({"url": clean_url, "source": source})
+        seen_by_role[role].add(clean_url)
+
+    # 1) Explicit selections first.
+    _add("character_1", str(selected_refs.get("character_1") or ""), "input.selected_refs.character_1")
+    _add("location", str(selected_refs.get("location") or ""), "input.selected_refs.location")
+    _add("style", str(selected_refs.get("style") or ""), "input.selected_refs.style")
+    for idx, value in enumerate(_safe_list(selected_refs.get("props"))):
+        _add("props", str(value or ""), f"input.selected_refs.props[{idx}]")
+
+    # 2) refs_by_role from input.
+    for role in role_order:
+        for idx, value in enumerate(_safe_list(refs_by_role.get(role))):
+            _add(role, str(value or ""), f"input.refs_by_role.{role}[{idx}]")
+
+    # 3) refs_inventory fallback (connected/context refs).
+    for role in role_order:
+        ref_key = _role_to_ref_key(role)
+        for idx, value in enumerate(_extract_ref_urls(refs_inventory.get(ref_key))):
+            _add(role, str(value or ""), f"refs_inventory.{ref_key}[{idx}]")
+
+    return per_role
+
+
+def _build_story_core_inline_ref_parts(
+    *,
+    input_pkg: dict[str, Any],
+    refs_inventory: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    role_order = ["character_1", "props", "location", "style"]
+    picked = _pick_story_core_ref_urls_by_role(input_pkg=input_pkg, refs_inventory=refs_inventory, max_per_role=1)
+    inline_parts: list[dict[str, Any]] = []
+    summary: dict[str, Any] = {
+        role: {"attached": False, "error": "", "source": "", "url": ""}
+        for role in role_order
+    }
+    attached_roles: list[str] = []
+
+    for role in role_order:
+        candidates = _safe_list(picked.get(role))
+        if not candidates:
+            summary[role] = {"attached": False, "error": "missing", "source": "", "url": ""}
+            continue
+        chosen = _safe_dict(candidates[0])
+        ref_url = str(chosen.get("url") or "").strip()
+        ref_source = str(chosen.get("source") or "").strip()
+        if not ref_url:
+            summary[role] = {"attached": False, "error": "missing", "source": ref_source, "url": ""}
+            continue
+        inline_part, inline_error = _load_image_inline_part(ref_url)
+        if inline_part:
+            inline_parts.append(inline_part)
+            summary[role] = {"attached": True, "error": "", "source": ref_source, "url": ref_url}
+            attached_roles.append(role)
+        else:
+            summary[role] = {
+                "attached": False,
+                "error": str(inline_error or "image_attach_failed"),
+                "source": ref_source,
+                "url": ref_url,
+            }
+
+    diagnostics = {
+        "story_core_attached_ref_roles": attached_roles,
+        "story_core_attached_ref_count": len(attached_roles),
+        "story_core_ref_attachment_summary": summary,
+        "story_core_character_ref_attached": bool(summary.get("character_1", {}).get("attached")),
+        "story_core_character_ref_source": str(summary.get("character_1", {}).get("source") or ""),
+        "story_core_character_ref_error": str(summary.get("character_1", {}).get("error") or ""),
+        "story_core_props_ref_attached": bool(summary.get("props", {}).get("attached")),
+        "story_core_location_ref_attached": bool(summary.get("location", {}).get("attached")),
+        "story_core_style_ref_attached": bool(summary.get("style", {}).get("attached")),
+    }
+    return inline_parts, diagnostics
 
 
 def _collect_prop_hint_texts(input_pkg: dict[str, Any], refs_inventory: dict[str, Any]) -> list[str]:
@@ -1380,23 +1461,12 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     fallback["scenes"] = _default_story_core_scenes(audio_map)
     prop_contracts, prop_guard_applied = _normalize_story_core_prop_contracts(input_pkg, refs_inventory)
     ref_attachment_summary = {
-        "character_1": {"attached": False, "error": "", "source": ""},
-        "props": {"connected": bool(prop_contracts), "contracts_count": len(prop_contracts)},
+        "character_1": {"attached": False, "error": "", "source": "", "url": ""},
+        "props": {"attached": False, "error": "", "source": "", "url": "", "connected": bool(prop_contracts), "contracts_count": len(prop_contracts)},
+        "location": {"attached": False, "error": "", "source": "", "url": ""},
+        "style": {"attached": False, "error": "", "source": "", "url": ""},
     }
     grounding_level = "strict" if prop_contracts else "standard"
-    core_input_context = _build_story_core_input_context(
-        input_pkg=input_pkg,
-        audio_map=audio_map,
-        refs_inventory=refs_inventory,
-        prop_contracts=prop_contracts,
-        ref_attachment_summary=ref_attachment_summary,
-        grounding_level=grounding_level,
-    )
-    prompt = _build_story_core_prompt(
-        core_input_context,
-        assigned_roles,
-        story_core_mode,
-    )
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["story_core_mode"] = story_core_mode
     diagnostics["story_core_used_model"] = "gemini-3.1-pro-preview"
@@ -1410,47 +1480,52 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_audio_informed"] = bool(audio_map)
     diagnostics["story_core_audio_dramaturgy_source"] = "audio_map" if audio_map else ""
     diagnostics["story_core_textual_directive_present"] = bool(_has_textual_directive(input_pkg))
-    diagnostics["story_core_available_roles"] = _safe_list(core_input_context.get("available_roles"))
+    diagnostics["story_core_available_roles"] = []
+    diagnostics["story_core_attached_ref_roles"] = []
+    diagnostics["story_core_attached_ref_count"] = 0
+    diagnostics["story_core_props_ref_attached"] = False
+    diagnostics["story_core_location_ref_attached"] = False
+    diagnostics["story_core_style_ref_attached"] = False
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "story_core audio-informed build requested", stage_id="story_core")
     try:
         api_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
-        parts: list[dict[str, Any]] = [{"text": prompt}]
-        character_ref_url, character_ref_source = _pick_story_core_character_ref(refs_inventory)
-        if character_ref_url:
-            inline_part, inline_error = _load_image_inline_part(character_ref_url)
-            diagnostics = _safe_dict(package.get("diagnostics"))
-            diagnostics["story_core_character_ref_source"] = character_ref_source
-            if inline_part:
-                parts.append(inline_part)
-                diagnostics["story_core_character_ref_attached"] = True
-                diagnostics["story_core_character_ref_error"] = ""
-                diagnostics["story_core_ref_attachment_summary"] = {
-                    **_safe_dict(diagnostics.get("story_core_ref_attachment_summary")),
-                    "character_1": {"attached": True, "error": "", "source": character_ref_source},
-                }
-                diagnostics["story_core_grounding_level"] = "strict"
-                core_input_context["available_refs"] = {
-                    **_safe_dict(core_input_context.get("available_refs")),
-                    "ref_attachment_summary": _safe_dict(diagnostics.get("story_core_ref_attachment_summary")),
-                }
-            else:
-                diagnostics["story_core_character_ref_attached"] = False
-                diagnostics["story_core_character_ref_error"] = str(inline_error or "image_attach_failed")
-                diagnostics["story_core_ref_attachment_summary"] = {
-                    **_safe_dict(diagnostics.get("story_core_ref_attachment_summary")),
-                    "character_1": {
-                        "attached": False,
-                        "error": str(inline_error or "image_attach_failed"),
-                        "source": character_ref_source,
-                    },
-                }
-                diagnostics["story_core_grounding_level"] = "cautious"
-                core_input_context["available_refs"] = {
-                    **_safe_dict(core_input_context.get("available_refs")),
-                    "ref_attachment_summary": _safe_dict(diagnostics.get("story_core_ref_attachment_summary")),
-                }
-            package["diagnostics"] = diagnostics
+        inline_ref_parts, inline_ref_diag = _build_story_core_inline_ref_parts(
+            input_pkg=input_pkg,
+            refs_inventory=refs_inventory,
+        )
+        if bool(inline_ref_diag.get("story_core_character_ref_attached")):
+            grounding_level = "strict"
+        elif bool(inline_ref_diag.get("story_core_attached_ref_count")):
+            grounding_level = "standard"
+        else:
+            grounding_level = "cautious"
+        ref_attachment_summary = _safe_dict(inline_ref_diag.get("story_core_ref_attachment_summary"))
+        props_summary = _safe_dict(ref_attachment_summary.get("props"))
+        props_summary["connected"] = bool(prop_contracts)
+        props_summary["contracts_count"] = len(prop_contracts)
+        ref_attachment_summary["props"] = props_summary
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics.update(inline_ref_diag)
+        diagnostics["story_core_ref_attachment_summary"] = ref_attachment_summary
+        diagnostics["story_core_grounding_level"] = grounding_level
+        package["diagnostics"] = diagnostics
+        core_input_context = _build_story_core_input_context(
+            input_pkg=input_pkg,
+            audio_map=audio_map,
+            refs_inventory=refs_inventory,
+            prop_contracts=prop_contracts,
+            ref_attachment_summary=ref_attachment_summary,
+            grounding_level=grounding_level,
+        )
+        diagnostics["story_core_available_roles"] = _safe_list(core_input_context.get("available_roles"))
+        package["diagnostics"] = diagnostics
+        prompt = _build_story_core_prompt(
+            core_input_context,
+            assigned_roles,
+            story_core_mode,
+        )
+        parts: list[dict[str, Any]] = [{"text": prompt}, *inline_ref_parts]
         body = {
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},

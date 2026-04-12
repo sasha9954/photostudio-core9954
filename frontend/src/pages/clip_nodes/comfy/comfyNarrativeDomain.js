@@ -1340,7 +1340,6 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       globalMusicPrompt: "",
       directorOutput: {
         pipeline: "scenario_stage_v1",
-        storyboardPackage,
         stageStatuses: storyboardPackage?.stage_statuses && typeof storyboardPackage.stage_statuses === "object" ? storyboardPackage.stage_statuses : {},
         diagnostics: storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object" ? storyboardPackage.diagnostics : {},
         executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
