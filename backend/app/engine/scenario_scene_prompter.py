@@ -9,16 +9,15 @@ SCENE_PROMPTS_PROMPT_VERSION = "scene_prompts_v1"
 ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
 
 _GLOBAL_NEGATIVE_PROMPT = (
-    "Safety tail: keep identity/outfit/world continuity, stable anatomy, controlled camera, no extra limbs, no surreal deformation."
+    "identity drift, outfit drift, lighting/world drift, unstable anatomy, extra limbs, surreal deformation, chaotic camera, layout change"
 )
 
 _LIP_SYNC_NEGATIVE_PROMPT = (
-    "Safety tail: keep face and mouth readable, stable anatomy/balance, controlled camera, no frantic dance or chaotic motion."
+    "unreadable mouth, broken face motion, frantic dance, flailing arms, unstable anatomy, balance loss, chaotic camera, identity drift, outfit drift, surreal deformation"
 )
 
 _FIRST_LAST_NEGATIVE_PROMPT = (
-    "Safety tail: same subject/stance/world/outfit/shot feeling; no stepping, crouching, bowing, torso dip, dance choreography, "
-    "large arm action, spins, dramatic camera movement, added actors, or layout changes."
+    "camera drift, zoom, reframing, body-axis change, step, crouch, bow, torso dip, large arm action, spin, added actors, layout change, temporal instability, identity drift, outfit drift"
 )
 
 _GLOBAL_PROMPT_RULES = [
@@ -397,8 +396,8 @@ def _build_first_last_start_image_prompt(
 ) -> str:
     prop_clause = f", {attached_prop_token} stays worn in the same place" if attached_prop_token else ""
     return (
-        f"Start frame still of {primary_role} in {scene_space}, holding the anchor pose: {first_state}. "
-        f"Keep the same subject, world, wardrobe, and shot feeling{prop_clause}."
+        f"Start frame still of {primary_role} in {scene_space}: {first_state}. "
+        f"Keep same subject, same world, same wardrobe, same framing family, same perspective, same camera distance, same body line{prop_clause}."
     )
 
 
@@ -411,21 +410,17 @@ def _build_first_last_end_image_prompt(
 ) -> str:
     prop_clause = f", {attached_prop_token} remains worn in the same place" if attached_prop_token else ""
     return (
-        f"End frame still of {primary_role} in {scene_space}, showing one subtle delta from the anchor frame: {last_state}. "
-        f"Keep the same subject, world, wardrobe, and shot feeling{prop_clause}."
+        f"End frame still of {primary_role} in {scene_space}, one subtle visible delta only: {last_state}. "
+        f"Keep same subject, same world, same wardrobe, same framing family, same perspective, same camera distance, same body line{prop_clause}."
     )
 
 
 def _build_first_last_negative_prompt(*, attached_prop_token: str) -> str:
-    base = (
-        "Safety tail: same subject/stance/world/outfit/shot feeling; one subtle delta only; no stepping, crouching, bowing, torso dip, dance choreography, "
-        "large arm action, spins, dramatic camera movement, added background actors, layout changes, surreal motion, or temporal instability"
-    )
+    base = _FIRST_LAST_NEGATIVE_PROMPT
     if not attached_prop_token:
         return base
     return (
-        f"{base}, detached {attached_prop_token}, floating {attached_prop_token}, {attached_prop_token} teleportation, "
-        f"{attached_prop_token} pop-in, {attached_prop_token} drift away from body"
+        f"{base}, detached {attached_prop_token}, floating {attached_prop_token}, {attached_prop_token} teleportation, {attached_prop_token} drift"
     )
 
 
@@ -452,9 +447,9 @@ def _build_first_last_prompt_pair(
     )
     prop_clause = f" Keep {attached_prop_token} attached/worn with no drift or detachment." if attached_prop_token else ""
     positive_video_prompt = (
-        f"The still frame breathes into motion as {primary_role} makes one tiny transition in {scene_space}: {_trim_sentence(visual_delta, max_len=180)}. "
-        "The movement stays minimal and continuous, with the same stance, same shot feeling, and no choreography or camera show-off. "
-        f"Safety tail: keep world/identity continuity, keep camera stable, and avoid layout changes or added actors.{prop_clause}"
+        f"Micro-transition in {scene_space}: {primary_role} makes one subtle visible delta, {_trim_sentence(visual_delta, max_len=180)}. "
+        "Keep same subject/world/outfit/shot family, same framing family, same camera distance, same perspective, no zoom, no reframing, no body-axis change. "
+        f"Motion stays minimal and continuous, with no added actors or layout change.{prop_clause}"
     )
     negative_video_prompt = _build_first_last_negative_prompt(attached_prop_token=attached_prop_token)
     return start_image_prompt[:650], end_image_prompt[:700], positive_video_prompt[:850], negative_video_prompt
