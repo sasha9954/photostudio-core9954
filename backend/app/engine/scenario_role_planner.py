@@ -13,6 +13,9 @@ ALLOWED_SCENE_ROLES = set(_BASE_ROLES)
 _CHARACTER_ROLES = ["character_1", "character_2", "character_3"]
 _WORLD_ROLES = ["location", "style"]
 _PROP_ROLES = ["props"]
+_SCENE_SUBJECT_PRIORITIES = {"hero", "hero_plus_world", "hero_plus_prop", "world_anchor"}
+_PROP_ACTIVATION_MODES = {"anchor_worn", "visible_anchor", "silhouette_anchor", "not_emphasized"}
+_WORLD_EMPHASIS_LEVELS = {"low", "medium", "high"}
 
 ALLOWED_SCENE_PRESENCE_MODES = {
     "solo_performance",
@@ -168,6 +171,33 @@ def _build_roles_inventory(input_pkg: dict[str, Any], refs_inventory: dict[str, 
     }, character_roles_present, world_roles_present
 
 
+def _has_world_anchor_signal(input_pkg: dict[str, Any], story_core: dict[str, Any]) -> bool:
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    world_lock_blob = " ".join(
+        [
+            str(world_lock.get("setting") or ""),
+            str(world_lock.get("rules") or ""),
+            str(world_lock.get("setting_description") or ""),
+            str(world_lock.get("socio_cultural_context") or ""),
+            " ".join(str(item).strip() for item in _safe_list(world_lock.get("key_locations")) if str(item).strip()),
+        ]
+    ).strip()
+    if world_lock_blob:
+        return True
+    text_blob = " ".join(
+        str(part or "")
+        for part in [
+            input_pkg.get("note"),
+            input_pkg.get("story_text"),
+            input_pkg.get("director_note"),
+            story_core.get("story_summary"),
+            story_core.get("opening_anchor"),
+        ]
+    ).lower()
+    anchor_hints = ("urban", "street", "city", "district", "tehran", "iran", "iranian", "neighborhood", "daylight")
+    return any(hint in text_blob for hint in anchor_hints)
+
+
 def _build_scene_windows(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for idx, row_raw in enumerate(_safe_list(audio_map.get("scene_candidate_windows")), start=1):
@@ -217,6 +247,9 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
     audio_map = _safe_dict(package.get("audio_map"))
 
     roles_inventory, character_roles_present, world_roles_present = _build_roles_inventory(input_pkg, refs_inventory, assigned_roles)
+    if _has_world_anchor_signal(input_pkg, story_core) and "location" not in world_roles_present:
+        world_roles_present = [*world_roles_present, "location"]
+        roles_inventory["present_roles"] = list(dict.fromkeys([*(_safe_list(roles_inventory.get("present_roles"))), "location"]))
     scene_windows = _build_scene_windows(audio_map)
     audio_dramaturgy = _build_audio_dramaturgy_context(audio_map)
 
@@ -527,20 +560,60 @@ def _default_scene_presence_mode(scene_window: dict[str, Any], idx: int, total: 
         return "environment_anchor"
     energy = str(scene_window.get("energy") or "").strip().lower()
     scene_function = str(scene_window.get("scene_function") or "").strip().lower()
+    phrase_text = str(scene_window.get("phrase_text") or "").strip().lower()
+    performance_cues = ("performance", "perform", "sing", "dance", "chorus", "hook", "drop", "refrain")
+    has_performance_cue = any(cue in scene_function or cue in phrase_text for cue in performance_cues)
     if "release" in scene_function or "afterimage" in scene_function:
         return "private_release"
     if energy == "high":
-        return "solo_performance"
+        if has_performance_cue:
+            return "solo_performance"
+        return "transit" if idx not in {0, total - 1} else "solo_observational"
     if energy == "low":
         return "solo_observational" if idx < total - 1 else "private_release"
     if energy == "medium":
         return "transit" if idx not in {0, total - 1} else "solo_observational"
     if total <= 1:
-        return "solo_performance"
+        return "solo_observational"
     if idx == total - 1 and total >= 4:
         return "private_release"
     pattern = ["solo_observational", "solo_performance", "transit", "environment_anchor"]
     return pattern[idx % len(pattern)]
+
+
+def _infer_scene_subject_priority(*, scene_presence_mode: str, active_roles: list[str], primary_role: str | None) -> str:
+    mode = str(scene_presence_mode or "").strip().lower()
+    active = set(active_roles)
+    if mode == "environment_anchor" and "location" in active:
+        return "world_anchor"
+    if primary_role and "location" in active:
+        return "hero_plus_world"
+    if primary_role and "props" in active:
+        return "hero_plus_prop"
+    if primary_role:
+        return "hero"
+    if "location" in active:
+        return "world_anchor"
+    return "hero"
+
+
+def _infer_world_emphasis(scene_presence_mode: str, scene_subject_priority: str) -> str:
+    mode = str(scene_presence_mode or "").strip().lower()
+    if mode in {"environment_anchor", "transit"} or scene_subject_priority in {"hero_plus_world", "world_anchor"}:
+        return "high"
+    if mode in {"solo_observational", "private_release"}:
+        return "medium"
+    return "low"
+
+
+def _infer_prop_activation_mode(*, props_active: bool, scene_subject_priority: str, scene_presence_mode: str) -> str:
+    if not props_active:
+        return "not_emphasized"
+    if scene_subject_priority == "hero_plus_prop":
+        return "visible_anchor"
+    if scene_presence_mode == "private_release":
+        return "silhouette_anchor"
+    return "anchor_worn"
 
 
 def _default_scene_role_row(
@@ -554,7 +627,21 @@ def _default_scene_role_row(
 ) -> dict[str, Any]:
     active_roles = [*([hero_role] if hero_role else []), *world_anchors]
     active_roles = list(dict.fromkeys([role for role in active_roles if role]))
+    if "props" in all_roles and hero_role and idx in {0, total_scenes - 1}:
+        active_roles.append("props")
+        active_roles = list(dict.fromkeys(active_roles))
     scene_presence_mode = _default_scene_presence_mode(scene_window, idx, total_scenes, bool(hero_role))
+    scene_subject_priority = _infer_scene_subject_priority(
+        scene_presence_mode=scene_presence_mode,
+        active_roles=active_roles,
+        primary_role=hero_role or None,
+    )
+    world_emphasis = _infer_world_emphasis(scene_presence_mode, scene_subject_priority)
+    prop_activation_mode = _infer_prop_activation_mode(
+        props_active="props" in active_roles,
+        scene_subject_priority=scene_subject_priority,
+        scene_presence_mode=scene_presence_mode,
+    )
     return {
         "scene_id": str(scene_window.get("id") or ""),
         "t0": _round3(scene_window.get("t0")),
@@ -566,6 +653,9 @@ def _default_scene_role_row(
         "character_presence": "solo" if hero_role else "none",
         "scene_presence_mode": scene_presence_mode,
         "performance_focus": bool(hero_role and scene_presence_mode == "solo_performance"),
+        "scene_subject_priority": scene_subject_priority,
+        "prop_activation_mode": prop_activation_mode,
+        "world_emphasis": world_emphasis,
         "role_reason": "fallback_scene_completion",
     }
 
@@ -619,13 +709,6 @@ def _normalize_role_plan(
             if role != primary_role
         ]
 
-        active_roles = _normalize_role_list(row.get("active_roles"), allowed_roles)
-        if primary_role and primary_role not in active_roles:
-            active_roles.insert(0, primary_role)
-        if not active_roles:
-            active_roles = [*([first_character_role] if first_character_role else []), *world_roles_present]
-            active_roles = [role for role in active_roles if role in allowed_roles]
-
         character_presence = str(row.get("character_presence") or "").strip().lower() or ("solo" if primary_role else "none")
         if character_presence not in {"solo", "duo", "ensemble", "none"}:
             character_presence = "solo" if primary_role else "none"
@@ -634,9 +717,50 @@ def _normalize_role_plan(
         if scene_presence_mode not in ALLOWED_SCENE_PRESENCE_MODES:
             scene_presence_mode = _default_scene_presence_mode(window, len(scene_roles_by_id), len(scene_windows), bool(primary_role))
 
+        active_roles = _normalize_role_list(row.get("active_roles"), allowed_roles)
+        if primary_role and primary_role not in active_roles:
+            active_roles.insert(0, primary_role)
+        has_world_anchor = "location" in world_roles_present
+        if has_world_anchor and "location" not in active_roles and scene_presence_mode in {"transit", "environment_anchor"}:
+            active_roles.append("location")
+        if "props" in allowed_roles and "props" in active_roles and scene_presence_mode in {"environment_anchor", "transit"}:
+            active_roles = [role for role in active_roles if role != "props"]
+        if not active_roles:
+            active_roles = [*([first_character_role] if first_character_role else []), *world_roles_present]
+            active_roles = [role for role in active_roles if role in allowed_roles]
+
         performance_focus = bool(row.get("performance_focus")) if primary_role else False
         if scene_presence_mode in {"environment_anchor", "transit", "solo_observational"}:
             performance_focus = False
+        if scene_presence_mode == "solo_performance":
+            scene_function_blob = " ".join(
+                [
+                    str(window.get("scene_function") or "").lower(),
+                    str(window.get("phrase_text") or "").lower(),
+                    str(row.get("role_reason") or "").lower(),
+                ]
+            )
+            performance_focus = any(tag in scene_function_blob for tag in {"perform", "sing", "dance", "chorus", "stage"})
+
+        scene_subject_priority_raw = str(row.get("scene_subject_priority") or "").strip().lower()
+        scene_subject_priority = scene_subject_priority_raw if scene_subject_priority_raw in _SCENE_SUBJECT_PRIORITIES else _infer_scene_subject_priority(
+            scene_presence_mode=scene_presence_mode,
+            active_roles=active_roles,
+            primary_role=primary_role,
+        )
+
+        prop_activation_mode_raw = str(row.get("prop_activation_mode") or "").strip().lower()
+        prop_activation_mode = prop_activation_mode_raw if prop_activation_mode_raw in _PROP_ACTIVATION_MODES else _infer_prop_activation_mode(
+            props_active="props" in active_roles,
+            scene_subject_priority=scene_subject_priority,
+            scene_presence_mode=scene_presence_mode,
+        )
+
+        world_emphasis_raw = str(row.get("world_emphasis") or "").strip().lower()
+        world_emphasis = world_emphasis_raw if world_emphasis_raw in _WORLD_EMPHASIS_LEVELS else _infer_world_emphasis(
+            scene_presence_mode=scene_presence_mode,
+            scene_subject_priority=scene_subject_priority,
+        )
 
         scene_roles_by_id[scene_id] = {
             "scene_id": scene_id,
@@ -649,6 +773,9 @@ def _normalize_role_plan(
             "character_presence": character_presence,
             "scene_presence_mode": scene_presence_mode,
             "performance_focus": performance_focus,
+            "scene_subject_priority": scene_subject_priority,
+            "prop_activation_mode": prop_activation_mode,
+            "world_emphasis": world_emphasis,
             "role_reason": str(row.get("role_reason") or "").strip() or "scene_role_distribution",
         }
 
@@ -672,10 +799,15 @@ def _normalize_role_plan(
                 )
             )
 
-    role_arc_summary = str(raw_plan.get("role_arc_summary") or "").strip() or "Clip role continuity with scene-aware casting."
+    role_arc_summary = str(raw_plan.get("role_arc_summary") or "").strip() or "Single-hero arc moves between internal pressure and urban world contact, then resolves into restrained release."
     continuity_notes = [str(item).strip() for item in _safe_list(raw_plan.get("continuity_notes")) if str(item).strip()]
     if not continuity_notes:
-        continuity_notes = ["Preserve role continuity while avoiding overloaded scenes."]
+        continuity_notes = [
+            "Single hero continuity: character_1 remains the only narrative subject across all windows.",
+            "Prop continuity: white baseball cap remains worn as a stable identity anchor.",
+            "World continuity: one coherent realistic urban location anchor is preserved across scenes.",
+            "Lighting/realism lock: grounded daylight progression; avoid neon/club/warehouse drift.",
+        ]
 
     plan = {
         "plan_version": ROLE_PLAN_PROMPT_VERSION,
@@ -699,12 +831,28 @@ def _presence_diagnostics(scene_roles: list[dict[str, Any]], world_continuity: d
     performance_values = [bool(_safe_dict(row).get("performance_focus")) for row in scene_roles]
     unique_presence = sorted(set(presence_modes))
     unique_performance = sorted(set(performance_values))
+    subject_priorities = sorted(
+        {
+            str(_safe_dict(row).get("scene_subject_priority") or "").strip()
+            for row in scene_roles
+            if str(_safe_dict(row).get("scene_subject_priority") or "").strip()
+        }
+    )
+    world_emphasis_levels = sorted(
+        {
+            str(_safe_dict(row).get("world_emphasis") or "").strip()
+            for row in scene_roles
+            if str(_safe_dict(row).get("world_emphasis") or "").strip()
+        }
+    )
     return {
         "role_plan_world_anchor_mode": str(world_continuity.get("world_anchor_mode") or ""),
         "role_plan_country_or_region": str(world_continuity.get("country_or_region") or ""),
         "role_plan_presence_modes": unique_presence,
         "role_plan_presence_flat": bool(scene_roles) and len(unique_presence) <= 1,
         "role_plan_performance_focus_flat": bool(scene_roles) and len(unique_performance) <= 1,
+        "role_plan_subject_priorities": subject_priorities,
+        "role_plan_world_emphasis_levels": world_emphasis_levels,
     }
 
 
