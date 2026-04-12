@@ -1257,25 +1257,53 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
         **capability_diag,
     }
 
-    if not scene_windows:
-        plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag = _normalize_scene_plan(
-            {},
-            scene_windows=scene_windows,
-            role_lookup=role_lookup,
-            include_debug_raw=include_debug_raw,
-        )
-        diagnostics.update(
-            {
-                "route_counts": _safe_dict(_safe_dict(plan.get("route_mix_summary"))),
-                "presence_modes": [],
-                "route_flat": False,
-                "watchability_fallback_count": int(watchability_fallback_count),
-                "window_count_source": int(normalization_diag.get("window_count_source") or 0),
-                "window_count_model": int(normalization_diag.get("window_count_model") or 0),
-                "window_count_normalized": int(normalization_diag.get("window_count_normalized") or 0),
-                "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
-                "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
-                "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
+    def _collect_scene_plan_diagnostics(
+        *,
+        scene_plan: dict[str, Any],
+        normalization_diag: dict[str, Any],
+        watchability_fallback_count: int,
+        include_presence_modes: bool,
+    ) -> dict[str, Any]:
+        route_summary = _safe_dict(scene_plan.get("route_mix_summary"))
+        route_counts = {
+            "i2v": int(route_summary.get("i2v") or 0),
+            "ia2v": int(route_summary.get("ia2v") or 0),
+            "first_last": int(route_summary.get("first_last") or 0),
+        }
+        spacing = _safe_dict(normalization_diag.get("route_spacing"))
+        payload = {
+            "route_counts": route_counts,
+            "presence_modes": (
+                sorted(
+                    {
+                        str(_safe_dict(role_lookup.get(str(row.get("scene_id") or ""))).get("scene_presence_mode") or "").strip()
+                        for row in _safe_list(scene_plan.get("scenes"))
+                    }
+                    - {""}
+                )
+                if include_presence_modes
+                else []
+            ),
+            "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
+            "watchability_fallback_count": int(watchability_fallback_count),
+            "window_count_source": int(normalization_diag.get("window_count_source") or 0),
+            "window_count_model": int(normalization_diag.get("window_count_model") or 0),
+            "window_count_normalized": int(normalization_diag.get("window_count_normalized") or 0),
+            "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
+            "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
+            "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
+            "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
+            "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
+            "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
+            "warnings_count": int(normalization_diag.get("warnings_count") or 0),
+            "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
+            "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
+            "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
+            "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
+            "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
+        }
+        if include_debug_raw:
+            payload["scene_plan_debug"] = {
                 "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
                 "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
                 "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
@@ -1285,29 +1313,29 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                 "target_route_mix": _safe_dict(normalization_diag.get("target_route_mix")),
                 "actual_route_mix": _safe_dict(normalization_diag.get("actual_route_mix")),
                 "deviation_summary": _safe_dict(normalization_diag.get("deviation_summary")),
-                "route_spacing": _safe_dict(normalization_diag.get("route_spacing")),
+                "route_spacing": spacing,
                 "i2v_motion_family_counts": _safe_dict(normalization_diag.get("i2v_motion_family_counts")),
                 "unsupported_i2v_family_count": int(normalization_diag.get("unsupported_i2v_family_count") or 0),
                 "i2v_rows_enriched_count": int(normalization_diag.get("i2v_rows_enriched_count") or 0),
                 "original_scenes_count": int(normalization_diag.get("original_scenes_count") or 0),
-                "scene_plan_debug": {
-                    "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
-                    "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
-                    "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
-                    "warnings_count": int(normalization_diag.get("warnings_count") or 0),
-                    "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
-                    "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
-                    "target_route_mix": _safe_dict(normalization_diag.get("target_route_mix")),
-                    "actual_route_mix": _safe_dict(normalization_diag.get("actual_route_mix")),
-                    "deviation_summary": _safe_dict(normalization_diag.get("deviation_summary")),
-                    "route_spacing": _safe_dict(normalization_diag.get("route_spacing")),
-                    "i2v_motion_family_counts": _safe_dict(normalization_diag.get("i2v_motion_family_counts")),
-                    "unsupported_i2v_family_count": int(normalization_diag.get("unsupported_i2v_family_count") or 0),
-                    "i2v_rows_enriched_count": int(normalization_diag.get("i2v_rows_enriched_count") or 0),
-                    "original_scenes_count": int(normalization_diag.get("original_scenes_count") or 0),
-                    "original_scenes": _safe_list(normalization_diag.get("original_scenes")),
-                },
+                "original_scenes": _safe_list(normalization_diag.get("original_scenes")),
             }
+        return payload
+
+    if not scene_windows:
+        plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag = _normalize_scene_plan(
+            {},
+            scene_windows=scene_windows,
+            role_lookup=role_lookup,
+            include_debug_raw=include_debug_raw,
+        )
+        diagnostics.update(
+            _collect_scene_plan_diagnostics(
+                scene_plan=plan,
+                normalization_diag=normalization_diag,
+                watchability_fallback_count=watchability_fallback_count,
+                include_presence_modes=False,
+            )
         )
         return {
             "ok": False,
@@ -1339,67 +1367,13 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             role_lookup=role_lookup,
             include_debug_raw=include_debug_raw,
         )
-        route_summary = _safe_dict(scene_plan.get("route_mix_summary"))
-        presence_modes = sorted(
-            {
-                str(_safe_dict(role_lookup.get(str(row.get("scene_id") or ""))).get("scene_presence_mode") or "").strip()
-                for row in _safe_list(scene_plan.get("scenes"))
-            }
-            - {""}
-        )
-        route_counts = {
-            "i2v": int(route_summary.get("i2v") or 0),
-            "ia2v": int(route_summary.get("ia2v") or 0),
-            "first_last": int(route_summary.get("first_last") or 0),
-        }
-        spacing = _safe_dict(normalization_diag.get("route_spacing"))
         diagnostics.update(
-            {
-                "route_counts": route_counts,
-                "i2v_motion_family_counts": _safe_dict(normalization_diag.get("i2v_motion_family_counts")),
-                "unsupported_i2v_family_count": int(normalization_diag.get("unsupported_i2v_family_count") or 0),
-                "i2v_rows_enriched_count": int(normalization_diag.get("i2v_rows_enriched_count") or 0),
-                "presence_modes": presence_modes,
-                "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
-                "watchability_fallback_count": int(watchability_fallback_count),
-                "window_count_source": int(normalization_diag.get("window_count_source") or 0),
-                "window_count_model": int(normalization_diag.get("window_count_model") or 0),
-                "window_count_normalized": int(normalization_diag.get("window_count_normalized") or 0),
-                "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
-                "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
-                "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
-                "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
-                "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
-                "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
-                "warnings_count": int(normalization_diag.get("warnings_count") or 0),
-                "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
-                "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
-                "target_route_mix": _safe_dict(normalization_diag.get("target_route_mix")),
-                "actual_route_mix": _safe_dict(normalization_diag.get("actual_route_mix")),
-                "deviation_summary": _safe_dict(normalization_diag.get("deviation_summary")),
-                "route_spacing": spacing,
-                "original_scenes_count": int(normalization_diag.get("original_scenes_count") or 0),
-                "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
-                "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
-                "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
-                "scene_plan_debug": {
-                    "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
-                    "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
-                    "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
-                    "warnings_count": int(normalization_diag.get("warnings_count") or 0),
-                    "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
-                    "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
-                    "target_route_mix": _safe_dict(normalization_diag.get("target_route_mix")),
-                    "actual_route_mix": _safe_dict(normalization_diag.get("actual_route_mix")),
-                    "deviation_summary": _safe_dict(normalization_diag.get("deviation_summary")),
-                    "route_spacing": spacing,
-                    "i2v_motion_family_counts": _safe_dict(normalization_diag.get("i2v_motion_family_counts")),
-                    "unsupported_i2v_family_count": int(normalization_diag.get("unsupported_i2v_family_count") or 0),
-                    "i2v_rows_enriched_count": int(normalization_diag.get("i2v_rows_enriched_count") or 0),
-                    "original_scenes_count": int(normalization_diag.get("original_scenes_count") or 0),
-                    "original_scenes": _safe_list(normalization_diag.get("original_scenes")),
-                },
-            }
+            _collect_scene_plan_diagnostics(
+                scene_plan=scene_plan,
+                normalization_diag=normalization_diag,
+                watchability_fallback_count=watchability_fallback_count,
+                include_presence_modes=True,
+            )
         )
         return {
             "ok": bool(_safe_list(scene_plan.get("scenes"))),
@@ -1416,66 +1390,13 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             role_lookup=role_lookup,
             include_debug_raw=include_debug_raw,
         )
-        route_summary = _safe_dict(scene_plan.get("route_mix_summary"))
-        route_counts = {
-            "i2v": int(route_summary.get("i2v") or 0),
-            "ia2v": int(route_summary.get("ia2v") or 0),
-            "first_last": int(route_summary.get("first_last") or 0),
-        }
-        spacing = _safe_dict(normalization_diag.get("route_spacing"))
         diagnostics.update(
-            {
-                "route_counts": route_counts,
-                "i2v_motion_family_counts": _safe_dict(normalization_diag.get("i2v_motion_family_counts")),
-                "unsupported_i2v_family_count": int(normalization_diag.get("unsupported_i2v_family_count") or 0),
-                "i2v_rows_enriched_count": int(normalization_diag.get("i2v_rows_enriched_count") or 0),
-                "presence_modes": sorted(
-                    {
-                        str(_safe_dict(role_lookup.get(str(row.get("scene_id") or ""))).get("scene_presence_mode") or "").strip()
-                        for row in _safe_list(scene_plan.get("scenes"))
-                    }
-                    - {""}
-                ),
-                "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
-                "watchability_fallback_count": int(watchability_fallback_count),
-                "window_count_source": int(normalization_diag.get("window_count_source") or 0),
-                "window_count_model": int(normalization_diag.get("window_count_model") or 0),
-                "window_count_normalized": int(normalization_diag.get("window_count_normalized") or 0),
-                "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
-                "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
-                "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
-                "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
-                "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
-                "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
-                "warnings_count": int(normalization_diag.get("warnings_count") or 0),
-                "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
-                "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
-                "target_route_mix": _safe_dict(normalization_diag.get("target_route_mix")),
-                "actual_route_mix": _safe_dict(normalization_diag.get("actual_route_mix")),
-                "deviation_summary": _safe_dict(normalization_diag.get("deviation_summary")),
-                "route_spacing": spacing,
-                "original_scenes_count": int(normalization_diag.get("original_scenes_count") or 0),
-                "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
-                "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
-                "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
-                "scene_plan_debug": {
-                    "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
-                    "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
-                    "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
-                    "warnings_count": int(normalization_diag.get("warnings_count") or 0),
-                    "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
-                    "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
-                    "target_route_mix": _safe_dict(normalization_diag.get("target_route_mix")),
-                    "actual_route_mix": _safe_dict(normalization_diag.get("actual_route_mix")),
-                    "deviation_summary": _safe_dict(normalization_diag.get("deviation_summary")),
-                    "route_spacing": spacing,
-                    "i2v_motion_family_counts": _safe_dict(normalization_diag.get("i2v_motion_family_counts")),
-                    "unsupported_i2v_family_count": int(normalization_diag.get("unsupported_i2v_family_count") or 0),
-                    "i2v_rows_enriched_count": int(normalization_diag.get("i2v_rows_enriched_count") or 0),
-                    "original_scenes_count": int(normalization_diag.get("original_scenes_count") or 0),
-                    "original_scenes": _safe_list(normalization_diag.get("original_scenes")),
-                },
-            }
+            _collect_scene_plan_diagnostics(
+                scene_plan=scene_plan,
+                normalization_diag=normalization_diag,
+                watchability_fallback_count=watchability_fallback_count,
+                include_presence_modes=True,
+            )
         )
         return {
             "ok": bool(_safe_list(scene_plan.get("scenes"))),
