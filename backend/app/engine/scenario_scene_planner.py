@@ -33,6 +33,28 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _compact_prompt_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        compact: dict[str, Any] = {}
+        for key, item in value.items():
+            cleaned = _compact_prompt_payload(item)
+            if cleaned in (None, "", [], {}):
+                continue
+            compact[str(key)] = cleaned
+        return compact
+    if isinstance(value, list):
+        compact_list: list[Any] = []
+        for item in value:
+            cleaned = _compact_prompt_payload(item)
+            if cleaned in (None, "", [], {}):
+                continue
+            compact_list.append(cleaned)
+        return compact_list
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
 def _round3(value: Any) -> float:
     try:
         return round(float(value), 3)
@@ -214,7 +236,10 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Do NOT assign ia2v to every performance scene. Do NOT flatten all scenes into one route.\\n"
         "Route spacing policy: ia2v scenes must not be adjacent; spread ia2v as rare emotional accents with at least one non-ia2v between them whenever possible.\\n"
         "first_last scenes should not be adjacent to another first_last unless unavoidable. Keep route rhythm staggered, not paired.\\n"
-        "Preserve realism and coherent lighting/world progression from role_plan world continuity.\\n\\n"
+        "Preserve realism and coherent lighting/world progression from role_plan world continuity.\\n"
+        "Add visual progression layer: repetitive phrases must not produce visually repetitive scenes.\\n"
+        "Progress through shot scale, camera intimacy, performance openness, and focal event type.\\n"
+        "Add motion/prop complexity risk tags for each scene for downstream prompt simplification.\\n\\n"
         "WATCHABILITY ROLE (MANDATORY): viewer-facing clip function of the scene, not role name.\\n"
         "Each scene.watchability_role must be a short phrase that says why this scene matters to the viewer/clip arc.\\n"
         "Avoid weak labels (hero/main character/character_1/route names/raw scene_function duplicates).\\n\\n"
@@ -230,11 +255,11 @@ def _build_prompt(context: dict[str, Any]) -> str:
         '  \"plan_version\": \"scene_plan_v1\",\\n'
         '  \"mode\": \"clip\",\\n'
         '  \"route_mix_summary\": {\"total_scenes\": 0, \"i2v\": 0, \"ia2v\": 0, \"first_last\": 0},\\n'
-        '  \"scenes\": [{\"scene_id\": \"sc_1\", \"t0\": 0.0, \"t1\": 1.0, \"duration_sec\": 1.0, \"primary_role\": \"character_1\", \"active_roles\": [\"character_1\"], \"scene_presence_mode\": \"solo_observational\", \"scene_function\": \"setup\", \"route\": \"i2v\", \"route_reason\": \"\", \"emotional_intent\": \"\", \"motion_intent\": \"\", \"watchability_role\": \"\"}],\\n'
+        '  \"scenes\": [{\"scene_id\": \"sc_1\", \"t0\": 0.0, \"t1\": 1.0, \"duration_sec\": 1.0, \"primary_role\": \"character_1\", \"active_roles\": [\"character_1\"], \"scene_presence_mode\": \"solo_observational\", \"scene_function\": \"setup\", \"route\": \"i2v\", \"route_reason\": \"\", \"emotional_intent\": \"\", \"motion_intent\": \"\", \"watchability_role\": \"\", \"shot_scale\": \"wide\", \"camera_intimacy\": \"observational\", \"performance_openness\": \"restrained\", \"visual_event_type\": \"environment\", \"repeat_variation_rule\": \"\", \"motion_risk\": {\"motion_complexity\": \"low\", \"prop_interaction_complexity\": \"low\", \"finger_precision_risk\": \"low\", \"face_occlusion_risk\": \"low\", \"identity_drift_risk\": \"low\", \"ltx_motion_risk\": \"low\"}}],\\n'
         '  \"scene_arc_summary\": \"\",\\n'
         '  \"route_strategy_notes\": [\"\"]\\n'
         "}\\n\\n"
-        f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(context, ensure_ascii=False)}"
+        f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )
 
 
@@ -354,6 +379,71 @@ def _route_scores(scene: dict[str, Any], idx: int, total: int, *, scenes: list[d
 def _default_route(scene: dict[str, Any], idx: int, total: int, *, scenes: list[dict[str, Any]] | None = None) -> str:
     scores = _route_scores(scene, idx, total, scenes=scenes)
     return max(("i2v", "ia2v", "first_last"), key=lambda route: (scores[route], route == "i2v"))
+
+
+def _progression_by_position(idx: int, total: int) -> tuple[str, str, str]:
+    if total <= 1:
+        return "medium", "observational", "restrained"
+    ratio = idx / max(total - 1, 1)
+    if ratio < 0.2:
+        return "wide", "distant", "closed"
+    if ratio < 0.45:
+        return "medium", "observational", "restrained"
+    if ratio < 0.7:
+        return "close", "near", "opening"
+    if ratio < 0.9:
+        return "close", "intimate", "exposed"
+    return "detail", "near", "restrained"
+
+
+def _visual_event_type(scene: dict[str, Any]) -> str:
+    scene_function = str(scene.get("scene_function") or "").lower()
+    route = str(scene.get("route") or "").lower()
+    presence_mode = str(scene.get("scene_presence_mode") or "").lower()
+    if "callback" in scene_function or "afterimage" in scene_function:
+        return "callback"
+    if "transit" in presence_mode or "transit" in scene_function:
+        return "transit"
+    if route == "ia2v":
+        return "face"
+    if "environment" in scene_function or "anchor" in scene_function:
+        return "environment"
+    if "hand" in scene_function or "prop" in scene_function:
+        return "hands"
+    if route == "first_last":
+        return "body"
+    return "body"
+
+
+def _infer_motion_risk(scene: dict[str, Any], phrase_text: str) -> dict[str, str]:
+    blob = " ".join(
+        [
+            str(scene.get("scene_function") or ""),
+            str(scene.get("motion_intent") or ""),
+            str(scene.get("emotional_intent") or ""),
+            str(scene.get("watchability_role") or ""),
+            str(phrase_text or ""),
+        ]
+    ).lower()
+    finger_tokens = ("finger", "fingertip", "brim", "grip", "pinch", "small object", "button", "cassette", "ring")
+    prop_tokens = ("cap", "hat", "cassette", "phone", "cigarette", "necklace", "mask", "glasses", "prop")
+    face_tokens = ("face", "mouth", "lip", "cheek", "eye", "gaze", "near face")
+    tiny_steps_tokens = ("then", "after that", "while", "sequence", "multi-step", "precise")
+
+    finger_hit = any(token in blob for token in finger_tokens)
+    prop_hit = any(token in blob for token in prop_tokens)
+    face_hit = any(token in blob for token in face_tokens)
+    tiny_steps_hit = any(token in blob for token in tiny_steps_tokens)
+
+    high_triplet = finger_hit and prop_hit and face_hit
+    return {
+        "motion_complexity": "high" if tiny_steps_hit or high_triplet else ("medium" if prop_hit else "low"),
+        "prop_interaction_complexity": "high" if (prop_hit and finger_hit) else ("medium" if prop_hit else "low"),
+        "finger_precision_risk": "high" if (finger_hit and prop_hit) else ("medium" if finger_hit else "low"),
+        "face_occlusion_risk": "high" if (face_hit and (prop_hit or finger_hit)) else ("medium" if face_hit else "low"),
+        "identity_drift_risk": "high" if high_triplet else ("medium" if face_hit else "low"),
+        "ltx_motion_risk": "high" if (high_triplet or tiny_steps_hit) else ("medium" if prop_hit or face_hit else "low"),
+    }
 
 
 def _is_weak_watchability_role(value: str, *, route: str, scene_function: str) -> bool:
@@ -517,6 +607,7 @@ def _normalize_scene_plan(
     row_count_model = len(raw_model_rows)
     missing_rows_filled = 0
     repaired_to_audio_windows = False
+    seen_phrase_counts: dict[str, int] = {}
 
     ordered_fallback_rows = [
         _safe_dict(row_raw)
@@ -554,6 +645,20 @@ def _normalize_scene_plan(
 
         scene_function = str(raw_row.get("scene_function") or window.get("scene_function") or "montage_progression").strip() or "montage_progression"
         watchability_role_raw = str(raw_row.get("watchability_role") or "").strip()
+        phrase_text = str(window.get("phrase_text") or "").strip().lower()
+        phrase_repeat_idx = 0
+        if phrase_text:
+            phrase_repeat_idx = seen_phrase_counts.get(phrase_text, 0)
+            seen_phrase_counts[phrase_text] = phrase_repeat_idx + 1
+        shot_scale, camera_intimacy, performance_openness = _progression_by_position(idx, len(scene_windows))
+        visual_event_type = _visual_event_type({**window, **role_row, **raw_row, "route": route})
+        repeat_variation_rule = str(raw_row.get("repeat_variation_rule") or "").strip()
+        if not repeat_variation_rule:
+            if phrase_repeat_idx > 0:
+                repeat_variation_rule = f"repeat_phrase_variation_{phrase_repeat_idx}: change shot intimacy/focal emphasis versus prior similar phrase"
+            else:
+                repeat_variation_rule = "first_occurrence_anchor"
+        motion_risk = _infer_motion_risk({**window, **role_row, **raw_row}, phrase_text)
         scene_row = {
             "scene_id": scene_id,
             "t0": _round3(window.get("t0")),
@@ -570,6 +675,12 @@ def _normalize_scene_plan(
             "watchability_role": watchability_role_raw,
             "performance_focus": bool(role_row.get("performance_focus")),
             "energy": str(window.get("energy") or "").strip().lower(),
+            "shot_scale": str(raw_row.get("shot_scale") or "").strip().lower() or shot_scale,
+            "camera_intimacy": str(raw_row.get("camera_intimacy") or "").strip().lower() or camera_intimacy,
+            "performance_openness": str(raw_row.get("performance_openness") or "").strip().lower() or performance_openness,
+            "visual_event_type": str(raw_row.get("visual_event_type") or "").strip().lower() or visual_event_type,
+            "repeat_variation_rule": repeat_variation_rule,
+            "motion_risk": _safe_dict(raw_row.get("motion_risk")) or motion_risk,
         }
         if route == "first_last" and not _is_first_last_candidate(scene_row, idx, len(scene_windows)):
             route = "i2v"
@@ -619,6 +730,12 @@ def _normalize_scene_plan(
                     "emotional_intent",
                     "motion_intent",
                     "watchability_role",
+                    "shot_scale",
+                    "camera_intimacy",
+                    "performance_openness",
+                    "visual_event_type",
+                    "repeat_variation_rule",
+                    "motion_risk",
                 }
             }
             for row in normalized_scenes

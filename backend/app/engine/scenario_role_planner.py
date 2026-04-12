@@ -49,6 +49,28 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _compact_prompt_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        compact: dict[str, Any] = {}
+        for key, item in value.items():
+            cleaned = _compact_prompt_payload(item)
+            if cleaned in (None, "", [], {}):
+                continue
+            compact[str(key)] = cleaned
+        return compact
+    if isinstance(value, list):
+        compact_list: list[Any] = []
+        for item in value:
+            cleaned = _compact_prompt_payload(item)
+            if cleaned in (None, "", [], {}):
+                continue
+            compact_list.append(cleaned)
+        return compact_list
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
 def _round3(value: Any) -> float:
     try:
         return round(float(value), 3)
@@ -286,12 +308,12 @@ def _build_prompt(context: dict[str, Any]) -> str:
         '  "plan_version": "role_plan_v2",\n'
         '  "mode": "clip",\n'
         '  "global_roles": {"primary_character_roles": [], "support_character_roles": [], "world_roles": [], "prop_roles": []},\n'
-        '  "world_continuity": {"world_anchor_mode": "inferred", "country_or_region": "", "environment_family": "", "location_progression": [], "style_anchor": "", "realism_contract": "", "lighting_continuity": {"time_of_day_base": "", "allowed_progression": "", "forbidden_shifts": []}, "continuity_rules": []},\n'
+        '  "world_continuity": {"world_anchor_mode": "inferred", "country_or_region": "", "environment_family": "", "location_progression": [], "style_anchor": "", "realism_contract": "", "lighting_continuity": {"time_of_day_base": "", "allowed_progression": "", "color_temperature_band": "", "contrast_profile": "", "shadow_behavior": "", "practical_sources": [], "forbidden_shifts": []}, "continuity_rules": []},\n'
         '  "scene_roles": [{"scene_id": "sc_1", "t0": 0.0, "t1": 1.0, "primary_role": "character_1", "secondary_roles": [], "active_roles": ["character_1", "location", "style"], "inactive_roles": ["character_2", "character_3", "props"], "character_presence": "solo", "scene_presence_mode": "solo_observational", "performance_focus": false, "role_reason": ""}],\n'
         '  "role_arc_summary": "",\n'
         '  "continuity_notes": [""]\n'
         "}\n\n"
-        f"ROLE_PLANNING_CONTEXT:\n{json.dumps(context, ensure_ascii=False)}"
+        f"ROLE_PLANNING_CONTEXT:\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )
 
 
@@ -383,6 +405,39 @@ def _infer_time_of_day_base(*parts: str) -> str:
     return "late afternoon"
 
 
+def _default_lighting_continuity(time_of_day_base: str) -> dict[str, Any]:
+    base = str(time_of_day_base or "late_afternoon").strip().lower().replace(" ", "_")
+    if base in {"afternoon", "late_afternoon"}:
+        return {
+            "time_of_day_base": "late_afternoon",
+            "allowed_progression": "consistent_late_afternoon",
+            "color_temperature_band": "4300_5200k",
+            "contrast_profile": "soft_to_medium",
+            "shadow_behavior": "long_soft_shadows",
+            "practical_sources": ["window_light", "street_bounce"],
+            "forbidden_shifts": ["neon", "club_color", "day_to_night", "unmotivated_weather_change"],
+        }
+    if base in {"night", "dusk", "evening"}:
+        return {
+            "time_of_day_base": "night",
+            "allowed_progression": "consistent_night",
+            "color_temperature_band": "2800_4300k",
+            "contrast_profile": "medium_to_high",
+            "shadow_behavior": "controlled_deep_shadows",
+            "practical_sources": ["street_lamps", "window_practicals"],
+            "forbidden_shifts": ["daylight_jump", "unmotivated_sunlight", "club_color"],
+        }
+    return {
+        "time_of_day_base": base or "late_afternoon",
+        "allowed_progression": "local_realistic_progression",
+        "color_temperature_band": "neutral_natural",
+        "contrast_profile": "soft_to_medium",
+        "shadow_behavior": "consistent_natural_shadows",
+        "practical_sources": ["ambient_natural", "local_practicals"],
+        "forbidden_shifts": ["unmotivated_day_night_jump", "neon_style_teleport"],
+    }
+
+
 def _infer_environment_family(story_summary: str, country_or_region: str) -> str:
     story = str(story_summary or "").lower()
     if country_or_region == "Iran":
@@ -420,17 +475,16 @@ def _normalize_world_continuity(raw_world: Any, *, input_pkg: dict[str, Any], st
         world_anchor_mode = mode_raw
 
     lighting = _safe_dict(row.get("lighting_continuity"))
+    default_lighting = _default_lighting_continuity(str(lighting.get("time_of_day_base") or inferred_time_of_day))
     lighting_normalized = {
-        "time_of_day_base": str(lighting.get("time_of_day_base") or "").strip() or inferred_time_of_day,
-        "allowed_progression": str(lighting.get("allowed_progression") or "").strip() or "local realistic progression",
-        "forbidden_shifts": [str(item).strip() for item in _safe_list(lighting.get("forbidden_shifts")) if str(item).strip()],
+        "time_of_day_base": str(lighting.get("time_of_day_base") or "").strip() or str(default_lighting.get("time_of_day_base") or ""),
+        "allowed_progression": str(lighting.get("allowed_progression") or "").strip() or str(default_lighting.get("allowed_progression") or ""),
+        "color_temperature_band": str(lighting.get("color_temperature_band") or "").strip() or str(default_lighting.get("color_temperature_band") or ""),
+        "contrast_profile": str(lighting.get("contrast_profile") or "").strip() or str(default_lighting.get("contrast_profile") or ""),
+        "shadow_behavior": str(lighting.get("shadow_behavior") or "").strip() or str(default_lighting.get("shadow_behavior") or ""),
+        "practical_sources": [str(item).strip() for item in _safe_list(lighting.get("practical_sources")) if str(item).strip()] or _safe_list(default_lighting.get("practical_sources")),
+        "forbidden_shifts": [str(item).strip() for item in _safe_list(lighting.get("forbidden_shifts")) if str(item).strip()] or _safe_list(default_lighting.get("forbidden_shifts")),
     }
-    if not lighting_normalized["forbidden_shifts"]:
-        lighting_normalized["forbidden_shifts"] = [
-            "unmotivated day/night teleport",
-            "unmotivated studio-light jump",
-            "random unrelated lighting style switch",
-        ]
 
     normalized = {
         "world_anchor_mode": world_anchor_mode,

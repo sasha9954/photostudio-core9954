@@ -97,6 +97,28 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _compact_prompt_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        compact: dict[str, Any] = {}
+        for key, item in value.items():
+            cleaned = _compact_prompt_payload(item)
+            if cleaned in (None, "", [], {}):
+                continue
+            compact[str(key)] = cleaned
+        return compact
+    if isinstance(value, list):
+        compact_list: list[Any] = []
+        for item in value:
+            cleaned = _compact_prompt_payload(item)
+            if cleaned in (None, "", [], {}):
+                continue
+            compact_list.append(cleaned)
+        return compact_list
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
 def _extract_audio_url_from_refs(refs_inventory: dict[str, Any]) -> str:
     audio_in = _safe_dict(refs_inventory.get("audio_in"))
     meta = _safe_dict(audio_in.get("meta"))
@@ -561,6 +583,9 @@ def _build_story_core_prompt(
         "story_core_grounding_level": grounding_level,
         "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
     }
+    compact_input = _compact_prompt_payload(compact_input)
+    compact_assigned_roles = _compact_prompt_payload(assigned_roles)
+    compact_refs_inventory = _compact_prompt_payload(refs_inventory)
     mode = "directed" if story_core_mode == "directed" else "creative"
     mode_instructions = (
         "MODE: DIRECTED MODE\n"
@@ -611,8 +636,8 @@ def _build_story_core_prompt(
         f"{mode_instructions}\n"
         f"story_core_mode={mode}\n\n"
         f"INPUT_SUMMARY:\n{json.dumps(compact_input, ensure_ascii=False)[:3500]}\n\n"
-        f"ASSIGNED_ROLES:\n{json.dumps(assigned_roles, ensure_ascii=False)[:1200]}\n\n"
-        f"CONTEXT_REFS:\n{json.dumps(refs_inventory, ensure_ascii=False)[:2200]}\n"
+        f"ASSIGNED_ROLES:\n{json.dumps(compact_assigned_roles, ensure_ascii=False)[:1200]}\n\n"
+        f"CONTEXT_REFS:\n{json.dumps(compact_refs_inventory, ensure_ascii=False)[:2200]}\n"
     )
 
 

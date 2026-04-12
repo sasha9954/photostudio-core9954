@@ -55,6 +55,28 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _compact_prompt_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        compact: dict[str, Any] = {}
+        for key, item in value.items():
+            cleaned = _compact_prompt_payload(item)
+            if cleaned in (None, "", [], {}):
+                continue
+            compact[str(key)] = cleaned
+        return compact
+    if isinstance(value, list):
+        compact_list: list[Any] = []
+        for item in value:
+            cleaned = _compact_prompt_payload(item)
+            if cleaned in (None, "", [], {}):
+                continue
+            compact_list.append(cleaned)
+        return compact_list
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
 def _round3(value: Any) -> float:
     try:
         return round(float(value), 3)
@@ -303,7 +325,8 @@ def _build_scene_anchor_bundle(
         or world_lock.get("setting_description")
         or "same environment"
     ).strip()
-    lighting = str(style_lock.get("lighting") or "same lighting family").strip()
+    lighting_contract_anchor = _lighting_anchor_from_contract(world_continuity)
+    lighting = str(style_lock.get("lighting") or "").strip() or lighting_contract_anchor
     world_anchor = ", ".join([part for part in [location_ref_hint, environment, "same world continuity"] if part])[:220]
     lighting_anchor = lighting[:160]
 
@@ -331,6 +354,29 @@ def _enrich_prompt_with_anchor(prompt: str, identity_anchor: str, world_anchor: 
 def _trim_sentence(text: str, *, max_len: int = 220) -> str:
     clean = " ".join(str(text or "").strip().split())
     return clean[:max_len]
+
+
+def _lighting_anchor_from_contract(world_continuity: dict[str, Any]) -> str:
+    lighting = _safe_dict(world_continuity.get("lighting_continuity"))
+    tod = str(lighting.get("time_of_day_base") or "").replace("_", " ").strip()
+    contrast = str(lighting.get("contrast_profile") or "").replace("_", " ").strip()
+    shadows = str(lighting.get("shadow_behavior") or "").replace("_", " ").strip()
+    practicals = ", ".join([str(item).replace("_", " ").strip() for item in _safe_list(lighting.get("practical_sources")) if str(item).strip()])
+    parts = []
+    if tod:
+        parts.append(f"{tod} natural light")
+    if contrast:
+        parts.append(f"{contrast} contrast")
+    if shadows:
+        parts.append(shadows)
+    if practicals:
+        parts.append(f"stable practical sources ({practicals})")
+    return "; ".join(parts)[:220] or "stable naturalistic light continuity"
+
+
+def _is_high_motion_risk(scene_plan_row: dict[str, Any]) -> bool:
+    risk = _safe_dict(scene_plan_row.get("motion_risk"))
+    return any(str(risk.get(key) or "").strip().lower() == "high" for key in ("ltx_motion_risk", "finger_precision_risk", "prop_interaction_complexity"))
 
 
 def _detect_attached_prop_token(*texts: str) -> str:
@@ -531,6 +577,12 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
                     "emotional_intent": str(_safe_dict(row).get("emotional_intent") or ""),
                     "motion_intent": str(_safe_dict(row).get("motion_intent") or ""),
                     "watchability_role": str(_safe_dict(row).get("watchability_role") or ""),
+                    "shot_scale": str(_safe_dict(row).get("shot_scale") or ""),
+                    "camera_intimacy": str(_safe_dict(row).get("camera_intimacy") or ""),
+                    "performance_openness": str(_safe_dict(row).get("performance_openness") or ""),
+                    "visual_event_type": str(_safe_dict(row).get("visual_event_type") or ""),
+                    "repeat_variation_rule": str(_safe_dict(row).get("repeat_variation_rule") or ""),
+                    "motion_risk": _safe_dict(_safe_dict(row).get("motion_risk")),
                 }
                 for row in _safe_list(scene_plan.get("scenes"))
             ],
@@ -549,7 +601,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
         "story_core": story_core,
         "world_continuity": _safe_dict(role_plan.get("world_continuity")),
     }
-    return compact_context, aux
+    return _compact_prompt_payload(compact_context), aux
 
 
 def _build_prompt(context: dict[str, Any]) -> str:
@@ -565,6 +617,9 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Preserve identity/world/style continuity and realism.\\n"
         "Prompt text must be short, usable, and not overloaded.\\n"
         "Avoid unnecessary world/geography decoration (no forced urban/industrial/location labels unless explicitly grounded in inputs).\\n"
+        "Use scene visual progression attributes (shot_scale, camera_intimacy, performance_openness, visual_event_type, repeat_variation_rule) to keep repeated phrases visually different.\\n"
+        "Use lighting continuity contract as stable anchor and translate it to natural cinematic language, not numeric dump.\\n"
+        "If motion_risk shows high complexity, simplify action wording: broad readable motion only, no tiny finger-sequence choreography.\\n"
         "Video prompts must be LTX-native, anatomy-safe, and motion-first.\\n"
         "Write prompts in natural cinematic English, present tense, one connected paragraph, chronological motion logic.\\n"
         "Describe what starts happening after the still image; do NOT mechanically re-describe all static elements already visible.\\n"
@@ -757,6 +812,7 @@ def _build_fallback_scene_prompts(
 
     positive_video_prompt = ""
     negative_video_prompt = ""
+    high_motion_risk = _is_high_motion_risk(scene_plan_row)
 
     if route == "ia2v":
         photo_prompt = (
@@ -828,6 +884,14 @@ def _build_fallback_scene_prompts(
                 "Safety tail: preserve identity/world continuity, stable anatomy, and controlled camera."
             )
 
+    if high_motion_risk and route in {"i2v", "ia2v"}:
+        simplified = (
+            f"Use one broad readable action only in {world_anchor}: controlled posture/gaze shift with simple hand trajectory, no tiny finger sequencing near face, no multistep prop manipulation. "
+            "Camera stays steady and supportive with continuity-first motion."
+        )
+        video_prompt = simplified
+        positive_video_prompt = simplified
+
     fallback_notes = _prompt_notes_template(route)
     fallback_notes["shot_intent"] = scene_function
     fallback_notes["continuity_anchor"] = anchors["continuity_anchor"] if anchors["continuity_anchor"] else (
@@ -836,6 +900,13 @@ def _build_fallback_scene_prompts(
     fallback_notes["world_anchor"] = anchors["world_anchor"]
     fallback_notes["identity_anchor"] = anchors["identity_anchor"]
     fallback_notes["lighting_anchor"] = anchors["lighting_anchor"]
+    fallback_notes["shot_scale"] = str(scene_plan_row.get("shot_scale") or "")
+    fallback_notes["camera_intimacy"] = str(scene_plan_row.get("camera_intimacy") or "")
+    fallback_notes["performance_openness"] = str(scene_plan_row.get("performance_openness") or "")
+    fallback_notes["visual_event_type"] = str(scene_plan_row.get("visual_event_type") or "")
+    fallback_notes["repeat_variation_rule"] = str(scene_plan_row.get("repeat_variation_rule") or "")
+    fallback_notes["motion_risk"] = _safe_dict(scene_plan_row.get("motion_risk"))
+    fallback_notes["risk_simplified"] = bool(high_motion_risk and route in {"i2v", "ia2v"})
     if route == "first_last":
         fallback_notes["first_state"] = first_state
         fallback_notes["last_state"] = last_state
@@ -976,6 +1047,22 @@ def _normalize_scene_prompts(
                 "lighting_anchor": str(prompt_notes.get("lighting_anchor") or fallback_row["prompt_notes"].get("lighting_anchor") or ""),
                 "motion_safety": str(prompt_notes.get("motion_safety") or fallback_row["prompt_notes"].get("motion_safety") or ""),
                 "audio_driven": bool(prompt_notes.get("audio_driven")) if "audio_driven" in prompt_notes else (actual_route == "ia2v"),
+                "shot_scale": str(prompt_notes.get("shot_scale") or scene.get("shot_scale") or fallback_row["prompt_notes"].get("shot_scale") or ""),
+                "camera_intimacy": str(prompt_notes.get("camera_intimacy") or scene.get("camera_intimacy") or fallback_row["prompt_notes"].get("camera_intimacy") or ""),
+                "performance_openness": str(
+                    prompt_notes.get("performance_openness")
+                    or scene.get("performance_openness")
+                    or fallback_row["prompt_notes"].get("performance_openness")
+                    or ""
+                ),
+                "visual_event_type": str(prompt_notes.get("visual_event_type") or scene.get("visual_event_type") or fallback_row["prompt_notes"].get("visual_event_type") or ""),
+                "repeat_variation_rule": str(
+                    prompt_notes.get("repeat_variation_rule")
+                    or scene.get("repeat_variation_rule")
+                    or fallback_row["prompt_notes"].get("repeat_variation_rule")
+                    or ""
+                ),
+                "motion_risk": _safe_dict(prompt_notes.get("motion_risk")) or _safe_dict(scene.get("motion_risk")) or _safe_dict(fallback_row["prompt_notes"].get("motion_risk")),
             }
         )
         if actual_route == "ia2v":
@@ -1048,6 +1135,16 @@ def _normalize_scene_prompts(
             end_image_prompt = ""
         video_prompt = _sanitize_positive_prompt(video_prompt, negative_prompt)
         positive_video_prompt = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
+        if _is_high_motion_risk(scene) and actual_route in {"i2v", "ia2v"}:
+            simplified_video = (
+                "Single readable motion line only: controlled body shift and simple hand path, no tiny finger choreography near face, no multistep prop manipulation. "
+                "Camera remains steady and continuity-first."
+            )
+            video_prompt = simplified_video
+            positive_video_prompt = simplified_video
+            normalized_notes["risk_simplified"] = True
+        else:
+            normalized_notes["risk_simplified"] = False
 
         scene_out = {
             "scene_id": scene_id,
