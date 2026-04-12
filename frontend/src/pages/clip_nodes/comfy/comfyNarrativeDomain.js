@@ -944,6 +944,31 @@ export function buildScenarioStageManualPayload({
   const existingStoryboardPackage = (
     storyboardPackage && typeof storyboardPackage === "object" && Object.keys(storyboardPackage).length
   ) ? storyboardPackage : (target?.storyboardPackage && typeof target.storyboardPackage === "object" ? target.storyboardPackage : {});
+  const buildLeanStoryCorePackage = (pkg = {}) => {
+    const safePkg = pkg && typeof pkg === "object" ? pkg : {};
+    const input = safePkg?.input && typeof safePkg.input === "object" ? safePkg.input : {};
+    const refsInventory = safePkg?.refs_inventory && typeof safePkg.refs_inventory === "object" ? safePkg.refs_inventory : {};
+    const assignedRoles = safePkg?.assigned_roles && typeof safePkg.assigned_roles === "object" ? safePkg.assigned_roles : {};
+    const audioMap = safePkg?.audio_map && typeof safePkg.audio_map === "object" ? safePkg.audio_map : {};
+    const stageStatuses = safePkg?.stage_statuses && typeof safePkg.stage_statuses === "object" ? safePkg.stage_statuses : {};
+    const diagnostics = safePkg?.diagnostics && typeof safePkg.diagnostics === "object" ? safePkg.diagnostics : {};
+    return {
+      input,
+      refs_inventory: refsInventory,
+      assigned_roles: assignedRoles,
+      audio_map: audioMap,
+      stage_statuses: stageStatuses,
+      diagnostics: {
+        story_core_mode: diagnostics?.story_core_mode,
+        story_core_grounding_level: diagnostics?.story_core_grounding_level,
+        story_core_payload_mode: "lean",
+      },
+    };
+  };
+  const normalizedStageId = normalizeText(stageId);
+  const stageStoryboardPackage = normalizedStageId === "story_core"
+    ? buildLeanStoryCorePackage(existingStoryboardPackage)
+    : existingStoryboardPackage;
 
   const rawContextRefs = source?.connectedInputs && typeof source.connectedInputs === "object"
     ? source.connectedInputs
@@ -959,9 +984,9 @@ export function buildScenarioStageManualPayload({
     ...basePayload,
     mode: "scenario_stage",
     pipelineMode: "scenario_stage_v1",
-    stageId: normalizeText(stageId),
+    stageId: normalizedStageId,
     autoRun: Boolean(autoRun),
-    storyboardPackage: existingStoryboardPackage,
+    storyboardPackage: stageStoryboardPackage,
     text: narrativeDirective.text || normalizeText(basePayload?.text),
     storyText: narrativeDirective.storyText,
     note: narrativeDirective.note,

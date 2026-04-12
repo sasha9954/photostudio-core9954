@@ -62,6 +62,51 @@ function toJson(value) {
   return JSON.stringify(value || {}, null, 2);
 }
 
+function buildCompactDebugSnapshot({ contextSummary = {}, executedStages = [], directorOutput = {}, storyboardPackage = {}, diagnostics = {} } = {}) {
+  const safePkg = storyboardPackage && typeof storyboardPackage === "object" ? storyboardPackage : {};
+  const safeDiagnostics = diagnostics && typeof diagnostics === "object" && Object.keys(diagnostics).length
+    ? diagnostics
+    : (safePkg?.diagnostics && typeof safePkg.diagnostics === "object" ? safePkg.diagnostics : {});
+  const stageStatuses = safePkg?.stage_statuses && typeof safePkg.stage_statuses === "object" ? safePkg.stage_statuses : {};
+  const refsInventory = safePkg?.refs_inventory && typeof safePkg.refs_inventory === "object" ? safePkg.refs_inventory : {};
+  const refsSummary = {
+    rolesWithRefs: Object.keys(refsInventory).filter((key) => String(key || "").startsWith("ref_")).length,
+    attachedRefRoles: Array.isArray(safeDiagnostics?.story_core_attached_ref_roles) ? safeDiagnostics.story_core_attached_ref_roles : [],
+    availableRoles: Array.isArray(safeDiagnostics?.story_core_available_roles_resolved) ? safeDiagnostics.story_core_available_roles_resolved : [],
+  };
+  return {
+    contextSummary: {
+      contentType: contextSummary?.contentType || "",
+      format: contextSummary?.format || "",
+    },
+    executedStages: Array.isArray(executedStages) ? executedStages : [],
+    stageStatuses,
+    diagnosticsSummary: {
+      story_core_payload_mode: safeDiagnostics?.story_core_payload_mode || "",
+      story_core_director_world_lock_summary: safeDiagnostics?.story_core_director_world_lock_summary || "",
+      story_core_compact_context_size_estimate: safeDiagnostics?.story_core_compact_context_size_estimate || 0,
+    },
+    packageStats: {
+      hasStoryCore: Boolean(safePkg?.story_core && typeof safePkg.story_core === "object" && Object.keys(safePkg.story_core).length),
+      audioWindows: Array.isArray(safePkg?.audio_map?.scene_candidate_windows) ? safePkg.audio_map.scene_candidate_windows.length : 0,
+      rolePlanScenes: Array.isArray(safePkg?.role_plan?.scene_roles) ? safePkg.role_plan.scene_roles.length : 0,
+      scenePlanScenes: Array.isArray(safePkg?.scene_plan?.scenes) ? safePkg.scene_plan.scenes.length : 0,
+      scenePrompts: Array.isArray(safePkg?.scene_prompts?.scenes) ? safePkg.scene_prompts.scenes.length : 0,
+      finalScenes: Array.isArray(safePkg?.final_storyboard?.scenes) ? safePkg.final_storyboard.scenes.length : 0,
+    },
+    shortStoryCoreSummary: {
+      story_summary: String(safePkg?.story_core?.story_summary || ""),
+      opening_anchor: String(safePkg?.story_core?.opening_anchor || ""),
+      ending_callback_rule: String(safePkg?.story_core?.ending_callback_rule || ""),
+    },
+    compactRefsSummary: refsSummary,
+    directorOutputSummary: {
+      pipeline: directorOutput?.pipeline || "",
+      storyCorePresent: Boolean(directorOutput?.story_core),
+    },
+  };
+}
+
 export default function ScenarioPipelineDebugEditor({
   open,
   nodeId,
@@ -178,7 +223,13 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>story_summary</span><strong>{String(storyCore?.story_summary || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>opening_anchor</span><strong>{String(storyCore?.opening_anchor || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>ending_callback_rule</span><strong>{String(storyCore?.ending_callback_rule || "—")}</strong></div>
-        <pre className="clipSB_pre">{toJson(storyCore)}</pre>
+        <pre className="clipSB_pre">{toJson({
+          global_arc: storyCore?.global_arc || "",
+          identity_lock: storyCore?.identity_lock || {},
+          world_lock: storyCore?.world_lock || {},
+          style_lock: storyCore?.style_lock || {},
+          scenes_count: Array.isArray(storyCore?.scenes) ? storyCore.scenes.length : 0,
+        })}</pre>
       </div>
     ),
     audio_map: (
@@ -211,10 +262,12 @@ export default function ScenarioPipelineDebugEditor({
         {transcriptAlignment?.source ? (
           <>
             <div className="clipSB_storyboardKv"><span>transcript_alignment.source</span><strong>{String(transcriptAlignment.source)}</strong></div>
-            <pre className="clipSB_pre">{toJson(transcriptAlignment)}</pre>
+            <pre className="clipSB_pre">{toJson({
+              source: transcriptAlignment?.source,
+              words_count: Array.isArray(transcriptAlignment?.words) ? transcriptAlignment.words.length : 0,
+            })}</pre>
           </>
         ) : null}
-        <pre className="clipSB_pre">{toJson(audioMap)}</pre>
       </div>
     ),
     role_plan: Object.keys(rolePlan || {}).length ? (
@@ -279,7 +332,13 @@ export default function ScenarioPipelineDebugEditor({
     ),
     final: <pre className="clipSB_pre">{toJson(finalStoryboard?.scenes || [])}</pre>,
     diagnostics: <pre className="clipSB_pre">{toJson(allDiagnostics)}</pre>,
-    raw: <pre className="clipSB_pre">{toJson({ contextSummary, executedStages, directorOutput, storyboardPackage: resolvedStoryboardPackage })}</pre>,
+    raw: <pre className="clipSB_pre">{toJson(buildCompactDebugSnapshot({
+      contextSummary,
+      executedStages,
+      directorOutput,
+      storyboardPackage: resolvedStoryboardPackage,
+      diagnostics: allDiagnostics,
+    }))}</pre>,
   };
 
   return (
