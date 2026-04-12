@@ -2550,6 +2550,141 @@ const SCENARIO_VIDEO_RESULT_FIELDS = [
   "videoJobId",
 ];
 
+const SCENARIO_PIPELINE_STAGE_ORDER = [
+  "audio_map",
+  "story_core",
+  "role_plan",
+  "scene_plan",
+  "scene_prompts",
+  "finalize",
+];
+
+const STAGE_LABEL_BY_ID = {
+  audio_map: "AUDIO",
+  story_core: "CORE",
+  role_plan: "ROLES",
+  scene_plan: "SCENES",
+  scene_prompts: "PROMPTS",
+  finalize: "FINAL",
+};
+
+const SCENARIO_PIPELINE_STAGE_PACKAGE_KEYS = {
+  audio_map: ["audio_map"],
+  story_core: ["story_core"],
+  role_plan: ["role_plan"],
+  scene_plan: ["scene_plan"],
+  scene_prompts: ["scene_prompts"],
+  finalize: ["final_storyboard"],
+};
+
+const SCENARIO_PIPELINE_DEBUG_CLEAR_FIELDS = [
+  "storyboardPackage",
+  "debugStoryboardPackage",
+  "storyboardOut",
+  "directorOutput",
+  "executedStages",
+  "diagnostics",
+  "stageStatuses",
+  "rawScenarioResponse",
+  "normalizedStageOutputs",
+];
+
+const SCENARIO_PIPELINE_SCENE_RUNTIME_CLEAR_FIELDS = [
+  "audioSliceUrl",
+  "audioSliceStatus",
+  "audioSliceError",
+  "audioSliceLoadError",
+  "audioSliceDurationSec",
+  "audioSliceStartSec",
+  "audioSliceEndSec",
+  "audioSliceT0",
+  "audioSliceT1",
+  "audioSliceExpectedDurationSec",
+  "audioSliceBackendDurationSec",
+  "audioSliceActualDurationSec",
+  "audioSliceKind",
+  "start_image_prompt",
+  "end_image_prompt",
+  "positive_video_prompt",
+  "negative_prompt",
+  "prompt_source",
+  "finalResult",
+  "selectedGeneratedAssetId",
+  "selectedGeneratedAssetUrl",
+  "selectedGeneratedVideoUrl",
+  "staleResultReason",
+];
+
+function normalizeScenarioPipelineStageStatus(status) {
+  return String(status || "").trim().toLowerCase();
+}
+
+function getScenarioPipelineStageOrder() {
+  return [...SCENARIO_PIPELINE_STAGE_ORDER];
+}
+
+function getScenarioPipelineDownstreamStages(stageId = "") {
+  const order = getScenarioPipelineStageOrder();
+  const normalized = String(stageId || "").trim().toLowerCase();
+  const idx = order.indexOf(normalized);
+  if (idx < 0) return [];
+  return order.slice(idx + 1);
+}
+
+function isScenarioPipelineStageEnabled(stageId, stageStatuses = {}, busyStage = "") {
+  if (String(busyStage || "").trim()) return false;
+  const hasRunningStage = Object.values(stageStatuses || {}).some((row) => normalizeScenarioPipelineStageStatus(row?.status) === "running");
+  if (hasRunningStage) return false;
+  const order = getScenarioPipelineStageOrder();
+  const normalized = String(stageId || "").trim().toLowerCase();
+  const idx = order.indexOf(normalized);
+  if (idx < 0) return false;
+  const currentStatus = normalizeScenarioPipelineStageStatus(stageStatuses?.[normalized]?.status || "idle");
+  if (currentStatus === "running") return false;
+  if (idx === 0) return true;
+  const prevStageId = order[idx - 1];
+  const prevStatus = normalizeScenarioPipelineStageStatus(stageStatuses?.[prevStageId]?.status || "idle");
+  return prevStatus === "done";
+}
+
+function getScenarioPipelineStageButtonStateMap(stageStatuses = {}, busyStage = "") {
+  const order = getScenarioPipelineStageOrder();
+  const map = {};
+  let nextEnabledAssigned = false;
+  const hasRunningStage = Object.values(stageStatuses || {}).some((row) => normalizeScenarioPipelineStageStatus(row?.status) === "running");
+  order.forEach((stageId, idx) => {
+    const enabled = isScenarioPipelineStageEnabled(stageId, stageStatuses, busyStage);
+    const prevStageId = idx > 0 ? order[idx - 1] : "";
+    const prevStageDone = idx === 0
+      ? true
+      : normalizeScenarioPipelineStageStatus(stageStatuses?.[prevStageId]?.status || "idle") === "done";
+    const reason = enabled
+      ? ""
+      : (busyStage
+        ? "Дождитесь завершения текущей стадии"
+        : (hasRunningStage
+          ? "Дождитесь завершения running-стадии"
+          : (prevStageDone ? "" : `Сначала выполните ${String(STAGE_LABEL_BY_ID[prevStageId] || prevStageId || "").toUpperCase()}`)));
+    map[stageId] = {
+      enabled,
+      isNext: enabled && !nextEnabledAssigned,
+      reason,
+    };
+    if (enabled && !nextEnabledAssigned) nextEnabledAssigned = true;
+  });
+  return map;
+}
+
+function clearScenarioPipelineDebugNodeData(nodeData = {}) {
+  const nextData = { ...(nodeData && typeof nodeData === "object" ? nodeData : {}) };
+  SCENARIO_PIPELINE_DEBUG_CLEAR_FIELDS.forEach((key) => {
+    if (key === "executedStages") nextData[key] = [];
+    else if (["storyboardPackage", "debugStoryboardPackage", "storyboardOut", "directorOutput", "diagnostics", "stageStatuses", "normalizedStageOutputs"].includes(key)) nextData[key] = {};
+    else nextData[key] = null;
+  });
+  return nextData;
+}
+
 function stripScenarioGeneratedAssets(scene = {}) {
   const base = scene && typeof scene === "object" ? { ...scene } : {};
   SCENARIO_GENERATED_ASSET_FIELDS.forEach((key) => {
@@ -8518,6 +8653,153 @@ const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") =>
   safeDel(COMFY_VIDEO_JOB_STORE_KEY);
   storageVersionRef.current += 1;
 }, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, accountKey]);
+
+const clearScenarioStoryboardGeneratedRuntime = useCallback((nodeData = {}, { clearScenes = false } = {}) => {
+  const baseData = nodeData && typeof nodeData === "object" ? nodeData : {};
+  const sourceScenes = Array.isArray(baseData?.scenes) ? baseData.scenes : [];
+  const clearedScenes = clearScenes
+    ? []
+    : sourceScenes.map((scene) => {
+      const nextScene = stripScenarioGeneratedAssets(scene);
+      SCENARIO_PIPELINE_SCENE_RUNTIME_CLEAR_FIELDS.forEach((field) => {
+        if (Object.prototype.hasOwnProperty.call(nextScene, field)) delete nextScene[field];
+      });
+      return nextScene;
+    });
+  return {
+    ...baseData,
+    scenes: clearedScenes,
+    sceneGeneration: {},
+    storyboardOut: null,
+    directorOutput: null,
+    scenarioPackage: null,
+    storyboardRevision: "",
+    storyboardSignature: "",
+    generatedAt: "",
+    status: clearScenes ? "idle" : String(baseData?.status || "idle"),
+  };
+}, []);
+
+const clearScenarioPipelineDownstreamRuntime = useCallback(({
+  fromStageId = "",
+  debugNodeId = "",
+  sourceNodeId = "",
+  fullClear = false,
+} = {}) => {
+  const downstreamStages = fullClear ? getScenarioPipelineStageOrder() : getScenarioPipelineDownstreamStages(fromStageId);
+  const downstreamSet = new Set(downstreamStages);
+  const edgesNow = edgesRef.current || [];
+  const nodesNow = nodesRef.current || [];
+  const resolvedSourceNodeId = sourceNodeId || String(
+    edgesNow.find((edge) => edge?.target === debugNodeId && String(edge?.targetHandle || "") === "scenario_pipeline_debug_in")?.source || ""
+  );
+  const storyboardTargetIds = edgesNow
+    .filter((edge) => (
+      edge?.source === resolvedSourceNodeId
+      && String(edge?.sourceHandle || "") === "storyboard_out"
+      && String(edge?.targetHandle || "") === "scenario_storyboard_in"
+    ))
+    .map((edge) => String(edge?.target || "").trim())
+    .filter(Boolean);
+  setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+    if (nodeItem.type === "scenarioPipelineDebug" && nodeItem.id === debugNodeId) {
+      if (fullClear) {
+        return { ...nodeItem, data: clearScenarioPipelineDebugNodeData(nodeItem?.data || {}) };
+      }
+      const nextData = { ...(nodeItem?.data || {}) };
+      const currentPackage = nextData?.storyboardPackage && typeof nextData.storyboardPackage === "object" ? { ...nextData.storyboardPackage } : {};
+      const currentStatuses = currentPackage?.stage_statuses && typeof currentPackage.stage_statuses === "object"
+        ? { ...currentPackage.stage_statuses }
+        : (nextData?.stageStatuses && typeof nextData.stageStatuses === "object" ? { ...nextData.stageStatuses } : {});
+      downstreamStages.forEach((stageKey) => {
+        const mappedKeys = SCENARIO_PIPELINE_STAGE_PACKAGE_KEYS[stageKey] || [];
+        mappedKeys.forEach((pkgKey) => {
+          if (Object.prototype.hasOwnProperty.call(currentPackage, pkgKey)) delete currentPackage[pkgKey];
+        });
+        currentStatuses[stageKey] = { status: "idle", invalidated: true };
+      });
+      currentPackage.stage_statuses = currentStatuses;
+      nextData.storyboardPackage = currentPackage;
+      nextData.debugStoryboardPackage = currentPackage;
+      nextData.stageStatuses = currentStatuses;
+      nextData.storyboardOut = {};
+      nextData.directorOutput = {};
+      nextData.diagnostics = currentPackage?.diagnostics && typeof currentPackage.diagnostics === "object" ? currentPackage.diagnostics : {};
+      nextData.executedStages = Array.isArray(nextData?.executedStages)
+        ? nextData.executedStages.filter((value) => !downstreamSet.has(String(value || "").trim()))
+        : [];
+      return { ...nodeItem, data: nextData };
+    }
+    if (resolvedSourceNodeId && nodeItem.type === "comfyNarrative" && nodeItem.id === resolvedSourceNodeId) {
+      const nextData = { ...(nodeItem?.data || {}) };
+      if (fullClear) {
+        nextData.pendingOutputs = null;
+        nextData.pendingRawResponse = null;
+        nextData.pendingStoryboardOut = null;
+        nextData.pendingDirectorOutput = null;
+        nextData.pendingGeneratedAt = "";
+        nextData.pendingScenarioRevision = "";
+        nextData.storyboardPackage = {};
+        nextData.debugStoryboardPackage = {};
+        nextData.storyboardOut = null;
+        nextData.executedStages = [];
+        nextData.diagnostics = {};
+        nextData.stageStatuses = {};
+      } else {
+        const pendingOutputs = nextData?.pendingOutputs && typeof nextData.pendingOutputs === "object" ? { ...nextData.pendingOutputs } : null;
+        if (pendingOutputs?.debugStoryboardPackage && typeof pendingOutputs.debugStoryboardPackage === "object") {
+          const trimmedPackage = { ...pendingOutputs.debugStoryboardPackage };
+          downstreamStages.forEach((stageKey) => {
+            const mappedKeys = SCENARIO_PIPELINE_STAGE_PACKAGE_KEYS[stageKey] || [];
+            mappedKeys.forEach((pkgKey) => {
+              if (Object.prototype.hasOwnProperty.call(trimmedPackage, pkgKey)) delete trimmedPackage[pkgKey];
+            });
+          });
+          pendingOutputs.debugStoryboardPackage = trimmedPackage;
+        }
+        if (pendingOutputs) {
+          pendingOutputs.storyboardOut = null;
+          pendingOutputs.runtimeStoryboard = null;
+          pendingOutputs.scenarioPackage = null;
+          if (pendingOutputs?.directorOutput && typeof pendingOutputs.directorOutput === "object") {
+            pendingOutputs.directorOutput = { ...pendingOutputs.directorOutput, storyboardPackage: pendingOutputs.debugStoryboardPackage || {} };
+          }
+        }
+        nextData.pendingOutputs = pendingOutputs;
+        nextData.pendingRawResponse = null;
+        nextData.pendingStoryboardOut = null;
+        nextData.pendingDirectorOutput = null;
+        nextData.pendingGeneratedAt = "";
+        nextData.pendingScenarioRevision = "";
+      }
+      return { ...nodeItem, data: nextData };
+    }
+    if (storyboardTargetIds.includes(nodeItem.id) && nodeItem.type === "scenarioStoryboard") {
+      return {
+        ...nodeItem,
+        data: clearScenarioStoryboardGeneratedRuntime(nodeItem?.data || {}, { clearScenes: fullClear || downstreamSet.has("finalize") }),
+      };
+    }
+    return nodeItem;
+  }), { nodesNow: prev, edgesNow: edgesRef.current || [], traceReason: "scenario-pipeline:invalidate" }));
+  clearClipStoryboardStorageForCurrentAccount(fullClear ? "scenario_pipeline_full_clear" : `scenario_pipeline_downstream:${fromStageId || "unknown"}`);
+  if (fullClear) {
+    scenarioActivePollingJobIdsRef.current.clear();
+    scenarioVideoJobsBySceneRef.current.clear();
+    stopScenarioVideoPolling();
+  }
+}, [clearClipStoryboardStorageForCurrentAccount, clearScenarioStoryboardGeneratedRuntime, setNodes, stopScenarioVideoPolling]);
+
+const applyScenarioPipelinePreRunInvalidation = useCallback(({ stageId = "", debugNodeId = "", sourceNodeId = "" } = {}) => {
+  const normalizedStageId = String(stageId || "").trim().toLowerCase();
+  if (!normalizedStageId) return;
+  clearScenarioPipelineDownstreamRuntime({
+    fromStageId: normalizedStageId,
+    debugNodeId,
+    sourceNodeId,
+    fullClear: false,
+  });
+}, [clearScenarioPipelineDownstreamRuntime]);
 
 const comfySelectedIndex = Number.isFinite(comfyEditor.selected) ? comfyEditor.selected : 0;
 const comfySafeIndex = comfySelectedIndex < 0 ? 0 : Math.min(comfySelectedIndex, Math.max(0, comfyScenes.length - 1));
@@ -16702,6 +16984,7 @@ onClipSec: (nodeId, value) => {
           const stageStatuses = storyboardPackage?.stage_statuses && typeof storyboardPackage.stage_statuses === "object"
             ? storyboardPackage.stage_statuses
             : (base?.data?.stageStatuses && typeof base.data.stageStatuses === "object" ? base.data.stageStatuses : {});
+          const stageButtonStateById = getScenarioPipelineStageButtonStateMap(stageStatuses, "");
           const diagnostics = storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object"
             ? storyboardPackage.diagnostics
             : (base?.data?.diagnostics && typeof base.data.diagnostics === "object" ? base.data.diagnostics : {});
@@ -16758,6 +17041,7 @@ onClipSec: (nodeId, value) => {
                 : (Array.isArray(base?.data?.executedStages) ? base.data.executedStages : []),
               diagnostics,
               stageStatuses,
+              stageButtonStateById,
               onOpenScenarioPipelineDebug: onOpenScenarioPipelineDebug,
               onScenarioPipelineRunStage: async (nodeId, options = {}) => {
                 const activeNodes = nodesRef.current || [];
@@ -16771,6 +17055,13 @@ onClipSec: (nodeId, value) => {
                 const source = edgeToDebug?.source
                   ? activeNodes.find((nodeItem) => nodeItem.id === edgeToDebug.source && nodeItem.type === "comfyNarrative")
                   : null;
+                if (!autoRun && stageId) {
+                  applyScenarioPipelinePreRunInvalidation({
+                    stageId,
+                    debugNodeId: nodeId,
+                    sourceNodeId: String(source?.id || ""),
+                  });
+                }
                 const payload = buildScenarioStageManualPayload({
                   sourceState: source?.data || {},
                   targetState: debugNode?.data || {},
@@ -16931,6 +17222,22 @@ onClipSec: (nodeId, value) => {
                     },
                   };
                 })));
+              },
+              onClearScenarioPipeline: async (nodeId) => {
+                const activeNodes = nodesRef.current || [];
+                const activeEdges = edgesRef.current || [];
+                const edgeToDebug = [...activeEdges]
+                  .reverse()
+                  .find((edge) => edge?.target === nodeId && String(edge?.targetHandle || "") === "scenario_pipeline_debug_in") || null;
+                const sourceNodeId = String(edgeToDebug?.source || "");
+                const debugNode = activeNodes.find((nodeItem) => nodeItem.id === nodeId && nodeItem.type === "scenarioPipelineDebug");
+                const explicitSourceNodeId = String(debugNode?.data?.sourceNodeId || sourceNodeId || "");
+                clearScenarioPipelineDownstreamRuntime({
+                  fromStageId: "",
+                  debugNodeId: nodeId,
+                  sourceNodeId: explicitSourceNodeId,
+                  fullClear: true,
+                });
               },
             },
           };
@@ -20622,6 +20929,8 @@ const hydrate = useCallback((source = "unknown") => {
         diagnostics={activeScenarioPipelineDebugNode?.data?.diagnostics || {}}
         executedStages={activeScenarioPipelineDebugNode?.data?.executedStages || []}
         onRunPipelineStage={activeScenarioPipelineDebugNode?.data?.onScenarioPipelineRunStage}
+        onClearScenarioPipeline={activeScenarioPipelineDebugNode?.data?.onClearScenarioPipeline}
+        stageButtonStateById={activeScenarioPipelineDebugNode?.data?.stageButtonStateById || {}}
       />
 
       {comfyEditor.open ? (

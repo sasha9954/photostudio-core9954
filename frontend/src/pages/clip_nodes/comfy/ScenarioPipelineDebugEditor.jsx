@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from "react";
 
 const STAGE_BUTTONS = [
-  { id: "story_core", label: "CORE" },
   { id: "audio_map", label: "AUDIO" },
+  { id: "story_core", label: "CORE" },
   { id: "role_plan", label: "ROLES" },
   { id: "scene_plan", label: "SCENES" },
   { id: "scene_prompts", label: "PROMPTS" },
@@ -10,8 +10,8 @@ const STAGE_BUTTONS = [
 ];
 
 const TABS = [
-  { id: "story_core", label: "STORY CORE" },
   { id: "audio_map", label: "AUDIO MAP" },
+  { id: "story_core", label: "STORY CORE" },
   { id: "role_plan", label: "ROLE PLAN" },
   { id: "scene_plan", label: "SCENE PLAN" },
   { id: "scene_prompts", label: "PROMPTS" },
@@ -44,9 +44,11 @@ export default function ScenarioPipelineDebugEditor({
   diagnostics = {},
   executedStages = [],
   onRunPipelineStage,
+  onClearScenarioPipeline,
+  stageButtonStateById = {},
 }) {
   const [busyStage, setBusyStage] = useState("");
-  const [activeTab, setActiveTab] = useState("story_core");
+  const [activeTab, setActiveTab] = useState("audio_map");
 
   const chips = useMemo(() => STAGE_BUTTONS.map((stage) => {
     const status = String(stageStatuses?.[stage.id]?.status || "idle").trim().toLowerCase() || "idle";
@@ -263,9 +265,23 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_scenarioEditorTopTabs">
           <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorStageButtonsRow">
             {STAGE_BUTTONS.map((stage) => (
-              <button key={stage.id} className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn" type="button" disabled={!!busyStage} onClick={() => runStage(stage.id, false)}>{stage.label}</button>
+              <button
+                key={stage.id}
+                className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn"
+                type="button"
+                disabled={!!busyStage || !stageButtonStateById?.[stage.id]?.enabled}
+                title={stageButtonStateById?.[stage.id]?.reason || ""}
+                style={{
+                  opacity: stageButtonStateById?.[stage.id]?.enabled ? 1 : 0.48,
+                  outline: stageButtonStateById?.[stage.id]?.isNext ? "1px solid #22c55e" : "none",
+                }}
+                onClick={() => runStage(stage.id, false)}
+              >
+                {stage.label}
+              </button>
             ))}
             <button className="clipSB_btn clipSB_scenarioEditorStageBtn" type="button" disabled={!!busyStage} onClick={() => runStage("", true)}>AUTO</button>
+            <button className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn" type="button" disabled={!!busyStage} onClick={() => onClearScenarioPipeline?.(nodeId)}>ОЧИСТИТЬ</button>
             <button className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn" type="button" onClick={() => setActiveTab("raw")}>JSON</button>
           </div>
           <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorStageStatusRow">
