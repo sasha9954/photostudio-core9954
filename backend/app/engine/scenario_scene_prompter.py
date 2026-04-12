@@ -78,6 +78,14 @@ SAFE_MOTION_CANON = (
     "gentle lateral tracking",
     "small parallax / small arc around mostly stable subject",
 )
+I2V_MOTION_FAMILIES = {
+    "push_in_follow",
+    "side_tracking_walk",
+    "look_reveal_follow",
+    "baseline_forward_walk",
+    "tension_head_turn",
+    "pull_back_release",
+}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -709,6 +717,22 @@ def _prompt_notes_template(route: str) -> dict[str, Any]:
         "motion_safety": "single clear motion line, smooth camera, anatomy-safe body dynamics",
         "audio_driven": clean_route == "ia2v",
     }
+    if clean_route == "i2v":
+        notes.update(
+            {
+                "i2v_motion_family": "baseline_forward_walk",
+                "pace_class": "purposeful",
+                "camera_pattern": "stable_follow",
+                "reveal_target": "none",
+                "parallax_required": False,
+                "allow_head_turn": False,
+                "allow_simple_hand_motion": True,
+                "forbid_slow_motion_feel": True,
+                "forbid_bullet_time": True,
+                "forbid_stylized_action": True,
+                "template_built": False,
+            }
+        )
     if clean_route == "first_last":
         notes.update(
             {
@@ -737,6 +761,16 @@ def _scene_plan_semantics_lock(scene_plan_row: dict[str, Any]) -> dict[str, Any]
         "performance_openness": str(scene_plan_row.get("performance_openness") or "").strip(),
         "visual_event_type": str(scene_plan_row.get("visual_event_type") or "").strip(),
         "first_last_mode": str(scene_plan_row.get("first_last_mode") or "").strip(),
+        "i2v_motion_family": str(scene_plan_row.get("i2v_motion_family") or "").strip(),
+        "pace_class": str(scene_plan_row.get("pace_class") or "").strip(),
+        "camera_pattern": str(scene_plan_row.get("camera_pattern") or "").strip(),
+        "reveal_target": str(scene_plan_row.get("reveal_target") or "").strip(),
+        "parallax_required": bool(scene_plan_row.get("parallax_required")),
+        "allow_head_turn": bool(scene_plan_row.get("allow_head_turn")),
+        "allow_simple_hand_motion": bool(scene_plan_row.get("allow_simple_hand_motion")),
+        "forbid_slow_motion_feel": bool(scene_plan_row.get("forbid_slow_motion_feel")),
+        "forbid_bullet_time": bool(scene_plan_row.get("forbid_bullet_time")),
+        "forbid_stylized_action": bool(scene_plan_row.get("forbid_stylized_action")),
         "motion_risk": _safe_dict(scene_plan_row.get("motion_risk")),
     }
 
@@ -871,6 +905,81 @@ def _row_looks_unrelated_to_current_package(row: dict[str, Any], fingerprint: di
     continuity_tokens = _safe_list(fingerprint.get("continuity_tokens"))
     anchor_hits = sum(1 for token in continuity_tokens if token and str(token) in blob)
     return stale_hits > 0 and anchor_hits == 0
+
+
+def _build_i2v_base_guardrail(*, role_label: str, world_anchor: str, lighting_anchor: str) -> str:
+    return (
+        f"Exact first-frame identity anchor for {role_label}: same woman, same face, same cap, same scarf, same clothes. "
+        f"Keep the same alley and {lighting_anchor or 'warm late-afternoon light'} in the same realistic Iranian urban environment ({world_anchor}). "
+        "Preserve same background geometry and grounded documentary realism. "
+        "No identity drift, no wardrobe change, no location change, no broken anatomy, no floating limbs, no leg warping, no face deformation, no camera shake, no slow-motion feel, no stylized action feel, no bullet-time effect."
+    )
+
+
+def _build_i2v_motion_family_prompt(scene_plan_row: dict[str, Any]) -> tuple[str, str]:
+    family = str(scene_plan_row.get("i2v_motion_family") or "").strip()
+    hint_sec = _round3(scene_plan_row.get("i2v_prompt_duration_hint_sec"))
+    duration_hint = f" Keep pacing real-time around ~{hint_sec:.1f}s." if hint_sec > 0 else " Keep pacing real-time."
+    templates = {
+        "push_in_follow": (
+            "Purposeful natural forward motion. Smooth push-in from medium-full framing toward a controlled medium shot; physically natural motion with stable legs/feet, natural simple arm swing only, subtle scarf/hair response, no dramatic camera turn.",
+            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, aggressive zoom spikes, extreme close-up crash-in",
+        ),
+        "side_tracking_walk": (
+            "Purposeful walk while camera tracks sideways with clearly visible but controlled parallax. Keep alley walls and scene geometry stable, physically coherent body travel, and no background collapse.",
+            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, unstable parallax, no parallax",
+        ),
+        "look_reveal_follow": (
+            "She keeps moving forward and shifts attention toward something ahead or to the side; slight head/upper-body turn without stopping. Camera follows attention via lateral move plus pan, opening into a side-revealed traveling view with believable parallax and stable geometry.",
+            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, unstable parallax, no parallax, head turn without camera follow",
+        ),
+        "baseline_forward_walk": (
+            "Restrained natural forward walk: one to two calm steps or short grounded walk continuation, mostly stable frontal/stable-follow camera, subtle fabric/hair response, safe realism.",
+            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn",
+        ),
+        "tension_head_turn": (
+            "Slight slowdown with restrained side glance/cautious check, subtle shoulder tension, simple body motion, suspicious/alert feel, no large gestures.",
+            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn",
+        ),
+        "pull_back_release": (
+            "Camera slowly pulls back while she remains grounded in motion/stance; alley depth opens behind her with stable buildings, poles, cars, and pedestrians; restrained emotional tone for release/aftermath distance.",
+            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, static background collapse, artificial zoom feel",
+        ),
+    }
+    motion_prompt, negative_prompt = templates.get("baseline_forward_walk")
+    if family in templates:
+        motion_prompt, negative_prompt = templates[family]
+    return f"{motion_prompt}{duration_hint}", negative_prompt
+
+
+def _build_i2v_negative_prompt(scene_plan_row: dict[str, Any]) -> str:
+    _, negative_prompt = _build_i2v_motion_family_prompt(scene_plan_row)
+    return negative_prompt
+
+
+def _build_i2v_prompt_bundle(
+    *,
+    role_label: str,
+    scene_plan_row: dict[str, Any],
+    world_anchor: str,
+    lighting_anchor: str,
+    identity_anchor: str,
+) -> dict[str, str]:
+    guardrail = _build_i2v_base_guardrail(role_label=role_label, world_anchor=world_anchor, lighting_anchor=lighting_anchor)
+    motion_prompt, _ = _build_i2v_motion_family_prompt(scene_plan_row)
+    negative_prompt = _build_i2v_negative_prompt(scene_plan_row)
+    photo_prompt = (
+        f"Exact anchor frame of {role_label} in the same alley, same warm late-afternoon light, same realistic Iranian urban environment; "
+        "same face/cap/scarf/clothes and stable geometry, grounded documentary realism."
+    )
+    positive_video_prompt = f"{guardrail} {motion_prompt}".strip()
+    return {
+        "photo_prompt": _enrich_prompt_with_anchor(photo_prompt, identity_anchor, world_anchor),
+        "video_prompt": _enrich_prompt_with_anchor(positive_video_prompt, identity_anchor, world_anchor),
+        "positive_video_prompt": _enrich_prompt_with_anchor(positive_video_prompt, identity_anchor, world_anchor),
+        "negative_video_prompt": negative_prompt,
+        "negative_prompt": negative_prompt,
+    }
 
 
 def _build_fallback_scene_prompts(
@@ -1054,6 +1163,10 @@ def _normalize_scene_prompts(
     positive_negative_leak_stripped_count = 0
     repaired_from_current_package_count = 0
     unrelated_rows_discarded_count = 0
+    i2v_template_rebuilt_count = 0
+    i2v_unknown_family_fallback_count = 0
+    i2v_template_override_applied = False
+    i2v_prompt_family_counts = {family: 0 for family in sorted(I2V_MOTION_FAMILIES)}
     fingerprint = _build_package_anchor_fingerprint(package, story_core, world_continuity)
 
     for scene_raw in scene_rows:
@@ -1252,6 +1365,39 @@ def _normalize_scene_prompts(
         else:
             start_image_prompt = ""
             end_image_prompt = ""
+        if actual_route == "i2v":
+            family = str(scene.get("i2v_motion_family") or "").strip()
+            if family not in I2V_MOTION_FAMILIES:
+                family = "baseline_forward_walk"
+                i2v_unknown_family_fallback_count += 1
+            i2v_prompt_family_counts[family] = i2v_prompt_family_counts.get(family, 0) + 1
+            i2v_scene_row = dict(scene)
+            i2v_scene_row["i2v_motion_family"] = family
+            bundle = _build_i2v_prompt_bundle(
+                role_label=_build_human_subject_label(role_row, story_core, scene),
+                scene_plan_row=i2v_scene_row,
+                world_anchor=anchors["world_anchor"],
+                lighting_anchor=anchors["lighting_anchor"],
+                identity_anchor=anchors["identity_anchor"],
+            )
+            photo_prompt = str(bundle.get("photo_prompt") or photo_prompt)
+            video_prompt = str(bundle.get("video_prompt") or video_prompt)
+            positive_video_prompt = str(bundle.get("positive_video_prompt") or video_prompt)
+            negative_video_prompt = str(bundle.get("negative_video_prompt") or negative_video_prompt or _GLOBAL_NEGATIVE_PROMPT)
+            negative_prompt = str(bundle.get("negative_prompt") or negative_video_prompt or _GLOBAL_NEGATIVE_PROMPT)
+            normalized_notes["i2v_motion_family"] = family
+            normalized_notes["pace_class"] = str(scene.get("pace_class") or "purposeful")
+            normalized_notes["camera_pattern"] = str(scene.get("camera_pattern") or "stable_follow")
+            normalized_notes["reveal_target"] = str(scene.get("reveal_target") or "none")
+            normalized_notes["parallax_required"] = bool(scene.get("parallax_required"))
+            normalized_notes["allow_head_turn"] = bool(scene.get("allow_head_turn"))
+            normalized_notes["allow_simple_hand_motion"] = bool(scene.get("allow_simple_hand_motion", True))
+            normalized_notes["forbid_slow_motion_feel"] = bool(scene.get("forbid_slow_motion_feel", True))
+            normalized_notes["forbid_bullet_time"] = bool(scene.get("forbid_bullet_time", True))
+            normalized_notes["forbid_stylized_action"] = bool(scene.get("forbid_stylized_action", True))
+            normalized_notes["template_built"] = True
+            i2v_template_rebuilt_count += 1
+            i2v_template_override_applied = True
         video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
         positive_video_prompt, positive_sanitized = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
         photo_prompt, photo_sanitized = _sanitize_positive_prompt(photo_prompt, negative_prompt)
@@ -1331,6 +1477,10 @@ def _normalize_scene_prompts(
         "scene_prompts_semantic_mismatch_count": semantic_mismatch_count,
         "scene_prompts_rows_rebuilt_from_scene_plan_count": rows_rebuilt_from_scene_plan_count,
         "scene_prompts_positive_negative_leak_stripped_count": positive_negative_leak_stripped_count,
+        "i2v_template_rebuilt_count": i2v_template_rebuilt_count,
+        "i2v_unknown_family_fallback_count": i2v_unknown_family_fallback_count,
+        "i2v_prompt_family_counts": i2v_prompt_family_counts,
+        "i2v_template_override_applied": i2v_template_override_applied,
         "stage_source": "current_package",
     }
     return (
@@ -1367,6 +1517,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
         "scene_prompts_rows_rebuilt_from_scene_plan_count": 0,
         "scene_prompts_positive_negative_leak_stripped_count": 0,
         "scene_prompts_route_semantics_mismatch_count": 0,
+        "i2v_template_rebuilt_count": 0,
+        "i2v_unknown_family_fallback_count": 0,
+        "i2v_prompt_family_counts": {},
+        "i2v_template_override_applied": False,
     }
 
     if not scene_rows:
@@ -1430,6 +1584,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "scene_prompts_rows_rebuilt_from_scene_plan_count": int(rows_rebuilt_from_scene_plan_count),
                 "scene_prompts_positive_negative_leak_stripped_count": int(positive_negative_leak_stripped_count),
                 "scene_prompts_route_semantics_mismatch_count": int(route_mismatch_count + semantic_mismatch_count),
+                "i2v_template_rebuilt_count": int(normalization_diag.get("i2v_template_rebuilt_count") or 0),
+                "i2v_unknown_family_fallback_count": int(normalization_diag.get("i2v_unknown_family_fallback_count") or 0),
+                "i2v_prompt_family_counts": _safe_dict(normalization_diag.get("i2v_prompt_family_counts")),
+                "i2v_template_override_applied": bool(normalization_diag.get("i2v_template_override_applied")),
                 "rows_source_count": int(normalization_diag.get("rows_source_count") or 0),
                 "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
                 "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),
@@ -1477,6 +1635,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "scene_prompts_rows_rebuilt_from_scene_plan_count": int(rows_rebuilt_from_scene_plan_count),
                 "scene_prompts_positive_negative_leak_stripped_count": int(positive_negative_leak_stripped_count),
                 "scene_prompts_route_semantics_mismatch_count": int(route_mismatch_count + semantic_mismatch_count),
+                "i2v_template_rebuilt_count": int(normalization_diag.get("i2v_template_rebuilt_count") or 0),
+                "i2v_unknown_family_fallback_count": int(normalization_diag.get("i2v_unknown_family_fallback_count") or 0),
+                "i2v_prompt_family_counts": _safe_dict(normalization_diag.get("i2v_prompt_family_counts")),
+                "i2v_template_override_applied": bool(normalization_diag.get("i2v_template_override_applied")),
                 "rows_source_count": int(normalization_diag.get("rows_source_count") or 0),
                 "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
                 "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),

@@ -72,6 +72,22 @@ FORBIDDEN_MOTION_CANON = (
     "drastic perspective reconstruction",
     "180-270 degree orbit around subject as standard move",
 )
+I2V_MOTION_FAMILIES = {
+    "push_in_follow",
+    "side_tracking_walk",
+    "look_reveal_follow",
+    "baseline_forward_walk",
+    "tension_head_turn",
+    "pull_back_release",
+}
+I2V_PROMPT_DURATION_HINT_RANGE: dict[str, tuple[float, float]] = {
+    "push_in_follow": (3.8, 4.2),
+    "side_tracking_walk": (4.0, 4.5),
+    "look_reveal_follow": (4.5, 5.0),
+    "tension_head_turn": (3.8, 4.2),
+    "pull_back_release": (4.5, 5.0),
+    "baseline_forward_walk": (4.0, 4.5),
+}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -513,6 +529,131 @@ def _infer_motion_risk(scene: dict[str, Any], phrase_text: str) -> dict[str, str
     }
 
 
+def _pick_i2v_duration_hint(scene_duration_sec: Any, family: str) -> float:
+    low, high = I2V_PROMPT_DURATION_HINT_RANGE.get(family, I2V_PROMPT_DURATION_HINT_RANGE["baseline_forward_walk"])
+    target = round((low + high) / 2.0, 2)
+    try:
+        actual = float(scene_duration_sec)
+    except Exception:
+        actual = 0.0
+    if actual > 0:
+        target = min(target, actual)
+        if target < 1.2:
+            target = max(0.8, round(actual, 2))
+    return round(max(0.8, target), 2)
+
+
+def _select_i2v_motion_family(
+    scene: dict[str, Any],
+    *,
+    idx: int,
+    total: int,
+    prev_i2v_family: str,
+) -> dict[str, Any]:
+    scene_function = str(scene.get("scene_function") or "").lower()
+    scene_presence_mode = str(scene.get("scene_presence_mode") or "").lower()
+    emotional_intent = str(scene.get("emotional_intent") or "").lower()
+    motion_intent = str(scene.get("motion_intent") or "").lower()
+    watchability_role = str(scene.get("watchability_role") or "").lower()
+    visual_event_type = str(scene.get("visual_event_type") or "").lower()
+    shot_scale = str(scene.get("shot_scale") or "").lower()
+    camera_intimacy = str(scene.get("camera_intimacy") or "").lower()
+    motion_risk = _safe_dict(scene.get("motion_risk"))
+    energy = str(scene.get("energy") or "").lower()
+    risk_level = str(motion_risk.get("ltx_motion_risk") or "").lower()
+    blob = " ".join([scene_function, scene_presence_mode, emotional_intent, motion_intent, watchability_role])
+
+    reveal_tokens = ("notice", "notic", "reveal", "check", "react", "look", "direction", "opening")
+    tension_tokens = ("suspicion", "watched", "pursuit", "parano", "cautious", "alert", "danger", "followed")
+    release_tokens = ("release", "afterimage", "aftermath", "distance", "isolation", "swallow")
+    transit_like = ("transit" in scene_presence_mode) or visual_event_type == "transit" or "travel" in blob
+    needs_reveal = any(token in blob for token in reveal_tokens)
+    tension_mode = any(token in blob for token in tension_tokens)
+    release_mode = any(token in blob for token in release_tokens)
+    high_energy = energy == "high" or "high" in str(scene.get("performance_openness") or "").lower()
+    medium_or_low_energy = energy in {"", "low", "medium"}
+    too_wide = shot_scale in {"wide", "establishing"} or camera_intimacy in {"distant", "far"}
+    i2v_mid_or_late = idx >= max(1, int(total * 0.3))
+
+    if release_mode and medium_or_low_energy:
+        family = "pull_back_release"
+    elif tension_mode:
+        family = "tension_head_turn"
+    elif needs_reveal:
+        family = "look_reveal_follow"
+    elif (
+        scene_function in {"build", "accent", "climax"}
+        and visual_event_type in {"transit", "character_action", "body"}
+        and not too_wide
+        and high_energy
+        and not needs_reveal
+        and i2v_mid_or_late
+    ):
+        family = "push_in_follow"
+    elif transit_like and (prev_i2v_family == "push_in_follow" or "world" in blob or "space" in blob):
+        family = "side_tracking_walk"
+    elif transit_like and not too_wide and high_energy:
+        family = "push_in_follow"
+    elif transit_like:
+        family = "side_tracking_walk"
+    else:
+        family = "baseline_forward_walk"
+
+    if family not in I2V_MOTION_FAMILIES:
+        family = "baseline_forward_walk"
+    if risk_level == "high" and family in {"push_in_follow", "look_reveal_follow"}:
+        family = "baseline_forward_walk"
+
+    reveal_target = "none"
+    if family == "look_reveal_follow":
+        if "object" in blob or "sign" in blob:
+            reveal_target = "noticed_object"
+        elif "side" in blob:
+            reveal_target = "side_space"
+        else:
+            reveal_target = "forward_path"
+    elif family == "side_tracking_walk":
+        reveal_target = "side_space"
+    elif family in {"push_in_follow", "baseline_forward_walk"} and transit_like:
+        reveal_target = "forward_path"
+
+    pace_class = "purposeful"
+    if family in {"tension_head_turn", "pull_back_release"}:
+        pace_class = "restrained"
+    elif family == "push_in_follow" and high_energy:
+        pace_class = "energetic"
+    elif family in {"side_tracking_walk", "look_reveal_follow"} and high_energy:
+        pace_class = "purposeful"
+
+    camera_pattern_by_family = {
+        "push_in_follow": "push_in",
+        "side_tracking_walk": "side_track",
+        "look_reveal_follow": "follow_reveal",
+        "baseline_forward_walk": "stable_follow",
+        "tension_head_turn": "stable_follow",
+        "pull_back_release": "pull_back",
+    }
+    allow_head_turn = family in {"look_reveal_follow", "tension_head_turn"}
+    parallax_required = family in {"side_tracking_walk", "look_reveal_follow"}
+
+    return {
+        "i2v_motion_family": family,
+        "pace_class": pace_class,
+        "camera_pattern": camera_pattern_by_family.get(family, "stable_follow"),
+        "reveal_target": reveal_target,
+        "allow_head_turn": allow_head_turn,
+        "allow_simple_hand_motion": True,
+        "forbid_complex_hand_motion": True,
+        "forbid_slow_motion_feel": True,
+        "forbid_bullet_time": True,
+        "forbid_stylized_action": True,
+        "require_real_time_pacing": True,
+        "parallax_required": parallax_required,
+        "max_camera_intensity": "medium" if family in {"push_in_follow", "side_tracking_walk", "look_reveal_follow"} else "low",
+        "i2v_prompt_duration_hint_sec": _pick_i2v_duration_hint(scene.get("duration_sec"), family),
+    }
+
+
 def _infer_first_last_mode(scene: dict[str, Any], idx: int, total: int) -> str:
     scene_function = str(scene.get("scene_function") or "").lower()
     emotional_intent = str(scene.get("emotional_intent") or "").lower()
@@ -797,6 +938,23 @@ def _normalize_scene_plan(
             row["first_last_mode"] = mode_raw if mode_raw in FIRST_LAST_MODES else _infer_first_last_mode(row, idx, len(normalized_scenes))
         else:
             row.pop("first_last_mode", None)
+    i2v_motion_family_counts = {family: 0 for family in sorted(I2V_MOTION_FAMILIES)}
+    i2v_rows_enriched_count = 0
+    unsupported_i2v_family_count = 0
+    prev_i2v_family = ""
+    for idx, row in enumerate(normalized_scenes):
+        if str(row.get("route") or "") != "i2v":
+            continue
+        enriched = _select_i2v_motion_family(row, idx=idx, total=len(normalized_scenes), prev_i2v_family=prev_i2v_family)
+        row.update(enriched)
+        family = str(row.get("i2v_motion_family") or "")
+        if family not in I2V_MOTION_FAMILIES:
+            unsupported_i2v_family_count += 1
+            family = "baseline_forward_walk"
+            row["i2v_motion_family"] = family
+        i2v_motion_family_counts[family] = i2v_motion_family_counts.get(family, 0) + 1
+        i2v_rows_enriched_count += 1
+        prev_i2v_family = family
 
     route_counts = {route: sum(1 for row in normalized_scenes if row.get("route") == route) for route in ("i2v", "ia2v", "first_last")}
     has_adjacent_ia2v = _has_adjacent_route(normalized_scenes, "ia2v")
@@ -838,6 +996,20 @@ def _normalize_scene_plan(
                     "repeat_variation_rule",
                     "first_last_mode",
                     "motion_risk",
+                    "i2v_motion_family",
+                    "pace_class",
+                    "camera_pattern",
+                    "reveal_target",
+                    "allow_head_turn",
+                    "allow_simple_hand_motion",
+                    "forbid_complex_hand_motion",
+                    "forbid_slow_motion_feel",
+                    "forbid_bullet_time",
+                    "forbid_stylized_action",
+                    "require_real_time_pacing",
+                    "parallax_required",
+                    "max_camera_intensity",
+                    "i2v_prompt_duration_hint_sec",
                 }
             }
             for row in normalized_scenes
@@ -853,6 +1025,9 @@ def _normalize_scene_plan(
             "has_adjacent_first_last": has_adjacent_first_last,
             "warning": route_spacing_warning,
         },
+        "i2v_motion_family_counts": i2v_motion_family_counts,
+        "unsupported_i2v_family_count": unsupported_i2v_family_count,
+        "i2v_rows_enriched_count": i2v_rows_enriched_count,
     }
 
     validation_error = "" if normalized_scenes else "scene_plan_empty_after_normalization"
@@ -950,6 +1125,9 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
         diagnostics.update(
             {
                 "route_counts": route_counts,
+                "i2v_motion_family_counts": _safe_dict(scene_plan.get("i2v_motion_family_counts")),
+                "unsupported_i2v_family_count": int(scene_plan.get("unsupported_i2v_family_count") or 0),
+                "i2v_rows_enriched_count": int(scene_plan.get("i2v_rows_enriched_count") or 0),
                 "presence_modes": presence_modes,
                 "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
                 "watchability_fallback_count": int(watchability_fallback_count),
@@ -988,6 +1166,9 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
         diagnostics.update(
             {
                 "route_counts": route_counts,
+                "i2v_motion_family_counts": _safe_dict(scene_plan.get("i2v_motion_family_counts")),
+                "unsupported_i2v_family_count": int(scene_plan.get("unsupported_i2v_family_count") or 0),
+                "i2v_rows_enriched_count": int(scene_plan.get("i2v_rows_enriched_count") or 0),
                 "presence_modes": sorted(
                     {
                         str(_safe_dict(role_lookup.get(str(row.get("scene_id") or ""))).get("scene_presence_mode") or "").strip()
