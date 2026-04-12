@@ -18,7 +18,7 @@ _LIP_SYNC_NEGATIVE_PROMPT = (
 )
 
 _FIRST_LAST_NEGATIVE_PROMPT = (
-    "camera drift, zoom, reframing, body-axis change, step, crouch, bow, torso dip, large arm action, spin, added actors, layout change, temporal instability, identity drift, outfit drift"
+    "camera drift, zoom spikes, chaotic reframing, body-axis jump, step, crouch, bow, torso dip, large arm action, spin, added actors, layout change, temporal instability, identity drift, outfit drift, finger choreography near face, cap brim finger adjustment"
 )
 
 _GLOBAL_PROMPT_RULES = [
@@ -51,6 +51,32 @@ _EXPLICIT_NEGATIVE_MARKERS = (
     "negative:",
     "avoid:",
     "do not show:",
+)
+FIRST_LAST_MODES = {
+    "push_in_emotional",
+    "pull_back_release",
+    "small_side_arc",
+    "reveal_face_from_shadow",
+    "foreground_parallax",
+    "camera_settle",
+    "visibility_reveal",
+}
+SAFE_MOTION_CANON = (
+    "slow walk / steady transit",
+    "head turn",
+    "gaze shift",
+    "shoulder drop",
+    "exhale / breath release",
+    "weight shift",
+    "controlled sway",
+    "stillness with atmosphere motion",
+    "subtle upper-body performance",
+    "steady stare / direct gaze",
+    "simple body reorientation",
+    "camera push-in",
+    "camera pull-back",
+    "gentle lateral tracking",
+    "small parallax / small arc around mostly stable subject",
 )
 
 
@@ -383,7 +409,10 @@ def _lighting_anchor_from_contract(world_continuity: dict[str, Any]) -> str:
 
 def _is_high_motion_risk(scene_plan_row: dict[str, Any]) -> bool:
     risk = _safe_dict(scene_plan_row.get("motion_risk"))
-    return any(str(risk.get(key) or "").strip().lower() == "high" for key in ("ltx_motion_risk", "finger_precision_risk", "prop_interaction_complexity"))
+    return any(
+        str(risk.get(key) or "").strip().lower() == "high"
+        for key in ("ltx_motion_risk", "finger_precision_risk", "prop_interaction_complexity", "face_occlusion_risk")
+    )
 
 
 def _detect_attached_prop_token(*texts: str) -> str:
@@ -400,7 +429,6 @@ def _build_first_last_visual_delta(
     primary_role: str,
     attached_prop_token: str,
 ) -> tuple[str, str, str]:
-    scene_id = str(scene_plan_row.get("scene_id") or "").strip().lower()
     first_field = _trim_sentence(str(scene_plan_row.get("first_state") or "").strip(), max_len=180)
     last_field = _trim_sentence(str(scene_plan_row.get("last_state") or "").strip(), max_len=180)
     transition_action = _trim_sentence(str(scene_plan_row.get("transition_action") or "").strip(), max_len=180)
@@ -434,23 +462,17 @@ def _build_first_last_visual_delta(
         else:
             prop_stability = f"{attached_prop_token} remains attached with no detachment"
 
-    if scene_id == "sc_2":
-        first_state = "head lowered, gaze down, face more hidden under the cap brim"
-        delta_phrase = "head lifts slightly and gaze rises slightly while the cap remains worn and the face becomes only slightly more readable, still partially shaded"
-        last_state = "head slightly raised and gaze slightly higher, with face slightly more readable under the same partially shading cap"
-    elif scene_id == "sc_7":
-        first_state = "hand only beginning to move toward the cap brim, face still partly shadowed"
-        delta_phrase = "brim lifts relative to start while the cap remains worn, the face opens more, and direct gaze becomes visible"
-        last_state = "brim lifted relative to start, face more open/readable, direct gaze revealed while cap stays attached"
-    else:
-        candidate_delta = next((text for text in [last_field, transition_action, scene_goal, frame_description, motion_intent] if _is_visual(text)), "")
-        if not candidate_delta:
-            candidate_delta = emotional_intent or "one small posture/gaze shift"
-        delta_parts = [_trim_sentence(candidate_delta, max_len=180)]
-        if prop_stability and attached_prop_token not in candidate_delta.lower():
-            delta_parts.append(prop_stability)
-        delta_phrase = " while ".join([part for part in delta_parts if part])
-        last_state = _trim_sentence(delta_phrase, max_len=180)
+    candidate_delta = next((text for text in [last_field, transition_action, scene_goal, frame_description, motion_intent] if _is_visual(text)), "")
+    if not candidate_delta:
+        candidate_delta = emotional_intent or "one small posture/gaze shift with camera settle"
+    candidate_delta_low = candidate_delta.lower()
+    if any(token in candidate_delta_low for token in ("finger", "brim", "pinch", "grip", "regrip", "tiny hand")):
+        candidate_delta = "gaze lifts slightly while shoulder line relaxes and framing settles"
+    delta_parts = [_trim_sentence(candidate_delta, max_len=180)]
+    if prop_stability and attached_prop_token not in candidate_delta.lower():
+        delta_parts.append(prop_stability)
+    delta_phrase = " while ".join([part for part in delta_parts if part])
+    last_state = _trim_sentence(delta_phrase, max_len=180)
 
     if prop_stability and attached_prop_token not in last_state.lower():
         last_state = _trim_sentence(f"{last_state}; {prop_stability}", max_len=180)
@@ -504,6 +526,7 @@ def _build_first_last_prompt_pair(
     last_state: str,
     visual_delta: str,
     attached_prop_token: str,
+    first_last_mode: str = "",
 ) -> tuple[str, str, str, str]:
     start_image_prompt = _build_first_last_start_image_prompt(
         primary_role=primary_role,
@@ -518,10 +541,21 @@ def _build_first_last_prompt_pair(
         attached_prop_token=attached_prop_token,
     )
     prop_clause = f" Keep {attached_prop_token} attached/worn with no drift or detachment." if attached_prop_token else ""
+    clean_mode = first_last_mode if first_last_mode in FIRST_LAST_MODES else "camera_settle"
+    camera_clause_map = {
+        "push_in_emotional": "camera performs a smooth minimal push-in",
+        "pull_back_release": "camera performs a smooth minimal pull-back",
+        "small_side_arc": "camera performs a small controlled side arc",
+        "reveal_face_from_shadow": "camera settles to slightly improve face visibility",
+        "foreground_parallax": "camera allows subtle foreground parallax pass",
+        "camera_settle": "camera settles with no perspective jump",
+        "visibility_reveal": "camera reframes minimally to reveal visibility shift",
+    }
+    camera_clause = camera_clause_map.get(clean_mode, "camera settles with no perspective jump")
     positive_video_prompt = (
-        f"Micro-transition in {scene_space}: {primary_role} makes one subtle visible delta, {_trim_sentence(visual_delta, max_len=180)}. "
-        "Keep same subject/world/outfit/shot family, same framing family, same camera distance, same perspective, no zoom, no reframing, no body-axis change. "
-        f"Motion stays minimal and continuous, with no added actors or layout change.{prop_clause}"
+        f"Controlled first_last transition in {scene_space}: {camera_clause} while {primary_role} keeps a broad readable state shift, {_trim_sentence(visual_delta, max_len=180)}. "
+        "Keep same subject/world/outfit/shot family, same framing family, smooth continuity, no abrupt zoom spikes, no large perspective jump, no fine-motor prop choreography. "
+        f"Only one subtle visible delta, with no added actors or layout change.{prop_clause}"
     )
     negative_video_prompt = _build_first_last_negative_prompt(attached_prop_token=attached_prop_token)
     return start_image_prompt[:650], end_image_prompt[:700], positive_video_prompt[:850], negative_video_prompt
@@ -589,6 +623,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
                     "performance_openness": str(_safe_dict(row).get("performance_openness") or ""),
                     "visual_event_type": str(_safe_dict(row).get("visual_event_type") or ""),
                     "repeat_variation_rule": str(_safe_dict(row).get("repeat_variation_rule") or ""),
+                    "first_last_mode": str(_safe_dict(row).get("first_last_mode") or ""),
                     "motion_risk": _safe_dict(_safe_dict(row).get("motion_risk")),
                 }
                 for row in _safe_list(scene_plan.get("scenes"))
@@ -622,11 +657,15 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "For each scene from scene_plan, write route-aware photo_prompt and video_prompt with compact production language.\\n"
         "Use only CURRENT PACKAGE context in this request; do not reuse stale or previous package prompts.\\n"
         "Preserve identity/world/style continuity and realism.\\n"
+        "Clip-mode principle: visual/emotional arc under music energy, not default literal travel plot.\\n"
         "Prompt text must be short, usable, and not overloaded.\\n"
         "Avoid unnecessary world/geography decoration (no forced urban/industrial/location labels unless explicitly grounded in inputs).\\n"
         "Use scene visual progression attributes (shot_scale, camera_intimacy, performance_openness, visual_event_type, repeat_variation_rule) to keep repeated phrases visually different.\\n"
         "Use lighting continuity contract as stable anchor and translate it to natural cinematic language, not numeric dump.\\n"
         "If motion_risk shows high complexity, simplify action wording: broad readable motion only, no tiny finger-sequence choreography.\\n"
+        f"LTX-safe motion canon (prefer): {', '.join(SAFE_MOTION_CANON)}.\\n"
+        "Camera-led transitions are preferred over fine-motor body actions when either can express the same beat.\\n"
+        "Baseball cap is continuity/silhouette anchor; cap manipulation is not default motion.\\n"
         "Video prompts must be LTX-native, anatomy-safe, and motion-first.\\n"
         "Write prompts in natural cinematic English, present tense, one connected paragraph, chronological motion logic.\\n"
         "Describe what starts happening after the still image; do NOT mechanically re-describe all static elements already visible.\\n"
@@ -635,15 +674,14 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Route rules:\\n"
         "- i2v (normal): motion-first continuation from the still image, one visible action line, camera behavior, energy/atmosphere, short safety tail at end.\\n"
         "- ia2v (lip_sync_music/performance): performance-first, readable face/mouth, musical phrasing drives upper-body expressivity, stable balance, smooth camera, short safety tail at end.\\n"
-        "- first_last (locked transition): micro-transition between near-matched anchor frames with one subtle visible delta only; same subject/stance/world/costume/shot feeling; must include TWO standalone prompts start_image_prompt and end_image_prompt; short safety tail at end.\\n"
+        "- first_last (locked transition): controlled camera/framing/state transition between near-matched anchor frames with one subtle visible delta only; same subject/stance/world/costume/shot feeling; must include TWO standalone prompts start_image_prompt and end_image_prompt; short safety tail at end.\\n"
+        "- first_last must honor scene_plan.first_last_mode when present: push_in_emotional, pull_back_release, small_side_arc, reveal_face_from_shadow, foreground_parallax, camera_settle, visibility_reveal.\\n"
         "Energy tier behavior (mandatory): low-energy i2v -> restrained motion and held tension/afterimage; medium-energy i2v -> forward motion with controlled camera support; high-energy ia2v -> expressive but readable upper-body performance; first_last -> continuity-first micro-transition and never transit/geography change.\\n"
-        "FIRST_LAST FORBIDDEN BY DEFAULT: stepping, crouching, bowing, torso dip, dance choreography, large arm action, spinning, dramatic camera movement, added background actors, layout changes.\\n"
+        "FIRST_LAST FORBIDDEN BY DEFAULT: stepping, crouching, bowing, torso dip, dance choreography, large arm action, spinning, dramatic camera movement, added background actors, layout changes, fine-motor hand/prop choreography.\\n"
         "Do NOT use dance/performance language in first_last unless scene contract explicitly asks for it.\\n"
         "Scene-level quality beats (if scene ids exist):\\n"
         "- sc_1: intro-observational, more static, more closed, shadow-heavy, restrained framing intent.\\n"
-        "- sc_2 (first_last): controlled internal shift. START: head lowered, gaze down, cap obscures more face. END: head slightly raised, gaze slightly higher, emotion starts to surface while cap still partially closes face.\\n"
         "- sc_5: breather with internal defiance; quiet but tense pause with readable subtle emotional charge (not dead static).\\n"
-        "- sc_7 (first_last): START face partly under cap shadow, hand just beginning toward brim. END brim lifted, face open, direct camera gaze, culminating reveal.\\n"
         "Honor scene_plan route semantics exactly: first_last must stay strict first_last contract; ia2v must stay audio-driven singing/performance; i2v must stay simple observable action.\\n"
         "Always include compact negative_prompt with safety constraints as short tail text.\\n"
         "Never mix negative prompt text into positive video_prompt; keep positive and negative fields separated.\\n"
@@ -675,6 +713,7 @@ def _prompt_notes_template(route: str) -> dict[str, Any]:
         notes.update(
             {
                 "transition_contract": "controlled_micro_transition",
+                "first_last_mode": "",
                 "first_state": "",
                 "last_state": "",
                 "same_world_required": True,
@@ -697,6 +736,7 @@ def _scene_plan_semantics_lock(scene_plan_row: dict[str, Any]) -> dict[str, Any]
         "camera_intimacy": str(scene_plan_row.get("camera_intimacy") or "").strip(),
         "performance_openness": str(scene_plan_row.get("performance_openness") or "").strip(),
         "visual_event_type": str(scene_plan_row.get("visual_event_type") or "").strip(),
+        "first_last_mode": str(scene_plan_row.get("first_last_mode") or "").strip(),
         "motion_risk": _safe_dict(scene_plan_row.get("motion_risk")),
     }
 
@@ -873,6 +913,9 @@ def _build_fallback_scene_prompts(
         )
         negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
     elif route == "first_last":
+        first_last_mode = str(scene_plan_row.get("first_last_mode") or "").strip().lower()
+        if first_last_mode not in FIRST_LAST_MODES:
+            first_last_mode = "camera_settle"
         attached_prop_token = _detect_attached_prop_token(
             str(scene_plan_row.get("first_state") or ""),
             str(scene_plan_row.get("last_state") or ""),
@@ -902,6 +945,7 @@ def _build_fallback_scene_prompts(
             last_state=last_state,
             visual_delta=visual_delta,
             attached_prop_token=attached_prop_token,
+            first_last_mode=first_last_mode,
         )
         video_prompt = positive_video_prompt
     else:
@@ -935,8 +979,8 @@ def _build_fallback_scene_prompts(
 
     if high_motion_risk and route in {"i2v", "ia2v"}:
         simplified = (
-            f"Use one broad readable action only in {world_anchor}: controlled posture/gaze shift with simple hand trajectory, no tiny finger sequencing near face, no multistep prop manipulation. "
-            "Camera stays steady and supportive with continuity-first motion."
+            f"Use one broad readable action only in {world_anchor}: controlled gaze/head/shoulder shift with minimal hand emphasis, no tiny finger sequencing near face, no cap-brim adjustment details, no multistep prop manipulation. "
+            "Prefer smooth camera settle/push/pull over micro hand actions."
         )
         video_prompt = simplified
         positive_video_prompt = simplified
@@ -959,6 +1003,7 @@ def _build_fallback_scene_prompts(
     if route == "first_last":
         fallback_notes["first_state"] = first_state
         fallback_notes["last_state"] = last_state
+        fallback_notes["first_last_mode"] = first_last_mode
 
     return {
         "scene_id": scene_id,
@@ -1164,6 +1209,9 @@ def _normalize_scene_prompts(
                 primary_role=_build_human_subject_label(role_row, story_core, scene),
                 attached_prop_token=attached_prop_token,
             )
+            first_last_mode = str(scene.get("first_last_mode") or prompt_notes.get("first_last_mode") or "").strip().lower()
+            if first_last_mode not in FIRST_LAST_MODES:
+                first_last_mode = "camera_settle"
             strict_start, strict_end, strict_positive, strict_negative = _build_first_last_prompt_pair(
                 primary_role=_build_human_subject_label(role_row, story_core, scene),
                 scene_space=_trim_sentence(str(world_continuity.get("environment_family") or "the same fixed scene space"), max_len=90),
@@ -1171,6 +1219,7 @@ def _normalize_scene_prompts(
                 last_state=last_state,
                 visual_delta=visual_delta,
                 attached_prop_token=attached_prop_token,
+                first_last_mode=first_last_mode,
             )
             start_image_prompt = strict_start
             end_image_prompt = strict_end
@@ -1181,6 +1230,7 @@ def _normalize_scene_prompts(
             normalized_notes["transition_contract"] = "controlled_micro_transition"
             normalized_notes["first_state"] = first_state
             normalized_notes["last_state"] = last_state
+            normalized_notes["first_last_mode"] = first_last_mode
             normalized_notes["same_world_required"] = bool(
                 prompt_notes.get("same_world_required") if "same_world_required" in prompt_notes else True
             )
@@ -1220,8 +1270,8 @@ def _normalize_scene_prompts(
                 positive_negative_leak_stripped_count += 1
         if _is_high_motion_risk(scene) and actual_route in {"i2v", "ia2v"}:
             simplified_video = (
-                "Single readable motion line only: controlled body shift and simple hand path, no tiny finger choreography near face, no multistep prop manipulation. "
-                "Camera remains steady and continuity-first."
+                "Single readable motion line only: controlled gaze/head/shoulder shift, minimal hand emphasis, no tiny finger choreography near face, no cap-brim adjustment detail, no multistep prop manipulation. "
+                "Prefer camera settle/push/pull with continuity-first behavior."
             )
             video_prompt = simplified_video
             positive_video_prompt = simplified_video

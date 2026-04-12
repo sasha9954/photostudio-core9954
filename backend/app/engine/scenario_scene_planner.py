@@ -8,6 +8,15 @@ from app.engine.gemini_rest import post_generate_content
 SCENE_PLAN_PROMPT_VERSION = "scene_plan_v1"
 SCENE_PLAN_MODEL = "gemini-3.1-pro-preview"
 ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
+FIRST_LAST_MODES = {
+    "push_in_emotional",
+    "pull_back_release",
+    "small_side_arc",
+    "reveal_face_from_shadow",
+    "foreground_parallax",
+    "camera_settle",
+    "visibility_reveal",
+}
 GENERIC_ENVIRONMENT_FAMILIES = {"urban", "city", "interior", "outdoor"}
 TURN_FUNCTION_HINTS = {
     "turn",
@@ -23,6 +32,46 @@ TURN_FUNCTION_HINTS = {
 FIRST_LAST_EXCLUSION_HINTS = {"transit", "environment_anchor", "location_change", "world_jump", "montage", "travel", "alley", "courtyard", "corner"}
 IA2V_ADJACENCY_PENALTY = 9
 FIRST_LAST_ADJACENCY_PENALTY = 2
+SAFE_MOTION_CANON = (
+    "slow walk / steady transit",
+    "head turn",
+    "gaze shift",
+    "shoulder drop",
+    "exhale / breath release",
+    "weight shift",
+    "controlled sway",
+    "stillness with atmosphere motion",
+    "subtle upper-body performance",
+    "steady stare / direct gaze",
+    "simple body reorientation",
+    "camera push-in",
+    "camera pull-back",
+    "gentle lateral tracking",
+    "small parallax / small arc around mostly stable subject",
+)
+CAUTION_MOTION_CANON = (
+    "hand to chest",
+    "one hand opening outward",
+    "cap brim reveal without complex finger choreography",
+    "partial body turn with face readability preserved",
+    "close prop hold with minimal motion",
+    "slight posture reconfiguration",
+)
+FORBIDDEN_MOTION_CANON = (
+    "cap adjustment with fingers as default action",
+    "tiny finger choreography near face",
+    "multi-step prop manipulation",
+    "gripping/regripping small object with finger precision",
+    "complex hand choreography around face",
+    "fine-motor micro-actions as scene focus",
+    "violent spins",
+    "high-velocity orbit",
+    "jerky dance",
+    "flailing arms",
+    "complex body choreography",
+    "drastic perspective reconstruction",
+    "180-270 degree orbit around subject as standard move",
+)
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -209,6 +258,13 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "ia2v_definition": "emotion-first performance shot; readable face/mouth; smooth camera; restrained motion",
             "i2v_definition": "baseline clip route for observation, transit, environment and connective montage scenes",
             "first_last_definition": "explicit state transition A->B for reveal/turn/payoff/release/callback scenes",
+            "clip_mode_core_principle": "visual/emotional arc under audio energy, not literal travel-story plot",
+            "camera_led_transitions_preferred": True,
+            "safe_motion_canon": list(SAFE_MOTION_CANON),
+            "caution_motion_canon": list(CAUTION_MOTION_CANON),
+            "forbidden_motion_canon": list(FORBIDDEN_MOTION_CANON),
+            "baseball_cap_policy": "cap is continuity/silhouette anchor; not default action driver",
+            "first_last_modes": sorted(FIRST_LAST_MODES),
         },
     }
     aux = {
@@ -237,25 +293,36 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Route spacing policy: ia2v scenes must not be adjacent; spread ia2v as rare emotional accents with at least one non-ia2v between them whenever possible.\\n"
         "first_last scenes should not be adjacent to another first_last unless unavoidable. Keep route rhythm staggered, not paired.\\n"
         "Preserve realism and coherent lighting/world progression from role_plan world continuity.\\n"
+        "CLIP MODE CORE PRINCIPLE: visual/emotional arc under music energy, NOT literal travel-story by default.\\n"
+        "If user/director text does not explicitly demand travel plot, keep one coherent environment family and build progression through energy/intimacy/framing/pressure-release.\\n"
+        "Do not invent alley->market->courtyard city-route narratives from nowhere.\\n"
         "Add visual progression layer: repetitive phrases must not produce visually repetitive scenes.\\n"
         "Progress through shot scale, camera intimacy, performance openness, and focal event type.\\n"
-        "Add motion/prop complexity risk tags for each scene for downstream prompt simplification.\\n\\n"
+        "Add motion/prop complexity risk tags for each scene for downstream prompt simplification and strategy redirection.\\n\\n"
+        "LTX 2.3 MOTION CANON:\\n"
+        f"- SAFE/DEFAULT-ON: {', '.join(SAFE_MOTION_CANON)}.\\n"
+        f"- CAUTION (rare, only when needed): {', '.join(CAUTION_MOTION_CANON)}.\\n"
+        f"- FORBIDDEN/DEFAULT-OFF: {', '.join(FORBIDDEN_MOTION_CANON)}.\\n"
+        "Camera-led transitions are generally more reliable than fine-motor body actions; prefer camera/framing evolution when both can express the beat.\\n"
+        "Baseball cap must stay continuity/silhouette/mood anchor, not default action driver.\\n"
+        "Do not use cap touching/brim finger choreography as generic fallback motion.\\n\\n"
         "WATCHABILITY ROLE (MANDATORY): viewer-facing clip function of the scene, not role name.\\n"
         "Each scene.watchability_role must be a short phrase that says why this scene matters to the viewer/clip arc.\\n"
         "Avoid weak labels (hero/main character/character_1/route names/raw scene_function duplicates).\\n\\n"
         "ROUTE SEMANTICS (MANDATORY):\\n"
         "- i2v: baseline observation/transit/connective/environment continuity; also medium build motion when needed.\\n"
         "- ia2v: performance-first peaks, phrase-led expressive scenes, readable face, upper-body emphasis.\\n"
-        "- first_last: controlled micro-transition only (near-neighbor A->B states in same world, same location family, same hero, same lighting family, same outfit continuity, same framing family; only one controlled action/state changes).\\n"
+        "- first_last: controlled camera/framing/state transition only (near-neighbor A->B states in same world, same location family, same hero, same lighting family, same outfit continuity, same framing family; only one controlled delta).\\n"
         "Choose first_last only for reveal/turn/payoff threshold moments where continuity can hold.\\n"
-        "Never use first_last for transit-through-space, turning a corner, walking into another place, location progression, world jump, or implied geography change.\\n"
+        "Never use first_last for transit-through-space, turning a corner, walking into another place, location progression, world jump, implied geography change, or fine-motor prop choreography.\\n"
+        "For first_last scenes, include first_last_mode from allowed taxonomy: push_in_emotional, pull_back_release, small_side_arc, reveal_face_from_shadow, foreground_parallax, camera_settle, visibility_reveal.\\n"
         "Low energy: held/restrained/observational/afterimage feel. Medium: build movement and pressure. High: concentrated performance intensity. Release tail: settle instead of new travel invention.\\n\\n"
         "Return EXACT contract keys:\\n"
         "{\\n"
         '  \"plan_version\": \"scene_plan_v1\",\\n'
         '  \"mode\": \"clip\",\\n'
         '  \"route_mix_summary\": {\"total_scenes\": 0, \"i2v\": 0, \"ia2v\": 0, \"first_last\": 0},\\n'
-        '  \"scenes\": [{\"scene_id\": \"sc_1\", \"t0\": 0.0, \"t1\": 1.0, \"duration_sec\": 1.0, \"primary_role\": \"character_1\", \"active_roles\": [\"character_1\"], \"scene_presence_mode\": \"solo_observational\", \"scene_function\": \"setup\", \"route\": \"i2v\", \"route_reason\": \"\", \"emotional_intent\": \"\", \"motion_intent\": \"\", \"watchability_role\": \"\", \"shot_scale\": \"wide\", \"camera_intimacy\": \"observational\", \"performance_openness\": \"restrained\", \"visual_event_type\": \"environment\", \"repeat_variation_rule\": \"\", \"motion_risk\": {\"motion_complexity\": \"low\", \"prop_interaction_complexity\": \"low\", \"finger_precision_risk\": \"low\", \"face_occlusion_risk\": \"low\", \"identity_drift_risk\": \"low\", \"ltx_motion_risk\": \"low\"}}],\\n'
+        '  \"scenes\": [{\"scene_id\": \"sc_1\", \"t0\": 0.0, \"t1\": 1.0, \"duration_sec\": 1.0, \"primary_role\": \"character_1\", \"active_roles\": [\"character_1\"], \"scene_presence_mode\": \"solo_observational\", \"scene_function\": \"setup\", \"route\": \"i2v\", \"route_reason\": \"\", \"emotional_intent\": \"\", \"motion_intent\": \"\", \"watchability_role\": \"\", \"shot_scale\": \"wide\", \"camera_intimacy\": \"observational\", \"performance_openness\": \"restrained\", \"visual_event_type\": \"environment\", \"repeat_variation_rule\": \"\", \"first_last_mode\": \"\", \"motion_risk\": {\"motion_complexity\": \"low\", \"prop_interaction_complexity\": \"low\", \"finger_precision_risk\": \"low\", \"face_occlusion_risk\": \"low\", \"identity_drift_risk\": \"low\", \"ltx_motion_risk\": \"low\"}}],\\n'
         '  \"scene_arc_summary\": \"\",\\n'
         '  \"route_strategy_notes\": [\"\"]\\n'
         "}\\n\\n"
@@ -444,6 +511,27 @@ def _infer_motion_risk(scene: dict[str, Any], phrase_text: str) -> dict[str, str
         "identity_drift_risk": "high" if high_triplet else ("medium" if face_hit else "low"),
         "ltx_motion_risk": "high" if (high_triplet or tiny_steps_hit) else ("medium" if prop_hit or face_hit else "low"),
     }
+
+
+def _infer_first_last_mode(scene: dict[str, Any], idx: int, total: int) -> str:
+    scene_function = str(scene.get("scene_function") or "").lower()
+    emotional_intent = str(scene.get("emotional_intent") or "").lower()
+    motion_intent = str(scene.get("motion_intent") or "").lower()
+    watchability_role = str(scene.get("watchability_role") or "").lower()
+    blob = " ".join([scene_function, emotional_intent, motion_intent, watchability_role])
+    if "shadow" in blob:
+        return "reveal_face_from_shadow"
+    if any(token in blob for token in ("reveal", "visibility", "surface", "open face")):
+        return "visibility_reveal"
+    if idx == total - 1 or "release" in blob or "afterimage" in blob:
+        return "pull_back_release"
+    if any(token in blob for token in ("turn", "threshold", "intimate", "closer", "exposure")):
+        return "push_in_emotional"
+    if "parallax" in blob:
+        return "foreground_parallax"
+    if "arc" in blob or "side" in blob:
+        return "small_side_arc"
+    return "camera_settle"
 
 
 def _is_weak_watchability_role(value: str, *, route: str, scene_function: str) -> bool:
@@ -682,10 +770,16 @@ def _normalize_scene_plan(
             "repeat_variation_rule": repeat_variation_rule,
             "motion_risk": _safe_dict(raw_row.get("motion_risk")) or motion_risk,
         }
+        if route == "first_last":
+            first_last_mode_raw = str(raw_row.get("first_last_mode") or "").strip().lower()
+            scene_row["first_last_mode"] = (
+                first_last_mode_raw if first_last_mode_raw in FIRST_LAST_MODES else _infer_first_last_mode(scene_row, idx, len(scene_windows))
+            )
         if route == "first_last" and not _is_first_last_candidate(scene_row, idx, len(scene_windows)):
             route = "i2v"
             scene_row["route"] = route
             scene_row["route_reason"] = "first_last_rejected_non_continuity_scene"
+            scene_row.pop("first_last_mode", None)
             used_fallback = True
         if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
             scene_row["watchability_role"] = _infer_watchability_role(scene_row, idx, len(scene_windows))
@@ -696,6 +790,13 @@ def _normalize_scene_plan(
     target_budget = _target_route_budget(len(normalized_scenes))
     if _rebalance_routes(normalized_scenes, target_budget):
         used_fallback = True
+    for idx, row in enumerate(normalized_scenes):
+        route = str(row.get("route") or "")
+        if route == "first_last":
+            mode_raw = str(row.get("first_last_mode") or "").strip().lower()
+            row["first_last_mode"] = mode_raw if mode_raw in FIRST_LAST_MODES else _infer_first_last_mode(row, idx, len(normalized_scenes))
+        else:
+            row.pop("first_last_mode", None)
 
     route_counts = {route: sum(1 for row in normalized_scenes if row.get("route") == route) for route in ("i2v", "ia2v", "first_last")}
     has_adjacent_ia2v = _has_adjacent_route(normalized_scenes, "ia2v")
@@ -735,6 +836,7 @@ def _normalize_scene_plan(
                     "performance_openness",
                     "visual_event_type",
                     "repeat_variation_rule",
+                    "first_last_mode",
                     "motion_risk",
                 }
             }
