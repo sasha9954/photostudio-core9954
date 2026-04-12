@@ -45,6 +45,13 @@ _NEGATIVE_LEAK_TOKENS = (
     "deformed",
 )
 _STALE_WORLD_TOKENS = ("apartment", "cassette", "headscarf")
+_EXPLICIT_NEGATIVE_MARKERS = (
+    "[negative:",
+    "(negative:",
+    "negative:",
+    "avoid:",
+    "do not show:",
+)
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -679,50 +686,80 @@ def _prompt_notes_template(route: str) -> dict[str, Any]:
     return notes
 
 
-def _route_semantics_mismatch(scene_row: dict[str, Any]) -> bool:
-    route = str(scene_row.get("route") or "").strip()
-    photo = str(scene_row.get("photo_prompt") or "").lower()
-    video = str(scene_row.get("video_prompt") or "").lower()
-    notes = _safe_dict(scene_row.get("prompt_notes"))
-    combined = f"{photo} {video}"
-    if route == "ia2v":
-        has_audio_lang = any(token in combined for token in ("audio", "sing", "vocal", "performance"))
-        return not (bool(notes.get("audio_driven")) and has_audio_lang)
-    if route == "first_last":
-        positive_video = str(scene_row.get("positive_video_prompt") or scene_row.get("video_prompt") or "").lower()
-        negative_video = str(scene_row.get("negative_video_prompt") or scene_row.get("negative_prompt") or "").lower()
-        continuity_flags_ok = all(
-            bool(notes.get(key))
-            for key in (
-                "same_world_required",
-                "same_outfit_required",
-                "same_lighting_required",
-                "same_camera_family_required",
-            )
-        )
-        has_two_image_prompts = bool(str(scene_row.get("start_image_prompt") or "").strip()) and bool(
-            str(scene_row.get("end_image_prompt") or "").strip()
-        )
-        has_transition_lang = any(token in positive_video for token in ("micro-transition", "subtle delta", "tiny transition", "one subtle"))
-        has_negative_contract = all(
-            token in negative_video for token in ("same subject", "one subtle delta", "layout", "camera", "temporal instability")
-        )
-        return not (
-            continuity_flags_ok
-            and has_transition_lang
-            and has_two_image_prompts
-            and has_negative_contract
-            and str(notes.get("transition_contract") or "") == "controlled_micro_transition"
-        )
-    if route == "i2v":
-        return any(token in combined for token in ("audio-slice-driven", "sings", "vocal phrase")) or "controlled micro-transition" in combined
-    return False
+def _scene_plan_semantics_lock(scene_plan_row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "scene_id": str(scene_plan_row.get("scene_id") or "").strip(),
+        "route": str(scene_plan_row.get("route") or "i2v").strip().lower(),
+        "scene_function": str(scene_plan_row.get("scene_function") or "").strip(),
+        "emotional_intent": str(scene_plan_row.get("emotional_intent") or "").strip(),
+        "motion_intent": str(scene_plan_row.get("motion_intent") or "").strip(),
+        "shot_scale": str(scene_plan_row.get("shot_scale") or "").strip(),
+        "camera_intimacy": str(scene_plan_row.get("camera_intimacy") or "").strip(),
+        "performance_openness": str(scene_plan_row.get("performance_openness") or "").strip(),
+        "visual_event_type": str(scene_plan_row.get("visual_event_type") or "").strip(),
+        "motion_risk": _safe_dict(scene_plan_row.get("motion_risk")),
+    }
 
 
-def _sanitize_positive_prompt(text: str, negative_text: str) -> str:
+def _detect_scene_prompt_contract_mismatch(*, expected_route: str, scene_plan_row: dict[str, Any], model_row: dict[str, Any]) -> tuple[bool, bool]:
+    actual_route = str(model_row.get("route") or expected_route).strip().lower()
+    route_mismatch = actual_route != expected_route
+    if not model_row:
+        return route_mismatch, False
+
+    notes = _safe_dict(model_row.get("prompt_notes"))
+    blob = " ".join(
+        [
+            str(model_row.get("photo_prompt") or ""),
+            str(model_row.get("video_prompt") or ""),
+            str(model_row.get("positive_video_prompt") or ""),
+            str(model_row.get("start_image_prompt") or ""),
+            str(model_row.get("end_image_prompt") or ""),
+        ]
+    ).lower()
+    has_first_last_terms = any(token in blob for token in ("micro-transition", "one subtle", "start frame", "end frame", "subtle delta"))
+    has_performance_terms = any(token in blob for token in ("audio", "vocal", "sing", "lip", "performance"))
+    has_face_readability = any(token in blob for token in ("readable face", "mouth", "upper-body", "upper body"))
+    has_transition_transit_language = any(token in blob for token in ("travel", "walk to", "transit", "location change", "geography change"))
+
+    semantic_mismatch = False
+    scene_function = str(scene_plan_row.get("scene_function") or "").lower()
+    if expected_route == "ia2v":
+        if has_first_last_terms:
+            semantic_mismatch = True
+        if not bool(notes.get("audio_driven")):
+            semantic_mismatch = True
+        if not (has_performance_terms and has_face_readability):
+            semantic_mismatch = True
+        if ("climax" in scene_function or "performance" in scene_function) and has_first_last_terms:
+            semantic_mismatch = True
+    elif expected_route == "first_last":
+        has_start = bool(str(model_row.get("start_image_prompt") or "").strip())
+        has_end = bool(str(model_row.get("end_image_prompt") or "").strip())
+        if not has_start or not has_end:
+            semantic_mismatch = True
+        if str(notes.get("transition_contract") or "") != "controlled_micro_transition":
+            semantic_mismatch = True
+        if not has_first_last_terms:
+            semantic_mismatch = True
+        if has_performance_terms or has_transition_transit_language:
+            semantic_mismatch = True
+    else:  # i2v
+        if has_first_last_terms:
+            semantic_mismatch = True
+        if has_performance_terms and bool(notes.get("audio_driven")):
+            semantic_mismatch = True
+        if str(model_row.get("start_image_prompt") or "").strip() or str(model_row.get("end_image_prompt") or "").strip():
+            semantic_mismatch = True
+
+    return route_mismatch, semantic_mismatch
+
+
+def _sanitize_positive_prompt(text: str, negative_text: str) -> tuple[str, bool]:
     clean = str(text or "").strip()
     if not clean:
-        return ""
+        return "", False
+    changed = False
     low = clean.lower()
     neg_low = str(negative_text or "").strip().lower()
     cut_idx = -1
@@ -730,13 +767,25 @@ def _sanitize_positive_prompt(text: str, negative_text: str) -> str:
         idx = low.find(token)
         if idx >= 0 and (cut_idx < 0 or idx < cut_idx):
             cut_idx = idx
+    for marker in _EXPLICIT_NEGATIVE_MARKERS:
+        idx = low.find(marker)
+        if idx >= 0 and (cut_idx < 0 or idx < cut_idx):
+            cut_idx = idx
     if cut_idx >= 0:
         clean = clean[:cut_idx].rstrip(" ,;.")
+        changed = True
     if neg_low and neg_low in clean.lower():
         clean = clean[: clean.lower().find(neg_low)].rstrip(" ,;.")
+        changed = True
+    before_cleanup = clean
+    clean = re.sub(r"[\[\(]\s*$", "", clean).strip()
+    clean = re.sub(r"[\]\)]", "", clean)
     clean = re.sub(r"\s*[,;:.!?-]\s*[,;:.!?-]\s*", ", ", clean)
+    clean = re.sub(r"[,;:\-]+\s*$", "", clean)
     clean = re.sub(r"\s{2,}", " ", clean).strip(" ,;:.")
-    return clean[:900]
+    if clean != before_cleanup:
+        changed = True
+    return clean[:900], changed
 
 
 def _build_package_anchor_fingerprint(package: dict[str, Any], story_core: dict[str, Any], world_continuity: dict[str, Any]) -> dict[str, Any]:
@@ -941,7 +990,7 @@ def _normalize_scene_prompts(
     role_lookup: dict[str, dict[str, Any]],
     story_core: dict[str, Any],
     world_continuity: dict[str, Any],
-) -> tuple[dict[str, Any], bool, str, int, int, int, int, dict[str, Any]]:
+) -> tuple[dict[str, Any], bool, str, int, int, int, int, int, int, dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
     for row_raw in _safe_list(raw.get("scenes")):
         row = _safe_dict(row_raw)
@@ -954,7 +1003,10 @@ def _normalize_scene_prompts(
     validation_errors: list[str] = []
     missing_photo_count = 0
     missing_video_count = 0
-    route_semantics_mismatch_count = 0
+    route_mismatch_count = 0
+    semantic_mismatch_count = 0
+    rows_rebuilt_from_scene_plan_count = 0
+    positive_negative_leak_stripped_count = 0
     repaired_from_current_package_count = 0
     unrelated_rows_discarded_count = 0
     fingerprint = _build_package_anchor_fingerprint(package, story_core, world_continuity)
@@ -981,10 +1033,6 @@ def _normalize_scene_prompts(
         )
 
         actual_route = str(base.get("route") or expected_route).strip()
-        if actual_route != expected_route:
-            used_fallback = True
-            validation_errors.append(f"route_mismatch:{scene_id}")
-            actual_route = expected_route
         row_repaired_from_current_package = False
         if base and _row_looks_unrelated_to_current_package(base, fingerprint):
             used_fallback = True
@@ -992,6 +1040,23 @@ def _normalize_scene_prompts(
             unrelated_rows_discarded_count += 1
             validation_errors.append(f"unrelated_prompt_row_discarded:{scene_id}")
             base = {}
+        route_mismatch, semantic_mismatch = _detect_scene_prompt_contract_mismatch(
+            expected_route=expected_route,
+            scene_plan_row=scene,
+            model_row=base,
+        )
+        if route_mismatch or semantic_mismatch:
+            used_fallback = True
+            row_repaired_from_current_package = True
+            rows_rebuilt_from_scene_plan_count += 1
+            if route_mismatch:
+                route_mismatch_count += 1
+                validation_errors.append(f"route_mismatch:{scene_id}")
+            if semantic_mismatch:
+                semantic_mismatch_count += 1
+                validation_errors.append(f"semantic_mismatch:{scene_id}")
+            base = {}
+        actual_route = expected_route
 
         photo_prompt = str(base.get("photo_prompt") or "").strip()
         if not photo_prompt:
@@ -1027,8 +1092,12 @@ def _normalize_scene_prompts(
             positive_video_prompt = positive_video_prompt or video_prompt
             negative_video_prompt = negative_video_prompt or str(base.get("negative_prompt") or "").strip() or _GLOBAL_NEGATIVE_PROMPT
             negative_prompt = negative_video_prompt
-        video_prompt = _sanitize_positive_prompt(video_prompt, negative_prompt)
-        positive_video_prompt = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
+        video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
+        positive_video_prompt, positive_sanitized = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
+        if video_sanitized:
+            positive_negative_leak_stripped_count += 1
+        if positive_sanitized:
+            positive_negative_leak_stripped_count += 1
         if not (
             str(base.get("negative_prompt") or "").strip() or str(base.get("negative_video_prompt") or "").strip()
         ):
@@ -1133,8 +1202,22 @@ def _normalize_scene_prompts(
         else:
             start_image_prompt = ""
             end_image_prompt = ""
-        video_prompt = _sanitize_positive_prompt(video_prompt, negative_prompt)
-        positive_video_prompt = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
+        video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
+        positive_video_prompt, positive_sanitized = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
+        photo_prompt, photo_sanitized = _sanitize_positive_prompt(photo_prompt, negative_prompt)
+        if video_sanitized:
+            positive_negative_leak_stripped_count += 1
+        if positive_sanitized:
+            positive_negative_leak_stripped_count += 1
+        if photo_sanitized:
+            positive_negative_leak_stripped_count += 1
+        if actual_route == "first_last":
+            start_image_prompt, start_sanitized = _sanitize_positive_prompt(start_image_prompt, negative_prompt)
+            end_image_prompt, end_sanitized = _sanitize_positive_prompt(end_image_prompt, negative_prompt)
+            if start_sanitized:
+                positive_negative_leak_stripped_count += 1
+            if end_sanitized:
+                positive_negative_leak_stripped_count += 1
         if _is_high_motion_risk(scene) and actual_route in {"i2v", "ia2v"}:
             simplified_video = (
                 "Single readable motion line only: controlled body shift and simple hand path, no tiny finger choreography near face, no multistep prop manipulation. "
@@ -1170,10 +1253,12 @@ def _normalize_scene_prompts(
             "negative_prompt": negative_prompt,
             "prompt_notes": normalized_notes,
         }
+        semantics_lock = _scene_plan_semantics_lock(scene)
+        scene_out["route"] = semantics_lock["route"] if semantics_lock["route"] in ALLOWED_ROUTES else actual_route
+        scene_out["prompt_notes"].update(semantics_lock)
+        scene_out["prompt_notes"]["row_repaired_from_scene_plan"] = bool(row_repaired_from_current_package)
         if row_repaired_from_current_package:
             repaired_from_current_package_count += 1
-        if _route_semantics_mismatch(scene_out):
-            route_semantics_mismatch_count += 1
         scenes.append(scene_out)
 
     normalized = {
@@ -1192,6 +1277,10 @@ def _normalize_scene_prompts(
         "rows_normalized_count": len(scenes),
         "repaired_from_current_package_count": repaired_from_current_package_count,
         "unrelated_rows_discarded_count": unrelated_rows_discarded_count,
+        "scene_prompts_route_mismatch_count": route_mismatch_count,
+        "scene_prompts_semantic_mismatch_count": semantic_mismatch_count,
+        "scene_prompts_rows_rebuilt_from_scene_plan_count": rows_rebuilt_from_scene_plan_count,
+        "scene_prompts_positive_negative_leak_stripped_count": positive_negative_leak_stripped_count,
         "stage_source": "current_package",
     }
     return (
@@ -1201,7 +1290,10 @@ def _normalize_scene_prompts(
         missing_photo_count,
         missing_video_count,
         ia2v_audio_driven_count,
-        route_semantics_mismatch_count,
+        route_mismatch_count,
+        semantic_mismatch_count,
+        rows_rebuilt_from_scene_plan_count,
+        positive_negative_leak_stripped_count,
         normalization_diag,
     )
 
@@ -1220,6 +1312,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
         "missing_photo_count": 0,
         "missing_video_count": 0,
         "ia2v_audio_driven_count": 0,
+        "scene_prompts_route_mismatch_count": 0,
+        "scene_prompts_semantic_mismatch_count": 0,
+        "scene_prompts_rows_rebuilt_from_scene_plan_count": 0,
+        "scene_prompts_positive_negative_leak_stripped_count": 0,
         "scene_prompts_route_semantics_mismatch_count": 0,
     }
 
@@ -1261,7 +1357,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             missing_photo,
             missing_video,
             ia2v_audio_driven,
-            route_semantics_mismatch_count,
+            route_mismatch_count,
+            semantic_mismatch_count,
+            rows_rebuilt_from_scene_plan_count,
+            positive_negative_leak_stripped_count,
             normalization_diag,
         ) = _normalize_scene_prompts(
             package,
@@ -1276,7 +1375,11 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "missing_photo_count": int(missing_photo),
                 "missing_video_count": int(missing_video),
                 "ia2v_audio_driven_count": int(ia2v_audio_driven),
-                "scene_prompts_route_semantics_mismatch_count": int(route_semantics_mismatch_count),
+                "scene_prompts_route_mismatch_count": int(route_mismatch_count),
+                "scene_prompts_semantic_mismatch_count": int(semantic_mismatch_count),
+                "scene_prompts_rows_rebuilt_from_scene_plan_count": int(rows_rebuilt_from_scene_plan_count),
+                "scene_prompts_positive_negative_leak_stripped_count": int(positive_negative_leak_stripped_count),
+                "scene_prompts_route_semantics_mismatch_count": int(route_mismatch_count + semantic_mismatch_count),
                 "rows_source_count": int(normalization_diag.get("rows_source_count") or 0),
                 "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
                 "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),
@@ -1301,7 +1404,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             missing_photo,
             missing_video,
             ia2v_audio_driven,
-            route_semantics_mismatch_count,
+            route_mismatch_count,
+            semantic_mismatch_count,
+            rows_rebuilt_from_scene_plan_count,
+            positive_negative_leak_stripped_count,
             normalization_diag,
         ) = _normalize_scene_prompts(
             package,
@@ -1316,7 +1422,11 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "missing_photo_count": int(missing_photo),
                 "missing_video_count": int(missing_video),
                 "ia2v_audio_driven_count": int(ia2v_audio_driven),
-                "scene_prompts_route_semantics_mismatch_count": int(route_semantics_mismatch_count),
+                "scene_prompts_route_mismatch_count": int(route_mismatch_count),
+                "scene_prompts_semantic_mismatch_count": int(semantic_mismatch_count),
+                "scene_prompts_rows_rebuilt_from_scene_plan_count": int(rows_rebuilt_from_scene_plan_count),
+                "scene_prompts_positive_negative_leak_stripped_count": int(positive_negative_leak_stripped_count),
+                "scene_prompts_route_semantics_mismatch_count": int(route_mismatch_count + semantic_mismatch_count),
                 "rows_source_count": int(normalization_diag.get("rows_source_count") or 0),
                 "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
                 "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),
