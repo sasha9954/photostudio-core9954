@@ -20,7 +20,7 @@ TURN_FUNCTION_HINTS = {
     "resolution",
     "drop",
 }
-FIRST_LAST_EXCLUSION_HINTS = {"transit", "environment_anchor", "location_change", "world_jump", "montage"}
+FIRST_LAST_EXCLUSION_HINTS = {"transit", "environment_anchor", "location_change", "world_jump", "montage", "travel", "alley", "courtyard", "corner"}
 IA2V_ADJACENCY_PENALTY = 9
 FIRST_LAST_ADJACENCY_PENALTY = 2
 
@@ -171,6 +171,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "sections": _safe_list(audio_map.get("sections")),
             "scene_windows": scene_windows,
             "cut_policy": _safe_dict(audio_map.get("cut_policy")),
+            "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
         },
         "role_plan": {
             "global_roles": _safe_dict(role_plan.get("global_roles")),
@@ -182,6 +183,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         },
         "clip_scene_policy": {
             "target_route_mix_for_8_scenes": {"i2v": 4, "ia2v": 2, "first_last": 2},
+            "target_route_mix_is_soft_heuristic_only": True,
             "ia2v_definition": "emotion-first performance shot; readable face/mouth; smooth camera; restrained motion",
             "i2v_definition": "baseline clip route for observation, transit, environment and connective montage scenes",
             "first_last_definition": "explicit state transition A->B for reveal/turn/payoff/release/callback scenes",
@@ -201,9 +203,11 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Return STRICT JSON only. No markdown.\\n"
         "MODE IS CLIP ONLY.\\n"
         "Build final watchable scene plan from fixed scene windows.\\n"
+        "Audio energy is the primary default driver of dramaturgy in clip/music_video mode.\\n"
+        "Refs lock identity/world/style continuity; text sets premise only when present.\\n"
         "Use scene windows exactly as provided.\\n"
         "Keep route mix intelligent (not random), preserve role/world continuity, and keep rhythm/emotional variation.\\n"
-        "For 8 scenes target route mix 4 i2v / 2 ia2v / 2 first_last unless there is a strong reason.\\n"
+        "For 8 scenes, 4 i2v / 2 ia2v / 2 first_last is a soft heuristic only; audio behavior + continuity feasibility can override it.\\n"
         "Do NOT assign ia2v to every performance scene. Do NOT flatten all scenes into one route.\\n"
         "Route spacing policy: ia2v scenes must not be adjacent; spread ia2v as rare emotional accents with at least one non-ia2v between them whenever possible.\\n"
         "first_last scenes should not be adjacent to another first_last unless unavoidable. Keep route rhythm staggered, not paired.\\n"
@@ -212,10 +216,12 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Each scene.watchability_role must be a short phrase that says why this scene matters to the viewer/clip arc.\\n"
         "Avoid weak labels (hero/main character/character_1/route names/raw scene_function duplicates).\\n\\n"
         "ROUTE SEMANTICS (MANDATORY):\\n"
-        "- i2v: baseline clip scene for observation/transit/environment/connective motion.\\n"
-        "- ia2v: emotional performance shot, readable face, smooth motion, minimal abrupt full-body action.\\n"
+        "- i2v: baseline observation/transit/connective/environment continuity; also medium build motion when needed.\\n"
+        "- ia2v: performance-first peaks, phrase-led expressive scenes, readable face, upper-body emphasis.\\n"
         "- first_last: controlled micro-transition only (near-neighbor A->B states in same world, same location family, same hero, same lighting family, same outfit continuity, same framing family; only one controlled action/state changes).\\n"
-        "Choose first_last only for reveal/turn/payoff threshold moments where continuity can hold; avoid first_last for implied location/world/style jumps.\\n\\n"
+        "Choose first_last only for reveal/turn/payoff threshold moments where continuity can hold.\\n"
+        "Never use first_last for transit-through-space, turning a corner, walking into another place, location progression, world jump, or implied geography change.\\n"
+        "Low energy: held/restrained/observational/afterimage feel. Medium: build movement and pressure. High: concentrated performance intensity. Release tail: settle instead of new travel invention.\\n\\n"
         "Return EXACT contract keys:\\n"
         "{\\n"
         '  \"plan_version\": \"scene_plan_v1\",\\n'
@@ -268,8 +274,14 @@ def _target_route_budget(total_scenes: int) -> dict[str, int]:
 def _is_first_last_candidate(scene: dict[str, Any], idx: int, total: int) -> bool:
     scene_function = str(scene.get("scene_function") or "").strip().lower()
     presence_mode = str(scene.get("scene_presence_mode") or "").strip().lower()
+    motion_intent = str(scene.get("motion_intent") or "").strip().lower()
+    watchability_role = str(scene.get("watchability_role") or "").strip().lower()
     has_turn = any(hint in scene_function for hint in TURN_FUNCTION_HINTS)
-    has_exclusion = any(hint in presence_mode or hint in scene_function for hint in FIRST_LAST_EXCLUSION_HINTS)
+    exclusion_blob = " ".join([presence_mode, scene_function, motion_intent, watchability_role])
+    has_exclusion = any(hint in exclusion_blob for hint in FIRST_LAST_EXCLUSION_HINTS)
+    energy = str(scene.get("energy") or "").strip().lower()
+    if energy == "high" and "release" not in scene_function:
+        return False
     return bool(has_turn and not has_exclusion) or (idx == total - 1 and "release" in scene_function)
 
 
@@ -300,6 +312,7 @@ def _route_scores(scene: dict[str, Any], idx: int, total: int, *, scenes: list[d
     presence_mode = str(scene.get("scene_presence_mode") or "").strip().lower()
     scene_function = str(scene.get("scene_function") or "").strip().lower()
     performance_focus = bool(scene.get("performance_focus"))
+    energy = str(scene.get("energy") or "").strip().lower()
 
     scores = {"i2v": 1, "ia2v": 0, "first_last": 0}
 
@@ -309,6 +322,13 @@ def _route_scores(scene: dict[str, Any], idx: int, total: int, *, scenes: list[d
         scores["ia2v"] += 4
     if performance_focus:
         scores["ia2v"] += 4
+    if energy == "high":
+        scores["ia2v"] += 5
+    elif energy == "medium":
+        scores["i2v"] += 2
+    elif energy == "low":
+        scores["i2v"] += 2
+        scores["first_last"] += 1 if "release" in scene_function or idx == total - 1 else 0
 
     if _is_first_last_candidate(scene, idx, total):
         scores["first_last"] += 4
@@ -398,8 +418,8 @@ def _rebalance_routes(scenes: list[dict[str, Any]], target: dict[str, int]) -> b
     cur = counts()
     total = len(scenes)
     for _ in range(total * 4):
-        deficits = [route for route in ("i2v", "ia2v", "first_last") if cur[route] < target.get(route, 0)]
-        surpluses = [route for route in ("i2v", "ia2v", "first_last") if cur[route] > target.get(route, 0)]
+        deficits = [route for route in ("i2v", "ia2v", "first_last") if cur[route] + 1 < target.get(route, 0)]
+        surpluses = [route for route in ("i2v", "ia2v", "first_last") if cur[route] > target.get(route, 0) + 1]
         if not deficits or not surpluses:
             break
 
@@ -411,6 +431,8 @@ def _rebalance_routes(scenes: list[dict[str, Any]], target: dict[str, int]) -> b
             if current_route not in surpluses:
                 continue
             score = _route_scores(row, idx, total, scenes=scenes)
+            if desired == "first_last" and not _is_first_last_candidate(row, idx, total):
+                continue
             gain = score.get(desired, 0) - score.get(current_route, 0)
             if gain > best_gain:
                 best_gain = gain
@@ -513,7 +535,13 @@ def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[
             "motion_intent": str(raw_row.get("motion_intent") or "").strip() or "watchable realistic movement",
             "watchability_role": watchability_role_raw,
             "performance_focus": bool(role_row.get("performance_focus")),
+            "energy": str(window.get("energy") or "").strip().lower(),
         }
+        if route == "first_last" and not _is_first_last_candidate(scene_row, idx, len(scene_windows)):
+            route = "i2v"
+            scene_row["route"] = route
+            scene_row["route_reason"] = "first_last_rejected_non_continuity_scene"
+            used_fallback = True
         if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
             scene_row["watchability_role"] = _infer_watchability_role(scene_row, idx, len(scene_windows))
             watchability_fallback_count += 1

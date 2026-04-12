@@ -27,6 +27,16 @@ _GLOBAL_PROMPT_RULES = [
     "Enforce LTX-safe motion and anatomy-safe constraints for all routes.",
 ]
 
+_NEGATIVE_LEAK_TOKENS = (
+    "low quality",
+    "blurry",
+    "distorted anatomy",
+    "extra limbs",
+    "worst quality",
+    "bad quality",
+    "deformed",
+)
+
 
 def _safe_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -483,6 +493,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
             "scene_windows": scene_windows,
             "sections": _safe_list(audio_map.get("sections")),
             "cut_policy": _safe_dict(audio_map.get("cut_policy")),
+            "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
         },
         "role_plan": {
             "world_continuity": _safe_dict(role_plan.get("world_continuity")),
@@ -538,6 +549,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Return STRICT JSON only. No markdown.\\n"
         "MODE is clip only.\\n"
         "Task: build planning-to-generation bridge prompts for later storyboard/render stages.\\n"
+        "Prompts are translation layer only: do not invent new plot geography beyond upstream story/role/scene contracts.\\n"
         "Do NOT produce render payloads or API calls.\\n"
         "For each scene from scene_plan, write route-aware photo_prompt and video_prompt with compact production language.\\n"
         "Preserve identity/world/style continuity and realism.\\n"
@@ -552,6 +564,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "- i2v (normal): motion-first continuation from the still image, one visible action line, camera behavior, energy/atmosphere, short safety tail at end.\\n"
         "- ia2v (lip_sync_music/performance): performance-first, readable face/mouth, musical phrasing drives upper-body expressivity, stable balance, smooth camera, short safety tail at end.\\n"
         "- first_last (locked transition): micro-transition between near-matched anchor frames with one subtle visible delta only; same subject/stance/world/costume/shot feeling; must include TWO standalone prompts start_image_prompt and end_image_prompt; short safety tail at end.\\n"
+        "Energy tier behavior (mandatory): low-energy i2v -> restrained motion and held tension/afterimage; medium-energy i2v -> forward motion with controlled camera support; high-energy ia2v -> expressive but readable upper-body performance; first_last -> continuity-first micro-transition and never transit/geography change.\\n"
         "FIRST_LAST FORBIDDEN BY DEFAULT: stepping, crouching, bowing, torso dip, dance choreography, large arm action, spinning, dramatic camera movement, added background actors, layout changes.\\n"
         "Do NOT use dance/performance language in first_last unless scene contract explicitly asks for it.\\n"
         "Scene-level quality beats (if scene ids exist):\\n"
@@ -561,6 +574,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "- sc_7 (first_last): START face partly under cap shadow, hand just beginning toward brim. END brim lifted, face open, direct camera gaze, culminating reveal.\\n"
         "Honor scene_plan route semantics exactly: first_last must stay strict first_last contract; ia2v must stay audio-driven singing/performance; i2v must stay simple observable action.\\n"
         "Always include compact negative_prompt with safety constraints as short tail text.\\n"
+        "Never mix negative prompt text into positive video_prompt; keep positive and negative fields separated.\\n"
         "For first_last, return both positive_video_prompt and negative_video_prompt fields (negative_video_prompt is mandatory for first_last).\\n"
         "Set prompt_notes.audio_driven=true for ia2v scenes.\\n"
         "Return EXACT contract keys:\\n"
@@ -638,6 +652,24 @@ def _route_semantics_mismatch(scene_row: dict[str, Any]) -> bool:
     if route == "i2v":
         return any(token in combined for token in ("audio-slice-driven", "sings", "vocal phrase")) or "controlled micro-transition" in combined
     return False
+
+
+def _sanitize_positive_prompt(text: str, negative_text: str) -> str:
+    clean = str(text or "").strip()
+    if not clean:
+        return ""
+    low = clean.lower()
+    neg_low = str(negative_text or "").strip().lower()
+    cut_idx = -1
+    for token in _NEGATIVE_LEAK_TOKENS:
+        idx = low.find(token)
+        if idx >= 0 and (cut_idx < 0 or idx < cut_idx):
+            cut_idx = idx
+    if cut_idx > 0:
+        clean = clean[:cut_idx].rstrip(" ,;.")
+    if neg_low and neg_low in clean.lower():
+        clean = clean[: clean.lower().find(neg_low)].rstrip(" ,;.")
+    return clean[:900]
 
 
 def _build_fallback_scene_prompts(
@@ -855,6 +887,8 @@ def _normalize_scene_prompts(
             positive_video_prompt = positive_video_prompt or video_prompt
             negative_video_prompt = negative_video_prompt or str(base.get("negative_prompt") or "").strip() or _GLOBAL_NEGATIVE_PROMPT
             negative_prompt = negative_video_prompt
+        video_prompt = _sanitize_positive_prompt(video_prompt, negative_prompt)
+        positive_video_prompt = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
         if not (
             str(base.get("negative_prompt") or "").strip() or str(base.get("negative_video_prompt") or "").strip()
         ):
@@ -943,6 +977,8 @@ def _normalize_scene_prompts(
         else:
             start_image_prompt = ""
             end_image_prompt = ""
+        video_prompt = _sanitize_positive_prompt(video_prompt, negative_prompt)
+        positive_video_prompt = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
 
         scene_out = {
             "scene_id": scene_id,

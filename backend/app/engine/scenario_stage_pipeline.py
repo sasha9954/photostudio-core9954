@@ -33,8 +33,8 @@ MAX_STORY_CORE_IMAGE_BYTES = 8 * 1024 * 1024
 
 STAGE_IDS = (
     "input_package",
-    "story_core",
     "audio_map",
+    "story_core",
     "role_plan",
     "scene_plan",
     "scene_prompts",
@@ -43,12 +43,12 @@ STAGE_IDS = (
 
 STAGE_DEPENDENCIES: dict[str, list[str]] = {
     "input_package": [],
-    "story_core": ["input_package"],
-    "audio_map": ["story_core"],
-    "role_plan": ["story_core", "audio_map"],
-    "scene_plan": ["story_core", "audio_map", "role_plan"],
-    "scene_prompts": ["story_core", "audio_map", "role_plan", "scene_plan"],
-    "finalize": ["story_core", "audio_map", "role_plan", "scene_plan", "scene_prompts"],
+    "audio_map": ["input_package"],
+    "story_core": ["input_package", "audio_map"],
+    "role_plan": ["input_package", "audio_map", "story_core"],
+    "scene_plan": ["input_package", "audio_map", "story_core", "role_plan"],
+    "scene_prompts": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan"],
+    "finalize": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts"],
 }
 
 DOWNSTREAM_BY_STAGE: dict[str, list[str]] = {
@@ -57,8 +57,8 @@ DOWNSTREAM_BY_STAGE: dict[str, list[str]] = {
 }
 
 MANUAL_RESET_DOWNSTREAM: dict[str, list[str]] = {
-    "story_core": ["audio_map", "role_plan", "scene_plan", "scene_prompts", "finalize"],
-    "audio_map": ["role_plan", "scene_plan", "scene_prompts", "finalize"],
+    "audio_map": ["story_core", "role_plan", "scene_plan", "scene_prompts", "finalize"],
+    "story_core": ["role_plan", "scene_plan", "scene_prompts", "finalize"],
     "role_plan": ["scene_plan", "scene_prompts", "finalize"],
     "scene_plan": ["scene_prompts", "finalize"],
     "scene_prompts": ["finalize"],
@@ -66,6 +66,7 @@ MANUAL_RESET_DOWNSTREAM: dict[str, list[str]] = {
 }
 
 STAGE_SECTION_RESETTERS: dict[str, Any] = {
+    "story_core": lambda: {},
     "audio_map": lambda: {},
     "role_plan": lambda: {},
     "scene_plan": lambda: {"scenes": []},
@@ -452,8 +453,89 @@ def _detect_story_core_mode(input_pkg: dict[str, Any]) -> str:
     return "directed" if has_directive else "creative"
 
 
+def _has_textual_directive(input_pkg: dict[str, Any]) -> bool:
+    return _detect_story_core_mode(input_pkg) == "directed"
+
+
+def _build_audio_dramaturgy_summary(audio_map: dict[str, Any], input_pkg: dict[str, Any], content_type: str) -> dict[str, Any]:
+    windows = [row for row in _safe_list(audio_map.get("scene_candidate_windows")) if isinstance(row, dict)]
+    low_ids: list[str] = []
+    medium_ids: list[str] = []
+    high_ids: list[str] = []
+    build_ids: list[str] = []
+    release_ids: list[str] = []
+    tail_ids: list[str] = []
+    performance_ids: list[str] = []
+    micro_transition_ids: list[str] = []
+    observational_ids: list[str] = []
+
+    for idx, row in enumerate(windows, start=1):
+        scene_id = str(row.get("id") or f"sc_{idx}").strip()
+        if not scene_id:
+            continue
+        energy = str(row.get("energy") or "").strip().lower()
+        function = str(row.get("scene_function") or "").strip().lower()
+        t1 = _to_float(row.get("t1"), 0.0)
+        duration = max(_coerce_duration_sec(audio_map.get("duration_sec")), 0.001)
+        near_tail = t1 >= max(duration - 0.01, duration * 0.84)
+
+        if energy == "low":
+            low_ids.append(scene_id)
+        elif energy == "high":
+            high_ids.append(scene_id)
+        else:
+            medium_ids.append(scene_id)
+
+        if any(token in function for token in ("build", "rise", "pressure", "escalat")):
+            build_ids.append(scene_id)
+        if any(token in function for token in ("release", "drop", "resolve", "afterimage", "payoff")):
+            release_ids.append(scene_id)
+        if near_tail or any(token in function for token in ("tail", "afterimage", "outro", "resolution")):
+            tail_ids.append(scene_id)
+
+        if energy == "high" or any(token in function for token in ("peak", "climax", "performance")):
+            performance_ids.append(scene_id)
+        if any(token in function for token in ("transition", "turn", "reveal", "callback")):
+            micro_transition_ids.append(scene_id)
+        if energy == "low" or any(token in function for token in ("setup", "observe", "anchor", "breather", "release")):
+            observational_ids.append(scene_id)
+
+    dominant_energy = "medium"
+    if len(high_ids) > max(len(low_ids), len(medium_ids)):
+        dominant_energy = "high"
+    elif len(low_ids) > max(len(high_ids), len(medium_ids)):
+        dominant_energy = "low"
+
+    return {
+        "dramaturgy_source": "audio_primary",
+        "audio_drives_dramaturgy": True,
+        "content_type": str(content_type or "music_video"),
+        "textual_directive_present": bool(_has_textual_directive(input_pkg)),
+        "energy_profile": {
+            "low": len(low_ids),
+            "medium": len(medium_ids),
+            "high": len(high_ids),
+            "total_windows": len(windows),
+        },
+        "dominant_energy": dominant_energy,
+        "energy_curve_summary": str(audio_map.get("global_arc_hint") or audio_map.get("analysis_mode") or "audio_arc_driven"),
+        "peak_window_ids": high_ids[:6],
+        "low_energy_window_ids": low_ids[:8],
+        "medium_energy_window_ids": medium_ids[:8],
+        "high_energy_window_ids": high_ids[:8],
+        "build_window_ids": list(dict.fromkeys(build_ids))[:8],
+        "release_window_ids": list(dict.fromkeys(release_ids))[:8],
+        "tail_resolution_window_ids": list(dict.fromkeys(tail_ids))[:8],
+        "performance_candidate_window_ids": list(dict.fromkeys(performance_ids))[:8],
+        "micro_transition_candidate_window_ids": list(dict.fromkeys(micro_transition_ids))[:8],
+        "observational_candidate_window_ids": list(dict.fromkeys(observational_ids))[:8],
+        "suggested_arc": "ground -> build -> peak -> release -> afterimage",
+    }
+
+
 def _build_story_core_prompt(
     input_pkg: dict[str, Any],
+    audio_map: dict[str, Any],
     refs_inventory: dict[str, Any],
     assigned_roles: dict[str, Any],
     story_core_mode: str,
@@ -476,23 +558,25 @@ def _build_story_core_prompt(
         "story_core_prop_contracts": prop_contracts,
         "story_core_ref_attachment_summary": ref_attachment_summary,
         "story_core_grounding_level": grounding_level,
+        "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
     }
     mode = "directed" if story_core_mode == "directed" else "creative"
     mode_instructions = (
         "MODE: DIRECTED MODE\n"
-        "- User text is the mandatory narrative source of truth for the plot.\n"
+        "- User text is narrative/directorial source of meaning.\n"
         "- Do NOT replace user plot with a different premise.\n"
         "- Preserve explicitly specified world, actions, relationships, and narrative direction.\n"
-        "- You may only structure, clarify, improve wording, increase cinematic visuality, and fill missing connective tissue.\n"
-        "- Do NOT ignore clearly stated user events.\n"
+        "- Audio map still controls pacing, escalation, release pattern, and scene behavior rhythm.\n"
+        "- Do NOT let text fully override audio-driven temporal behavior.\n"
     )
     if mode == "creative":
         mode_instructions = (
             "MODE: CREATIVE MODE\n"
             "- User did not provide narrative directive text.\n"
-            "- Invent an original story core.\n"
-            "- Be cinematic, emotionally clear, visually strong, and compelling.\n"
-            "- Use audio, hero, world/location, style, and props references to shape concept, arc, mood, opening, ending, and emotional journey.\n"
+            "- Audio energy is the default dramaturgic driver.\n"
+            "- Build compact emotional/visual arc from energy, phrasing, escalation, release, afterimage.\n"
+            "- Do NOT invent heavy literal geography or random premise/world travel without refs or text grounding.\n"
+            "- Keep clip premise cinematic but concise, not over-plotted.\n"
         )
     return (
         "You are STORY CORE stage of a scenario pipeline.\n"
@@ -512,6 +596,8 @@ def _build_story_core_prompt(
         "Use the character image reference to infer hero gender presentation (male/female/androgynous), approximate age, visual mood, and core appearance markers.\n"
         "Keep appearance notes compact and production-usable; do not describe every tiny detail, only stable identity-relevant ones.\n"
         "Keep each field compact and actionable.\n"
+        "In clip/music_video mode, audio energy is the default dramaturgic driver.\n"
+        "User text, when present, acts as a narrative/directorial frame, not as the sole timing/energy source.\n"
         "Required keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock.\n"
         "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
         f"{mode_instructions}\n"
@@ -1047,10 +1133,13 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
 
 def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
+    audio_map = _safe_dict(package.get("audio_map"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     assigned_roles = _safe_dict(package.get("assigned_roles"))
     story_core_mode = _detect_story_core_mode(input_pkg)
     fallback = _default_story_core(input_pkg)
+    if not _is_usable_audio_map(audio_map):
+        raise RuntimeError("story_core_requires_audio_map")
     prop_contracts, prop_guard_applied = _normalize_story_core_prop_contracts(input_pkg, refs_inventory)
     ref_attachment_summary = {
         "character_1": {"attached": False, "error": "", "source": ""},
@@ -1059,6 +1148,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     grounding_level = "strict" if prop_contracts else "standard"
     prompt = _build_story_core_prompt(
         input_pkg,
+        audio_map,
         refs_inventory,
         assigned_roles,
         story_core_mode,
@@ -1076,7 +1166,11 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_prop_confusion_guard_applied"] = bool(prop_guard_applied)
     diagnostics["story_core_ref_attachment_summary"] = ref_attachment_summary
     diagnostics["story_core_grounding_level"] = grounding_level
+    diagnostics["story_core_audio_informed"] = bool(audio_map)
+    diagnostics["story_core_audio_dramaturgy_source"] = "audio_map" if audio_map else ""
+    diagnostics["story_core_textual_directive_present"] = bool(_has_textual_directive(input_pkg))
     package["diagnostics"] = diagnostics
+    _append_diag_event(package, "story_core audio-informed build requested", stage_id="story_core")
     try:
         api_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
         parts: list[dict[str, Any]] = [{"text": prompt}]
@@ -2624,7 +2718,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     package["diagnostics"] = diagnostics
 
     if not _is_usable_story_core(story_core):
-        raise RuntimeError("audio_map_requires_story_core")
+        story_core = _default_story_core(input_pkg)
 
     if duration_sec <= 0:
         warnings = _safe_list(diagnostics.get("warnings"))
@@ -2878,6 +2972,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_map["content_type"] = content_type
     audio_map["story_core_mode"] = story_core_mode
     audio_map["story_core_arc_ref"] = str(story_core.get("global_arc") or "")
+    audio_map["audio_dramaturgy"] = _build_audio_dramaturgy_summary(audio_map, input_pkg, content_type)
     audio_map.setdefault(
         "transcript_available",
         bool(transcript_text and str(audio_map.get("analysis_mode") or "") in {"transcript_alignment_v2", "approximate_phrase_grouping_v1"}),
@@ -2952,6 +3047,8 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics.update(grid_metrics)
     diagnostics["audio_map_music_signal_mode"] = music_signal_mode
     diagnostics["audio_map_dynamics_available"] = dynamics_available
+    diagnostics["audio_map_dramaturgy_source"] = str(_safe_dict(audio_map.get("audio_dramaturgy")).get("dramaturgy_source") or "")
+    diagnostics["audio_map_textual_directive_present"] = bool(_safe_dict(audio_map.get("audio_dramaturgy")).get("textual_directive_present"))
     package["diagnostics"] = diagnostics
     package["audio_map"] = audio_map
     _append_diag_event(package, "audio_map generated", stage_id="audio_map")
@@ -3165,10 +3262,10 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
     try:
         if stage_id == "input_package":
             pkg = _run_input_package_stage(pkg)
-        elif stage_id == "story_core":
-            pkg = _run_story_core_stage(pkg)
         elif stage_id == "audio_map":
             pkg = _run_audio_map_stage(pkg)
+        elif stage_id == "story_core":
+            pkg = _run_story_core_stage(pkg)
         elif stage_id == "role_plan":
             pkg = _run_role_plan_stage(pkg)
         elif stage_id == "scene_plan":
@@ -3194,9 +3291,10 @@ def run_manual_stage(stage_id: str, package: dict[str, Any], payload: dict[str, 
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
-    if stage_id == "story_core":
-        pkg = run_stage("input_package", pkg, payload)
-        if str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get("input_package")).get("status") or "") == "error":
+    dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
+    for dep_stage in dep_sequence:
+        pkg = run_stage(dep_stage, pkg, payload)
+        if str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(dep_stage)).get("status") or "") == "error":
             return pkg
     pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
     return run_stage(stage_id, pkg, payload)

@@ -169,6 +169,24 @@ def _build_scene_windows(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _build_audio_dramaturgy_context(audio_map: dict[str, Any]) -> dict[str, Any]:
+    drama = _safe_dict(audio_map.get("audio_dramaturgy"))
+    return {
+        "dramaturgy_source": str(drama.get("dramaturgy_source") or "audio_primary"),
+        "audio_drives_dramaturgy": bool(drama.get("audio_drives_dramaturgy") if "audio_drives_dramaturgy" in drama else True),
+        "dominant_energy": str(drama.get("dominant_energy") or ""),
+        "energy_curve_summary": str(drama.get("energy_curve_summary") or ""),
+        "peak_window_ids": _safe_list(drama.get("peak_window_ids") or drama.get("high_energy_window_ids")),
+        "build_window_ids": _safe_list(drama.get("build_window_ids")),
+        "release_window_ids": _safe_list(drama.get("release_window_ids")),
+        "tail_resolution_window_ids": _safe_list(drama.get("tail_resolution_window_ids")),
+        "low_energy_window_ids": _safe_list(drama.get("low_energy_window_ids")),
+        "medium_energy_window_ids": _safe_list(drama.get("medium_energy_window_ids")),
+        "high_energy_window_ids": _safe_list(drama.get("high_energy_window_ids")),
+        "textual_directive_present": bool(drama.get("textual_directive_present")),
+    }
+
+
 def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
@@ -178,6 +196,7 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
 
     roles_inventory, character_roles_present, world_roles_present = _build_roles_inventory(input_pkg, refs_inventory, assigned_roles)
     scene_windows = _build_scene_windows(audio_map)
+    audio_dramaturgy = _build_audio_dramaturgy_context(audio_map)
 
     compact_context = {
         "mode": "clip",
@@ -195,6 +214,7 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
         },
         "roles_inventory": roles_inventory,
         "scene_windows": scene_windows,
+        "audio_dramaturgy": audio_dramaturgy,
         "sections": _safe_list(audio_map.get("sections")),
         "clip_role_policy": {
             "goal": "watchable music-video style scene casting",
@@ -232,9 +252,14 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "props should appear only where useful.\n"
         "style is global style anchor, not a scene object.\n"
         "No scene prompts, no camera routes, no i2v/ia2v assignment.\n\n"
-        "CLIP WATCHABILITY (MANDATORY):\n"
-        "- This is clip mode; scenes must feel watchable, rhythm-aware, emotionally coherent.\n"
-        "- Avoid making all scenes functionally identical.\n\n"
+        "CLIP DRAMATURGY (MANDATORY):\n"
+        "- In clip mode, scene presence mode is derived primarily from audio energy and phrase intensity.\n"
+        "- Role distribution must serve musical dramaturgy, not arbitrary variety.\n"
+        "- Low-energy windows: prefer solo_observational or private_release.\n"
+        "- Medium-energy windows: prefer transit/solo_observational with occasional solo_performance.\n"
+        "- High-energy windows: prefer solo_performance.\n"
+        "- Release/tail windows: prefer private_release or restrained observational close.\n"
+        "- Audio peaks naturally support performance emphasis.\n\n"
         "ROLE VARIETY (MANDATORY):\n"
         "- scene_presence_mode must be one of: solo_performance, solo_observational, environment_anchor, transit, private_release.\n"
         "- Even with one hero, vary scene_presence_mode across scenes when feasible.\n"
@@ -248,7 +273,9 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "- style ref defines visual/tonal/aesthetic anchor.\n"
         "- Both anchors must remain stable across scenes; variation only inside same world/style family.\n"
         "- If no location ref is provided, infer one coherent realistic world anchor from note/story/story_core and keep all scenes inside that same country/city/environment logic.\n"
-        "- Allow only natural local progression inside the same world (street -> alley -> courtyard -> apartment), not random cross-country or cross-style jumps.\n"
+        "- If user text is absent, avoid over-literal geographic progression and keep continuity tight.\n"
+        "- If refs imply one heroine + one location + one prop, keep same-world continuity and avoid unnecessary travel invention.\n"
+        "- Allow only natural local progression when explicitly grounded; no random cross-country or cross-style jumps.\n"
         "- If no explicit time-of-day is given, choose a baseline in scene 1 and keep believable lighting progression.\n\n"
         "REALISM (MANDATORY):\n"
         "- Always stay realistic and grounded by default.\n"
@@ -436,9 +463,19 @@ def _normalize_world_continuity(raw_world: Any, *, input_pkg: dict[str, Any], st
     return normalized
 
 
-def _default_scene_presence_mode(idx: int, total: int, has_hero: bool) -> str:
+def _default_scene_presence_mode(scene_window: dict[str, Any], idx: int, total: int, has_hero: bool) -> str:
     if not has_hero:
         return "environment_anchor"
+    energy = str(scene_window.get("energy") or "").strip().lower()
+    scene_function = str(scene_window.get("scene_function") or "").strip().lower()
+    if "release" in scene_function or "afterimage" in scene_function:
+        return "private_release"
+    if energy == "high":
+        return "solo_performance"
+    if energy == "low":
+        return "solo_observational" if idx < total - 1 else "private_release"
+    if energy == "medium":
+        return "transit" if idx not in {0, total - 1} else "solo_observational"
     if total <= 1:
         return "solo_performance"
     if idx == total - 1 and total >= 4:
@@ -458,7 +495,7 @@ def _default_scene_role_row(
 ) -> dict[str, Any]:
     active_roles = [*([hero_role] if hero_role else []), *world_anchors]
     active_roles = list(dict.fromkeys([role for role in active_roles if role]))
-    scene_presence_mode = _default_scene_presence_mode(idx, total_scenes, bool(hero_role))
+    scene_presence_mode = _default_scene_presence_mode(scene_window, idx, total_scenes, bool(hero_role))
     return {
         "scene_id": str(scene_window.get("id") or ""),
         "t0": _round3(scene_window.get("t0")),
@@ -536,7 +573,7 @@ def _normalize_role_plan(
 
         scene_presence_mode = str(row.get("scene_presence_mode") or "").strip().lower()
         if scene_presence_mode not in ALLOWED_SCENE_PRESENCE_MODES:
-            scene_presence_mode = _default_scene_presence_mode(len(scene_roles_by_id), len(scene_windows), bool(primary_role))
+            scene_presence_mode = _default_scene_presence_mode(window, len(scene_roles_by_id), len(scene_windows), bool(primary_role))
 
         performance_focus = bool(row.get("performance_focus")) if primary_role else False
         if scene_presence_mode in {"environment_anchor", "transit", "solo_observational"}:
