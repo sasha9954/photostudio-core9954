@@ -27,6 +27,14 @@ FIRST_LAST_MODES = {
     "visibility_reveal",
 }
 TRANSIT_I2V_FAMILIES = {"baseline_forward_walk", "side_tracking_walk", "push_in_follow"}
+TRANSIT_LIKE_VISUAL_EVENTS = {
+    "transit",
+    "environment",
+    "character_movement",
+    "environment_reveal",
+    "threshold_crossing",
+    "vertical_transition",
+}
 GENERIC_ENVIRONMENT_FAMILIES = {"urban", "city", "interior", "outdoor"}
 TURN_FUNCTION_HINTS = {
     "turn",
@@ -731,6 +739,63 @@ def _select_i2v_motion_family(
     }
 
 
+def _is_transit_like_scene(scene_row: dict[str, Any]) -> bool:
+    scene_presence_mode = str(scene_row.get("scene_presence_mode") or "").strip().lower()
+    route = str(scene_row.get("route") or "").strip().lower()
+    i2v_motion_family = str(scene_row.get("i2v_motion_family") or "").strip().lower()
+    visual_event_type = str(scene_row.get("visual_event_type") or "").strip().lower()
+    motion_intent = str(scene_row.get("motion_intent") or "").strip().lower()
+    watchability_role = str(scene_row.get("watchability_role") or "").strip().lower()
+    scene_function = str(scene_row.get("scene_function") or "").strip().lower()
+
+    if scene_presence_mode == "transit":
+        return True
+    if route == "i2v" and i2v_motion_family in TRANSIT_I2V_FAMILIES:
+        return True
+    if visual_event_type == "transit":
+        return True
+
+    blob = " ".join([motion_intent, watchability_role, scene_function])
+    movement_tokens = (
+        "walk",
+        "moving",
+        "movement",
+        "transit",
+        "cross",
+        "enter",
+        "exit",
+        "pass",
+        "climb",
+        "descent",
+        "reveal",
+        "progress",
+        "advance",
+        "follow",
+        "through space",
+    )
+    movement_signal = any(token in blob for token in movement_tokens)
+    visual_transit_candidate = visual_event_type in TRANSIT_LIKE_VISUAL_EVENTS
+    if visual_transit_candidate and movement_signal:
+        return True
+    if movement_signal and route == "i2v" and ("travel" in blob or "route" in blob or "space" in blob):
+        return True
+    return False
+
+
+def _pick_transit_anti_repeat_event(scene_row: dict[str, Any]) -> str:
+    blob = " ".join(
+        [
+            str(scene_row.get("motion_intent") or "").lower(),
+            str(scene_row.get("watchability_role") or "").lower(),
+            str(scene_row.get("scene_function") or "").lower(),
+            str(scene_row.get("visual_event_type") or "").lower(),
+        ]
+    )
+    if any(token in blob for token in ("threshold", "door", "entry", "exit", "cross")):
+        return "threshold_crossing"
+    return "environment_reveal"
+
+
 def _infer_first_last_mode(scene: dict[str, Any], idx: int, total: int) -> str:
     scene_function = str(scene.get("scene_function") or "").lower()
     emotional_intent = str(scene.get("emotional_intent") or "").lower()
@@ -1020,7 +1085,7 @@ def _normalize_scene_plan(
             "repeat_variation_rule": repeat_variation_rule,
             "motion_risk": _safe_dict(raw_row.get("motion_risk")) or motion_risk,
         }
-        if visual_event_type in {"transit"}:
+        if _is_transit_like_scene(scene_row):
             transit_scene_streak += 1
         else:
             transit_scene_streak = 0
@@ -1031,10 +1096,16 @@ def _normalize_scene_plan(
         scene_family = visual_event_type or route
         scene_family_seen_counts[scene_family] = scene_family_seen_counts.get(scene_family, 0) + 1
         family_repeat_idx = max(0, scene_family_seen_counts.get(scene_family, 1) - 1)
-        if transit_scene_streak >= 3 and scene_row.get("visual_event_type") == "transit":
-            scene_row["visual_event_type"] = "environment_reveal"
-            scene_row["watchability_role"] = "break transit repetition with fresh spatial reveal"
-            repeat_variation_rule = f"{repeat_variation_rule}; anti_repeat: shift from transit chain to spatial reveal"
+        if transit_scene_streak >= 3 and _is_transit_like_scene(scene_row):
+            anti_repeat_event = _pick_transit_anti_repeat_event(scene_row)
+            scene_row["visual_event_type"] = anti_repeat_event
+            scene_row["watchability_role"] = (
+                "anti-repeat transit variation: add a new spatial checkpoint and concrete reveal value"
+            )
+            repeat_variation_rule = (
+                f"{repeat_variation_rule}; anti_repeat: transit_family_streak_{transit_scene_streak}"
+                f" -> pivot_to_{anti_repeat_event} with new spatial information"
+            )
         if intimate_scene_streak >= 2 and scene_row.get("route") == "ia2v":
             repeat_variation_rule = f"{repeat_variation_rule}; anti_repeat: keep emotional beat but add new scale/space pressure"
         if family_repeat_idx > 0 and "anti_repeat" not in repeat_variation_rule:
