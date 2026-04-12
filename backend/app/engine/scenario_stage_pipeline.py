@@ -27,6 +27,12 @@ from app.engine.gemini_rest import post_generate_content
 from app.engine.scenario_role_planner import ROLE_PLAN_PROMPT_VERSION, build_gemini_role_plan
 from app.engine.scenario_scene_planner import SCENE_PLAN_PROMPT_VERSION, build_gemini_scene_plan
 from app.engine.scenario_scene_prompter import SCENE_PROMPTS_PROMPT_VERSION, build_gemini_scene_prompts
+from app.engine.video_capability_canon import (
+    DEFAULT_VIDEO_MODEL_ID,
+    build_capability_diagnostics_summary,
+    get_capability_rules_source_version,
+    get_video_model_capability_profile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +138,14 @@ def _extract_audio_url_from_refs(refs_inventory: dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _resolve_active_video_model_id(input_pkg: dict[str, Any]) -> str:
+    for key in ("video_model", "video_model_id", "model_id"):
+        value = str(input_pkg.get(key) or "").strip().lower()
+        if value:
+            return value
+    return DEFAULT_VIDEO_MODEL_ID
 
 
 def _extract_ref_urls(ref_node: Any) -> list[str]:
@@ -849,6 +863,8 @@ def _build_story_core_input_context(
         connected_summary=connected_summary,
     )
     story_user_concept = _extract_story_user_concept(input_pkg)
+    model_id = _resolve_active_video_model_id(input_pkg)
+    i2v_profile = get_video_model_capability_profile(model_id, "i2v")
     audio_dramaturgy = _safe_dict(audio_map.get("audio_dramaturgy"))
     audio_summary = {
         "duration_sec": _to_float(audio_map.get("duration_sec"), 0.0),
@@ -877,6 +893,20 @@ def _build_story_core_input_context(
         "world_style_identity_constraints": {
             "director_world_lock_summary": director_world_lock_summary,
             "grounding_level": grounding_level,
+        },
+        "video_capability_canon": {
+            "model_id": model_id,
+            "capability_rules_source_version": get_capability_rules_source_version(),
+            "story_core_planning_bounds": {
+                "verified_safe": _safe_list(i2v_profile.get("verified_safe")),
+                "experimental": _safe_list(i2v_profile.get("experimental")),
+                "blocked": _safe_list(i2v_profile.get("blocked")),
+                "policy": {
+                    "verified_safe_can_drive_default_planning": True,
+                    "experimental_is_opt_in_not_default": True,
+                    "blocked_must_not_be_normalized": True,
+                },
+            },
         },
         "story_rules": _build_story_core_rules(),
     }
@@ -962,6 +992,7 @@ def _build_story_core_prompt(
     core_input_context: dict[str, Any],
     assigned_roles: dict[str, Any],
     story_core_mode: str,
+    capability_bounds_text: str,
 ) -> str:
     compact_input = _compact_prompt_payload(core_input_context)
     compact_assigned_roles = _compact_prompt_payload(assigned_roles)
@@ -1015,6 +1046,7 @@ def _build_story_core_prompt(
         "Use the character image reference to infer hero gender presentation (male/female/androgynous), approximate age, visual mood, and core appearance markers.\n"
         "Keep appearance notes compact and production-usable; do not describe every tiny detail, only stable identity-relevant ones.\n"
         "Audio must be primary dramaturgic driver; lyrics are secondary optional signal.\n"
+        f"Video model capability bounds (must obey): {capability_bounds_text}\n"
         "HARD CONTRACT: Director note/user concept world constraints are NON-NEGOTIABLE and override generic music-video tropes.\n"
         "HARD CONTRACT: If note says no club/no neon/no warehouse and requests realistic Iranian urban environment, NEVER switch to neon/club/warehouse aesthetics.\n"
         "HARD CONTRACT: Audio affects rhythm/emotional arc/pacing only; audio cannot rewrite locked world constraints.\n"
@@ -1588,6 +1620,8 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     assigned_roles = _safe_dict(package.get("assigned_roles"))
     story_core_mode = _detect_story_core_mode(input_pkg)
+    model_id = _resolve_active_video_model_id(input_pkg)
+    capability_profile = get_video_model_capability_profile(model_id, "i2v")
     fallback = _default_story_core(input_pkg)
     if not _is_usable_audio_map(audio_map):
         raise RuntimeError("story_core_requires_audio_map")
@@ -1624,6 +1658,12 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_director_world_lock_summary"] = ""
     diagnostics["story_core_compact_context_size_estimate"] = 0
     diagnostics["story_core_refs_sources_used"] = []
+    diagnostics["active_video_model_capability_profile"] = model_id
+    diagnostics["active_route_capability_mode"] = "story_core_planning_bounds"
+    diagnostics["story_core_capability_guard_applied"] = True
+    diagnostics["scene_plan_capability_guard_applied"] = False
+    diagnostics["prompt_capability_guard_applied"] = False
+    diagnostics["capability_rules_source_version"] = get_capability_rules_source_version()
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "story_core audio-informed build requested", stage_id="story_core")
     try:
@@ -1665,11 +1705,26 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["story_core_compact_context_size_estimate"] = int(core_input_context.get("story_core_compact_context_size_estimate") or 0)
         diagnostics["story_core_refs_sources_used"] = _safe_list(core_input_context.get("story_core_refs_sources_used"))
         diagnostics["story_core_payload_mode"] = "lean"
+        diagnostics.update(
+            build_capability_diagnostics_summary(
+                model_id=model_id,
+                route_type="story_core_planning_bounds",
+                story_core_guard_applied=True,
+                scene_plan_guard_applied=False,
+                prompt_guard_applied=False,
+            )
+        )
         package["diagnostics"] = diagnostics
+        capability_bounds_text = (
+            f"model={model_id}; verified_safe={', '.join([str(v) for v in _safe_list(capability_profile.get('verified_safe'))])}; "
+            f"experimental(opt-in)={', '.join([str(v) for v in _safe_list(capability_profile.get('experimental'))])}; "
+            f"blocked={', '.join([str(v) for v in _safe_list(capability_profile.get('blocked'))])}"
+        )[:1500]
         prompt = _build_story_core_prompt(
             core_input_context,
             assigned_roles,
             story_core_mode,
+            capability_bounds_text,
         )
         parts: list[dict[str, Any]] = [{"text": prompt}, *inline_ref_parts]
         body = {
@@ -3623,6 +3678,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_has_adjacent_ia2v"] = False
     diagnostics["scene_plan_has_adjacent_first_last"] = False
     diagnostics["scene_plan_route_spacing_warning"] = False
+    diagnostics["active_video_model_capability_profile"] = str(diagnostics.get("active_video_model_capability_profile") or "")
+    diagnostics["active_route_capability_mode"] = str(diagnostics.get("active_route_capability_mode") or "")
+    diagnostics["scene_plan_capability_guard_applied"] = False
     diagnostics["scene_plan_validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
@@ -3661,6 +3719,16 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_has_adjacent_ia2v"] = bool(scene_diag.get("scene_plan_has_adjacent_ia2v"))
     diagnostics["scene_plan_has_adjacent_first_last"] = bool(scene_diag.get("scene_plan_has_adjacent_first_last"))
     diagnostics["scene_plan_route_spacing_warning"] = bool(scene_diag.get("scene_plan_route_spacing_warning"))
+    diagnostics["active_video_model_capability_profile"] = str(
+        scene_diag.get("active_video_model_capability_profile") or diagnostics.get("active_video_model_capability_profile") or ""
+    )
+    diagnostics["active_route_capability_mode"] = str(
+        scene_diag.get("active_route_capability_mode") or diagnostics.get("active_route_capability_mode") or ""
+    )
+    diagnostics["scene_plan_capability_guard_applied"] = bool(scene_diag.get("scene_plan_capability_guard_applied"))
+    diagnostics["capability_rules_source_version"] = str(
+        scene_diag.get("capability_rules_source_version") or diagnostics.get("capability_rules_source_version") or ""
+    )
     diagnostics["scene_plan_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
     diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("scenes")))
@@ -3696,6 +3764,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_missing_video_count"] = 0
     diagnostics["scene_prompts_ia2v_audio_driven_count"] = 0
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = 0
+    diagnostics["prompt_capability_guard_applied"] = False
     diagnostics["scene_prompts_validation_error"] = ""
     diagnostics["scene_prompts_error"] = ""
     diagnostics["scene_prompts_empty"] = False
@@ -3734,6 +3803,16 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_ia2v_audio_driven_count"] = int(prompts_diag.get("ia2v_audio_driven_count") or 0)
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = int(
         prompts_diag.get("scene_prompts_route_semantics_mismatch_count") or 0
+    )
+    diagnostics["active_video_model_capability_profile"] = str(
+        prompts_diag.get("active_video_model_capability_profile") or diagnostics.get("active_video_model_capability_profile") or ""
+    )
+    diagnostics["active_route_capability_mode"] = str(
+        prompts_diag.get("active_route_capability_mode") or diagnostics.get("active_route_capability_mode") or ""
+    )
+    diagnostics["prompt_capability_guard_applied"] = bool(prompts_diag.get("prompt_capability_guard_applied"))
+    diagnostics["capability_rules_source_version"] = str(
+        prompts_diag.get("capability_rules_source_version") or diagnostics.get("capability_rules_source_version") or ""
     )
     diagnostics["scene_prompts_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["scene_prompts_error"] = str(result.get("error") or "")

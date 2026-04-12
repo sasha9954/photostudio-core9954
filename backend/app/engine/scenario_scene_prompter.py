@@ -5,6 +5,14 @@ import re
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
+from app.engine.video_capability_canon import (
+    DEFAULT_VIDEO_MODEL_ID,
+    build_capability_diagnostics_summary,
+    get_capability_rules_source_version,
+    get_first_last_pairing_rules,
+    get_lipsync_rules,
+    get_video_model_capability_profile,
+)
 
 SCENE_PROMPTS_PROMPT_VERSION = "scene_prompts_v1"
 ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
@@ -116,6 +124,15 @@ def _compact_prompt_payload(value: Any) -> Any:
     if isinstance(value, str):
         return value.strip()
     return value
+
+
+def _resolve_active_video_model_id(package: dict[str, Any]) -> str:
+    input_pkg = _safe_dict(package.get("input"))
+    for key in ("video_model", "video_model_id", "model_id"):
+        value = str(input_pkg.get(key) or "").strip().lower()
+        if value:
+            return value
+    return DEFAULT_VIDEO_MODEL_ID
 
 
 def _round3(value: Any) -> float:
@@ -578,6 +595,11 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
 
     scene_windows = _build_scene_windows(audio_map)
     role_lookup = _build_scene_role_lookup(role_plan)
+    model_id = _resolve_active_video_model_id(package)
+    route_profiles = {
+        route: get_video_model_capability_profile(model_id, route)
+        for route in ("i2v", "ia2v", "first_last", "lipsync")
+    }
 
     compact_context = {
         "mode": "clip",
@@ -643,6 +665,18 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
             "world_continuity_required": True,
             "identity_continuity_required": True,
         },
+        "video_capability_canon": {
+            "model_id": model_id,
+            "capability_rules_source_version": get_capability_rules_source_version(),
+            "route_profiles": route_profiles,
+            "first_last_pairing_rules": get_first_last_pairing_rules(model_id),
+            "lipsync_rules": get_lipsync_rules(model_id),
+            "usage_policy": {
+                "prefer_verified_safe_by_default": True,
+                "experimental_is_opt_in_not_default": True,
+                "blocked_patterns_must_be_filtered": True,
+            },
+        },
     }
 
     aux = {
@@ -655,6 +689,15 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
 
 
 def _build_prompt(context: dict[str, Any]) -> str:
+    canon = _safe_dict(context.get("video_capability_canon"))
+    route_profiles = _safe_dict(canon.get("route_profiles"))
+    i2v_profile = _safe_dict(route_profiles.get("i2v"))
+    first_last_profile = _safe_dict(route_profiles.get("first_last"))
+    lipsync_profile = _safe_dict(route_profiles.get("lipsync"))
+    i2v_safe = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("verified_safe")) if str(v).strip()])
+    i2v_blocked = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("blocked")) if str(v).strip()])
+    first_last_blocked = ", ".join([str(v).strip() for v in _safe_list(first_last_profile.get("blocked")) if str(v).strip()])
+    lipsync_blocked = ", ".join([str(v).strip() for v in _safe_list(lipsync_profile.get("blocked")) if str(v).strip()])
     return (
         "You are SCENE PROMPTS stage for scenario pipeline.\\n"
         "Return STRICT JSON only. No markdown.\\n"
@@ -671,7 +714,12 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Use scene visual progression attributes (shot_scale, camera_intimacy, performance_openness, visual_event_type, repeat_variation_rule) to keep repeated phrases visually different.\\n"
         "Use lighting continuity contract as stable anchor and translate it to natural cinematic language, not numeric dump.\\n"
         "If motion_risk shows high complexity, simplify action wording: broad readable motion only, no tiny finger-sequence choreography.\\n"
-        f"LTX-safe motion canon (prefer): {', '.join(SAFE_MOTION_CANON)}.\\n"
+        f"Video capability canon model={str(canon.get('model_id') or DEFAULT_VIDEO_MODEL_ID)} version={str(canon.get('capability_rules_source_version') or '')}.\\n"
+        f"Use VERIFIED_SAFE defaults first: {i2v_safe}.\\n"
+        "Experimental patterns are opt-in only and must not be default.\\n"
+        f"Blocked i2v patterns (filter out): {i2v_blocked}.\\n"
+        f"Blocked first_last patterns (filter out): {first_last_blocked}.\\n"
+        f"Blocked lipsync patterns (filter out): {lipsync_blocked}.\\n"
         "Camera-led transitions are preferred over fine-motor body actions when either can express the same beat.\\n"
         "Baseball cap is continuity/silhouette anchor; cap manipulation is not default motion.\\n"
         "Video prompts must be LTX-native, anatomy-safe, and motion-first.\\n"
@@ -1548,6 +1596,14 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
     role_lookup = _safe_dict(aux.get("role_lookup"))
 
     used_model = "gemini-3-flash-preview"
+    model_id = str(_safe_dict(context.get("video_capability_canon")).get("model_id") or DEFAULT_VIDEO_MODEL_ID)
+    capability_diag = build_capability_diagnostics_summary(
+        model_id=model_id,
+        route_type="mixed",
+        story_core_guard_applied=False,
+        scene_plan_guard_applied=False,
+        prompt_guard_applied=True,
+    )
 
     diagnostics = {
         "prompt_version": SCENE_PROMPTS_PROMPT_VERSION,
@@ -1565,6 +1621,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
         "i2v_unknown_family_fallback_count": 0,
         "i2v_prompt_family_counts": {},
         "i2v_template_override_applied": False,
+        **capability_diag,
     }
 
     if not scene_rows:

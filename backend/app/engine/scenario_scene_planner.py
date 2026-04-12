@@ -4,6 +4,15 @@ import json
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
+from app.engine.video_capability_canon import (
+    DEFAULT_VIDEO_MODEL_ID,
+    build_capability_diagnostics_summary,
+    get_capability_rules_source_version,
+    get_first_last_pairing_rules,
+    get_lipsync_rules,
+    get_scene_grammar_hints,
+    get_video_model_capability_profile,
+)
 
 SCENE_PLAN_PROMPT_VERSION = "scene_plan_v1"
 SCENE_PLAN_MODEL = "gemini-3.1-pro-preview"
@@ -118,6 +127,15 @@ def _compact_prompt_payload(value: Any) -> Any:
     if isinstance(value, str):
         return value.strip()
     return value
+
+
+def _resolve_active_video_model_id(package: dict[str, Any]) -> str:
+    input_pkg = _safe_dict(package.get("input"))
+    for key in ("video_model", "video_model_id", "model_id"):
+        value = str(input_pkg.get(key) or "").strip().lower()
+        if value:
+            return value
+    return DEFAULT_VIDEO_MODEL_ID
 
 
 def _round3(value: Any) -> float:
@@ -242,6 +260,15 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     role_plan = _safe_dict(package.get("role_plan"))
     scene_windows = _build_scene_windows(audio_map)
     world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
+    model_id = _resolve_active_video_model_id(package)
+    route_capability_profiles = {
+        route: {
+            "route_type": route,
+            "profile": get_video_model_capability_profile(model_id, route),
+            "scene_grammar_hints": get_scene_grammar_hints(model_id, route),
+        }
+        for route in ("i2v", "ia2v", "first_last")
+    }
 
     context = {
         "mode": "clip",
@@ -286,6 +313,18 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "baseball_cap_policy": "cap is continuity/silhouette anchor; not default action driver",
             "first_last_modes": sorted(FIRST_LAST_MODES),
         },
+        "video_capability_canon": {
+            "model_id": model_id,
+            "capability_rules_source_version": get_capability_rules_source_version(),
+            "route_profiles": route_capability_profiles,
+            "first_last_pairing_rules": get_first_last_pairing_rules(model_id),
+            "lipsync_rules": get_lipsync_rules(model_id),
+            "usage_policy": {
+                "prefer_verified_safe_by_default": True,
+                "experimental_is_opt_in_not_default": True,
+                "blocked_patterns_must_be_avoided": True,
+            },
+        },
     }
     aux = {
         "scene_windows": scene_windows,
@@ -296,6 +335,12 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
 
 
 def _build_prompt(context: dict[str, Any]) -> str:
+    canon = _safe_dict(context.get("video_capability_canon"))
+    route_profiles = _safe_dict(canon.get("route_profiles"))
+    i2v_profile = _safe_dict(_safe_dict(route_profiles.get("i2v")).get("profile"))
+    i2v_safe = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("verified_safe")) if str(v).strip()])
+    i2v_experimental = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("experimental")) if str(v).strip()])
+    i2v_blocked = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("blocked")) if str(v).strip()])
     return (
         "You are SCENE PLAN stage for scenario pipeline.\\n"
         "Return STRICT JSON only. No markdown.\\n"
@@ -320,10 +365,12 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Progress through shot scale, camera intimacy, performance openness, and focal event type.\\n"
         "Add motion/prop complexity risk tags for each scene for downstream prompt simplification and strategy redirection.\\n\\n"
         "When story_core.scenes exists, use its visual_intent, scene_function_hint, continuity_requirement, and allowed_variation as planning hints.\\n"
-        "LTX 2.3 MOTION CANON:\\n"
-        f"- SAFE/DEFAULT-ON: {', '.join(SAFE_MOTION_CANON)}.\\n"
-        f"- CAUTION (rare, only when needed): {', '.join(CAUTION_MOTION_CANON)}.\\n"
-        f"- FORBIDDEN/DEFAULT-OFF: {', '.join(FORBIDDEN_MOTION_CANON)}.\\n"
+        "VIDEO CAPABILITY CANON (from model profile, use as source of truth):\\n"
+        f"- MODEL: {str(canon.get('model_id') or DEFAULT_VIDEO_MODEL_ID)}; VERSION: {str(canon.get('capability_rules_source_version') or '')}.\\n"
+        f"- i2v VERIFIED_SAFE (default-on): {i2v_safe}.\\n"
+        f"- i2v EXPERIMENTAL (opt-in only): {i2v_experimental}.\\n"
+        f"- i2v BLOCKED (must not normalize): {i2v_blocked}.\\n"
+        "Never treat experimental as baseline and never select blocked patterns.\\n"
         "Camera-led transitions are generally more reliable than fine-motor body actions; prefer camera/framing evolution when both can express the beat.\\n"
         "Baseball cap must stay continuity/silhouette/mood anchor, not default action driver.\\n"
         "Do not use cap touching/brim finger choreography as generic fallback motion.\\n\\n"
@@ -1063,6 +1110,14 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
     scene_windows = _safe_list(aux.get("scene_windows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
     world_summary_used = bool(aux.get("world_summary_used"))
+    model_id = str(_safe_dict(context.get("video_capability_canon")).get("model_id") or DEFAULT_VIDEO_MODEL_ID)
+    capability_diag = build_capability_diagnostics_summary(
+        model_id=model_id,
+        route_type="mixed",
+        story_core_guard_applied=False,
+        scene_plan_guard_applied=True,
+        prompt_guard_applied=False,
+    )
 
     diagnostics = {
         "prompt_version": SCENE_PLAN_PROMPT_VERSION,
@@ -1070,6 +1125,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
         "scene_count": len(scene_windows),
         "watchability_fallback_count": 0,
         "world_summary_used": world_summary_used,
+        **capability_diag,
     }
 
     if not scene_windows:
