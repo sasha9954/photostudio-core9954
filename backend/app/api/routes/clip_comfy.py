@@ -775,14 +775,45 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
     ).strip().lower()
     if pipeline_mode == "scenario_stage_v1":
         incoming_package = req.get("storyboardPackage") if isinstance(req.get("storyboardPackage"), dict) else {}
-        package = incoming_package or create_storyboard_package(req)
+        stage_id = str(req.get("stageId") or "").strip()
+        if incoming_package:
+            package = incoming_package
+            if stage_id == "story_core":
+                base_package = create_storyboard_package(req)
+                package = {
+                    **base_package,
+                    **incoming_package,
+                    "input": incoming_package.get("input") if isinstance(incoming_package.get("input"), dict) else base_package.get("input"),
+                    "refs_inventory": (
+                        incoming_package.get("refs_inventory")
+                        if isinstance(incoming_package.get("refs_inventory"), dict)
+                        else base_package.get("refs_inventory")
+                    ),
+                    "assigned_roles": (
+                        incoming_package.get("assigned_roles")
+                        if isinstance(incoming_package.get("assigned_roles"), dict)
+                        else base_package.get("assigned_roles")
+                    ),
+                    "audio_map": incoming_package.get("audio_map") if isinstance(incoming_package.get("audio_map"), dict) else {},
+                    "stage_statuses": (
+                        incoming_package.get("stage_statuses")
+                        if isinstance(incoming_package.get("stage_statuses"), dict)
+                        else base_package.get("stage_statuses")
+                    ),
+                    "diagnostics": (
+                        incoming_package.get("diagnostics")
+                        if isinstance(incoming_package.get("diagnostics"), dict)
+                        else base_package.get("diagnostics")
+                    ),
+                }
+        else:
+            package = create_storyboard_package(req)
         package, package_changed = _sync_stage_package_input(package, req)
         if package_changed:
             package = mark_stale_downstream(package, "input_package", reason="payload_refresh")
         mark_stale_from = str(req.get("markStaleFrom") or "").strip()
         if mark_stale_from:
             package = mark_stale_downstream(package, mark_stale_from, reason=str(req.get("staleReason") or ""))
-        stage_id = str(req.get("stageId") or "").strip()
         stage_ids = req.get("stageIds") if isinstance(req.get("stageIds"), list) else []
         auto_run = bool(req.get("autoRun"))
         if stage_id:

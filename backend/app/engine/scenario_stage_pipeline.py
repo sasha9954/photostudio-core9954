@@ -695,6 +695,9 @@ def _build_story_core_rules() -> dict[str, Any]:
             "examples": ["no neon", "no club", "realism", "local environment tone"],
             "allow_user_authorized_style_override_only": True,
             "forbid_wholesale_identity_replacement": True,
+            "director_note_world_lock_is_hard_constraint": True,
+            "forbid_neon_club_warehouse_drift_when_director_note_blocks_it": True,
+            "audio_cannot_override_explicit_world_lock": True,
         },
         "core_stage_boundaries": {
             "forbid_route_selection": True,
@@ -713,6 +716,114 @@ def _extract_story_user_concept(input_pkg: dict[str, Any]) -> str:
     return ""
 
 
+def _collect_story_core_refs_by_role(
+    input_pkg: dict[str, Any],
+    refs_inventory: dict[str, Any],
+    connected_summary: dict[str, Any],
+) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    refs_by_role = _safe_dict(input_pkg.get("refs_by_role"))
+    connected_refs_by_role = _safe_dict(connected_summary.get("refsByRole"))
+    connected_refs_present = _safe_dict(connected_summary.get("refsPresentByRole"))
+    connected_attached_present = _safe_dict(connected_summary.get("connectedRefsPresentByRole"))
+
+    def _append(role: str, candidate: str) -> None:
+        clean_role = str(role or "").strip()
+        clean_url = str(candidate or "").strip()
+        if not clean_role or not clean_url:
+            return
+        bucket = normalized.setdefault(clean_role, [])
+        if clean_url not in bucket:
+            bucket.append(clean_url)
+
+    for role, urls in refs_by_role.items():
+        for value in _safe_list(urls):
+            _append(str(role), str(value))
+    for role, urls in connected_refs_by_role.items():
+        for value in _safe_list(urls):
+            _append(str(role), str(value))
+    for role in ("character_1", "character_2", "character_3", "props", "location", "style", "animal", "group"):
+        ref_key = _role_to_ref_key(role)
+        for value in _extract_ref_urls(refs_inventory.get(ref_key)):
+            _append(role, value)
+        selected_refs = _safe_dict(input_pkg.get("selected_refs"))
+        selected_value = selected_refs.get(role)
+        if isinstance(selected_value, list):
+            for value in _safe_list(selected_value):
+                _append(role, str(value))
+        else:
+            _append(role, str(selected_value or ""))
+        if bool(connected_refs_present.get(role)) and role not in normalized:
+            normalized[role] = []
+        if bool(connected_attached_present.get(role)) and role not in normalized:
+            normalized[role] = []
+    return normalized
+
+
+def _build_story_core_compact_refs_manifest(
+    *,
+    refs_by_role: dict[str, list[str]],
+    ref_attachment_summary: dict[str, Any],
+    connected_summary: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    attached = _safe_dict(ref_attachment_summary)
+    connected_present = _safe_dict(connected_summary.get("refsPresentByRole"))
+    connected_attached_present = _safe_dict(connected_summary.get("connectedRefsPresentByRole"))
+    connected_role_ids = [str(role).strip() for role in _safe_list(connected_summary.get("connectedRoleIds")) if str(role).strip()]
+    ordered_roles = [
+        "character_1", "character_2", "character_3", "props", "location", "style", "animal", "group",
+    ]
+    role_set: set[str] = set(connected_role_ids)
+    role_set.update(str(role).strip() for role in refs_by_role.keys() if str(role).strip())
+    for role in ordered_roles:
+        if bool(connected_present.get(role)) or bool(connected_attached_present.get(role)):
+            role_set.add(role)
+    available_roles = sorted(role_set)
+    label_map = {
+        "character_1": "Character 1",
+        "character_2": "Character 2",
+        "character_3": "Character 3",
+        "props": "Props",
+        "location": "Location",
+        "style": "Style",
+        "animal": "Animal",
+        "group": "Group",
+    }
+    attached_refs: dict[str, Any] = {}
+    attached_roles: list[str] = []
+    for role in available_roles:
+        urls = _safe_list(refs_by_role.get(role))
+        attachment_row = _safe_dict(attached.get(role))
+        is_attached = bool(attachment_row.get("attached")) or bool(urls) or bool(connected_attached_present.get(role))
+        if is_attached:
+            attached_roles.append(role)
+        attached_refs[role] = {
+            "count": len(urls) or int(attachment_row.get("count") or 0) or (1 if bool(connected_attached_present.get(role)) else 0),
+            "attached": is_attached,
+            "label": label_map.get(role) or role.replace("_", " ").title(),
+        }
+    return {"available_roles": available_roles, "attached_refs": attached_refs}, attached_roles
+
+
+def _extract_director_world_lock_summary(input_pkg: dict[str, Any], story_user_concept: str) -> str:
+    user_text = " ".join(
+        [
+            str(input_pkg.get("director_note") or "").strip(),
+            str(input_pkg.get("note") or "").strip(),
+            str(input_pkg.get("story_text") or "").strip(),
+            str(input_pkg.get("text") or "").strip(),
+            str(story_user_concept or "").strip(),
+        ]
+    ).strip().lower()
+    if not user_text:
+        return ""
+    markers = []
+    for token in ("not club", "не клуб", "not neon", "не неон", "not warehouse", "не warehouse", "iran", "иран", "realistic"):
+        if token in user_text:
+            markers.append(token)
+    return ", ".join(markers[:8])
+
+
 def _build_story_core_input_context(
     *,
     input_pkg: dict[str, Any],
@@ -722,42 +833,52 @@ def _build_story_core_input_context(
     ref_attachment_summary: dict[str, Any],
     grounding_level: str,
 ) -> dict[str, Any]:
-    refs_by_role = _safe_dict(input_pkg.get("refs_by_role"))
-    available_roles = sorted(
-        {
-            role
-            for role in (
-                "character_1",
-                "character_2",
-                "character_3",
-                "props",
-                "location",
-                "style",
-                "animal",
-                "group",
-            )
-            if _safe_list(refs_by_role.get(role))
-        }
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    normalized_refs_by_role = _collect_story_core_refs_by_role(input_pkg, refs_inventory, connected_summary)
+    compact_refs_manifest, attached_ref_roles = _build_story_core_compact_refs_manifest(
+        refs_by_role=normalized_refs_by_role,
+        ref_attachment_summary=ref_attachment_summary,
+        connected_summary=connected_summary,
     )
-    return {
-        "audio_map": {
-            "duration_sec": _to_float(audio_map.get("duration_sec"), 0.0),
-            "analysis_mode": str(audio_map.get("analysis_mode") or ""),
-            "global_arc_hint": str(audio_map.get("global_arc_hint") or ""),
-            "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
-            "scene_candidate_windows": _safe_list(audio_map.get("scene_candidate_windows")),
-        },
-        "available_roles": available_roles,
-        "refs_by_role": refs_by_role,
-        "available_refs": {
-            "selected_refs": _safe_dict(input_pkg.get("selected_refs")),
-            "refs_inventory": refs_inventory,
-            "ref_attachment_summary": ref_attachment_summary,
-        },
-        "user_concept": _extract_story_user_concept(input_pkg),
-        "story_rules": _build_story_core_rules(),
+    story_user_concept = _extract_story_user_concept(input_pkg)
+    audio_dramaturgy = _safe_dict(audio_map.get("audio_dramaturgy"))
+    audio_summary = {
+        "duration_sec": _to_float(audio_map.get("duration_sec"), 0.0),
+        "analysis_mode": str(audio_map.get("analysis_mode") or ""),
+        "global_arc_hint": str(audio_map.get("global_arc_hint") or ""),
+        "energy_curve_summary": str(audio_dramaturgy.get("energy_curve_summary") or ""),
+        "dominant_energy": str(audio_dramaturgy.get("dominant_energy") or ""),
+        "window_counts": _safe_dict(audio_dramaturgy.get("window_counts")),
+    }
+    director_world_lock_summary = _extract_director_world_lock_summary(input_pkg, story_user_concept)
+    connected_role_summary = {
+        "connectedRoleIds": [str(role).strip() for role in _safe_list(connected_summary.get("connectedRoleIds")) if str(role).strip()],
+        "refsPresentByRole": _safe_dict(connected_summary.get("refsPresentByRole")),
+        "connectedRefsPresentByRole": _safe_dict(connected_summary.get("connectedRefsPresentByRole")),
+    }
+    compact_context = {
+        "director_note": str(input_pkg.get("director_note") or "").strip(),
+        "story_text": str(input_pkg.get("story_text") or "").strip(),
+        "note": str(input_pkg.get("note") or "").strip(),
+        "user_concept": story_user_concept,
+        "audio_summary": audio_summary,
+        "connected_role_summary": connected_role_summary,
+        "compact_refs_manifest": compact_refs_manifest,
+        "assigned_roles": _safe_dict(input_pkg.get("assigned_roles_override")),
         "story_core_prop_contracts": prop_contracts,
-        "story_core_grounding_level": grounding_level,
+        "world_style_identity_constraints": {
+            "director_world_lock_summary": director_world_lock_summary,
+            "grounding_level": grounding_level,
+        },
+        "story_rules": _build_story_core_rules(),
+    }
+    return {
+        **compact_context,
+        "available_roles": _safe_list(compact_refs_manifest.get("available_roles")),
+        "refs_by_role": normalized_refs_by_role,
+        "story_core_attached_ref_roles": attached_ref_roles,
+        "story_core_director_world_lock_summary": director_world_lock_summary,
+        "story_core_compact_context_size_estimate": len(json.dumps(_compact_prompt_payload(compact_context), ensure_ascii=False)),
     }
 
 
@@ -885,6 +1006,9 @@ def _build_story_core_prompt(
         "Use the character image reference to infer hero gender presentation (male/female/androgynous), approximate age, visual mood, and core appearance markers.\n"
         "Keep appearance notes compact and production-usable; do not describe every tiny detail, only stable identity-relevant ones.\n"
         "Audio must be primary dramaturgic driver; lyrics are secondary optional signal.\n"
+        "HARD CONTRACT: Director note/user concept world constraints are NON-NEGOTIABLE and override generic music-video tropes.\n"
+        "HARD CONTRACT: If note says no club/no neon/no warehouse and requests realistic Iranian urban environment, NEVER switch to neon/club/warehouse aesthetics.\n"
+        "HARD CONTRACT: Audio affects rhythm/emotional arc/pacing only; audio cannot rewrite locked world constraints.\n"
         "If lyrics are weak/repetitive, rely on rhythm/energy/repetition/emotional contour and user concept.\n"
         "Scenes must be distinct even for repeating musical structures (action/space/shot scale/angle/world relation/prop relation/emotional evolution).\n"
         "Required top-level keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock, scenes.\n"
@@ -1486,6 +1610,10 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_props_ref_attached"] = False
     diagnostics["story_core_location_ref_attached"] = False
     diagnostics["story_core_style_ref_attached"] = False
+    diagnostics["story_core_payload_mode"] = "full"
+    diagnostics["story_core_available_roles_resolved"] = []
+    diagnostics["story_core_director_world_lock_summary"] = ""
+    diagnostics["story_core_compact_context_size_estimate"] = 0
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "story_core audio-informed build requested", stage_id="story_core")
     try:
@@ -1510,8 +1638,10 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["story_core_ref_attachment_summary"] = ref_attachment_summary
         diagnostics["story_core_grounding_level"] = grounding_level
         package["diagnostics"] = diagnostics
+        input_with_assignments = dict(input_pkg)
+        input_with_assignments["assigned_roles_override"] = assigned_roles
         core_input_context = _build_story_core_input_context(
-            input_pkg=input_pkg,
+            input_pkg=input_with_assignments,
             audio_map=audio_map,
             refs_inventory=refs_inventory,
             prop_contracts=prop_contracts,
@@ -1519,6 +1649,11 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
             grounding_level=grounding_level,
         )
         diagnostics["story_core_available_roles"] = _safe_list(core_input_context.get("available_roles"))
+        diagnostics["story_core_available_roles_resolved"] = _safe_list(core_input_context.get("available_roles"))
+        diagnostics["story_core_attached_ref_roles"] = _safe_list(core_input_context.get("story_core_attached_ref_roles"))
+        diagnostics["story_core_director_world_lock_summary"] = str(core_input_context.get("story_core_director_world_lock_summary") or "")
+        diagnostics["story_core_compact_context_size_estimate"] = int(core_input_context.get("story_core_compact_context_size_estimate") or 0)
+        diagnostics["story_core_payload_mode"] = "lean"
         package["diagnostics"] = diagnostics
         prompt = _build_story_core_prompt(
             core_input_context,
