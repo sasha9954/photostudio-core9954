@@ -899,85 +899,6 @@ def _infer_watchability_role(scene: dict[str, Any], idx: int, total: int) -> str
     return "sustain watchable continuity and momentum"
 
 
-def _rebalance_routes(scenes: list[dict[str, Any]], target: dict[str, int]) -> bool:
-    if not scenes:
-        return False
-
-    changed = False
-
-    def counts() -> dict[str, int]:
-        return {route: sum(1 for row in scenes if row.get("route") == route) for route in ("i2v", "ia2v", "first_last")}
-
-    cur = counts()
-    total = len(scenes)
-    for _ in range(total * 4):
-        deficits = [route for route in ("i2v", "ia2v", "first_last") if cur[route] + 1 < target.get(route, 0)]
-        surpluses = [route for route in ("i2v", "ia2v", "first_last") if cur[route] > target.get(route, 0) + 1]
-        if not deficits or not surpluses:
-            break
-
-        desired = sorted(deficits, key=lambda route: (target.get(route, 0) - cur[route]), reverse=True)[0]
-        best_idx = -1
-        best_gain = -999
-        for idx, row in enumerate(scenes):
-            current_route = str(row.get("route") or "")
-            if current_route not in surpluses:
-                continue
-            score = _route_scores(row, idx, total, scenes=scenes)
-            if desired == "first_last" and not _is_first_last_candidate(row, idx, total):
-                continue
-            gain = score.get(desired, 0) - score.get(current_route, 0)
-            if gain > best_gain:
-                best_gain = gain
-                best_idx = idx
-
-        if best_idx < 0:
-            break
-
-        row = scenes[best_idx]
-        prev = str(row.get("route") or "")
-        row["route"] = desired
-        row["route_reason"] = (str(row.get("route_reason") or "").strip() + f" [route_rebalanced:{prev}->{desired}]").strip()
-        changed = True
-        cur = counts()
-
-    for _ in range(total * 3):
-        if not _has_adjacent_route(scenes, "ia2v"):
-            break
-        improved = False
-        for idx in range(1, total):
-            if str(scenes[idx - 1].get("route") or "") != "ia2v" or str(scenes[idx].get("route") or "") != "ia2v":
-                continue
-            candidate_indices = [idx - 1, idx]
-            for target_idx in candidate_indices:
-                row = scenes[target_idx]
-                current_route = str(row.get("route") or "")
-                alternatives = [r for r in ("i2v", "first_last") if cur[r] < target.get(r, 0) or current_route == "ia2v"]
-                best_route = ""
-                best_gain = -999
-                for alt in alternatives:
-                    score = _route_scores(row, target_idx, total, scenes=scenes)
-                    gain = score.get(alt, 0) - score.get(current_route, 0)
-                    gain += _route_adjacency_penalty(scenes, target_idx, current_route) - _route_adjacency_penalty(scenes, target_idx, alt)
-                    if gain > best_gain:
-                        best_gain = gain
-                        best_route = alt
-                if best_route:
-                    row["route"] = best_route
-                    row["route_reason"] = (
-                        str(row.get("route_reason") or "").strip() + f" [route_spacing:ia2v_adjacent->{best_route}]"
-                    ).strip()
-                    changed = True
-                    cur = counts()
-                    improved = True
-                    break
-            if improved:
-                break
-        if not improved:
-            break
-
-    return changed
-
 
 def _normalize_scene_plan(
     raw_plan: dict[str, Any],
@@ -1011,6 +932,7 @@ def _normalize_scene_plan(
     scene_family_seen_counts: dict[str, int] = {}
     transit_scene_streak = 0
     intimate_scene_streak = 0
+    route_swaps_applied = 0
 
     ordered_fallback_rows = [
         _safe_dict(row_raw)
@@ -1054,7 +976,7 @@ def _normalize_scene_plan(
             phrase_repeat_idx = seen_phrase_counts.get(phrase_text, 0)
             seen_phrase_counts[phrase_text] = phrase_repeat_idx + 1
         shot_scale, camera_intimacy, performance_openness = _progression_by_position(idx, len(scene_windows))
-        visual_event_type = _visual_event_type({**window, **role_row, **raw_row, "route": route})
+        visual_event_type_default = _visual_event_type({**window, **role_row, **raw_row, "route": route})
         repeat_variation_rule = str(raw_row.get("repeat_variation_rule") or "").strip()
         if not repeat_variation_rule:
             if phrase_repeat_idx > 0:
@@ -1062,6 +984,26 @@ def _normalize_scene_plan(
             else:
                 repeat_variation_rule = "first_occurrence_anchor"
         motion_risk = _infer_motion_risk({**window, **role_row, **raw_row}, phrase_text)
+
+        route_validation_status = "ok"
+        route_validation_reason = ""
+        suggested_route = ""
+        capability_warnings: list[str] = []
+        continuity_warnings: list[str] = []
+        anti_repeat_warnings: list[str] = []
+
+        if route == "first_last" and not _is_first_last_candidate({**window, **role_row, **raw_row, "route": route}, idx, len(scene_windows)):
+            route_validation_status = "risky"
+            route_validation_reason = "first_last_continuity_risk"
+            suggested_route = "i2v"
+            continuity_warnings.append("first_last_continuity_risk")
+
+        if route == "i2v":
+            candidate_family = str(raw_row.get("i2v_motion_family") or "").strip().lower()
+            if candidate_family and candidate_family not in I2V_MOTION_FAMILIES:
+                route_validation_status = "warning" if route_validation_status == "ok" else route_validation_status
+                capability_warnings.append("unsupported_i2v_motion_family")
+
         scene_row = {
             "scene_id": scene_id,
             "t0": _round3(window.get("t0")),
@@ -1072,47 +1014,49 @@ def _normalize_scene_plan(
             "scene_presence_mode": scene_presence_mode,
             "scene_function": scene_function,
             "route": route,
-            "route_reason": str(raw_row.get("route_reason") or "").strip() or "route_selected_by_policy",
+            "route_reason": str(raw_row.get("route_reason") or "").strip() or "route_selected_by_model",
             "emotional_intent": str(raw_row.get("emotional_intent") or "").strip() or "emotionally coherent clip beat",
             "motion_intent": str(raw_row.get("motion_intent") or "").strip() or "watchable realistic movement",
-            "watchability_role": watchability_role_raw,
+            "watchability_role": watchability_role_raw or _infer_watchability_role({**window, **role_row, **raw_row, "route": route}, idx, len(scene_windows)),
             "performance_focus": bool(role_row.get("performance_focus")),
             "energy": str(window.get("energy") or "").strip().lower(),
             "shot_scale": str(raw_row.get("shot_scale") or "").strip().lower() or shot_scale,
             "camera_intimacy": str(raw_row.get("camera_intimacy") or "").strip().lower() or camera_intimacy,
             "performance_openness": str(raw_row.get("performance_openness") or "").strip().lower() or performance_openness,
-            "visual_event_type": str(raw_row.get("visual_event_type") or "").strip().lower() or visual_event_type,
+            "visual_event_type": str(raw_row.get("visual_event_type") or "").strip().lower() or visual_event_type_default,
             "repeat_variation_rule": repeat_variation_rule,
             "motion_risk": _safe_dict(raw_row.get("motion_risk")) or motion_risk,
+            "route_validation_status": route_validation_status,
+            "route_validation_reason": route_validation_reason,
+            "suggested_route": suggested_route,
+            "capability_warnings": capability_warnings,
+            "continuity_warnings": continuity_warnings,
+            "anti_repeat_warnings": anti_repeat_warnings,
+            "original_route": route_raw,
         }
+
+        if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
+            watchability_fallback_count += 1
+            capability_warnings.append("weak_watchability_role")
+
         if _is_transit_like_scene(scene_row):
             transit_scene_streak += 1
         else:
             transit_scene_streak = 0
-        if visual_event_type == "face" and route == "ia2v":
+        if str(scene_row.get("visual_event_type") or "") == "face" and route == "ia2v":
             intimate_scene_streak += 1
         else:
             intimate_scene_streak = 0
-        scene_family = visual_event_type or route
+        scene_family = str(scene_row.get("visual_event_type") or route)
         scene_family_seen_counts[scene_family] = scene_family_seen_counts.get(scene_family, 0) + 1
         family_repeat_idx = max(0, scene_family_seen_counts.get(scene_family, 1) - 1)
         if transit_scene_streak >= 3 and _is_transit_like_scene(scene_row):
-            anti_repeat_event = _pick_transit_anti_repeat_event(scene_row)
-            scene_row["visual_event_type"] = anti_repeat_event
-            scene_row["watchability_role"] = (
-                "anti-repeat transit variation: add a new spatial checkpoint and concrete reveal value"
-            )
-            repeat_variation_rule = (
-                f"{repeat_variation_rule}; anti_repeat: transit_family_streak_{transit_scene_streak}"
-                f" -> pivot_to_{anti_repeat_event} with new spatial information"
-            )
+            anti_repeat_warnings.append(f"transit_family_streak_{transit_scene_streak}")
         if intimate_scene_streak >= 2 and scene_row.get("route") == "ia2v":
-            repeat_variation_rule = f"{repeat_variation_rule}; anti_repeat: keep emotional beat but add new scale/space pressure"
-        if family_repeat_idx > 0 and "anti_repeat" not in repeat_variation_rule:
-            repeat_variation_rule = (
-                f"{repeat_variation_rule}; anti_repeat: family_repeat_{family_repeat_idx} requires new pressure/reveal logic"
-            )
-        scene_row["repeat_variation_rule"] = repeat_variation_rule
+            anti_repeat_warnings.append("adjacent_ia2v_intimacy_streak")
+        if family_repeat_idx > 0:
+            anti_repeat_warnings.append(f"family_repeat_{family_repeat_idx}")
+
         if route == "first_last":
             first_last_mode_raw = str(raw_row.get("first_last_mode") or "").strip().lower()
             scene_row["first_last_mode"] = _stabilize_first_last_mode(
@@ -1121,28 +1065,8 @@ def _normalize_scene_plan(
                 idx,
                 len(scene_windows),
             )
-        if route == "first_last" and not _is_first_last_candidate(scene_row, idx, len(scene_windows)):
-            route = "i2v"
-            scene_row["route"] = route
-            scene_row["route_reason"] = "first_last_rejected_non_continuity_scene"
-            scene_row.pop("first_last_mode", None)
-            used_fallback = True
-        if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
-            scene_row["watchability_role"] = _infer_watchability_role(scene_row, idx, len(scene_windows))
-            watchability_fallback_count += 1
-            used_fallback = True
         normalized_scenes.append(scene_row)
 
-    target_budget = _target_route_budget(len(normalized_scenes))
-    if _rebalance_routes(normalized_scenes, target_budget):
-        used_fallback = True
-    for idx, row in enumerate(normalized_scenes):
-        route = str(row.get("route") or "")
-        if route == "first_last":
-            mode_raw = str(row.get("first_last_mode") or "").strip().lower()
-            row["first_last_mode"] = _stabilize_first_last_mode(mode_raw, row, idx, len(normalized_scenes))
-        else:
-            row.pop("first_last_mode", None)
     i2v_motion_family_counts = {family: 0 for family in sorted(I2V_MOTION_FAMILIES)}
     i2v_rows_enriched_count = 0
     unsupported_i2v_family_count = 0
@@ -1152,28 +1076,52 @@ def _normalize_scene_plan(
         if str(row.get("route") or "") != "i2v":
             transit_i2v_streak = 0
             continue
-        enriched = _select_i2v_motion_family(
-            row,
-            idx=idx,
-            total=len(normalized_scenes),
-            prev_i2v_family=prev_i2v_family,
-            transit_streak=transit_i2v_streak,
-        )
-        row.update(enriched)
-        family = str(row.get("i2v_motion_family") or "")
-        if family not in I2V_MOTION_FAMILIES:
-            unsupported_i2v_family_count += 1
-            family = "baseline_forward_walk"
+        raw_family = str(row.get("i2v_motion_family") or "").strip().lower()
+        if raw_family and raw_family in I2V_MOTION_FAMILIES:
+            family = raw_family
             row["i2v_motion_family"] = family
+            row["i2v_prompt_duration_hint_sec"] = _pick_i2v_duration_hint(row.get("duration_sec"), family)
+        else:
+            if raw_family and raw_family not in I2V_MOTION_FAMILIES:
+                unsupported_i2v_family_count += 1
+            enriched = _select_i2v_motion_family(
+                row,
+                idx=idx,
+                total=len(normalized_scenes),
+                prev_i2v_family=prev_i2v_family,
+                transit_streak=transit_i2v_streak,
+            )
+            row.update(enriched)
+            family = str(row.get("i2v_motion_family") or "")
         i2v_motion_family_counts[family] = i2v_motion_family_counts.get(family, 0) + 1
         i2v_rows_enriched_count += 1
         prev_i2v_family = family
         transit_i2v_streak = transit_i2v_streak + 1 if family in TRANSIT_I2V_FAMILIES else 0
 
-    route_counts = {route: sum(1 for row in normalized_scenes if row.get("route") == route) for route in ("i2v", "ia2v", "first_last")}
+    route_counts = {route_name: sum(1 for row in normalized_scenes if row.get("route") == route_name) for route_name in ("i2v", "ia2v", "first_last")}
     has_adjacent_ia2v = _has_adjacent_route(normalized_scenes, "ia2v")
     has_adjacent_first_last = _has_adjacent_route(normalized_scenes, "first_last")
     route_spacing_warning = "adjacent_ia2v_detected" if has_adjacent_ia2v else ("adjacent_first_last_detected" if has_adjacent_first_last else "")
+
+    warnings_count = 0
+    unsupported_scene_count = 0
+    risky_scene_count = 0
+    for row in normalized_scenes:
+        warnings_count += (
+            len(_safe_list(row.get("capability_warnings")))
+            + len(_safe_list(row.get("continuity_warnings")))
+            + len(_safe_list(row.get("anti_repeat_warnings")))
+        )
+        status = str(row.get("route_validation_status") or "ok")
+        if status == "risky":
+            risky_scene_count += 1
+        if status == "unsupported":
+            unsupported_scene_count += 1
+
+    target_budget = _target_route_budget(len(normalized_scenes))
+    deviation_summary = {
+        route_name: int(route_counts.get(route_name, 0) - target_budget.get(route_name, 0)) for route_name in ("i2v", "ia2v", "first_last")
+    }
 
     plan = {
         "plan_version": SCENE_PLAN_PROMPT_VERSION,
@@ -1184,6 +1132,9 @@ def _normalize_scene_plan(
             "ia2v": route_counts["ia2v"],
             "first_last": route_counts["first_last"],
         },
+        "target_route_mix": target_budget,
+        "actual_route_mix": route_counts,
+        "deviation_summary": deviation_summary,
         "scenes": [
             {
                 key: value
@@ -1224,10 +1175,18 @@ def _normalize_scene_plan(
                     "parallax_required",
                     "max_camera_intensity",
                     "i2v_prompt_duration_hint_sec",
+                    "route_validation_status",
+                    "route_validation_reason",
+                    "suggested_route",
+                    "capability_warnings",
+                    "continuity_warnings",
+                    "anti_repeat_warnings",
+                    "original_route",
                 }
             }
             for row in normalized_scenes
         ],
+        "original_scenes": raw_model_rows,
         "scene_arc_summary": str(raw_plan.get("scene_arc_summary") or "").strip() or "Clip scene progression with balanced route rhythm.",
         "route_strategy_notes": [str(item).strip() for item in _safe_list(raw_plan.get("route_strategy_notes")) if str(item).strip()] or [
             "i2v remains baseline route for connective watchability.",
@@ -1242,6 +1201,14 @@ def _normalize_scene_plan(
         "i2v_motion_family_counts": i2v_motion_family_counts,
         "unsupported_i2v_family_count": unsupported_i2v_family_count,
         "i2v_rows_enriched_count": i2v_rows_enriched_count,
+        "normalization_summary": {
+            "normalization_mode": "validate_only",
+            "creative_rewrite_applied": False,
+            "route_swaps_applied": route_swaps_applied,
+            "warnings_count": warnings_count,
+            "unsupported_scene_count": unsupported_scene_count,
+            "risky_scene_count": risky_scene_count,
+        },
     }
 
     validation_error = "" if normalized_scenes else "scene_plan_empty_after_normalization"
@@ -1255,6 +1222,12 @@ def _normalize_scene_plan(
         "repaired_to_audio_windows": repaired_to_audio_windows,
         "synthetic_rows_dropped": synthetic_rows_dropped,
         "missing_rows_filled": missing_rows_filled,
+        "normalization_mode": "validate_only",
+        "creative_rewrite_applied": False,
+        "route_swaps_applied": route_swaps_applied,
+        "warnings_count": warnings_count,
+        "unsupported_scene_count": unsupported_scene_count,
+        "risky_scene_count": risky_scene_count,
     }
     return plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag
 
@@ -1300,6 +1273,12 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                 "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
                 "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
                 "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
+                "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
+                "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
+                "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
+                "warnings_count": int(normalization_diag.get("warnings_count") or 0),
+                "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
+                "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
             }
         )
         return {
@@ -1360,6 +1339,12 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                 "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
                 "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
                 "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
+                "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
+                "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
+                "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
+                "warnings_count": int(normalization_diag.get("warnings_count") or 0),
+                "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
+                "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
                 "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
                 "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
                 "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
@@ -1407,6 +1392,12 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                 "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
                 "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
                 "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
+                "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
+                "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
+                "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
+                "warnings_count": int(normalization_diag.get("warnings_count") or 0),
+                "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
+                "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
                 "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
                 "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
                 "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
