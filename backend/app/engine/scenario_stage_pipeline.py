@@ -462,6 +462,7 @@ def _default_story_core(input_pkg: dict[str, Any]) -> dict[str, Any]:
         "identity_lock": {"rule": "Keep hero identity stable across all scenes."},
         "world_lock": {"rule": "Keep world/location logic coherent without random jumps."},
         "style_lock": {"rule": "Keep one cinematic style language across the whole track."},
+        "scenes": [],
     }
 
 
@@ -556,36 +557,192 @@ def _build_audio_dramaturgy_summary(audio_map: dict[str, Any], input_pkg: dict[s
     }
 
 
-def _build_story_core_prompt(
+def _build_story_core_rules() -> dict[str, Any]:
+    return {
+        "audio_priority": {
+            "primary_signals": [
+                "rhythm_scene_timing_and_cut_structure_from_audio_map",
+                "emotional_arc_from_audio_map",
+            ],
+            "secondary_signal": "lyrics_meaning_optional_only",
+            "forbid_lyrics_only_story_derivation": True,
+            "fallback_when_lyrics_weak": [
+                "rhythm",
+                "energy_pattern",
+                "repetition_pattern",
+                "emotional_contour",
+                "user_concept",
+            ],
+        },
+        "ref_usage": {
+            "refs_are_cast_and_objects": True,
+            "refs_are_world_anchors": True,
+            "props_can_drive_dramaturgy": True,
+            "forbid_rewriting_face_identity": True,
+            "forbid_rewriting_key_prop_identity": True,
+        },
+        "appearance_policy": {
+            "allow_controlled_styling_variation": True,
+            "forbid_full_character_reinvention": True,
+            "must_keep_face_identity": True,
+            "must_keep_key_prop_identity": True,
+            "must_keep_core_silhouette": True,
+            "headwear_optional_not_mandatory": True,
+            "forbid_default_headwear_takeoff_puton_actions": True,
+            "forbid_scene_to_scene_full_wardrobe_replacement": True,
+            "limit_active_object_complexity_per_scene": True,
+        },
+        "hair_headwear_compatibility": {
+            "baseball_cap_hair_should_be_believable": True,
+            "preferred_hair_arrangements_with_cap": ["long straight hair", "long loose hair", "low ponytail"],
+            "forbid_unnatural_hair_hidden_inside_cap": True,
+            "forbid_top_bun_high_bun_cap_conflict": True,
+        },
+        "world_lock": {
+            "respect_user_world_constraints": True,
+            "examples": ["no neon", "no club", "realism", "local environment tone"],
+            "allow_user_authorized_style_override_only": True,
+            "forbid_wholesale_identity_replacement": True,
+        },
+        "core_stage_boundaries": {
+            "forbid_route_selection": True,
+            "forbid_i2v_ia2v_first_last_selection": True,
+            "forbid_final_prompt_writing": True,
+            "forbid_final_package_assembly": True,
+        },
+    }
+
+
+def _extract_story_user_concept(input_pkg: dict[str, Any]) -> str:
+    for key in ("director_note", "note", "story_text", "text"):
+        value = str(input_pkg.get(key) or "").strip()
+        if value:
+            return value[:1400]
+    return ""
+
+
+def _build_story_core_input_context(
+    *,
     input_pkg: dict[str, Any],
     audio_map: dict[str, Any],
     refs_inventory: dict[str, Any],
-    assigned_roles: dict[str, Any],
-    story_core_mode: str,
     prop_contracts: list[dict[str, Any]],
     ref_attachment_summary: dict[str, Any],
     grounding_level: str,
-) -> str:
-    compact_input = {
-        "audio_url": str(input_pkg.get("audio_url") or ""),
-        "audio_duration_sec": float(input_pkg.get("audio_duration_sec") or 0.0),
-        "text": str(input_pkg.get("text") or ""),
-        "story_text": str(input_pkg.get("story_text") or ""),
-        "note": str(input_pkg.get("note") or ""),
-        "director_note": str(input_pkg.get("director_note") or ""),
-        "content_type": str(input_pkg.get("content_type") or "music_video"),
-        "format": str(input_pkg.get("format") or "9:16"),
-        "selected_refs": _safe_dict(input_pkg.get("selected_refs")),
-        "refs_by_role": _safe_dict(input_pkg.get("refs_by_role")),
-        "connected_context_summary": _safe_dict(input_pkg.get("connected_context_summary")),
+) -> dict[str, Any]:
+    refs_by_role = _safe_dict(input_pkg.get("refs_by_role"))
+    available_roles = sorted(
+        {
+            role
+            for role in (
+                "character_1",
+                "character_2",
+                "character_3",
+                "props",
+                "location",
+                "style",
+                "animal",
+                "group",
+            )
+            if _safe_list(refs_by_role.get(role))
+        }
+    )
+    return {
+        "audio_map": {
+            "duration_sec": _to_float(audio_map.get("duration_sec"), 0.0),
+            "analysis_mode": str(audio_map.get("analysis_mode") or ""),
+            "global_arc_hint": str(audio_map.get("global_arc_hint") or ""),
+            "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
+            "scene_candidate_windows": _safe_list(audio_map.get("scene_candidate_windows")),
+        },
+        "available_roles": available_roles,
+        "refs_by_role": refs_by_role,
+        "available_refs": {
+            "selected_refs": _safe_dict(input_pkg.get("selected_refs")),
+            "refs_inventory": refs_inventory,
+            "ref_attachment_summary": ref_attachment_summary,
+        },
+        "user_concept": _extract_story_user_concept(input_pkg),
+        "story_rules": _build_story_core_rules(),
         "story_core_prop_contracts": prop_contracts,
-        "story_core_ref_attachment_summary": ref_attachment_summary,
         "story_core_grounding_level": grounding_level,
-        "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
     }
-    compact_input = _compact_prompt_payload(compact_input)
+
+
+def _default_story_core_scenes(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
+    scenes: list[dict[str, Any]] = []
+    for idx, row_raw in enumerate(_safe_list(audio_map.get("scene_candidate_windows")), start=1):
+        row = _safe_dict(row_raw)
+        t0 = _to_float(row.get("t0"), 0.0)
+        t1 = _to_float(row.get("t1"), t0)
+        if t1 <= t0:
+            continue
+        scene_function = str(row.get("scene_function") or "build").strip() or "build"
+        scenes.append(
+            {
+                "scene_id": str(row.get("id") or f"sc_{idx}").strip() or f"sc_{idx}",
+                "t0": round(t0, 3),
+                "t1": round(t1, 3),
+                "scene_goal": "Advance audio-driven narrative beat with clear visible action.",
+                "emotional_intent": str(row.get("energy") or "grounded").strip(),
+                "visual_intent": "Readable subject and world continuity with distinct framing progression.",
+                "action": "Simple, observable action aligned to rhythm and beat.",
+                "continuity_requirement": "Keep identity/world/style continuity from adjacent scenes.",
+                "role_hints": ["character_1"],
+                "prop_role_in_scene": "continuity",
+                "must_remain_same": ["face_identity", "world_family", "core_silhouette"],
+                "allowed_variation": ["camera_distance", "camera_angle", "micro_blocking"],
+                "scene_function_hint": scene_function,
+            }
+        )
+    return scenes
+
+
+def _normalize_story_core_scenes(raw_scenes: Any, audio_map: dict[str, Any]) -> list[dict[str, Any]]:
+    fallback_scenes = _default_story_core_scenes(audio_map)
+    fallback_by_id = {str(row.get("scene_id") or ""): row for row in fallback_scenes}
+    out: list[dict[str, Any]] = []
+    for idx, raw in enumerate(_safe_list(raw_scenes), start=1):
+        row = _safe_dict(raw)
+        fallback = fallback_by_id.get(str(row.get("scene_id") or "").strip()) or (
+            fallback_scenes[idx - 1] if idx - 1 < len(fallback_scenes) else {}
+        )
+        fallback = _safe_dict(fallback)
+        scene_id = str(row.get("scene_id") or fallback.get("scene_id") or f"sc_{idx}").strip() or f"sc_{idx}"
+        role_hints = [str(item).strip() for item in _safe_list(row.get("role_hints")) if str(item).strip()]
+        if not role_hints:
+            role_hints = _safe_list(fallback.get("role_hints")) or ["character_1"]
+        out.append(
+            {
+                "scene_id": scene_id,
+                "t0": round(_to_float(row.get("t0"), _to_float(fallback.get("t0"), 0.0)), 3),
+                "t1": round(_to_float(row.get("t1"), _to_float(fallback.get("t1"), 0.0)), 3),
+                "scene_goal": str(row.get("scene_goal") or fallback.get("scene_goal") or "").strip(),
+                "emotional_intent": str(row.get("emotional_intent") or fallback.get("emotional_intent") or "").strip(),
+                "visual_intent": str(row.get("visual_intent") or fallback.get("visual_intent") or "").strip(),
+                "action": str(row.get("action") or fallback.get("action") or "").strip(),
+                "continuity_requirement": str(row.get("continuity_requirement") or fallback.get("continuity_requirement") or "").strip(),
+                "role_hints": role_hints,
+                "prop_role_in_scene": str(row.get("prop_role_in_scene") or fallback.get("prop_role_in_scene") or "continuity").strip(),
+                "must_remain_same": [str(item).strip() for item in _safe_list(row.get("must_remain_same")) if str(item).strip()]
+                or _safe_list(fallback.get("must_remain_same")),
+                "allowed_variation": [str(item).strip() for item in _safe_list(row.get("allowed_variation")) if str(item).strip()]
+                or _safe_list(fallback.get("allowed_variation")),
+                "scene_function_hint": str(row.get("scene_function_hint") or fallback.get("scene_function_hint") or "build").strip(),
+            }
+        )
+    if not out:
+        return fallback_scenes
+    return out
+
+
+def _build_story_core_prompt(
+    core_input_context: dict[str, Any],
+    assigned_roles: dict[str, Any],
+    story_core_mode: str,
+) -> str:
+    compact_input = _compact_prompt_payload(core_input_context)
     compact_assigned_roles = _compact_prompt_payload(assigned_roles)
-    compact_refs_inventory = _compact_prompt_payload(refs_inventory)
     mode = "directed" if story_core_mode == "directed" else "creative"
     mode_instructions = (
         "MODE: DIRECTED MODE\n"
@@ -616,9 +773,9 @@ def _build_story_core_prompt(
     return (
         "You are STORY CORE stage of a scenario pipeline.\n"
         "Return STRICT JSON only, no markdown.\n"
-        "story_core is source of truth for arc/identity/world/style, not a storyboard.\n"
-        "Do NOT output scenes, prompts, shot list, or giant plan.\n"
-        "Use roles/refs/content type to infer protagonist and supporting cast.\n"
+        "story_core is source of truth for arc/identity/world/style/scenario layer.\n"
+        "Write narrative/scenario from track timing + refs cast + optional user concept.\n"
+        "Use refs as actors/objects anchors, not decorative prose inspiration.\n"
         "If a character image reference is attached, treat it as the source of truth for hero appearance and gender presentation.\n"
         "Connected prop refs are source-of-truth for object identity and object category.\n"
         "Do not replace a referenced prop with a semantically related but different object.\n"
@@ -627,20 +784,21 @@ def _build_story_core_prompt(
         "If prop is cap/hat/headwear, it must remain headwear. baseball cap is not baseball bat.\n"
         "If character ref attachment failed, keep character visuals conservative: keep only reliable role/gender-energy hints and avoid specific visual identity claims.\n"
         "At CORE stage do not inject arbitrary accent colors or symbolic props not grounded in refs/audio/text.\n"
+        "Do not output route planning (no i2v/ia2v/first_last), no final prompts, no final package assembly.\n"
         "Do not invent a contradictory hero identity against the attached character image reference.\n"
         "Use the character image reference to infer hero gender presentation (male/female/androgynous), approximate age, visual mood, and core appearance markers.\n"
         "Keep appearance notes compact and production-usable; do not describe every tiny detail, only stable identity-relevant ones.\n"
-        "Keep each field compact and actionable.\n"
-        "In clip/music_video mode, audio energy is the default dramaturgic driver.\n"
-        "Clip mode should prioritize visual/emotional progression over literal travel plotting unless user text/refs explicitly require geographic narrative.\n"
-        "User text, when present, acts as a narrative/directorial frame, not as the sole timing/energy source.\n"
-        "Required keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock.\n"
+        "Audio must be primary dramaturgic driver; lyrics are secondary optional signal.\n"
+        "If lyrics are weak/repetitive, rely on rhythm/energy/repetition/emotional contour and user concept.\n"
+        "Scenes must be distinct even for repeating musical structures (action/space/shot scale/angle/world relation/prop relation/emotional evolution).\n"
+        "Required top-level keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock, scenes.\n"
         "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
+        "scenes must be array of objects with required keys:\n"
+        "scene_id, t0, t1, scene_goal, emotional_intent, visual_intent, action, continuity_requirement, role_hints, prop_role_in_scene, must_remain_same, allowed_variation, scene_function_hint.\n"
         f"{mode_instructions}\n"
         f"story_core_mode={mode}\n\n"
-        f"INPUT_SUMMARY:\n{json.dumps(compact_input, ensure_ascii=False)[:3500]}\n\n"
+        f"CORE_INPUT_CONTEXT:\n{json.dumps(compact_input, ensure_ascii=False)[:4200]}\n\n"
         f"ASSIGNED_ROLES:\n{json.dumps(compact_assigned_roles, ensure_ascii=False)[:1200]}\n\n"
-        f"CONTEXT_REFS:\n{json.dumps(compact_refs_inventory, ensure_ascii=False)[:2200]}\n"
     )
 
 
@@ -1204,21 +1362,25 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     fallback = _default_story_core(input_pkg)
     if not _is_usable_audio_map(audio_map):
         raise RuntimeError("story_core_requires_audio_map")
+    fallback["scenes"] = _default_story_core_scenes(audio_map)
     prop_contracts, prop_guard_applied = _normalize_story_core_prop_contracts(input_pkg, refs_inventory)
     ref_attachment_summary = {
         "character_1": {"attached": False, "error": "", "source": ""},
         "props": {"connected": bool(prop_contracts), "contracts_count": len(prop_contracts)},
     }
     grounding_level = "strict" if prop_contracts else "standard"
+    core_input_context = _build_story_core_input_context(
+        input_pkg=input_pkg,
+        audio_map=audio_map,
+        refs_inventory=refs_inventory,
+        prop_contracts=prop_contracts,
+        ref_attachment_summary=ref_attachment_summary,
+        grounding_level=grounding_level,
+    )
     prompt = _build_story_core_prompt(
-        input_pkg,
-        audio_map,
-        refs_inventory,
+        core_input_context,
         assigned_roles,
         story_core_mode,
-        prop_contracts,
-        ref_attachment_summary,
-        grounding_level,
     )
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["story_core_mode"] = story_core_mode
@@ -1233,6 +1395,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_audio_informed"] = bool(audio_map)
     diagnostics["story_core_audio_dramaturgy_source"] = "audio_map" if audio_map else ""
     diagnostics["story_core_textual_directive_present"] = bool(_has_textual_directive(input_pkg))
+    diagnostics["story_core_available_roles"] = _safe_list(core_input_context.get("available_roles"))
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "story_core audio-informed build requested", stage_id="story_core")
     try:
@@ -1252,6 +1415,10 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     "character_1": {"attached": True, "error": "", "source": character_ref_source},
                 }
                 diagnostics["story_core_grounding_level"] = "strict"
+                core_input_context["available_refs"] = {
+                    **_safe_dict(core_input_context.get("available_refs")),
+                    "ref_attachment_summary": _safe_dict(diagnostics.get("story_core_ref_attachment_summary")),
+                }
             else:
                 diagnostics["story_core_character_ref_attached"] = False
                 diagnostics["story_core_character_ref_error"] = str(inline_error or "image_attach_failed")
@@ -1264,6 +1431,10 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     },
                 }
                 diagnostics["story_core_grounding_level"] = "cautious"
+                core_input_context["available_refs"] = {
+                    **_safe_dict(core_input_context.get("available_refs")),
+                    "ref_attachment_summary": _safe_dict(diagnostics.get("story_core_ref_attachment_summary")),
+                }
             package["diagnostics"] = diagnostics
         body = {
             "contents": [{"role": "user", "parts": parts}],
@@ -1286,6 +1457,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
             "identity_lock": _safe_dict(parsed.get("identity_lock")) or fallback["identity_lock"],
             "world_lock": _safe_dict(parsed.get("world_lock")) or fallback["world_lock"],
             "style_lock": _safe_dict(parsed.get("style_lock")) or fallback["style_lock"],
+            "scenes": _normalize_story_core_scenes(parsed.get("scenes"), audio_map),
         }
         if not _is_usable_story_core(story_core):
             raise ValueError("story_core_unusable_after_parse")

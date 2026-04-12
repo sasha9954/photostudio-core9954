@@ -233,6 +233,7 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
             "identity_lock": _safe_dict(story_core.get("identity_lock")),
             "world_lock": _safe_dict(story_core.get("world_lock")),
             "style_lock": _safe_dict(story_core.get("style_lock")),
+            "scenes": _safe_list(story_core.get("scenes")),
         },
         "roles_inventory": roles_inventory,
         "scene_windows": scene_windows,
@@ -269,6 +270,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Do NOT force all roles into every scene.\n"
         "Use only roles that are present in roles_inventory.\n"
         "World refs (location/style/props) are globally visible, but scene-level should explicitly mark active/inactive.\n"
+        "Use story_core.scenes as dramaturgic hints when available: scene_goal, emotional_intent, role_hints, prop_role_in_scene, must_remain_same.\n"
         "If only one character ref exists, keep strong single-hero continuity.\n"
         "location is a world anchor, not necessarily scene subject.\n"
         "props should appear only where useful.\n"

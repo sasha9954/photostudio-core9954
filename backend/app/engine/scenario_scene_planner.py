@@ -253,6 +253,10 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "opening_anchor": str(story_core.get("opening_anchor") or "")[:600],
             "ending_callback_rule": str(story_core.get("ending_callback_rule") or "")[:600],
             "global_arc": str(story_core.get("global_arc") or "")[:600],
+            "identity_lock": _safe_dict(story_core.get("identity_lock")),
+            "world_lock": _safe_dict(story_core.get("world_lock")),
+            "style_lock": _safe_dict(story_core.get("style_lock")),
+            "scenes": _safe_list(story_core.get("scenes")),
         },
         "audio_map": {
             "sections": _safe_list(audio_map.get("sections")),
@@ -315,6 +319,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Add visual progression layer: repetitive phrases must not produce visually repetitive scenes.\\n"
         "Progress through shot scale, camera intimacy, performance openness, and focal event type.\\n"
         "Add motion/prop complexity risk tags for each scene for downstream prompt simplification and strategy redirection.\\n\\n"
+        "When story_core.scenes exists, use its visual_intent, scene_function_hint, continuity_requirement, and allowed_variation as planning hints.\\n"
         "LTX 2.3 MOTION CANON:\\n"
         f"- SAFE/DEFAULT-ON: {', '.join(SAFE_MOTION_CANON)}.\\n"
         f"- CAUTION (rare, only when needed): {', '.join(CAUTION_MOTION_CANON)}.\\n"
