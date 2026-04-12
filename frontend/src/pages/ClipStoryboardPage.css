@@ -4273,6 +4273,38 @@ body.ps_clip_fullscreen .mainCol {
   flex-wrap: wrap;
 }
 
+.clipSB_scenarioFinalizeNotice {
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.clipSB_scenarioFinalizeNoticeText {
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.92);
+  display: grid;
+  gap: 4px;
+}
+
+.clipSB_scenarioFinalizeNoticeStages {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.clipSB_scenarioFinalizeNoticeActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.clipSB_scenarioFinalizeHint {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.95);
+}
+
 .clipSB_scenarioEditorTabsRow {
   display: flex;
   gap: 8px;

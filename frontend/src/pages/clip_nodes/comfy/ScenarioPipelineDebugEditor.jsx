@@ -29,6 +29,35 @@ const TAB_STAGE_ID = {
   final: "finalize",
 };
 
+const FINALIZE_UPSTREAM_STAGES = [
+  "story_core",
+  "audio_map",
+  "role_plan",
+  "scene_plan",
+  "scene_prompts",
+];
+
+function collectFinalizeStaleStages(stageStatuses = {}) {
+  const suspiciousReasonPattern = /(stale|invalid|dirty|outdated|rerun|re-run|upstream|changed|not done)/i;
+  return FINALIZE_UPSTREAM_STAGES.filter((stageId) => {
+    const row = stageStatuses?.[stageId] && typeof stageStatuses[stageId] === "object" ? stageStatuses[stageId] : {};
+    const status = String(row?.status || "idle").trim().toLowerCase();
+    const reason = String(
+      row?.reason
+      || row?.statusReason
+      || row?.invalidateReason
+      || row?.invalidatedReason
+      || row?.message
+      || ""
+    ).trim();
+    const errorText = String(row?.error || row?.message || "").trim();
+    const hasError = status === "error" || Boolean(errorText);
+    const hasInvalidationMarker = Boolean(row?.invalidated || row?.invalid || row?.dirty || row?.stale);
+    const reasonLooksSuspicious = suspiciousReasonPattern.test(reason);
+    return status !== "done" || hasError || hasInvalidationMarker || reasonLooksSuspicious;
+  });
+}
+
 function toJson(value) {
   return JSON.stringify(value || {}, null, 2);
 }
@@ -49,6 +78,8 @@ export default function ScenarioPipelineDebugEditor({
 }) {
   const [busyStage, setBusyStage] = useState("");
   const [activeTab, setActiveTab] = useState("audio_map");
+  const [finalizeWarning, setFinalizeWarning] = useState({ open: false, staleStages: [] });
+  const [rebuildHint, setRebuildHint] = useState("");
 
   const chips = useMemo(() => STAGE_BUTTONS.map((stage) => {
     const status = String(stageStatuses?.[stage.id]?.status || "idle").trim().toLowerCase() || "idle";
@@ -58,7 +89,7 @@ export default function ScenarioPipelineDebugEditor({
   }), [stageStatuses]);
   const activeStageStatus = String(stageStatuses?.[TAB_STAGE_ID[activeTab]]?.status || "").trim().toLowerCase();
 
-  const runStage = async (stageId, autoRun = false) => {
+  const executeStageRun = async (stageId, autoRun = false) => {
     if (typeof onRunPipelineStage !== "function") return;
     setBusyStage(stageId || (autoRun ? "auto" : ""));
     try {
@@ -66,6 +97,19 @@ export default function ScenarioPipelineDebugEditor({
     } finally {
       setBusyStage("");
     }
+  };
+
+  const runStage = async (stageId, autoRun = false) => {
+    if (stageId === "finalize" && !autoRun) {
+      const staleStages = collectFinalizeStaleStages(stageStatuses);
+      if (staleStages.length > 0) {
+        setFinalizeWarning({ open: true, staleStages });
+        return;
+      }
+    }
+    if (finalizeWarning.open) setFinalizeWarning({ open: false, staleStages: [] });
+    if (rebuildHint) setRebuildHint("");
+    await executeStageRun(stageId, autoRun);
   };
 
   if (!open) return null;
@@ -291,6 +335,52 @@ export default function ScenarioPipelineDebugEditor({
               </span>
             ))}
           </div>
+          {finalizeWarning.open ? (
+            <div className="clipSB_scenarioFinalizeNotice">
+              <div className="clipSB_scenarioFinalizeNoticeText">
+                В пакете могут быть неактуальные стадии. Можно собрать Final из текущего пакета, но результат может не включать последние изменения.
+                {finalizeWarning.staleStages.length ? (
+                  <span className="clipSB_scenarioFinalizeNoticeStages">
+                    Неактуальные стадии: {finalizeWarning.staleStages.join(", ")}
+                  </span>
+                ) : null}
+              </div>
+              <div className="clipSB_scenarioFinalizeNoticeActions">
+                <button
+                  className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn"
+                  type="button"
+                  onClick={() => {
+                    setFinalizeWarning({ open: false, staleStages: [] });
+                    void executeStageRun("finalize", false);
+                  }}
+                >
+                  Собрать текущий Final
+                </button>
+                <button
+                  className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn"
+                  type="button"
+                  onClick={() => setFinalizeWarning({ open: false, staleStages: [] })}
+                >
+                  Отмена
+                </button>
+                <button
+                  className="clipSB_btn clipSB_scenarioEditorStageBtn"
+                  type="button"
+                  onClick={() => {
+                    const firstStale = String(finalizeWarning.staleStages?.[0] || "").trim();
+                    if (firstStale && TAB_STAGE_ID[firstStale]) setActiveTab(firstStale);
+                    setFinalizeWarning({ open: false, staleStages: [] });
+                    setRebuildHint("Запустите нужные стадии кнопками сверху, затем снова нажмите FINAL.");
+                  }}
+                >
+                  Обновить стадии сначала
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {!finalizeWarning.open && rebuildHint ? (
+            <div className="clipSB_scenarioFinalizeHint">{rebuildHint}</div>
+          ) : null}
           <div className="clipSB_scenarioEditorTabsRow">
             {TABS.map((tab) => (
               <button key={tab.id} type="button" className={`clipSB_scenarioEditorTabBtn ${activeTab === tab.id ? "isActive" : ""}`} onClick={() => setActiveTab(tab.id)}>
