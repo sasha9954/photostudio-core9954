@@ -2809,6 +2809,226 @@ def _build_scene_candidate_windows(
     return _repair_short_final_tail(windows)
 
 
+def _to_word_rows(alignment: dict[str, Any], duration_sec: float) -> list[dict[str, float]]:
+    rows: list[dict[str, float]] = []
+    for item in _safe_list(alignment.get("words")):
+        if not isinstance(item, dict):
+            continue
+        t0 = _clamp_time(_to_float(item.get("t0"), 0.0), duration_sec)
+        t1 = _clamp_time(_to_float(item.get("t1"), t0), duration_sec)
+        if t1 - t0 < 0.01:
+            continue
+        rows.append({"t0": round(t0, 3), "t1": round(t1, 3)})
+    return rows
+
+
+def _align_cut_to_word_boundary(cut_t: float, word_rows: list[dict[str, float]], duration_sec: float) -> float:
+    cut = _clamp_time(cut_t, duration_sec)
+    for row in word_rows:
+        w0 = float(row.get("t0") or 0.0)
+        w1 = float(row.get("t1") or w0)
+        if w0 < cut < w1:
+            if abs(cut - w0) <= abs(w1 - cut):
+                return round(w0, 3)
+            return round(w1, 3)
+    return round(cut, 3)
+
+
+def _repair_scene_slot_boundaries(
+    raw_slots: list[dict[str, Any]],
+    *,
+    duration_sec: float,
+    word_rows: list[dict[str, float]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    repaired: list[dict[str, Any]] = []
+    stats = {
+        "dropped_near_zero": 0,
+        "boundary_repaired": 0,
+        "word_boundary_repaired": 0,
+        "orphan_tail_merged": 0,
+    }
+    prev_t1 = 0.0
+    for row in raw_slots:
+        t0 = _clamp_time(_to_float(row.get("t0"), prev_t1), duration_sec)
+        t1 = _clamp_time(_to_float(row.get("t1"), t0), duration_sec)
+        if repaired:
+            t0 = round(prev_t1, 3)
+            if abs(t0 - _to_float(row.get("t0"), t0)) >= 0.001:
+                stats["boundary_repaired"] += 1
+        if word_rows:
+            aligned_t1 = _align_cut_to_word_boundary(t1, word_rows, duration_sec)
+            if abs(aligned_t1 - t1) >= 0.001:
+                stats["word_boundary_repaired"] += 1
+            t1 = aligned_t1
+        if t1 <= t0:
+            stats["dropped_near_zero"] += 1
+            continue
+        span = t1 - t0
+        if span < 0.1:
+            stats["dropped_near_zero"] += 1
+            continue
+        fixed = dict(row)
+        fixed["t0"] = round(t0, 3)
+        fixed["t1"] = round(t1, 3)
+        fixed["duration_sec"] = round(span, 3)
+        repaired.append(fixed)
+        prev_t1 = float(fixed["t1"])
+    if len(repaired) >= 2:
+        tail_span = float(repaired[-1].get("duration_sec") or 0.0)
+        if tail_span < 0.5:
+            repaired[-2]["t1"] = round(float(repaired[-1].get("t1") or repaired[-2].get("t1") or 0.0), 3)
+            repaired[-2]["duration_sec"] = round(
+                max(0.0, float(repaired[-2].get("t1") or 0.0) - float(repaired[-2].get("t0") or 0.0)), 3
+            )
+            repaired[-2]["phrase_ids"] = list(
+                dict.fromkeys(
+                    [str(item) for item in _safe_list(repaired[-2].get("phrase_ids")) if str(item)]
+                    + [str(item) for item in _safe_list(repaired[-1].get("phrase_ids")) if str(item)]
+                )
+            )
+            repaired.pop()
+            stats["orphan_tail_merged"] += 1
+    for idx, slot in enumerate(repaired, start=1):
+        slot["id"] = f"slot_{idx}"
+        slot["duration_sec"] = round(max(0.0, float(slot.get("t1") or 0.0) - float(slot.get("t0") or 0.0)), 3)
+    return repaired, stats
+
+
+def _build_scene_slots(
+    *,
+    audio_map: dict[str, Any],
+    analysis: dict[str, Any],
+    duration_sec: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    phrase_units = [item for item in _safe_list(audio_map.get("phrase_units")) if isinstance(item, dict)]
+    if not phrase_units:
+        return [], {"audio_map_scene_slots_repair_stats": {}}
+    phrase_index = {str(item.get("id") or ""): item for item in phrase_units}
+    seed_rows = [item for item in _safe_list(audio_map.get("scene_candidate_windows")) if isinstance(item, dict)] or phrase_units
+
+    raw_slots: list[dict[str, Any]] = []
+    for seed in seed_rows:
+        phrase_ids = [str(item) for item in _safe_list(seed.get("phrase_ids")) if str(item)]
+        if not phrase_ids and str(seed.get("id") or "").startswith("ph_"):
+            phrase_ids = [str(seed.get("id") or "")]
+        resolved_phrases = [phrase_index[item] for item in phrase_ids if item in phrase_index]
+        t0 = _to_float(seed.get("t0"), 0.0)
+        t1 = _to_float(seed.get("t1"), t0)
+        if resolved_phrases:
+            t0 = _to_float(resolved_phrases[0].get("t0"), t0)
+            t1 = _to_float(resolved_phrases[-1].get("t1"), t1)
+        primary_text = ""
+        for phrase in resolved_phrases:
+            text = str(phrase.get("text") or "").strip()
+            if text:
+                primary_text = text[:280]
+                break
+        raw_slots.append(
+            {
+                "id": str(seed.get("id") or ""),
+                "t0": round(_clamp_time(t0, duration_sec), 3),
+                "t1": round(_clamp_time(t1, duration_sec), 3),
+                "duration_sec": round(max(0.0, t1 - t0), 3),
+                "phrase_ids": phrase_ids,
+                "primary_phrase_text": primary_text,
+            }
+        )
+
+    word_rows = _to_word_rows(_safe_dict(audio_map.get("transcript_alignment")), duration_sec)
+    slots, repair_stats = _repair_scene_slot_boundaries(raw_slots, duration_sec=duration_sec, word_rows=word_rows)
+    if not slots:
+        return [], {"audio_map_scene_slots_repair_stats": repair_stats}
+
+    beats = _float_points(analysis.get("beats"), duration_sec)
+    energy_peaks = _float_points(analysis.get("energyPeaks"), duration_sec)
+    vocal_phrases = [item for item in _safe_list(analysis.get("vocalPhrases")) if isinstance(item, dict)]
+    diagnostics_notes: list[str] = []
+    if not beats:
+        diagnostics_notes.append("beat_alignment_score is approximate: beats unavailable")
+    if not vocal_phrases:
+        diagnostics_notes.append("vocal_ratio is approximate: vocal phrases unavailable")
+
+    for idx, slot in enumerate(slots):
+        t0 = float(slot.get("t0") or 0.0)
+        t1 = float(slot.get("t1") or t0)
+        span = max(0.001, t1 - t0)
+        phrase_ids = [str(item) for item in _safe_list(slot.get("phrase_ids")) if str(item)]
+        slot_phrases = [phrase_index[item] for item in phrase_ids if item in phrase_index]
+        word_count = sum(max(0, int(_to_float(phrase.get("word_count"), 0.0))) for phrase in slot_phrases)
+        words_per_sec = word_count / span if span > 0 else 0.0
+
+        vocal_overlap = 0.0
+        for vp in vocal_phrases:
+            v0 = _clamp_time(_to_float(vp.get("start"), 0.0), duration_sec)
+            v1 = _clamp_time(_to_float(vp.get("end"), v0), duration_sec)
+            vocal_overlap += max(0.0, min(t1, v1) - max(t0, v0))
+        vocal_ratio = round(max(0.0, min(1.0, vocal_overlap / span)), 4)
+        phrase_density = len(slot_phrases) / span
+        energy_score = round(max(0.0, min(1.0, 0.55 * vocal_ratio + 0.25 * min(1.0, words_per_sec / 3.0) + 0.2 * min(1.0, phrase_density))), 4)
+        energy_variance = round(max(0.0, min(1.0, min(1.0, len(slot_phrases) / 3.0) * (0.4 + 0.6 * min(1.0, words_per_sec / 3.5)))), 4)
+
+        slot_beats = [b for b in beats if t0 <= b <= t1]
+        sync_points = sorted({round(item, 3) for item in ([b for b in slot_beats] + [p for p in energy_peaks if t0 <= p <= t1])})
+        sync_points = sync_points[:8]
+        rhythmic_intensity = round(max(0.0, min(1.0, len(sync_points) / max(1.0, span * 1.2))), 4)
+        if beats:
+            nearest_beat_dist = min(abs(t1 - beat) for beat in beats)
+            beat_alignment_score = round(max(0.0, min(1.0, 1.0 - nearest_beat_dist / 0.25)), 4)
+        else:
+            beat_alignment_score = round(max(0.0, 1.0 - rhythmic_intensity * 0.5), 4)
+
+        short_slot_warning = span < 2.8
+        long_slot_warning = span > 8.0
+        opening_risk = idx == 0 and (short_slot_warning or energy_score < 0.35 or vocal_ratio < 0.2)
+        high_density_warning = words_per_sec > 3.2
+        low_vocal_confidence = vocal_ratio > 0.2 and word_count == 0 and not word_rows
+        beat_misalignment_warning = beat_alignment_score < 0.35 and len(slot_beats) >= 2
+        orphan_tail_risk = idx == len(slots) - 1 and 0.5 <= span < 1.2
+
+        merge_priority = "low"
+        if short_slot_warning and (high_density_warning or idx == len(slots) - 1):
+            merge_priority = "high"
+        elif short_slot_warning or beat_misalignment_warning:
+            merge_priority = "medium"
+        hold_candidate = span >= 5.2 and energy_variance <= 0.42
+        tail_ok = idx == len(slots) - 1 and span >= 1.8 and not orphan_tail_risk
+        afterimage_candidate = idx == len(slots) - 1 and span >= 2.4 and energy_score <= 0.65
+
+        slot["audio_features"] = {
+            "vocal_ratio": vocal_ratio,
+            "energy_score": energy_score,
+            "energy_variance": energy_variance,
+            "rhythmic_intensity": rhythmic_intensity,
+            "sync_points": sync_points,
+            "beat_alignment_score": beat_alignment_score,
+        }
+        slot["integrity_flags"] = {
+            "short_slot_warning": short_slot_warning,
+            "long_slot_warning": long_slot_warning,
+            "opening_risk": opening_risk,
+            "high_density_warning": high_density_warning,
+            "low_vocal_confidence": low_vocal_confidence,
+            "beat_misalignment_warning": beat_misalignment_warning,
+            "orphan_tail_risk": orphan_tail_risk,
+        }
+        slot["hints"] = {
+            "vocal_focus_potential": round(max(0.0, min(1.0, 0.75 * vocal_ratio + 0.25 * (1.0 - rhythmic_intensity))), 4),
+            "motion_potential": round(max(0.0, min(1.0, 0.65 * rhythmic_intensity + 0.35 * energy_variance)), 4),
+            "tail_ok": tail_ok,
+            "afterimage_candidate": afterimage_candidate,
+            "hold_candidate": hold_candidate,
+            "dialogue_candidate": bool(vocal_ratio >= 0.55 and rhythmic_intensity <= 0.45),
+            "merge_candidate_priority": merge_priority,
+        }
+        slot["primary_phrase_text"] = str(slot.get("primary_phrase_text") or "")
+
+    diagnostics_patch = {
+        "audio_map_scene_slots_repair_stats": repair_stats,
+        "audio_map_scene_slot_feature_notes": diagnostics_notes,
+    }
+    return slots, diagnostics_patch
+
+
 def _max_equal_duration_streak(durations: list[float], *, tolerance: float = 0.08) -> int:
     if not durations:
         return 0
@@ -3461,11 +3681,11 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     analysis_mode = "timing_heuristics_v1"
     transcript_text = _extract_audio_transcript_text(input_pkg)
     provided_alignment = _extract_input_alignment_payload(input_pkg)
+    raw_analysis: dict[str, Any] = {}
     try:
         if audio_url:
             analysis_path = ""
             cleanup_path: str | None = None
-            raw_analysis: dict[str, Any] = {}
             try:
                 local_audio_path, local_resolution_debug = _resolve_local_audio_asset_path(
                     audio_url=audio_url,
@@ -3705,6 +3925,12 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
     audio_map.setdefault("phrase_units", [])
     audio_map.setdefault("scene_candidate_windows", [])
+    scene_slots, scene_slot_diag = _build_scene_slots(
+        audio_map=audio_map,
+        analysis=raw_analysis,
+        duration_sec=duration_sec,
+    )
+    audio_map["scene_slots"] = scene_slots
     audio_map.setdefault("audio_map_alignment_source", "")
     audio_map.setdefault(
         "cut_policy",
@@ -3765,6 +3991,8 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["word_timestamp_count"] = len(_safe_list(_safe_dict(audio_map.get("transcript_alignment")).get("words")))
     diagnostics["phrase_unit_count"] = len(_safe_list(audio_map.get("phrase_units")))
     diagnostics["scene_candidate_count"] = len(_safe_list(audio_map.get("scene_candidate_windows")))
+    diagnostics["scene_slot_count"] = len(scene_slots)
+    diagnostics.update(_safe_dict(scene_slot_diag))
     diagnostics["audio_map_alignment_source"] = str(audio_map.get("audio_map_alignment_source") or "")
     diagnostics["audio_map_alignment_backend"] = str(diagnostics.get("audio_map_alignment_backend") or "")
     diagnostics["audio_map_alignment_attempted"] = bool(diagnostics.get("audio_map_alignment_attempted"))

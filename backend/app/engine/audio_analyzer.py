@@ -225,7 +225,7 @@ def _estimate_sections(y: np.ndarray, sr: int, duration: float) -> List[Dict[str
     elif clean[-1] != duration:
         clean[-1] = duration
 
-    # Section labels: intro + verse/chorus by relative energy.
+    # Section labels: mode-agnostic by relative energy.
     sec_energy = []
     for i in range(len(clean) - 1):
         s, e = clean[i], clean[i + 1]
@@ -242,12 +242,14 @@ def _estimate_sections(y: np.ndarray, sr: int, duration: float) -> List[Dict[str
     for i in range(len(clean) - 1):
         s = _safe_float(clean[i])
         e = _safe_float(clean[i + 1])
-        if sec_energy[i] <= low_thr:
-            sec_type = "intro"
+        if i == 0:
+            sec_type = "opening"
+        elif sec_energy[i] <= low_thr:
+            sec_type = "energy_low"
         elif sec_energy[i] >= high_thr:
-            sec_type = "chorus"
+            sec_type = "energy_high"
         else:
-            sec_type = "verse"
+            sec_type = "energy_mid"
         sections.append({"start": s, "end": e, "type": sec_type})
 
     return sections
@@ -377,9 +379,9 @@ def derive_audio_semantic_profile(analysis: Dict[str, object] | None) -> Dict[st
     energy_peaks = data.get("energyPeaks") if isinstance(data.get("energyPeaks"), list) else []
 
     section_types = [str((section or {}).get("type") or "").strip().lower() for section in sections if isinstance(section, dict)]
-    chorus_count = sum(1 for sec in section_types if "chorus" in sec or "hook" in sec)
-    verse_count = sum(1 for sec in section_types if "verse" in sec)
-    intro_present = bool(section_types and "intro" in section_types[0])
+    high_energy_count = sum(1 for sec in section_types if "energy_high" in sec or "chorus" in sec or "hook" in sec)
+    mid_energy_count = sum(1 for sec in section_types if "energy_mid" in sec or "verse" in sec)
+    intro_present = bool(section_types and section_types[0] in {"intro", "opening"})
 
     hints: List[str] = []
     summary_parts: List[str] = []
@@ -387,12 +389,12 @@ def derive_audio_semantic_profile(analysis: Dict[str, object] | None) -> Dict[st
     if intro_present:
         hints.append("intro atmosphere")
         summary_parts.append("intro atmosphere")
-    if chorus_count > 0:
-        hints.append("rising energy toward chorus")
-        summary_parts.append("rising energy toward chorus")
-    elif verse_count > 1:
-        hints.append("steady verse-driven progression")
-        summary_parts.append("steady verse-driven progression")
+    if high_energy_count > 0:
+        hints.append("rising high-energy progression")
+        summary_parts.append("rising high-energy progression")
+    elif mid_energy_count > 1:
+        hints.append("steady mid-energy progression")
+        summary_parts.append("steady mid-energy progression")
 
     duration_min = max(duration / 60.0, 1e-6)
     vocal_density = len(vocal_phrases) / duration_min
@@ -436,8 +438,8 @@ def derive_audio_semantic_profile(analysis: Dict[str, object] | None) -> Dict[st
     if section_types and section_types[-1] in {"intro", "verse"}:
         hints.append("soft release ending")
         summary_parts.append("softer release")
-    elif chorus_count > 0:
-        hints.append("strong chorus emphasis")
+    elif high_energy_count > 0:
+        hints.append("strong high-energy emphasis")
 
     dedup_hints = list(dict.fromkeys([h for h in hints if h]))[:8]
     summary = ", ".join(dict.fromkeys([p for p in summary_parts if p]))
