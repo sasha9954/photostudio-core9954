@@ -20,6 +20,7 @@ from app.engine.clip_storyboard_pipeline import (
     run_clip_storyboard_pipeline,
 )
 from app.engine.scenario_stage_pipeline import (
+    build_runtime_diagnostics_summary,
     create_storyboard_package,
     mark_stale_downstream,
     resolve_stage_sequence,
@@ -774,6 +775,13 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
         or ""
     ).strip().lower()
     if pipeline_mode == "scenario_stage_v1":
+        metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}
+        debug_mode = (
+            _flag_enabled(req.get("debug"), default=False)
+            or _flag_enabled(req.get("includeDebugMirrors"), default=False)
+            or _flag_enabled(metadata.get("debugScenarioStageResponse"), default=False)
+            or _flag_enabled(metadata.get("includeDebugMirrors"), default=False)
+        )
         incoming_package = req.get("storyboardPackage") if isinstance(req.get("storyboardPackage"), dict) else {}
         stage_id = str(req.get("stageId") or "").strip()
         if incoming_package:
@@ -823,23 +831,37 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
             resolved_stage_ids = resolve_stage_sequence(stage_ids, auto_mode=auto_run, include_dependencies=not auto_run)
             package = run_pipeline(resolved_stage_ids, package, req)
             executed_stages = resolved_stage_ids
-        diagnostics = package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {}
-        return {
+        diagnostics_summary = build_runtime_diagnostics_summary(
+            package,
+            current_stage=stage_id or "",
+            include_debug=debug_mode,
+        )
+        response_payload: dict[str, Any] = {
             "ok": True,
             "pipeline": "scenario_stage_v1",
             "requestedStage": stage_id or "",
             "autoRun": auto_run,
             "executedStages": executed_stages,
             "storyboardPackage": package,
-            "storyboardOut": package.get("final_storyboard") if isinstance(package.get("final_storyboard"), dict) else {},
-            "directorOutput": {
+            "meta": {
+                "debugMode": debug_mode,
+                "diagnostics": diagnostics_summary,
+            },
+            "debugMode": debug_mode,
+        }
+        if debug_mode:
+            diagnostics = package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {}
+            response_payload["storyboardOut"] = (
+                package.get("final_storyboard") if isinstance(package.get("final_storyboard"), dict) else {}
+            )
+            response_payload["directorOutput"] = {
                 "pipeline": "scenario_stage_v1",
                 "story_core": package.get("story_core") if isinstance(package.get("story_core"), dict) else {},
                 "stage_statuses": package.get("stage_statuses") if isinstance(package.get("stage_statuses"), dict) else {},
                 "diagnostics": diagnostics,
-            },
-            "diagnostics": diagnostics,
-        }
+            }
+            response_payload["diagnostics"] = diagnostics
+        return response_payload
     logger.info(
         "[SCENARIO DIRECTOR ROUTE] route=%s requestId=%s method=%s",
         "/api/clip/comfy/scenario-director/generate",

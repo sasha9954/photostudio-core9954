@@ -17110,6 +17110,7 @@ onClipSec: (nodeId, value) => {
                   method: "POST",
                   body: payload,
                 });
+                const responseDebugMode = Boolean(response?.debugMode || response?.meta?.debugMode);
                 const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, debugNode?.data || {});
                 const runtimeStoryboard = buildLeanRuntimeStoryboardContract(
                   normalizedOutputs?.runtimeStoryboard || normalizedOutputs?.storyboardOut || {},
@@ -17197,7 +17198,7 @@ onClipSec: (nodeId, value) => {
                     data: {
                       ...nodeItem.data,
                       storyboardPackage: nextStoryboardPackage,
-                      debugStoryboardPackage: nextStoryboardPackage,
+                      debugStoryboardPackage: responseDebugMode ? nextStoryboardPackage : {},
                       storyboardOut: normalizedStoryboardOut,
                       scenarioRevision: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                       directorOutput: {
@@ -17206,7 +17207,9 @@ onClipSec: (nodeId, value) => {
                         executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                       },
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
-                      diagnostics: nextStoryboardPackage?.diagnostics && typeof nextStoryboardPackage.diagnostics === "object" ? nextStoryboardPackage.diagnostics : {},
+                      diagnostics: response?.meta?.diagnostics && typeof response.meta.diagnostics === "object"
+                        ? response.meta.diagnostics
+                        : (nextStoryboardPackage?.diagnostics && typeof nextStoryboardPackage.diagnostics === "object" ? nextStoryboardPackage.diagnostics : {}),
                       stageStatuses: nextStoryboardPackage?.stage_statuses && typeof nextStoryboardPackage.stage_statuses === "object" ? nextStoryboardPackage.stage_statuses : {},
                       rawScenarioResponseSummary: compactResponseSummary,
                       normalizedStageOutputs: compactNormalizedOutputs,
@@ -17231,7 +17234,7 @@ onClipSec: (nodeId, value) => {
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                     },
                     scenarioPackage: runtimeStoryboard,
-                    debugStoryboardPackage: nextStoryboardPackage,
+                    ...(responseDebugMode ? { debugStoryboardPackage: nextStoryboardPackage } : {}),
                   };
                   return {
                     ...nodeItem,
