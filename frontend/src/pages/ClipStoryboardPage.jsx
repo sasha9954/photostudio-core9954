@@ -2799,6 +2799,13 @@ function buildScenarioClearImagePatch({ transitionType = "single", slot = "singl
     videoError: "",
     videoJobId: "",
   };
+  SCENARIO_IMAGE_SOURCE_FIELDS.forEach((field) => {
+    basePatch[field] = "";
+  });
+  SCENARIO_GENERATED_ASSET_FIELDS.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(basePatch, field)) return;
+    basePatch[field] = null;
+  });
   if (normalizedTransition !== "continuous") return basePatch;
   if (normalizedSlot === "start") {
     return {
@@ -2854,6 +2861,27 @@ function buildScenarioClearRuntimeImagePatch({ transitionType = "single", slot =
     lastApiDegradeReason: "",
     lastApiResultStatus: "",
     lastApiImageUrlPresent: false,
+    runtimeImageApiResult: null,
+    responseJson: null,
+    responseBlob: null,
+    cachedResponseBlob: null,
+    promptDebug: null,
+    refsDebug: null,
+    providerDebug: null,
+    imageDegraded: false,
+    imageDegradeReason: "",
+    imageHint: "",
+    generatedImageUrl: "",
+    resultImageUrl: "",
+    finalImageUrl: "",
+    previewImageUrl: "",
+    selectedImageUrl: "",
+    image_url: "",
+    generated_image_url: "",
+    result_image_url: "",
+    final_image_url: "",
+    photoUrl: "",
+    assetUrl: "",
   };
   const clearSharedImageAndVideoFields = {
     imageUrl: "",
@@ -8934,7 +8962,7 @@ const applyScenarioPipelinePreRunInvalidation = useCallback(({ stageId = "", deb
     fromStageId: normalizedStageId,
     debugNodeId,
     sourceNodeId,
-    fullClear: false,
+    fullClear: true,
   });
 }, [clearScenarioPipelineDownstreamRuntime]);
 
@@ -12906,10 +12934,8 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     const clearPatch = buildScenarioClearImagePatch({ transitionType, slot: normalizedSlot });
-    if (normalizedSlot === "single") {
-      clearPatch.imageClearedAt = new Date().toISOString();
-      clearPatch.suppressAssetRehydrate = true;
-    }
+    clearPatch.imageClearedAt = new Date().toISOString();
+    clearPatch.suppressAssetRehydrate = true;
     if (
       transitionType === "continuous"
       && !!scenarioSelected?.inheritPreviousEndAsStart
@@ -17191,6 +17217,17 @@ onClipSec: (nodeId, value) => {
                 const source = edgeToDebug?.source
                   ? activeNodes.find((nodeItem) => nodeItem.id === edgeToDebug.source && nodeItem.type === "comfyNarrative")
                   : null;
+                const storyboardTargetIds = source?.id
+                  ? activeEdges
+                    .filter((edge) => (
+                      edge?.source === source.id
+                      && String(edge?.sourceHandle || "") === "storyboard_out"
+                      && String(edge?.targetHandle || "") === "scenario_storyboard_in"
+                    ))
+                    .map((edge) => String(edge?.target || "").trim())
+                    .filter(Boolean)
+                  : [];
+                const isFinalizeStage = stageId === "finalize";
                 if (!autoRun && stageId) {
                   applyScenarioPipelinePreRunInvalidation({
                     stageId,
@@ -17267,15 +17304,16 @@ onClipSec: (nodeId, value) => {
                     : hasPackageFinalStoryboard
                       ? "package_final_storyboard"
                       : "empty";
-                  const effectiveStoryboardOut = runtimeStoryboard
-                    || packageFinalStoryboard
-                    || {};
+                  const effectiveStoryboardOut = (isFinalizeStage && hasPackageFinalStoryboard)
+                    ? packageFinalStoryboard
+                    : {};
                   console.debug("[SCENARIO FINAL STORYBOARD SOURCE]", {
                     hasNormalizedStoryboardOut,
                     normalizedStoryboardOutSceneCount,
                     hasPackageFinalStoryboard,
                     packageFinalStoryboardSceneCount,
                     chosenSource,
+                    stageId,
                   });
                   const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
                     storyboardOut: effectiveStoryboardOut,
@@ -17316,6 +17354,12 @@ onClipSec: (nodeId, value) => {
                     },
                   };
                 }).map((nodeItem) => {
+                  if (!storyboardTargetIds.includes(nodeItem.id) || nodeItem.type !== "scenarioStoryboard") return nodeItem;
+                  return {
+                    ...nodeItem,
+                    data: clearScenarioStoryboardGeneratedRuntime(nodeItem?.data || {}, { clearScenes: true }),
+                  };
+                }).map((nodeItem) => {
                   if (!source || nodeItem.id !== source.id || nodeItem.type !== "comfyNarrative") return nodeItem;
                   const nextStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
                     ? response.storyboardPackage
@@ -17326,14 +17370,14 @@ onClipSec: (nodeId, value) => {
                   const compactNormalizedOutputs = stripRawScenarioPayload(normalizedOutputs);
                   const normalizedPending = {
                     ...(compactNormalizedOutputs && typeof compactNormalizedOutputs === "object" ? compactNormalizedOutputs : {}),
-                    storyboardOut: runtimeStoryboard,
-                    runtimeStoryboard,
+                    storyboardOut: isFinalizeStage ? (responseFinalStoryboard || null) : null,
+                    runtimeStoryboard: isFinalizeStage ? (responseFinalStoryboard || null) : null,
                     directorOutput: {
                       ...(compactNormalizedOutputs?.directorOutput && typeof compactNormalizedOutputs.directorOutput === "object" ? compactNormalizedOutputs.directorOutput : {}),
                       pipeline: "scenario_stage_v1",
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                     },
-                    scenarioPackage: runtimeStoryboard,
+                    scenarioPackage: isFinalizeStage ? (responseFinalStoryboard || null) : null,
                     ...(responseDebugMode ? { debugStoryboardPackage: nextStoryboardPackage } : {}),
                   };
                   return {

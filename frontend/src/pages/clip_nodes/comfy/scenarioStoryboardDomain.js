@@ -1596,16 +1596,16 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     : [];
   const inputSceneCandidates = inputScenesFromDirectorOutput.length
     ? inputScenesFromDirectorOutput
-    : inputScenesFromStoryboardOut.length
-      ? inputScenesFromStoryboardOut
-      : inputScenesFromFinalStoryboard;
+    : inputScenesFromFinalStoryboard.length
+      ? inputScenesFromFinalStoryboard
+      : inputScenesFromStoryboardOut;
   const inputSceneCount = inputSceneCandidates.length;
   const canonicalSceneSource = inputScenesFromDirectorOutput.length
     ? "directorOutput.scenes"
-    : inputScenesFromStoryboardOut.length
-      ? "storyboardOut.scenes"
-      : inputScenesFromFinalStoryboard.length
-        ? "storyboardOut.final_storyboard.scenes"
+    : inputScenesFromFinalStoryboard.length
+      ? "storyboardOut.final_storyboard.scenes"
+      : inputScenesFromStoryboardOut.length
+        ? "storyboardOut.scenes"
         : "empty";
   const canonicalScenesRaw = inputSceneCandidates;
   const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
