@@ -933,7 +933,7 @@ def _default_story_core_guidance() -> dict[str, Any]:
             "compression_vs_release",
             "public_exposure_vs_momentary_concealment",
             "harsh_sunlight_vs_shadow_pocket",
-            "rigid_geometry_vs_soft_fabric_motion",
+            "rigid_geometry_vs_subject_motion_response",
             "forward_motion_vs_held_stillness",
             "wider_geography_vs_intimate_facial_tension",
             "crowd_pressure_vs_brief_solitude",
@@ -965,7 +965,7 @@ def _default_story_core_guidance() -> dict[str, Any]:
             "world should feel less safe in open exposure and more survivable in compressed/shadowed spaces",
             "final refuge must read as temporary shelter, not triumphant resolution",
             "secondary performance role must not steal narrative spine unless current input explicitly asks for co-lead behavior",
-            "do not collapse into repeated another street/another alley/another walk shot; repeated movement is allowed only when environment function changes",
+            "do not collapse into repeated same-route movement shots; repetition is allowed only when environment function changes",
         ],
         "world_richness_rules": [
             "grounded realism only; no spectacle-first escalation",

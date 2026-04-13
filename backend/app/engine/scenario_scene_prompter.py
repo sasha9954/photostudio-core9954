@@ -32,7 +32,7 @@ _FIRST_LAST_NEGATIVE_PROMPT = (
 _GLOBAL_PROMPT_RULES = [
     "Preserve hero identity, world anchor, style family, and realistic lighting continuity across all scenes.",
     "Keep prompts short, production-friendly, and route-aware; one clear action + one clear camera idea per video prompt.",
-    "Respect wardrobe continuity and only reveal special dress in explicitly private/final progression scenes.",
+    "Respect wardrobe continuity when current input/story locks wardrobe; do not invent wardrobe progression defaults unless explicitly provided by current story/refs.",
     "Enforce LTX-safe motion and anatomy-safe constraints for all routes.",
 ]
 
@@ -721,7 +721,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         f"Blocked first_last patterns (filter out): {first_last_blocked}.\\n"
         f"Blocked lipsync patterns (filter out): {lipsync_blocked}.\\n"
         "Camera-led transitions are preferred over fine-motor body actions when either can express the same beat.\\n"
-        "Baseball cap is continuity/silhouette anchor; cap manipulation is not default motion.\\n"
+        "When wardrobe or worn-object anchors are present, preserve continuity and avoid default item-manipulation choreography unless explicitly requested by current input.\\n"
         "Video prompts must be LTX-native, anatomy-safe, and motion-first.\\n"
         "Write prompts in natural cinematic English, present tense, one connected paragraph, chronological motion logic.\\n"
         "Describe what starts happening after the still image; do NOT mechanically re-describe all static elements already visible.\\n"
