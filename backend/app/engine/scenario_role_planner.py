@@ -16,6 +16,14 @@ _PROP_ROLES = ["props"]
 _SCENE_SUBJECT_PRIORITIES = {"hero", "hero_plus_world", "hero_plus_prop", "world_anchor"}
 _PROP_ACTIVATION_MODES = {"anchor_worn", "visible_anchor", "silhouette_anchor", "not_emphasized"}
 _WORLD_EMPHASIS_LEVELS = {"low", "medium", "high"}
+_OWNERSHIP_ROLE_MAP = {
+    "main": "character_1",
+    "support": "character_2",
+    "antagonist": "character_3",
+    "shared": "shared",
+    "world": "environment",
+}
+_BINDING_TYPES = {"carried", "worn", "held", "pocketed", "nearby", "environment"}
 
 ALLOWED_SCENE_PRESENCE_MODES = {
     "solo_performance",
@@ -72,6 +80,43 @@ def _compact_prompt_payload(value: Any) -> Any:
     if isinstance(value, str):
         return value.strip()
     return value
+
+
+def _normalize_ref_meta(meta: Any) -> dict[str, str]:
+    row = _safe_dict(meta)
+    ownership_role = str(row.get("ownershipRole") or row.get("ownership_role") or "auto").strip().lower() or "auto"
+    ownership_mapped = str(row.get("ownershipRoleMapped") or row.get("ownership_role_mapped") or "").strip().lower()
+    if ownership_mapped not in {"character_1", "character_2", "character_3", "shared", "environment"}:
+        ownership_mapped = _OWNERSHIP_ROLE_MAP.get(ownership_role, "")
+    binding_type = str(row.get("bindingType") or row.get("binding_type") or "nearby").strip().lower() or "nearby"
+    if binding_type not in _BINDING_TYPES:
+        binding_type = "nearby"
+    return {
+        "ownershipRole": ownership_role,
+        "ownershipRoleMapped": ownership_mapped,
+        "bindingType": binding_type,
+    }
+
+
+def _build_ref_binding_inventory(refs_inventory: dict[str, Any]) -> list[dict[str, str]]:
+    inventory: list[dict[str, str]] = []
+    for key, value in refs_inventory.items():
+        row = _safe_dict(value)
+        meta = _normalize_ref_meta(row.get("meta"))
+        if not meta["ownershipRoleMapped"] and meta["bindingType"] == "nearby":
+            continue
+        role_name = _role_from_ref_key(key)
+        label = str(row.get("source_label") or row.get("value") or key).strip()[:120]
+        inventory.append(
+            {
+                "refRole": role_name or str(key),
+                "label": label or str(key),
+                "ownershipRole": meta["ownershipRole"],
+                "ownershipRoleMapped": meta["ownershipRoleMapped"],
+                "bindingType": meta["bindingType"],
+            }
+        )
+    return inventory[:16]
 
 
 def _round3(value: Any) -> float:
@@ -245,6 +290,7 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
     assigned_roles = _safe_dict(package.get("assigned_roles"))
     story_core = _safe_dict(package.get("story_core"))
     audio_map = _safe_dict(package.get("audio_map"))
+    binding_inventory = _build_ref_binding_inventory(refs_inventory)
 
     roles_inventory, character_roles_present, world_roles_present = _build_roles_inventory(input_pkg, refs_inventory, assigned_roles)
     if _has_world_anchor_signal(input_pkg, story_core) and "location" not in world_roles_present:
@@ -269,6 +315,7 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
             "story_guidance": _safe_dict(story_core.get("story_guidance")),
         },
         "roles_inventory": roles_inventory,
+        "ownership_binding_inventory": binding_inventory,
         "scene_windows": scene_windows,
         "audio_dramaturgy": audio_dramaturgy,
         "sections": _safe_list(audio_map.get("sections")),
@@ -290,6 +337,7 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
         "input_pkg": input_pkg,
         "story_core": story_core,
         "roles_inventory": roles_inventory,
+        "ownership_binding_inventory": binding_inventory,
     }
     return compact_context, aux
 
@@ -307,6 +355,9 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "If only one character ref exists, keep strong single-hero continuity.\n"
         "location is a world anchor, not necessarily scene subject.\n"
         "props should appear only where useful.\n"
+        "ownership_binding_inventory is a planning signal, not metadata-only.\n"
+        "If ownershipRoleMapped=character_1 and bindingType in {carried, held}, keep props co-activated with character_1 in active scenes unless there is an explicit reason to suppress visual emphasis.\n"
+        "bindingType semantics: carried=high continuity burden/conflict anchor; held=strong local hand-occupied co-activation; worn=silhouette/wardrobe continuity; pocketed=owner-linked but optional visual emphasis; nearby=owner-adjacent optional activation; environment=world-anchored not owner-locked.\n"
         "style is global style anchor, not a scene object.\n"
         "No scene prompts, no camera routes, no i2v/ia2v assignment.\n\n"
         "CLIP DRAMATURGY (MANDATORY):\n"
@@ -669,6 +720,7 @@ def _normalize_role_plan(
     world_roles_present: list[str],
     input_pkg: dict[str, Any],
     story_core: dict[str, Any],
+    ownership_binding_inventory: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], bool, str]:
     allowed_roles = set(present_roles)
     known_scene_ids = {str(row.get("id") or ""): row for row in scene_windows}
@@ -695,6 +747,22 @@ def _normalize_role_plan(
     )
 
     scene_roles_by_id: dict[str, dict[str, Any]] = {}
+    binding_rows = _safe_list(ownership_binding_inventory)
+    strong_owner_props = {
+        str(item.get("ownershipRoleMapped") or "").strip().lower()
+        for item in binding_rows
+        if str(item.get("bindingType") or "").strip().lower() in {"carried", "held"}
+    }
+    moderate_owner_props = {
+        str(item.get("ownershipRoleMapped") or "").strip().lower()
+        for item in binding_rows
+        if str(item.get("bindingType") or "").strip().lower() in {"worn", "pocketed", "nearby"}
+    }
+    has_world_environment_binding = any(
+        str(item.get("ownershipRoleMapped") or "").strip().lower() == "environment"
+        or str(item.get("bindingType") or "").strip().lower() == "environment"
+        for item in binding_rows
+    )
     for row_raw in _safe_list(raw_plan.get("scene_roles")):
         row = _safe_dict(row_raw)
         scene_id = str(row.get("scene_id") or "").strip()
@@ -728,6 +796,14 @@ def _normalize_role_plan(
         if not active_roles:
             active_roles = [*([first_character_role] if first_character_role else []), *world_roles_present]
             active_roles = [role for role in active_roles if role in allowed_roles]
+        if "props" in allowed_roles and primary_role:
+            if primary_role in strong_owner_props and scene_presence_mode in {"solo_performance", "solo_observational", "transit"}:
+                if "props" not in active_roles:
+                    active_roles.append("props")
+            elif primary_role in moderate_owner_props and scene_presence_mode in {"solo_performance", "solo_observational"} and "props" not in active_roles:
+                active_roles.append("props")
+        if has_world_environment_binding and scene_presence_mode in {"environment_anchor", "transit"} and "props" in active_roles:
+            active_roles = [role for role in active_roles if role != "props"]
 
         performance_focus = bool(row.get("performance_focus")) if primary_role else False
         if scene_presence_mode in {"environment_anchor", "transit", "solo_observational"}:
@@ -755,6 +831,12 @@ def _normalize_role_plan(
             scene_subject_priority=scene_subject_priority,
             scene_presence_mode=scene_presence_mode,
         )
+        if "props" in active_roles and primary_role in strong_owner_props:
+            prop_activation_mode = "visible_anchor"
+        elif "props" in active_roles and primary_role in moderate_owner_props and prop_activation_mode == "not_emphasized":
+            prop_activation_mode = "anchor_worn"
+        elif has_world_environment_binding and scene_presence_mode in {"environment_anchor", "transit"}:
+            prop_activation_mode = "not_emphasized"
 
         world_emphasis_raw = str(row.get("world_emphasis") or "").strip().lower()
         world_emphasis = world_emphasis_raw if world_emphasis_raw in _WORLD_EMPHASIS_LEVELS else _infer_world_emphasis(
@@ -864,6 +946,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
     world_roles_present = [str(role) for role in _safe_list(aux.get("world_roles_present")) if str(role).strip()]
     input_pkg = _safe_dict(aux.get("input_pkg"))
     story_core = _safe_dict(aux.get("story_core"))
+    ownership_binding_inventory = _safe_list(aux.get("ownership_binding_inventory"))
 
     diagnostics = {
         "prompt_version": ROLE_PLAN_PROMPT_VERSION,
@@ -882,6 +965,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             world_roles_present=world_roles_present,
             input_pkg=input_pkg,
             story_core=story_core,
+            ownership_binding_inventory=ownership_binding_inventory,
         )
         diagnostics.update(_presence_diagnostics(_safe_list(plan.get("scene_roles")), _safe_dict(plan.get("world_continuity"))))
         return {
@@ -916,6 +1000,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             world_roles_present=world_roles_present,
             input_pkg=input_pkg,
             story_core=story_core,
+            ownership_binding_inventory=ownership_binding_inventory,
         )
         diagnostics.update(_presence_diagnostics(_safe_list(role_plan.get("scene_roles")), _safe_dict(role_plan.get("world_continuity"))))
         return {
@@ -935,6 +1020,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             world_roles_present=world_roles_present,
             input_pkg=input_pkg,
             story_core=story_core,
+            ownership_binding_inventory=ownership_binding_inventory,
         )
         diagnostics.update(_presence_diagnostics(_safe_list(role_plan.get("scene_roles")), _safe_dict(role_plan.get("world_continuity"))))
         return {

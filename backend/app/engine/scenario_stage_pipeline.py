@@ -89,6 +89,14 @@ STAGE_DIAGNOSTIC_PREFIXES: dict[str, tuple[str, ...]] = {
     "scene_prompts": ("scene_prompts_",),
     "finalize": ("finalize_",),
 }
+_OWNERSHIP_ROLE_MAP = {
+    "main": "character_1",
+    "support": "character_2",
+    "antagonist": "character_3",
+    "shared": "shared",
+    "world": "environment",
+}
+_BINDING_TYPES = {"carried", "worn", "held", "pocketed", "nearby", "environment"}
 
 
 def _utc_iso() -> str:
@@ -123,6 +131,47 @@ def _compact_prompt_payload(value: Any) -> Any:
     if isinstance(value, str):
         return value.strip()
     return value
+
+
+def _normalize_ref_meta(meta: Any) -> dict[str, Any]:
+    row = _safe_dict(meta)
+    ownership_role = str(row.get("ownershipRole") or row.get("ownership_role") or "auto").strip().lower() or "auto"
+    ownership_mapped = str(row.get("ownershipRoleMapped") or row.get("ownership_role_mapped") or "").strip().lower()
+    if ownership_mapped not in {"character_1", "character_2", "character_3", "shared", "environment"}:
+        ownership_mapped = _OWNERSHIP_ROLE_MAP.get(ownership_role, "")
+    binding_type = str(row.get("bindingType") or row.get("binding_type") or "nearby").strip().lower() or "nearby"
+    if binding_type not in _BINDING_TYPES:
+        binding_type = "nearby"
+    return {
+        **row,
+        "ownershipRole": ownership_role,
+        "ownershipRoleMapped": ownership_mapped,
+        "bindingType": binding_type,
+    }
+
+
+def _normalize_refs_inventory(refs_inventory: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    normalized: dict[str, Any] = {}
+    ownership_binding_inventory: list[dict[str, Any]] = []
+    for key, value in refs_inventory.items():
+        if not isinstance(value, dict):
+            normalized[str(key)] = value
+            continue
+        row = dict(value)
+        meta = _normalize_ref_meta(row.get("meta"))
+        row["meta"] = meta
+        normalized[str(key)] = row
+        if meta.get("ownershipRoleMapped") or meta.get("bindingType") != "nearby":
+            ownership_binding_inventory.append(
+                {
+                    "ref_id": str(key),
+                    "label": str(row.get("source_label") or row.get("value") or key).strip()[:120],
+                    "ownershipRole": str(meta.get("ownershipRole") or "auto"),
+                    "ownershipRoleMapped": str(meta.get("ownershipRoleMapped") or ""),
+                    "bindingType": str(meta.get("bindingType") or "nearby"),
+                }
+            )
+    return normalized, ownership_binding_inventory[:24]
 
 
 def _extract_audio_url_from_refs(refs_inventory: dict[str, Any]) -> str:
@@ -890,6 +939,7 @@ def _build_story_core_input_context(
         "compact_refs_manifest": compact_refs_manifest,
         "assigned_roles": _safe_dict(input_pkg.get("assigned_roles_override")),
         "story_core_prop_contracts": prop_contracts,
+        "ownership_binding_inventory": _safe_list(input_pkg.get("ownership_binding_inventory")),
         "world_style_identity_constraints": {
             "director_world_lock_summary": director_world_lock_summary,
             "grounding_level": grounding_level,
@@ -952,6 +1002,21 @@ def _default_story_core_guidance() -> dict[str, Any]:
         "prop_guidance": {
             "continuity_object_role": "continuity/conflict/risk anchor",
             "carried_object_role": "burden/constraint anchor when present",
+            "binding_grammar": {
+                "carried": "owner-bound continuity object; may affect posture/speed/balance/concealment/route/body tension",
+                "held": "owner hand-occupied continuity object; visible handling possible without finger micro-choreography",
+                "worn": "silhouette/look continuity anchor; not default action driver",
+                "pocketed": "owner-linked continuity object; optional visual emphasis",
+                "nearby": "owner-adjacent continuity object; within reach when scene logic allows",
+                "environment": "world-anchored scene element; not owner-locked prop",
+            },
+            "ownership_grammar": {
+                "character_1": "primary-role owned object",
+                "character_2": "support-role owned object",
+                "character_3": "antagonist-role owned object",
+                "shared": "multi-role shared object",
+                "environment": "world/environment object",
+            },
             "must_keep_same_object_identity_across_clip": True,
             "forbid_random_object_identity_changes": True,
             "object_is_functional_not_symbolic_decoration_by_default": True,
@@ -1000,6 +1065,8 @@ def _normalize_story_core_guidance(raw_guidance: Any) -> dict[str, Any]:
                 or fallback_prop_guidance.get("carried_object_role")
                 or ""
             ).strip(),
+            "binding_grammar": _safe_dict(prop_guidance.get("binding_grammar")) or _safe_dict(fallback_prop_guidance.get("binding_grammar")),
+            "ownership_grammar": _safe_dict(prop_guidance.get("ownership_grammar")) or _safe_dict(fallback_prop_guidance.get("ownership_grammar")),
             "must_keep_same_object_identity_across_clip": bool(
                 prop_guidance.get("must_keep_same_object_identity_across_clip")
                 if "must_keep_same_object_identity_across_clip" in prop_guidance
@@ -1103,6 +1170,9 @@ def _build_story_core_prompt(
         "If lyrics are weak/repetitive, rely on rhythm/energy/repetition/emotional contour and user concept.\n"
         "Scenes must be distinct even for repeating musical structures (action/space/shot scale/angle/world relation/prop relation/emotional evolution).\n"
         "Narrative spine must stay with the designated primary narrative role; secondary performance roles must remain support unless current input explicitly sets co-lead behavior.\n"
+        "Use ownership_binding_inventory as active planning grammar (main/support/antagonist/shared/world x carried/worn/held/pocketed/nearby/environment).\n"
+        "Owner-bound carried/held objects should influence continuity pressure and movement behavior without forced tiny hand choreography.\n"
+        "Do not randomly detach owner-bound carried/held objects from their owner unless context explicitly motivates it.\n"
         "Performance peaks must remain grounded in the same realistic world family and must not switch clip logic into concert/pop-video mode unless explicitly requested.\n"
         "Required top-level keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock, story_guidance.\n"
         "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
@@ -1128,7 +1198,7 @@ def _is_usable_story_core(story_core: dict[str, Any]) -> bool:
 def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     req = _safe_dict(payload)
     metadata = _safe_dict(req.get("metadata"))
-    refs_inventory = _safe_dict(req.get("context_refs"))
+    refs_inventory, ownership_binding_inventory = _normalize_refs_inventory(_safe_dict(req.get("context_refs")))
     source = _safe_dict(req.get("source"))
     source_mode = str(source.get("source_mode") or source.get("sourceMode") or "").strip().lower()
     source_text = str(source.get("source_value") or source.get("sourceValue") or "").strip() if source_mode == "text" else ""
@@ -1157,6 +1227,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "location": str(req.get("selectedLocationRefUrl") or "").strip(),
             "props": [str(item).strip() for item in _safe_list(req.get("selectedPropsRefUrls")) if str(item).strip()],
         },
+        "ownership_binding_inventory": ownership_binding_inventory,
     }
     normalized_input = _normalize_input_audio_source(base_input, refs_inventory)
     stages = {

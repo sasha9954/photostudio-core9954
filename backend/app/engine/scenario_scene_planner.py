@@ -106,6 +106,14 @@ I2V_PROMPT_DURATION_HINT_RANGE: dict[str, tuple[float, float]] = {
     "pull_back_release": (4.5, 5.0),
     "baseline_forward_walk": (4.0, 4.5),
 }
+_OWNERSHIP_ROLE_MAP = {
+    "main": "character_1",
+    "support": "character_2",
+    "antagonist": "character_3",
+    "shared": "shared",
+    "world": "environment",
+}
+_BINDING_TYPES = {"carried", "worn", "held", "pocketed", "nearby", "environment"}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -176,6 +184,40 @@ def _compact_prompt_payload(value: Any) -> Any:
     if isinstance(value, str):
         return value.strip()
     return value
+
+
+def _normalize_ref_meta(meta: Any) -> dict[str, str]:
+    row = _safe_dict(meta)
+    ownership_role = str(row.get("ownershipRole") or row.get("ownership_role") or "auto").strip().lower() or "auto"
+    ownership_mapped = str(row.get("ownershipRoleMapped") or row.get("ownership_role_mapped") or "").strip().lower()
+    if ownership_mapped not in {"character_1", "character_2", "character_3", "shared", "environment"}:
+        ownership_mapped = _OWNERSHIP_ROLE_MAP.get(ownership_role, "")
+    binding_type = str(row.get("bindingType") or row.get("binding_type") or "nearby").strip().lower() or "nearby"
+    if binding_type not in _BINDING_TYPES:
+        binding_type = "nearby"
+    return {
+        "ownershipRole": ownership_role,
+        "ownershipRoleMapped": ownership_mapped,
+        "bindingType": binding_type,
+    }
+
+
+def _build_ref_binding_inventory(refs_inventory: dict[str, Any]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for key, value in refs_inventory.items():
+        row = _safe_dict(value)
+        meta = _normalize_ref_meta(row.get("meta"))
+        if not meta["ownershipRoleMapped"] and meta["bindingType"] == "nearby":
+            continue
+        out.append(
+            {
+                "ref_id": str(key),
+                "label": str(row.get("source_label") or row.get("value") or key).strip()[:120],
+                "ownershipRoleMapped": meta["ownershipRoleMapped"],
+                "bindingType": meta["bindingType"],
+            }
+        )
+    return out[:16]
 
 
 def _resolve_active_video_model_id(package: dict[str, Any]) -> str:
@@ -320,6 +362,8 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     story_core = _safe_dict(package.get("story_core"))
     audio_map = _safe_dict(package.get("audio_map"))
     role_plan = _safe_dict(package.get("role_plan"))
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
+    ownership_binding_inventory = _build_ref_binding_inventory(refs_inventory)
     scene_windows = _build_scene_windows(audio_map)
     world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
     model_id = _resolve_active_video_model_id(package)
@@ -361,6 +405,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "role_arc_summary": str(role_plan.get("role_arc_summary") or ""),
             "continuity_notes": _safe_list(role_plan.get("continuity_notes")),
         },
+        "ownership_binding_inventory": ownership_binding_inventory,
         "clip_scene_policy": {
             "target_route_mix_for_8_scenes": {"i2v": 4, "ia2v": 2, "first_last": 2},
             "target_route_mix_is_soft_heuristic_only": True,
@@ -392,6 +437,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         "scene_windows": scene_windows,
         "role_lookup": _build_scene_role_lookup(role_plan),
         "world_summary_used": world_summary_used,
+        "ownership_binding_inventory": ownership_binding_inventory,
     }
     return context, aux
 
@@ -437,6 +483,9 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Never treat experimental as baseline and never select blocked patterns.\\n"
         "Camera-led transitions are generally more reliable than fine-motor body actions; prefer camera/framing evolution when both can express the beat.\\n"
         "Wearable continuity anchors must stay continuity/silhouette/mood anchors, not default action drivers.\\n"
+        "Use ownership_binding_inventory as planning grammar: main/support/antagonist/shared/world ownership plus carried/worn/held/pocketed/nearby/environment binding.\\n"
+        "Strong owner-lock for carried/held in owner-active scenes; moderate continuity for worn; lighter continuity for pocketed/nearby; world-driven anchoring for environment binding.\\n"
+        "Do not force object visibility in every scene, but do not randomly detach owner-bound carried objects from their owner continuity.\\n"
         "Do not use wearable-touch finger choreography as generic fallback motion.\\n\\n"
         "WATCHABILITY ROLE (MANDATORY): viewer-facing clip function of the scene, not role name.\\n"
         "Each scene.watchability_role must be a short phrase that says why this scene matters to the viewer/clip arc.\\n"
@@ -959,6 +1008,7 @@ def _normalize_scene_plan(
     scene_windows: list[dict[str, Any]],
     role_lookup: dict[str, dict[str, Any]],
     include_debug_raw: bool = False,
+    ownership_binding_inventory: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], bool, str, int, dict[str, Any]]:
     known_ids = {str(row.get("scene_id") or ""): row for row in scene_windows}
     raw_model_rows: list[dict[str, Any]] = []
@@ -987,6 +1037,18 @@ def _normalize_scene_plan(
     transit_scene_streak = 0
     intimate_scene_streak = 0
     route_swaps_applied = 0
+    binding_rows = _safe_list(ownership_binding_inventory)
+    strong_owner_roles = {
+        str(item.get("ownershipRoleMapped") or "").strip().lower()
+        for item in binding_rows
+        if str(item.get("bindingType") or "").strip().lower() in {"carried", "held"}
+    }
+    worn_owner_roles = {
+        str(item.get("ownershipRoleMapped") or "").strip().lower()
+        for item in binding_rows
+        if str(item.get("bindingType") or "").strip().lower() == "worn"
+    }
+    has_environment_binding = any(str(item.get("bindingType") or "").strip().lower() == "environment" for item in binding_rows)
 
     ordered_fallback_rows = [
         _safe_dict(row_raw)
@@ -1088,6 +1150,17 @@ def _normalize_scene_plan(
             "anti_repeat_warnings": anti_repeat_warnings,
             "original_route": route_raw,
         }
+        if scene_row["primary_role"] and scene_row["primary_role"].lower() in strong_owner_roles:
+            if scene_row["visual_event_type"] in {"environment", "face"}:
+                scene_row["visual_event_type"] = "character_action"
+            if scene_row["motion_intent"] == "watchable realistic movement":
+                scene_row["motion_intent"] = "owner-bound carried/held object affects posture, pace, and route choices"
+            if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
+                scene_row["watchability_role"] = "owner-bound continuity pressure with active object control"
+        elif scene_row["primary_role"] and scene_row["primary_role"].lower() in worn_owner_roles and scene_row["motion_intent"] == "watchable realistic movement":
+            scene_row["motion_intent"] = "silhouette continuity with worn anchor and controlled movement"
+        if has_environment_binding and scene_row["scene_presence_mode"] in {"environment_anchor", "transit"} and scene_row["visual_event_type"] == "character_action":
+            scene_row["visual_event_type"] = "environment"
 
         if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
             watchability_fallback_count += 1
@@ -1237,6 +1310,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
     context, aux = _build_scene_planning_context(package)
     scene_windows = _safe_list(aux.get("scene_windows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
+    ownership_binding_inventory = _safe_list(aux.get("ownership_binding_inventory"))
     world_summary_used = bool(aux.get("world_summary_used"))
     include_debug_raw = _scene_plan_debug_enabled(package)
     model_id = str(_safe_dict(context.get("video_capability_canon")).get("model_id") or DEFAULT_VIDEO_MODEL_ID)
@@ -1328,6 +1402,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             scene_windows=scene_windows,
             role_lookup=role_lookup,
             include_debug_raw=include_debug_raw,
+            ownership_binding_inventory=ownership_binding_inventory,
         )
         diagnostics.update(
             _collect_scene_plan_diagnostics(
@@ -1366,6 +1441,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             scene_windows=scene_windows,
             role_lookup=role_lookup,
             include_debug_raw=include_debug_raw,
+            ownership_binding_inventory=ownership_binding_inventory,
         )
         diagnostics.update(
             _collect_scene_plan_diagnostics(
@@ -1389,6 +1465,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             scene_windows=scene_windows,
             role_lookup=role_lookup,
             include_debug_raw=include_debug_raw,
+            ownership_binding_inventory=ownership_binding_inventory,
         )
         diagnostics.update(
             _collect_scene_plan_diagnostics(

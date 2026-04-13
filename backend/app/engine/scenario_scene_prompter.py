@@ -94,6 +94,14 @@ I2V_MOTION_FAMILIES = {
     "tension_head_turn",
     "pull_back_release",
 }
+_OWNERSHIP_ROLE_MAP = {
+    "main": "character_1",
+    "support": "character_2",
+    "antagonist": "character_3",
+    "shared": "shared",
+    "world": "environment",
+}
+_BINDING_TYPES = {"carried", "worn", "held", "pocketed", "nearby", "environment"}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -124,6 +132,61 @@ def _compact_prompt_payload(value: Any) -> Any:
     if isinstance(value, str):
         return value.strip()
     return value
+
+
+def _normalize_ref_meta(meta: Any) -> dict[str, str]:
+    row = _safe_dict(meta)
+    ownership_role = str(row.get("ownershipRole") or row.get("ownership_role") or "auto").strip().lower() or "auto"
+    ownership_mapped = str(row.get("ownershipRoleMapped") or row.get("ownership_role_mapped") or "").strip().lower()
+    if ownership_mapped not in {"character_1", "character_2", "character_3", "shared", "environment"}:
+        ownership_mapped = _OWNERSHIP_ROLE_MAP.get(ownership_role, "")
+    binding_type = str(row.get("bindingType") or row.get("binding_type") or "nearby").strip().lower() or "nearby"
+    if binding_type not in _BINDING_TYPES:
+        binding_type = "nearby"
+    return {
+        "ownershipRole": ownership_role,
+        "ownershipRoleMapped": ownership_mapped,
+        "bindingType": binding_type,
+    }
+
+
+def _build_ref_binding_inventory(refs_inventory: dict[str, Any]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for key, value in refs_inventory.items():
+        row = _safe_dict(value)
+        meta = _normalize_ref_meta(row.get("meta"))
+        if not meta["ownershipRoleMapped"] and meta["bindingType"] == "nearby":
+            continue
+        out.append(
+            {
+                "ref_id": str(key),
+                "ownershipRoleMapped": meta["ownershipRoleMapped"],
+                "bindingType": meta["bindingType"],
+            }
+        )
+    return out[:16]
+
+
+def _binding_prompt_clause(primary_role: str, ownership_binding_inventory: list[dict[str, str]]) -> str:
+    role = str(primary_role or "").strip().lower()
+    for item in ownership_binding_inventory:
+        owner = str(_safe_dict(item).get("ownershipRoleMapped") or "").strip().lower()
+        binding = str(_safe_dict(item).get("bindingType") or "").strip().lower()
+        if role and owner and owner != role:
+            continue
+        if binding == "carried":
+            return " Keep the owner-bound carried object close to body; it subtly affects posture, pace, and route."
+        if binding == "held":
+            return " Keep one hand-occupied held-object continuity, with broad readable handling only."
+        if binding == "worn":
+            return " Preserve worn-object silhouette continuity; treat it as look anchor, not choreography driver."
+        if binding == "pocketed":
+            return " Pocketed owner-bound object may stay implicit (not always visible) but continuity must hold."
+        if binding == "nearby":
+            return " Keep owner-bound object nearby/within reach when scene logic allows."
+        if binding == "environment":
+            return " Treat bound object as environment anchor in local scene, not hand choreography prop."
+    return ""
 
 
 def _resolve_active_video_model_id(package: dict[str, Any]) -> str:
@@ -592,6 +655,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
     audio_map = _safe_dict(package.get("audio_map"))
     role_plan = _safe_dict(package.get("role_plan"))
     scene_plan = _safe_dict(package.get("scene_plan"))
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
 
     scene_windows = _build_scene_windows(audio_map)
     role_lookup = _build_scene_role_lookup(role_plan)
@@ -600,6 +664,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
         route: get_video_model_capability_profile(model_id, route)
         for route in ("i2v", "ia2v", "first_last", "lipsync")
     }
+    ownership_binding_inventory = _build_ref_binding_inventory(refs_inventory)
 
     compact_context = {
         "mode": "clip",
@@ -659,6 +724,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
                 for row in _safe_list(scene_plan.get("scenes"))
             ],
         },
+        "ownership_binding_inventory": ownership_binding_inventory,
         "prompt_policy": {
             "ltx_safe_motion": True,
             "realism_required": True,
@@ -684,6 +750,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
         "role_lookup": role_lookup,
         "story_core": story_core,
         "world_continuity": _safe_dict(role_plan.get("world_continuity")),
+        "ownership_binding_inventory": ownership_binding_inventory,
     }
     return _compact_prompt_payload(compact_context), aux
 
@@ -722,6 +789,8 @@ def _build_prompt(context: dict[str, Any]) -> str:
         f"Blocked lipsync patterns (filter out): {lipsync_blocked}.\\n"
         "Camera-led transitions are preferred over fine-motor body actions when either can express the same beat.\\n"
         "When wardrobe or worn-object anchors are present, preserve continuity and avoid default item-manipulation choreography unless explicitly requested by current input.\\n"
+        "Use ownership_binding_inventory for owner/binding grammar: carried/held stronger owner continuity, worn silhouette continuity, pocketed/nearby lighter continuity, environment world-anchor behavior.\\n"
+        "Do not randomly detach owner-bound carried/held objects from owner continuity.\\n"
         "Video prompts must be LTX-native, anatomy-safe, and motion-first.\\n"
         "Write prompts in natural cinematic English, present tense, one connected paragraph, chronological motion logic.\\n"
         "Describe what starts happening after the still image; do NOT mechanically re-describe all static elements already visible.\\n"
@@ -1088,6 +1157,8 @@ def _build_fallback_scene_prompts(
         scene_plan_row=scene_plan_row,
         world_continuity=world_continuity,
     )
+    ownership_binding_inventory = _build_ref_binding_inventory(_safe_dict(package.get("refs_inventory")))
+    binding_clause = _binding_prompt_clause(str(role_row.get("primary_role") or ""), ownership_binding_inventory)
 
     positive_video_prompt = ""
     negative_video_prompt = ""
@@ -1099,7 +1170,7 @@ def _build_fallback_scene_prompts(
         )
         video_prompt = (
             "The still frame opens into a performance beat as the vocal phrase leads subtle rhythmic sway, a controlled torso pulse, a gentle head turn, and soft hand phrasing while the face stays readable and emotionally alive. "
-            "Camera motion stays smooth and supportive. Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
+            f"Camera motion stays smooth and supportive.{binding_clause} Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
         )
         negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
     elif route == "first_last":
@@ -1146,7 +1217,7 @@ def _build_fallback_scene_prompts(
             )
             video_prompt = (
                 "Very restrained intro beat with nearly static body line and subtle breath-level motion only. "
-                "Camera intent is observational and controlled, preserving closed mood and shadow-heavy framing."
+                f"Camera intent is observational and controlled, preserving closed mood and shadow-heavy framing.{binding_clause}"
             )
         elif scene_id == "sc_5":
             photo_prompt = (
@@ -1155,7 +1226,7 @@ def _build_fallback_scene_prompts(
             )
             video_prompt = (
                 "Breather beat with micro-performance only: controlled pause, slight posture reset, contained energy building before final push. "
-                "Keep movement subtle but alive, no dead static, no chaotic motion."
+                f"Keep movement subtle but alive, no dead static, no chaotic motion.{binding_clause}"
             )
         else:
             photo_prompt = (
@@ -1164,7 +1235,7 @@ def _build_fallback_scene_prompts(
             )
             video_prompt = (
                 f"After the still frame, the moment moves forward through one clear action: {motion_intent}, with camera behavior that follows the action and keeps the atmosphere grounded in {emotional}. "
-                "Safety tail: preserve identity/world continuity, stable anatomy, and controlled camera."
+                f"Safety tail: preserve identity/world continuity, stable anatomy, and controlled camera.{binding_clause}"
             )
 
     if high_motion_risk and route in {"i2v", "ia2v"}:
