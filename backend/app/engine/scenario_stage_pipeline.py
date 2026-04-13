@@ -1246,6 +1246,54 @@ def _append_diag_event(package: dict[str, Any], message: str, *, stage_id: str =
     package["diagnostics"] = diagnostics
 
 
+def _estimate_json_size_bytes(value: Any) -> int:
+    try:
+        payload = json.dumps(value, ensure_ascii=False, default=str)
+        return len(payload.encode("utf-8"))
+    except Exception:
+        return 0
+
+
+def build_runtime_diagnostics_summary(
+    package: dict[str, Any],
+    *,
+    current_stage: str = "",
+    include_debug: bool = False,
+) -> dict[str, Any]:
+    pkg = _safe_dict(package)
+    diagnostics = _safe_dict(pkg.get("diagnostics"))
+    warnings = _safe_list(diagnostics.get("warnings"))
+    validation_error = _first_text(
+        diagnostics.get(f"{current_stage}_validation_error") if current_stage else "",
+        diagnostics.get("validation_error"),
+    )
+    used_model = _first_text(
+        diagnostics.get(f"{current_stage}_used_model") if current_stage else "",
+        diagnostics.get("scene_prompts_used_model"),
+        diagnostics.get("scene_plan_used_model"),
+        diagnostics.get("role_plan_used_model"),
+        diagnostics.get("story_core_used_model"),
+    )
+    summary: dict[str, Any] = {
+        "current_stage": str(current_stage or ""),
+        "used_model": used_model,
+        "warnings_count": len(warnings),
+        "validation_error": str(validation_error or ""),
+    }
+    if include_debug:
+        section_sizes = {
+            "storyboardPackage": _estimate_json_size_bytes(pkg),
+            "final_storyboard": _estimate_json_size_bytes(_safe_dict(pkg.get("final_storyboard"))),
+            "story_core": _estimate_json_size_bytes(_safe_dict(pkg.get("story_core"))),
+            "diagnostics": _estimate_json_size_bytes(diagnostics),
+            "diagnostics.events": _estimate_json_size_bytes(_safe_list(diagnostics.get("events"))),
+        }
+        summary["size_counters"] = section_sizes
+        summary["events"] = _safe_list(diagnostics.get("events"))
+        summary["errors"] = _safe_list(diagnostics.get("errors"))
+    return summary
+
+
 def _to_float(value: Any, fallback: float = 0.0) -> float:
     try:
         if hasattr(value, "item") and callable(getattr(value, "item")):

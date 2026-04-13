@@ -311,6 +311,14 @@ function sanitizeContextRefItem(item = {}) {
   };
 }
 
+function sanitizeConnectedContextSummary(summary = {}) {
+  if (!summary || typeof summary !== "object") return {};
+  const next = { ...summary };
+  if (Object.prototype.hasOwnProperty.call(next, "context_refs")) delete next.context_refs;
+  if (Object.prototype.hasOwnProperty.call(next, "refs_inventory")) delete next.refs_inventory;
+  return next;
+}
+
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC_SYNTH = false;
 const SCENARIO_DIRECTOR_FIXTURE_TOGGLE_KEY = "ps:scenarioDirector:forceFixture";
 
@@ -940,11 +948,27 @@ export function buildScenarioStageManualPayload({
   const basePayload = buildScenarioDirectorRequestPayload(sourceState) || {};
   const source = sourceState && typeof sourceState === "object" ? sourceState : {};
   const target = targetState && typeof targetState === "object" ? targetState : {};
-  const directorOutput = target?.directorOutput && typeof target.directorOutput === "object" ? target.directorOutput : {};
   const existingStoryboardPackage = (
     storyboardPackage && typeof storyboardPackage === "object" && Object.keys(storyboardPackage).length
   ) ? storyboardPackage : (target?.storyboardPackage && typeof target.storyboardPackage === "object" ? target.storyboardPackage : {});
-  const buildLeanStoryCorePackage = (pkg = {}) => {
+  const buildCompactDiagnostics = (diag = {}, currentStage = "") => {
+    const safeDiag = diag && typeof diag === "object" ? diag : {};
+    const warnings = Array.isArray(safeDiag?.warnings) ? safeDiag.warnings : [];
+    const errors = Array.isArray(safeDiag?.errors) ? safeDiag.errors : [];
+    return {
+      current_stage: currentStage,
+      warnings_count: warnings.length,
+      errors_count: errors.length,
+      validation_error: normalizeText(
+        safeDiag?.[`${currentStage}_validation_error`]
+        || safeDiag?.validation_error
+      ),
+      story_core_mode: safeDiag?.story_core_mode,
+      story_core_grounding_level: safeDiag?.story_core_grounding_level,
+      story_core_payload_mode: "lean",
+    };
+  };
+  const buildLeanManualPackage = (pkg = {}, currentStage = "") => {
     const safePkg = pkg && typeof pkg === "object" ? pkg : {};
     const input = safePkg?.input && typeof safePkg.input === "object" ? safePkg.input : {};
     const refsInventory = safePkg?.refs_inventory && typeof safePkg.refs_inventory === "object" ? safePkg.refs_inventory : {};
@@ -952,23 +976,45 @@ export function buildScenarioStageManualPayload({
     const audioMap = safePkg?.audio_map && typeof safePkg.audio_map === "object" ? safePkg.audio_map : {};
     const stageStatuses = safePkg?.stage_statuses && typeof safePkg.stage_statuses === "object" ? safePkg.stage_statuses : {};
     const diagnostics = safePkg?.diagnostics && typeof safePkg.diagnostics === "object" ? safePkg.diagnostics : {};
-    return {
+    const stageSectionById = {
+      story_core: ["story_core"],
+      role_plan: ["story_core", "role_plan"],
+      scene_plan: ["story_core", "role_plan", "scene_plan"],
+      scene_prompts: ["story_core", "role_plan", "scene_plan", "scene_prompts"],
+      finalize: ["story_core", "role_plan", "scene_plan", "scene_prompts", "final_storyboard"],
+    };
+    const keepSections = stageSectionById[currentStage] || [];
+    const leanPkg = {
       input,
       refs_inventory: refsInventory,
       assigned_roles: assignedRoles,
       audio_map: audioMap,
-      stage_statuses: stageStatuses,
-      diagnostics: {
-        story_core_mode: diagnostics?.story_core_mode,
-        story_core_grounding_level: diagnostics?.story_core_grounding_level,
-        story_core_payload_mode: "lean",
-      },
+      stage_statuses: Object.fromEntries(
+        Object.entries(stageStatuses).map(([key, value]) => {
+          const row = value && typeof value === "object" ? value : {};
+          return [key, {
+            status: normalizeText(row?.status) || "idle",
+            updated_at: normalizeText(row?.updated_at),
+            error: normalizeText(row?.error),
+            run_count: Number(row?.run_count || 0) || 0,
+          }];
+        })
+      ),
+      diagnostics: buildCompactDiagnostics(diagnostics, currentStage),
     };
+    keepSections.forEach((sectionKey) => {
+      const value = safePkg?.[sectionKey];
+      if (value && typeof value === "object") leanPkg[sectionKey] = value;
+    });
+    if (!Object.prototype.hasOwnProperty.call(leanPkg, "final_storyboard")) leanPkg.final_storyboard = { scenes: [] };
+    if (!Object.prototype.hasOwnProperty.call(leanPkg, "scene_prompts")) leanPkg.scene_prompts = { scenes: [] };
+    if (!Object.prototype.hasOwnProperty.call(leanPkg, "scene_plan")) leanPkg.scene_plan = { scenes: [] };
+    if (!Object.prototype.hasOwnProperty.call(leanPkg, "role_plan")) leanPkg.role_plan = {};
+    if (!Object.prototype.hasOwnProperty.call(leanPkg, "story_core")) leanPkg.story_core = {};
+    return leanPkg;
   };
   const normalizedStageId = normalizeText(stageId);
-  const stageStoryboardPackage = normalizedStageId === "story_core"
-    ? buildLeanStoryCorePackage(existingStoryboardPackage)
-    : existingStoryboardPackage;
+  const stageStoryboardPackage = buildLeanManualPackage(existingStoryboardPackage, normalizedStageId);
 
   const rawContextRefs = source?.connectedInputs && typeof source.connectedInputs === "object"
     ? source.connectedInputs
@@ -979,6 +1025,10 @@ export function buildScenarioStageManualPayload({
     ...source,
     connectedInputs: source?.connectedInputs || target?.connectedInputs || {},
   });
+  const connectedContextSummaryRaw = (
+    source?.connected_context_summary && typeof source.connected_context_summary === "object"
+  ) ? source.connected_context_summary : (basePayload?.connected_context_summary || {});
+  const connectedContextSummary = sanitizeConnectedContextSummary(connectedContextSummaryRaw);
 
   return {
     ...basePayload,
@@ -995,9 +1045,7 @@ export function buildScenarioStageManualPayload({
     audioDurationSec: Number(source?.audioDurationSec || target?.audioDurationSec || basePayload?.audioDurationSec || 0) || 0,
     source: source?.resolvedSource && typeof source.resolvedSource === "object" ? source.resolvedSource : (basePayload?.source || {}),
     context_refs: sanitizedContextRefs,
-    connected_context_summary: (
-      source?.connected_context_summary && typeof source.connected_context_summary === "object"
-    ) ? source.connected_context_summary : (basePayload?.connected_context_summary || {}),
+    connected_context_summary: connectedContextSummary,
     director_controls: {
       ...(basePayload?.director_controls && typeof basePayload.director_controls === "object" ? basePayload.director_controls : {}),
       ...(source?.director_controls && typeof source.director_controls === "object" ? source.director_controls : {}),
@@ -1022,11 +1070,10 @@ export function buildScenarioStageManualPayload({
       requestSource: normalizeText(requestSource) || "scenario_storyboard:manual_stage",
       contentType: normalizeText(source?.contentType || target?.scenarioMode) || "music_video",
       format: normalizeText(source?.format || target?.format) || "9:16",
+      stagePayloadMode: "lean",
     },
     scenario: target?.scenario || source?.scenario || "",
     scenarioPackage: target?.scenarioPackage && typeof target.scenarioPackage === "object" ? target.scenarioPackage : {},
-    storyboardOut: target?.storyboardOut && typeof target.storyboardOut === "object" ? target.storyboardOut : {},
-    directorOutput: directorOutput,
   };
 }
 
@@ -1331,8 +1378,10 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         ? finalStoryboard.context_refs
         : (storyboardPackage?.refs_inventory && typeof storyboardPackage.refs_inventory === "object" ? storyboardPackage.refs_inventory : {}),
       connected_context_summary: finalStoryboard?.connected_context_summary && typeof finalStoryboard.connected_context_summary === "object"
-        ? finalStoryboard.connected_context_summary
-        : (storyboardPackage?.input?.connected_context_summary && typeof storyboardPackage.input.connected_context_summary === "object" ? storyboardPackage.input.connected_context_summary : {}),
+        ? sanitizeConnectedContextSummary(finalStoryboard.connected_context_summary)
+        : (storyboardPackage?.input?.connected_context_summary && typeof storyboardPackage.input.connected_context_summary === "object"
+          ? sanitizeConnectedContextSummary(storyboardPackage.input.connected_context_summary)
+          : {}),
       world_continuity: finalStoryboard?.world_continuity && typeof finalStoryboard.world_continuity === "object"
         ? finalStoryboard.world_continuity
         : (storyboardPackage?.role_plan?.world_continuity && typeof storyboardPackage.role_plan.world_continuity === "object" ? storyboardPackage.role_plan.world_continuity : {}),
@@ -1350,9 +1399,20 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       contentType: "music_video",
       format: normalizeText(state?.format) || "9:16",
     });
-    const diagnosticsSummary = response?.diagnostics && typeof response.diagnostics === "object"
-      ? response.diagnostics
-      : (storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object" ? storyboardPackage.diagnostics : {});
+    const diagnosticsSummaryRaw = response?.meta?.diagnostics && typeof response.meta.diagnostics === "object"
+      ? response.meta.diagnostics
+      : (response?.diagnostics && typeof response.diagnostics === "object"
+        ? response.diagnostics
+        : (storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object" ? storyboardPackage.diagnostics : {}));
+    const diagnosticsSummary = diagnosticsSummaryRaw && typeof diagnosticsSummaryRaw === "object"
+      ? {
+        ...diagnosticsSummaryRaw,
+        warnings_count: Number(
+          diagnosticsSummaryRaw?.warnings_count
+          ?? (Array.isArray(diagnosticsSummaryRaw?.warnings) ? diagnosticsSummaryRaw.warnings.length : 0)
+        ) || 0,
+      }
+      : {};
     return {
       storyboardOut: runtimeStoryboard,
       runtimeStoryboard,
