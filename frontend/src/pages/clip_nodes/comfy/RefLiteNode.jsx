@@ -25,12 +25,12 @@ const OWNERSHIP_ROLE_OPTIONS = [
   { value: "world", label: "Мир" },
 ];
 const BINDING_TYPE_OPTIONS = [
-  { value: "carried", label: "carried" },
-  { value: "worn", label: "worn" },
-  { value: "held", label: "held" },
-  { value: "pocketed", label: "pocketed" },
-  { value: "nearby", label: "nearby" },
-  { value: "environment", label: "environment" },
+  { value: "carried", label: "Носит с собой" },
+  { value: "worn", label: "Надето" },
+  { value: "held", label: "В руках" },
+  { value: "pocketed", label: "В кармане" },
+  { value: "nearby", label: "Рядом" },
+  { value: "environment", label: "Часть окружения" },
 ];
 
 function getRefThumbCandidateSignature(item) {
