@@ -882,13 +882,38 @@ def _normalize_role_plan(
             scene_subject_priority=scene_subject_priority,
             scene_presence_mode=scene_presence_mode,
         )
+        held_owner_scene_for_prop_guard = bool(
+            primary_role
+            and primary_role in held_owner_props
+            and "props" in active_roles
+            and (
+                scene_presence_mode in {"transit", "private_release"}
+                or any(
+                    tag in " ".join(
+                        [
+                            str(window.get("scene_function") or "").strip().lower(),
+                            str(window.get("phrase_text") or "").strip().lower(),
+                            str(row.get("role_reason") or "").strip().lower(),
+                        ]
+                    )
+                    for tag in {"pressure", "evasion", "conceal", "escape", "release"}
+                )
+            )
+        )
         if "props" in active_roles and primary_role in carried_owner_props:
             prop_activation_mode = "visible_anchor"
-        elif "props" in active_roles and primary_role in held_owner_props and prop_activation_mode == "not_emphasized":
-            prop_activation_mode = "visible_anchor" if scene_presence_mode in {"transit", "private_release"} else "anchor_worn"
+        elif held_owner_scene_for_prop_guard:
+            if prop_activation_mode == "not_emphasized":
+                prop_activation_mode = "visible_anchor" if scene_presence_mode in {"transit", "private_release"} else "anchor_worn"
+            if prop_activation_mode == "anchor_worn" and scene_presence_mode in {"transit", "private_release"}:
+                prop_activation_mode = "visible_anchor"
         elif "props" in active_roles and primary_role in moderate_owner_props and prop_activation_mode == "not_emphasized":
             prop_activation_mode = "anchor_worn"
-        elif has_world_environment_binding and scene_presence_mode in {"environment_anchor", "transit"}:
+        elif (
+            has_world_environment_binding
+            and scene_presence_mode in {"environment_anchor", "transit"}
+            and not held_owner_scene_for_prop_guard
+        ):
             prop_activation_mode = "not_emphasized"
 
         world_emphasis_raw = str(row.get("world_emphasis") or "").strip().lower()
