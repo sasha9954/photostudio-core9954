@@ -485,21 +485,10 @@ def analyze_audio_semantics(audio_path: str | None = None, *, transcript_text: s
     implied_events: list[str] = []
     tone_signals: list[str] = []
 
-    entity_rules = [
-        (("iran", "иран"), "Iran"),
-        (("bunker", "бункер"), "Bunkers"),
-        (("missile", "missiles", "ракет"), "Missiles"),
-        (("base", "facility", "объект", "база"), "Military facility"),
-        (("operation", "операц"), "Operations"),
-        (("corridor", "туннел", "коридор"), "Underground corridors"),
-    ]
-    event_rules = [
-        (("military", "военн"), "Military context"),
-        (("underground", "подзем"), "Underground facilities"),
-        (("launch", "strike", "удар", "пуск"), "Launch/strike references"),
-        (("warning", "alarm", "тревог"), "Alert state"),
-        (("explosion", "blast", "взрыв"), "Explosive event"),
-    ]
+    # Keep semantic extraction story-agnostic: do not hardcode domain/country/case-specific
+    # entities/events that could silently drag future stories into legacy contexts.
+    entity_rules: list[tuple[tuple[str, ...], str]] = []
+    event_rules: list[tuple[tuple[str, ...], str]] = []
     tone_rules = [
         (("urgent", "critical", "сроч", "немед"), "urgent"),
         (("danger", "threat", "опас", "угроз"), "threatening"),

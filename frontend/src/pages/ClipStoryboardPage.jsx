@@ -3767,7 +3767,7 @@ function ensureFirstLastSlotPrompt(scene = {}, slot = "start", prompt = "") {
   }
   const needsDeltaInjection = !endPrompt || isNearDuplicateSceneText(startPrompt, endPrompt);
   if (!needsDeltaInjection) return fallbackBase;
-  return `${fallbackBase}. End state must be visibly progressed from the opening frame: changed pose, changed head angle, changed hand placement, evolved emotion; keep same girl, same wall/location, same lighting family, same camera family.`;
+  return `${fallbackBase}. End state must be visibly progressed from the opening frame: changed pose, changed head angle, changed hand placement, evolved emotion; keep same character, same wall/location, same lighting family, same camera family.`;
 }
 
 function getSceneFramePromptByStrategy(scene, slot = "single") {

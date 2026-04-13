@@ -5434,10 +5434,7 @@ def _build_session_world_anchors(
     if character_refs:
         character_anchor = "same exact person identity as character reference images"
     else:
-        if any(word in text_l for word in ["woman", "girl", "her", "she"]):
-            character_anchor = "a solitary woman in her early 30s with short dark hair, expressive eyes, and a dark winter coat"
-        else:
-            character_anchor = "a solitary man in his early 30s with short dark hair and a trimmed beard, wearing a dark winter coat"
+        character_anchor = "a solitary adult character with coherent identity, grounded wardrobe, and readable facial presence"
 
     world_style_packs: list[dict[str, Any]] = [
         {
@@ -5733,11 +5730,6 @@ def _detect_world_scale_context(*, text: str, scenes: list[dict], session_world_
                 r"\bvocal(?:ist)?\b",
                 r"\bsing(?:er|ing)?\b",
                 r"\bperform(?:er|ance)?\b",
-                r"\bwoman\b",
-                r"\bgirl\b",
-                r"\bman\b",
-                r"\bperson\b",
-                r"\bhuman\b",
             ]
         )
     )
@@ -10444,7 +10436,7 @@ def _build_comfy_image_prompt_assembly(
     if bool(contract.get("identityLock")) and ("character_1" in active_roles or bool(contract.get("heroAppearanceContract"))):
         forbidden_changes.extend([
             "do not change face identity",
-            "do not age up/down the same woman across scenes",
+            "do not age up/down the same character across scenes",
             "do not slim down or compress body",
             "do not change hair color or hair structure",
             "do not alter hair texture or parting",
@@ -10452,7 +10444,7 @@ def _build_comfy_image_prompt_assembly(
             "do not change neckline/silhouette/color/signature details",
             "do not replace accessories or shoes",
             "do not remove shoes or crop into shoe-loss reinterpretation",
-            "do not beautify into a different woman",
+            "do not beautify into a different character",
             "do not convert into generic singer portrait",
         ])
     if has_hero_appearance_contract:
@@ -10783,7 +10775,7 @@ def _build_comfy_image_prompt_assembly(
     if is_non_lip_route:
         non_lip_identity_first_block = "\n".join([
             "NON-LIP IDENTITY-OUTFIT LOCK (PRIORITY 0, STRICT):",
-            "- same exact woman as character_1 reference (source-of-truth identity)",
+            "- same exact character_1 identity as reference (source-of-truth identity)",
             "- keep same face identity, same hairstyle structure, same outfit category/silhouette/construction",
             "- keep signature details/colors/footwear/accessories when present in reference",
             "- do not redesign outfit family or reinterpret garment category",
@@ -11171,7 +11163,7 @@ def clip_image(payload: ClipImageIn):
         human_roles_present
         or bool(raw_scene_contract.get("lipSync") is True)
         or str(raw_scene_contract.get("videoGenerationRoute") or raw_scene_contract.get("plannedVideoGenerationRoute") or "").strip().lower() == "lip_sync_music"
-        or bool(re.search(r"\blip[\s-]?sync\b|\bvocal(?:ist)?\b|\bperform(?:er|ance)?\b|\bhuman\b|\bwoman\b|\bgirl\b|\bman\b", f"{scene_text} {scene_delta}".lower()))
+        or bool(re.search(r"\blip[\s-]?sync\b|\bvocal(?:ist)?\b|\bperform(?:er|ance)?\b", f"{scene_text} {scene_delta}".lower()))
     )
     if world_scale_context == "micro_world" and is_human_performance_scene:
         world_scale_context = "human_world"
