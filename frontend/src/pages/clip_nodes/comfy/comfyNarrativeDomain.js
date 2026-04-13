@@ -521,26 +521,49 @@ function resolveAudioDurationFallback(state = {}) {
 
 function buildReferencePayload(input, fallbackLabel) {
   if (!input || typeof input !== "object") return null;
+  const normalizeOwnershipRole = (value) => {
+    const normalized = normalizeText(value).toLowerCase();
+    return ["auto", "main", "support", "antagonist", "shared", "world"].includes(normalized) ? normalized : "auto";
+  };
+  const normalizeBindingType = (value) => {
+    const normalized = normalizeText(value).toLowerCase();
+    return ["carried", "worn", "held", "pocketed", "nearby", "environment"].includes(normalized) ? normalized : "nearby";
+  };
+  const ownershipRoleToPipelineRole = (value) => {
+    if (value === "main") return "character_1";
+    if (value === "support") return "character_2";
+    if (value === "antagonist") return "character_3";
+    if (value === "shared") return "shared";
+    if (value === "world") return "environment";
+    return "auto";
+  };
   const normalizedRefs = Array.isArray(input.refs)
     ? input.refs
       .map((item) => {
         if (typeof item === "string") {
           const url = normalizeText(item);
-          return url ? { url, roleType: "" } : null;
+          return url ? { url, roleType: "", ownershipRole: "auto", bindingType: "nearby" } : null;
         }
         const url = normalizeText(item?.url || item?.value || item);
         if (!url) return null;
         const roleType = normalizeText(item?.roleType).toLowerCase();
-        return { url, roleType };
+        const ownershipRole = normalizeOwnershipRole(item?.ownershipRole || item?.ownership_role);
+        const bindingType = normalizeBindingType(item?.bindingType || item?.binding_type);
+        return { url, roleType, ownershipRole, bindingType };
       })
       .filter(Boolean)
     : [];
   const refs = normalizedRefs.map((item) => item.url).filter(Boolean);
   const roleType = normalizeText(input?.roleType || normalizedRefs.find((item) => !!item.roleType)?.roleType).toLowerCase();
+  const ownershipRole = normalizeOwnershipRole(input?.ownershipRole || input?.ownership_role || input?.meta?.ownershipRole || normalizedRefs.find((item) => !!item.ownershipRole)?.ownershipRole);
+  const bindingType = normalizeBindingType(input?.bindingType || input?.binding_type || input?.meta?.bindingType || normalizedRefs.find((item) => !!item.bindingType)?.bindingType);
   const value = normalizeText(input.value) || normalizeText(refs[0]) || "";
   if (!value && !refs.length && !normalizeText(input.preview)) return null;
   const meta = input?.meta && typeof input.meta === "object" ? { ...input.meta } : {};
   if (roleType) meta.roleType = roleType;
+  meta.ownershipRole = ownershipRole;
+  meta.ownershipRoleMapped = ownershipRoleToPipelineRole(ownershipRole);
+  meta.bindingType = bindingType;
   return {
     label: fallbackLabel,
     source_label: normalizeText(input.sourceLabel) || fallbackLabel,
@@ -850,6 +873,16 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       .map(([role, value]) => [role, normalizeText(value?.meta?.roleType).toLowerCase()])
       .filter(([, roleType]) => !!roleType)
   );
+  const ownershipRoleByRole = Object.fromEntries(
+    Object.entries(contextRefs)
+      .map(([role, value]) => [role, normalizeText(value?.meta?.ownershipRoleMapped || value?.meta?.ownershipRole).toLowerCase()])
+      .filter(([, ownershipRole]) => !!ownershipRole && ownershipRole !== "auto")
+  );
+  const bindingTypeByRole = Object.fromEntries(
+    Object.entries(contextRefs)
+      .map(([role, value]) => [role, normalizeText(value?.meta?.bindingType).toLowerCase()])
+      .filter(([, bindingType]) => !!bindingType)
+  );
 
   const format = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
     ? String(state.format).trim()
@@ -883,6 +916,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       },
     },
     context_refs: Object.fromEntries(Object.entries(contextRefs).filter(([, value]) => !!value)),
+    ownershipRoleByRole,
+    bindingTypeByRole,
     source_origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
     audioDurationSec: audioContext.audioDurationSec,
     text: narrativeDirective.text,
@@ -903,6 +938,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       ...(isMusicVideo ? { pipelineMode: "clip_pipeline_v1", useClipStoryboardPipeline: true } : {}),
       fileOrLinkMeta: connectedInputs?.video_file_in?.meta || connectedInputs?.video_link_in?.meta || connectedInputs?.audio_in?.meta || {},
       roleTypeByRole,
+      ownershipRoleByRole,
+      bindingTypeByRole,
       audio: {
         durationSec: audioContext.audioDurationSec,
         mimeType: audioContext.mimeType,

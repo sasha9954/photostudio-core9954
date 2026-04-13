@@ -19,6 +19,26 @@ const VISUAL_ANCHOR_ROLES = ["character_1", "character_2", "character_3", "anima
 const STORY_OVERRIDE_MARKERS = ["не по песне", "другой сюжет", "separate story", "different story", "not literal lyrics"];
 const STORY_ENHANCEMENT_MARKERS = ["усили", "усилить", "enhance", "intensify", "emphasize", "make more cinematic"];
 const CLIP_TRACE_COMFY_REFS = false;
+const REF_OWNERSHIP_ROLES = new Set(["auto", "main", "support", "antagonist", "shared", "world"]);
+const REF_BINDING_TYPES = new Set(["carried", "worn", "held", "pocketed", "nearby", "environment"]);
+const REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE = {
+  auto: "auto",
+  main: "character_1",
+  support: "character_2",
+  antagonist: "character_3",
+  shared: "shared",
+  world: "environment",
+};
+
+function normalizeRefOwnershipRole(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return REF_OWNERSHIP_ROLES.has(normalized) ? normalized : "auto";
+}
+
+function normalizeRefBindingType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return REF_BINDING_TYPES.has(normalized) ? normalized : "nearby";
+}
 
 const MODE_RULES = {
   clip: {
@@ -755,21 +775,29 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     if (!sourceNode || sourceNode?.type !== cfg.nodeType) return [];
     if (cfg.kind && sourceNode?.data?.kind !== cfg.kind) return [];
     const roleType = String(sourceNode?.data?.roleType || "").trim().toLowerCase();
+    const ownershipRole = normalizeRefOwnershipRole(sourceNode?.data?.ownershipRole);
+    const bindingType = normalizeRefBindingType(sourceNode?.data?.bindingType);
+    const withOwnershipBinding = (items = []) => items.map((item) => ({
+      ...item,
+      ownershipRole,
+      ownershipRoleMapped: REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE[ownershipRole] || "auto",
+      bindingType,
+    }));
     const withRoleType = (items = []) => {
       if (!(cfg?.role === "character_1" || cfg?.role === "character_2" || cfg?.role === "character_3")) return items;
       if (!roleType || roleType === "auto") return items;
       return items.map((item) => ({ ...item, roleType }));
     };
     if (cfg.nodeType === "refNode" && typeof normalizeRefDataFn === "function") {
-      return withRoleType(normalizeRefDataFn(sourceNode?.data || {}, cfg.kind || "").refs);
+      return withOwnershipBinding(withRoleType(normalizeRefDataFn(sourceNode?.data || {}, cfg.kind || "").refs));
     }
     const refs = Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [];
-    return withRoleType(refs
+    return withOwnershipBinding(withRoleType(refs
       .map((item) => {
         if (typeof item === "string") return { url: String(item || "").trim(), name: "" };
         return { url: String(item?.url || "").trim(), name: String(item?.name || "").trim() };
       })
-      .filter((item) => !!item.url));
+      .filter((item) => !!item.url)));
   };
   const resolveRefStatus = (sourceNode, refs = []) => {
     const refsCount = Array.isArray(refs) ? refs.length : 0;
@@ -840,6 +868,14 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     }];
   }));
   const refsByRole = Object.fromEntries(Object.entries(refConnectionStates).map(([role, meta]) => [role, meta.status === "ready" ? meta.refs : []]));
+  const ownershipRoleByRole = Object.fromEntries(
+    Object.entries(refNodesByRole)
+      .map(([role, node]) => [role, REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE[normalizeRefOwnershipRole(node?.data?.ownershipRole)] || "auto"])
+      .filter(([, mappedRole]) => mappedRole && mappedRole !== "auto")
+  );
+  const bindingTypeByRole = Object.fromEntries(
+    Object.entries(refNodesByRole).map(([role, node]) => [role, normalizeRefBindingType(node?.data?.bindingType)])
+  );
 
   const audioNode = pickConnectedNode("audio");
   const textNode = pickConnectedNode("text");
@@ -933,6 +969,8 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     audioSemanticSummary,
     audioSemanticHints,
     refsByRole,
+    ownershipRoleByRole,
+    bindingTypeByRole,
     storyControlMode,
     narrativeRoles,
     narrativeSource,
