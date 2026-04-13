@@ -2777,9 +2777,36 @@ def _build_scene_candidate_windows(
                     "cut_after_phrase_id": str(current[-1]),
                 }
             )
+    def _repair_short_final_tail(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if len(candidates) < 2:
+            return candidates
+        repaired = [dict(item) for item in candidates]
+        last = repaired[-1]
+        prev = repaired[-2]
+        last_span = float(last.get("duration_sec") or 0.0)
+        min_tail_sec = min(2.0, max(0.0, target_min - 0.1))
+        if last_span >= min_tail_sec and last_span >= max(0.0, target_min - 0.8):
+            return repaired
+        prev_t0 = float(prev.get("t0") or 0.0)
+        last_t1 = float(last.get("t1") or prev_t0)
+        if last_t1 <= prev_t0:
+            return repaired
+        merged_phrase_ids = [
+            *[str(item) for item in _safe_list(prev.get("phrase_ids")) if str(item)],
+            *[str(item) for item in _safe_list(last.get("phrase_ids")) if str(item)],
+        ]
+        prev["t1"] = round(last_t1, 3)
+        prev["duration_sec"] = round(max(0.0, last_t1 - prev_t0), 3)
+        prev["phrase_ids"] = list(dict.fromkeys(merged_phrase_ids))
+        prev["cut_after_phrase_id"] = str(last.get("cut_after_phrase_id") or prev.get("cut_after_phrase_id") or "")
+        repaired = repaired[:-1]
+        for idx, row in enumerate(repaired, start=1):
+            row["id"] = f"sc_{idx}"
+        return repaired
+
     if normalized:
-        return normalized
-    return windows
+        return _repair_short_final_tail(normalized)
+    return _repair_short_final_tail(windows)
 
 
 def _max_equal_duration_streak(durations: list[float], *, tolerance: float = 0.08) -> int:

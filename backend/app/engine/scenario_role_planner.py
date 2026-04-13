@@ -724,6 +724,24 @@ def _default_scene_role_row(
     }
 
 
+def _story_requires_character_1_opening(story_core: dict[str, Any], present_roles: list[str]) -> bool:
+    if "character_1" not in set(present_roles):
+        return False
+    text_blob = " ".join(
+        [
+            str(story_core.get("opening_anchor") or ""),
+            str(story_core.get("story_summary") or ""),
+            str(story_core.get("global_arc") or ""),
+        ]
+    ).strip().lower()
+    if not text_blob:
+        return False
+    hero_hints = ("character_1", "hero", "boy", "male", "main character", "protagonist")
+    opening_hints = ("open", "opening", "start", "begins", "intro")
+    prop_hints = ("box", "package", "parcel", "held object", "carry")
+    return any(h in text_blob for h in hero_hints) and (any(h in text_blob for h in opening_hints) or any(h in text_blob for h in prop_hints))
+
+
 def _normalize_role_plan(
     raw_plan: dict[str, Any],
     *,
@@ -958,6 +976,31 @@ def _normalize_role_plan(
                     total_scenes=total_scenes,
                 )
             )
+
+    if normalized_scene_roles and _story_requires_character_1_opening(story_core, present_roles):
+        first_scene = _safe_dict(normalized_scene_roles[0])
+        first_active = [str(item).strip() for item in _safe_list(first_scene.get("active_roles")) if str(item).strip()]
+        if first_scene.get("primary_role") != "character_1":
+            first_scene["primary_role"] = "character_1"
+            if "character_1" not in first_active:
+                first_active.insert(0, "character_1")
+            if "props" in set(present_roles) and "props" not in first_active:
+                first_active.append("props")
+            first_scene["active_roles"] = list(dict.fromkeys(first_active))
+            first_scene["inactive_roles"] = [role for role in present_roles if role not in set(first_scene["active_roles"])]
+            first_scene["character_presence"] = "solo"
+            first_scene["scene_subject_priority"] = _infer_scene_subject_priority(
+                scene_presence_mode=str(first_scene.get("scene_presence_mode") or ""),
+                active_roles=_safe_list(first_scene.get("active_roles")),
+                primary_role="character_1",
+            )
+            first_scene["prop_activation_mode"] = _infer_prop_activation_mode(
+                props_active="props" in set(_safe_list(first_scene.get("active_roles"))),
+                scene_subject_priority=str(first_scene.get("scene_subject_priority") or ""),
+                scene_presence_mode=str(first_scene.get("scene_presence_mode") or ""),
+            )
+            first_scene["role_reason"] = "opening_anchor_guard_character_1"
+            normalized_scene_roles[0] = first_scene
 
     role_arc_summary = str(raw_plan.get("role_arc_summary") or "").strip() or "Single-hero arc moves between internal pressure and urban world contact, then resolves into restrained release."
     continuity_notes = [str(item).strip() for item in _safe_list(raw_plan.get("continuity_notes")) if str(item).strip()]
