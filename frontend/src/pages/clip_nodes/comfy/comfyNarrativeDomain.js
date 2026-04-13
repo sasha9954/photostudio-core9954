@@ -1029,6 +1029,30 @@ export function buildScenarioStageManualPayload({
     source?.connected_context_summary && typeof source.connected_context_summary === "object"
   ) ? source.connected_context_summary : (basePayload?.connected_context_summary || {});
   const connectedContextSummary = sanitizeConnectedContextSummary(connectedContextSummaryRaw);
+  const debugMirrorsEnabled = Boolean(
+    source?.debug
+    || source?.includeDebugMirrors
+    || source?.metadata?.debugScenarioStageResponse
+    || source?.metadata?.includeDebugMirrors
+    || target?.debug
+    || target?.includeDebugMirrors
+    || target?.metadata?.debugScenarioStageResponse
+    || target?.metadata?.includeDebugMirrors
+  );
+  const resolvedSource = source?.resolvedSource && typeof source.resolvedSource === "object"
+    ? source.resolvedSource
+    : (basePayload?.source || {});
+  const leanSource = {
+    source_mode: normalizeText(resolvedSource?.source_mode || resolvedSource?.sourceMode || resolvedSource?.mode) || "audio",
+    source_origin: normalizeText(resolvedSource?.source_origin || resolvedSource?.sourceOrigin || resolvedSource?.origin) || "connected",
+    source_value: normalizeText(resolvedSource?.source_value || resolvedSource?.sourceValue || resolvedSource?.value),
+    source_preview: normalizeText(resolvedSource?.source_preview || resolvedSource?.sourcePreview || resolvedSource?.preview || resolvedSource?.source_label || resolvedSource?.sourceLabel),
+    source_label: normalizeText(resolvedSource?.source_label || resolvedSource?.sourceLabel || resolvedSource?.label),
+    audioDurationSec: Number(source?.audioDurationSec || target?.audioDurationSec || basePayload?.audioDurationSec || 0) || 0,
+  };
+  if (resolvedSource?.metadata && typeof resolvedSource.metadata === "object" && Object.keys(resolvedSource.metadata).length) {
+    leanSource.metadata = resolvedSource.metadata;
+  }
 
   return {
     ...basePayload,
@@ -1043,7 +1067,7 @@ export function buildScenarioStageManualPayload({
     directorNote: narrativeDirective.directorNote,
     audioUrl: normalizeText(source?.audioUrl || source?.masterAudioUrl || target?.audioUrl || basePayload?.audioUrl),
     audioDurationSec: Number(source?.audioDurationSec || target?.audioDurationSec || basePayload?.audioDurationSec || 0) || 0,
-    source: source?.resolvedSource && typeof source.resolvedSource === "object" ? source.resolvedSource : (basePayload?.source || {}),
+    source: leanSource,
     context_refs: sanitizedContextRefs,
     connected_context_summary: connectedContextSummary,
     director_controls: {
@@ -1060,9 +1084,6 @@ export function buildScenarioStageManualPayload({
     selectedStyleRefUrl: normalizeText(source?.selectedStyleRefUrl),
     selectedLocationRefUrl: normalizeText(source?.selectedLocationRefUrl),
     selectedPropsRefUrls: Array.isArray(source?.selectedPropsRefUrls) ? source.selectedPropsRefUrls : [],
-    master_output: source?.master_output && typeof source.master_output === "object" ? source.master_output : {},
-    timeWindow: source?.timeWindow && typeof source.timeWindow === "object" ? source.timeWindow : {},
-    options: source?.options && typeof source.options === "object" ? source.options : {},
     metadata: {
       ...(basePayload?.metadata && typeof basePayload.metadata === "object" ? basePayload.metadata : {}),
       ...(source?.metadata && typeof source.metadata === "object" ? source.metadata : {}),
@@ -1073,7 +1094,10 @@ export function buildScenarioStageManualPayload({
       stagePayloadMode: "lean",
     },
     scenario: target?.scenario || source?.scenario || "",
-    scenarioPackage: target?.scenarioPackage && typeof target.scenarioPackage === "object" ? target.scenarioPackage : {},
+    ...(debugMirrorsEnabled && source?.master_output && typeof source.master_output === "object" ? { master_output: source.master_output } : {}),
+    ...(debugMirrorsEnabled && source?.timeWindow && typeof source.timeWindow === "object" ? { timeWindow: source.timeWindow } : {}),
+    ...(debugMirrorsEnabled && source?.options && typeof source.options === "object" ? { options: source.options } : {}),
+    ...(debugMirrorsEnabled && target?.scenarioPackage && typeof target.scenarioPackage === "object" ? { scenarioPackage: target.scenarioPackage } : {}),
   };
 }
 
@@ -1342,6 +1366,14 @@ function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
 
 export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) {
   if (String(response?.pipeline || "").trim() === "scenario_stage_v1") {
+    const debugMode = Boolean(
+      response?.debugMode
+      || response?.meta?.debugMode
+      || state?.debug
+      || state?.includeDebugMirrors
+      || state?.metadata?.debugScenarioStageResponse
+      || state?.metadata?.includeDebugMirrors
+    );
     const storyboardPackage = response?.debugStoryboardPackage && typeof response.debugStoryboardPackage === "object"
       ? response.debugStoryboardPackage
       : (response?.storyboardPackage && typeof response.storyboardPackage === "object" ? response.storyboardPackage : {});
@@ -1413,35 +1445,30 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         ) || 0,
       }
       : {};
+    const backendDirectorOutput = response?.directorOutput && typeof response.directorOutput === "object"
+      ? response.directorOutput
+      : null;
+    const compactDirectorSummary = {
+      pipeline: "scenario_stage_v1",
+      executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
+      stageStatuses: storyboardPackage?.stage_statuses && typeof storyboardPackage.stage_statuses === "object" ? storyboardPackage.stage_statuses : {},
+    };
     return {
       storyboardOut: runtimeStoryboard,
       runtimeStoryboard,
       scenario: storySummary,
       voiceScript: "",
       scenarioPackage: runtimeStoryboard,
-      debugStoryboardPackage: storyboardPackage,
+      debugStoryboardPackage: debugMode ? storyboardPackage : null,
       brainPackage: null,
       bgMusicPrompt: "",
       globalMusicPrompt: "",
-      directorOutput: {
-        pipeline: "scenario_stage_v1",
-        stageStatuses: storyboardPackage?.stage_statuses && typeof storyboardPackage.stage_statuses === "object" ? storyboardPackage.stage_statuses : {},
-        diagnostics: storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object" ? storyboardPackage.diagnostics : {},
-        executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
-        scenes: storyboardOut.scenes,
-        story_summary: storyboardOut.story_summary,
-        director_summary: storyboardOut.director_summary,
-        opening_anchor: storyboardOut.opening_anchor,
-        ending_callback_rule: storyboardOut.ending_callback_rule,
-        audioUrl: storyboardOut.audioUrl,
-        audioDurationSec: storyboardOut.audioDurationSec,
-        refsByRole: storyboardOut.refsByRole,
-        roleTypeByRole: storyboardOut.roleTypeByRole,
-        context_refs: storyboardOut.context_refs,
-        connected_context_summary: storyboardOut.connected_context_summary,
-        world_continuity: storyboardOut.world_continuity,
-        story_locks: storyboardOut.story_locks,
-      },
+      directorOutput: debugMode && backendDirectorOutput
+        ? {
+          ...backendDirectorOutput,
+          ...compactDirectorSummary,
+        }
+        : compactDirectorSummary,
       diagnostics: diagnosticsSummary,
       raw: response,
     };

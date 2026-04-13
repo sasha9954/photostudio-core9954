@@ -8812,9 +8812,6 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
           pendingOutputs.storyboardOut = null;
           pendingOutputs.runtimeStoryboard = null;
           pendingOutputs.scenarioPackage = null;
-          if (pendingOutputs?.directorOutput && typeof pendingOutputs.directorOutput === "object") {
-            pendingOutputs.directorOutput = { ...pendingOutputs.directorOutput, storyboardPackage: pendingOutputs.debugStoryboardPackage || {} };
-          }
         }
         nextData.pendingOutputs = pendingOutputs;
         nextData.pendingRawResponseSummary = null;
@@ -17242,8 +17239,8 @@ onClipSec: (nodeId, value) => {
                       ...nodeItem.data,
                       pendingOutputs: normalizedPending,
                       pendingRawResponseSummary: compactResponseSummary,
-                      pendingStoryboardOut: normalizedPending.storyboardOut,
-                      pendingDirectorOutput: normalizedPending.directorOutput,
+                      pendingStoryboardOut: null,
+                      pendingDirectorOutput: null,
                       pendingGeneratedAt: generatedAt,
                       pendingScenarioRevision: nextRevision,
                     },
@@ -17793,11 +17790,13 @@ onClipSec: (nodeId, value) => {
                             storyboardOut: runtimeStoryboard,
                             runtimeStoryboard,
                             scenarioPackage: runtimeStoryboard,
-                            debugStoryboardPackage: compactNormalizedOutputs?.debugStoryboardPackage || response?.storyboardPackage || null,
+                            ...(response?.debugMode || response?.meta?.debugMode
+                              ? { debugStoryboardPackage: compactNormalizedOutputs?.debugStoryboardPackage || response?.storyboardPackage || null }
+                              : {}),
                           },
                           pendingRawResponseSummary: buildScenarioResponseSummary(response),
-                          pendingStoryboardOut: runtimeStoryboard,
-                          pendingDirectorOutput: compactNormalizedOutputs?.directorOutput || null,
+                          pendingStoryboardOut: null,
+                          pendingDirectorOutput: null,
                           pendingGeneratedAt: new Date().toISOString(),
                           pendingScenarioRevision: nextRevision,
                         },
