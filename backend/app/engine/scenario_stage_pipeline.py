@@ -2375,6 +2375,17 @@ def _words_from_text(text: str) -> list[str]:
     return [token for token in re.findall(r"[^\s]+", str(text or "").strip()) if token]
 
 
+def _estimate_word_count_from_text(text: Any) -> int:
+    return len(_words_from_text(str(text or "")))
+
+
+def _phrase_word_count(phrase: dict[str, Any]) -> int:
+    direct_count = int(max(0, _to_float(phrase.get("word_count"), -1.0)))
+    if direct_count > 0:
+        return direct_count
+    return _estimate_word_count_from_text(phrase.get("text"))
+
+
 def _semantic_weight_for_phrase(text: str, word_count: int, *, is_last: bool) -> str:
     clean = str(text or "").strip()
     if is_last or any(mark in clean for mark in ("!", "?", "…", "...", "—")):
@@ -2978,6 +2989,8 @@ def _build_scene_slots(
     beats = _float_points(analysis.get("beats"), duration_sec)
     energy_peaks = _float_points(analysis.get("energyPeaks"), duration_sec)
     vocal_phrases = [item for item in _safe_list(analysis.get("vocalPhrases")) if isinstance(item, dict)]
+    alignment = _safe_dict(audio_map.get("transcript_alignment"))
+    transcript_available = bool(str(alignment.get("transcript_text") or "").strip() or _safe_list(alignment.get("words")))
     diagnostics_notes: list[str] = []
     if not beats:
         diagnostics_notes.append("beat_alignment_score is approximate: beats unavailable")
@@ -3010,7 +3023,7 @@ def _build_scene_slots(
 
         slot_phrases = deduped_phrases
         phrase_ids = [str(item.get("id") or "") for item in slot_phrases if str(item.get("id") or "")]
-        word_count = sum(max(0, int(_to_float(phrase.get("word_count"), 0.0))) for phrase in slot_phrases)
+        word_count = sum(_phrase_word_count(phrase) for phrase in slot_phrases)
         words_per_sec = word_count / span if span > 0 else 0.0
         primary_phrase_text = ""
         for phrase in slot_phrases:
@@ -3024,7 +3037,19 @@ def _build_scene_slots(
             v0 = _clamp_time(_to_float(vp.get("start"), 0.0), duration_sec)
             v1 = _clamp_time(_to_float(vp.get("end"), v0), duration_sec)
             vocal_overlap += max(0.0, min(t1, v1) - max(t0, v0))
-        vocal_ratio = round(max(0.0, min(1.0, vocal_overlap / span)), 4)
+        if vocal_phrases:
+            vocal_ratio = round(max(0.0, min(1.0, vocal_overlap / span)), 4)
+        else:
+            phrase_coverage = max(0.0, min(1.0, sum(_slot_phrase_overlap(t0, t1, phrase) for phrase in slot_phrases) / span))
+            has_phrase_text = bool(primary_phrase_text)
+            if transcript_available and (phrase_ids or has_phrase_text):
+                fallback_vocal_ratio = 0.45 + 0.35 * phrase_coverage + 0.20 * min(1.0, words_per_sec / 3.2)
+                vocal_ratio = round(max(0.0, min(0.95, fallback_vocal_ratio)), 4)
+            elif has_phrase_text:
+                fallback_vocal_ratio = 0.22 + 0.33 * phrase_coverage + 0.15 * min(1.0, words_per_sec / 3.2)
+                vocal_ratio = round(max(0.0, min(0.7, fallback_vocal_ratio)), 4)
+            else:
+                vocal_ratio = 0.0
         phrase_density = len(slot_phrases) / span
         energy_score = round(max(0.0, min(1.0, 0.55 * vocal_ratio + 0.25 * min(1.0, words_per_sec / 3.0) + 0.2 * min(1.0, phrase_density))), 4)
         energy_variance = round(max(0.0, min(1.0, min(1.0, len(slot_phrases) / 3.0) * (0.4 + 0.6 * min(1.0, words_per_sec / 3.5)))), 4)
