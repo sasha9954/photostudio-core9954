@@ -16,6 +16,22 @@ const ROLE_TYPE_OPTIONS = [
   { value: "antagonist", label: "Антагонист" },
   { value: "support", label: "Поддержка" },
 ];
+const OWNERSHIP_ROLE_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "main", label: "Главный" },
+  { value: "support", label: "Поддержка" },
+  { value: "antagonist", label: "Антагонист" },
+  { value: "shared", label: "Общий" },
+  { value: "world", label: "Мир" },
+];
+const BINDING_TYPE_OPTIONS = [
+  { value: "carried", label: "carried" },
+  { value: "worn", label: "worn" },
+  { value: "held", label: "held" },
+  { value: "pocketed", label: "pocketed" },
+  { value: "nearby", label: "nearby" },
+  { value: "environment", label: "environment" },
+];
 
 function getRefThumbCandidateSignature(item) {
   return buildRefImageCandidates(item).join("|");
@@ -118,6 +134,8 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
   const roleType = String(data?.roleType || "auto").trim().toLowerCase() || "auto";
+  const ownershipRole = String(data?.ownershipRole || "auto").trim().toLowerCase() || "auto";
+  const bindingType = String(data?.bindingType || "nearby").trim().toLowerCase() || "nearby";
   const onOpenLightbox = data?.onOpenLightbox;
 
   const openPicker = () => { if (canAddMore) inputRef.current?.click(); };
@@ -153,6 +171,28 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
           </select>
         </div>
       ) : null}
+      <div style={{ marginBottom: 10 }}>
+        <div className="clipSB_small" style={{ marginBottom: 4 }}>Принадлежит:</div>
+        <select
+          className="clipSB_select"
+          value={ownershipRole}
+          onChange={(event) => data?.onField?.(id, "ownershipRole", String(event?.target?.value || "auto").trim().toLowerCase() || "auto")}
+          disabled={refStatus === "loading"}
+        >
+          {OWNERSHIP_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип связи:</div>
+        <select
+          className="clipSB_select"
+          value={bindingType}
+          onChange={(event) => data?.onField?.(id, "bindingType", String(event?.target?.value || "nearby").trim().toLowerCase() || "nearby")}
+          disabled={refStatus === "loading"}
+        >
+          {BINDING_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+      </div>
       <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => {
         return (
           <div className="clipSB_refThumb" key={getStableRefItemKey(item, idx)}>

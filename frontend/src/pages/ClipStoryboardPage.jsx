@@ -4994,13 +4994,14 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     const normalized = normalizeRefData(sourceNode?.data || {}, "ref_character");
     if (!normalized.refs.length) return null;
     const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
+    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
     return {
       value: normalized.refs[0]?.url || "",
       preview: normalized.refs[0]?.name || `Character 1 • ${normalized.refs.length} refs`,
       sourceLabel: "Character 1",
-      refs: normalized.refs.map((item) => ({ url: item.url, roleType })),
+      refs: normalized.refs.map((item) => ({ url: item.url, roleType, ...refMeta })),
       count: normalized.refs.length,
-      meta: { kind: "ref_character", count: normalized.refs.length, roleType },
+      meta: { kind: "ref_character", count: normalized.refs.length, roleType, ...refMeta },
     };
   }
 
@@ -5011,13 +5012,14 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .slice(0, 5);
     if (!refs.length) return null;
     const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
+    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Character 2 • ${refs.length} refs`,
       sourceLabel: "Character 2",
-      refs: refs.map((url) => ({ url, roleType })),
+      refs: refs.map((url) => ({ url, roleType, ...refMeta })),
       count: refs.length,
-      meta: { kind: "ref_character_2", count: refs.length, roleType },
+      meta: { kind: "ref_character_2", count: refs.length, roleType, ...refMeta },
     };
   }
 
@@ -5028,13 +5030,14 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .slice(0, 5);
     if (!refs.length) return null;
     const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
+    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Character 3 • ${refs.length} refs`,
       sourceLabel: "Character 3",
-      refs: refs.map((url) => ({ url, roleType })),
+      refs: refs.map((url) => ({ url, roleType, ...refMeta })),
       count: refs.length,
-      meta: { kind: "ref_character_3", count: refs.length, roleType },
+      meta: { kind: "ref_character_3", count: refs.length, roleType, ...refMeta },
     };
   }
 
@@ -5044,13 +5047,14 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .filter(Boolean)
       .slice(0, 5);
     if (!refs.length) return null;
+    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Animal • ${refs.length} refs`,
       sourceLabel: "Animal",
-      refs,
+      refs: refs.map((url) => ({ url, ...refMeta })),
       count: refs.length,
-      meta: { kind: "ref_animal", count: refs.length },
+      meta: { kind: "ref_animal", count: refs.length, ...refMeta },
     };
   }
 
@@ -5060,26 +5064,28 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .filter(Boolean)
       .slice(0, 5);
     if (!refs.length) return null;
+    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Group • ${refs.length} refs`,
       sourceLabel: "Group",
-      refs,
+      refs: refs.map((url) => ({ url, ...refMeta })),
       count: refs.length,
-      meta: { kind: "ref_group", count: refs.length },
+      meta: { kind: "ref_group", count: refs.length, ...refMeta },
     };
   }
 
   if (targetHandle === "ref_props" && sourceNode.type === "refNode" && sourceHandle === "ref_items") {
     const normalized = normalizeRefData(sourceNode?.data || {}, "ref_items");
     if (!normalized.refs.length) return null;
+    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
     return {
       value: normalized.refs[0]?.url || "",
       preview: normalized.refs[0]?.name || `Props • ${normalized.refs.length} refs`,
       sourceLabel: "Props",
-      refs: normalized.refs.map((item) => item.url),
+      refs: normalized.refs.map((item) => ({ url: item.url, ...refMeta })),
       count: normalized.refs.length,
-      meta: { kind: "ref_props", count: normalized.refs.length },
+      meta: { kind: "ref_props", count: normalized.refs.length, ...refMeta },
     };
   }
 
@@ -5157,11 +5163,15 @@ function buildNarrativeConnectedContextFingerprint(connectedInputs = {}) {
         ? value.refs.map((ref) => String(ref?.url || ref || "").trim()).filter(Boolean).sort()
         : [];
       const roleType = String(value?.meta?.roleType || "").trim().toLowerCase();
+      const ownershipRole = normalizeRefOwnershipRole(value?.meta?.ownershipRole || "");
+      const bindingType = normalizeRefBindingType(value?.meta?.bindingType || "");
       return {
         handleId: String(handleId || ""),
         sourceNodeId: String(value?.sourceNodeId || ""),
         sourceHandle: String(value?.sourceHandle || ""),
         roleType,
+        ownershipRole,
+        bindingType,
         refs,
       };
     })
@@ -5646,10 +5656,56 @@ const CHARACTER_ROLE_TYPE_OPTIONS = [
   { value: "antagonist", label: "Антагонист" },
   { value: "support", label: "Поддержка" },
 ];
+const REF_OWNERSHIP_ROLES = new Set(["auto", "main", "support", "antagonist", "shared", "world"]);
+const REF_OWNERSHIP_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "main", label: "Главный" },
+  { value: "support", label: "Поддержка" },
+  { value: "antagonist", label: "Антагонист" },
+  { value: "shared", label: "Общий" },
+  { value: "world", label: "Мир" },
+];
+const REF_BINDING_TYPES = new Set(["carried", "worn", "held", "pocketed", "nearby", "environment"]);
+const REF_BINDING_OPTIONS = [
+  { value: "carried", label: "carried" },
+  { value: "worn", label: "worn" },
+  { value: "held", label: "held" },
+  { value: "pocketed", label: "pocketed" },
+  { value: "nearby", label: "nearby" },
+  { value: "environment", label: "environment" },
+];
+const REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE = {
+  auto: "auto",
+  main: "character_1",
+  support: "character_2",
+  antagonist: "character_3",
+  shared: "shared",
+  world: "environment",
+};
 
 function normalizeCharacterRoleType(value) {
   const clean = String(value || "").trim().toLowerCase();
   return CHARACTER_ROLE_TYPES.has(clean) ? clean : "auto";
+}
+
+function normalizeRefOwnershipRole(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  return REF_OWNERSHIP_ROLES.has(clean) ? clean : "auto";
+}
+
+function normalizeRefBindingType(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  return REF_BINDING_TYPES.has(clean) ? clean : "nearby";
+}
+
+function buildRefOwnershipBindingMeta(data = {}) {
+  const ownershipRole = normalizeRefOwnershipRole(data?.ownershipRole);
+  const bindingType = normalizeRefBindingType(data?.bindingType);
+  return {
+    ownershipRole,
+    bindingType,
+    ownershipRoleMapped: REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE[ownershipRole] || "auto",
+  };
 }
 
 function resolveRefRoleForNode(node = {}) {
@@ -5685,6 +5741,8 @@ function normalizeRefNodeData(data = {}, kindHint = "") {
   return {
     ...normalized,
     roleType: kind === "ref_character" ? normalizeCharacterRoleType(normalized?.roleType) : "",
+    ownershipRole: (kind === "ref_location" || kind === "ref_style") ? "" : normalizeRefOwnershipRole(normalized?.ownershipRole),
+    bindingType: (kind === "ref_location" || kind === "ref_style") ? "" : normalizeRefBindingType(normalized?.bindingType),
     refStatus,
     refShortLabel,
     refDetailsOpen: !!normalized?.refDetailsOpen,
@@ -5721,6 +5779,8 @@ function normalizeComfyRefNodeData(nodeType = "", data = {}, kindHint = "") {
     ...data,
     refs,
     roleType: (nodeType === "refCharacter2" || nodeType === "refCharacter3") ? normalizeCharacterRoleType(data?.roleType) : "",
+    ownershipRole: normalizeRefOwnershipRole(data?.ownershipRole),
+    bindingType: normalizeRefBindingType(data?.bindingType),
     refStatus: deriveRefNodeStatus({ ...(data || {}), refs }),
     refShortLabel: String(data?.refShortLabel || "").trim(),
     refDetailsOpen: !!data?.refDetailsOpen,
@@ -7138,6 +7198,9 @@ function RefNode({ id, data }) {
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
   const showRoleSelector = kind === "ref_character";
   const roleType = normalizeCharacterRoleType(data?.roleType);
+  const showOwnershipBindingSelectors = kind !== "ref_location" && kind !== "ref_style";
+  const ownershipRole = normalizeRefOwnershipRole(data?.ownershipRole);
+  const bindingType = normalizeRefBindingType(data?.bindingType);
   const onOpenLightbox = data?.onOpenLightbox;
   const onRemoveImage = data?.onRemoveImage;
   const openLightbox = useCallback((url) => onOpenLightbox?.(url), [onOpenLightbox]);
@@ -7217,6 +7280,32 @@ function RefNode({ id, data }) {
               {CHARACTER_ROLE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </div>
+        ) : null}
+        {showOwnershipBindingSelectors ? (
+          <>
+            <div style={{ marginBottom: 10 }}>
+              <div className="clipSB_small" style={{ marginBottom: 4 }}>Принадлежит:</div>
+              <select
+                className="clipSB_select"
+                value={ownershipRole}
+                onChange={(event) => data?.onField?.(id, "ownershipRole", normalizeRefOwnershipRole(event?.target?.value))}
+                disabled={refStatus === "loading"}
+              >
+                {REF_OWNERSHIP_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип связи:</div>
+              <select
+                className="clipSB_select"
+                value={bindingType}
+                onChange={(event) => data?.onField?.(id, "bindingType", normalizeRefBindingType(event?.target?.value))}
+                disabled={refStatus === "loading"}
+              >
+                {REF_BINDING_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+          </>
         ) : null}
 
         <div style={{ display: "flex", gap: 8 }}>
@@ -15571,7 +15660,21 @@ onClipSec: (nodeId, value) => {
             ...base,
             data: {
               ...normalizedRefData,
-              onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: key === "roleType" ? normalizeCharacterRoleType(value) : value } } : x))),
+              onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId
+                ? {
+                  ...x,
+                  data: {
+                    ...x.data,
+                    [key]: key === "roleType"
+                      ? normalizeCharacterRoleType(value)
+                      : key === "ownershipRole"
+                        ? normalizeRefOwnershipRole(value)
+                        : key === "bindingType"
+                          ? normalizeRefBindingType(value)
+                          : value,
+                  },
+                }
+                : x))),
               onPickImage: async (nodeId, file) => {
                 const pickedFiles = Array.isArray(file) ? file : (file ? [file] : []);
                 if (!pickedFiles.length) return;
@@ -18293,6 +18396,8 @@ onClipSec: (nodeId, value) => {
                   masterAudioUrl: freshDerived.meaningfulAudio || "",
                   audioDurationSec: freshDerived.meaningfulAudioDurationSec,
                   refsByRole: freshDerived.refsByRole,
+                  ownershipRoleByRole: freshDerived.ownershipRoleByRole || {},
+                  bindingTypeByRole: freshDerived.bindingTypeByRole || {},
                   storyControlMode: freshDerived.storyControlMode,
                   storyMissionSummary: freshDerived.storyMissionSummary,
                   audioStoryMode: freshDerived.audioStoryMode,
@@ -18862,7 +18967,21 @@ onClipSec: (nodeId, value) => {
             data: {
               ...base.data,
               refStatus: deriveRefNodeStatus(base.data || {}),
-              onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
+              onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId
+                ? {
+                  ...x,
+                  data: {
+                    ...x.data,
+                    [key]: key === "roleType"
+                      ? normalizeCharacterRoleType(value)
+                      : key === "ownershipRole"
+                        ? normalizeRefOwnershipRole(value)
+                        : key === "bindingType"
+                          ? normalizeRefBindingType(value)
+                          : value,
+                  },
+                }
+                : x))),
               onOpenLightbox: (url) => openLightbox(resolveAssetUrl(url)),
               onPickImage: async (nodeId, filesRaw) => {
                 const files = Array.isArray(filesRaw) ? filesRaw : (filesRaw ? [filesRaw] : []);
