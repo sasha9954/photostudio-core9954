@@ -5434,7 +5434,7 @@ def _build_session_world_anchors(
     if character_refs:
         character_anchor = "same exact person identity as character reference images"
     else:
-        character_anchor = "a solitary adult character with coherent identity, grounded wardrobe, and readable facial presence"
+        character_anchor = "a coherent identity appropriate to the current package and scene"
 
     world_style_packs: list[dict[str, Any]] = [
         {
