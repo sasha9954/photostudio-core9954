@@ -3018,46 +3018,9 @@ def _build_scene_slots(
     slots, repair_stats = _repair_scene_slot_boundaries(raw_slots, duration_sec=duration_sec, word_rows=word_rows)
     if not slots:
         return [], {"audio_map_scene_slots_repair_stats": repair_stats}
-    if len(slots) >= 2:
-        last = slots[-1]
-        prev = slots[-2]
-        last_t0 = float(last.get("t0") or 0.0)
-        last_t1 = float(last.get("t1") or last_t0)
-        last_span = max(0.0, last_t1 - last_t0)
-        last_phrase_rows = [phrase_index[item] for item in _safe_list(last.get("phrase_ids")) if item in phrase_index]
-        last_texts = [str(phrase.get("text") or "").strip() for phrase in last_phrase_rows if str(phrase.get("text") or "").strip()]
-        marker_text_only = bool(last_texts) and all(_is_instrumental_tail_marker_text(text) for text in last_texts)
-        tail_has_no_words = sum(_phrase_word_count(phrase) for phrase in last_phrase_rows) == 0
-        if 0.0 < last_span <= 1.2 and marker_text_only and tail_has_no_words:
-            prev_t0 = float(prev.get("t0") or 0.0)
-            prev["t1"] = round(last_t1, 3)
-            prev["duration_sec"] = round(max(0.0, last_t1 - prev_t0), 3)
-            prev["phrase_ids"] = list(
-                dict.fromkeys(
-                    [str(item) for item in _safe_list(prev.get("phrase_ids")) if str(item)]
-                    + [str(item) for item in _safe_list(last.get("phrase_ids")) if str(item)]
-                )
-            )
-            slots.pop()
-            repair_stats["orphan_tail_merged"] = int(repair_stats.get("orphan_tail_merged", 0)) + 1
-            for slot_idx, row in enumerate(slots, start=1):
-                row["id"] = f"slot_{slot_idx}"
-
-    beats = _float_points(analysis.get("beats"), duration_sec)
-    energy_peaks = _float_points(analysis.get("energyPeaks"), duration_sec)
-    vocal_phrases = [item for item in _safe_list(analysis.get("vocalPhrases")) if isinstance(item, dict)]
-    alignment = _safe_dict(audio_map.get("transcript_alignment"))
-    transcript_available = bool(str(alignment.get("transcript_text") or "").strip() or _safe_list(alignment.get("words")))
-    diagnostics_notes: list[str] = []
-    if not beats:
-        diagnostics_notes.append("beat_alignment_score is approximate: beats unavailable")
-    if not vocal_phrases:
-        diagnostics_notes.append("vocal_ratio is approximate: vocal phrases unavailable")
-
-    for idx, slot in enumerate(slots):
+    def _hydrate_slot_phrase_data(slot: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], int, str, bool]:
         t0 = float(slot.get("t0") or 0.0)
         t1 = float(slot.get("t1") or t0)
-        span = max(0.001, t1 - t0)
         existing_ids = [str(item) for item in _safe_list(slot.get("phrase_ids")) if str(item)]
         slot_phrases_by_id = [phrase_index[item] for item in existing_ids if item in phrase_index]
         slot_phrase_rows = slot_phrases_by_id + _intersected_phrase_rows(t0, t1)
@@ -3081,7 +3044,6 @@ def _build_scene_slots(
         slot_phrases = deduped_phrases
         phrase_ids = [str(item.get("id") or "") for item in slot_phrases if str(item.get("id") or "")]
         word_count = sum(_phrase_word_count(phrase) for phrase in slot_phrases)
-        words_per_sec = word_count / span if span > 0 else 0.0
         primary_phrase_text = ""
         for phrase in slot_phrases:
             text = str(phrase.get("text") or "").strip()
@@ -3091,6 +3053,69 @@ def _build_scene_slots(
         is_instrumental_tail_slot = bool(slot_phrases) and all(
             _is_instrumental_tail_marker_text(str(phrase.get("text") or "")) for phrase in slot_phrases
         )
+        return slot_phrases, phrase_ids, word_count, primary_phrase_text, is_instrumental_tail_slot
+
+    for slot in slots:
+        slot_phrases, phrase_ids, word_count, primary_phrase_text, is_instrumental_tail_slot = _hydrate_slot_phrase_data(slot)
+        slot["_hydrated_phrases"] = slot_phrases
+        slot["phrase_ids"] = phrase_ids
+        slot["phrase_count"] = len(slot_phrases)
+        slot["word_count"] = word_count
+        slot["primary_phrase_text"] = primary_phrase_text
+        slot["_is_instrumental_tail_slot"] = is_instrumental_tail_slot
+
+    if len(slots) >= 2:
+        last = slots[-1]
+        prev = slots[-2]
+        last_t0 = float(last.get("t0") or 0.0)
+        last_t1 = float(last.get("t1") or last_t0)
+        last_span = max(0.0, last_t1 - last_t0)
+        marker_text_only = bool(last.get("_hydrated_phrases")) and bool(last.get("_is_instrumental_tail_slot"))
+        tail_has_no_words = int(last.get("word_count") or 0) == 0
+        if 0.0 < last_span <= 1.2 and marker_text_only and tail_has_no_words:
+            prev_t0 = float(prev.get("t0") or 0.0)
+            prev["t1"] = round(last_t1, 3)
+            prev["duration_sec"] = round(max(0.0, last_t1 - prev_t0), 3)
+            prev["phrase_ids"] = list(
+                dict.fromkeys(
+                    [str(item) for item in _safe_list(prev.get("phrase_ids")) if str(item)]
+                    + [str(item) for item in _safe_list(last.get("phrase_ids")) if str(item)]
+                )
+            )
+            slots.pop()
+            repair_stats["orphan_tail_merged"] = int(repair_stats.get("orphan_tail_merged", 0)) + 1
+            for slot_idx, row in enumerate(slots, start=1):
+                row["id"] = f"slot_{slot_idx}"
+            for slot in slots:
+                slot_phrases, phrase_ids, word_count, primary_phrase_text, is_instrumental_tail_slot = _hydrate_slot_phrase_data(slot)
+                slot["_hydrated_phrases"] = slot_phrases
+                slot["phrase_ids"] = phrase_ids
+                slot["phrase_count"] = len(slot_phrases)
+                slot["word_count"] = word_count
+                slot["primary_phrase_text"] = primary_phrase_text
+                slot["_is_instrumental_tail_slot"] = is_instrumental_tail_slot
+
+    beats = _float_points(analysis.get("beats"), duration_sec)
+    energy_peaks = _float_points(analysis.get("energyPeaks"), duration_sec)
+    vocal_phrases = [item for item in _safe_list(analysis.get("vocalPhrases")) if isinstance(item, dict)]
+    alignment = _safe_dict(audio_map.get("transcript_alignment"))
+    transcript_available = bool(str(alignment.get("transcript_text") or "").strip() or _safe_list(alignment.get("words")))
+    diagnostics_notes: list[str] = []
+    if not beats:
+        diagnostics_notes.append("beat_alignment_score is approximate: beats unavailable")
+    if not vocal_phrases:
+        diagnostics_notes.append("vocal_ratio is approximate: vocal phrases unavailable")
+
+    for idx, slot in enumerate(slots):
+        t0 = float(slot.get("t0") or 0.0)
+        t1 = float(slot.get("t1") or t0)
+        span = max(0.001, t1 - t0)
+        slot_phrases = [item for item in _safe_list(slot.get("_hydrated_phrases")) if isinstance(item, dict)]
+        phrase_ids = [str(item) for item in _safe_list(slot.get("phrase_ids")) if str(item)]
+        word_count = int(slot.get("word_count") or 0)
+        words_per_sec = word_count / span if span > 0 else 0.0
+        primary_phrase_text = str(slot.get("primary_phrase_text") or "")
+        is_instrumental_tail_slot = bool(slot.get("_is_instrumental_tail_slot"))
 
         vocal_overlap = 0.0
         for vp in vocal_phrases:
@@ -3174,6 +3199,8 @@ def _build_scene_slots(
         slot["phrase_count"] = len(slot_phrases)
         slot["word_count"] = word_count
         slot["primary_phrase_text"] = primary_phrase_text
+        slot.pop("_hydrated_phrases", None)
+        slot.pop("_is_instrumental_tail_slot", None)
 
     diagnostics_patch = {
         "audio_map_scene_slots_repair_stats": repair_stats,
