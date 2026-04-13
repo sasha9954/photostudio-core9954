@@ -832,7 +832,18 @@ def _normalize_role_plan(
                     active_roles.append("props")
             elif primary_role in moderate_owner_props and scene_presence_mode in {"solo_performance", "solo_observational"} and "props" not in active_roles:
                 active_roles.append("props")
-        if has_world_environment_binding and scene_presence_mode in {"environment_anchor", "transit"} and "props" in active_roles:
+        carried_owner_scene_for_env_guard = bool(
+            primary_role
+            and primary_role in carried_owner_props
+            and scene_presence_mode in {"environment_anchor", "transit", "private_release"}
+            and "props" in active_roles
+        )
+        if (
+            has_world_environment_binding
+            and scene_presence_mode in {"environment_anchor", "transit"}
+            and "props" in active_roles
+            and not carried_owner_scene_for_env_guard
+        ):
             active_roles = [role for role in active_roles if role != "props"]
 
         performance_focus = bool(row.get("performance_focus")) if primary_role else False

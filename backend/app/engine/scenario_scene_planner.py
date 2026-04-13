@@ -1173,6 +1173,7 @@ def _normalize_scene_plan(
             "anti_repeat_warnings": anti_repeat_warnings,
             "original_route": route_raw,
         }
+        carried_owner_scene_for_env_guard = False
         if scene_row["primary_role"] and scene_row["primary_role"].lower() in carried_owner_roles:
             if scene_row["visual_event_type"] in {"environment", "face"}:
                 scene_row["visual_event_type"] = "character_action"
@@ -1181,6 +1182,7 @@ def _normalize_scene_plan(
             if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
                 scene_row["watchability_role"] = "owner-bound carried continuity anchor driving readable motion semantics"
             scene_row["prop_activation_mode"] = "visible_anchor"
+            carried_owner_scene_for_env_guard = "props" in scene_row["active_roles"] and scene_row["prop_activation_mode"] == "visible_anchor"
         elif scene_row["primary_role"] and scene_row["primary_role"].lower() in held_owner_roles:
             if scene_row["motion_intent"] == "watchable realistic movement":
                 scene_row["motion_intent"] = "handling-driven held-object continuity with controlled readable movement"
@@ -1188,7 +1190,12 @@ def _normalize_scene_plan(
                 scene_row["prop_activation_mode"] = "anchor_worn"
         elif scene_row["primary_role"] and scene_row["primary_role"].lower() in worn_owner_roles and scene_row["motion_intent"] == "watchable realistic movement":
             scene_row["motion_intent"] = "silhouette continuity with worn anchor and controlled movement"
-        if has_environment_binding and scene_row["scene_presence_mode"] in {"environment_anchor", "transit"} and scene_row["visual_event_type"] == "character_action":
+        if (
+            has_environment_binding
+            and scene_row["scene_presence_mode"] in {"environment_anchor", "transit"}
+            and scene_row["visual_event_type"] == "character_action"
+            and not carried_owner_scene_for_env_guard
+        ):
             scene_row["visual_event_type"] = "environment"
 
         if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
