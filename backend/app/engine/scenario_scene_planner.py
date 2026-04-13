@@ -1038,10 +1038,15 @@ def _normalize_scene_plan(
     intimate_scene_streak = 0
     route_swaps_applied = 0
     binding_rows = _safe_list(ownership_binding_inventory)
-    strong_owner_roles = {
+    carried_owner_roles = {
         str(item.get("ownershipRoleMapped") or "").strip().lower()
         for item in binding_rows
-        if str(item.get("bindingType") or "").strip().lower() in {"carried", "held"}
+        if str(item.get("bindingType") or "").strip().lower() == "carried"
+    }
+    held_owner_roles = {
+        str(item.get("ownershipRoleMapped") or "").strip().lower()
+        for item in binding_rows
+        if str(item.get("bindingType") or "").strip().lower() == "held"
     }
     worn_owner_roles = {
         str(item.get("ownershipRoleMapped") or "").strip().lower()
@@ -1128,6 +1133,7 @@ def _normalize_scene_plan(
             "primary_role": primary_role,
             "active_roles": active_roles,
             "scene_presence_mode": scene_presence_mode,
+            "prop_activation_mode": str(role_row.get("prop_activation_mode") or "").strip().lower() or "not_emphasized",
             "scene_function": scene_function,
             "route": route,
             "route_reason": str(raw_row.get("route_reason") or "").strip() or "route_selected_by_model",
@@ -1150,13 +1156,20 @@ def _normalize_scene_plan(
             "anti_repeat_warnings": anti_repeat_warnings,
             "original_route": route_raw,
         }
-        if scene_row["primary_role"] and scene_row["primary_role"].lower() in strong_owner_roles:
+        if scene_row["primary_role"] and scene_row["primary_role"].lower() in carried_owner_roles:
             if scene_row["visual_event_type"] in {"environment", "face"}:
                 scene_row["visual_event_type"] = "character_action"
             if scene_row["motion_intent"] == "watchable realistic movement":
                 scene_row["motion_intent"] = "owner-bound carried/held object affects posture, pace, and route choices"
             if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
                 scene_row["watchability_role"] = "owner-bound continuity pressure with active object control"
+            if scene_row.get("prop_activation_mode") == "not_emphasized":
+                scene_row["prop_activation_mode"] = "visible_anchor"
+        elif scene_row["primary_role"] and scene_row["primary_role"].lower() in held_owner_roles:
+            if scene_row["motion_intent"] == "watchable realistic movement":
+                scene_row["motion_intent"] = "hand-occupied continuity with controlled readable movement"
+            if scene_row.get("prop_activation_mode") == "not_emphasized":
+                scene_row["prop_activation_mode"] = "anchor_worn"
         elif scene_row["primary_role"] and scene_row["primary_role"].lower() in worn_owner_roles and scene_row["motion_intent"] == "watchable realistic movement":
             scene_row["motion_intent"] = "silhouette continuity with worn anchor and controlled movement"
         if has_environment_binding and scene_row["scene_presence_mode"] in {"environment_anchor", "transit"} and scene_row["visual_event_type"] == "character_action":

@@ -5667,12 +5667,12 @@ const REF_OWNERSHIP_OPTIONS = [
 ];
 const REF_BINDING_TYPES = new Set(["carried", "worn", "held", "pocketed", "nearby", "environment"]);
 const REF_BINDING_OPTIONS = [
-  { value: "carried", label: "carried" },
-  { value: "worn", label: "worn" },
-  { value: "held", label: "held" },
-  { value: "pocketed", label: "pocketed" },
-  { value: "nearby", label: "nearby" },
-  { value: "environment", label: "environment" },
+  { value: "carried", label: "Носит с собой" },
+  { value: "worn", label: "Надето" },
+  { value: "held", label: "В руках" },
+  { value: "pocketed", label: "В кармане" },
+  { value: "nearby", label: "Рядом" },
+  { value: "environment", label: "Часть окружения" },
 ];
 const REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE = {
   auto: "auto",

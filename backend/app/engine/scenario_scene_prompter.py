@@ -189,6 +189,22 @@ def _binding_prompt_clause(primary_role: str, ownership_binding_inventory: list[
     return ""
 
 
+
+
+def _is_owner_carried_active_scene(scene_plan_row: dict[str, Any], role_row: dict[str, Any], ownership_binding_inventory: list[dict[str, str]]) -> bool:
+    primary_role = str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip().lower()
+    if not primary_role:
+        return False
+    active_roles = {str(v).strip().lower() for v in _safe_list(role_row.get("active_roles") or scene_plan_row.get("active_roles")) if str(v).strip()}
+    if "props" not in active_roles:
+        return False
+    for item in ownership_binding_inventory:
+        owner = str(_safe_dict(item).get("ownershipRoleMapped") or "").strip().lower()
+        binding = str(_safe_dict(item).get("bindingType") or "").strip().lower()
+        if owner == primary_role and binding == "carried":
+            return True
+    return False
+
 def _resolve_active_video_model_id(package: dict[str, Any]) -> str:
     input_pkg = _safe_dict(package.get("input"))
     for key in ("video_model", "video_model_id", "model_id"):
@@ -1334,6 +1350,8 @@ def _normalize_scene_prompts(
         base = _safe_dict(by_id.get(scene_id))
         role_row = _safe_dict(role_lookup.get(scene_id))
         fallback_row = _build_fallback_scene_prompts(package, scene, role_row, story_core, world_continuity)
+        ownership_binding_inventory = _build_ref_binding_inventory(_safe_dict(package.get("refs_inventory")))
+        carried_active_scene = _is_owner_carried_active_scene(scene, role_row, ownership_binding_inventory)
         anchors = _build_scene_anchor_bundle(
             package=package,
             story_core=story_core,
@@ -1402,7 +1420,11 @@ def _normalize_scene_prompts(
             positive_video_prompt = positive_video_prompt or video_prompt
             negative_video_prompt = negative_video_prompt or str(base.get("negative_prompt") or "").strip() or _GLOBAL_NEGATIVE_PROMPT
             negative_prompt = negative_video_prompt
+        if carried_active_scene and "close to body" not in video_prompt.lower():
+            video_prompt = f"{video_prompt} Keep the owner-bound carried object close to body; it affects posture, pace, and route/concealment choices.".strip()
         video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
+        if carried_active_scene and "close to body" not in positive_video_prompt.lower():
+            positive_video_prompt = f"{(positive_video_prompt or video_prompt)} Keep the owner-bound carried object close to body; it affects posture, pace, and route/concealment choices.".strip()
         positive_video_prompt, positive_sanitized = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
         if video_sanitized:
             positive_negative_leak_stripped_count += 1
@@ -1420,7 +1442,7 @@ def _normalize_scene_prompts(
                 "shot_intent": str(prompt_notes.get("shot_intent") or fallback_row["prompt_notes"].get("shot_intent") or ""),
                 "continuity_anchor": str(
                     prompt_notes.get("continuity_anchor") or fallback_row["prompt_notes"].get("continuity_anchor") or ""
-                ),
+                ) + ("; owner-bound carried continuity stays active" if carried_active_scene else ""),
                 "world_anchor": str(prompt_notes.get("world_anchor") or fallback_row["prompt_notes"].get("world_anchor") or ""),
                 "identity_anchor": str(prompt_notes.get("identity_anchor") or fallback_row["prompt_notes"].get("identity_anchor") or ""),
                 "lighting_anchor": str(prompt_notes.get("lighting_anchor") or fallback_row["prompt_notes"].get("lighting_anchor") or ""),
@@ -1554,7 +1576,11 @@ def _normalize_scene_prompts(
             normalized_notes["template_built"] = True
             i2v_template_rebuilt_count += 1
             i2v_template_override_applied = True
+        if carried_active_scene and "close to body" not in video_prompt.lower():
+            video_prompt = f"{video_prompt} Keep the owner-bound carried object close to body; it affects posture, pace, and route/concealment choices.".strip()
         video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
+        if carried_active_scene and "close to body" not in positive_video_prompt.lower():
+            positive_video_prompt = f"{(positive_video_prompt or video_prompt)} Keep the owner-bound carried object close to body; it affects posture, pace, and route/concealment choices.".strip()
         positive_video_prompt, positive_sanitized = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
         photo_prompt, photo_sanitized = _sanitize_positive_prompt(photo_prompt, negative_prompt)
         if video_sanitized:

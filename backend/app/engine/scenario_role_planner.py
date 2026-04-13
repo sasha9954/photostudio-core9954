@@ -748,10 +748,15 @@ def _normalize_role_plan(
 
     scene_roles_by_id: dict[str, dict[str, Any]] = {}
     binding_rows = _safe_list(ownership_binding_inventory)
-    strong_owner_props = {
+    carried_owner_props = {
         str(item.get("ownershipRoleMapped") or "").strip().lower()
         for item in binding_rows
-        if str(item.get("bindingType") or "").strip().lower() in {"carried", "held"}
+        if str(item.get("bindingType") or "").strip().lower() == "carried"
+    }
+    held_owner_props = {
+        str(item.get("ownershipRoleMapped") or "").strip().lower()
+        for item in binding_rows
+        if str(item.get("bindingType") or "").strip().lower() == "held"
     }
     moderate_owner_props = {
         str(item.get("ownershipRoleMapped") or "").strip().lower()
@@ -791,13 +796,25 @@ def _normalize_role_plan(
         has_world_anchor = "location" in world_roles_present
         if has_world_anchor and "location" not in active_roles and scene_presence_mode in {"transit", "environment_anchor"}:
             active_roles.append("location")
-        if "props" in allowed_roles and "props" in active_roles and scene_presence_mode in {"environment_anchor", "transit"}:
+        if "props" in allowed_roles and "props" in active_roles and scene_presence_mode == "environment_anchor":
             active_roles = [role for role in active_roles if role != "props"]
         if not active_roles:
             active_roles = [*([first_character_role] if first_character_role else []), *world_roles_present]
             active_roles = [role for role in active_roles if role in allowed_roles]
         if "props" in allowed_roles and primary_role:
-            if primary_role in strong_owner_props and scene_presence_mode in {"solo_performance", "solo_observational", "transit"}:
+            scene_function_blob = " ".join(
+                [
+                    str(window.get("scene_function") or "").strip().lower(),
+                    str(window.get("phrase_text") or "").strip().lower(),
+                    str(row.get("role_reason") or "").strip().lower(),
+                ]
+            )
+            carried_owner_scene = primary_role in carried_owner_props and (
+                scene_presence_mode in {"solo_performance", "solo_observational", "transit", "private_release"}
+                or any(tag in scene_function_blob for tag in {"pressure", "evasion", "conceal", "escape", "release"})
+            )
+            held_owner_scene = primary_role in held_owner_props and scene_presence_mode in {"solo_performance", "solo_observational", "transit"}
+            if carried_owner_scene or held_owner_scene:
                 if "props" not in active_roles:
                     active_roles.append("props")
             elif primary_role in moderate_owner_props and scene_presence_mode in {"solo_performance", "solo_observational"} and "props" not in active_roles:
@@ -831,8 +848,10 @@ def _normalize_role_plan(
             scene_subject_priority=scene_subject_priority,
             scene_presence_mode=scene_presence_mode,
         )
-        if "props" in active_roles and primary_role in strong_owner_props:
+        if "props" in active_roles and primary_role in carried_owner_props:
             prop_activation_mode = "visible_anchor"
+        elif "props" in active_roles and primary_role in held_owner_props and prop_activation_mode == "not_emphasized":
+            prop_activation_mode = "anchor_worn"
         elif "props" in active_roles and primary_role in moderate_owner_props and prop_activation_mode == "not_emphasized":
             prop_activation_mode = "anchor_worn"
         elif has_world_environment_binding and scene_presence_mode in {"environment_anchor", "transit"}:
