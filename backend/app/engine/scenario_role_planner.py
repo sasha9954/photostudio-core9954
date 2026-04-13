@@ -826,7 +826,10 @@ def _normalize_role_plan(
                 scene_presence_mode in {"solo_performance", "solo_observational", "transit", "private_release"}
                 or any(tag in scene_function_blob for tag in {"pressure", "evasion", "conceal", "escape", "release"})
             )
-            held_owner_scene = primary_role in held_owner_props and scene_presence_mode in {"solo_performance", "solo_observational"}
+            held_owner_scene = primary_role in held_owner_props and (
+                scene_presence_mode in {"solo_performance", "solo_observational", "transit", "private_release"}
+                or any(tag in scene_function_blob for tag in {"pressure", "evasion", "conceal", "escape", "release"})
+            )
             if carried_owner_scene or held_owner_scene:
                 if "props" not in active_roles:
                     active_roles.append("props")
@@ -838,11 +841,18 @@ def _normalize_role_plan(
             and scene_presence_mode in {"environment_anchor", "transit", "private_release"}
             and "props" in active_roles
         )
+        held_owner_scene_for_env_guard = bool(
+            primary_role
+            and primary_role in held_owner_props
+            and scene_presence_mode in {"transit", "private_release"}
+            and "props" in active_roles
+        )
         if (
             has_world_environment_binding
             and scene_presence_mode in {"environment_anchor", "transit"}
             and "props" in active_roles
             and not carried_owner_scene_for_env_guard
+            and not held_owner_scene_for_env_guard
         ):
             active_roles = [role for role in active_roles if role != "props"]
 
@@ -875,7 +885,7 @@ def _normalize_role_plan(
         if "props" in active_roles and primary_role in carried_owner_props:
             prop_activation_mode = "visible_anchor"
         elif "props" in active_roles and primary_role in held_owner_props and prop_activation_mode == "not_emphasized":
-            prop_activation_mode = "anchor_worn"
+            prop_activation_mode = "visible_anchor" if scene_presence_mode in {"transit", "private_release"} else "anchor_worn"
         elif "props" in active_roles and primary_role in moderate_owner_props and prop_activation_mode == "not_emphasized":
             prop_activation_mode = "anchor_worn"
         elif has_world_environment_binding and scene_presence_mode in {"environment_anchor", "transit"}:

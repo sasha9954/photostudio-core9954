@@ -177,7 +177,10 @@ def _binding_prompt_clause(primary_role: str, ownership_binding_inventory: list[
         if binding == "carried":
             return " Keep the same owner-bound carried object close to body; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
         if binding == "held":
-            return " Keep one hand-occupied held-object continuity, with broad readable handling only."
+            return (
+                " Keep the same owner-bound held object across transit/evasion/release beats with readable handling only; "
+                "it is not a replaceable random prop and one hand/handling attention stays committed, shaping posture, pace, and route decisions even off center."
+            )
         if binding == "worn":
             return " Preserve worn-object silhouette continuity; treat it as look anchor, not choreography driver."
         if binding == "pocketed":
@@ -204,6 +207,22 @@ def _is_owner_carried_active_scene(scene_plan_row: dict[str, Any], role_row: dic
         if owner == primary_role and binding == "carried":
             return True
     return False
+
+
+def _is_owner_held_active_scene(scene_plan_row: dict[str, Any], role_row: dict[str, Any], ownership_binding_inventory: list[dict[str, str]]) -> bool:
+    primary_role = str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip().lower()
+    if not primary_role:
+        return False
+    active_roles = {str(v).strip().lower() for v in _safe_list(role_row.get("active_roles") or scene_plan_row.get("active_roles")) if str(v).strip()}
+    if "props" not in active_roles:
+        return False
+    for item in ownership_binding_inventory:
+        owner = str(_safe_dict(item).get("ownershipRoleMapped") or "").strip().lower()
+        binding = str(_safe_dict(item).get("bindingType") or "").strip().lower()
+        if owner == primary_role and binding == "held":
+            return True
+    return False
+
 
 def _resolve_active_video_model_id(package: dict[str, Any]) -> str:
     input_pkg = _safe_dict(package.get("input"))
@@ -1352,6 +1371,7 @@ def _normalize_scene_prompts(
         fallback_row = _build_fallback_scene_prompts(package, scene, role_row, story_core, world_continuity)
         ownership_binding_inventory = _build_ref_binding_inventory(_safe_dict(package.get("refs_inventory")))
         carried_active_scene = _is_owner_carried_active_scene(scene, role_row, ownership_binding_inventory)
+        held_active_scene = _is_owner_held_active_scene(scene, role_row, ownership_binding_inventory)
         anchors = _build_scene_anchor_bundle(
             package=package,
             story_core=story_core,
@@ -1425,11 +1445,23 @@ def _normalize_scene_prompts(
                 f"{video_prompt} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
                 "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
             ).strip()
+        if held_active_scene and "owner-bound held object" not in video_prompt.lower():
+            video_prompt = (
+                f"{video_prompt} Keep the same owner-bound held object continuous across transit/evasion/release beats, "
+                "with readable handling only; one hand/handling attention remains committed so posture, pace, and route decisions stay constrained, "
+                "and this is not a replaceable random prop even when off center."
+            ).strip()
         video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
         if carried_active_scene and "close to body" not in positive_video_prompt.lower():
             positive_video_prompt = (
                 f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
                 "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
+            ).strip()
+        if held_active_scene and "owner-bound held object" not in positive_video_prompt.lower():
+            positive_video_prompt = (
+                f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound held object continuous across transit/evasion/release beats, "
+                "with readable handling only; one hand/handling attention remains committed so posture, pace, and route decisions stay constrained, "
+                "and this is not a replaceable random prop even when off center."
             ).strip()
         positive_video_prompt, positive_sanitized = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
         if video_sanitized:
@@ -1472,6 +1504,10 @@ def _normalize_scene_prompts(
                 "motion_risk": _safe_dict(prompt_notes.get("motion_risk")) or _safe_dict(scene.get("motion_risk")) or _safe_dict(fallback_row["prompt_notes"].get("motion_risk")),
             }
         )
+        if held_active_scene:
+            normalized_notes["continuity_anchor"] = (
+                f"{normalized_notes['continuity_anchor']}; same owner-bound held object persists across transit/evasion/release with readable handling continuity (not replaceable, survives off-center framing)"
+            ).strip("; ")
         if actual_route == "ia2v":
             normalized_notes["audio_driven"] = True
         if actual_route == "first_last":
@@ -1587,11 +1623,23 @@ def _normalize_scene_prompts(
                 f"{video_prompt} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
                 "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
             ).strip()
+        if held_active_scene and "owner-bound held object" not in video_prompt.lower():
+            video_prompt = (
+                f"{video_prompt} Keep the same owner-bound held object continuous across transit/evasion/release beats, "
+                "with readable handling only; one hand/handling attention remains committed so posture, pace, and route decisions stay constrained, "
+                "and this is not a replaceable random prop even when off center."
+            ).strip()
         video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
         if carried_active_scene and "close to body" not in positive_video_prompt.lower():
             positive_video_prompt = (
                 f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
                 "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
+            ).strip()
+        if held_active_scene and "owner-bound held object" not in positive_video_prompt.lower():
+            positive_video_prompt = (
+                f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound held object continuous across transit/evasion/release beats, "
+                "with readable handling only; one hand/handling attention remains committed so posture, pace, and route decisions stay constrained, "
+                "and this is not a replaceable random prop even when off center."
             ).strip()
         positive_video_prompt, positive_sanitized = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
         photo_prompt, photo_sanitized = _sanitize_positive_prompt(photo_prompt, negative_prompt)

@@ -1174,6 +1174,7 @@ def _normalize_scene_plan(
             "original_route": route_raw,
         }
         carried_owner_scene_for_env_guard = False
+        held_owner_scene_for_env_guard = False
         if scene_row["primary_role"] and scene_row["primary_role"].lower() in carried_owner_roles:
             if scene_row["visual_event_type"] in {"environment", "face"}:
                 scene_row["visual_event_type"] = "character_action"
@@ -1184,10 +1185,34 @@ def _normalize_scene_plan(
             scene_row["prop_activation_mode"] = "visible_anchor"
             carried_owner_scene_for_env_guard = "props" in scene_row["active_roles"] and scene_row["prop_activation_mode"] == "visible_anchor"
         elif scene_row["primary_role"] and scene_row["primary_role"].lower() in held_owner_roles:
+            held_transit_like_scene = scene_row["scene_presence_mode"] in {"transit", "private_release"} or any(
+                tag in " ".join(
+                    [
+                        str(scene_row.get("scene_function") or "").strip().lower(),
+                        str(scene_row.get("emotional_intent") or "").strip().lower(),
+                        str(scene_row.get("motion_intent") or "").strip().lower(),
+                        str(scene_row.get("watchability_role") or "").strip().lower(),
+                    ]
+                )
+                for tag in {"pressure", "evasion", "conceal", "escape", "release"}
+            )
+            if held_transit_like_scene and scene_row["visual_event_type"] in {"environment", "face"}:
+                scene_row["visual_event_type"] = "character_action"
             if scene_row["motion_intent"] == "watchable realistic movement":
-                scene_row["motion_intent"] = "handling-driven held-object continuity with controlled readable movement"
-            if scene_row.get("prop_activation_mode") == "not_emphasized":
+                scene_row["motion_intent"] = (
+                    "same owner-bound held object stays with the hero, with readable handling that constrains posture, pace, and route choices"
+                    if held_transit_like_scene
+                    else "handling-driven held-object continuity with controlled readable movement"
+                )
+            if held_transit_like_scene and _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
+                scene_row["watchability_role"] = "owner-bound held continuity anchor shaping readable movement and handling choices"
+            if scene_row.get("prop_activation_mode") in {"not_emphasized", "anchor_worn"} and held_transit_like_scene:
+                scene_row["prop_activation_mode"] = "visible_anchor"
+            elif scene_row.get("prop_activation_mode") == "not_emphasized":
                 scene_row["prop_activation_mode"] = "anchor_worn"
+            held_owner_scene_for_env_guard = (
+                held_transit_like_scene and "props" in scene_row["active_roles"] and scene_row["prop_activation_mode"] == "visible_anchor"
+            )
         elif scene_row["primary_role"] and scene_row["primary_role"].lower() in worn_owner_roles and scene_row["motion_intent"] == "watchable realistic movement":
             scene_row["motion_intent"] = "silhouette continuity with worn anchor and controlled movement"
         if (
@@ -1195,6 +1220,7 @@ def _normalize_scene_plan(
             and scene_row["scene_presence_mode"] in {"environment_anchor", "transit"}
             and scene_row["visual_event_type"] == "character_action"
             and not carried_owner_scene_for_env_guard
+            and not held_owner_scene_for_env_guard
         ):
             scene_row["visual_event_type"] = "environment"
 
