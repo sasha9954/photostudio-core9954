@@ -716,6 +716,26 @@ def _infer_motion_risk(scene: dict[str, Any], phrase_text: str) -> dict[str, str
     }
 
 
+def _should_auto_downgrade_first_last(
+    *,
+    route: str,
+    route_validation_status: str,
+    suggested_route: str,
+    route_validation_reason: str,
+    continuity_warnings: list[str],
+    visual_event_type: str,
+) -> bool:
+    if route != "first_last" or route_validation_status != "risky" or suggested_route != "i2v":
+        return False
+    risk_markers = {
+        str(route_validation_reason or "").strip().lower(),
+        *[str(item).strip().lower() for item in continuity_warnings if str(item).strip()],
+    }
+    has_continuity_risk = any("continuity_risk" in marker for marker in risk_markers)
+    weak_visual_delta = str(visual_event_type or "").strip().lower() in {"environment", "transit", "character_movement"}
+    return has_continuity_risk or weak_visual_delta
+
+
 def _pick_i2v_duration_hint(scene_duration_sec: Any, family: str) -> float:
     low, high = I2V_PROMPT_DURATION_HINT_RANGE.get(family, I2V_PROMPT_DURATION_HINT_RANGE["baseline_forward_walk"])
     target = round((low + high) / 2.0, 2)
@@ -1141,6 +1161,20 @@ def _normalize_scene_plan(
             if candidate_family and candidate_family not in I2V_MOTION_FAMILIES:
                 route_validation_status = "warning" if route_validation_status == "ok" else route_validation_status
                 capability_warnings.append("unsupported_i2v_motion_family")
+        auto_downgraded_first_last = False
+        if _should_auto_downgrade_first_last(
+            route=route,
+            route_validation_status=route_validation_status,
+            suggested_route=suggested_route,
+            route_validation_reason=route_validation_reason,
+            continuity_warnings=continuity_warnings,
+            visual_event_type=visual_event_type_default,
+        ):
+            route = "i2v"
+            route_validation_status = "warning"
+            route_validation_reason = "auto_downgraded_from_risky_first_last"
+            continuity_warnings.append("first_last_auto_downgraded_to_i2v")
+            auto_downgraded_first_last = True
 
         scene_row = {
             "scene_id": scene_id,
@@ -1153,7 +1187,11 @@ def _normalize_scene_plan(
             "prop_activation_mode": str(role_row.get("prop_activation_mode") or "").strip().lower() or "not_emphasized",
             "scene_function": scene_function,
             "route": route,
-            "route_reason": str(raw_row.get("route_reason") or "").strip() or "route_selected_by_model",
+            "route_reason": (
+                "auto_downgraded_to_i2v_after_risky_first_last_validation"
+                if auto_downgraded_first_last
+                else (str(raw_row.get("route_reason") or "").strip() or "route_selected_by_model")
+            ),
             "emotional_intent": str(raw_row.get("emotional_intent") or "").strip() or "emotionally coherent clip beat",
             "motion_intent": str(raw_row.get("motion_intent") or "").strip() or "watchable realistic movement",
             "watchability_role": watchability_role_raw or _infer_watchability_role({**window, **role_row, **raw_row, "route": route}, idx, len(scene_windows)),
