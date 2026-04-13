@@ -924,9 +924,10 @@ def _build_story_core_input_context(
 def _default_story_core_guidance() -> dict[str, Any]:
     return {
         "world_progression_hints": [
-            "single coherent world; progression via changing urban pressure and release, not travel montage",
-            "allow grounded variation: narrow dusty street, shopfront passage, sunlit crossing, shadow threshold, side passage, stairs/slope, quieter courtyard pocket, elevated edge reveal",
-            "each next scene family should add new pressure, relief, or textural value",
+            "single coherent iranian/middle eastern urban world; progression follows one boy carrying one compact stolen box while avoiding visibility, not travel montage",
+            "move through pressure gradient: exposed street -> pressured passage -> tighter squeeze-through -> brief concealment pocket -> threshold crossing -> temporary refuge",
+            "favor thresholds, courtyard pockets, side passages, and shadow transitions where the carried box changes posture/speed/balance/route choices",
+            "each next scene family should increase or release spatial pressure tied to carrying burden and risk of being seen",
         ],
         "viewer_contrast_rules": [
             "compression_vs_release",
@@ -949,28 +950,28 @@ def _default_story_core_guidance() -> dict[str, Any]:
             "threshold into quieter pocket without changing world family",
         ],
         "prop_guidance": {
-            "baseball_cap_role": "continuity/silhouette/emotional shield anchor",
-            "baseball_cap_not_default_action_driver": True,
-            "forbid_generic_brim_touch_fallback": True,
-            "forbid_generic_finger_choreography_fallback": True,
-            "expression_priority": [
-                "gaze",
-                "pace_change",
-                "body_tension",
-                "framing",
-                "spatial_relation",
-                "environmental_pressure",
-            ],
+            "stolen_box_role": "continuity/conflict/risk anchor",
+            "must_keep_same_box_identity_across_clip": True,
+            "forbid_random_box_size_material_shape_changes": True,
+            "box_is_burden_not_symbolic_decoration": True,
+            "box_affects_posture_speed_balance_concealment_route_choice_body_tension": True,
+            "forbid_overused_hand_choreography_around_box": True,
+            "forbid_magic_or_metaphor_prop_behavior": True,
         },
         "narrative_pressure_rules": [
-            "do not collapse into repeated another street/another alley/another walk shot",
-            "repeated movement is allowed only when environment function changes",
-            "world progression must feel like changing urban conditions, not recycled backdrop",
+            "character_1 (boy) remains the action spine: exposed vulnerability -> risk of being seen -> pressured evasion while carrying box -> temporary refuge",
+            "the stolen box increases vulnerability and slows adaptation in open public zones",
+            "world should feel less safe in open exposure and more survivable in compressed/shadowed spaces",
+            "final refuge must read as temporary shelter, not triumphant resolution",
+            "character_2 is emotional witness/performance layer only, not chase co-lead and not action driver",
+            "do not collapse into repeated another street/another alley/another walk shot; repeated movement is allowed only when environment function changes",
         ],
         "world_richness_rules": [
             "grounded realism only; no spectacle-first escalation",
             "one coherent country/city/environment logic across clip",
             "restrained motion scale; avoid complex hand/cloth gimmicks",
+            "character_2 appears mainly at selected lipsync/performance peaks while staying embedded in the same realistic world",
+            "no concert/pop-video takeover, no club, no neon, no fantasy drift",
         ],
     }
 
@@ -988,24 +989,37 @@ def _normalize_story_core_guidance(raw_guidance: Any) -> dict[str, Any]:
         "unexpected_realistic_beats": [str(item).strip() for item in _safe_list(row.get("unexpected_realistic_beats")) if str(item).strip()]
         or _safe_list(fallback.get("unexpected_realistic_beats")),
         "prop_guidance": {
-            "baseball_cap_role": str(prop_guidance.get("baseball_cap_role") or fallback_prop_guidance.get("baseball_cap_role") or "").strip(),
-            "baseball_cap_not_default_action_driver": bool(
-                prop_guidance.get("baseball_cap_not_default_action_driver")
-                if "baseball_cap_not_default_action_driver" in prop_guidance
-                else fallback_prop_guidance.get("baseball_cap_not_default_action_driver")
+            "stolen_box_role": str(prop_guidance.get("stolen_box_role") or fallback_prop_guidance.get("stolen_box_role") or "").strip(),
+            "must_keep_same_box_identity_across_clip": bool(
+                prop_guidance.get("must_keep_same_box_identity_across_clip")
+                if "must_keep_same_box_identity_across_clip" in prop_guidance
+                else fallback_prop_guidance.get("must_keep_same_box_identity_across_clip")
             ),
-            "forbid_generic_brim_touch_fallback": bool(
-                prop_guidance.get("forbid_generic_brim_touch_fallback")
-                if "forbid_generic_brim_touch_fallback" in prop_guidance
-                else fallback_prop_guidance.get("forbid_generic_brim_touch_fallback")
+            "forbid_random_box_size_material_shape_changes": bool(
+                prop_guidance.get("forbid_random_box_size_material_shape_changes")
+                if "forbid_random_box_size_material_shape_changes" in prop_guidance
+                else fallback_prop_guidance.get("forbid_random_box_size_material_shape_changes")
             ),
-            "forbid_generic_finger_choreography_fallback": bool(
-                prop_guidance.get("forbid_generic_finger_choreography_fallback")
-                if "forbid_generic_finger_choreography_fallback" in prop_guidance
-                else fallback_prop_guidance.get("forbid_generic_finger_choreography_fallback")
+            "box_is_burden_not_symbolic_decoration": bool(
+                prop_guidance.get("box_is_burden_not_symbolic_decoration")
+                if "box_is_burden_not_symbolic_decoration" in prop_guidance
+                else fallback_prop_guidance.get("box_is_burden_not_symbolic_decoration")
             ),
-            "expression_priority": [str(item).strip() for item in _safe_list(prop_guidance.get("expression_priority")) if str(item).strip()]
-            or _safe_list(fallback_prop_guidance.get("expression_priority")),
+            "box_affects_posture_speed_balance_concealment_route_choice_body_tension": bool(
+                prop_guidance.get("box_affects_posture_speed_balance_concealment_route_choice_body_tension")
+                if "box_affects_posture_speed_balance_concealment_route_choice_body_tension" in prop_guidance
+                else fallback_prop_guidance.get("box_affects_posture_speed_balance_concealment_route_choice_body_tension")
+            ),
+            "forbid_overused_hand_choreography_around_box": bool(
+                prop_guidance.get("forbid_overused_hand_choreography_around_box")
+                if "forbid_overused_hand_choreography_around_box" in prop_guidance
+                else fallback_prop_guidance.get("forbid_overused_hand_choreography_around_box")
+            ),
+            "forbid_magic_or_metaphor_prop_behavior": bool(
+                prop_guidance.get("forbid_magic_or_metaphor_prop_behavior")
+                if "forbid_magic_or_metaphor_prop_behavior" in prop_guidance
+                else fallback_prop_guidance.get("forbid_magic_or_metaphor_prop_behavior")
+            ),
         },
         "narrative_pressure_rules": [str(item).strip() for item in _safe_list(row.get("narrative_pressure_rules")) if str(item).strip()]
         or _safe_list(fallback.get("narrative_pressure_rules")),
@@ -1078,6 +1092,8 @@ def _build_story_core_prompt(
         "HARD CONTRACT: Audio affects rhythm/emotional arc/pacing only; audio cannot rewrite locked world constraints.\n"
         "If lyrics are weak/repetitive, rely on rhythm/energy/repetition/emotional contour and user concept.\n"
         "Scenes must be distinct even for repeating musical structures (action/space/shot scale/angle/world relation/prop relation/emotional evolution).\n"
+        "Narrative spine must stay with character_1; character_2 is a secondary lipsync/performance witness layer, not a chase/escape co-lead.\n"
+        "Character_2 performance peaks must remain grounded in the same realistic world and must not switch clip logic into concert/pop-video mode.\n"
         "Required top-level keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock, story_guidance.\n"
         "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
         "story_guidance must be JSON object with keys:\n"
