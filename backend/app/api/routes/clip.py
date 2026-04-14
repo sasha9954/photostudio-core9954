@@ -4910,6 +4910,103 @@ def _resolve_media_input(url: str, temp_files: list[str]) -> tuple[str | None, s
     return temp_path, None
 
 
+def _validate_video_ready_for_playback(
+    scene_id: str,
+    video_url: str,
+    *,
+    max_attempts: int = 5,
+    retry_delay_sec: float = 1.0,
+) -> tuple[bool, float | None, str]:
+    safe_scene_id = str(scene_id or "").strip() or "scene"
+    safe_video_url = str(video_url or "").strip()
+    if not safe_video_url:
+        print(
+            "[SCENARIO VIDEO READY VALIDATION] "
+            + json.dumps(
+                {
+                    "sceneId": safe_scene_id,
+                    "videoUrl": "",
+                    "attempt": 0,
+                    "ffprobeDurationSec": None,
+                    "fileAccessible": False,
+                    "ready": False,
+                    "reason": "video_url_empty",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return False, None, "video_url_empty"
+
+    attempts = max(1, int(max_attempts or 1))
+    delay = max(0.1, float(retry_delay_sec or 1.0))
+    last_reason = "video_not_ready"
+    last_duration: float | None = None
+    for attempt in range(1, attempts + 1):
+        temp_files: list[str] = []
+        file_accessible = False
+        resolved_path = None
+        try:
+            resolved_path, resolve_err = _resolve_media_input(safe_video_url, temp_files)
+            if not resolve_err and resolved_path and os.path.isfile(resolved_path):
+                file_accessible = os.path.getsize(resolved_path) > 0
+                if file_accessible:
+                    ffprobe_duration, probe_err = _ffprobe_duration(resolved_path)
+                    if probe_err == "ffprobe_missing_install_and_add_to_PATH":
+                        raise RuntimeError("FFPROBE_MISSING")
+                    last_duration = ffprobe_duration
+                    if not probe_err and ffprobe_duration is not None and math.isfinite(ffprobe_duration) and ffprobe_duration > 0:
+                        print(
+                            "[SCENARIO VIDEO READY VALIDATION] "
+                            + json.dumps(
+                                {
+                                    "sceneId": safe_scene_id,
+                                    "videoUrl": safe_video_url,
+                                    "attempt": attempt,
+                                    "ffprobeDurationSec": round(float(ffprobe_duration), 3),
+                                    "fileAccessible": True,
+                                    "ready": True,
+                                    "reason": "validated",
+                                },
+                                ensure_ascii=False,
+                            )
+                        )
+                        return True, float(ffprobe_duration), "validated"
+                    last_reason = str(probe_err or "ffprobe_duration_non_positive")
+                else:
+                    last_reason = "resolved_file_empty"
+            else:
+                last_reason = str(resolve_err or "file_not_accessible")
+        except Exception as exc:
+            last_reason = str(exc or "video_ready_validation_failed")[:300]
+        finally:
+            for pth in temp_files:
+                try:
+                    if os.path.isfile(pth):
+                        os.remove(pth)
+                except Exception:
+                    pass
+
+        print(
+            "[SCENARIO VIDEO READY VALIDATION] "
+            + json.dumps(
+                {
+                    "sceneId": safe_scene_id,
+                    "videoUrl": safe_video_url,
+                    "attempt": attempt,
+                    "ffprobeDurationSec": round(float(last_duration), 3) if isinstance(last_duration, (float, int)) and math.isfinite(last_duration) else None,
+                    "fileAccessible": file_accessible,
+                    "ready": False,
+                    "reason": last_reason,
+                },
+                ensure_ascii=False,
+            )
+        )
+        if attempt < attempts:
+            time.sleep(delay)
+
+    return False, last_duration, last_reason
+
+
 def _build_public_static_url(filename: str) -> str:
     return _asset_url(filename)
 
@@ -13940,6 +14037,11 @@ def clip_video_comfy_output(request: Request, filename: str, subfolder: str = ""
         )
 
     content_type = str(upstream.headers.get("content-type") or "application/octet-stream").strip() or "application/octet-stream"
+    guessed_content_type = mimetypes.guess_type(safe_filename)[0] or ""
+    if (content_type == "application/octet-stream" or not content_type) and guessed_content_type:
+        content_type = guessed_content_type
+    if safe_filename.lower().endswith(".mp4") and "video/" not in content_type.lower():
+        content_type = "video/mp4"
     response_headers = {
         "Content-Type": content_type,
         "Cache-Control": "no-cache",
@@ -13948,6 +14050,8 @@ def clip_video_comfy_output(request: Request, filename: str, subfolder: str = ""
         response_headers["Content-Length"] = str(upstream.headers.get("content-length"))
     if upstream.headers.get("accept-ranges"):
         response_headers["Accept-Ranges"] = str(upstream.headers.get("accept-ranges"))
+    elif incoming_range:
+        response_headers["Accept-Ranges"] = "bytes"
     if upstream.headers.get("content-range"):
         response_headers["Content-Range"] = str(upstream.headers.get("content-range"))
 
@@ -13997,6 +14101,27 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "code": "COMFY_OUTPUT_URL_INVALID" if provider_name == "comfy_remote" else "VIDEO_URL_MISSING",
                 "hint": "provider_marked_done_without_video_url",
             }
+        if status == "done":
+            ready, validated_duration_sec, validation_reason = _validate_video_ready_for_playback(
+                scene_id,
+                video_url,
+                max_attempts=4,
+                retry_delay_sec=1.0,
+            )
+            if ready:
+                out = {
+                    **(out if isinstance(out, dict) else {}),
+                    "providerDurationSec": round(float(validated_duration_sec), 3) if isinstance(validated_duration_sec, (float, int)) and math.isfinite(validated_duration_sec) else out.get("providerDurationSec"),
+                }
+            else:
+                status = "error"
+                out = {
+                    **(out if isinstance(out, dict) else {}),
+                    "ok": False,
+                    "code": "VIDEO_NOT_READY_FOR_PLAYBACK",
+                    "hint": str(validation_reason or "video_duration_unreadable"),
+                    "details": str(validation_reason or "video_duration_unreadable"),
+                }
         if video_url:
             print(f"[CLIP VIDEO JOB WORKER] result_received jobId={job_id} video_url={video_url}")
         with CLIP_VIDEO_JOBS_LOCK:
