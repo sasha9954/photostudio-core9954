@@ -240,20 +240,41 @@ def _round3(value: Any) -> float:
         return 0.0
 
 
-def _extract_json_obj(text: str) -> dict[str, Any]:
+def _extract_json_obj(text: str) -> Any:
     raw = str(text or "").strip()
     if not raw:
         return {}
     try:
         return json.loads(raw)
     except Exception:
-        first, last = raw.find("{"), raw.rfind("}")
-        if first >= 0 and last > first:
+        first_obj, last_obj = raw.find("{"), raw.rfind("}")
+        if first_obj >= 0 and last_obj > first_obj:
             try:
-                return json.loads(raw[first : last + 1])
+                return json.loads(raw[first_obj : last_obj + 1])
+            except Exception:
+                pass
+        first_arr, last_arr = raw.find("["), raw.rfind("]")
+        if first_arr >= 0 and last_arr > first_arr:
+            try:
+                return json.loads(raw[first_arr : last_arr + 1])
             except Exception:
                 return {}
     return {}
+
+
+def _coerce_scene_prompts_payload(raw: Any) -> dict[str, Any]:
+    data = _safe_dict(raw)
+    if isinstance(raw, list):
+        return {"scenes": _safe_list(raw)}
+    scenes = _safe_list(data.get("scenes"))
+    if scenes:
+        return {"scenes": scenes, "global_prompt_rules": _safe_list(data.get("global_prompt_rules"))}
+    for key in ("result", "data", "output"):
+        nested = _safe_dict(data.get(key))
+        nested_scenes = _safe_list(nested.get("scenes"))
+        if nested_scenes:
+            return {"scenes": nested_scenes, "global_prompt_rules": _safe_list(data.get("global_prompt_rules")) or _safe_list(nested.get("global_prompt_rules"))}
+    return {"scenes": [], "global_prompt_rules": _safe_list(data.get("global_prompt_rules"))}
 
 
 def _extract_gemini_text(resp: dict[str, Any]) -> str:
@@ -1902,7 +1923,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
         if isinstance(response, dict) and response.get("__http_error__"):
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
 
-        parsed = _extract_json_obj(_extract_gemini_text(response))
+        parsed = _coerce_scene_prompts_payload(_extract_json_obj(_extract_gemini_text(response)))
         (
             scene_prompts,
             used_fallback,
