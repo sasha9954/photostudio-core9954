@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict
 import requests
@@ -250,6 +250,8 @@ class ClipVideoIn(BaseModel):
     videoNegativePrompt: str | None = None
     video_negative_prompt: str | None = None
     requestedDurationSec: int | float | None = 5
+    targetDurationSec: int | float | None = None
+    generationDurationSec: int | float | None = None
     sceneStartSec: int | float | None = None
     sceneEndSec: int | float | None = None
     sceneDurationSec: int | float | None = None
@@ -1390,6 +1392,123 @@ def _resolve_video_timeframe(payload: ClipVideoIn) -> tuple[float, float | None,
         resolved = 5.0
     resolved = max(1.0, float(resolved))
     return float(resolved), scene_start, scene_end, scene_duration
+
+
+def _resolve_generation_and_target_duration(payload: ClipVideoIn, workflow_key: str) -> tuple[float, float, str, str]:
+    target_candidates = [
+        payload.targetDurationSec,
+        payload.sceneDurationSec,
+        payload.requestedDurationSec,
+    ]
+    target_duration = next((_safe_positive_float(v) for v in target_candidates if _safe_positive_float(v) is not None), None)
+    if target_duration is None:
+        target_duration = 5.0
+
+    generation_candidates = [
+        payload.generationDurationSec,
+        payload.requestedDurationSec,
+        payload.targetDurationSec,
+        payload.sceneDurationSec,
+    ]
+    generation_duration = next((_safe_positive_float(v) for v in generation_candidates if _safe_positive_float(v) is not None), None)
+    if generation_duration is None:
+        generation_duration = target_duration
+
+    normalized_workflow = _normalize_ltx_workflow_key(workflow_key) or str(workflow_key or "").strip().lower()
+    overgenerate_allowed = normalized_workflow in {"i2v", "f_l"}
+    overgenerate_applied = False
+    overgenerate_reason = "not_applicable"
+    if overgenerate_allowed and target_duration < 6.0 and generation_duration <= target_duration:
+        generation_duration = min(12.0, max(6.0, float(target_duration) + 3.0))
+        overgenerate_applied = True
+        overgenerate_reason = "short_target_duration_safe_overgenerate"
+    elif overgenerate_allowed:
+        overgenerate_reason = "already_provided_or_target_not_short"
+    else:
+        overgenerate_reason = "audio_sensitive_or_non_supported_route"
+
+    trim_reason = "generation_exceeds_target" if generation_duration > target_duration else "target_ge_generation_no_trim"
+    return float(generation_duration), float(target_duration), overgenerate_reason, trim_reason
+
+
+def _trim_scene_video_to_target_duration(
+    *,
+    video_url: str,
+    target_duration_sec: float,
+    scene_id: str,
+) -> tuple[str, float | None, dict[str, Any]]:
+    debug: dict[str, Any] = {
+        "sceneId": scene_id,
+        "sourceVideoDurationSec": None,
+        "targetTrimDurationSec": float(target_duration_sec),
+        "trimmedDurationSec": None,
+        "trimApplied": False,
+        "trimReason": "not_required",
+    }
+    if target_duration_sec <= 0:
+        debug["trimReason"] = "invalid_target_duration"
+        return video_url, None, debug
+
+    temp_files: list[str] = []
+    source_path = None
+    try:
+        source_path, resolve_err = _resolve_media_input(video_url, temp_files)
+        if resolve_err or not source_path:
+            debug["trimReason"] = f"source_unavailable:{resolve_err or 'empty'}"
+            return video_url, None, debug
+        source_duration, source_probe_err = _ffprobe_duration(source_path)
+        debug["sourceVideoDurationSec"] = source_duration
+        if source_probe_err:
+            debug["trimReason"] = f"source_probe_failed:{source_probe_err}"
+            return video_url, source_duration, debug
+        if not source_duration or source_duration <= 0:
+            debug["trimReason"] = "source_duration_missing"
+            return video_url, source_duration, debug
+        if source_duration <= target_duration_sec:
+            debug["trimReason"] = "source_shorter_or_equal_than_target"
+            return video_url, source_duration, debug
+
+        trimmed_filename = f"scene_trim_{scene_id}_{uuid4().hex}.mp4"
+        trimmed_path = os.path.join(str(ASSETS_DIR), trimmed_filename)
+        ok, err = _run_ffmpeg(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                source_path,
+                "-t",
+                f"{float(target_duration_sec):.3f}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "18",
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                trimmed_path,
+            ]
+        )
+        if not ok:
+            debug["trimReason"] = f"trim_ffmpeg_failed:{err}"
+            return video_url, source_duration, debug
+        trimmed_duration, trimmed_probe_err = _ffprobe_duration(trimmed_path)
+        debug["trimmedDurationSec"] = trimmed_duration
+        if trimmed_probe_err:
+            debug["trimReason"] = f"trim_probe_failed:{trimmed_probe_err}"
+            return video_url, source_duration, debug
+        debug["trimApplied"] = True
+        debug["trimReason"] = "trimmed_to_target_duration"
+        return _build_public_static_url(trimmed_filename), trimmed_duration, debug
+    finally:
+        for temp_file in temp_files:
+            try:
+                if os.path.isfile(temp_file):
+                    os.remove(temp_file)
+            except Exception:
+                pass
 
 
 def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
@@ -13750,7 +13869,7 @@ def _normalize_clip_video_response_payload(response_obj) -> tuple[dict, int]:
 
 
 @router.get("/clip/video/comfy-output")
-def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "output"):
+def clip_video_comfy_output(request: Request, filename: str, subfolder: str = "", type: str = "output"):
     safe_filename = str(filename or "").strip()
     safe_subfolder = str(subfolder or "").strip()
     safe_type = str(type or "output").strip() or "output"
@@ -13785,8 +13904,12 @@ def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "out
         "[COMFY RESULT PROXY] "
         f"filename={safe_filename} subfolder={safe_subfolder} type={safe_type} comfy_view_url={comfy_view_url}"
     )
+    request_headers: dict[str, str] = {}
+    incoming_range = str(request.headers.get("range") or "").strip()
+    if incoming_range:
+        request_headers["Range"] = incoming_range
     try:
-        upstream = requests.get(comfy_view_url, stream=True, timeout=(10, 120))
+        upstream = requests.get(comfy_view_url, stream=True, timeout=(10, 120), headers=request_headers or None)
     except RequestException as exc:
         return JSONResponse(
             status_code=502,
@@ -13823,6 +13946,10 @@ def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "out
     }
     if upstream.headers.get("content-length"):
         response_headers["Content-Length"] = str(upstream.headers.get("content-length"))
+    if upstream.headers.get("accept-ranges"):
+        response_headers["Accept-Ranges"] = str(upstream.headers.get("accept-ranges"))
+    if upstream.headers.get("content-range"):
+        response_headers["Content-Range"] = str(upstream.headers.get("content-range"))
 
     def _stream_and_close():
         try:
@@ -13832,7 +13959,7 @@ def clip_video_comfy_output(filename: str, subfolder: str = "", type: str = "out
         finally:
             upstream.close()
 
-    return StreamingResponse(_stream_and_close(), headers=response_headers, status_code=200)
+    return StreamingResponse(_stream_and_close(), headers=response_headers, status_code=int(upstream.status_code or 200))
 
 
 def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
@@ -13893,6 +14020,8 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "workflowKey": str(((out.get("debug") or {}).get("workflow_key") if isinstance(out.get("debug"), dict) else "") or "").strip(),
                 "providerJobId": str(out.get("taskId") or job.get("providerJobId") or "").strip(),
                 "requestedDurationSec": out.get("requestedDurationSec"),
+                "generationDurationSec": out.get("generationDurationSec"),
+                "targetDurationSec": out.get("targetDurationSec"),
                 "providerDurationSec": out.get("providerDurationSec"),
                 "sceneStartSec": out.get("sceneStartSec", scene_start_sec),
                 "sceneEndSec": out.get("sceneEndSec", scene_end_sec),
@@ -14040,6 +14169,8 @@ def clip_video_start(payload: ClipVideoIn):
             "model": None,
             "workflowKey": None,
             "requestedDurationSec": float(resolved_duration_sec),
+            "generationDurationSec": _safe_positive_float(payload.generationDurationSec),
+            "targetDurationSec": _safe_positive_float(payload.targetDurationSec),
             "providerDurationSec": None,
             "sceneStartSec": scene_start_sec,
             "sceneEndSec": scene_end_sec,
@@ -14425,6 +14556,22 @@ def clip_video(payload: ClipVideoIn):
 
         width, height = _resolve_clip_video_dimensions(output_format)
         requested_duration, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
+        generation_duration_sec, target_duration_sec, overgenerate_reason, trim_plan_reason = _resolve_generation_and_target_duration(payload, final_workflow_key)
+        print(
+            "[SCENARIO VIDEO OVERGENERATE PLAN] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "route": final_workflow_key,
+                    "targetDurationSec": target_duration_sec,
+                    "generationDurationSec": generation_duration_sec,
+                    "overgenerateApplied": bool(generation_duration_sec > target_duration_sec),
+                    "overgenerateReason": overgenerate_reason,
+                    "trimPlanned": bool(generation_duration_sec > target_duration_sec),
+                },
+                ensure_ascii=False,
+            )
+        )
         print(
             "[SCENARIO VIDEO TIMEFRAME] "
             + json.dumps(
@@ -14433,6 +14580,9 @@ def clip_video(payload: ClipVideoIn):
                     "workflowKey": final_workflow_key,
                     "requestedDurationSec": _safe_positive_float(payload.requestedDurationSec),
                     "resolvedDurationSec": requested_duration,
+                    "generationDurationSec": generation_duration_sec,
+                    "targetDurationSec": target_duration_sec,
+                    "durationFieldUsed": "generationDurationSec" if _safe_positive_float(payload.generationDurationSec) else ("requestedDurationSec" if _safe_positive_float(payload.requestedDurationSec) else "fallback"),
                     "sceneStartSec": scene_start_sec,
                     "sceneEndSec": scene_end_sec,
                     "sceneDurationSec": scene_duration_sec,
@@ -14455,7 +14605,7 @@ def clip_video(payload: ClipVideoIn):
             video_prompt=scene_video_prompt,
             transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
             output_format=output_format,
-            requested_duration_sec=requested_duration,
+            requested_duration_sec=generation_duration_sec,
             scene_human_visual_anchors=scene_human_visual_anchors,
             scene_type=str(payload.sceneType or "").strip(),
             shot_type=str(payload.shotType or "").strip(),
@@ -14960,6 +15110,42 @@ def clip_video(payload: ClipVideoIn):
         )
 
         video_url = str(comfy_out.get("videoUrl") or "").strip()
+        source_video_duration_sec = _safe_positive_float(comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec"))
+        trim_result_debug = {
+            "sceneId": scene_id,
+            "sourceVideoDurationSec": source_video_duration_sec,
+            "targetTrimDurationSec": target_duration_sec,
+            "trimmedDurationSec": source_video_duration_sec,
+            "trimApplied": False,
+            "trimReason": trim_plan_reason,
+        }
+        if video_url and generation_duration_sec > target_duration_sec:
+            trimmed_url, trimmed_duration_sec, trim_result_debug = _trim_scene_video_to_target_duration(
+                video_url=video_url,
+                target_duration_sec=target_duration_sec,
+                scene_id=scene_id,
+            )
+            video_url = trimmed_url
+            if trimmed_duration_sec and trimmed_duration_sec > 0:
+                source_video_duration_sec = trimmed_duration_sec
+        print("[SCENARIO VIDEO TRIM RESULT] " + json.dumps(trim_result_debug, ensure_ascii=False))
+        print(
+            "[SCENARIO VIDEO DURATION TRACE] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "requestedDurationSec": _safe_positive_float(payload.requestedDurationSec),
+                    "sceneDurationSec": _safe_positive_float(payload.sceneDurationSec),
+                    "generationDurationSec": generation_duration_sec,
+                    "targetTrimDurationSec": target_duration_sec,
+                    "payloadDurationFieldUsed": "generationDurationSec" if _safe_positive_float(payload.generationDurationSec) else "requestedDurationSec",
+                    "backendDurationFieldUsed": "generationDurationSec",
+                    "workflowDurationFieldUsed": "requested_duration_sec_node_patch",
+                    "finalReturnedVideoUrl": video_url,
+                },
+                ensure_ascii=False,
+            )
+        )
         prompt_id = str(comfy_out.get("taskId") or "").strip()
         comfy_debug = comfy_out.get("debug") if isinstance(comfy_out, dict) and isinstance(comfy_out.get("debug"), dict) else {}
         if final_workflow_key == "lip_sync":
@@ -15006,8 +15192,10 @@ def clip_video(payload: ClipVideoIn):
             "model": resolved_model_key,
             "taskId": prompt_id,
             "mode": str(comfy_out.get("mode") or mode),
-            "requestedDurationSec": round(float(requested_duration), 3),
-            "providerDurationSec": round(float(comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or requested_duration), 3),
+            "requestedDurationSec": round(float(generation_duration_sec), 3),
+            "targetDurationSec": round(float(target_duration_sec), 3),
+            "generationDurationSec": round(float(generation_duration_sec), 3),
+            "providerDurationSec": round(float(source_video_duration_sec or comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or generation_duration_sec), 3),
             "sceneStartSec": scene_start_sec,
             "sceneEndSec": scene_end_sec,
             "sceneDurationSec": scene_duration_sec,
@@ -15015,6 +15203,9 @@ def clip_video(payload: ClipVideoIn):
                 **comfy_debug,
                 "workflow_key": final_workflow_key,
                 "workflow_file": workflow_path,
+                "targetDurationSec": float(target_duration_sec),
+                "generationDurationSec": float(generation_duration_sec),
+                "trimResult": trim_result_debug,
                 "requestedPromptPreview": prompt_debug.get("requestedPromptPreview"),
                 "effectivePromptPreview": prompt_debug.get("effectivePromptPreview"),
                 "effectivePromptLength": prompt_debug.get("effectivePromptLength"),

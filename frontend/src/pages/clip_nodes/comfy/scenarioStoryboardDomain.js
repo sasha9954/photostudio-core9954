@@ -839,6 +839,17 @@ export function resolveScenarioSceneVideoProfile(scene = {}) {
   };
 }
 
+function resolveScenarioTransitionTypeByRoute(scene = {}, videoProfile = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const route = String(videoProfile?.canonicalRoute || source?.resolvedWorkflowKey || "").trim().toLowerCase();
+  const imageStrategy = String(source.imageStrategy || videoProfile?.imageStrategy || deriveScenarioImageStrategy(source)).trim().toLowerCase();
+  const requiresTwoFrames = Boolean(source.requiresTwoFrames ?? source.needsTwoFrames ?? videoProfile?.requiresTwoFrames ?? false);
+  const requiresContinuation = Boolean(source.requiresContinuation ?? source.continuation ?? source.continuationFromPrevious);
+  if (route === "f_l" || imageStrategy === "first_last" || requiresTwoFrames) return "first_last";
+  if (route === "continuation" || imageStrategy === "continuation" || requiresContinuation) return "continuous";
+  return "single";
+}
+
 function resolveScenarioRenderProvider(source = {}, scenarioPackage = null) {
   const providerHints = source?.providerHints && typeof source.providerHints === "object" ? source.providerHints : {};
   const packageHints = scenarioPackage?.providerHints && typeof scenarioPackage.providerHints === "object" ? scenarioPackage.providerHints : {};
@@ -1580,7 +1591,18 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   normalizedScene.plannedVideoGenerationRoute = normalizedScene.plannedVideoGenerationRoute || videoProfile.plannedVideoGenerationRoute || videoProfile.canonicalRoute;
   normalizedScene.videoGenerationRoute = normalizedScene.videoGenerationRoute || videoProfile.videoGenerationRoute || videoProfile.canonicalRoute;
   normalizedScene.imageStrategy = normalizedScene.imageStrategy || videoProfile.imageStrategy;
-  normalizedScene.transitionType = normalizedScene.transitionType || videoProfile.transitionType;
+  const transitionTypeBefore = String(normalizedScene.transitionType || videoProfile.transitionType || "").trim().toLowerCase();
+  normalizedScene.transitionType = resolveScenarioTransitionTypeByRoute(normalizedScene, videoProfile);
+  console.debug("[SCENARIO VIDEO TRANSITION RESOLVE]", {
+    sceneId: normalizedScene.sceneId,
+    resolvedWorkflowKey: normalizedScene.resolvedWorkflowKey,
+    requiresContinuation: Boolean(normalizedScene.requiresContinuation || normalizedScene.continuationFromPrevious),
+    requiresTwoFrames: Boolean(normalizedScene.requiresTwoFrames),
+    imageStrategy: normalizedScene.imageStrategy,
+    transitionTypeBefore,
+    transitionTypeAfter: normalizedScene.transitionType,
+    reason: "normalized_from_route_and_flags",
+  });
   normalizedScene.debugRouteSourceField = videoProfile.debugRouteSourceField;
   console.debug("[SCENARIO SCENE PROFILE]", {
     sceneId: normalizedScene.sceneId,
