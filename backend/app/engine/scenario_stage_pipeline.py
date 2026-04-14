@@ -4971,6 +4971,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["active_route_capability_mode"] = str(diagnostics.get("active_route_capability_mode") or "")
     diagnostics["scene_plan_capability_guard_applied"] = False
     diagnostics["scene_plan_validation_error"] = ""
+    diagnostics["validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
     package["diagnostics"] = diagnostics
@@ -5019,6 +5020,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         scene_diag.get("capability_rules_source_version") or diagnostics.get("capability_rules_source_version") or ""
     )
     diagnostics["scene_plan_validation_error"] = str(result.get("validation_error") or "")
+    diagnostics["validation_error"] = str(diagnostics.get("scene_plan_validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
     diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("scenes")))
     package["diagnostics"] = diagnostics
@@ -5055,6 +5057,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = 0
     diagnostics["prompt_capability_guard_applied"] = False
     diagnostics["scene_prompts_validation_error"] = ""
+    diagnostics["validation_error"] = ""
     diagnostics["scene_prompts_error"] = ""
     diagnostics["scene_prompts_empty"] = False
     previous_signature = str(diagnostics.get("scene_prompts_upstream_signature") or "")
@@ -5073,25 +5076,55 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     prompts_diag = _safe_dict(result.get("diagnostics"))
     diagnostics = _safe_dict(package.get("diagnostics"))
-    diagnostics["scene_prompts_backend"] = "gemini"
-    diagnostics["scene_prompts_prompt_version"] = str(prompts_diag.get("prompt_version") or SCENE_PROMPTS_PROMPT_VERSION)
-    diagnostics["scene_prompts_stage_source"] = str(prompts_diag.get("stage_source") or "current_package")
-    diagnostics["scene_prompts_rows_source_count"] = int(prompts_diag.get("rows_source_count") or 0)
-    diagnostics["scene_prompts_rows_model_count"] = int(prompts_diag.get("rows_model_count") or 0)
-    diagnostics["scene_prompts_rows_normalized_count"] = int(prompts_diag.get("rows_normalized_count") or 0)
-    diagnostics["scene_prompts_repaired_from_current_package_count"] = int(
-        prompts_diag.get("repaired_from_current_package_count") or 0
+    for key, value in prompts_diag.items():
+        if str(key).startswith("scene_prompts_"):
+            diagnostics[str(key)] = value
+
+    stage_keys = (
+        "prompt_version",
+        "stage_source",
+        "rows_source_count",
+        "rows_model_count",
+        "rows_normalized_count",
+        "repaired_from_current_package_count",
+        "unrelated_rows_discarded_count",
+        "missing_photo_count",
+        "missing_video_count",
+        "ia2v_audio_driven_count",
+        "active_video_model_capability_profile",
+        "active_route_capability_mode",
+        "capability_rules_source_version",
+        "scene_prompts_runtime_marker",
     )
-    diagnostics["scene_prompts_unrelated_rows_discarded_count"] = int(
-        prompts_diag.get("unrelated_rows_discarded_count") or 0
+    for key in stage_keys:
+        if key in prompts_diag:
+            diagnostics[key] = prompts_diag.get(key)
+
+    alias_map = {
+        "prompt_version": "scene_prompts_prompt_version",
+        "stage_source": "scene_prompts_stage_source",
+        "rows_source_count": "scene_prompts_rows_source_count",
+        "rows_model_count": "scene_prompts_rows_model_count",
+        "rows_normalized_count": "scene_prompts_rows_normalized_count",
+        "repaired_from_current_package_count": "scene_prompts_repaired_from_current_package_count",
+        "unrelated_rows_discarded_count": "scene_prompts_unrelated_rows_discarded_count",
+        "missing_photo_count": "scene_prompts_missing_photo_count",
+        "missing_video_count": "scene_prompts_missing_video_count",
+        "ia2v_audio_driven_count": "scene_prompts_ia2v_audio_driven_count",
+    }
+    for source_key, target_key in alias_map.items():
+        if source_key in prompts_diag:
+            diagnostics[target_key] = prompts_diag.get(source_key)
+
+    diagnostics["scene_prompts_backend"] = str(
+        prompts_diag.get("scene_prompts_backend") or diagnostics.get("scene_prompts_backend") or "gemini"
     )
     diagnostics["scene_prompts_used_fallback"] = bool(result.get("used_fallback"))
     diagnostics["scene_prompts_scene_count"] = int(prompts_diag.get("scene_count") or len(_safe_list(scene_prompts.get("scenes"))))
-    diagnostics["scene_prompts_missing_photo_count"] = int(prompts_diag.get("missing_photo_count") or 0)
-    diagnostics["scene_prompts_missing_video_count"] = int(prompts_diag.get("missing_video_count") or 0)
-    diagnostics["scene_prompts_ia2v_audio_driven_count"] = int(prompts_diag.get("ia2v_audio_driven_count") or 0)
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = int(
-        prompts_diag.get("scene_prompts_route_semantics_mismatch_count") or 0
+        prompts_diag.get("scene_prompts_route_semantics_mismatch_count")
+        or diagnostics.get("scene_prompts_route_semantics_mismatch_count")
+        or 0
     )
     diagnostics["active_video_model_capability_profile"] = str(
         prompts_diag.get("active_video_model_capability_profile") or diagnostics.get("active_video_model_capability_profile") or ""
@@ -5104,6 +5137,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         prompts_diag.get("capability_rules_source_version") or diagnostics.get("capability_rules_source_version") or ""
     )
     diagnostics["scene_prompts_validation_error"] = str(result.get("validation_error") or "")
+    diagnostics["validation_error"] = str(diagnostics.get("scene_prompts_validation_error") or "")
     diagnostics["scene_prompts_error"] = str(result.get("error") or "")
     diagnostics["scene_prompts_empty"] = not bool(scene_prompts and _safe_list(scene_prompts.get("scenes")))
     package["diagnostics"] = diagnostics
