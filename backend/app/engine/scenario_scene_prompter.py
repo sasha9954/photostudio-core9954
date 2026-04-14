@@ -504,7 +504,10 @@ def _build_scene_anchor_bundle(
     ).strip()
     lighting_contract_anchor = _lighting_anchor_from_contract(world_continuity)
     lighting = str(style_lock.get("lighting") or "").strip() or lighting_contract_anchor
-    world_anchor = ", ".join([part for part in [location_ref_hint, environment, "same world continuity"] if part])[:220]
+    world_parts = [f"{environment} world family"]
+    if location_ref_hint:
+        world_parts.append("same location reference continuity")
+    world_anchor = ", ".join([part for part in world_parts if part])[:220]
     lighting_anchor = lighting[:160]
 
     route = str(scene_plan_row.get("route") or "i2v").strip().lower()
@@ -671,6 +674,8 @@ def _build_first_last_prompt_pair(
     visual_delta: str,
     attached_prop_token: str,
     first_last_mode: str = "",
+    scene_function: str = "",
+    emotional_intent: str = "",
 ) -> tuple[str, str, str, str]:
     start_image_prompt = _build_first_last_start_image_prompt(
         primary_role=primary_role,
@@ -696,10 +701,19 @@ def _build_first_last_prompt_pair(
         "visibility_reveal": "camera reframes minimally to reveal visibility shift",
     }
     camera_clause = camera_clause_map.get(clean_mode, "camera settles with no perspective jump")
+    scene_function_low = str(scene_function or "").strip().lower()
+    release_clause = ""
+    if "release" in scene_function_low:
+        release_clause = " Readable release beat: tension exits body line and breath settles without geography change."
+    elif "afterimage" in scene_function_low:
+        release_clause = " Readable afterimage beat: lingering echo of previous tension remains while body line stabilizes."
+    elif "callback" in scene_function_low:
+        release_clause = " Readable callback beat: visual echo links back to opening motif with continuity-first framing."
+    emotion_clause = f" Emotional register: {_trim_sentence(emotional_intent, max_len=120)}." if emotional_intent else ""
     positive_video_prompt = (
         f"Controlled first_last transition in {scene_space}: {camera_clause} while {primary_role} keeps a broad readable state shift, {_trim_sentence(visual_delta, max_len=180)}. "
         "Keep same subject/world/outfit/shot family, same framing family, smooth continuity, no abrupt zoom spikes, no large perspective jump, no fine-motor prop choreography. "
-        f"Only one subtle visible delta, with no added actors or layout change.{prop_clause}"
+        f"Only one subtle visible delta, with no added actors or layout change.{release_clause}{emotion_clause}{prop_clause}"
     )
     negative_video_prompt = _build_first_last_negative_prompt(attached_prop_token=attached_prop_token)
     return start_image_prompt[:650], end_image_prompt[:700], positive_video_prompt[:850], negative_video_prompt
@@ -1015,32 +1029,64 @@ def _detect_scene_prompt_contract_mismatch(*, expected_route: str, scene_plan_ro
             str(model_row.get("end_image_prompt") or ""),
         ]
     ).lower()
-    has_first_last_terms = any(token in blob for token in ("micro-transition", "one subtle", "start frame", "end frame", "subtle delta"))
+    has_first_last_terms = any(
+        token in blob
+        for token in (
+            "micro-transition",
+            "micro transition",
+            "one subtle",
+            "one subtle visible delta",
+            "subtle delta",
+            "start frame",
+            "end frame",
+            "start keyframe",
+            "end keyframe",
+            "locked transition",
+            "controlled transition",
+            "same subject/world/outfit",
+        )
+    )
     has_performance_terms = any(token in blob for token in ("audio", "vocal", "sing", "lip", "performance"))
-    has_face_readability = any(token in blob for token in ("readable face", "mouth", "upper-body", "upper body"))
-    has_transition_transit_language = any(token in blob for token in ("travel", "walk to", "transit", "location change", "geography change"))
+    has_face_readability = any(
+        token in blob for token in ("readable face", "face readable", "mouth", "readable mouth", "upper-body", "upper body")
+    )
+    has_transition_transit_language = bool(
+        re.search(
+            r"\b(travel|walk to|transit|location change|geography change)\b",
+            blob,
+        )
+    )
 
     semantic_mismatch = False
     scene_function = str(scene_plan_row.get("scene_function") or "").lower()
+    transition_contract = str(notes.get("transition_contract") or "").strip().lower()
+    has_transition_contract = transition_contract == "controlled_micro_transition"
+    has_scene_function_callback = any(token in scene_function for token in ("release", "afterimage", "callback"))
+    has_scene_function_echo = has_scene_function_callback and any(token in blob for token in ("release", "afterimage", "callback", "echo"))
+    inferred_audio_driven = bool(notes.get("audio_driven")) or (
+        has_performance_terms and (has_face_readability or "music" in blob or "phrase" in blob)
+    )
     if expected_route == "ia2v":
-        if has_first_last_terms:
+        if has_first_last_terms and not has_performance_terms:
             semantic_mismatch = True
-        if not bool(notes.get("audio_driven")):
+        if not inferred_audio_driven:
             semantic_mismatch = True
         if not (has_performance_terms and has_face_readability):
             semantic_mismatch = True
-        if ("climax" in scene_function or "performance" in scene_function) and has_first_last_terms:
+        if ("climax" in scene_function or "performance" in scene_function) and has_first_last_terms and not has_performance_terms:
             semantic_mismatch = True
     elif expected_route == "first_last":
         has_start = bool(str(model_row.get("start_image_prompt") or "").strip())
         has_end = bool(str(model_row.get("end_image_prompt") or "").strip())
         if not has_start or not has_end:
             semantic_mismatch = True
-        if str(notes.get("transition_contract") or "") != "controlled_micro_transition":
+        if transition_contract and not has_transition_contract:
             semantic_mismatch = True
-        if not has_first_last_terms:
+        if not (has_first_last_terms or (has_start and has_end and has_scene_function_echo)):
             semantic_mismatch = True
-        if has_performance_terms or has_transition_transit_language:
+        if has_transition_transit_language:
+            semantic_mismatch = True
+        if has_performance_terms and not (has_first_last_terms or has_scene_function_echo):
             semantic_mismatch = True
     else:  # i2v
         if has_first_last_terms:
@@ -1265,10 +1311,11 @@ def _build_fallback_scene_prompts(
 
     if route == "ia2v":
         photo_prompt = (
-            f"Performance portrait of {primary_role} in {world_anchor}, framed to keep face and mouth readable while the vocal phrase carries emotion through eyes, shoulders, and hands."
+            f"Performance portrait of {primary_role} in {world_anchor}, {scene_function} beat with {emotional}, framed to keep face and mouth readable while the vocal phrase carries emotion through eyes, shoulders, and hands."
         )
         video_prompt = (
-            "The still frame opens into a performance beat as the vocal phrase leads subtle rhythmic sway, a controlled torso pulse, a gentle head turn, and soft hand phrasing while the face stays readable and emotionally alive. "
+            f"The still frame opens into {scene_function} performance intent: {motion_intent}. "
+            "Vocal phrasing leads subtle rhythmic sway, a controlled torso pulse, a gentle head turn, and soft hand phrasing while the face stays readable and emotionally alive. "
             f"Camera motion stays smooth and supportive.{binding_clause} Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
         )
         negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
@@ -1306,6 +1353,8 @@ def _build_fallback_scene_prompts(
             visual_delta=visual_delta,
             attached_prop_token=attached_prop_token,
             first_last_mode=first_last_mode,
+            scene_function=scene_function,
+            emotional_intent=emotional,
         )
         video_prompt = positive_video_prompt
     else:
@@ -1627,6 +1676,8 @@ def _normalize_scene_prompts(
                 visual_delta=visual_delta,
                 attached_prop_token=attached_prop_token,
                 first_last_mode=first_last_mode,
+                scene_function=str(scene.get("scene_function") or ""),
+                emotional_intent=str(scene.get("emotional_intent") or ""),
             )
             start_image_prompt = strict_start
             end_image_prompt = strict_end
