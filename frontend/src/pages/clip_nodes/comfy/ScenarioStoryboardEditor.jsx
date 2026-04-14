@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { resolveScenarioFinalRouteKey, resolveSceneDisplayTime } from "./scenarioStoryboardDomain";
+import { resolveScenarioSceneVideoProfile, resolveSceneDisplayTime } from "./scenarioStoryboardDomain";
 import { resolveAssetUrl } from "./comfyNodeShared";
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const CLIP_TRACE_SCENARIO_EDITOR_DEBUG = false;
@@ -57,29 +57,26 @@ function hydrateSceneWithRuntime(scene = {}, runtime = {}) {
 
 function sceneBadges(scene = {}) {
   const badges = [];
-  const { finalRoute } = resolveUiRoute(scene);
-  if (finalRoute === "lip_sync_music") badges.push("lip_sync_music");
-  else if (finalRoute === "f_l") badges.push("first_last");
-  else badges.push("i2v");
+  const profile = resolveScenarioSceneVideoProfile(scene);
+  badges.push(profile.displayRouteLabel || "i2v");
+  if (profile.isAudioDriven) badges.push("audio-driven");
+  if (profile.requiresTwoFrames) badges.push("two-frame");
+  if (profile.canonicalRoute === "f_l") badges.push("first+last");
+  const modeLabel = [profile.renderMode, profile.ltxMode, String(scene?.resolvedModelKey || "").trim()].filter(Boolean).join(" / ");
+  if (modeLabel) badges.push(modeLabel);
   const warnings = Array.isArray(scene?.contractWarnings) ? scene.contractWarnings : [];
   if (warnings.length) badges.push(`warnings:${warnings.length}`);
   return badges;
 }
 
 function resolveUiRoute(scene = {}) {
-  const directCandidates = [
-    { source: "videoGenerationRoute", value: scene?.videoGenerationRoute ?? scene?.video_generation_route },
-    { source: "plannedVideoGenerationRoute", value: scene?.plannedVideoGenerationRoute ?? scene?.planned_video_generation_route },
-    { source: "sourceRoute", value: scene?.sourceRoute ?? scene?.source_route },
-  ];
-  for (const candidate of directCandidates) {
-    const normalized = String(candidate?.value || "").trim().toLowerCase();
-    if (!normalized) continue;
-    if (["avatar_lipsync", "lip_sync", "lip_sync_music"].includes(normalized)) return { source: candidate.source, value: normalized, finalRoute: "lip_sync_music" };
-    if (["first_last", "f_l", "f_l_as", "imag-imag-video-bz"].includes(normalized)) return { source: candidate.source, value: normalized, finalRoute: "f_l" };
-    return { source: candidate.source, value: normalized, finalRoute: "i2v" };
-  }
-  return { source: "legacy", value: "", finalRoute: resolveScenarioFinalRouteKey(scene) };
+  const profile = resolveScenarioSceneVideoProfile(scene);
+  return {
+    source: profile.debugRouteSourceField,
+    value: profile.routeRaw || profile.canonicalRoute,
+    finalRoute: profile.canonicalRoute || "i2v",
+    displayRouteLabel: profile.displayRouteLabel,
+  };
 }
 
 function renderContractWarnings(scene = {}) {
@@ -134,13 +131,8 @@ function isLongText(value) {
 }
 
 function isFirstLastScene(scene = {}) {
-  const imageStrategy = String(scene?.imageStrategy || "").trim().toLowerCase();
-  if (imageStrategy === "first_last") return true;
-  const mode = String(scene?.renderMode || "").trim().toLowerCase();
-  if (mode === "first_last") return true;
-  if (scene?.requiresTwoFrames === true || scene?.needsTwoFrames === true) return true;
-  const ltxMode = String(scene?.ltxMode || scene?.ltx_mode || "").trim().toLowerCase();
-  return ["f_l", "first_last"].includes(ltxMode);
+  const profile = resolveScenarioSceneVideoProfile(scene);
+  return profile.requiresTwoFrames || profile.canonicalRoute === "f_l";
 }
 
 function resolveScenePreviewSources(scene = {}) {

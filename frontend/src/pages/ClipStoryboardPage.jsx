@@ -52,6 +52,7 @@ import {
   detectScenarioAssetType,
   deriveScenarioImageStrategy,
   normalizeScenarioStoryboardPackage,
+  resolveScenarioSceneVideoProfile,
   resolveSceneDisplayTime,
   resolveScenarioExplicitModelKey,
   resolveScenarioExplicitWorkflowKey,
@@ -16180,7 +16181,11 @@ onClipSec: (nodeId, value) => {
             || sourceNode?.data?.directorOutput?.storyboardPackage?.final_storyboard
             || null
           );
-          let normalizedPackage = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
+          let normalizedPackage = normalizeScenarioStoryboardPackage({
+            storyboardOut,
+            directorOutput,
+            allowDirectorSceneFallback: !isFinalizeOnlyStageApply,
+          });
           const normalizedPackageScenesCount = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0;
           const directFinalStoryboardScenesCount = Array.isArray(directFinalStoryboard?.scenes) ? directFinalStoryboard.scenes.length : 0;
           if (normalizedPackageScenesCount === 0 && directFinalStoryboardScenesCount > 0) {
@@ -16424,6 +16429,29 @@ onClipSec: (nodeId, value) => {
             return nextScene;
           });
           const uiStateUpdated = storyboardRunChanged || scenes.length !== previousScenes.length;
+          const routeDiffs = scenes.map((sceneItem, idx) => {
+            const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
+            const before = previousBySceneId.get(sceneId) || {};
+            const beforeProfile = resolveScenarioSceneVideoProfile(before);
+            const afterProfile = resolveScenarioSceneVideoProfile(sceneItem);
+            return {
+              sceneId,
+              beforeRoute: beforeProfile.canonicalRoute,
+              afterRoute: afterProfile.canonicalRoute,
+              beforeModel: String(before?.resolvedModelKey || "").trim(),
+              afterModel: String(sceneItem?.resolvedModelKey || "").trim(),
+              changed: beforeProfile.canonicalRoute !== afterProfile.canonicalRoute || String(before?.resolvedModelKey || "").trim() !== String(sceneItem?.resolvedModelKey || "").trim(),
+            };
+          });
+          const updatedRouteSceneIds = routeDiffs.filter((item) => item.changed).map((item) => item.sceneId);
+          console.debug("[SCENARIO FINAL APPLY]", {
+            sourceStageId,
+            isFinalizeOnlyStageApply,
+            incomingSceneCount: Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0,
+            appliedSceneCount: scenes.length,
+            updatedSceneIds: updatedRouteSceneIds,
+            routeDiffs,
+          });
           if (storyboardRunChanged) {
             scenarioActivePollingJobIdsRef.current.clear();
             scenarioVideoJobsBySceneRef.current.clear();

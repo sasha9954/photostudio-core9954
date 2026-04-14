@@ -769,6 +769,76 @@ export function resolveScenarioFinalRouteKey(scene = {}) {
   return "i2v";
 }
 
+function normalizeScenarioRouteToCanonical(value = "") {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) return "";
+  if (["avatar_lipsync", "lip_sync_music", "lip_sync", "ia2v"].includes(normalized)) return "lip_sync_music";
+  if (["first_last", "f_l", "imag-imag-video-bz", "f_l_as"].includes(normalized)) return "f_l";
+  if (["image_video", "image_to_video", "standard_video", "i2v", "i2v_as"].includes(normalized)) return "i2v";
+  const workflow = normalizeScenarioWorkflowKeyCandidate(normalized);
+  if (!workflow) return "";
+  return workflow === "lip_sync" ? "lip_sync_music" : workflow;
+}
+
+export function resolveScenarioSceneVideoProfile(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const candidates = [
+    ["route", source.route],
+    ["finalRoute", source.finalRoute],
+    ["resolvedWorkflowKey", source.resolvedWorkflowKey ?? source.resolved_workflow_key],
+    ["videoGenerationRoute", source.videoGenerationRoute ?? source.video_generation_route],
+    ["plannedVideoGenerationRoute", source.plannedVideoGenerationRoute ?? source.planned_video_generation_route],
+    ["sourceRoute", source.sourceRoute ?? source.source_route],
+    ["ltxMode", source.ltxMode ?? source.ltx_mode],
+    ["renderMode", source.renderMode ?? source.render_mode],
+  ];
+  let canonicalRoute = "";
+  let debugRouteSourceField = "fallback:resolveScenarioFinalRouteKey";
+  let routeRaw = "";
+  for (const [field, value] of candidates) {
+    const normalized = normalizeText(value).toLowerCase();
+    if (!normalized) continue;
+    const mapped = normalizeScenarioRouteToCanonical(normalized);
+    if (!mapped) continue;
+    canonicalRoute = mapped;
+    routeRaw = normalized;
+    debugRouteSourceField = field;
+    break;
+  }
+  if (!canonicalRoute) {
+    canonicalRoute = resolveScenarioFinalRouteKey(source);
+  }
+  const imageStrategy = normalizeText(source.imageStrategy || deriveScenarioImageStrategy(source)).toLowerCase();
+  const explicitRequiresTwoFrames = source.requiresTwoFrames ?? source.needsTwoFrames ?? source.needs_two_frames;
+  const requiresTwoFrames = explicitRequiresTwoFrames === undefined || explicitRequiresTwoFrames === null
+    ? (imageStrategy === "first_last" || canonicalRoute === "f_l")
+    : Boolean(explicitRequiresTwoFrames);
+  const explicitAudioDriven = source.isAudioDriven ?? source.requiresAudioSensitiveVideo ?? source.lipSync ?? source.lip_sync;
+  const isAudioDriven = explicitAudioDriven === undefined || explicitAudioDriven === null
+    ? canonicalRoute === "lip_sync_music"
+    : Boolean(explicitAudioDriven);
+  const displayRouteLabel = canonicalRoute === "lip_sync_music" ? "ia2v" : canonicalRoute;
+  return {
+    canonicalRoute,
+    displayRouteLabel,
+    renderMode: normalizeText(source.renderMode ?? source.render_mode),
+    ltxMode: normalizeText(source.ltxMode ?? source.ltx_mode),
+    requiresTwoFrames,
+    isAudioDriven,
+    imageStrategy,
+    transitionType: normalizeText(source.transitionType ?? source.transition_type).toLowerCase(),
+    resolvedWorkflowKey: normalizeText(source.resolvedWorkflowKey ?? source.resolved_workflow_key) || canonicalRoute,
+    videoGenerationRoute: normalizeText(source.videoGenerationRoute ?? source.video_generation_route),
+    plannedVideoGenerationRoute: normalizeText(source.plannedVideoGenerationRoute ?? source.planned_video_generation_route),
+    sourceFieldsSummary: candidates
+      .map(([field, value]) => `${field}:${normalizeText(value)}`)
+      .filter((item) => !item.endsWith(":")),
+    debugRouteSourceField,
+    routeRaw,
+    routeResolved: canonicalRoute,
+  };
+}
+
 function resolveScenarioRenderProvider(source = {}, scenarioPackage = null) {
   const providerHints = source?.providerHints && typeof source.providerHints === "object" ? source.providerHints : {};
   const packageHints = scenarioPackage?.providerHints && typeof scenarioPackage.providerHints === "object" ? scenarioPackage.providerHints : {};
@@ -1500,6 +1570,28 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   normalizedScene.startFramePromptEn = sanitizeVisiblePromptText(normalizedScene.startFramePromptEn || normalizedScene.startFramePromptRu);
   normalizedScene.endFramePromptRu = sanitizeVisiblePromptText(normalizedScene.endFramePromptRu || distinctPrompts.endFramePrompt);
   normalizedScene.endFramePromptEn = sanitizeVisiblePromptText(normalizedScene.endFramePromptEn || normalizedScene.endFramePromptRu);
+  const videoProfile = resolveScenarioSceneVideoProfile(normalizedScene);
+  normalizedScene.route = videoProfile.canonicalRoute;
+  normalizedScene.resolvedWorkflowKey = videoProfile.resolvedWorkflowKey || videoProfile.canonicalRoute || normalizedScene.resolvedWorkflowKey;
+  normalizedScene.ltxMode = normalizedScene.ltxMode || videoProfile.ltxMode;
+  normalizedScene.renderMode = normalizedScene.renderMode || videoProfile.renderMode;
+  normalizedScene.requiresTwoFrames = Boolean(videoProfile.requiresTwoFrames);
+  normalizedScene.isAudioDriven = Boolean(videoProfile.isAudioDriven);
+  normalizedScene.plannedVideoGenerationRoute = normalizedScene.plannedVideoGenerationRoute || videoProfile.plannedVideoGenerationRoute || videoProfile.canonicalRoute;
+  normalizedScene.videoGenerationRoute = normalizedScene.videoGenerationRoute || videoProfile.videoGenerationRoute || videoProfile.canonicalRoute;
+  normalizedScene.imageStrategy = normalizedScene.imageStrategy || videoProfile.imageStrategy;
+  normalizedScene.transitionType = normalizedScene.transitionType || videoProfile.transitionType;
+  normalizedScene.debugRouteSourceField = videoProfile.debugRouteSourceField;
+  console.debug("[SCENARIO SCENE PROFILE]", {
+    sceneId: normalizedScene.sceneId,
+    routeRaw: videoProfile.routeRaw,
+    routeResolved: videoProfile.routeResolved,
+    renderMode: normalizedScene.renderMode,
+    ltxMode: normalizedScene.ltxMode,
+    requiresTwoFrames: normalizedScene.requiresTwoFrames,
+    isAudioDriven: normalizedScene.isAudioDriven,
+    sourceFieldUsed: videoProfile.debugRouteSourceField,
+  });
   normalizedScene.contractWarnings = buildScenarioSceneContractWarnings(normalizedScene);
   normalizedScene.contractWarningCodes = normalizedScene.contractWarnings.map((item) => item.code);
   return normalizedScene;
