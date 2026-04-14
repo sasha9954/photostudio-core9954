@@ -1090,7 +1090,14 @@ def _derive_outfit_lock_policy(confidence: dict[str, float], family_module: str)
         return {"strength": "high", "family_specific_lock": True, "line": f"- confidence policy: HIGH ({mean_confidence:.2f}) → enforce strong family-specific lock"}
     if mean_confidence >= 0.45:
         return {"strength": "medium", "family_specific_lock": family_module != "unknown", "line": f"- confidence policy: MEDIUM ({mean_confidence:.2f}) → apply moderate lock with cautious family details"}
-    return {"strength": "low", "family_specific_lock": False, "line": f"- confidence policy: LOW ({mean_confidence:.2f}) → keep generic lock, avoid over-assuming family specifics"}
+    return {
+        "strength": "low",
+        "family_specific_lock": False,
+        "line": (
+            f"- confidence policy: LOW ({mean_confidence:.2f}) → do NOT widen outfit freedom; "
+            "keep visual reference lock and preserve topology from reference image instead of semantic reinterpretation"
+        ),
+    }
 
 
 def _normalize_outfit_profile(
@@ -1189,62 +1196,25 @@ def _extract_lip_sync_outfit_rescue(
         ]).lower()
         strong_casual = _has_strong_casual_separates_evidence(merged_text)
         strong_dress = _has_strong_dress_evidence(merged_text)
+        has_visual_signal = bool(merged_text.strip())
 
-        if strong_casual:
-            rescue.setdefault("garment_category", "casual_layered")
-            rescue.setdefault("garment_top_identity", "top_with_jeans")
-            rescue.setdefault("material_identity", "denim_or_cotton_family")
-            rescue.setdefault("silhouette_identity", "casual_fitted_or_straight")
-            rescue.setdefault("footwear_identity", "sneakers")
-        elif strong_dress:
+        if strong_dress:
             rescue.setdefault("garment_category", "dress")
-            rescue.setdefault("garment_top_identity", "dress_top")
-        elif "jeans" in merged_text or "denim" in merged_text:
+        elif strong_casual:
             rescue.setdefault("garment_category", "casual_layered")
-            rescue.setdefault("garment_top_identity", "top_with_jeans")
-            rescue.setdefault("material_identity", "denim_or_cotton_family")
-            rescue.setdefault("silhouette_identity", "casual_fitted_or_straight")
-        elif "t-shirt" in merged_text or "tshirt" in merged_text or "tee " in merged_text:
-            rescue.setdefault("garment_category", "casual_layered")
-            rescue.setdefault("garment_top_identity", "t_shirt_top")
-        elif "jacket" in merged_text or "coat" in merged_text:
-            rescue.setdefault("garment_category", "outerwear")
-            rescue.setdefault("garment_top_identity", "jacket_or_coat_top")
-        elif "hoodie" in merged_text:
-            rescue.setdefault("garment_category", "hoodie")
-            rescue.setdefault("garment_top_identity", "hoodie_top")
-        elif "suit" in merged_text:
-            rescue.setdefault("garment_category", "suit")
-            rescue.setdefault("garment_top_identity", "tailored_top")
-        elif "swim" in merged_text or "bikini" in merged_text:
-            rescue.setdefault("garment_category", "swimwear")
-            rescue.setdefault("garment_top_identity", "swimwear_top")
-        if "long sleeve" in merged_text or "long-sleeve" in merged_text:
-            rescue.setdefault("coverage_identity", "long_sleeve_coverage")
-        elif "sleeveless" in merged_text or "strapless" in merged_text:
-            rescue.setdefault("coverage_identity", "sleeveless_or_strapless")
-        if any(token in merged_text for token in ("v-neck", "v neck")):
-            rescue.setdefault("neckline_identity", "v_neck")
-        elif any(token in merged_text for token in ("crew neck", "crewneck", "round neck")):
-            rescue.setdefault("neckline_identity", "crew_neck")
-        elif any(token in merged_text for token in ("collar", "collared")):
-            rescue.setdefault("neckline_identity", "collared_neckline")
-        if any(token in merged_text for token in ("structured", "tailored", "corset", "bodice", "seam")):
-            rescue.setdefault("construction_identity", "structured_construction")
-        if any(token in merged_text for token in ("a-line", "fitted", "form-fitting", "flowing", "voluminous")):
-            rescue.setdefault("silhouette_identity", "stable_reference_silhouette")
-        if any(token in merged_text for token in ("cotton", "knit", "jersey", "wool", "linen", "leather", "denim", "satin", "silk")):
-            rescue.setdefault("material_identity", "reference_material_family_locked")
-        if any(token in merged_text for token in ("rose", "lace", "embroidery", "applique", "sequin", "logo", "ruffle", "bow")):
-            rescue.setdefault("signature_details_identity", "reference_signature_details_locked")
-        if "sneaker" in merged_text:
-            rescue.setdefault("footwear_identity", "sneakers")
-        elif "boot" in merged_text:
-            rescue.setdefault("footwear_identity", "boots")
-        elif "heel" in merged_text:
-            rescue.setdefault("footwear_identity", "heels")
-        elif any(token in merged_text for token in ("sandals", "shoes")):
-            rescue.setdefault("footwear_identity", "reference_footwear_locked")
+        elif has_visual_signal:
+            rescue.setdefault("garment_category", "reference_locked")
+
+        if has_visual_signal:
+            rescue.setdefault("garment_top_identity", "reference_locked_topology")
+            rescue.setdefault("neckline_identity", "reference_locked_neckline")
+            rescue.setdefault("coverage_identity", "reference_locked_coverage")
+            rescue.setdefault("construction_identity", "reference_locked_construction")
+            rescue.setdefault("silhouette_identity", "reference_locked_silhouette")
+            rescue.setdefault("material_identity", "reference_locked_material_family")
+            rescue.setdefault("signature_details_identity", "reference_locked_signature_details")
+            rescue.setdefault("footwear_identity", "reference_locked_footwear")
+            rescue.setdefault("accessory_identity", "reference_locked_accessory")
         colors = visual_profile.get("dominantColors")
         if isinstance(colors, list):
             clean_colors = [str(x or "").strip() for x in colors if str(x or "").strip()]
@@ -10394,6 +10364,9 @@ def _build_high_identity_risk_rescue_block(rescue: dict[str, Any]) -> str:
         "- preserve same hair color family, length read, parting read, wave/curl tightness read, root-to-end contrast",
         "- preserve garment category, coverage identity, construction identity, silhouette identity, and visible signature details",
         "- preserve exact top/neckline/strap/shoulder-coverage logic under tight framing",
+        "- no neckline raising and no added chest/shoulder coverage unless explicitly requested by scene text",
+        "- no garment-class reinterpretation and no fallback into generic fashion archetype",
+        "- original hero reference remains the absolute identity source; generated continuity images are hint-only",
         "- no hairstyle redesign, no neckline/top-cut reinterpretation, no garment simplification when framing gets tighter",
         "- keep intimate close-up emotion while preserving enough shoulders/neckline/upper-chest/garment edge context for continuity",
         "- do not collapse into face-only glamour crop if it weakens identity/outfit continuity",
@@ -12689,6 +12662,12 @@ def clip_image(payload: ClipImageIn):
         continuity_visual_anchor_mode = "disabled_not_high_risk"
         attached_previous_scene_inline_part_count = 0
 
+        scene_refs_by_role = scene_contract.get("refsByRole") if isinstance(scene_contract, dict) else {}
+        has_active_character_refs = any(
+            isinstance(scene_refs_by_role.get(role), list) and bool(scene_refs_by_role.get(role))
+            for role in ("character_1", "character_2", "character_3")
+        ) if isinstance(scene_refs_by_role, dict) else False
+
         if high_identity_risk_rescue_applied:
             if previous_confirmed_stable_image_url and continuity_stable_image_source_usable:
                 previous_confirmed_stable_image_inline = _load_reference_image_inline(previous_confirmed_stable_image_url)
@@ -12704,9 +12683,11 @@ def clip_image(payload: ClipImageIn):
             elif not previous_confirmed_stable_image_url:
                 continuity_visual_anchor_mode = "stable_missing_url"
 
-            if (not continuity_stable_image_used) and previous_scene_image_inline:
+            if (not continuity_stable_image_used) and previous_scene_image_inline and (not has_active_character_refs):
                 continuity_stable_image_fallback_used = True
                 continuity_visual_anchor_mode = "fallback_previous_scene_inline"
+            elif (not continuity_stable_image_used) and previous_scene_image_inline and has_active_character_refs:
+                continuity_visual_anchor_mode = "fallback_previous_scene_blocked_by_hero_ref_priority"
             elif (not continuity_stable_image_used) and (not previous_scene_image_inline) and continuity_visual_anchor_mode in {
                 "stable_confirmed_load_failed",
                 "stable_missing_url",

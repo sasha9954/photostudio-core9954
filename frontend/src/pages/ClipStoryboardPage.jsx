@@ -4727,17 +4727,18 @@ function resolveScenarioVideoSourceUrls(scene, previousScene = null, options = {
   const previousEndHit = resolveScenarioAssetAliasCandidates(sourcePreviousScene, previousEndAliases);
   const startSource = getSceneStartImageSource(sourceScene, sourcePreviousScene);
   const allowSingleFallbackToStart = !(transitionType === "continuous" && suppressInheritedStartPreview);
-  const fallbackImageUrl = imageHit.value;
+  const runtimeFallbackImageUrl = String(options?.runtimeFallbackImageUrl || "").trim();
+  const fallbackImageUrl = imageHit.value || runtimeFallbackImageUrl;
   const effectiveStartImageUrl = startSource === "previous_end"
     ? previousEndHit.value
     : (startHit.value || (allowSingleFallbackToStart ? fallbackImageUrl : ""));
   const continuationSourceSelection = resolveContinuationSourceFromPreviousScene(sourcePreviousScene);
   const continuationSourceAssetUrl = String(continuationSourceSelection?.continuationSourceAssetUrl || "").trim();
   const debugSourceFieldsUsed = {
-    imageUrl: imageHit.field || "none",
+    imageUrl: imageHit.field || (runtimeFallbackImageUrl ? "runtime_fallback_image_url" : "none"),
     startImageUrl: startSource === "previous_end" ? (previousEndHit.field ? `previousScene.${previousEndHit.field}` : "none") : (startHit.field || "none"),
     endImageUrl: endHit.field || "none",
-    fallbackImageUrl: imageHit.field || "none",
+    fallbackImageUrl: imageHit.field || (runtimeFallbackImageUrl ? "runtime_fallback_image_url" : "none"),
     continuationSourceAssetUrl: continuationSourceAssetUrl ? "resolveContinuationSourceFromPreviousScene" : "none",
     startSource,
     workflowKey,
@@ -12974,6 +12975,9 @@ Aspect ratio: ${imageFormat}`,
       if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
         updateScenarioScene(sceneId, {
           imageUrl: "",
+          generatedImageUrl: generatedImageUrl,
+          resultImageUrl: generatedImageUrl,
+          finalImageUrl: generatedImageUrl,
           startImageUrl: generatedImageUrl,
           startFrameImageUrl: generatedImageUrl,
           suppressInheritedStartPreview: false,
@@ -13009,6 +13013,9 @@ Aspect ratio: ${imageFormat}`,
         }
         updateScenarioScene(sceneId, {
           imageUrl: "",
+          generatedImageUrl: generatedImageUrl,
+          resultImageUrl: generatedImageUrl,
+          finalImageUrl: generatedImageUrl,
           endImageUrl: generatedImageUrl,
           endFrameImageUrl: generatedImageUrl,
           suppressInheritedStartPreview: false,
@@ -13041,6 +13048,9 @@ Aspect ratio: ${imageFormat}`,
       } else {
         updateScenarioScene(sceneId, {
           imageUrl: generatedImageUrl,
+          generatedImageUrl: generatedImageUrl,
+          resultImageUrl: generatedImageUrl,
+          finalImageUrl: generatedImageUrl,
           startImageUrl: "",
           endImageUrl: "",
           startFrameImageUrl: "",
@@ -13071,6 +13081,7 @@ Aspect ratio: ${imageFormat}`,
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
       updateScenarioSceneGenerationRuntime(sceneId, {
         lastImageApiResult: imageApiRuntimeResult,
+        lastAcceptedImageUrl: generatedImageUrl,
         lastRejectedImageUrl: "",
         lastRejectedReason: "",
         lastRejectedAt: "",
@@ -13581,7 +13592,20 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     const targetPreviousScene = targetSceneIndex > 0 ? targetScenes[targetSceneIndex - 1] : null;
-    const scenarioVideoSourceUrls = resolveScenarioVideoSourceUrls(targetScene, targetPreviousScene);
+    const runtimeByScene = targetNode?.data?.sceneGeneration && typeof targetNode.data.sceneGeneration === "object"
+      ? targetNode.data.sceneGeneration
+      : {};
+    const targetSceneRuntime = runtimeByScene?.[sceneId] && typeof runtimeByScene[sceneId] === "object"
+      ? runtimeByScene[sceneId]
+      : {};
+    const runtimeGeneratedImageUrl = String(
+      targetSceneRuntime?.lastImageApiResult?.imageUrl
+      || targetSceneRuntime?.lastAcceptedImageUrl
+      || ""
+    ).trim();
+    const scenarioVideoSourceUrls = resolveScenarioVideoSourceUrls(targetScene, targetPreviousScene, {
+      runtimeFallbackImageUrl: runtimeGeneratedImageUrl,
+    });
     const {
       imageUrl: resolvedSceneImageUrl,
       effectiveStartImageUrl,
@@ -13655,6 +13679,19 @@ Aspect ratio: ${imageFormat}`,
     const hasImageForVideo = requiresTwoFrames
       ? !!resolvedFirstFrameUrl && !!resolvedLastFrameUrl
       : (effectiveRequiresContinuation ? !!(resolvedFirstFrameUrl || frameImageUrl) : !!frameImageUrl);
+    if (!String(targetScene?.imageUrl || targetScene?.generatedImageUrl || targetScene?.resultImageUrl || targetScene?.finalImageUrl || "").trim() && frameImageUrl) {
+      updateScenarioScene(sceneId, {
+        imageUrl: frameImageUrl,
+        generatedImageUrl: frameImageUrl,
+        resultImageUrl: frameImageUrl,
+        finalImageUrl: frameImageUrl,
+      }, { nodeId: targetNodeId });
+      console.info("[SCENARIO VIDEO SOURCE CANONICAL SYNC]", {
+        sceneId,
+        syncedFromRuntimeFallback: Boolean(runtimeGeneratedImageUrl),
+        imageUrl: frameImageUrl,
+      });
+    }
     console.info("[SCENARIO VIDEO SOURCE RESOLVE]", {
       sceneId,
       workflowKey: effectiveWorkflowKey,
