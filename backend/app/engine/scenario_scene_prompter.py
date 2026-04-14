@@ -1655,6 +1655,27 @@ def _normalize_scene_prompts(
         actual_route = expected_route
 
         photo_prompt = str(base.get("photo_prompt") or "").strip()
+        video_prompt = str(base.get("video_prompt") or "").strip()
+        positive_video_prompt = str(base.get("positive_video_prompt") or "").strip()
+        negative_video_prompt = str(base.get("negative_video_prompt") or "").strip()
+
+        if actual_route == "first_last":
+            semantic_beat = _resolve_first_last_semantic_beat(scene)
+            start_image_prompt_base = str(base.get("start_image_prompt") or "").strip()
+            end_image_prompt_base = str(base.get("end_image_prompt") or "").strip()
+            image_alias_candidates = (
+                [end_image_prompt_base, start_image_prompt_base]
+                if semantic_beat in {"afterimage", "release"}
+                else [start_image_prompt_base, end_image_prompt_base]
+            )
+            if not photo_prompt:
+                for candidate in image_alias_candidates:
+                    if candidate:
+                        photo_prompt = candidate
+                        break
+            if not video_prompt and positive_video_prompt:
+                video_prompt = positive_video_prompt
+
         if not photo_prompt:
             missing_photo_count += 1
             missing_photo_scene_ids.append(scene_id)
@@ -1663,9 +1684,6 @@ def _normalize_scene_prompts(
             row_repaired_from_current_package = True
             photo_prompt = str(fallback_row.get("photo_prompt") or "")
 
-        video_prompt = str(base.get("video_prompt") or "").strip()
-        positive_video_prompt = str(base.get("positive_video_prompt") or "").strip()
-        negative_video_prompt = str(base.get("negative_video_prompt") or "").strip()
         if not video_prompt:
             missing_video_count += 1
             missing_video_scene_ids.append(scene_id)
