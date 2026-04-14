@@ -44,6 +44,66 @@ COMFY_FALLBACK_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "gr
 COMFY_CAST_ROLES = {"character_1", "character_2", "character_3", "animal", "group"}
 COMFY_WORLD_ANCHOR_ROLES = {"location", "style"}
 GROUP_NARRATIVE_REQUIRED_HINTS = {"protest", "riot", "mob", "audience", "chorus", "crowd chant", "mass panic", "митинг", "бунт", "толпа", "массов", "хор"}
+CANONICAL_IMAGE_REF_SCHEMES = {"http", "https", "data"}
+ENTITY_TYPE_CANON_MAP = {
+    "human": "human_like",
+    "human_like": "human_like",
+    "creature": "creature_like",
+    "creature_like": "creature_like",
+    "undead": "undead_like",
+    "undead_like": "undead_like",
+    "animal": "animal_like",
+    "animal_like": "animal_like",
+    "object": "object_like",
+    "object_like": "object_like",
+    "prop": "object_like",
+    "location": "object_like",
+    "style": "object_like",
+}
+ENTITY_CRITICAL_FIELDS: dict[str, list[str]] = {
+    "human_like": [
+        "age_or_maturity_identity",
+        "face_identity",
+        "hair_identity",
+        "hair_structure_identity",
+        "body_fullness_identity",
+        "silhouette_identity",
+        "garment_or_covering_category",
+        "neckline_or_opening_identity",
+        "coverage_identity",
+        "construction_identity",
+        "material_identity",
+        "color_identity",
+    ],
+    "creature_like": [
+        "anatomy_type_identity",
+        "limb_structure_identity",
+        "decay_or_surface_identity",
+        "facial_damage_or_mutation_identity",
+        "silhouette_identity",
+    ],
+    "undead_like": [
+        "anatomy_type_identity",
+        "decay_or_surface_identity",
+        "facial_damage_or_mutation_identity",
+        "silhouette_identity",
+    ],
+    "animal_like": [
+        "anatomy_type_identity",
+        "silhouette_identity",
+        "color_identity",
+        "material_identity",
+        "size_class_identity",
+    ],
+    "object_like": [
+        "object_category",
+        "silhouette_identity",
+        "material_identity",
+        "color_identity",
+        "size_class_identity",
+        "construction_identity",
+    ],
+}
 
 
 def _flag_enabled(name: str, default: bool = False) -> bool:
@@ -2007,6 +2067,83 @@ def _normalize_hero_appearance_contract(value: Any) -> dict[str, str]:
         if clean_key and clean_value:
             normalized[clean_key] = clean_value
     return normalized
+
+
+def _map_to_entity_family(entity_type: Any, role: str) -> str:
+    normalized = str(entity_type or "").strip().lower()
+    mapped = ENTITY_TYPE_CANON_MAP.get(normalized)
+    if mapped:
+        return mapped
+    if role in {"character_1", "character_2", "character_3", "group"}:
+        return "human_like"
+    if role == "animal":
+        return "animal_like"
+    if role in {"props", "location", "style"}:
+        return "object_like"
+    return "object_like"
+
+
+def _confidence_strength(confidence: Any) -> str:
+    normalized = str(confidence or "").strip().lower()
+    if normalized in {"high", "medium", "low"}:
+        return normalized
+    return "medium"
+
+
+def _promote_critical_identity_fields(
+    *,
+    reference_profiles: dict[str, Any],
+    scene_contract: dict[str, Any],
+    scene_active_roles: list[str],
+) -> dict[str, Any]:
+    promoted: list[str] = [str(x or "").strip() for x in (scene_contract.get("identityLockFieldsUsed") or []) if str(x or "").strip()]
+    critical_extracted_by_role: dict[str, list[str]] = {}
+    critical_unknown_by_role: dict[str, list[dict[str, str]]] = {}
+    hard_lock_strength_by_field: dict[str, str] = {}
+    entity_type_by_role: dict[str, str] = {}
+    profile_map = reference_profiles if isinstance(reference_profiles, dict) else {}
+    outfit = scene_contract.get("effectiveOutfitProfile") if isinstance(scene_contract.get("effectiveOutfitProfile"), dict) else {}
+    hero = scene_contract.get("heroAppearanceContract") if isinstance(scene_contract.get("heroAppearanceContract"), dict) else {}
+
+    for role in scene_active_roles:
+        role_profile = profile_map.get(role) if isinstance(profile_map.get(role), dict) else {}
+        raw_entity_type = role_profile.get("detectedEntityType") or role_profile.get("entityType")
+        family = _map_to_entity_family(raw_entity_type, role)
+        entity_type_by_role[role] = family
+        critical_fields = ENTITY_CRITICAL_FIELDS.get(family, [])
+        confidence = _confidence_strength(role_profile.get("confidence"))
+        extracted: list[str] = []
+        unknown: list[dict[str, str]] = []
+        for field in critical_fields:
+            canonical_field = {
+                "age_or_maturity_identity": "age_consistency",
+                "garment_or_covering_category": "garment_category",
+                "neckline_or_opening_identity": "neckline_identity",
+            }.get(field, field)
+            field_value = hero.get(canonical_field) if canonical_field in hero else outfit.get(canonical_field)
+            if not str(field_value or "").strip() or str(field_value or "").strip().lower() in {"unknown", "n/a", "none"}:
+                unknown.append({"field": canonical_field, "reason": "missing_or_unknown_after_profile_merge"})
+                continue
+            extracted.append(canonical_field)
+            if canonical_field not in promoted and confidence in {"high", "medium"}:
+                promoted.append(canonical_field)
+            hard_lock_strength_by_field[canonical_field] = "hard" if confidence == "high" else "guided_hard" if confidence == "medium" else "soft"
+        critical_extracted_by_role[role] = sorted(list(dict.fromkeys(extracted)))
+        critical_unknown_by_role[role] = unknown
+
+    promoted_unique = list(dict.fromkeys(promoted))
+    return {
+        "identityLockFieldsUsed": promoted_unique,
+        "entityTypeDetectedByRole": entity_type_by_role,
+        "criticalFieldsExtractedByRole": critical_extracted_by_role,
+        "criticalFieldsUnknownByRole": critical_unknown_by_role,
+        "criticalFieldsPromotedToHardLock": [f for f in promoted_unique if hard_lock_strength_by_field.get(f) in {"hard", "guided_hard"}],
+        "hardLockStrengthByField": hard_lock_strength_by_field,
+        "ageLockApplied": any("age_" in field or field == "age_consistency" for field in promoted_unique),
+        "bodyLockApplied": any(field in promoted_unique for field in {"body_fullness_identity", "silhouette_identity", "body_identity"}),
+        "coveringLockApplied": any(field in promoted_unique for field in {"coverage_identity", "neckline_identity", "construction_identity", "garment_category"}),
+        "objectIdentityLockApplied": any(field in promoted_unique for field in {"object_category", "size_class_identity", "material_identity"}),
+    }
 
 
 def _build_world_continuity_contract(scene_contract: dict[str, Any] | None) -> dict[str, str]:
@@ -5110,6 +5247,62 @@ def _normalize_ref_list(items, max_items: int = 8) -> list[str]:
         if url:
             out.append(url)
     return out[:max_items]
+
+
+def _canonicalize_image_ref_candidate(candidate: Any) -> tuple[str | None, str | None]:
+    raw = str(candidate or "").strip()
+    if not raw:
+        return None, "empty_candidate"
+    if raw.lower() in {"required", "omit", "present", "true", "false"}:
+        return None, "non_url_directive_marker"
+    parsed = urlparse(raw)
+    if parsed.scheme and parsed.scheme.lower() not in CANONICAL_IMAGE_REF_SCHEMES:
+        return None, "unsupported_scheme"
+    if parsed.scheme.lower() == "data":
+        return (raw if raw.lower().startswith("data:image/") else None), ("non_image_data_url" if not raw.lower().startswith("data:image/") else None)
+    if parsed.scheme.lower() in {"http", "https"}:
+        if not parsed.netloc:
+            return None, "invalid_http_url"
+        normalized_path = parsed.path or "/"
+        canonical = f"{parsed.scheme.lower()}://{parsed.netloc}{normalized_path}"
+        if parsed.query:
+            canonical = f"{canonical}?{parsed.query}"
+        return canonical, None
+    if raw.startswith(("/static/", "static/")):
+        clean = raw if raw.startswith("/") else f"/{raw}"
+        return clean, None
+    if raw.startswith(("/uploads/", "uploads/")):
+        clean = raw if raw.startswith("/") else f"/{raw}"
+        return clean, None
+    return None, "non_resolvable_or_label_like_candidate"
+
+
+def _canonicalize_refs_by_role_for_image(refs_by_role: dict[str, list[str]] | None) -> tuple[dict[str, list[str]], dict[str, Any]]:
+    src = refs_by_role if isinstance(refs_by_role, dict) else {}
+    canonical: dict[str, list[str]] = {role: [] for role in COMFY_REF_ROLES}
+    rejected: dict[str, list[dict[str, str]]] = {role: [] for role in COMFY_REF_ROLES}
+    raw_candidates: dict[str, list[str]] = {}
+    for role in COMFY_REF_ROLES:
+        seen: set[str] = set()
+        role_candidates = [str(item or "").strip() for item in (src.get(role) or []) if str(item or "").strip()]
+        raw_candidates[role] = role_candidates
+        for item in role_candidates:
+            resolved, reason = _canonicalize_image_ref_candidate(item)
+            if not resolved:
+                rejected[role].append({"candidate": item, "reason": reason or "unknown_rejection"})
+                continue
+            if resolved in seen:
+                rejected[role].append({"candidate": item, "reason": "duplicate_canonical_ref"})
+                continue
+            seen.add(resolved)
+            canonical[role].append(resolved)
+    diagnostics = {
+        "rawRefCandidatesByRole": raw_candidates,
+        "canonicalRefsByRole": canonical,
+        "rejectedRefCandidatesByRole": rejected,
+        "canonicalRefCountByRole": {role: len(canonical.get(role) or []) for role in COMFY_REF_ROLES},
+    }
+    return canonical, diagnostics
 
 
 def _clean_anchor_label(label: str | None) -> str:
@@ -11301,7 +11494,10 @@ def clip_image(payload: ClipImageIn):
             ]))
             comfy_refs_by_role_merged[role] = merged_role_urls
     print("[COMFY IMAGE DEBUG] merged refsByRole before clean=" + json.dumps(comfy_refs_by_role_merged, ensure_ascii=False))
-    comfy_refs_by_role = _clean_refs_by_role_for_image(comfy_refs_by_role_merged)
+    canonical_refs_by_role, canonical_ref_diagnostics = _canonicalize_refs_by_role_for_image(comfy_refs_by_role_merged)
+    print("[COMFY IMAGE DEBUG] canonical refsByRole=" + json.dumps(canonical_refs_by_role, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] canonical rejectedRefCandidatesByRole=" + json.dumps(canonical_ref_diagnostics.get("rejectedRefCandidatesByRole") or {}, ensure_ascii=False))
+    comfy_refs_by_role = _clean_refs_by_role_for_image(canonical_refs_by_role)
     print("[COMFY IMAGE DEBUG] cleaned refsByRole=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole counts=" + json.dumps({role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_1=" + json.dumps(comfy_refs_by_role.get("character_1") or [], ensure_ascii=False))
@@ -11968,6 +12164,22 @@ def clip_image(payload: ClipImageIn):
             prop_anchor_label = _infer_prop_anchor_label(props_images, api_key_for_anchor, anchor_model)
             prop_anchor_source = "inferred" if prop_anchor_label else "fallback"
 
+    critical_policy_debug = _promote_critical_identity_fields(
+        reference_profiles=reference_profiles,
+        scene_contract=scene_contract,
+        scene_active_roles=scene_active_roles,
+    )
+    scene_contract["identityLockFieldsUsed"] = critical_policy_debug.get("identityLockFieldsUsed") or []
+    scene_contract["entityTypeDetectedByRole"] = critical_policy_debug.get("entityTypeDetectedByRole") or {}
+    scene_contract["criticalFieldsExtractedByRole"] = critical_policy_debug.get("criticalFieldsExtractedByRole") or {}
+    scene_contract["criticalFieldsUnknownByRole"] = critical_policy_debug.get("criticalFieldsUnknownByRole") or {}
+    scene_contract["criticalFieldsPromotedToHardLock"] = critical_policy_debug.get("criticalFieldsPromotedToHardLock") or []
+    scene_contract["hardLockStrengthByField"] = critical_policy_debug.get("hardLockStrengthByField") or {}
+    scene_contract["ageLockApplied"] = bool(critical_policy_debug.get("ageLockApplied"))
+    scene_contract["bodyLockApplied"] = bool(critical_policy_debug.get("bodyLockApplied"))
+    scene_contract["coveringLockApplied"] = bool(critical_policy_debug.get("coveringLockApplied"))
+    scene_contract["objectIdentityLockApplied"] = bool(critical_policy_debug.get("objectIdentityLockApplied"))
+
     role_type_by_role = _build_role_type_by_role(scene_active_roles, reference_profiles)
 
     identity_contract = scene_contract.get("identityContract") if isinstance(scene_contract.get("identityContract"), dict) else {}
@@ -12044,6 +12256,9 @@ def clip_image(payload: ClipImageIn):
         "allowedRolesForImage": sorted(list(allowed_roles_for_image)),
         "filteredOutBySceneContract": filtered_out_by_scene_contract,
         "incomingRefsByRoleCounts": {role: len(comfy_refs_by_role_merged.get(role) or []) for role in comfy_roles},
+        "canonicalRefCountByRole": canonical_ref_diagnostics.get("canonicalRefCountByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
+        "rejectedRefCandidatesByRole": canonical_ref_diagnostics.get("rejectedRefCandidatesByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
+        "rawRefCandidatesByRole": canonical_ref_diagnostics.get("rawRefCandidatesByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
         "incomingReadyRefsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
         "rawRefsByRole": {role: len((getattr(refs_obj, "refsByRole", {}) or {}).get(role) or []) for role in comfy_roles},
         "filteredRefsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
@@ -12055,6 +12270,15 @@ def clip_image(payload: ClipImageIn):
         "attachedViewLabelsByRole": attached_view_labels_by_role,
         "selectedPrimaryViewByRole": selected_primary_view_by_role,
         "selectedViewMatchModeByRole": selected_view_match_mode_by_role,
+        "entityTypeDetectedByRole": scene_contract.get("entityTypeDetectedByRole") if isinstance(scene_contract.get("entityTypeDetectedByRole"), dict) else {},
+        "criticalFieldsExtractedByRole": scene_contract.get("criticalFieldsExtractedByRole") if isinstance(scene_contract.get("criticalFieldsExtractedByRole"), dict) else {},
+        "criticalFieldsUnknownByRole": scene_contract.get("criticalFieldsUnknownByRole") if isinstance(scene_contract.get("criticalFieldsUnknownByRole"), dict) else {},
+        "criticalFieldsPromotedToHardLock": scene_contract.get("criticalFieldsPromotedToHardLock") if isinstance(scene_contract.get("criticalFieldsPromotedToHardLock"), list) else [],
+        "hardLockStrengthByField": scene_contract.get("hardLockStrengthByField") if isinstance(scene_contract.get("hardLockStrengthByField"), dict) else {},
+        "ageLockApplied": bool(scene_contract.get("ageLockApplied")),
+        "bodyLockApplied": bool(scene_contract.get("bodyLockApplied")),
+        "coveringLockApplied": bool(scene_contract.get("coveringLockApplied")),
+        "objectIdentityLockApplied": bool(scene_contract.get("objectIdentityLockApplied")),
         "identityLockReason": (
             "character_1_reference_present"
             if bool(scene_contract.get("identityLockApplied"))
