@@ -1974,6 +1974,12 @@ def build_runtime_diagnostics_summary(
             "diagnostics.events": _estimate_json_size_bytes(_safe_list(diagnostics.get("events"))),
         }
         summary["size_counters"] = section_sizes
+        summary["downstream_modes"] = {
+            "role_plan_mode": str(_safe_dict(pkg.get("role_plan")).get("director_mode") or ""),
+            "scene_plan_mode": str(_safe_dict(pkg.get("scene_plan")).get("director_mode") or ""),
+            "scene_prompts_mode": str(_safe_dict(pkg.get("scene_prompts")).get("director_mode") or ""),
+            "final_storyboard_mode": str(_safe_dict(pkg.get("final_storyboard")).get("director_mode") or ""),
+        }
         summary["events"] = _safe_list(diagnostics.get("events"))
         summary["errors"] = _safe_list(diagnostics.get("errors"))
     return summary
@@ -2002,6 +2008,34 @@ def _first_text(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _resolve_downstream_mode_metadata(package: dict[str, Any]) -> dict[str, str]:
+    input_pkg = _safe_dict(package.get("input"))
+    story_core = _safe_dict(package.get("story_core"))
+    story_core_v1 = _safe_dict(story_core.get("story_core_v1"))
+    content_type = str(input_pkg.get("content_type") or "")
+    director_mode = _resolve_director_mode(input_pkg.get("director_mode"), content_type=content_type)
+    story_truth_source = str(story_core_v1.get("story_truth_source") or "").strip()
+    audio_truth_scope = str(story_core_v1.get("audio_truth_scope") or "").strip()
+    if not story_truth_source:
+        story_truth_source = "note_refs_primary" if director_mode == "clip" else "mixed_inputs"
+    if not audio_truth_scope:
+        audio_truth_scope = "timing_plus_emotion" if director_mode == "clip" else "timing_structure"
+    return {
+        "director_mode": director_mode,
+        "story_truth_source": story_truth_source,
+        "audio_truth_scope": audio_truth_scope,
+    }
+
+
+def _attach_downstream_mode_metadata(stage_payload: Any, package: dict[str, Any]) -> dict[str, Any]:
+    payload = _safe_dict(stage_payload)
+    metadata = _resolve_downstream_mode_metadata(package)
+    payload["director_mode"] = metadata["director_mode"]
+    payload["story_truth_source"] = metadata["story_truth_source"]
+    payload["audio_truth_scope"] = metadata["audio_truth_scope"]
+    return payload
 
 
 def _scene_prompts_upstream_signature(package: dict[str, Any]) -> str:
@@ -2327,6 +2361,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         "connected_context_summary": _safe_dict(input_pkg.get("connected_context_summary")),
         "scenes": final_scenes,
     }
+    final_storyboard = _attach_downstream_mode_metadata(final_storyboard, package)
     logger.info(
         "[FINALIZE STORYBOARD BUILD] planSceneCount=%s promptSceneCount=%s roleSceneCount=%s finalSceneCount=%s sceneIds=%s",
         len(plan_by_scene),
@@ -4829,7 +4864,7 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     package["diagnostics"] = diagnostics
 
     if content_type and content_type not in {"music_video", "clip", "story"}:
-        package["role_plan"] = {}
+        package["role_plan"] = _attach_downstream_mode_metadata({}, package)
         diagnostics = _safe_dict(package.get("diagnostics"))
         diagnostics["role_plan_error"] = f"unsupported_content_type:{content_type}"
         diagnostics["role_plan_used_fallback"] = True
@@ -4844,7 +4879,7 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         package=package,
     )
     role_plan = _safe_dict(result.get("role_plan"))
-    package["role_plan"] = role_plan
+    package["role_plan"] = _attach_downstream_mode_metadata(role_plan, package)
 
     role_diag = _safe_dict(result.get("diagnostics"))
     diagnostics = _safe_dict(package.get("diagnostics"))
@@ -4913,7 +4948,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         package=package,
     )
     scene_plan = _safe_dict(result.get("scene_plan"))
-    package["scene_plan"] = scene_plan
+    package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
 
     scene_diag = _safe_dict(result.get("diagnostics"))
     route_counts = _safe_dict(scene_diag.get("route_counts"))
@@ -5002,7 +5037,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
 
     scene_prompts = _safe_dict(result.get("scene_prompts"))
-    package["scene_prompts"] = scene_prompts
+    package["scene_prompts"] = _attach_downstream_mode_metadata(scene_prompts, package)
 
     prompts_diag = _safe_dict(result.get("diagnostics"))
     diagnostics = _safe_dict(package.get("diagnostics"))

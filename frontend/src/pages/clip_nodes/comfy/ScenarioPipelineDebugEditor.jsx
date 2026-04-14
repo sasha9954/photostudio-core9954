@@ -70,6 +70,36 @@ function resolveDirectorModeDisplay(value = "") {
   return "—";
 }
 
+function resolveInheritedModeMetadata({ stageOutput = {}, storyboardPackage = {}, contextSummary = {} } = {}) {
+  const safeStage = stageOutput && typeof stageOutput === "object" ? stageOutput : {};
+  const safePkg = storyboardPackage && typeof storyboardPackage === "object" ? storyboardPackage : {};
+  const storyCoreV1 = safePkg?.story_core?.story_core_v1 && typeof safePkg.story_core.story_core_v1 === "object"
+    ? safePkg.story_core.story_core_v1
+    : {};
+  const baseDirectorMode = String(
+    safePkg?.input?.director_mode
+    || contextSummary?.director_mode
+    || storyCoreV1?.director_mode
+    || "—"
+  ).trim() || "—";
+  const resolvedDirectorMode = String(safeStage?.director_mode || baseDirectorMode || "—").trim() || "—";
+  const resolvedStoryTruth = String(
+    safeStage?.story_truth_source
+    || storyCoreV1?.story_truth_source
+    || (resolvedDirectorMode === "clip" ? "note_refs_primary" : "—")
+  ).trim() || "—";
+  const resolvedAudioTruth = String(
+    safeStage?.audio_truth_scope
+    || storyCoreV1?.audio_truth_scope
+    || (resolvedDirectorMode === "clip" ? "timing_plus_emotion" : "—")
+  ).trim() || "—";
+  return {
+    director_mode: resolvedDirectorMode,
+    story_truth_source: resolvedStoryTruth,
+    audio_truth_scope: resolvedAudioTruth,
+  };
+}
+
 function buildCompactDebugSnapshot({ contextSummary = {}, executedStages = [], directorOutput = {}, storyboardPackage = {}, diagnostics = {} } = {}) {
   const safePkg = storyboardPackage && typeof storyboardPackage === "object" ? storyboardPackage : {};
   const safeDiagnostics = diagnostics && typeof diagnostics === "object" && Object.keys(diagnostics).length
@@ -82,6 +112,10 @@ function buildCompactDebugSnapshot({ contextSummary = {}, executedStages = [], d
     attachedRefRoles: Array.isArray(safeDiagnostics?.story_core_attached_ref_roles) ? safeDiagnostics.story_core_attached_ref_roles : [],
     availableRoles: Array.isArray(safeDiagnostics?.story_core_available_roles_resolved) ? safeDiagnostics.story_core_available_roles_resolved : [],
   };
+  const rolePlanMeta = resolveInheritedModeMetadata({ stageOutput: safePkg?.role_plan, storyboardPackage: safePkg, contextSummary });
+  const scenePlanMeta = resolveInheritedModeMetadata({ stageOutput: safePkg?.scene_plan, storyboardPackage: safePkg, contextSummary });
+  const scenePromptsMeta = resolveInheritedModeMetadata({ stageOutput: safePkg?.scene_prompts, storyboardPackage: safePkg, contextSummary });
+  const finalMeta = resolveInheritedModeMetadata({ stageOutput: safePkg?.final_storyboard, storyboardPackage: safePkg, contextSummary });
   return {
     contextSummary: {
       contentType: contextSummary?.contentType || "",
@@ -94,6 +128,10 @@ function buildCompactDebugSnapshot({ contextSummary = {}, executedStages = [], d
       story_core_payload_mode: safeDiagnostics?.story_core_payload_mode || "",
       story_core_director_world_lock_summary: safeDiagnostics?.story_core_director_world_lock_summary || "",
       story_core_compact_context_size_estimate: safeDiagnostics?.story_core_compact_context_size_estimate || 0,
+      role_plan_mode: rolePlanMeta?.director_mode || "",
+      scene_plan_mode: scenePlanMeta?.director_mode || "",
+      scene_prompts_mode: scenePromptsMeta?.director_mode || "",
+      final_storyboard_mode: finalMeta?.director_mode || "",
     },
     packageStats: {
       hasStoryCore: Boolean(safePkg?.story_core && typeof safePkg.story_core === "object" && Object.keys(safePkg.story_core).length),
@@ -191,6 +229,10 @@ export default function ScenarioPipelineDebugEditor({
   );
   const audioTruthScope = String(audioMap?.audio_truth_scope || storyCore?.story_core_v1?.audio_truth_scope || "—");
   const storyTruthSource = String(storyCore?.story_core_v1?.story_truth_source || "—");
+  const rolePlanMeta = resolveInheritedModeMetadata({ stageOutput: rolePlan, storyboardPackage: resolvedStoryboardPackage, contextSummary });
+  const scenePlanMeta = resolveInheritedModeMetadata({ stageOutput: scenePlan, storyboardPackage: resolvedStoryboardPackage, contextSummary });
+  const promptsMeta = resolveInheritedModeMetadata({ stageOutput: prompts, storyboardPackage: resolvedStoryboardPackage, contextSummary });
+  const finalMeta = resolveInheritedModeMetadata({ stageOutput: finalStoryboard, storyboardPackage: resolvedStoryboardPackage, contextSummary });
 
   const audioSections = Array.isArray(audioMap?.sections) ? audioMap.sections : [];
   const phraseEndpoints = Array.isArray(audioMap?.phrase_endpoints_sec) ? audioMap.phrase_endpoints_sec : [];
@@ -296,6 +338,9 @@ export default function ScenarioPipelineDebugEditor({
     ),
     role_plan: Object.keys(rolePlan || {}).length ? (
       <div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(rolePlanMeta?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(rolePlanMeta?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(rolePlanMeta?.audio_truth_scope || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>global_roles</span><strong>{Object.keys(rolePlan?.global_roles || {}).length ? "present" : "—"}</strong></div>
         <div className="clipSB_storyboardKv"><span>world_continuity</span><strong>{worldContinuity ? "present" : "empty"}</strong></div>
         <div className="clipSB_storyboardKv"><span>scene_roles</span><strong>{rolePlanSceneRoles.length}</strong></div>
@@ -314,10 +359,18 @@ export default function ScenarioPipelineDebugEditor({
         })}</pre>
       </div>
     ) : (
-      <div className="clipSB_storyboardKv"><span>ROLE PLAN</span><strong>role_plan empty</strong></div>
+      <div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(rolePlanMeta?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(rolePlanMeta?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(rolePlanMeta?.audio_truth_scope || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>ROLE PLAN</span><strong>role_plan empty</strong></div>
+      </div>
     ),
     scene_plan: scenePlanScenes.length ? (
       <div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(scenePlanMeta?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(scenePlanMeta?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(scenePlanMeta?.audio_truth_scope || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>route_mix_summary</span><strong>{toJson(scenePlanRouteMix)}</strong></div>
         <div className="clipSB_storyboardKv"><span>count_per_route</span><strong>{toJson(scenePlanRouteCounts)}</strong></div>
         <div className="clipSB_storyboardKv"><span>scene_count</span><strong>{scenePlanScenes.length}</strong></div>
@@ -332,10 +385,18 @@ export default function ScenarioPipelineDebugEditor({
         <pre className="clipSB_pre">{toJson(scenePlan)}</pre>
       </div>
     ) : (
-      <div className="clipSB_storyboardKv"><span>SCENE PLAN</span><strong>scene_plan empty</strong></div>
+      <div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(scenePlanMeta?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(scenePlanMeta?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(scenePlanMeta?.audio_truth_scope || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>SCENE PLAN</span><strong>scene_plan empty</strong></div>
+      </div>
     ),
     scene_prompts: promptScenes.length ? (
       <div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(promptsMeta?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(promptsMeta?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(promptsMeta?.audio_truth_scope || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>scene_count</span><strong>{promptScenes.length}</strong></div>
         <pre className="clipSB_pre">{toJson(promptScenes.map((row) => ({
           scene_id: row?.scene_id,
@@ -352,9 +413,21 @@ export default function ScenarioPipelineDebugEditor({
         })}</pre>
       </div>
     ) : (
-      <div className="clipSB_storyboardKv"><span>SCENE PROMPTS</span><strong>scene_prompts empty</strong></div>
+      <div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(promptsMeta?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(promptsMeta?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(promptsMeta?.audio_truth_scope || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>SCENE PROMPTS</span><strong>scene_prompts empty</strong></div>
+      </div>
     ),
-    final: <pre className="clipSB_pre">{toJson(finalStoryboard?.scenes || [])}</pre>,
+    final: (
+      <div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(finalMeta?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(finalMeta?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(finalMeta?.audio_truth_scope || "—")}</strong></div>
+        <pre className="clipSB_pre">{toJson(finalStoryboard?.scenes || [])}</pre>
+      </div>
+    ),
     diagnostics: <pre className="clipSB_pre">{toJson(allDiagnostics)}</pre>,
     raw: <pre className="clipSB_pre">{toJson(buildCompactDebugSnapshot({
       contextSummary,
