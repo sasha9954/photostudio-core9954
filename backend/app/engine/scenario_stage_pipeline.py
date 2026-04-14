@@ -1545,12 +1545,12 @@ def _default_story_core_guidance() -> dict[str, Any]:
             "camera distance variation without changing world family",
         ],
         "prop_guidance": {
-            "continuity_object_role": "continuity/conflict/risk anchor",
-            "carried_object_role": "burden/constraint anchor when present",
+            "continuity_object_role": "continuity/reference anchor",
+            "carried_object_role": "owner-linked continuity/reference anchor when present",
             "binding_grammar": {
-                "carried": "owner-bound continuity object; may affect posture/speed/balance/concealment/route/body tension",
+                "carried": "owner-bound continuity object; may affect visibility, handling, silhouette, and pose constraints when relevant",
                 "held": "owner hand-occupied continuity object; visible handling possible without finger micro-choreography",
-                "worn": "silhouette/look continuity anchor; not default action driver",
+                "worn": "silhouette/look continuity anchor; not a default action driver",
                 "pocketed": "owner-linked continuity object; optional visual emphasis",
                 "nearby": "owner-adjacent continuity object; within reach when scene logic allows",
                 "environment": "world-anchored scene element; not owner-locked prop",
@@ -1565,7 +1565,7 @@ def _default_story_core_guidance() -> dict[str, Any]:
             "must_keep_same_object_identity_across_clip": True,
             "forbid_random_object_identity_changes": True,
             "object_is_functional_not_symbolic_decoration_by_default": True,
-            "carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present": True,
+            "carried_object_affects_visibility_handling_silhouette_spatial_relation_pose_constraints_if_present": True,
             "forbid_overused_hand_choreography_around_object": True,
             "forbid_magic_or_metaphor_prop_behavior": True,
         },
@@ -1573,8 +1573,9 @@ def _default_story_core_guidance() -> dict[str, Any]:
             "primary narrative role remains the action spine unless current input explicitly reassigns it",
             "secondary performance role must not steal narrative spine unless current input explicitly asks for co-lead behavior",
             "do not invent extra characters unless grounded by current input, refs, or planner output",
-            "do not impose chase/escape/danger/refuge burdens unless grounded by current input",
-            "do not collapse into repeated same-route movement shots; repetition is allowed only when environment function changes",
+            "do not impose ungrounded high-stakes narrative pressure unless current input explicitly supports it",
+            "avoid repetitive scene function without meaningful variation",
+            "meaningful variation may come from framing, emotional intensity, performance mode, spatial relation, camera distance, or local world detail",
         ],
         "world_richness_rules": [
             "grounded realism only; no spectacle-first escalation",
@@ -1626,10 +1627,23 @@ def _normalize_story_core_guidance(raw_guidance: Any) -> dict[str, Any]:
                 if "object_is_functional_not_symbolic_decoration_by_default" in prop_guidance
                 else fallback_prop_guidance.get("object_is_functional_not_symbolic_decoration_by_default")
             ),
-            "carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present": bool(
-                prop_guidance.get("carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present")
-                if "carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present" in prop_guidance
-                else fallback_prop_guidance.get("carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present")
+            "carried_object_affects_visibility_handling_silhouette_spatial_relation_pose_constraints_if_present": bool(
+                prop_guidance.get("carried_object_affects_visibility_handling_silhouette_spatial_relation_pose_constraints_if_present")
+                if "carried_object_affects_visibility_handling_silhouette_spatial_relation_pose_constraints_if_present" in prop_guidance
+                else (
+                    prop_guidance.get("carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present")
+                    if "carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present" in prop_guidance
+                    else (
+                        fallback_prop_guidance.get(
+                            "carried_object_affects_visibility_handling_silhouette_spatial_relation_pose_constraints_if_present"
+                        )
+                        if "carried_object_affects_visibility_handling_silhouette_spatial_relation_pose_constraints_if_present"
+                        in fallback_prop_guidance
+                        else fallback_prop_guidance.get(
+                            "carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present"
+                        )
+                    )
+                )
             ),
             "forbid_overused_hand_choreography_around_object": bool(
                 prop_guidance.get("forbid_overused_hand_choreography_around_object")
