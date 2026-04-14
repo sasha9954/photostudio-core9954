@@ -62,6 +62,14 @@ function toJson(value) {
   return JSON.stringify(value || {}, null, 2);
 }
 
+function resolveDirectorModeDisplay(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "clip") return "Клип";
+  if (normalized === "story") return "История";
+  if (normalized === "ad") return "Реклама";
+  return "—";
+}
+
 function buildCompactDebugSnapshot({ contextSummary = {}, executedStages = [], directorOutput = {}, storyboardPackage = {}, diagnostics = {} } = {}) {
   const safePkg = storyboardPackage && typeof storyboardPackage === "object" ? storyboardPackage : {};
   const safeDiagnostics = diagnostics && typeof diagnostics === "object" && Object.keys(diagnostics).length
@@ -78,6 +86,7 @@ function buildCompactDebugSnapshot({ contextSummary = {}, executedStages = [], d
     contextSummary: {
       contentType: contextSummary?.contentType || "",
       format: contextSummary?.format || "",
+      director_mode: contextSummary?.director_mode || safePkg?.input?.director_mode || "",
     },
     executedStages: Array.isArray(executedStages) ? executedStages : [],
     stageStatuses,
@@ -173,6 +182,15 @@ export default function ScenarioPipelineDebugEditor({
   const promptScenes = Array.isArray(prompts?.scenes) ? prompts.scenes : [];
   const finalStoryboard = resolvedStoryboardPackage?.final_storyboard || {};
   const allDiagnostics = Object.keys(diagnostics || {}).length ? diagnostics : (resolvedStoryboardPackage?.diagnostics || {});
+  const directorMode = String(
+    resolvedStoryboardPackage?.input?.director_mode
+    || contextSummary?.director_mode
+    || audioMap?.director_mode
+    || storyCore?.story_core_v1?.director_mode
+    || "—"
+  );
+  const audioTruthScope = String(audioMap?.audio_truth_scope || storyCore?.story_core_v1?.audio_truth_scope || "—");
+  const storyTruthSource = String(storyCore?.story_core_v1?.story_truth_source || "—");
 
   const audioSections = Array.isArray(audioMap?.sections) ? audioMap.sections : [];
   const phraseEndpoints = Array.isArray(audioMap?.phrase_endpoints_sec) ? audioMap.phrase_endpoints_sec : [];
@@ -221,6 +239,9 @@ export default function ScenarioPipelineDebugEditor({
     story_core: (
       <div>
         <div className="clipSB_storyboardKv"><span>story_summary</span><strong>{String(storyCore?.story_summary || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_core_v1.director_mode</span><strong>{String(storyCore?.story_core_v1?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(storyCore?.story_core_v1?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(storyCore?.story_core_v1?.audio_truth_scope || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>opening_anchor</span><strong>{String(storyCore?.opening_anchor || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>ending_callback_rule</span><strong>{String(storyCore?.ending_callback_rule || "—")}</strong></div>
         <pre className="clipSB_pre">{toJson({
@@ -240,6 +261,9 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>candidate_cut_points_sec</span><strong>{cutPoints.length}</strong></div>
         <div className="clipSB_storyboardKv"><span>no_split_ranges</span><strong>{noSplitRanges.length}</strong></div>
         <div className="clipSB_storyboardKv"><span>analysis_mode</span><strong>{analysisMode}</strong></div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(audioMap?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>semantic_source_type</span><strong>{String(audioMap?.semantic_source_type || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(audioMap?.audio_truth_scope || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>audio_map_phrase_mode</span><strong>{phraseMode}</strong></div>
         <div className="clipSB_storyboardKv"><span>transcript_available</span><strong>{String(transcriptAvailable)}</strong></div>
         <div className="clipSB_storyboardKv"><span>word_timestamp_count</span><strong>{wordTimestampCount}</strong></div>
@@ -348,6 +372,9 @@ export default function ScenarioPipelineDebugEditor({
           <div>
             <div className="clipSB_scenarioTitle">Scenario Pipeline Debug</div>
             <div className="clipSB_scenarioMeta">contentType: {contextSummary?.contentType || "—"} • format: {contextSummary?.format || "—"}</div>
+            <div className="clipSB_scenarioMeta">
+              Selected mode / Режим: {resolveDirectorModeDisplay(directorMode)} • Director mode: {directorMode} • Audio truth: {audioTruthScope} • Story truth: {storyTruthSource}
+            </div>
           </div>
           <button className="clipSB_iconBtn" onClick={onClose} type="button">×</button>
         </div>

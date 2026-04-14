@@ -275,6 +275,35 @@ def _normalize_input_audio_source(input_payload: dict[str, Any], refs_inventory:
     return normalized
 
 
+def _resolve_director_mode(raw_mode: Any, *, content_type: str = "") -> str:
+    normalized = str(raw_mode or "").strip().lower()
+    if normalized in {"clip", "story", "ad"}:
+        return normalized
+    if normalized in {"music_video", "клип"}:
+        return "clip"
+    if normalized in {"история"}:
+        return "story"
+    if normalized in {"реклама", "reklama"}:
+        return "ad"
+    fallback_content_type = str(content_type or "").strip().lower()
+    if fallback_content_type == "music_video":
+        return "clip"
+    if fallback_content_type == "ad":
+        return "ad"
+    return "story"
+
+
+def _resolve_audio_semantic_source_type(input_pkg: dict[str, Any]) -> str:
+    lyrics_text = str(input_pkg.get("lyrics_text") or "").strip()
+    transcript_text = str(input_pkg.get("transcript_text") or "").strip()
+    spoken_text_hint = str(input_pkg.get("spoken_text_hint") or "").strip()
+    if lyrics_text:
+        return "lyric_vocal"
+    if transcript_text or spoken_text_hint:
+        return "spoken_music"
+    return "mixed_voice_music"
+
+
 def _extract_mime_type(url: str, headers: dict[str, str], data: bytes) -> str:
     header_mime = str(headers.get("content-type") or "").split(";")[0].strip().lower()
     if header_mime.startswith("image/"):
@@ -750,6 +779,7 @@ def _build_story_core_v11(
 ) -> dict[str, Any]:
     text_bundle = _story_text_bundle(input_pkg)
     content_type = str(input_pkg.get("content_type") or input_pkg.get("contentType") or "music_video").strip() or "music_video"
+    director_mode = _resolve_director_mode(input_pkg.get("director_mode"), content_type=content_type)
     content_format = str(input_pkg.get("format") or input_pkg.get("content_format") or "").strip() or "short_form_video"
     ownership_binding_inventory = [row for row in _safe_list(input_pkg.get("ownership_binding_inventory")) if isinstance(row, dict)]
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
@@ -1032,6 +1062,9 @@ def _build_story_core_v11(
 
     story_core_v1 = {
         "schema_version": "core_v1.1",
+        "director_mode": director_mode,
+        "story_truth_source": "note_refs_primary" if director_mode == "clip" else "mixed_inputs",
+        "audio_truth_scope": "timing_plus_emotion" if director_mode == "clip" else "timing_structure",
         "world_definition": world_definition,
         "narrative_backbone": {
             "primary_narrative_spine": primary_spine,
@@ -1742,6 +1775,10 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "lyrics_text": str(req.get("lyricsText") or req.get("lyrics") or "").strip(),
         "spoken_text_hint": str(req.get("spokenTextHint") or "").strip(),
         "content_type": str(_safe_dict(req.get("director_controls")).get("contentType") or "music_video"),
+        "director_mode": _resolve_director_mode(
+            req.get("director_mode") or metadata.get("director_mode"),
+            content_type=str(_safe_dict(req.get("director_controls")).get("contentType") or "music_video"),
+        ),
         "format": str(_safe_dict(req.get("director_controls")).get("format") or req.get("format") or "9:16"),
         "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
         "refs_by_role": _safe_dict(req.get("refsByRole")),
@@ -4368,6 +4405,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_url = str(input_pkg.get("audio_url") or "").strip()
     duration_sec = _coerce_duration_sec(input_pkg.get("audio_duration_sec"))
     content_type = str(input_pkg.get("content_type") or "").strip().lower() or "music_video"
+    director_mode = _resolve_director_mode(input_pkg.get("director_mode"), content_type=content_type)
     story_core_mode = str(diagnostics.get("story_core_mode") or _detect_story_core_mode(input_pkg)).strip().lower() or "creative"
 
     diagnostics["audio_map_source_audio_url"] = audio_url
@@ -4670,6 +4708,9 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         _append_diag_event(package, f"audio_map fallback used: {exc}", stage_id="audio_map")
 
     audio_map["content_type"] = content_type
+    audio_map["director_mode"] = director_mode
+    audio_map["semantic_source_type"] = _resolve_audio_semantic_source_type(input_pkg)
+    audio_map["audio_truth_scope"] = "timing_plus_emotion" if director_mode == "clip" else "timing_structure"
     audio_map["story_core_mode"] = story_core_mode
     audio_map["story_core_arc_ref"] = str(story_core.get("global_arc") or "")
     audio_map["audio_dramaturgy"] = _build_audio_dramaturgy_summary(audio_map, input_pkg, content_type)

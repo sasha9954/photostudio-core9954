@@ -343,6 +343,14 @@ export function getSafeNarrativeContentType(contentType, fallbackContentType = "
   return firstEnabled || "story";
 }
 
+export function resolveDirectorMode(contentType, fallbackMode = "clip") {
+  const normalized = normalizeText(contentType).toLowerCase();
+  if (normalized === "music_video" || normalized === "clip" || normalized === "клип") return "clip";
+  if (normalized === "ad" || normalized === "reklama" || normalized === "реклама") return "ad";
+  if (normalized === "story" || normalized === "история") return "story";
+  return String(fallbackMode || "clip").trim().toLowerCase() || "clip";
+}
+
 function isScenarioDirectorFixtureForced() {
   if (typeof window === "undefined") return false;
   const queryRaw = normalizeText(new URLSearchParams(window.location.search).get("scenarioDirectorFixture"));
@@ -858,6 +866,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     audioDurationSec: effectiveAudioDurationSec,
   };
   const safeContentType = getSafeNarrativeContentType(state?.contentType, "music_video");
+  const directorMode = resolveDirectorMode(safeContentType, "clip");
   const isMusicVideo = safeContentType === "music_video";
   const preferAudioOverText = audioContext.hasAudioSource;
   const contextRefs = {
@@ -890,6 +899,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
 
   const payload = {
     mode: isMusicVideo ? "clip_pipeline" : "oneshot",
+    director_mode: directorMode,
     directGeminiStoryboardMode: true,
     direct_gemini_storyboard_mode: true,
     source: {
@@ -931,6 +941,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     },
     connected_context_summary: connectedContextSummary,
     metadata: {
+      director_mode: directorMode,
       sourcePreview: normalizeText(resolvedSource.preview) || sourceValue,
       sourceLabel: normalizeText(resolvedSource.sourceLabel) || normalizeText(resolvedSource.label),
       directGeminiStoryboardMode: true,
@@ -1094,6 +1105,10 @@ export function buildScenarioStageManualPayload({
   return {
     ...basePayload,
     mode: "scenario_stage",
+    director_mode: resolveDirectorMode(
+      normalizeText(source?.contentType || target?.scenarioMode || basePayload?.director_controls?.contentType) || "music_video",
+      "clip"
+    ),
     pipelineMode: "scenario_stage_v1",
     stageId: normalizedStageId,
     autoRun: Boolean(autoRun),
@@ -1125,6 +1140,10 @@ export function buildScenarioStageManualPayload({
       ...(basePayload?.metadata && typeof basePayload.metadata === "object" ? basePayload.metadata : {}),
       ...(source?.metadata && typeof source.metadata === "object" ? source.metadata : {}),
       pipelineMode: "scenario_stage_v1",
+      director_mode: resolveDirectorMode(
+        normalizeText(source?.contentType || target?.scenarioMode || basePayload?.director_controls?.contentType) || "music_video",
+        "clip"
+      ),
       requestSource: normalizeText(requestSource) || "scenario_storyboard:manual_stage",
       contentType: normalizeText(source?.contentType || target?.scenarioMode) || "music_video",
       format: normalizeText(source?.format || target?.format) || "9:16",

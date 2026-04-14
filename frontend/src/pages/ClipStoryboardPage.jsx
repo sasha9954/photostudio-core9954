@@ -221,6 +221,14 @@ const normalizeDirectRouteToWorkflowKey = (value) => {
   return "";
 };
 
+const resolveDirectorModeFromContentType = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "music_video" || normalized === "clip" || normalized === "клип") return "clip";
+  if (normalized === "ad" || normalized === "реклама" || normalized === "reklama") return "ad";
+  if (normalized === "story" || normalized === "история") return "story";
+  return "clip";
+};
+
 const resolveSceneDirectRouteSource = (scene = {}) => {
   const sourceRoute = normalizeDirectRouteToWorkflowKey(scene?.sourceRoute || scene?.source_route);
   if (sourceRoute) return { workflowKey: sourceRoute, source: "sourceRoute" };
@@ -17200,6 +17208,12 @@ onClipSec: (nodeId, value) => {
                 source: sourceNode?.data?.resolvedSource || sourceNode?.data?.source || {},
                 audioUrl: String(sourceNode?.data?.audioUrl || sourceNode?.data?.masterAudioUrl || "").trim(),
                 audioDurationSec: Number(sourceNode?.data?.audioDurationSec || 0) || 0,
+                director_mode: String(
+                  sourceNode?.data?.director_mode
+                  || sourceNode?.data?.metadata?.director_mode
+                  || storyboardPackage?.input?.director_mode
+                  || resolveDirectorModeFromContentType(sourceNode?.data?.contentType || sourceNode?.data?.scenarioMode)
+                ).trim(),
                 text: String(sourceNode?.data?.text || "").trim(),
                 storyText: String(sourceNode?.data?.storyText || "").trim(),
                 note: String(sourceNode?.data?.note || "").trim(),
@@ -17807,10 +17821,15 @@ onClipSec: (nodeId, value) => {
                 }
                 const scenarioDirectorRequestId = (window.crypto?.randomUUID?.() || `sd-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
                 const scenarioDirectorClickCount = ((window.__scenarioDirectorClickCount = Number(window.__scenarioDirectorClickCount || 0) + 1));
+                const resolvedDirectorMode = resolveDirectorModeFromContentType(
+                  requestPayload?.director_controls?.contentType || requestPayload?.contentType
+                );
                 const requestPayloadWithDebug = {
                   ...requestPayload,
+                  director_mode: resolvedDirectorMode,
                   metadata: {
                     ...(requestPayload?.metadata && typeof requestPayload.metadata === "object" ? requestPayload.metadata : {}),
+                    director_mode: resolvedDirectorMode,
                     scenarioDirectorRequestId,
                     scenarioDirectorClickCount,
                     requestSource: "narrative:onGenerateScenario",
@@ -17846,6 +17865,7 @@ onClipSec: (nodeId, value) => {
                 );
                 console.debug("[CLIP PIPELINE REQUEST PAYLOAD]", {
                   mode: normalizedRequestPayload?.mode,
+                  director_mode: normalizedRequestPayload?.director_mode,
                   pipelineMode: normalizedRequestPayload?.metadata?.pipelineMode,
                   useClipStoryboardPipeline: normalizedRequestPayload?.metadata?.useClipStoryboardPipeline,
                   contentType: normalizedRequestPayload?.director_controls?.contentType,

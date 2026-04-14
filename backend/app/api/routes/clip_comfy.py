@@ -38,6 +38,7 @@ ALLOWED_PLANNER_MODES = {"legacy", "gemini_only"}
 ALLOWED_COMFY_GENRES = {"horror", "romance", "comedy", "drama", "action", "thriller", "noir", "dreamy", "melancholy", "fashion", "surreal", "performance", "experimental"}
 ALLOWED_PROJECT_MODES = {"narration_first", "music_first", "hybrid"}
 ALLOWED_INPUT_MODES = {"audio_first", "text_to_audio_first"}
+ALLOWED_DIRECTOR_MODES = {"clip", "story", "ad"}
 
 
 class RefItemIn(BaseModel):
@@ -194,8 +195,21 @@ class ScenarioDirectorGenerateIn(BaseModel):
     markStaleFrom: str = ""
     staleReason: str = ""
     pipelineMode: str = ""
+    director_mode: str = ""
     directGeminiStoryboardMode: bool | None = None
     direct_gemini_storyboard_mode: bool | None = None
+
+    @field_validator("director_mode", mode="before")
+    @classmethod
+    def validate_director_mode(cls, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"music_video", "клип"}:
+            return "clip"
+        if normalized in {"история"}:
+            return "story"
+        if normalized in {"реклама", "reklama"}:
+            return "ad"
+        return normalized if normalized in ALLOWED_DIRECTOR_MODES else ""
 
 
 def _sanitize_context_refs(raw_context_refs: Any) -> dict[str, Any]:
@@ -270,6 +284,11 @@ def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
         connected_text = str(text_in.get("value") or "").strip()
     local_text = str(req.get("directorNote") or req.get("director_note") or req.get("note") or "").strip()
     primary_narrative_text = connected_text or local_text or source_text
+    metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}
+    director_mode = str(req.get("director_mode") or metadata.get("director_mode") or "").strip().lower()
+    if director_mode not in ALLOWED_DIRECTOR_MODES:
+        content_type = str(controls.get("contentType") or "").strip().lower()
+        director_mode = "clip" if content_type == "music_video" else ("ad" if content_type == "ad" else "story")
     return {
         "text": str(req.get("text") or "").strip() or primary_narrative_text,
         "story_text": str(req.get("storyText") or req.get("story_text") or "").strip() or primary_narrative_text,
@@ -278,6 +297,7 @@ def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
         "source": normalized_source,
         "audio_url": audio_url,
         "audio_duration_sec": float(req.get("audioDurationSec") or 0.0),
+        "director_mode": director_mode,
         "content_type": str(controls.get("contentType") or "music_video"),
         "format": str(controls.get("format") or req.get("format") or "9:16"),
         "connected_context_summary": (
