@@ -790,8 +790,30 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
         "story_core": story_core,
         "world_continuity": _safe_dict(role_plan.get("world_continuity")),
         "ownership_binding_inventory": ownership_binding_inventory,
+        "compiled_contract": compiled_contract,
     }
     return _compact_prompt_payload(compact_context), aux
+
+
+def _build_scene_contract_lookup(compiled_contract: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row_raw in _safe_list(compiled_contract.get("scene_contracts")):
+        row = _safe_dict(row_raw)
+        scene_id = str(row.get("scene_id") or "").strip()
+        if scene_id:
+            out[scene_id] = row
+    return out, _safe_dict(compiled_contract.get("global_contract"))
+
+
+def _presence_policy_clause(presence_policy: dict[str, Any]) -> str:
+    policy = str(_safe_dict(presence_policy).get("presence_policy") or "").strip().upper()
+    if policy == "STRICT":
+        return "No extra visible people in frame; keep only required contract actors."
+    if policy == "MINIMAL":
+        return "Extras absent or extremely sparse; no identifiable secondary hero unless explicitly contracted."
+    if policy == "ADDITIVE":
+        return "Allow only anonymous atmospheric background presence; no second identifiable hero unless contract allows."
+    return ""
 
 
 def _build_prompt(context: dict[str, Any]) -> str:
@@ -1334,6 +1356,8 @@ def _normalize_scene_prompts(
     *,
     scene_rows: list[dict[str, Any]],
     role_lookup: dict[str, dict[str, Any]],
+    scene_contract_lookup: dict[str, dict[str, Any]],
+    global_contract: dict[str, Any],
     story_core: dict[str, Any],
     world_continuity: dict[str, Any],
 ) -> tuple[dict[str, Any], bool, str, int, int, int, int, int, int, dict[str, Any]]:
@@ -1373,6 +1397,7 @@ def _normalize_scene_prompts(
 
         base = _safe_dict(by_id.get(scene_id))
         role_row = _safe_dict(role_lookup.get(scene_id))
+        scene_contract = _safe_dict(scene_contract_lookup.get(scene_id))
         fallback_row = _build_fallback_scene_prompts(package, scene, role_row, story_core, world_continuity)
         ownership_binding_inventory = _build_ref_binding_inventory(_safe_dict(package.get("refs_inventory")))
         carried_active_scene = _is_owner_carried_active_scene(scene, role_row, ownership_binding_inventory)
@@ -1384,6 +1409,17 @@ def _normalize_scene_prompts(
             scene_plan_row=scene,
             world_continuity=world_continuity,
         )
+        required_world_anchor = str(scene_contract.get("required_world_anchor") or _safe_dict(global_contract.get("persisted_world_state")).get("world_anchor") or "").strip()
+        if required_world_anchor:
+            anchors["world_anchor"] = required_world_anchor
+        required_props = [str(v).strip() for v in _safe_list(scene_contract.get("required_continuity_props")) if str(v).strip()]
+        forbidden_actor_ids = {
+            str(v).strip()
+            for v in [*_safe_list(scene_contract.get("forbidden_actor_ids")), *_safe_list(_safe_dict(global_contract.get("actor_registry")).get("forbidden_actor_ids"))]
+            if str(v).strip()
+        }
+        presence_policy = _safe_dict(scene_contract.get("presence_policy"))
+        presence_clause = _presence_policy_clause(presence_policy)
 
         actual_route = str(base.get("route") or expected_route).strip()
         row_repaired_from_current_package = False
@@ -1679,6 +1715,29 @@ def _normalize_scene_prompts(
         else:
             normalized_notes["risk_simplified"] = False
 
+        hard_constraints = _safe_dict(global_contract.get("hard_constraints"))
+        if required_props:
+            props_clause = " Keep required continuity prop identity consistent across frames; do not replace with new key prop."
+            video_prompt = f"{video_prompt.rstrip('. ')}.{props_clause}".strip()
+            positive_video_prompt = f"{(positive_video_prompt or video_prompt).rstrip('. ')}.{props_clause}".strip()
+            normalized_notes["continuity_anchor"] = (
+                f"{normalized_notes.get('continuity_anchor', '').strip('; ')}; required continuity props: {', '.join(required_props)}"
+            ).strip("; ")
+        if forbidden_actor_ids and bool(hard_constraints.get("must_not_invent_cast", True)):
+            cast_clause = " Do not introduce extra identifiable cast; keep only contract-authorized actors."
+            video_prompt = f"{video_prompt.rstrip('. ')}.{cast_clause}".strip()
+            positive_video_prompt = f"{(positive_video_prompt or video_prompt).rstrip('. ')}.{cast_clause}".strip()
+            normalized_notes["cast_constraint"] = "must_not_invent_cast"
+        if presence_clause:
+            video_prompt = f"{video_prompt.rstrip('. ')}. {presence_clause}".strip()
+            positive_video_prompt = f"{(positive_video_prompt or video_prompt).rstrip('. ')}. {presence_clause}".strip()
+            normalized_notes["presence_policy"] = str(presence_policy.get("presence_policy") or "")
+            normalized_notes["presence_clause"] = presence_clause
+        if bool(scene_contract.get("allow_scene_local_props", True)):
+            normalized_notes["scene_local_props_policy"] = "decor_allowed_non_continuity"
+        else:
+            normalized_notes["scene_local_props_policy"] = "decor_restricted"
+
         scene_out = {
             "scene_id": scene_id,
             "route": actual_route,
@@ -1756,6 +1815,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
     context, aux = _build_compact_context(package)
     scene_rows = _safe_list(aux.get("scene_rows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
+    scene_contract_lookup, global_contract = _build_scene_contract_lookup(_safe_dict(aux.get("compiled_contract")))
 
     used_model = "gemini-3-flash-preview"
     model_id = str(_safe_dict(context.get("video_capability_canon")).get("model_id") or DEFAULT_VIDEO_MODEL_ID)
@@ -1834,6 +1894,8 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             parsed,
             scene_rows=scene_rows,
             role_lookup=role_lookup,
+            scene_contract_lookup=scene_contract_lookup,
+            global_contract=global_contract,
             story_core=_safe_dict(aux.get("story_core")),
             world_continuity=_safe_dict(aux.get("world_continuity")),
         )
@@ -1885,6 +1947,8 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             {},
             scene_rows=scene_rows,
             role_lookup=role_lookup,
+            scene_contract_lookup=scene_contract_lookup,
+            global_contract=global_contract,
             story_core=_safe_dict(aux.get("story_core")),
             world_continuity=_safe_dict(aux.get("world_continuity")),
         )

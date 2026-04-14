@@ -391,6 +391,125 @@ def _resolve_presence_policy(constraints: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _scene_presence_policy_for_row(
+    *,
+    role_row: dict[str, Any],
+    scene_window: dict[str, Any],
+    defaults: dict[str, Any],
+    director_constraints: dict[str, Any],
+) -> dict[str, Any]:
+    base = _safe_dict(defaults)
+    forbid_crowd = bool(director_constraints.get("forbid_crowd"))
+    no_second_actor = bool(director_constraints.get("no_second_actor") or director_constraints.get("solo_intent"))
+    crowd_allowed = bool(base.get("crowd_allowed")) and not forbid_crowd
+
+    energy = str(scene_window.get("energy") or "").strip().lower()
+    scene_function = str(role_row.get("scene_function") or scene_window.get("scene_function") or "").strip().lower()
+    scene_presence_mode = str(role_row.get("scene_presence_mode") or "").strip().lower()
+    performance_focus = bool(role_row.get("performance_focus"))
+
+    strict_signal = forbid_crowd or no_second_actor or scene_presence_mode in {"private_release", "solo_observational"}
+    strict_signal = strict_signal or any(
+        token in scene_function
+        for token in ("intimate", "minimal_intro", "minimal intro", "private", "release", "close_up", "close-up")
+    )
+
+    additive_signal = crowd_allowed and (
+        energy in {"high", "peak", "climax"}
+        or scene_presence_mode in {"transit", "environment_anchor"}
+        or any(token in scene_function for token in ("crowd", "public", "market", "street", "festival", "high_energy", "high energy"))
+        or (performance_focus and energy in {"medium", "build"})
+    )
+
+    if strict_signal:
+        policy = "STRICT"
+    elif additive_signal:
+        policy = "ADDITIVE"
+    else:
+        policy = "MINIMAL"
+
+    if policy == "ADDITIVE" and crowd_allowed:
+        crowd_density = 0.3 if energy in {"high", "peak", "climax"} else 0.18
+        crowd_type = "anonymous"
+        crowd_interaction = "passive"
+    elif policy == "MINIMAL" and crowd_allowed:
+        crowd_density = 0.08 if scene_presence_mode in {"transit", "environment_anchor"} else 0.04
+        crowd_type = "anonymous"
+        crowd_interaction = "distant"
+    else:
+        crowd_density = 0.0
+        crowd_type = "none"
+        crowd_interaction = "none"
+
+    if forbid_crowd:
+        policy = "STRICT"
+        crowd_density = 0.0
+        crowd_type = "none"
+        crowd_interaction = "none"
+
+    return {
+        "presence_policy": policy if policy in ALLOWED_PRESENCE_POLICIES else "MINIMAL",
+        "crowd_allowed": crowd_allowed and not forbid_crowd,
+        "crowd_type": crowd_type,
+        "crowd_density": _round3(crowd_density),
+        "crowd_interaction": crowd_interaction,
+        "allow_scene_local_details": bool(base.get("allow_scene_local_details", True)),
+        "allow_scene_local_props": bool(base.get("allow_scene_local_props", True)),
+        "scene_presence_mode": scene_presence_mode,
+        "presence_policy_source": "scene_level_resolver",
+    }
+
+
+def _resolve_persisted_world_state(
+    *,
+    story_core: dict[str, Any],
+    world_continuity: dict[str, Any],
+    director_constraints: dict[str, Any],
+) -> dict[str, Any]:
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    location_progression = [str(v).strip() for v in _safe_list(world_continuity.get("location_progression")) if str(v).strip()]
+    explicit_anchor = str(world_lock.get("setting") or (location_progression[0] if location_progression else "")).strip()
+    inferred_anchor = str(world_continuity.get("environment_family") or world_continuity.get("country_or_region") or "").strip()
+    persisted_world_state = _safe_dict(story_core.get("persisted_world_state"))
+    persisted_anchor = str(
+        persisted_world_state.get("world_anchor")
+        or persisted_world_state.get("anchor")
+        or persisted_world_state.get("world_family")
+        or ""
+    ).strip()
+    anchor = explicit_anchor or persisted_anchor or inferred_anchor
+    mode = "explicit_or_core_locked" if explicit_anchor else ("persisted" if persisted_anchor else ("inferred_once" if inferred_anchor else "unspecified"))
+    world_family = str(world_continuity.get("environment_family") or persisted_world_state.get("world_family") or anchor).strip()
+    country_or_region = str(world_continuity.get("country_or_region") or persisted_world_state.get("country_or_region") or "").strip()
+    drift_blocked = True
+    return {
+        "world_anchor": anchor,
+        "world_family": world_family,
+        "country_or_region": country_or_region,
+        "source_mode": mode,
+        "anchor_locked": bool(anchor),
+        "forbidden_drift": list(dict.fromkeys([
+            *[str(v).strip() for v in _safe_list(director_constraints.get("forbidden_drift")) if str(v).strip()],
+            *( ["incompatible_world_family"] if drift_blocked else []),
+        ])),
+        "drift_policy": "keep_persisted_world_unless_explicit_override",
+        "warnings": [],
+    }
+
+
+def _resolve_continuity_props(global_roles: dict[str, Any], ownership_binding_inventory: list[dict[str, Any]]) -> list[str]:
+    continuity_props: list[str] = []
+    if "props" in _safe_list(global_roles.get("prop_roles")):
+        continuity_props.append("props")
+    has_key_binding = any(
+        str(_safe_dict(item).get("bindingType") or "").strip().lower() in {"carried", "held", "worn", "environment"}
+        for item in _safe_list(ownership_binding_inventory)
+    )
+    if has_key_binding and "props" not in continuity_props:
+        continuity_props.append("props")
+    return continuity_props
+
+
 def _build_conflict_report(node_input: dict[str, Any], director_input: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     warnings: list[dict[str, Any]] = []
     severe: list[dict[str, Any]] = []
@@ -412,6 +531,15 @@ def _build_conflict_report(node_input: dict[str, Any], director_input: dict[str,
                 "message": "Director text includes both crowd allow and crowd forbid signals.",
                 "resolution": "forbid_crowd wins; crowd policy forced to STRICT/no crowd.",
                 "sources": {"director_text": constraints},
+            }
+        )
+    if bool(constraints.get("forbid_crowd")) and bool(node_input.get("has_explicit_props")):
+        warnings.append(
+            {
+                "code": "crowd_forbidden_props_present",
+                "message": "Crowd forbidden by text; props remain allowed but crowd must stay disabled in scene-level policies.",
+                "resolution": "enforce STRICT/MINIMAL policy with zero crowd density unless explicitly re-enabled by source contract",
+                "sources": {"nodes": node_input, "director_text": constraints, "core_continuity": {}},
             }
         )
     return warnings, severe
@@ -1164,28 +1292,26 @@ def _normalize_role_plan(
     continuity_notes = [str(item).strip() for item in _safe_list(raw_plan.get("continuity_notes")) if str(item).strip()]
     if not continuity_notes:
         continuity_notes = [
-            "Single hero continuity: character_1 remains the only narrative subject across all windows.",
-            "Prop continuity: keep the current continuity object/wearable identity stable when present.",
-            "World continuity: one coherent realistic urban location anchor is preserved across scenes.",
-            "Lighting/realism lock: grounded daylight progression; avoid neon/club/warehouse drift.",
+            "Actor continuity: keep required actor identity stable across all scenes; do not invent new cast identities.",
+            "World continuity: preserve one persisted world family and avoid incompatible world drift without explicit override.",
+            "Style and lighting continuity: keep coherent visual/style family progression across scenes.",
+            "Continuity props: preserve required continuity prop identity and ownership behavior when activated.",
+            "Contract discipline: enforce forbidden actor/crowd constraints and avoid forbidden drift.",
         ]
 
-    location_progression = [str(v).strip() for v in _safe_list(world_continuity.get("location_progression")) if str(v).strip()]
-    world_anchor_from_core = str(_safe_dict(story_core.get("world_lock")).get("setting") or (location_progression[0] if location_progression else "")).strip()
-    inferred_world_anchor = ""
-    if not world_anchor_from_core:
-        inferred_world_anchor = str(
-            world_continuity.get("environment_family")
-            or world_continuity.get("country_or_region")
-            or ""
-        ).strip()
-    persisted_world_anchor = world_anchor_from_core or inferred_world_anchor
+    persisted_world_state = _resolve_persisted_world_state(
+        story_core=story_core,
+        world_continuity=world_continuity,
+        director_constraints=director_constraints,
+    )
+    persisted_world_anchor = str(persisted_world_state.get("world_anchor") or "").strip()
     source_trace_global = {
         "from_nodes": _safe_dict(merged_input.get("explicit_node_input")),
         "from_director_text": _safe_dict(merged_input.get("explicit_director_text_input")),
         "from_audio": _safe_dict(merged_input.get("audio_scene_function_input")),
         "from_core_continuity": _safe_dict(merged_input.get("core_continuity_input")),
     }
+    continuity_props = _resolve_continuity_props(global_roles, ownership_binding_inventory)
     global_contract = {
         "actor_registry": {
             "required_actors": list(global_roles.get("primary_character_roles") or []),
@@ -1195,11 +1321,17 @@ def _normalize_role_plan(
         "anchor_registry": {
             "world_anchor": persisted_world_anchor,
             "style_anchor": str(world_continuity.get("style_anchor") or ""),
-            "continuity_props": list(global_roles.get("prop_roles") or []),
+            "continuity_props": continuity_props,
+            "scene_local_props_policy": {
+                "allow_scene_local_props": True,
+                "allow_scene_local_decor_only": True,
+                "forbid_scene_invented_continuity_props": True,
+            },
             "world_roles": list(global_roles.get("world_roles") or []),
         },
         "persisted_world_anchor": persisted_world_anchor,
-        "persisted_world_anchor_mode": "inferred_once" if inferred_world_anchor else "explicit_or_core_locked",
+        "persisted_world_anchor_mode": str(persisted_world_state.get("source_mode") or "unspecified"),
+        "persisted_world_state": persisted_world_state,
         "presence_policy_defaults": presence_policy_defaults,
         "hard_constraints": {
             "must_preserve_primary_identity": True,
@@ -1217,10 +1349,19 @@ def _normalize_role_plan(
         },
     }
     scene_contracts: list[dict[str, Any]] = []
-    for row in normalized_scene_roles:
+    for idx, row in enumerate(normalized_scene_roles):
         role_row = _safe_dict(row)
         primary_role = str(role_row.get("primary_role") or "").strip()
         optional = [r for r in _safe_list(role_row.get("secondary_roles")) if str(r).strip()]
+        optional = [r for r in optional if r not in set(forbidden_actor_ids)]
+        scene_window = _safe_dict(scene_windows[idx]) if idx < len(scene_windows) else {}
+        scene_presence_policy = _scene_presence_policy_for_row(
+            role_row=role_row,
+            scene_window=scene_window,
+            defaults=presence_policy_defaults,
+            director_constraints=director_constraints,
+        )
+        required_continuity_props = continuity_props if "props" in _safe_list(role_row.get("active_roles")) else []
         scene_contracts.append(
             {
                 "scene_id": str(role_row.get("scene_id") or ""),
@@ -1229,8 +1370,9 @@ def _normalize_role_plan(
                 "forbidden_actor_ids": list(dict.fromkeys(forbidden_actor_ids)),
                 "required_world_anchor": persisted_world_anchor,
                 "required_stage_anchor": str(world_continuity.get("environment_family") or ""),
-                "required_continuity_props": ["props"] if "props" in _safe_list(role_row.get("active_roles")) else [],
-                "presence_policy": presence_policy_defaults,
+                "required_continuity_props": required_continuity_props,
+                "allow_scene_local_props": bool(scene_presence_policy.get("allow_scene_local_props", True)),
+                "presence_policy": scene_presence_policy,
                 "performance_focus": bool(role_row.get("performance_focus")),
                 "scene_presence_mode": str(role_row.get("scene_presence_mode") or ""),
                 "constraints": global_contract["hard_constraints"],

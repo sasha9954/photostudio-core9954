@@ -455,8 +455,78 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         "role_lookup": _build_scene_role_lookup(role_plan),
         "world_summary_used": world_summary_used,
         "ownership_binding_inventory": ownership_binding_inventory,
+        "compiled_contract": compiled_contract,
     }
     return context, aux
+
+
+def _build_scene_contract_lookup(compiled_contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row_raw in _safe_list(compiled_contract.get("scene_contracts")):
+        row = _safe_dict(row_raw)
+        scene_id = str(row.get("scene_id") or "").strip()
+        if scene_id:
+            out[scene_id] = row
+    return out
+
+
+def _apply_scene_contract_constraints(
+    *,
+    scene_row: dict[str, Any],
+    role_row: dict[str, Any],
+    scene_contract: dict[str, Any],
+    global_contract: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    out = dict(scene_row)
+    warnings: list[str] = []
+    contract = _safe_dict(scene_contract)
+    actor_registry = _safe_dict(global_contract.get("actor_registry"))
+    hard_constraints = _safe_dict(global_contract.get("hard_constraints"))
+
+    required_actors = [str(v).strip() for v in _safe_list(contract.get("required_actors")) if str(v).strip()]
+    forbidden_actor_ids = {
+        str(v).strip()
+        for v in [*_safe_list(contract.get("forbidden_actor_ids")), *_safe_list(actor_registry.get("forbidden_actor_ids"))]
+        if str(v).strip()
+    }
+    active_roles = [str(v).strip() for v in _safe_list(out.get("active_roles")) if str(v).strip()]
+    active_roles = [v for v in active_roles if v not in forbidden_actor_ids]
+    if required_actors:
+        required_primary = required_actors[0]
+        out["primary_role"] = required_primary
+        if required_primary not in active_roles:
+            active_roles.insert(0, required_primary)
+    out["active_roles"] = list(dict.fromkeys(active_roles))
+
+    presence_policy = _safe_dict(contract.get("presence_policy"))
+    if presence_policy:
+        out["contract_presence_policy"] = presence_policy
+        out["scene_presence_mode"] = str(contract.get("scene_presence_mode") or out.get("scene_presence_mode") or "").strip()
+        policy = str(presence_policy.get("presence_policy") or "").strip().upper()
+        if policy == "STRICT":
+            out["visual_event_type"] = "face" if str(out.get("route") or "") == "ia2v" else "character_action"
+            warnings.append("contract_presence_strict")
+
+    required_world_anchor = str(contract.get("required_world_anchor") or "").strip()
+    if required_world_anchor:
+        out["required_world_anchor"] = required_world_anchor
+    required_props = [str(v).strip() for v in _safe_list(contract.get("required_continuity_props")) if str(v).strip()]
+    if required_props:
+        if "props" not in out["active_roles"]:
+            out["active_roles"].append("props")
+        out["required_continuity_props"] = required_props
+
+    if forbidden_actor_ids:
+        out["forbidden_actor_ids"] = sorted(forbidden_actor_ids)
+        for forbidden in forbidden_actor_ids:
+            if forbidden in out["active_roles"]:
+                out["active_roles"] = [r for r in out["active_roles"] if r != forbidden]
+                warnings.append(f"forbidden_actor_removed:{forbidden}")
+
+    if bool(hard_constraints.get("must_not_invent_cast")) and forbidden_actor_ids:
+        warnings.append("must_not_invent_cast_enforced")
+    out["active_roles"] = list(dict.fromkeys(out.get("active_roles") or []))
+    return out, warnings
 
 
 def _build_prompt(context: dict[str, Any]) -> str:
@@ -1045,6 +1115,8 @@ def _normalize_scene_plan(
     *,
     scene_windows: list[dict[str, Any]],
     role_lookup: dict[str, dict[str, Any]],
+    scene_contract_lookup: dict[str, dict[str, Any]],
+    global_contract: dict[str, Any],
     include_debug_raw: bool = False,
     ownership_binding_inventory: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], bool, str, int, dict[str, Any]]:
@@ -1115,6 +1187,7 @@ def _normalize_scene_plan(
                 missing_rows_filled += 1
                 repaired_to_audio_windows = True
         role_row = _safe_dict(role_lookup.get(scene_id))
+        scene_contract = _safe_dict(scene_contract_lookup.get(scene_id))
 
         route_raw = str(raw_row.get("route") or "").strip().lower()
         route = route_raw if route_raw in ALLOWED_ROUTES else ""
@@ -1216,6 +1289,14 @@ def _normalize_scene_plan(
             "anti_repeat_warnings": anti_repeat_warnings,
             "original_route": route_raw,
         }
+        scene_row, contract_warnings = _apply_scene_contract_constraints(
+            scene_row=scene_row,
+            role_row=role_row,
+            scene_contract=scene_contract,
+            global_contract=global_contract,
+        )
+        if contract_warnings:
+            scene_row["continuity_warnings"] = [*_safe_list(scene_row.get("continuity_warnings")), *contract_warnings]
         carried_owner_scene_for_env_guard = False
         held_owner_scene_for_env_guard = False
         if scene_row["primary_role"] and scene_row["primary_role"].lower() in carried_owner_roles:
@@ -1415,6 +1496,9 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
     context, aux = _build_scene_planning_context(package)
     scene_windows = _safe_list(aux.get("scene_windows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
+    compiled_contract = _safe_dict(aux.get("compiled_contract"))
+    global_contract = _safe_dict(compiled_contract.get("global_contract"))
+    scene_contract_lookup = _build_scene_contract_lookup(compiled_contract)
     ownership_binding_inventory = _safe_list(aux.get("ownership_binding_inventory"))
     world_summary_used = bool(aux.get("world_summary_used"))
     include_debug_raw = _scene_plan_debug_enabled(package)
@@ -1506,6 +1590,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             {},
             scene_windows=scene_windows,
             role_lookup=role_lookup,
+            scene_contract_lookup=scene_contract_lookup,
+            global_contract=global_contract,
             include_debug_raw=include_debug_raw,
             ownership_binding_inventory=ownership_binding_inventory,
         )
@@ -1545,6 +1631,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             parsed,
             scene_windows=scene_windows,
             role_lookup=role_lookup,
+            scene_contract_lookup=scene_contract_lookup,
+            global_contract=global_contract,
             include_debug_raw=include_debug_raw,
             ownership_binding_inventory=ownership_binding_inventory,
         )
@@ -1569,6 +1657,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             {},
             scene_windows=scene_windows,
             role_lookup=role_lookup,
+            scene_contract_lookup=scene_contract_lookup,
+            global_contract=global_contract,
             include_debug_raw=include_debug_raw,
             ownership_binding_inventory=ownership_binding_inventory,
         )
