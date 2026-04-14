@@ -659,6 +659,38 @@ def _slot_story_function(slot: dict[str, Any], index: int, total: int) -> str:
     return "build_progression"
 
 
+def _extract_forbidden_drift(note_text: str) -> list[str]:
+    text = str(note_text or "").strip().lower()
+    if not text:
+        return []
+    drift: list[str] = []
+    patterns = (
+        r"(?:no|avoid|without)\s+([a-z0-9_\- ]{3,36})",
+        r"(?:не|без)\s+([a-zа-я0-9_\- ]{3,36})",
+    )
+    for pattern in patterns:
+        for match in re.findall(pattern, text):
+            token = str(match or "").strip(" ,.;:!?")
+            if token:
+                drift.append(f"forbid:{token.replace(' ', '_')[:48]}")
+    for known in ("neon", "club", "fantasy", "cyberpunk", "horror", "gore"):
+        if re.search(rf"(?:no|avoid|without|не|без)\s+{re.escape(known)}", text):
+            drift.append(f"forbid:{known}")
+    return list(dict.fromkeys(drift))[:12]
+
+
+def _ref_record(ref_id: str, row: dict[str, Any]) -> dict[str, str]:
+    meta = _normalize_ref_meta(row.get("meta"))
+    label = _first_text(row.get("source_label"), row.get("label"), row.get("value"), ref_id)[:120]
+    return {
+        "ref_id": str(ref_id),
+        "label": label,
+        "type": str(row.get("type") or row.get("kind") or meta.get("type") or "").strip().lower(),
+        "ownership_role": str(meta.get("ownershipRoleMapped") or meta.get("ownershipRole") or "shared"),
+        "binding_type": str(meta.get("bindingType") or "nearby"),
+    }
+
+
 def _build_story_core_v11(
     *,
     input_pkg: dict[str, Any],
@@ -672,118 +704,255 @@ def _build_story_core_v11(
     content_type = str(input_pkg.get("content_type") or input_pkg.get("contentType") or "music_video").strip() or "music_video"
     content_format = str(input_pkg.get("format") or input_pkg.get("content_format") or "").strip() or "short_form_video"
     ownership_binding_inventory = [row for row in _safe_list(input_pkg.get("ownership_binding_inventory")) if isinstance(row, dict)]
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
     slots = _coerce_scene_slots(audio_map)
     total_slots = len(slots)
 
     primary_subject = str(assigned_roles.get("primary_role") or "character_1").strip() or "character_1"
-    secondary_subjects = [
+    role_subjects = [
         str(v).strip()
         for v in _safe_list(assigned_roles.get("active_roles"))
         if str(v).strip() and str(v).strip() != primary_subject
-    ][:5]
+    ]
+    connected_subjects = [
+        str(v).strip()
+        for v in (
+            _safe_list(connected_summary.get("support_roles"))
+            + _safe_list(connected_summary.get("secondary_subjects"))
+            + _safe_list(connected_summary.get("subject_candidates"))
+        )
+        if str(v).strip() and str(v).strip() != primary_subject
+    ]
+    ref_subjects: list[str] = []
+    continuity_objects: list[dict[str, Any]] = []
+    for ref_id, value in refs_inventory.items():
+        if not isinstance(value, dict):
+            continue
+        record = _ref_record(str(ref_id), value)
+        meta = _normalize_ref_meta(value.get("meta"))
+        type_token = record.get("type") or str(ref_id).lower()
+        is_subject_ref = any(token in type_token for token in ("char", "person", "subject", "talent", "hero"))
+        if is_subject_ref and record["label"] and record["label"] != primary_subject:
+            ref_subjects.append(record["label"])
+        is_object_ref = any(token in type_token for token in ("prop", "object", "item", "wardrobe", "vehicle")) or bool(meta.get("ownershipRoleMapped"))
+        if is_object_ref:
+            continuity_objects.append(
+                {
+                    "ref_id": record["ref_id"],
+                    "label": record["label"],
+                    "ownership_role": record["ownership_role"],
+                    "binding_type": record["binding_type"],
+                    "source_label": str(value.get("source_label") or ""),
+                    "visibility_expectation": "persistent" if record["binding_type"] in {"worn", "held", "carried"} else "recurring",
+                }
+            )
+    for row in ownership_binding_inventory[:18]:
+        ref_id = str(row.get("ref_id") or "").strip()
+        label = str(row.get("label") or "").strip()
+        if not (ref_id or label):
+            continue
+        continuity_objects.append(
+            {
+                "ref_id": ref_id,
+                "label": label[:120],
+                "ownership_role": str(row.get("ownershipRoleMapped") or row.get("ownershipRole") or "shared"),
+                "binding_type": str(row.get("bindingType") or "nearby"),
+                "source_label": str(row.get("source_label") or ""),
+                "visibility_expectation": "persistent" if str(row.get("bindingType") or "").strip().lower() in {"worn", "held", "carried"} else "recurring",
+            }
+        )
+    continuity_objects = list({f"{obj.get('ref_id')}::{obj.get('label')}": obj for obj in continuity_objects if obj.get("label") or obj.get("ref_id")}.values())[:16]
+
+    secondary_subjects = list(dict.fromkeys([*role_subjects, *connected_subjects, *ref_subjects]))[:6]
+    if not secondary_subjects and continuity_objects:
+        secondary_subjects = [str(continuity_objects[0].get("ownership_role") or "shared")]
+    if not secondary_subjects and refs_inventory:
+        secondary_subjects = ["support_presence_from_refs"]
     if not secondary_subjects:
         secondary_subjects = ["environment"]
 
-    continuity_objects = [
-        {
-            "ref_id": str(row.get("ref_id") or ""),
-            "label": str(row.get("label") or "").strip(),
-            "ownership_role": str(row.get("ownershipRoleMapped") or row.get("ownershipRole") or "shared"),
-            "binding_type": str(row.get("bindingType") or "nearby"),
-        }
-        for row in ownership_binding_inventory[:12]
-        if str(row.get("ref_id") or "").strip() or str(row.get("label") or "").strip()
-    ]
+    opening_anchor = _first_text(parsed_story_core.get("opening_anchor"), fallback_story_core.get("opening_anchor"), text_bundle.get("story_text"), text_bundle.get("text"))[:220]
+    ending_callback_rule = _first_text(parsed_story_core.get("ending_callback_rule"), fallback_story_core.get("ending_callback_rule"))
+    style_rule = _first_text(_safe_dict(parsed_story_core.get("style_lock")).get("rule"), _safe_dict(fallback_story_core.get("style_lock")).get("rule"))
+    note_text = " ".join([text_bundle.get("note", ""), text_bundle.get("director_note", "")]).strip()
+    forbidden_drift = _extract_forbidden_drift(note_text) or ["forbid:identity_replacement", "forbid:ungrounded_world_jump"]
 
     beats: list[dict[str, Any]] = []
     slot_groups: list[dict[str, Any]] = []
     group_reason: list[dict[str, Any]] = []
     current_group: list[str] = []
     current_function = ""
+    previous_phrase = ""
+    repeated_count = 0
+    mode_weight = {
+        "music_video": {"audio": 1.2, "continuity": 1.0, "causality": 0.9},
+        "story": {"audio": 0.9, "continuity": 1.2, "causality": 1.2},
+        "film": {"audio": 0.9, "continuity": 1.2, "causality": 1.2},
+        "ad": {"audio": 1.0, "continuity": 1.3, "causality": 1.1},
+        "news": {"audio": 0.8, "continuity": 1.0, "causality": 1.35},
+    }.get(content_type, {"audio": 1.0, "continuity": 1.0, "causality": 1.0})
+    object_labels = [str(obj.get("label") or "").lower() for obj in continuity_objects if str(obj.get("label") or "").strip()]
+    object_last_seen: dict[str, int] = {}
     for idx, slot in enumerate(slots):
         slot_id = str(slot.get("id") or f"slot_{idx + 1}")
+        phrase = str(slot.get("primary_phrase_text") or "").strip()
         fn = _slot_story_function(slot, idx, total_slots)
+        phrase_key = re.sub(r"\s+", " ", phrase.lower()).strip()
+        energy = _to_float(_safe_dict(slot.get("audio_features")).get("energy_score"), 0.5)
+        vocal = _to_float(_safe_dict(slot.get("audio_features")).get("vocal_ratio"), 0.4)
+        phrase_mentions_object = any(label and label in phrase_key for label in object_labels[:8])
+        continuity_pressure = "high" if (phrase_mentions_object or fn in {"transition_turn", "climax_pressure"}) else "medium"
+        semantic_density = "high" if (vocal >= 0.55 or len(phrase.split()) >= 8) else ("low" if not phrase else "medium")
+        narrative_load_score = (energy * mode_weight["audio"]) + (0.3 if fn in {"transition_turn", "climax_pressure"} else 0.0)
+        narrative_load = "high" if narrative_load_score >= 0.9 else ("medium" if narrative_load_score >= 0.6 else "low")
+        primary_shift_allowed = bool(re.search(r"\b(we|they|together|crowd|everyone)\b", phrase_key)) and fn in {"transition_turn", "climax_pressure"}
+        beat_primary_subject = primary_subject if not primary_shift_allowed else secondary_subjects[0]
+
         if not current_group:
             current_group = [slot_id]
             current_function = fn
-        elif fn == current_function and len(current_group) < 2:
+        elif fn == current_function and len(current_group) < 3 and phrase_key and phrase_key == previous_phrase and repeated_count < 2:
             current_group.append(slot_id)
+            repeated_count += 1
         else:
             group_id = f"group_{len(slot_groups) + 1}"
             slot_groups.append({"group_id": group_id, "slot_ids": list(current_group)})
-            group_reason.append({"group_id": group_id, "reason": f"semantic_continuity:{current_function}"})
+            group_reason.append({"group_id": group_id, "reason": f"semantic_continuity:{current_function}|phrase_pattern:{'repeat' if repeated_count else 'progression'}"})
             current_group = [slot_id]
             current_function = fn
+            repeated_count = 0
 
         beat_secondary = secondary_subjects[:2] if idx % 2 == 0 else secondary_subjects[1:3] or secondary_subjects[:1]
+        for label in object_labels:
+            if label and label in phrase_key:
+                object_last_seen[label] = idx
         beats.append(
             {
                 "beat_id": f"beat_{idx + 1}",
                 "slot_ids": [slot_id],
                 "time_range": {"t0": round(_to_float(slot.get("t0"), 0.0), 3), "t1": round(_to_float(slot.get("t1"), 0.0), 3)},
                 "story_function": fn,
-                "beat_primary_subject": primary_subject if idx < max(1, math.ceil(total_slots * 0.75)) else (secondary_subjects[0] if secondary_subjects else primary_subject),
+                "beat_primary_subject": beat_primary_subject,
                 "beat_secondary_subjects": beat_secondary,
-                "semantic_density": "high" if _to_float(_safe_dict(slot.get("audio_features")).get("vocal_ratio"), 0.0) >= 0.55 else "medium",
-                "narrative_load": "high" if fn in {"climax_pressure", "transition_turn"} else "medium",
-                "subject_presence_requirement": "primary_or_designated_secondary_must_be_visible",
-                "continuity_visibility_requirement": "at_least_one_continuity_object_or_world_anchor_visible",
-                "beat_focus_hint": str(slot.get("primary_phrase_text") or "").strip()[:180],
+                "semantic_density": semantic_density,
+                "narrative_load": narrative_load,
+                "subject_presence_requirement": "primary_subject_visible_unless_explicit_handoff",
+                "continuity_visibility_requirement": "object_or_environment_anchor_required" if continuity_pressure == "high" else "world_anchor_or_subject_callback",
+                "beat_focus_hint": phrase[:180] or fn,
                 "source_slot_id": slot_id,
+                "group_reason": f"{fn}|density:{semantic_density}|continuity:{continuity_pressure}",
             }
         )
+        previous_phrase = phrase_key
     if current_group:
         group_id = f"group_{len(slot_groups) + 1}"
         slot_groups.append({"group_id": group_id, "slot_ids": list(current_group)})
-        group_reason.append({"group_id": group_id, "reason": f"semantic_continuity:{current_function}"})
+        group_reason.append({"group_id": group_id, "reason": f"semantic_continuity:{current_function}|phrase_pattern:{'repeat' if repeated_count else 'progression'}"})
 
+    location_hints = [
+        _first_text(row.get("source_label"), row.get("value"), ref_id)
+        for ref_id, row in refs_inventory.items()
+        if isinstance(row, dict) and any(token in str(ref_id).lower() for token in ("location", "place", "env", "bg"))
+    ][:4]
+    style_hints = [
+        _first_text(row.get("source_label"), row.get("value"), ref_id)
+        for ref_id, row in refs_inventory.items()
+        if isinstance(row, dict) and any(token in str(ref_id).lower() for token in ("style", "look", "mood", "grade"))
+    ][:4]
+    world_model = _first_text(text_bundle.get("story_text"), text_bundle.get("text"), parsed_story_core.get("global_arc"), fallback_story_core.get("global_arc"))[:200]
     world_definition = {
-        "world_model": str(parsed_story_core.get("global_arc") or fallback_story_core.get("global_arc") or "audio_anchored_realism"),
+        "world_model": world_model or "grounded_continuity_world",
         "world_axioms": [
-            "same_story_world_across_all_beats",
-            "audio_map_timings_are_authoritative",
-            "refs_define_identity_and_object_continuity",
+            "same_world_family_across_beats",
+            "subject_identity_must_stay_consistent",
+            "object_bindings_follow_ownership_and_binding_meta",
+            "audio_slots_define_temporal_order",
+            f"mode_weighting:{content_type}:audio={mode_weight['audio']},continuity={mode_weight['continuity']},causality={mode_weight['causality']}",
         ],
-        "environment_anchor": str(parsed_story_core.get("opening_anchor") or fallback_story_core.get("opening_anchor") or "stable_environment_anchor"),
-        "style_anchor": str(_safe_dict(parsed_story_core.get("style_lock")).get("rule") or _safe_dict(fallback_story_core.get("style_lock")).get("rule") or "consistent_cinematic_language"),
-        "allowed_variation": ["lighting_shift", "camera_motion_shift", "performance_intensity_shift"],
-        "forbidden_drift": ["character_identity_replacement", "world_family_jump", "ungrounded_symbolic_prop_injection"],
+        "environment_anchor": _first_text(location_hints[0] if location_hints else "", opening_anchor, "text_derived_environment_anchor"),
+        "style_anchor": _first_text(style_hints[0] if style_hints else "", style_rule, "coherent_cinematic_style"),
+        "allowed_variation": ["lighting_shift", "framing_shift", "performance_intensity_shift", "weather_or_time_shift_if_text_supported"],
+        "forbidden_drift": forbidden_drift,
         "world_continuity_rules": [
-            "location_family_must_stay_coherent",
-            "time_of_day_can_shift_only_when_semantically_motivated",
-            "style_mood_can_evolve_without_world_reset",
+            "location_and_style_changes_require_semantic_bridge",
+            "forbidden_drift_tokens_cannot_be_introduced",
+            "if_location_refs_missing_use_text_guidance_not_global_arc",
         ],
     }
+    primary_spine = f"{primary_subject} carries narrative progression via {_first_text(text_bundle.get('story_text'), text_bundle.get('text'), parsed_story_core.get('story_summary'), fallback_story_core.get('story_summary'))[:120] or 'audio_text progression'}"
+    continuity_matrix = {
+        "subject_to_objects": [
+            {
+                "subject": str(item.get("ownership_role") or "shared"),
+                "object_label": str(item.get("label") or ""),
+                "binding_type": str(item.get("binding_type") or "nearby"),
+                "visibility_expectation": str(item.get("visibility_expectation") or "recurring"),
+            }
+            for item in continuity_objects[:14]
+        ]
+    }
+    transition_events = []
+    for i in range(max(0, len(beats) - 1)):
+        left, right = beats[i], beats[i + 1]
+        evt_type = "semantic_progression"
+        if left.get("story_function") != right.get("story_function"):
+            evt_type = "function_turn"
+        if left.get("beat_primary_subject") != right.get("beat_primary_subject"):
+            evt_type = "subject_handoff_explicit"
+        transition_events.append(
+            {
+                "from_beat": left["beat_id"],
+                "to_beat": right["beat_id"],
+                "type": evt_type,
+                "object_carry_required": bool(continuity_objects),
+            }
+        )
+
+    primary_per_beat = [str(item.get("beat_primary_subject") or "") for item in beats]
+    shadow_count = sum(1 for subject in primary_per_beat if subject and subject != primary_subject)
+    subject_shadowing = shadow_count > max(1, math.floor(len(beats) * 0.35))
+    continuity_break = any((len(beats) - 1 - seen_idx) >= 3 for seen_idx in object_last_seen.values()) if beats and object_last_seen else bool(continuity_objects and len(beats) >= 4 and not object_last_seen)
+    world_drift = any(token.replace("forbid:", "").replace("_", " ") in world_model.lower() for token in forbidden_drift if token.startswith("forbid:"))
+    arc_tokens = [str(item.get("story_function") or "") for item in beats]
+    flatline_segments: list[dict[str, Any]] = []
+    start = 0
+    while start < len(arc_tokens):
+        end = start + 1
+        while end < len(arc_tokens) and arc_tokens[end] == arc_tokens[start]:
+            end += 1
+        if (end - start) >= 3:
+            flatline_segments.append({"from_beat": f"beat_{start + 1}", "to_beat": f"beat_{end}", "story_function": arc_tokens[start]})
+        start = end
+    semantic_delta_score = round(1.0 - min(0.7, len(flatline_segments) * 0.18) - (0.15 if subject_shadowing else 0.0) - (0.15 if continuity_break else 0.0), 3)
+    opening_mismatch = bool(beats and primary_subject not in str(beats[0].get("beat_primary_subject") or ""))
+    dangling_tail = bool(beats and "afterimage" not in str(beats[-1].get("story_function") or "") and "release" not in str(beats[-1].get("story_function") or ""))
+    callback_missing = bool(opening_anchor and ending_callback_rule and not beats)
+    continuity_object_dropout = bool(continuity_objects and not continuity_matrix["subject_to_objects"])
 
     story_core_v1 = {
         "schema_version": "core_v1.1",
         "world_definition": world_definition,
         "narrative_backbone": {
-            "primary_narrative_spine": str(parsed_story_core.get("story_summary") or fallback_story_core.get("story_summary") or "audio_driven_story_spine"),
+            "primary_narrative_spine": primary_spine,
             "secondary_subjects": secondary_subjects,
             "continuity_objects": continuity_objects,
-            "continuity_matrix": {
-                "subject_to_objects": [
-                    {"subject": str(item.get("ownership_role") or "shared"), "object_label": str(item.get("label") or "")}
-                    for item in continuity_objects[:10]
-                ]
-            },
+            "continuity_matrix": continuity_matrix,
             "subject_priority_rules": [
                 "global_primary_spine_drives_interpretation",
-                "beat_level_primary_subject_can_shift_within_backbone",
+                "beat_primary_subject_cannot_shift_without_text_or_turn_signal",
             ],
             "emotional_voice_rules": ["keep_voice_consistent_with_global_arc", "avoid_unmotivated_tonal_inversion"],
-            "subject_transition_rules": ["transitions_require_shared_context_or_explicit_bridge_event"],
-            "object_transition_rules": ["ownership_or_binding_change_must_be_explicit_in_transition_events"],
-            "transition_events": [{"from_beat": beats[i]["beat_id"], "to_beat": beats[i + 1]["beat_id"], "type": "semantic_progression"} for i in range(max(0, len(beats) - 1))[:12]],
+            "subject_transition_rules": ["subject_handoff_allowed_only_on_transition_turn_or_explicit_phrase_signal", "secondary_subject_cannot_dominate_without_story_reason"],
+            "object_transition_rules": ["ownership_or_binding_change_must_be_explicit_in_transition_events", "persistent_objects_should_reappear_within_two_beats"],
+            "transition_events": transition_events[:16],
         },
         "semantic_arc": {
             "global_intent": str(parsed_story_core.get("story_summary") or fallback_story_core.get("story_summary") or ""),
-            "opening_statement": str(parsed_story_core.get("opening_anchor") or fallback_story_core.get("opening_anchor") or ""),
+            "opening_statement": opening_anchor,
             "arc_segments": [item.get("story_function") for item in beats[:8]],
             "turn_points": [item["beat_id"] for item in beats if item.get("story_function") in {"transition_turn", "climax_pressure"}][:4],
             "climax_definition": "max narrative pressure synchronized with high-energy audio slot(s)",
-            "ending_resolution": str(parsed_story_core.get("ending_callback_rule") or fallback_story_core.get("ending_callback_rule") or ""),
+            "ending_resolution": ending_callback_rule,
             "afterimage_rule": "final beat must preserve world identity while reducing pressure",
             "callback_rules": ["ending_echoes_opening_anchor_with_contextual_change"],
         },
@@ -805,10 +974,27 @@ def _build_story_core_v11(
                 "audio_slots_present": bool(slots),
                 "beat_slot_binding_valid": all(bool(_safe_list(item.get("slot_ids"))) for item in beats),
                 "world_anchor_present": bool(world_definition.get("environment_anchor")),
-                "narrative_spine_present": bool(str(parsed_story_core.get("story_summary") or fallback_story_core.get("story_summary") or "").strip()),
+                "narrative_spine_present": bool(primary_spine.strip()),
+                "subject_shadowing": subject_shadowing,
+                "continuity_break": continuity_break,
+                "world_drift": world_drift,
+                "audio_semantic_mismatch": bool(slots and not any(token in arc_tokens for token in ("transition_turn", "climax_pressure", "afterimage_release"))),
+                "dangling_tail": dangling_tail,
+                "opening_mismatch": opening_mismatch,
+                "missing_callback": callback_missing,
+                "continuity_object_dropout": continuity_object_dropout,
+                "semantic_stagnation_warning": bool(flatline_segments),
             },
-            "warnings": [] if slots else ["beat_map_generated_without_scene_slots"],
-            "consistency_score": round(0.82 if slots else 0.58, 3),
+            "warnings": (
+                [] if slots else ["beat_map_generated_without_scene_slots"]
+            )
+            + (["subject_shadowing_detected"] if subject_shadowing else [])
+            + (["continuity_break_risk"] if continuity_break else [])
+            + (["world_drift_risk"] if world_drift else [])
+            + (["semantic_flatline_detected"] if flatline_segments else []),
+            "consistency_score": round(max(0.0, min(1.0, semantic_delta_score)), 3),
+            "semantic_delta_score": semantic_delta_score,
+            "arc_flatline_segments": flatline_segments,
             "core_fail_conditions": [
                 "missing_audio_map_scene_slots",
                 "missing_primary_narrative_spine",
@@ -818,8 +1004,18 @@ def _build_story_core_v11(
         "prompt_interface_contract": {
             "contract_version": "prompt_interface_v1.1",
             "input_channels": ["world_definition", "narrative_backbone", "semantic_arc", "beat_map"],
-            "required_prompt_fields": ["beat_id", "slot_ids", "story_function", "beat_primary_subject", "continuity_visibility_requirement"],
-            "forbidden_prompt_decisions": ["route_selection", "camera_scale_lock", "lipsync_mode_selection", "i2v_first_last_selection"],
+            "must_remain_same": ["primary_subject_identity", "world_family", "core_continuity_objects", "slot_timing"],
+            "may_vary": ["lighting", "framing", "performance_intensity", "semantic_emphasis_per_beat"],
+            "must_be_visible": [primary_subject, *[str(item.get("label") or "") for item in continuity_objects[:2] if str(item.get("label") or "").strip()]],
+            "may_be_offscreen": secondary_subjects[:3],
+            "continuity_priority": ["subject_identity", "object_binding", "world_anchor"],
+            "world_prompt_constraints": world_definition.get("world_continuity_rules", []),
+            "identity_prompt_constraints": _safe_list(parsed_story_core.get("identity_lock")) or [_first_text(_safe_dict(parsed_story_core.get("identity_lock")).get("rule"), _safe_dict(fallback_story_core.get("identity_lock")).get("rule"))],
+            "object_prompt_constraints": ["respect_ownership_role_mapping", "do_not_drop_persistent_objects_without_transition_event"],
+            "forbidden_insertions": ["unreferenced_main_character", "ungrounded_magic_object", "unauthorized_world_reset"],
+            "forbidden_style_drift": forbidden_drift,
+            "required_callback_elements": [opening_anchor[:120], ending_callback_rule[:120]],
+            "beat_focus_hint": {item["beat_id"]: item["beat_focus_hint"] for item in beats},
             "downstream_constraints": {
                 "must_preserve_slot_timing": True,
                 "must_preserve_subject_priority_rules": True,
