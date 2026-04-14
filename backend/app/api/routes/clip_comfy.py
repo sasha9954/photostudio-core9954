@@ -825,8 +825,12 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
         stage_ids = req.get("stageIds") if isinstance(req.get("stageIds"), list) else []
         auto_run = bool(req.get("autoRun"))
         if stage_id:
-            package = run_manual_stage(stage_id, package, req)
-            executed_stages = ["input_package", stage_id] if stage_id == "story_core" else [stage_id]
+            package, executed_stages = run_manual_stage(
+                stage_id,
+                package,
+                req,
+                return_executed_stage_ids=True,
+            )
         else:
             resolved_stage_ids = resolve_stage_sequence(stage_ids, auto_mode=auto_run, include_dependencies=not auto_run)
             package = run_pipeline(resolved_stage_ids, package, req)

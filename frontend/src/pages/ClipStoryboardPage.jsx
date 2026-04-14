@@ -2718,6 +2718,35 @@ function stripRawScenarioPayload(outputs) {
   return nextOutputs;
 }
 
+function mergeScenarioPackagePreservingAudioMap({
+  requestedStageId = "",
+  executedStages = [],
+  previousPackage = {},
+  responsePackage = {},
+} = {}) {
+  const normalizedRequestedStageId = String(requestedStageId || "").trim().toLowerCase();
+  const executedSet = new Set(
+    (Array.isArray(executedStages) ? executedStages : [])
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const previousSafe = previousPackage && typeof previousPackage === "object" && !Array.isArray(previousPackage)
+    ? previousPackage
+    : {};
+  const responseSafe = responsePackage && typeof responsePackage === "object" && !Array.isArray(responsePackage)
+    ? responsePackage
+    : {};
+  if (normalizedRequestedStageId !== "story_core" || executedSet.has("audio_map")) return responseSafe;
+  const previousAudioMap = previousSafe?.audio_map && typeof previousSafe.audio_map === "object" && !Array.isArray(previousSafe.audio_map)
+    ? previousSafe.audio_map
+    : null;
+  if (!previousAudioMap) return responseSafe;
+  return {
+    ...responseSafe,
+    audio_map: previousAudioMap,
+  };
+}
+
 function stripScenarioGeneratedAssets(scene = {}) {
   const base = scene && typeof scene === "object" ? { ...scene } : {};
   SCENARIO_GENERATED_ASSET_FIELDS.forEach((key) => {
@@ -8962,7 +8991,7 @@ const applyScenarioPipelinePreRunInvalidation = useCallback(({ stageId = "", deb
     fromStageId: normalizedStageId,
     debugNodeId,
     sourceNodeId,
-    fullClear: true,
+    fullClear: normalizedStageId === "story_core" ? false : true,
   });
 }, [clearScenarioPipelineDownstreamRuntime]);
 
@@ -17274,9 +17303,15 @@ onClipSec: (nodeId, value) => {
                 });
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioPipelineDebug") return nodeItem;
-                  const nextStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
+                  const rawResponsePackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
                     ? response.storyboardPackage
                     : (nodeItem?.data?.storyboardPackage || {});
+                  const nextStoryboardPackage = mergeScenarioPackagePreservingAudioMap({
+                    requestedStageId: stageId,
+                    executedStages: response?.executedStages,
+                    previousPackage: nodeItem?.data?.storyboardPackage || {},
+                    responsePackage: rawResponsePackage,
+                  });
                   const compactResponseSummary = buildScenarioResponseSummary(response);
                   const compactNormalizedOutputs = stripRawScenarioPayload(normalizedOutputs);
                   const nextDirectorOutput = compactNormalizedOutputs?.directorOutput && typeof compactNormalizedOutputs.directorOutput === "object"
@@ -17362,9 +17397,15 @@ onClipSec: (nodeId, value) => {
                   };
                 }).map((nodeItem) => {
                   if (!source || nodeItem.id !== source.id || nodeItem.type !== "comfyNarrative") return nodeItem;
-                  const nextStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
+                  const rawResponsePackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
                     ? response.storyboardPackage
                     : {};
+                  const nextStoryboardPackage = mergeScenarioPackagePreservingAudioMap({
+                    requestedStageId: stageId,
+                    executedStages: response?.executedStages,
+                    previousPackage: nodeItem?.data?.storyboardPackage || source?.data?.storyboardPackage || {},
+                    responsePackage: rawResponsePackage,
+                  });
                   const generatedAt = new Date().toISOString();
                   const nextRevision = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
                   const compactResponseSummary = buildScenarioResponseSummary(response);

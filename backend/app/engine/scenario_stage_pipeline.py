@@ -4191,6 +4191,34 @@ def _is_usable_audio_map(audio_map: dict[str, Any]) -> bool:
     return duration > 0 and bool(sections)
 
 
+def _audio_map_story_core_guard_fingerprint(audio_map: dict[str, Any]) -> str:
+    node = _safe_dict(audio_map)
+
+    def _norm_rows(rows: Any) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for idx, row in enumerate(_safe_list(rows), start=1):
+            if not isinstance(row, dict):
+                continue
+            normalized.append(
+                {
+                    "id": str(row.get("id") or row.get("scene_id") or row.get("slot_id") or idx),
+                    "t0": round(_to_float(row.get("t0"), 0.0), 3),
+                    "t1": round(_to_float(row.get("t1"), 0.0), 3),
+                }
+            )
+        return normalized
+
+    payload = {
+        "duration_sec": round(_coerce_duration_sec(node.get("duration_sec")), 3),
+        "scene_candidate_windows_count": len(_safe_list(node.get("scene_candidate_windows"))),
+        "scene_slots_count": len(_safe_list(node.get("scene_slots"))),
+        "scene_candidate_windows": _norm_rows(node.get("scene_candidate_windows")),
+        "scene_slots": _norm_rows(node.get("scene_slots")),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _normalize_audio_rows_for_music_video(rows: list[dict[str, Any]], duration_sec: float) -> list[dict[str, Any]]:
     duration = _coerce_duration_sec(duration_sec)
     normalized: list[dict[str, Any]] = []
@@ -5022,22 +5050,58 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
     return pkg
 
 
-def run_manual_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def run_manual_stage(
+    stage_id: str,
+    package: dict[str, Any],
+    payload: dict[str, Any] | None = None,
+    *,
+    return_executed_stage_ids: bool = False,
+) -> dict[str, Any] | tuple[dict[str, Any], list[str]]:
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
+    executed_stage_ids: list[str] = []
     if stage_id == "finalize":
         # Guardrail: pressing FINAL must not retrigger upstream creative Gemini stages.
         # Finalize can run only from already prepared normalized outputs.
         pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
-        return run_stage(stage_id, pkg, payload)
+        pkg = run_stage(stage_id, pkg, payload)
+        executed_stage_ids.append(stage_id)
+        return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
+    preserve_audio_map_for_story_core = stage_id == "story_core" and _is_usable_audio_map(_safe_dict(pkg.get("audio_map")))
+    if preserve_audio_map_for_story_core:
+        dep_sequence = [dep_stage for dep_stage in dep_sequence if dep_stage != "audio_map"]
+    guarded_audio_map_before = deepcopy(_safe_dict(pkg.get("audio_map"))) if preserve_audio_map_for_story_core else {}
+    guarded_fingerprint_before = (
+        _audio_map_story_core_guard_fingerprint(guarded_audio_map_before) if preserve_audio_map_for_story_core else ""
+    )
     for dep_stage in dep_sequence:
         pkg = run_stage(dep_stage, pkg, payload)
+        executed_stage_ids.append(dep_stage)
         if str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(dep_stage)).get("status") or "") == "error":
-            return pkg
+            return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
-    return run_stage(stage_id, pkg, payload)
+    pkg = run_stage(stage_id, pkg, payload)
+    executed_stage_ids.append(stage_id)
+    if preserve_audio_map_for_story_core:
+        guarded_audio_map_after = _safe_dict(pkg.get("audio_map"))
+        guarded_fingerprint_after = _audio_map_story_core_guard_fingerprint(guarded_audio_map_after)
+        if guarded_fingerprint_before and guarded_fingerprint_after != guarded_fingerprint_before:
+            pkg["audio_map"] = guarded_audio_map_before
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
+            warnings = _safe_list(diagnostics.get("warnings"))
+            warnings.append(
+                {
+                    "stage_id": "story_core",
+                    "message": "story_core_audio_map_mutation_guard_triggered",
+                }
+            )
+            diagnostics["warnings"] = warnings[-80:]
+            diagnostics["story_core_audio_map_mutation_guard_triggered"] = True
+            pkg["diagnostics"] = diagnostics
+            _append_diag_event(pkg, "story_core audio_map mutation guard restored upstream audio_map", stage_id="story_core")
+    return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
 
 
 def run_pipeline(stage_ids: list[str], package: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
