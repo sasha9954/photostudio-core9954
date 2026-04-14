@@ -2567,6 +2567,15 @@ const SCENARIO_PIPELINE_STAGE_ORDER = [
   "scene_prompts",
   "finalize",
 ];
+const SCENARIO_STAGE_DEPTH_BY_ID = {
+  input_package: 0,
+  audio_map: 1,
+  story_core: 2,
+  role_plan: 3,
+  scene_plan: 4,
+  scene_prompts: 5,
+  finalize: 6,
+};
 
 const STAGE_LABEL_BY_ID = {
   audio_map: "AUDIO",
@@ -2596,6 +2605,8 @@ const SCENARIO_PIPELINE_DEBUG_CLEAR_FIELDS = [
   "stageStatuses",
   "rawScenarioResponseSummary",
   "normalizedStageOutputs",
+  "pendingScenarioRequestToken",
+  "activeScenarioRequestToken",
 ];
 
 const SCENARIO_PIPELINE_SCENE_RUNTIME_CLEAR_FIELDS = [
@@ -2717,6 +2728,56 @@ function getScenarioPipelineStageOrder() {
   return [...SCENARIO_PIPELINE_STAGE_ORDER];
 }
 
+function getScenarioStageDepth(stageId = "") {
+  const normalized = String(stageId || "").trim().toLowerCase();
+  return Number(SCENARIO_STAGE_DEPTH_BY_ID?.[normalized] ?? -1);
+}
+
+function hasScenarioStagePayload(stageId = "", storyboardPackage = {}) {
+  const pkg = storyboardPackage && typeof storyboardPackage === "object" && !Array.isArray(storyboardPackage)
+    ? storyboardPackage
+    : {};
+  const normalized = String(stageId || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (normalized === "audio_map") {
+    const stage = pkg?.audio_map && typeof pkg.audio_map === "object" ? pkg.audio_map : {};
+    return Object.keys(stage).length > 0;
+  }
+  if (normalized === "story_core") {
+    const stage = pkg?.story_core && typeof pkg.story_core === "object" ? pkg.story_core : {};
+    return Object.keys(stage).length > 0;
+  }
+  if (normalized === "role_plan") {
+    const stage = pkg?.role_plan && typeof pkg.role_plan === "object" ? pkg.role_plan : {};
+    return Object.keys(stage).length > 0;
+  }
+  if (normalized === "scene_plan") {
+    const stage = pkg?.scene_plan && typeof pkg.scene_plan === "object" ? pkg.scene_plan : {};
+    if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
+    return Object.keys(stage).length > 0;
+  }
+  if (normalized === "scene_prompts") {
+    const stage = pkg?.scene_prompts && typeof pkg.scene_prompts === "object" ? pkg.scene_prompts : {};
+    if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
+    return Object.keys(stage).length > 0;
+  }
+  if (normalized === "finalize") {
+    const stage = pkg?.final_storyboard && typeof pkg.final_storyboard === "object" ? pkg.final_storyboard : {};
+    if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
+    return Object.keys(stage).length > 0;
+  }
+  return false;
+}
+
+function getScenarioPackageMaxDepth(storyboardPackage = {}) {
+  return getScenarioPipelineStageOrder().reduce((maxDepth, stageId) => {
+    if (hasScenarioStagePayload(stageId, storyboardPackage)) {
+      return Math.max(maxDepth, getScenarioStageDepth(stageId));
+    }
+    return maxDepth;
+  }, hasScenarioStagePayload("input_package", storyboardPackage) ? getScenarioStageDepth("input_package") : -1);
+}
+
 function getScenarioPipelineDownstreamStages(stageId = "") {
   const order = getScenarioPipelineStageOrder();
   const normalized = String(stageId || "").trim().toLowerCase();
@@ -2725,7 +2786,7 @@ function getScenarioPipelineDownstreamStages(stageId = "") {
   return order.slice(idx + 1);
 }
 
-function isScenarioPipelineStageEnabled(stageId, stageStatuses = {}, busyStage = "") {
+function isScenarioPipelineStageEnabled(stageId, stageStatuses = {}, busyStage = "", storyboardPackage = {}) {
   if (String(busyStage || "").trim()) return false;
   const hasRunningStage = Object.values(stageStatuses || {}).some((row) => normalizeScenarioPipelineStageStatus(row?.status) === "running");
   if (hasRunningStage) return false;
@@ -2738,16 +2799,16 @@ function isScenarioPipelineStageEnabled(stageId, stageStatuses = {}, busyStage =
   if (idx === 0) return true;
   const prevStageId = order[idx - 1];
   const prevStatus = normalizeScenarioPipelineStageStatus(stageStatuses?.[prevStageId]?.status || "idle");
-  return prevStatus === "done";
+  return prevStatus === "done" || hasScenarioStagePayload(prevStageId, storyboardPackage);
 }
 
-function getScenarioPipelineStageButtonStateMap(stageStatuses = {}, busyStage = "") {
+function getScenarioPipelineStageButtonStateMap(stageStatuses = {}, busyStage = "", storyboardPackage = {}) {
   const order = getScenarioPipelineStageOrder();
   const map = {};
   let nextEnabledAssigned = false;
   const hasRunningStage = Object.values(stageStatuses || {}).some((row) => normalizeScenarioPipelineStageStatus(row?.status) === "running");
   order.forEach((stageId, idx) => {
-    const enabled = isScenarioPipelineStageEnabled(stageId, stageStatuses, busyStage);
+    const enabled = isScenarioPipelineStageEnabled(stageId, stageStatuses, busyStage, storyboardPackage);
     const prevStageId = idx > 0 ? order[idx - 1] : "";
     const prevStageDone = idx === 0
       ? true
@@ -2758,7 +2819,7 @@ function getScenarioPipelineStageButtonStateMap(stageStatuses = {}, busyStage = 
         ? "Дождитесь завершения текущей стадии"
         : (hasRunningStage
           ? "Дождитесь завершения running-стадии"
-          : (prevStageDone ? "" : `Сначала выполните ${String(STAGE_LABEL_BY_ID[prevStageId] || prevStageId || "").toUpperCase()}`)));
+          : ((prevStageDone || hasScenarioStagePayload(prevStageId, storyboardPackage)) ? "" : `Сначала выполните ${String(STAGE_LABEL_BY_ID[prevStageId] || prevStageId || "").toUpperCase()}`)));
     map[stageId] = {
       enabled,
       isNext: enabled && !nextEnabledAssigned,
@@ -2830,16 +2891,79 @@ function mergeScenarioPackagePreservingAudioMap({
   const responseSafe = responsePackage && typeof responsePackage === "object" && !Array.isArray(responsePackage)
     ? responsePackage
     : {};
-  const isManualStoryCoreRunWithoutAudioMap = normalizedRequestedStageId === "story_core" && !executedSet.has("audio_map");
-  if (!isManualStoryCoreRunWithoutAudioMap) return responseSafe;
-  const previousAudioMap = previousSafe?.audio_map && typeof previousSafe.audio_map === "object" && !Array.isArray(previousSafe.audio_map)
-    ? previousSafe.audio_map
-    : null;
-  if (!previousAudioMap) return responseSafe;
-  return {
-    ...responseSafe,
-    audio_map: previousAudioMap,
+  const resolveIncomingStageId = () => {
+    const orderedExecuted = getScenarioPipelineStageOrder()
+      .filter((stageId) => executedSet.has(stageId))
+      .sort((a, b) => getScenarioStageDepth(b) - getScenarioStageDepth(a));
+    if (orderedExecuted.length > 0) return orderedExecuted[0];
+    return normalizedRequestedStageId || "";
   };
+  const incomingStageId = resolveIncomingStageId();
+  const incomingDepth = getScenarioStageDepth(incomingStageId);
+  const existingMaxDepth = getScenarioPackageMaxDepth(previousSafe);
+  const isPartialManualRerun = !!normalizedRequestedStageId && !executedSet.has("finalize");
+  const decision = {
+    applyDecision: "accept",
+    reason: "default_accept",
+  };
+  if (isPartialManualRerun && incomingDepth >= 0 && existingMaxDepth > incomingDepth) {
+    decision.applyDecision = "merge_preserve_downstream";
+    decision.reason = "incoming_partial_stage_weaker_than_existing_payload";
+  }
+
+  const nextPackage = { ...responseSafe };
+  const preservePayload = (stageId, packageKey) => {
+    const shouldPreserve = decision.applyDecision === "merge_preserve_downstream"
+      && getScenarioStageDepth(stageId) > incomingDepth
+      && !executedSet.has(stageId)
+      && hasScenarioStagePayload(stageId, previousSafe)
+      && !hasScenarioStagePayload(stageId, responseSafe);
+    if (!shouldPreserve) return false;
+    if (Object.prototype.hasOwnProperty.call(previousSafe, packageKey)) {
+      nextPackage[packageKey] = previousSafe[packageKey];
+      return true;
+    }
+    return false;
+  };
+  const preservedRolePlan = preservePayload("role_plan", "role_plan");
+  const preservedScenePlan = preservePayload("scene_plan", "scene_plan");
+  const preservedScenePrompts = preservePayload("scene_prompts", "scene_prompts");
+  const preservedFinalStoryboard = preservePayload("finalize", "final_storyboard");
+
+  const previousStatuses = previousSafe?.stage_statuses && typeof previousSafe.stage_statuses === "object" ? previousSafe.stage_statuses : {};
+  const incomingStatuses = responseSafe?.stage_statuses && typeof responseSafe.stage_statuses === "object" ? responseSafe.stage_statuses : {};
+  const mergedStatuses = { ...incomingStatuses };
+  getScenarioPipelineStageOrder().forEach((stageId) => {
+    const stageDepth = getScenarioStageDepth(stageId);
+    if (!(stageDepth > incomingDepth) || executedSet.has(stageId)) return;
+    const previousRow = previousStatuses?.[stageId] && typeof previousStatuses[stageId] === "object" ? previousStatuses[stageId] : null;
+    const incomingRow = incomingStatuses?.[stageId] && typeof incomingStatuses[stageId] === "object" ? incomingStatuses[stageId] : null;
+    const incomingStatus = normalizeScenarioPipelineStageStatus(incomingRow?.status || "");
+    const shouldPreserveStatus = decision.applyDecision === "merge_preserve_downstream"
+      && previousRow
+      && (incomingStatus === "idle" || incomingStatus === "stale" || incomingStatus === "" || !incomingRow);
+    if (shouldPreserveStatus) mergedStatuses[stageId] = previousRow;
+  });
+  if (Object.keys(mergedStatuses).length) nextPackage.stage_statuses = mergedStatuses;
+
+  console.debug("[SCENARIO APPLY GUARD]", {
+    incomingStage: incomingStageId,
+    incomingDepth,
+    existingMaxDepth,
+    incomingRevision: String(responseSafe?.revision || responseSafe?.scenarioRevision || ""),
+    existingRevision: String(previousSafe?.revision || previousSafe?.scenarioRevision || ""),
+    incomingRequestedStageId: normalizedRequestedStageId,
+    applyDecision: decision.applyDecision,
+    reason: decision.reason,
+  });
+  console.debug("[SCENARIO DOWNSTREAM PRESERVE]", {
+    preservedRolePlan,
+    preservedScenePlan,
+    preservedScenePrompts,
+    preservedFinalStoryboard,
+    becauseIncomingStageWas: incomingStageId || normalizedRequestedStageId || "unknown",
+  });
+  return nextPackage;
 }
 
 function stripScenarioGeneratedAssets(scene = {}) {
@@ -9033,6 +9157,8 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
         nextData.pendingDirectorOutput = null;
         nextData.pendingGeneratedAt = "";
         nextData.pendingScenarioRevision = "";
+        nextData.pendingScenarioRequestToken = "";
+        nextData.activeScenarioRequestToken = "";
         nextData.storyboardPackage = {};
         nextData.debugStoryboardPackage = {};
         nextData.storyboardOut = null;
@@ -9074,6 +9200,7 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
         nextData.pendingDirectorOutput = null;
         nextData.storyboardOut = null;
         nextData.directorOutput = null;
+        nextData.pendingScenarioRequestToken = "";
       }
       return { ...nodeItem, data: nextData };
     }
@@ -9096,12 +9223,11 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
 const applyScenarioPipelinePreRunInvalidation = useCallback(({ stageId = "", debugNodeId = "", sourceNodeId = "" } = {}) => {
   const normalizedStageId = String(stageId || "").trim().toLowerCase();
   if (!normalizedStageId) return;
-  const requiresHardRuntimeClear = new Set(["story_core", "role_plan", "scene_plan", "scene_prompts"]).has(normalizedStageId);
   clearScenarioPipelineDownstreamRuntime({
     fromStageId: normalizedStageId,
     debugNodeId,
     sourceNodeId,
-    fullClear: requiresHardRuntimeClear,
+    fullClear: false,
   });
 }, [clearScenarioPipelineDownstreamRuntime]);
 
@@ -17342,7 +17468,7 @@ onClipSec: (nodeId, value) => {
           const stageStatuses = storyboardPackage?.stage_statuses && typeof storyboardPackage.stage_statuses === "object"
             ? storyboardPackage.stage_statuses
             : (base?.data?.stageStatuses && typeof base.data.stageStatuses === "object" ? base.data.stageStatuses : {});
-          const stageButtonStateById = getScenarioPipelineStageButtonStateMap(stageStatuses, "");
+          const stageButtonStateById = getScenarioPipelineStageButtonStateMap(stageStatuses, "", storyboardPackage);
           const diagnostics = storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object"
             ? storyboardPackage.diagnostics
             : (base?.data?.diagnostics && typeof base.data.diagnostics === "object" ? base.data.diagnostics : {});
@@ -17412,6 +17538,7 @@ onClipSec: (nodeId, value) => {
                 const debugNode = activeNodes.find((nodeItem) => nodeItem.id === nodeId && nodeItem.type === "scenarioPipelineDebug");
                 const stageId = String(options?.stageId || "").trim();
                 const autoRun = Boolean(options?.autoRun);
+                const scenarioRequestToken = `scenario-stage-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
                 const activeEdges = edgesRef.current || [];
                 const edgeToDebug = [...activeEdges]
                   .reverse()
@@ -17435,6 +17562,31 @@ onClipSec: (nodeId, value) => {
                   storyboardPackage: debugNode?.data?.storyboardPackage || {},
                   requestSource: "scenario_pipeline_debug:manual_stage",
                 });
+                setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                  if (nodeItem.id === nodeId && nodeItem.type === "scenarioPipelineDebug") {
+                    return {
+                      ...nodeItem,
+                      data: {
+                        ...nodeItem.data,
+                        pendingScenarioRequestToken: scenarioRequestToken,
+                        activeScenarioRequestToken: scenarioRequestToken,
+                        lastRequestedStageId: stageId,
+                      },
+                    };
+                  }
+                  if (source && nodeItem.id === source.id && nodeItem.type === "comfyNarrative") {
+                    return {
+                      ...nodeItem,
+                      data: {
+                        ...nodeItem.data,
+                        pendingScenarioRequestToken: scenarioRequestToken,
+                        activeScenarioRequestToken: scenarioRequestToken,
+                        lastRequestedStageId: stageId,
+                      },
+                    };
+                  }
+                  return nodeItem;
+                })));
                 const response = await fetchJson("/api/clip/comfy/scenario-director/generate", {
                   method: "POST",
                   body: payload,
@@ -17466,6 +17618,26 @@ onClipSec: (nodeId, value) => {
                 });
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioPipelineDebug") return nodeItem;
+                  const pendingRequestToken = String(nodeItem?.data?.pendingScenarioRequestToken || "");
+                  const activeRequestToken = String(nodeItem?.data?.activeScenarioRequestToken || "");
+                  const matched = !pendingRequestToken || pendingRequestToken === scenarioRequestToken || activeRequestToken === scenarioRequestToken;
+                  console.debug("[SCENARIO RESPONSE IDENTITY]", {
+                    requestToken: scenarioRequestToken,
+                    pendingRequestToken,
+                    activeRequestToken,
+                    matched,
+                  });
+                  if (!matched) {
+                    console.warn("[SCENARIO APPLY GUARD]", {
+                      incomingStage: stageId,
+                      incomingDepth: getScenarioStageDepth(stageId),
+                      existingMaxDepth: getScenarioPackageMaxDepth(nodeItem?.data?.storyboardPackage || {}),
+                      incomingRequestedStageId: stageId,
+                      applyDecision: "reject_as_stale",
+                      reason: "request_token_mismatch",
+                    });
+                    return nodeItem;
+                  }
                   const rawResponsePackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
                     ? response.storyboardPackage
                     : (nodeItem?.data?.storyboardPackage || {});
@@ -17544,6 +17716,8 @@ onClipSec: (nodeId, value) => {
                         executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                       },
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
+                      pendingScenarioRequestToken: "",
+                      activeScenarioRequestToken: scenarioRequestToken,
                       diagnostics: response?.meta?.diagnostics && typeof response.meta.diagnostics === "object"
                         ? response.meta.diagnostics
                         : (nextStoryboardPackage?.diagnostics && typeof nextStoryboardPackage.diagnostics === "object" ? nextStoryboardPackage.diagnostics : {}),
@@ -17555,6 +17729,16 @@ onClipSec: (nodeId, value) => {
                   };
                 }).map((nodeItem) => {
                   if (!source || nodeItem.id !== source.id || nodeItem.type !== "comfyNarrative") return nodeItem;
+                  const pendingRequestToken = String(nodeItem?.data?.pendingScenarioRequestToken || "");
+                  const activeRequestToken = String(nodeItem?.data?.activeScenarioRequestToken || "");
+                  const matched = !pendingRequestToken || pendingRequestToken === scenarioRequestToken || activeRequestToken === scenarioRequestToken;
+                  console.debug("[SCENARIO RESPONSE IDENTITY]", {
+                    requestToken: scenarioRequestToken,
+                    pendingRequestToken,
+                    activeRequestToken,
+                    matched,
+                  });
+                  if (!matched) return nodeItem;
                   const rawResponsePackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
                     ? response.storyboardPackage
                     : {};
@@ -17591,6 +17775,8 @@ onClipSec: (nodeId, value) => {
                       pendingDirectorOutput: null,
                       pendingGeneratedAt: generatedAt,
                       pendingScenarioRevision: nextRevision,
+                      pendingScenarioRequestToken: "",
+                      activeScenarioRequestToken: scenarioRequestToken,
                       lastRequestedStageId: stageId,
                     },
                   };
