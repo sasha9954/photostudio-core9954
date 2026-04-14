@@ -375,6 +375,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     story_core = _safe_dict(package.get("story_core"))
     audio_map = _safe_dict(package.get("audio_map"))
     role_plan = _safe_dict(package.get("role_plan"))
+    compiled_contract = _safe_dict(role_plan.get("compiled_contract"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     ownership_binding_inventory = _build_ref_binding_inventory(refs_inventory)
     scene_windows = _build_scene_windows(audio_map)
@@ -393,7 +394,6 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         "mode": "clip",
         "content_type": str(input_pkg.get("content_type") or ""),
         "format": str(input_pkg.get("format") or ""),
-        "director_note": str(input_pkg.get("director_note") or input_pkg.get("note") or "")[:1200],
         "story_core": {
             "story_summary": str(story_core.get("story_summary") or "")[:1200],
             "opening_anchor": str(story_core.get("opening_anchor") or "")[:600],
@@ -415,6 +415,10 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "world_continuity": _safe_dict(role_plan.get("world_continuity")),
             "world_summary": world_summary,
             "scene_roles": _safe_list(role_plan.get("scene_roles")),
+            "compiled_contract": {
+                "global_contract": _safe_dict(compiled_contract.get("global_contract")),
+                "scene_contracts": _safe_list(compiled_contract.get("scene_contracts")),
+            },
             "role_arc_summary": str(role_plan.get("role_arc_summary") or ""),
             "continuity_notes": _safe_list(role_plan.get("continuity_notes")),
         },
@@ -468,6 +472,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "MODE IS CLIP ONLY.\\n"
         "Build final watchable scene plan from fixed scene windows.\\n"
         "Audio energy is the primary default driver of dramaturgy in clip/music_video mode.\\n"
+        "Do not read or reason from raw Scenario Director text in this stage; use role_plan.compiled_contract only for cast/world constraints.\\n"
         "Refs lock identity/world/style continuity; text sets premise only when present.\\n"
         "Use scene windows exactly as provided.\\n"
         "Do not add, merge, split, or invent extra scenes.\\n"

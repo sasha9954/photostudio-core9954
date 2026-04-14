@@ -689,6 +689,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
     story_core = _safe_dict(package.get("story_core"))
     audio_map = _safe_dict(package.get("audio_map"))
     role_plan = _safe_dict(package.get("role_plan"))
+    compiled_contract = _safe_dict(role_plan.get("compiled_contract"))
     scene_plan = _safe_dict(package.get("scene_plan"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
 
@@ -705,7 +706,6 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
         "mode": "clip",
         "content_type": str(input_pkg.get("content_type") or ""),
         "format": str(input_pkg.get("format") or ""),
-        "director_note": str(input_pkg.get("director_note") or input_pkg.get("note") or "")[:1200],
         "story_core": {
             "story_summary": str(story_core.get("story_summary") or "")[:1200],
             "opening_anchor": str(story_core.get("opening_anchor") or "")[:600],
@@ -723,6 +723,10 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
         },
         "role_plan": {
             "world_continuity": _safe_dict(role_plan.get("world_continuity")),
+            "compiled_contract": {
+                "global_contract": _safe_dict(compiled_contract.get("global_contract")),
+                "scene_contracts": _safe_list(compiled_contract.get("scene_contracts")),
+            },
             "scene_roles": [
                 {
                     "scene_id": sid,
@@ -805,6 +809,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Return STRICT JSON only. No markdown.\\n"
         "MODE is clip only.\\n"
         "Task: build planning-to-generation bridge prompts for later storyboard/render stages.\\n"
+        "Do not access raw Scenario Director text directly; treat role_plan.compiled_contract as source of cast/world/presence constraints.\\n"
         "Prompts are translation layer only: do not invent new plot geography beyond upstream story/role/scene contracts.\\n"
         "Do NOT produce render payloads or API calls.\\n"
         "For each scene from scene_plan, write route-aware photo_prompt and video_prompt with compact production language.\\n"

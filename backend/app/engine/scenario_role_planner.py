@@ -32,6 +32,7 @@ ALLOWED_SCENE_PRESENCE_MODES = {
     "transit",
     "private_release",
 }
+ALLOWED_PRESENCE_POLICIES = {"STRICT", "ADDITIVE", "MINIMAL"}
 
 _COUNTRY_HINTS = {
     "iran": "Iran",
@@ -297,6 +298,125 @@ def _build_audio_dramaturgy_context(audio_map: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _build_explicit_node_input(
+    roles_inventory: dict[str, Any],
+    refs_inventory: dict[str, Any],
+    ownership_binding_inventory: list[dict[str, str]],
+) -> dict[str, Any]:
+    refs_present_by_role = _safe_dict(roles_inventory.get("refs_present_by_role"))
+    present_roles = [str(role).strip() for role in _safe_list(roles_inventory.get("present_roles")) if str(role).strip()]
+    explicit_actors = [role for role in _CHARACTER_ROLES if role in present_roles]
+    explicit_anchors = [role for role in ("location", "style", "props") if role in present_roles]
+    occupied_slots = sorted(set([*explicit_actors, *explicit_anchors]))
+    return {
+        "actors": explicit_actors,
+        "anchors": explicit_anchors,
+        "refs_present_by_role": refs_present_by_role,
+        "occupied_slots": occupied_slots,
+        "ownership_binding_inventory": ownership_binding_inventory[:16],
+        "refs_inventory_summary": _safe_list(roles_inventory.get("refs_inventory_summary")),
+        "refs_connected_count": len([k for k in refs_inventory.keys() if str(k).strip().startswith("ref_")]),
+    }
+
+
+def _build_explicit_director_text_input(input_pkg: dict[str, Any]) -> dict[str, Any]:
+    text_fields = {
+        "text": str(input_pkg.get("text") or "").strip(),
+        "story_text": str(input_pkg.get("story_text") or "").strip(),
+        "note": str(input_pkg.get("note") or "").strip(),
+        "director_note": str(input_pkg.get("director_note") or "").strip(),
+    }
+    text_blob = " ".join(v for v in text_fields.values() if v).lower()
+    solo_intent = any(token in text_blob for token in ("solo", "одна", "один", "single hero", "single character"))
+    duo_intent = any(token in text_blob for token in ("duo", "двое", "two characters"))
+    group_intent = any(token in text_blob for token in ("group", "ensemble", "толпа", "массовка", "crowd"))
+    no_second_actor = any(
+        token in text_blob
+        for token in ("без второго", "no second", "without second", "single actor only", "no support character")
+    )
+    no_crowd = any(token in text_blob for token in ("без массовки", "no crowd", "without crowd", "crowd forbidden"))
+    crowd_allowed = not no_crowd and ("crowd" in text_blob or "массов" in text_blob or group_intent)
+    forbid_neon = any(token in text_blob for token in ("неон нельзя", "no neon", "without neon"))
+    forbidden_drift: list[str] = []
+    if forbid_neon:
+        forbidden_drift.append("neon")
+    if any(token in text_blob for token in ("не делать концерт", "no concert", "without concert")):
+        forbidden_drift.append("concert_staging")
+    if no_crowd:
+        forbidden_drift.append("crowd")
+    world_family_hints = [token for token in ("urban", "street", "interior", "outdoor", "nightclub", "city") if token in text_blob]
+    return {
+        "raw_fields": text_fields,
+        "constraints": {
+            "solo_intent": solo_intent,
+            "duo_intent": duo_intent,
+            "group_intent": group_intent,
+            "no_second_actor": no_second_actor,
+            "crowd_allowed": crowd_allowed,
+            "forbid_crowd": no_crowd,
+            "forbidden_drift": forbidden_drift,
+            "world_family_hints": world_family_hints[:6],
+        },
+    }
+
+
+def _resolve_presence_policy(constraints: dict[str, Any]) -> dict[str, Any]:
+    forbid_crowd = bool(constraints.get("forbid_crowd"))
+    crowd_allowed = bool(constraints.get("crowd_allowed")) and not forbid_crowd
+    if forbid_crowd:
+        presence_policy = "STRICT"
+        crowd_type = "none"
+        crowd_density = 0.0
+        crowd_interaction = "none"
+    elif crowd_allowed:
+        presence_policy = "ADDITIVE"
+        crowd_type = "anonymous"
+        crowd_density = 0.25
+        crowd_interaction = "passive"
+    else:
+        presence_policy = "MINIMAL"
+        crowd_type = "none"
+        crowd_density = 0.0
+        crowd_interaction = "none"
+    if presence_policy not in ALLOWED_PRESENCE_POLICIES:
+        presence_policy = "MINIMAL"
+    return {
+        "presence_policy": presence_policy,
+        "crowd_allowed": crowd_allowed,
+        "crowd_type": crowd_type,
+        "crowd_density": crowd_density,
+        "crowd_interaction": crowd_interaction,
+        "allow_scene_local_details": True,
+        "allow_scene_local_props": True,
+    }
+
+
+def _build_conflict_report(node_input: dict[str, Any], director_input: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    warnings: list[dict[str, Any]] = []
+    severe: list[dict[str, Any]] = []
+    constraints = _safe_dict(director_input.get("constraints"))
+    node_actors = [str(v).strip() for v in _safe_list(node_input.get("actors")) if str(v).strip()]
+    if bool(constraints.get("solo_intent") or constraints.get("no_second_actor")) and len(node_actors) >= 2:
+        severe.append(
+            {
+                "code": "node_text_cast_conflict",
+                "message": "Text requests solo/no-second-actor but multiple character nodes are connected.",
+                "resolution": "keep explicit node actors in registry, mark secondary actors as forbidden in scene constraints unless explicitly re-enabled",
+                "sources": {"nodes": node_actors, "director_text": {"solo_intent": True, "no_second_actor": bool(constraints.get("no_second_actor"))}},
+            }
+        )
+    if bool(constraints.get("forbid_crowd")) and bool(constraints.get("crowd_allowed")):
+        warnings.append(
+            {
+                "code": "director_text_internal_conflict",
+                "message": "Director text includes both crowd allow and crowd forbid signals.",
+                "resolution": "forbid_crowd wins; crowd policy forced to STRICT/no crowd.",
+                "sources": {"director_text": constraints},
+            }
+        )
+    return warnings, severe
+
+
 def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
@@ -311,6 +431,30 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
         roles_inventory["present_roles"] = list(dict.fromkeys([*(_safe_list(roles_inventory.get("present_roles"))), "location"]))
     scene_windows = _build_scene_windows(audio_map)
     audio_dramaturgy = _build_audio_dramaturgy_context(audio_map)
+    explicit_node_input = _build_explicit_node_input(roles_inventory, refs_inventory, binding_inventory)
+    explicit_director_text_input = _build_explicit_director_text_input(input_pkg)
+    director_constraints = _safe_dict(explicit_director_text_input.get("constraints"))
+    conflict_warnings, severe_conflicts = _build_conflict_report(explicit_node_input, explicit_director_text_input)
+    merged_authored_input = {
+        "explicit_node_input": explicit_node_input,
+        "explicit_director_text_input": explicit_director_text_input,
+        "audio_scene_function_input": {
+            "scene_windows": scene_windows,
+            "audio_dramaturgy": audio_dramaturgy,
+        },
+        "core_continuity_input": {
+            "identity_lock": _safe_dict(story_core.get("identity_lock")),
+            "world_lock": _safe_dict(story_core.get("world_lock")),
+            "style_lock": _safe_dict(story_core.get("style_lock")),
+            "forbidden_drift": _safe_list(_safe_dict(story_core.get("story_guidance")).get("forbidden_drift")),
+            "persisted_world_state": _safe_dict(story_core.get("persisted_world_state")),
+        },
+        "presence_policy_defaults": _resolve_presence_policy(director_constraints),
+        "conflicts": {
+            "warnings": conflict_warnings,
+            "severe": severe_conflicts,
+        },
+    }
 
     compact_context = {
         "mode": "clip",
@@ -328,6 +472,7 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
             "story_guidance": _safe_dict(story_core.get("story_guidance")),
         },
         "roles_inventory": roles_inventory,
+        "merged_authored_input": merged_authored_input,
         "ownership_binding_inventory": binding_inventory,
         "scene_windows": scene_windows,
         "audio_dramaturgy": audio_dramaturgy,
@@ -351,6 +496,7 @@ def _build_role_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any
         "story_core": story_core,
         "roles_inventory": roles_inventory,
         "ownership_binding_inventory": binding_inventory,
+        "merged_authored_input": merged_authored_input,
     }
     return compact_context, aux
 
@@ -360,6 +506,8 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "You are ROLE PLAN stage for scenario pipeline.\n"
         "Return STRICT JSON only. No markdown.\n"
         "mode=clip only.\n"
+        "Work from merged_authored_input. Both node graph inputs and Scenario Director text are primary authored sources.\n"
+        "Never silently override node entities or director prohibitions; if conflict exists, keep deterministic output and include conflict notes.\n"
         "Task: distribute role presence across already fixed scene windows.\n"
         "Do NOT force all roles into every scene.\n"
         "Use only roles that are present in roles_inventory.\n"
@@ -752,6 +900,7 @@ def _normalize_role_plan(
     input_pkg: dict[str, Any],
     story_core: dict[str, Any],
     ownership_binding_inventory: list[dict[str, str]] | None = None,
+    merged_authored_input: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool, str]:
     allowed_roles = set(present_roles)
     known_scene_ids = {str(row.get("id") or ""): row for row in scene_windows}
@@ -1002,6 +1151,15 @@ def _normalize_role_plan(
             first_scene["role_reason"] = "opening_anchor_guard_character_1"
             normalized_scene_roles[0] = first_scene
 
+    merged_input = _safe_dict(merged_authored_input)
+    director_constraints = _safe_dict(_safe_dict(merged_input.get("explicit_director_text_input")).get("constraints"))
+    presence_policy_defaults = _safe_dict(merged_input.get("presence_policy_defaults"))
+    conflict_block = _safe_dict(merged_input.get("conflicts"))
+    no_second_actor = bool(director_constraints.get("no_second_actor") or director_constraints.get("solo_intent"))
+    forbidden_actor_ids: list[str] = []
+    if no_second_actor:
+        forbidden_actor_ids.extend([role for role in _CHARACTER_ROLES if role != "character_1"])
+
     role_arc_summary = str(raw_plan.get("role_arc_summary") or "").strip() or "Single-hero arc moves between internal pressure and urban world contact, then resolves into restrained release."
     continuity_notes = [str(item).strip() for item in _safe_list(raw_plan.get("continuity_notes")) if str(item).strip()]
     if not continuity_notes:
@@ -1012,12 +1170,86 @@ def _normalize_role_plan(
             "Lighting/realism lock: grounded daylight progression; avoid neon/club/warehouse drift.",
         ]
 
+    location_progression = [str(v).strip() for v in _safe_list(world_continuity.get("location_progression")) if str(v).strip()]
+    world_anchor_from_core = str(_safe_dict(story_core.get("world_lock")).get("setting") or (location_progression[0] if location_progression else "")).strip()
+    inferred_world_anchor = ""
+    if not world_anchor_from_core:
+        inferred_world_anchor = str(
+            world_continuity.get("environment_family")
+            or world_continuity.get("country_or_region")
+            or ""
+        ).strip()
+    persisted_world_anchor = world_anchor_from_core or inferred_world_anchor
+    source_trace_global = {
+        "from_nodes": _safe_dict(merged_input.get("explicit_node_input")),
+        "from_director_text": _safe_dict(merged_input.get("explicit_director_text_input")),
+        "from_audio": _safe_dict(merged_input.get("audio_scene_function_input")),
+        "from_core_continuity": _safe_dict(merged_input.get("core_continuity_input")),
+    }
+    global_contract = {
+        "actor_registry": {
+            "required_actors": list(global_roles.get("primary_character_roles") or []),
+            "optional_actors": list(global_roles.get("support_character_roles") or []),
+            "forbidden_actor_ids": list(dict.fromkeys(forbidden_actor_ids)),
+        },
+        "anchor_registry": {
+            "world_anchor": persisted_world_anchor,
+            "style_anchor": str(world_continuity.get("style_anchor") or ""),
+            "continuity_props": list(global_roles.get("prop_roles") or []),
+            "world_roles": list(global_roles.get("world_roles") or []),
+        },
+        "persisted_world_anchor": persisted_world_anchor,
+        "persisted_world_anchor_mode": "inferred_once" if inferred_world_anchor else "explicit_or_core_locked",
+        "presence_policy_defaults": presence_policy_defaults,
+        "hard_constraints": {
+            "must_preserve_primary_identity": True,
+            "must_preserve_world_family": True,
+            "must_preserve_key_props": bool(global_roles.get("prop_roles")),
+            "must_not_invent_cast": True,
+            "allow_new_character_ids": False,
+            "forbidden_drift": _safe_list(director_constraints.get("forbidden_drift")),
+        },
+        "source_trace": source_trace_global,
+        "conflicts": {
+            "warnings": _safe_list(conflict_block.get("warnings")),
+            "severe": _safe_list(conflict_block.get("severe")),
+            "severe_conflict_state": bool(_safe_list(conflict_block.get("severe"))),
+        },
+    }
+    scene_contracts: list[dict[str, Any]] = []
+    for row in normalized_scene_roles:
+        role_row = _safe_dict(row)
+        primary_role = str(role_row.get("primary_role") or "").strip()
+        optional = [r for r in _safe_list(role_row.get("secondary_roles")) if str(r).strip()]
+        scene_contracts.append(
+            {
+                "scene_id": str(role_row.get("scene_id") or ""),
+                "required_actors": [primary_role] if primary_role else [],
+                "optional_actors": optional,
+                "forbidden_actor_ids": list(dict.fromkeys(forbidden_actor_ids)),
+                "required_world_anchor": persisted_world_anchor,
+                "required_stage_anchor": str(world_continuity.get("environment_family") or ""),
+                "required_continuity_props": ["props"] if "props" in _safe_list(role_row.get("active_roles")) else [],
+                "presence_policy": presence_policy_defaults,
+                "performance_focus": bool(role_row.get("performance_focus")),
+                "scene_presence_mode": str(role_row.get("scene_presence_mode") or ""),
+                "constraints": global_contract["hard_constraints"],
+                "source_trace": source_trace_global,
+                "conflicts": global_contract["conflicts"],
+            }
+        )
+
     plan = {
         "plan_version": ROLE_PLAN_PROMPT_VERSION,
         "mode": "clip",
         "global_roles": global_roles,
         "world_continuity": world_continuity,
         "scene_roles": normalized_scene_roles,
+        "input_truth": merged_input,
+        "compiled_contract": {
+            "global_contract": global_contract,
+            "scene_contracts": scene_contracts,
+        },
         "role_arc_summary": role_arc_summary,
         "continuity_notes": continuity_notes,
     }
@@ -1068,6 +1300,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
     input_pkg = _safe_dict(aux.get("input_pkg"))
     story_core = _safe_dict(aux.get("story_core"))
     ownership_binding_inventory = _safe_list(aux.get("ownership_binding_inventory"))
+    merged_authored_input = _safe_dict(aux.get("merged_authored_input"))
 
     diagnostics = {
         "prompt_version": ROLE_PLAN_PROMPT_VERSION,
@@ -1087,6 +1320,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             input_pkg=input_pkg,
             story_core=story_core,
             ownership_binding_inventory=ownership_binding_inventory,
+            merged_authored_input=merged_authored_input,
         )
         diagnostics.update(_presence_diagnostics(_safe_list(plan.get("scene_roles")), _safe_dict(plan.get("world_continuity"))))
         return {
@@ -1122,6 +1356,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             input_pkg=input_pkg,
             story_core=story_core,
             ownership_binding_inventory=ownership_binding_inventory,
+            merged_authored_input=merged_authored_input,
         )
         diagnostics.update(_presence_diagnostics(_safe_list(role_plan.get("scene_roles")), _safe_dict(role_plan.get("world_continuity"))))
         return {
@@ -1142,6 +1377,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             input_pkg=input_pkg,
             story_core=story_core,
             ownership_binding_inventory=ownership_binding_inventory,
+            merged_authored_input=merged_authored_input,
         )
         diagnostics.update(_presence_diagnostics(_safe_list(role_plan.get("scene_roles")), _safe_dict(role_plan.get("world_continuity"))))
         return {
