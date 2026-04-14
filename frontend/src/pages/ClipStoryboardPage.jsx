@@ -7007,6 +7007,37 @@ async function getVideoDurationSec(url) {
   });
 }
 
+async function waitForReadableVideoDuration(url, sceneId, maxAttempts = 4, retryDelayMs = 900) {
+  const safeUrl = String(url || "").trim();
+  const attempts = Math.max(1, Number(maxAttempts) || 1);
+  const delayMs = Math.max(100, Number(retryDelayMs) || 900);
+  let lastDurationSec = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const browserDurationSec = await getVideoDurationSec(safeUrl);
+    const browserDurationReadable = Number.isFinite(browserDurationSec) && browserDurationSec > 0;
+    const finalDecision = browserDurationReadable
+      ? "done"
+      : (attempt < attempts ? "retry" : "finalizing");
+    console.info("[SCENARIO VIDEO BROWSER METADATA CHECK]", {
+      sceneId: String(sceneId || "").trim(),
+      videoUrl: safeUrl,
+      attempt,
+      browserDurationSec,
+      browserDurationReadable,
+      finalDecision,
+    });
+    if (browserDurationReadable) {
+      return { ready: true, durationSec: Number(browserDurationSec), attempts: attempt };
+    }
+    lastDurationSec = browserDurationSec;
+    if (attempt < attempts) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return { ready: false, durationSec: lastDurationSec, attempts };
+}
+
 
 // -------------------------
 // node UIs
@@ -10163,7 +10194,23 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
 
         if (status === "done") {
           const finalReturnedVideoUrl = String(out?.videoUrl || "").trim();
-          const browserDurationSec = await getVideoDurationSec(finalReturnedVideoUrl);
+          const metadataCheck = await waitForReadableVideoDuration(finalReturnedVideoUrl, sceneId, 4, 900);
+          const browserDurationSec = metadataCheck?.durationSec;
+          const browserDurationReadable = Boolean(metadataCheck?.ready);
+          if (!browserDurationReadable) {
+            applyScenarioVideoPatch({
+              videoStatus: "finalizing_video_metadata",
+              videoReady: false,
+              videoUrl: finalReturnedVideoUrl || null,
+              videoError: "video_metadata_unreadable_after_retries",
+              videoJobId: String(settledMeta?.jobId || ""),
+              videoPanelActivated: true,
+              ...workflowInspectionPatch,
+            }, { jobId: String(settledMeta?.jobId || ""), status: "finalizing_video_metadata", message: "video_metadata_pending" });
+            logPollingTerminalPanelState("finalizing_video_metadata", true);
+            clearActiveVideoJob(sceneId, { status: "finalizing_video_metadata", jobId: settledMeta.jobId });
+            return;
+          }
           const liveDoneScene = getScenarioSceneState(sceneId) || {};
           applyScenarioVideoPatch({
             ...buildCanonicalVideoStatusPatch("done", { ...out, jobId: settledMeta.jobId }, liveDoneScene),
@@ -10191,7 +10238,7 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             backendDurationFieldUsed: "generationDurationSec",
             workflowDurationFieldUsed: "requested_duration_sec_node_patch",
             finalReturnedVideoUrl,
-            browserDurationReadable: Number.isFinite(browserDurationSec) && browserDurationSec > 0,
+            browserDurationReadable,
           });
           logPollingTerminalPanelState("done", true);
           console.info("[SCENARIO VIDEO SUCCESS FLOW]", { sceneId, openNextSceneWithoutVideoSkipped: true });
