@@ -8918,18 +8918,22 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
         ? { ...currentPackage.stage_statuses }
         : (nextData?.stageStatuses && typeof nextData.stageStatuses === "object" ? { ...nextData.stageStatuses } : {});
       downstreamStages.forEach((stageKey) => {
-        const mappedKeys = SCENARIO_PIPELINE_STAGE_PACKAGE_KEYS[stageKey] || [];
-        mappedKeys.forEach((pkgKey) => {
-          if (Object.prototype.hasOwnProperty.call(currentPackage, pkgKey)) delete currentPackage[pkgKey];
-        });
-        currentStatuses[stageKey] = { status: "idle", invalidated: true };
+        const prevStageState = currentStatuses?.[stageKey] && typeof currentStatuses[stageKey] === "object"
+          ? currentStatuses[stageKey]
+          : {};
+        currentStatuses[stageKey] = {
+          ...prevStageState,
+          status: "stale",
+          invalidated: true,
+          staleReason: `manual_rerun:${String(fromStageId || "").trim() || "unknown"}`,
+          updated_at: new Date().toISOString(),
+          error: "",
+        };
       });
       currentPackage.stage_statuses = currentStatuses;
       nextData.storyboardPackage = currentPackage;
       nextData.debugStoryboardPackage = currentPackage;
       nextData.stageStatuses = currentStatuses;
-      nextData.storyboardOut = {};
-      nextData.directorOutput = {};
       nextData.diagnostics = currentPackage?.diagnostics && typeof currentPackage.diagnostics === "object" ? currentPackage.diagnostics : {};
       nextData.executedStages = Array.isArray(nextData?.executedStages)
         ? nextData.executedStages.filter((value) => !downstreamSet.has(String(value || "").trim()))
@@ -8955,25 +8959,29 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
         const pendingOutputs = nextData?.pendingOutputs && typeof nextData.pendingOutputs === "object" ? { ...nextData.pendingOutputs } : null;
         if (pendingOutputs?.debugStoryboardPackage && typeof pendingOutputs.debugStoryboardPackage === "object") {
           const trimmedPackage = { ...pendingOutputs.debugStoryboardPackage };
+          const pendingStatuses = trimmedPackage?.stage_statuses && typeof trimmedPackage.stage_statuses === "object"
+            ? { ...trimmedPackage.stage_statuses }
+            : {};
           downstreamStages.forEach((stageKey) => {
-            const mappedKeys = SCENARIO_PIPELINE_STAGE_PACKAGE_KEYS[stageKey] || [];
-            mappedKeys.forEach((pkgKey) => {
-              if (Object.prototype.hasOwnProperty.call(trimmedPackage, pkgKey)) delete trimmedPackage[pkgKey];
-            });
+            const prevStageState = pendingStatuses?.[stageKey] && typeof pendingStatuses[stageKey] === "object"
+              ? pendingStatuses[stageKey]
+              : {};
+            pendingStatuses[stageKey] = {
+              ...prevStageState,
+              status: "stale",
+              invalidated: true,
+              staleReason: `manual_rerun:${String(fromStageId || "").trim() || "unknown"}`,
+              updated_at: new Date().toISOString(),
+              error: "",
+            };
           });
+          trimmedPackage.stage_statuses = pendingStatuses;
           pendingOutputs.debugStoryboardPackage = trimmedPackage;
-        }
-        if (pendingOutputs) {
-          pendingOutputs.storyboardOut = null;
-          pendingOutputs.runtimeStoryboard = null;
-          pendingOutputs.scenarioPackage = null;
         }
         nextData.pendingOutputs = pendingOutputs;
         nextData.pendingRawResponseSummary = null;
         nextData.pendingStoryboardOut = null;
         nextData.pendingDirectorOutput = null;
-        nextData.pendingGeneratedAt = "";
-        nextData.pendingScenarioRevision = "";
       }
       return { ...nodeItem, data: nextData };
     }
@@ -8996,12 +9004,11 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
 const applyScenarioPipelinePreRunInvalidation = useCallback(({ stageId = "", debugNodeId = "", sourceNodeId = "" } = {}) => {
   const normalizedStageId = String(stageId || "").trim().toLowerCase();
   if (!normalizedStageId) return;
-  const shouldFullClear = normalizedStageId !== "story_core";
   clearScenarioPipelineDownstreamRuntime({
     fromStageId: normalizedStageId,
     debugNodeId,
     sourceNodeId,
-    fullClear: shouldFullClear,
+    fullClear: false,
   });
 }, [clearScenarioPipelineDownstreamRuntime]);
 
@@ -17262,16 +17269,6 @@ onClipSec: (nodeId, value) => {
                 const source = edgeToDebug?.source
                   ? activeNodes.find((nodeItem) => nodeItem.id === edgeToDebug.source && nodeItem.type === "comfyNarrative")
                   : null;
-                const storyboardTargetIds = source?.id
-                  ? activeEdges
-                    .filter((edge) => (
-                      edge?.source === source.id
-                      && String(edge?.sourceHandle || "") === "storyboard_out"
-                      && String(edge?.targetHandle || "") === "scenario_storyboard_in"
-                    ))
-                    .map((edge) => String(edge?.target || "").trim())
-                    .filter(Boolean)
-                  : [];
                 const isFinalizeStage = stageId === "finalize";
                 if (!autoRun && stageId) {
                   applyScenarioPipelinePreRunInvalidation({
@@ -17404,12 +17401,6 @@ onClipSec: (nodeId, value) => {
                       rawScenarioResponseSummary: compactResponseSummary,
                       normalizedStageOutputs: compactNormalizedOutputs,
                     },
-                  };
-                }).map((nodeItem) => {
-                  if (!storyboardTargetIds.includes(nodeItem.id) || nodeItem.type !== "scenarioStoryboard") return nodeItem;
-                  return {
-                    ...nodeItem,
-                    data: clearScenarioStoryboardGeneratedRuntime(nodeItem?.data || {}, { clearScenes: true }),
                   };
                 }).map((nodeItem) => {
                   if (!source || nodeItem.id !== source.id || nodeItem.type !== "comfyNarrative") return nodeItem;

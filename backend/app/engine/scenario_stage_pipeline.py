@@ -89,6 +89,15 @@ STAGE_DIAGNOSTIC_PREFIXES: dict[str, tuple[str, ...]] = {
     "scene_prompts": ("scene_prompts_",),
     "finalize": ("finalize_",),
 }
+STAGE_PACKAGE_FIELD_BY_STAGE: dict[str, str] = {
+    "input_package": "input",
+    "audio_map": "audio_map",
+    "story_core": "story_core",
+    "role_plan": "role_plan",
+    "scene_plan": "scene_plan",
+    "scene_prompts": "scene_prompts",
+    "finalize": "final_storyboard",
+}
 _OWNERSHIP_ROLE_MAP = {
     "main": "character_1",
     "support": "character_2",
@@ -111,6 +120,28 @@ def _safe_dict(value: Any) -> dict[str, Any]:
 
 def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _stage_output_field(stage_id: str) -> str:
+    return STAGE_PACKAGE_FIELD_BY_STAGE.get(stage_id, stage_id)
+
+
+def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
+    safe_pkg = _safe_dict(package)
+    output = safe_pkg.get(_stage_output_field(stage_id))
+    if stage_id == "input_package":
+        return bool(_safe_dict(output))
+    if stage_id == "audio_map":
+        return _is_usable_audio_map(_safe_dict(output))
+    if stage_id in {"scene_plan", "scene_prompts", "finalize"}:
+        return isinstance(output, dict) and "scenes" in output
+    return isinstance(output, dict) and bool(output)
+
+
+def _can_reuse_stage_output(package: dict[str, Any], stage_id: str) -> bool:
+    statuses = _safe_dict(_safe_dict(package).get("stage_statuses"))
+    status = str(_safe_dict(statuses.get(stage_id)).get("status") or "").strip().lower()
+    return status == "done" and _has_stage_output(package, stage_id)
 
 
 def _compact_prompt_payload(value: Any) -> Any:
@@ -5148,6 +5179,14 @@ def run_manual_stage(
         executed_stage_ids.append(stage_id)
         return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
+    reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
+    missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
+    continuation_mode = "reuse_existing_package" if not missing_upstream else "recompute_missing_upstream"
+    if missing_upstream:
+        first_missing_idx = dep_sequence.index(missing_upstream[0])
+        dep_sequence = dep_sequence[first_missing_idx:]
+    else:
+        dep_sequence = []
     preserve_audio_map_for_story_core = stage_id == "story_core" and _is_usable_audio_map(_safe_dict(pkg.get("audio_map")))
     if preserve_audio_map_for_story_core:
         # Manual CORE rerun must preserve upstream audio_map and skip audio_map dependency rebuild.
@@ -5156,6 +5195,18 @@ def run_manual_stage(
     guarded_fingerprint_before = (
         _audio_map_story_core_guard_fingerprint(preserved_audio_map_snapshot) if preserve_audio_map_for_story_core else ""
     )
+    upstream_guard_snapshots: dict[str, dict[str, Any]] = {
+        dep_stage: deepcopy(_safe_dict(pkg.get(_stage_output_field(dep_stage))))
+        for dep_stage in reusable_upstream
+    }
+    diagnostics = _safe_dict(pkg.get("diagnostics"))
+    diagnostics["continuation_mode"] = continuation_mode
+    diagnostics["upstream_package_complete"] = not bool(missing_upstream)
+    diagnostics["reused_upstream_stages"] = reusable_upstream
+    diagnostics["regenerated_stages"] = list(dep_sequence) + [stage_id]
+    if missing_upstream:
+        diagnostics["recompute_missing_upstream_stages"] = missing_upstream
+    pkg["diagnostics"] = diagnostics
     for dep_stage in dep_sequence:
         pkg = run_stage(dep_stage, pkg, payload)
         executed_stage_ids.append(dep_stage)
@@ -5164,6 +5215,36 @@ def run_manual_stage(
     pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
     pkg = run_stage(stage_id, pkg, payload)
     executed_stage_ids.append(stage_id)
+    if reusable_upstream:
+        statuses = _safe_dict(pkg.get("stage_statuses"))
+        guard_restored: list[str] = []
+        for upstream_stage in reusable_upstream:
+            output_key = _stage_output_field(upstream_stage)
+            before_snapshot = upstream_guard_snapshots.get(upstream_stage, {})
+            after_snapshot = _safe_dict(pkg.get(output_key))
+            if before_snapshot and after_snapshot != before_snapshot:
+                pkg[output_key] = deepcopy(before_snapshot)
+                stage_state = _safe_dict(statuses.get(upstream_stage))
+                stage_state["status"] = "done"
+                stage_state["error"] = ""
+                stage_state["updated_at"] = _utc_iso()
+                statuses[upstream_stage] = stage_state
+                guard_restored.append(upstream_stage)
+        pkg["stage_statuses"] = statuses
+        if guard_restored:
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
+            warnings = _safe_list(diagnostics.get("warnings"))
+            warnings.append(
+                {
+                    "stage_id": stage_id,
+                    "message": "manual_rerun_upstream_mutation_guard_triggered",
+                    "restored_stages": guard_restored,
+                }
+            )
+            diagnostics["warnings"] = warnings[-80:]
+            diagnostics["manual_rerun_upstream_mutation_guard_triggered"] = True
+            diagnostics["manual_rerun_upstream_restored_stages"] = guard_restored
+            pkg["diagnostics"] = diagnostics
     if preserve_audio_map_for_story_core:
         guarded_audio_map_after = _safe_dict(pkg.get("audio_map"))
         guarded_fingerprint_after = _audio_map_story_core_guard_fingerprint(guarded_audio_map_after)
