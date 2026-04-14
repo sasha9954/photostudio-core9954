@@ -3982,10 +3982,42 @@ function resolveIntroCompositionPlan({ refsByRole = {}, heroParticipants = [], s
 }
 
 function resolveSceneTransitionType(scene) {
+  const sceneId = String(scene?.sceneId || scene?.scene_id || "").trim();
+  const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
+    String(scene?.resolvedWorkflowKey || resolveScenarioWorkflowKey(scene) || "")
+  );
+  const requiresContinuation = Boolean(scene?.requiresContinuation || scene?.continuation || scene?.continuationFromPrevious);
+  const requiresTwoFrames = Boolean(scene?.requiresTwoFrames || scene?.needsTwoFrames || resolvedWorkflowKey === "f_l");
   const imageStrategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase();
-  if (imageStrategy === "continuation" || imageStrategy === "first_last") return "continuous";
+  const transitionTypeBefore = String(scene?.transitionType || "").trim().toLowerCase();
+  if (requiresTwoFrames || imageStrategy === "first_last" || resolvedWorkflowKey === "f_l") {
+    console.debug("[SCENARIO VIDEO TRANSITION RESOLVE]", {
+      sceneId,
+      resolvedWorkflowKey,
+      requiresContinuation,
+      requiresTwoFrames,
+      imageStrategy,
+      transitionTypeBefore,
+      transitionTypeAfter: "first_last",
+      reason: "two_frame_or_first_last_route",
+    });
+    return "first_last";
+  }
+  if (requiresContinuation || imageStrategy === "continuation" || resolvedWorkflowKey === "continuation") {
+    console.debug("[SCENARIO VIDEO TRANSITION RESOLVE]", {
+      sceneId,
+      resolvedWorkflowKey,
+      requiresContinuation,
+      requiresTwoFrames,
+      imageStrategy,
+      transitionTypeBefore,
+      transitionTypeAfter: "continuous",
+      reason: "continuation_route_or_flag",
+    });
+    return "continuous";
+  }
   const raw = String(scene?.transitionType || "single").toLowerCase();
-  if (raw === "continuous" || raw === "continuation" || raw === "enter_transition") return "continuous";
+  if (raw === "continuous" || raw === "continuation" || raw === "enter_transition") return "single";
   if (raw === "hard_cut" || raw === "justified_cut") return "hard_cut";
   if (raw === "single" || raw === "match_cut" || raw === "perspective_shift" || raw === "start") return "single";
   return "single";
@@ -4189,6 +4221,33 @@ function resolveSceneTimeframe(scene = {}, { preferGenerationDuration = false } 
     sceneStartSec,
     sceneEndSec,
     sceneDurationSec,
+  };
+}
+
+function buildScenarioGenerationDurationPlan({ scene = {}, workflowKey = "" } = {}) {
+  const timeframe = resolveSceneTimeframe(scene, { preferGenerationDuration: false });
+  const targetDurationSec = normalizeDurationSec(scene?.targetDurationSec) ?? timeframe.requestedDurationSec ?? 3;
+  const explicitGenerationDuration = normalizeDurationSec(scene?.generationDurationSec);
+  const normalizedWorkflow = String(workflowKey || resolveScenarioWorkflowKey(scene) || "").trim().toLowerCase();
+  const overgenerateAllowed = normalizedWorkflow === "i2v" || normalizedWorkflow === "f_l";
+  let generationDurationSec = explicitGenerationDuration ?? targetDurationSec;
+  let overgenerateApplied = false;
+  let overgenerateReason = "not_applicable";
+  if (overgenerateAllowed && targetDurationSec < 6 && generationDurationSec <= targetDurationSec) {
+    generationDurationSec = Math.min(12, Math.max(6, targetDurationSec + 3));
+    overgenerateApplied = true;
+    overgenerateReason = "short_target_safe_overgenerate";
+  } else if (overgenerateAllowed) {
+    overgenerateReason = "already_provided_or_target_not_short";
+  } else {
+    overgenerateReason = "audio_sensitive_or_non_supported_route";
+  }
+  return {
+    targetDurationSec: Number(targetDurationSec),
+    generationDurationSec: Number(generationDurationSec),
+    overgenerateApplied,
+    overgenerateReason,
+    trimPlanned: Number(generationDurationSec) > Number(targetDurationSec),
   };
 }
 
@@ -6920,6 +6979,28 @@ async function getAudioDurationSec(url) {
       };
       a.onerror = () => resolve(null);
       a.src = safeUrl;
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function getVideoDurationSec(url) {
+  return await new Promise((resolve) => {
+    const safeUrl = String(url || "").trim();
+    if (!safeUrl) {
+      resolve(null);
+      return;
+    }
+    try {
+      const v = document.createElement("video");
+      v.preload = "metadata";
+      v.onloadedmetadata = () => {
+        const duration = Number.isFinite(v.duration) ? Number(v.duration) : null;
+        resolve(duration);
+      };
+      v.onerror = () => resolve(null);
+      v.src = safeUrl;
     } catch {
       resolve(null);
     }
@@ -10081,11 +10162,15 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
         });
 
         if (status === "done") {
+          const finalReturnedVideoUrl = String(out?.videoUrl || "").trim();
+          const browserDurationSec = await getVideoDurationSec(finalReturnedVideoUrl);
           const liveDoneScene = getScenarioSceneState(sceneId) || {};
           applyScenarioVideoPatch({
             ...buildCanonicalVideoStatusPatch("done", { ...out, jobId: settledMeta.jobId }, liveDoneScene),
             model: String(out?.model || ""),
             requestedDurationSec: normalizeDurationSec(out?.requestedDurationSec),
+            generationDurationSec: normalizeDurationSec(out?.generationDurationSec ?? out?.debug?.generationDurationSec),
+            targetDurationSec: normalizeDurationSec(out?.targetDurationSec ?? out?.debug?.targetDurationSec),
             providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
             videoRequestedPromptPreview: String(out?.requestedPromptPreview || out?.debug?.requestedPromptPreview || ""),
             videoEffectivePromptPreview: String(out?.effectivePromptPreview || out?.debug?.effectivePromptPreview || ""),
@@ -10096,6 +10181,18 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoPanelActivated: true,
             ...workflowInspectionPatch,
           }, { jobId: String(settledMeta?.jobId || ""), status: "done", message: "video_ready" });
+          console.info("[SCENARIO VIDEO DURATION TRACE]", {
+            sceneId,
+            requestedDurationSec: normalizeDurationSec(out?.debug?.requestedDurationSec ?? out?.requestedDurationSec),
+            sceneDurationSec: normalizeDurationSec(out?.sceneDurationSec),
+            generationDurationSec: normalizeDurationSec(out?.generationDurationSec ?? out?.debug?.generationDurationSec ?? out?.requestedDurationSec),
+            targetTrimDurationSec: normalizeDurationSec(out?.targetDurationSec ?? out?.debug?.targetDurationSec ?? out?.sceneDurationSec),
+            payloadDurationFieldUsed: "generationDurationSec",
+            backendDurationFieldUsed: "generationDurationSec",
+            workflowDurationFieldUsed: "requested_duration_sec_node_patch",
+            finalReturnedVideoUrl,
+            browserDurationReadable: Number.isFinite(browserDurationSec) && browserDurationSec > 0,
+          });
           logPollingTerminalPanelState("done", true);
           console.info("[SCENARIO VIDEO SUCCESS FLOW]", { sceneId, openNextSceneWithoutVideoSkipped: true });
           clearActiveVideoJob(sceneId, { status: "done", jobId: settledMeta.jobId });
@@ -14012,7 +14109,8 @@ Aspect ratio: ${imageFormat}`,
       || ""
     ).trim();
     const sceneTimeframe = resolveSceneTimeframe(targetScene, { preferGenerationDuration: false });
-    const requestedDurationSec = sceneTimeframe.requestedDurationSec;
+    const durationPlan = buildScenarioGenerationDurationPlan({ scene: targetScene, workflowKey: effectiveWorkflowKey });
+    const requestedDurationSec = durationPlan.generationDurationSec;
     const requiresAudioSensitiveVideo = effectiveWorkflowKey === "lip_sync_music" || Boolean(effectiveLipSync);
     const shouldAttachAudioSlice = Boolean(attachedAudioSliceUrl) && (requiresAudioSensitiveVideo || Boolean(effectiveLipSync));
     const continuationSourceSceneId = effectiveRequiresContinuation
@@ -14163,6 +14261,8 @@ Aspect ratio: ${imageFormat}`,
         sceneId,
         resolvedWorkflowKey: effectiveWorkflowKey,
         requestedDurationSec: sceneTimeframe.requestedDurationSec,
+        generationDurationSec: durationPlan.generationDurationSec,
+        targetDurationSec: durationPlan.targetDurationSec,
         sceneStartSec: sceneTimeframe.sceneStartSec,
         sceneEndSec: sceneTimeframe.sceneEndSec,
         sceneDurationSec: sceneTimeframe.sceneDurationSec,
@@ -14279,6 +14379,8 @@ Aspect ratio: ${imageFormat}`,
         transitionActionPrompt,
         transitionType,
         requestedDurationSec,
+        generationDurationSec: durationPlan.generationDurationSec,
+        targetDurationSec: durationPlan.targetDurationSec,
         sceneStartSec: sceneTimeframe.sceneStartSec,
         sceneEndSec: sceneTimeframe.sceneEndSec,
         sceneDurationSec: sceneTimeframe.sceneDurationSec,
@@ -14328,6 +14430,27 @@ Aspect ratio: ${imageFormat}`,
         },
         sceneContract: scenarioContractPayloadSanitized,
       };
+      console.info("[SCENARIO VIDEO OVERGENERATE PLAN]", {
+        sceneId,
+        route: effectiveWorkflowKey,
+        targetDurationSec: durationPlan.targetDurationSec,
+        generationDurationSec: durationPlan.generationDurationSec,
+        overgenerateApplied: durationPlan.overgenerateApplied,
+        overgenerateReason: durationPlan.overgenerateReason,
+        trimPlanned: durationPlan.trimPlanned,
+      });
+      console.info("[SCENARIO VIDEO DURATION TRACE]", {
+        sceneId,
+        requestedDurationSec: sceneTimeframe.requestedDurationSec,
+        sceneDurationSec: sceneTimeframe.sceneDurationSec,
+        generationDurationSec: durationPlan.generationDurationSec,
+        targetTrimDurationSec: durationPlan.targetDurationSec,
+        payloadDurationFieldUsed: "generationDurationSec",
+        backendDurationFieldUsed: "pending_status_debug",
+        workflowDurationFieldUsed: "pending_status_debug",
+        finalReturnedVideoUrl: "",
+        browserDurationReadable: false,
+      });
       traceScenarioVideo("[SCENARIO VIDEO TRACE 11] after_payload_build", {
         sceneId,
         selectedSceneId: requestedSceneId,
