@@ -2623,6 +2623,91 @@ const SCENARIO_PIPELINE_SCENE_RUNTIME_CLEAR_FIELDS = [
   "staleResultReason",
 ];
 
+const SCENARIO_RUNTIME_IMAGE_CLEAR_FIELDS = Array.from(new Set([
+  ...SCENARIO_IMAGE_SOURCE_FIELDS,
+  "imageStatus",
+  "imageError",
+  "imageDegraded",
+  "imageDegradeReason",
+  "imageHint",
+  "imageFormat",
+  "promptDebug",
+  "refsDebug",
+  "providerDebug",
+  "responseJson",
+  "responseBlob",
+  "cachedResponseBlob",
+  "runtimeImageApiResult",
+  "lastImageApiResult",
+  "lastImageResult",
+  "mockImageUsed",
+  "fallbackImageUsed",
+  "fallbackUsed",
+  "suppressAssetRehydrate",
+  "suppressInheritedStartPreview",
+  "imageClearedAt",
+  "lastRejectedImageUrl",
+  "lastRejectedReason",
+  "lastRejectedAt",
+  "lastApiEngine",
+  "lastApiHint",
+  "lastApiDegradeReason",
+  "lastApiResultStatus",
+  "lastApiImageUrlPresent",
+  "startFrameStatus",
+  "startFrameError",
+  "endFrameStatus",
+  "endFrameError",
+]));
+
+const SCENARIO_RUNTIME_AUDIO_CLEAR_FIELDS = [
+  "audioSliceUrl",
+  "audioSliceStatus",
+  "audioSliceError",
+  "audioSliceLoadError",
+  "audioSliceDurationSec",
+  "audioSliceStartSec",
+  "audioSliceEndSec",
+  "audioSliceT0",
+  "audioSliceT1",
+  "audioSliceExpectedDurationSec",
+  "audioSliceBackendDurationSec",
+  "audioSliceActualDurationSec",
+  "audioSliceKind",
+  "musicVocalLipSyncAllowed",
+  "requiresAudioSensitiveVideo",
+  "send_audio_to_generator",
+  "external_audio_used",
+  "speechSafeAdjusted",
+  "speechSafeShiftMs",
+  "sliceMayCutSpeech",
+];
+
+const SCENARIO_RUNTIME_VIDEO_CLEAR_FIELDS = Array.from(new Set([
+  ...SCENARIO_VIDEO_DELETE_FIELDS,
+  "videoSourceImageUrl",
+  "resolvedWorkflowKey",
+  "renderMode",
+  "ltxMode",
+]));
+
+function buildScenarioSceneRuntimeCleanupPatch(scene = {}, { domains = ["image", "video", "audio"] } = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const domainSet = new Set((Array.isArray(domains) ? domains : [domains]).map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
+  const patch = {};
+  const clearField = (field) => {
+    const prevValue = source?.[field];
+    if (typeof prevValue === "boolean") patch[field] = false;
+    else if (typeof prevValue === "number") patch[field] = 0;
+    else if (prevValue != null && typeof prevValue === "object") patch[field] = null;
+    else patch[field] = "";
+  };
+  if (domainSet.has("image")) SCENARIO_RUNTIME_IMAGE_CLEAR_FIELDS.forEach(clearField);
+  if (domainSet.has("video")) SCENARIO_RUNTIME_VIDEO_CLEAR_FIELDS.forEach(clearField);
+  if (domainSet.has("audio")) SCENARIO_RUNTIME_AUDIO_CLEAR_FIELDS.forEach(clearField);
+  return patch;
+}
+
 function normalizeScenarioPipelineStageStatus(status) {
   return String(status || "").trim().toLowerCase();
 }
@@ -2758,6 +2843,10 @@ function mergeScenarioPackagePreservingAudioMap({
 
 function stripScenarioGeneratedAssets(scene = {}) {
   const base = scene && typeof scene === "object" ? { ...scene } : {};
+  const runtimePatch = buildScenarioSceneRuntimeCleanupPatch(base, { domains: ["image", "video", "audio"] });
+  Object.keys(runtimePatch).forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(base, key)) delete base[key];
+  });
   SCENARIO_GENERATED_ASSET_FIELDS.forEach((key) => {
     if (Object.prototype.hasOwnProperty.call(base, key)) delete base[key];
   });
@@ -2766,13 +2855,7 @@ function stripScenarioGeneratedAssets(scene = {}) {
 
 function buildScenarioVideoDeletePatch(scene = {}) {
   const baseScene = scene && typeof scene === "object" ? scene : {};
-  const patch = {
-    videoUrl: "",
-    videoStatus: "",
-    videoError: "",
-    videoJobId: "",
-    videoPanelActivated: false,
-  };
+  const patch = buildScenarioSceneRuntimeCleanupPatch(baseScene, { domains: ["video", "audio"] });
   const clearedVideoFields = [];
   SCENARIO_VIDEO_DELETE_FIELDS.forEach((field) => {
     if (field === "videoPanelActivated") {
@@ -8957,6 +9040,12 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
         nextData.stageStatuses = {};
       } else {
         const pendingOutputs = nextData?.pendingOutputs && typeof nextData.pendingOutputs === "object" ? { ...nextData.pendingOutputs } : null;
+        if (pendingOutputs) {
+          pendingOutputs.storyboardOut = null;
+          pendingOutputs.runtimeStoryboard = null;
+          pendingOutputs.directorOutput = null;
+          pendingOutputs.scenarioPackage = null;
+        }
         if (pendingOutputs?.debugStoryboardPackage && typeof pendingOutputs.debugStoryboardPackage === "object") {
           const trimmedPackage = { ...pendingOutputs.debugStoryboardPackage };
           const pendingStatuses = trimmedPackage?.stage_statuses && typeof trimmedPackage.stage_statuses === "object"
@@ -8982,6 +9071,8 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
         nextData.pendingRawResponseSummary = null;
         nextData.pendingStoryboardOut = null;
         nextData.pendingDirectorOutput = null;
+        nextData.storyboardOut = null;
+        nextData.directorOutput = null;
       }
       return { ...nodeItem, data: nextData };
     }
@@ -9004,11 +9095,12 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
 const applyScenarioPipelinePreRunInvalidation = useCallback(({ stageId = "", debugNodeId = "", sourceNodeId = "" } = {}) => {
   const normalizedStageId = String(stageId || "").trim().toLowerCase();
   if (!normalizedStageId) return;
+  const requiresHardRuntimeClear = new Set(["story_core", "role_plan", "scene_plan", "scene_prompts", "finalize"]).has(normalizedStageId);
   clearScenarioPipelineDownstreamRuntime({
     fromStageId: normalizedStageId,
     debugNodeId,
     sourceNodeId,
-    fullClear: false,
+    fullClear: requiresHardRuntimeClear,
   });
 }, [clearScenarioPipelineDownstreamRuntime]);
 
@@ -12980,6 +13072,7 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     const clearPatch = buildScenarioClearImagePatch({ transitionType, slot: normalizedSlot });
+    Object.assign(clearPatch, buildScenarioSceneRuntimeCleanupPatch(scenarioSelected || {}, { domains: ["image", "video"] }));
     clearPatch.imageClearedAt = new Date().toISOString();
     clearPatch.suppressAssetRehydrate = true;
     if (
@@ -14342,7 +14435,7 @@ Aspect ratio: ${imageFormat}`,
       hasEndAfterDelete: Boolean(String(previewAfterDelete?.endImageUrl || previewAfterDelete?.endFrameImageUrl || previewAfterDelete?.lastFrameImageUrl || previewAfterDelete?.endFramePreviewUrl || "").trim()),
     });
     clearActiveVideoJob(sceneId);
-    updateScenarioScene(scenarioEditor.selected, deletePatchMeta.patch, { actionName: "clear_video", preserveSourceFieldsInVideoActions: true });
+    updateScenarioScene(scenarioEditor.selected, deletePatchMeta.patch, { actionName: "clear_video" });
     console.info("[SCENARIO VIDEO DELETE RESULT]", {
       sceneId,
       videoUrlAfter: String(previewAfterDelete?.videoUrl || "").trim(),
@@ -16171,15 +16264,21 @@ onClipSec: (nodeId, value) => {
             const sampleScene = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes[0] : null;
             console.debug("[SCENARIO TRANSFER] normalizeScenarioScene sample", buildScenarioTransferLogData(sampleScene || {}, sampleScene || {}));
           }
-          const previousScenes = Array.isArray(base?.data?.scenes) ? base.data.scenes : [];
+          const previousRevision = String(base?.data?.storyboardRevision || "");
+          const nextRevision = sourceScenarioRevision || previousRevision;
+          const revisionChanged = previousRevision !== nextRevision;
+          const shouldHardResetStoryboardRuntime = validScenarioSource
+            && !sourceIsGenerating
+            && (revisionChanged || sourceScenarioContextStale || connectedContextChanged);
+          const runtimeBaseData = shouldHardResetStoryboardRuntime
+            ? clearScenarioStoryboardGeneratedRuntime(base?.data || {}, { clearScenes: true })
+            : (base?.data || {});
+          const previousScenes = Array.isArray(runtimeBaseData?.scenes) ? runtimeBaseData.scenes : [];
           const resetBeforeRequest = sourceIsGenerating && (!hasPendingScenarioOutputs || Boolean(base?.data?.scenarioResetInFlight));
           const resetBecauseConnectedContextChanged = !sourceIsGenerating && (sourceScenarioContextStale || connectedContextChanged);
           const normalizedScenes = Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length
             ? normalizedPackage.scenes
             : ((resetBeforeRequest || resetBecauseConnectedContextChanged) ? [] : previousScenes);
-          const previousRevision = String(base?.data?.storyboardRevision || "");
-          const nextRevision = sourceScenarioRevision || previousRevision;
-          const revisionChanged = previousRevision !== nextRevision;
           const previousStoryboardSignature = String(
             base?.data?.storyboardSignature
             || buildSceneSignature(previousScenes, "scene")
@@ -16207,7 +16306,7 @@ onClipSec: (nodeId, value) => {
             const previousSceneSignature = String(previousSceneSignatureById.get(sceneId) || "");
             const nextSceneSignature = buildScenarioScenePackageSignature(cleanedScene);
             const semanticChanged = !previousSceneSignature || previousSceneSignature !== nextSceneSignature;
-            const shouldPreserveAssets = !!persistedScene && !storyboardRunChanged && !semanticChanged;
+            const shouldPreserveAssets = false;
             if (semanticChanged || storyboardRunChanged) {
               invalidatedSceneIds.add(sceneId);
             }
@@ -16221,6 +16320,7 @@ onClipSec: (nodeId, value) => {
                 nextSceneSignature,
                 sceneId,
                 preservedAssets: shouldPreserveAssets,
+                hardResetBeforeApply: shouldHardResetStoryboardRuntime,
               });
             }
             const rebuiltScene = shouldPreserveAssets
@@ -16636,13 +16736,13 @@ onClipSec: (nodeId, value) => {
           return {
             ...base,
             data: {
-              ...base.data,
+              ...runtimeBaseData,
               scenes,
               format: resolvePreferredSceneFormat(
                 normalizedPackage?.format,
                 scenes.find((scene) => String(scene?.format || "").trim())?.format,
                 scenes.find((scene) => String(scene?.imageFormat || "").trim())?.imageFormat,
-                base.data?.format
+                runtimeBaseData?.format
               ),
               sceneGeneration,
               scenarioPackage: leanRuntimeStoryboard,
@@ -16654,7 +16754,7 @@ onClipSec: (nodeId, value) => {
               storyboardPackage: (
                 directorOutput?.storyboardPackage
                 && typeof directorOutput.storyboardPackage === "object"
-              ) ? directorOutput.storyboardPackage : (base?.data?.storyboardPackage || null),
+              ) ? directorOutput.storyboardPackage : (runtimeBaseData?.storyboardPackage || null),
               incomingMode: String(
                 normalizedPackage?.mode
                 || normalizedPackage?.contentType
@@ -16705,11 +16805,20 @@ onClipSec: (nodeId, value) => {
                 }
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
-                  const nextScenes = (Array.isArray(nodeItem?.data?.scenes) ? nodeItem.data.scenes : []).map((sceneItem) => (
-                    String(sceneItem?.sceneId || "") === String(sceneId || "")
-                      ? { ...sceneItem, ...patch }
-                      : sceneItem
-                  ));
+                  const nextScenes = (Array.isArray(nodeItem?.data?.scenes) ? nodeItem.data.scenes : []).map((sceneItem) => {
+                    if (String(sceneItem?.sceneId || "") !== String(sceneId || "")) return sceneItem;
+                    const normalizedPatch = { ...(patch && typeof patch === "object" ? patch : {}) };
+                    if (Object.prototype.hasOwnProperty.call(normalizedPatch, "imageUrl") && !String(normalizedPatch.imageUrl || "").trim()) {
+                      Object.assign(normalizedPatch, buildScenarioSceneRuntimeCleanupPatch(sceneItem || {}, { domains: ["image"] }));
+                    }
+                    if (Object.prototype.hasOwnProperty.call(normalizedPatch, "videoUrl") && !String(normalizedPatch.videoUrl || "").trim()) {
+                      Object.assign(normalizedPatch, buildScenarioSceneRuntimeCleanupPatch(sceneItem || {}, { domains: ["video"] }));
+                    }
+                    if (Object.prototype.hasOwnProperty.call(normalizedPatch, "audioSliceUrl") && !String(normalizedPatch.audioSliceUrl || "").trim()) {
+                      Object.assign(normalizedPatch, buildScenarioSceneRuntimeCleanupPatch(sceneItem || {}, { domains: ["audio"] }));
+                    }
+                    return { ...sceneItem, ...normalizedPatch };
+                  });
                   const currentMap = nodeItem?.data?.sceneGeneration && typeof nodeItem.data.sceneGeneration === "object" ? nodeItem.data.sceneGeneration : {};
                   const currentRuntime = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
                   const runtimePatch = {};
