@@ -857,11 +857,7 @@ def _build_story_core_v11(
     secondary_subjects = list(dict.fromkeys(ref_subjects))[:6]
     if not secondary_subjects and continuity_objects:
         mapped_subject = _canonical_subject_id(continuity_objects[0].get("ownership_role"))
-        secondary_subjects = [mapped_subject] if mapped_subject else ["character_2"]
-    if not secondary_subjects and refs_inventory:
-        secondary_subjects = ["character_2"]
-    if not secondary_subjects:
-        secondary_subjects = ["environment"]
+        secondary_subjects = [mapped_subject] if mapped_subject and mapped_subject != primary_subject else []
 
     opening_anchor = _first_text(parsed_story_core.get("opening_anchor"), fallback_story_core.get("opening_anchor"), text_bundle.get("story_text"), text_bundle.get("text"))[:220]
     ending_callback_rule = _first_text(parsed_story_core.get("ending_callback_rule"), fallback_story_core.get("ending_callback_rule"))
@@ -899,7 +895,7 @@ def _build_story_core_v11(
         )
         continuity_pressure = "high" if object_presence_required else "medium"
         primary_shift_allowed = bool(re.search(r"\b(we|they|together|crowd|everyone)\b", phrase_key)) and fn in {"transition_turn", "climax_pressure"}
-        beat_primary_subject = primary_subject if not primary_shift_allowed else secondary_subjects[0]
+        beat_primary_subject = primary_subject if not (primary_shift_allowed and secondary_subjects) else secondary_subjects[0]
 
         if not current_group:
             current_group = [slot_id]
@@ -1531,30 +1527,22 @@ def _build_story_core_input_context(
 def _default_story_core_guidance() -> dict[str, Any]:
     return {
         "world_progression_hints": [
-            "single coherent grounded world; world family and location specifics must come from current text/refs/props, not defaults",
-            "move through pressure gradient: exposure -> pressured passage -> tighter squeeze-through -> concealment pocket -> threshold crossing -> temporary refuge",
-            "favor thresholds and local transitions where continuity/carry objects can change posture/speed/balance/route choices",
-            "each next scene family should increase or release spatial pressure tied to current narrative burden and visibility risk",
+            "single coherent world; world/location specifics must come from current text, refs, props, and already established context",
+            "preserve identity, world, and style continuity across the full clip",
+            "allow clip progression through performance intensity, framing variation, spatial variation inside one world family, emotional modulation, and camera intimacy",
+            "do not introduce concrete setting lore when current input does not provide it",
         ],
         "viewer_contrast_rules": [
-            "compression_vs_release",
-            "public_exposure_vs_momentary_concealment",
-            "harsh_sunlight_vs_shadow_pocket",
-            "rigid_geometry_vs_subject_motion_response",
-            "forward_motion_vs_held_stillness",
-            "wider_geography_vs_intimate_facial_tension",
-            "crowd_pressure_vs_brief_solitude",
-            "threshold_crossing_vs_open_reveal",
+            "wide_framing_vs_close_intimacy",
+            "held_stillness_vs_dynamic_motion",
+            "environment_context_vs_subject_micro_expression",
+            "measured_rhythm_vs_peak_intensity",
         ],
         "unexpected_realistic_beats": [
-            "brief reflection glimpse in glass or metal",
-            "passing scooter, bicycle, or pedestrian layer without interaction",
-            "fabric awning movement or dust in sunlight",
-            "sharp transition from shadow to harsh sun",
-            "brief environmental obstruction or squeeze-through path",
-            "momentary slow-down to assess surroundings",
-            "distant movement in background plane",
-            "threshold into quieter pocket without changing world family",
+            "small environmental motion that supports realism",
+            "brief framing reset that keeps subject/world continuity",
+            "short pause or breath beat before renewed performance intensity",
+            "camera distance variation without changing world family",
         ],
         "prop_guidance": {
             "continuity_object_role": "continuity/conflict/risk anchor",
@@ -1583,18 +1571,17 @@ def _default_story_core_guidance() -> dict[str, Any]:
         },
         "narrative_pressure_rules": [
             "primary narrative role remains the action spine unless current input explicitly reassigns it",
-            "continuity/carry object may increase vulnerability and slow adaptation in open public zones when present",
-            "world should feel less safe in open exposure and more survivable in compressed/shadowed spaces",
-            "final refuge must read as temporary shelter, not triumphant resolution",
             "secondary performance role must not steal narrative spine unless current input explicitly asks for co-lead behavior",
+            "do not invent extra characters unless grounded by current input, refs, or planner output",
+            "do not impose chase/escape/danger/refuge burdens unless grounded by current input",
             "do not collapse into repeated same-route movement shots; repetition is allowed only when environment function changes",
         ],
         "world_richness_rules": [
             "grounded realism only; no spectacle-first escalation",
-            "one coherent country/city/environment logic across clip",
+            "one coherent world logic across clip",
             "restrained motion scale; avoid complex hand/cloth gimmicks",
-            "support performance roles may appear at selected peaks while staying embedded in the same realistic world family",
-            "no concert/pop-video takeover, no club, no neon, no fantasy drift",
+            "support performance roles may appear only when grounded by current input and refs while staying in the same world family",
+            "do not inject hardcoded genre/location restrictions in fallback guidance",
         ],
     }
 
