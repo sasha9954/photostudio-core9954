@@ -1061,11 +1061,19 @@ def _scene_plan_semantics_lock(scene_plan_row: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def _detect_scene_prompt_contract_mismatch(*, expected_route: str, scene_plan_row: dict[str, Any], model_row: dict[str, Any]) -> tuple[bool, bool]:
+def _detect_scene_prompt_contract_mismatch(
+    *,
+    expected_route: str,
+    scene_plan_row: dict[str, Any],
+    model_row: dict[str, Any],
+) -> tuple[bool, bool, list[str]]:
     actual_route = str(model_row.get("route") or expected_route).strip().lower()
     route_mismatch = actual_route != expected_route
+    mismatch_reasons: list[str] = []
+    if route_mismatch:
+        mismatch_reasons.append("route_mismatch")
     if not model_row:
-        return route_mismatch, False
+        return route_mismatch, False, mismatch_reasons
 
     notes = _safe_dict(model_row.get("prompt_notes"))
     blob = " ".join(
@@ -1117,19 +1125,25 @@ def _detect_scene_prompt_contract_mismatch(*, expected_route: str, scene_plan_ro
     if expected_route == "ia2v":
         if has_first_last_terms and not has_performance_terms:
             semantic_mismatch = True
+            mismatch_reasons.append("ia2v_first_last_terms_without_performance")
         if not inferred_audio_driven:
             semantic_mismatch = True
+            mismatch_reasons.append("ia2v_audio_driven_not_detected")
         if not (has_performance_terms and has_face_readability):
             semantic_mismatch = True
+            mismatch_reasons.append("ia2v_performance_or_face_readability_missing")
         if ("climax" in scene_function or "performance" in scene_function) and has_first_last_terms and not has_performance_terms:
             semantic_mismatch = True
+            mismatch_reasons.append("ia2v_climax_scene_without_performance_terms")
     elif expected_route == "first_last":
         has_start = bool(str(model_row.get("start_image_prompt") or "").strip())
         has_end = bool(str(model_row.get("end_image_prompt") or "").strip())
         if not has_start or not has_end:
             semantic_mismatch = True
+            mismatch_reasons.append("first_last_missing_start_or_end_image_prompt")
         if transition_contract and not has_transition_contract:
             semantic_mismatch = True
+            mismatch_reasons.append("first_last_transition_contract_not_honored")
 
         strict_echo_mode = _is_strict_echo_first_last_scene(scene_plan_row, notes)
         if strict_echo_mode:
@@ -1160,26 +1174,35 @@ def _detect_scene_prompt_contract_mismatch(*, expected_route: str, scene_plan_ro
             )
             if not continuity_ok:
                 semantic_mismatch = True
+                mismatch_reasons.append("strict_echo_continuity_not_detected")
             if forbidden_new_entity or explicit_contradiction or has_transition_transit_language:
                 semantic_mismatch = True
+                mismatch_reasons.append("strict_echo_forbidden_entity_or_transition_detected")
             if has_performance_terms and "afterimage" in scene_function and "residual" not in blob and "echo" not in blob:
                 semantic_mismatch = True
+                mismatch_reasons.append("afterimage_echo_missing")
         else:
             if not (has_first_last_terms or (has_start and has_end and has_scene_function_echo)):
                 semantic_mismatch = True
+                mismatch_reasons.append("first_last_transition_echo_not_detected")
             if has_transition_transit_language:
                 semantic_mismatch = True
+                mismatch_reasons.append("first_last_transition_transit_language_detected")
             if has_performance_terms and not (has_first_last_terms or has_scene_function_echo):
                 semantic_mismatch = True
+                mismatch_reasons.append("first_last_performance_without_transition_or_echo")
     else:  # i2v
         if has_first_last_terms:
             semantic_mismatch = True
+            mismatch_reasons.append("i2v_first_last_terms_detected")
         if has_performance_terms and bool(notes.get("audio_driven")):
             semantic_mismatch = True
+            mismatch_reasons.append("i2v_audio_driven_performance_terms_detected")
         if str(model_row.get("start_image_prompt") or "").strip() or str(model_row.get("end_image_prompt") or "").strip():
             semantic_mismatch = True
+            mismatch_reasons.append("i2v_start_or_end_image_prompt_detected")
 
-    return route_mismatch, semantic_mismatch
+    return route_mismatch, semantic_mismatch, list(dict.fromkeys(mismatch_reasons))
 
 
 def _sanitize_positive_prompt(text: str, negative_text: str) -> tuple[str, bool]:
@@ -1553,6 +1576,11 @@ def _normalize_scene_prompts(
     rows_rebuilt_from_scene_plan_count = 0
     positive_negative_leak_stripped_count = 0
     repaired_from_current_package_count = 0
+    repaired_scene_ids: list[str] = []
+    semantic_mismatch_scene_ids: list[str] = []
+    missing_photo_scene_ids: list[str] = []
+    missing_video_scene_ids: list[str] = []
+    mismatch_reason_by_scene: dict[str, list[str]] = {}
     unrelated_rows_discarded_count = 0
     i2v_template_rebuilt_count = 0
     i2v_unknown_family_fallback_count = 0
@@ -1604,7 +1632,7 @@ def _normalize_scene_prompts(
             unrelated_rows_discarded_count += 1
             validation_errors.append(f"unrelated_prompt_row_discarded:{scene_id}")
             base = {}
-        route_mismatch, semantic_mismatch = _detect_scene_prompt_contract_mismatch(
+        route_mismatch, semantic_mismatch, mismatch_reasons = _detect_scene_prompt_contract_mismatch(
             expected_route=expected_route,
             scene_plan_row=scene,
             model_row=base,
@@ -1618,13 +1646,17 @@ def _normalize_scene_prompts(
                 validation_errors.append(f"route_mismatch:{scene_id}")
             if semantic_mismatch:
                 semantic_mismatch_count += 1
+                semantic_mismatch_scene_ids.append(scene_id)
                 validation_errors.append(f"semantic_mismatch:{scene_id}")
+            if mismatch_reasons:
+                mismatch_reason_by_scene[scene_id] = list(dict.fromkeys(mismatch_reasons))
             base = {}
         actual_route = expected_route
 
         photo_prompt = str(base.get("photo_prompt") or "").strip()
         if not photo_prompt:
             missing_photo_count += 1
+            missing_photo_scene_ids.append(scene_id)
             used_fallback = True
             row_repaired_from_current_package = True
             photo_prompt = str(fallback_row.get("photo_prompt") or "")
@@ -1634,6 +1666,7 @@ def _normalize_scene_prompts(
         negative_video_prompt = str(base.get("negative_video_prompt") or "").strip()
         if not video_prompt:
             missing_video_count += 1
+            missing_video_scene_ids.append(scene_id)
             used_fallback = True
             row_repaired_from_current_package = True
             video_prompt = str(fallback_row.get("video_prompt") or "")
@@ -1969,6 +2002,7 @@ def _normalize_scene_prompts(
         scene_out["prompt_notes"]["row_repaired_from_scene_plan"] = bool(row_repaired_from_current_package)
         if row_repaired_from_current_package:
             repaired_from_current_package_count += 1
+            repaired_scene_ids.append(scene_id)
         scenes.append(scene_out)
 
     normalized = {
@@ -1986,9 +2020,14 @@ def _normalize_scene_prompts(
         "rows_model_count": len(_safe_list(raw.get("scenes"))),
         "rows_normalized_count": len(scenes),
         "repaired_from_current_package_count": repaired_from_current_package_count,
+        "scene_prompts_repaired_scene_ids": repaired_scene_ids,
         "unrelated_rows_discarded_count": unrelated_rows_discarded_count,
         "scene_prompts_route_mismatch_count": route_mismatch_count,
         "scene_prompts_semantic_mismatch_count": semantic_mismatch_count,
+        "scene_prompts_semantic_mismatch_scene_ids": semantic_mismatch_scene_ids,
+        "scene_prompts_missing_photo_scene_ids": missing_photo_scene_ids,
+        "scene_prompts_missing_video_scene_ids": missing_video_scene_ids,
+        "scene_prompts_mismatch_reason_by_scene": mismatch_reason_by_scene,
         "scene_prompts_rows_rebuilt_from_scene_plan_count": rows_rebuilt_from_scene_plan_count,
         "scene_prompts_positive_negative_leak_stripped_count": positive_negative_leak_stripped_count,
         "i2v_template_rebuilt_count": i2v_template_rebuilt_count,
@@ -2037,6 +2076,11 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
         "ia2v_audio_driven_count": 0,
         "scene_prompts_route_mismatch_count": 0,
         "scene_prompts_semantic_mismatch_count": 0,
+        "scene_prompts_repaired_scene_ids": [],
+        "scene_prompts_semantic_mismatch_scene_ids": [],
+        "scene_prompts_missing_photo_scene_ids": [],
+        "scene_prompts_missing_video_scene_ids": [],
+        "scene_prompts_mismatch_reason_by_scene": {},
         "scene_prompts_rows_rebuilt_from_scene_plan_count": 0,
         "scene_prompts_positive_negative_leak_stripped_count": 0,
         "scene_prompts_route_semantics_mismatch_count": 0,
@@ -2118,7 +2162,14 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
                 "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),
                 "repaired_from_current_package_count": int(normalization_diag.get("repaired_from_current_package_count") or 0),
+                "scene_prompts_repaired_scene_ids": _safe_list(normalization_diag.get("scene_prompts_repaired_scene_ids")),
                 "unrelated_rows_discarded_count": int(normalization_diag.get("unrelated_rows_discarded_count") or 0),
+                "scene_prompts_semantic_mismatch_scene_ids": _safe_list(
+                    normalization_diag.get("scene_prompts_semantic_mismatch_scene_ids")
+                ),
+                "scene_prompts_missing_photo_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_photo_scene_ids")),
+                "scene_prompts_missing_video_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_video_scene_ids")),
+                "scene_prompts_mismatch_reason_by_scene": _safe_dict(normalization_diag.get("scene_prompts_mismatch_reason_by_scene")),
                 "stage_source": str(normalization_diag.get("stage_source") or "current_package"),
             }
         )
@@ -2171,7 +2222,14 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
                 "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),
                 "repaired_from_current_package_count": int(normalization_diag.get("repaired_from_current_package_count") or 0),
+                "scene_prompts_repaired_scene_ids": _safe_list(normalization_diag.get("scene_prompts_repaired_scene_ids")),
                 "unrelated_rows_discarded_count": int(normalization_diag.get("unrelated_rows_discarded_count") or 0),
+                "scene_prompts_semantic_mismatch_scene_ids": _safe_list(
+                    normalization_diag.get("scene_prompts_semantic_mismatch_scene_ids")
+                ),
+                "scene_prompts_missing_photo_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_photo_scene_ids")),
+                "scene_prompts_missing_video_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_video_scene_ids")),
+                "scene_prompts_mismatch_reason_by_scene": _safe_dict(normalization_diag.get("scene_prompts_mismatch_reason_by_scene")),
                 "stage_source": str(normalization_diag.get("stage_source") or "current_package"),
             }
         )
