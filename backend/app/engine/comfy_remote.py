@@ -5,7 +5,9 @@ import hashlib
 import logging
 import json
 import math
+import os
 import socket
+import tempfile
 import time
 from collections import deque
 from pathlib import Path
@@ -1153,6 +1155,16 @@ def _set_node_input(workflow: dict, node_id: str, input_key: str, value) -> tupl
         return False, f"missing_input:{node_id}.{input_key}"
     inputs[input_key] = value
     return True, None
+
+
+def _read_node_input(workflow: dict, node_id: str, input_key: str):
+    node = workflow.get(str(node_id))
+    if not isinstance(node, dict):
+        return None
+    inputs = node.get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    return inputs.get(input_key)
 
 
 # These node ids are intentionally pinned to image-video-silent-directprompt.json.
@@ -3012,6 +3024,9 @@ def run_comfy_image_to_video(
     scene_start_sec: float | None = None,
     scene_end_sec: float | None = None,
     scene_duration_sec: float | None = None,
+    original_requested_duration_sec: float | None = None,
+    generation_duration_sec: float | None = None,
+    target_duration_sec: float | None = None,
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
     raw_workflow_key = str(workflow_key or "i2v").strip().lower() or "i2v"
@@ -3212,6 +3227,80 @@ def run_comfy_image_to_video(
             "patchedExpressionNodeIds": (workflow_discovery_debug or {}).get("patchedExpressionNodeIds") or [],
         },
     )
+    final_workflow_dump_path = ""
+    i2v_final_node_dump: dict[str, object] = {}
+    if normalized_workflow_key == "i2v":
+        fps_from_node = _read_node_input(patched_workflow, "267:260", "value")
+        try:
+            resolved_i2v_fps = int(round(float(fps_from_node)))
+        except Exception:
+            resolved_i2v_fps = 24
+        if resolved_i2v_fps <= 0:
+            resolved_i2v_fps = 24
+        expected_frame_count = int(round(float(requested_duration_sec) * float(resolved_i2v_fps)))
+        if expected_frame_count < 2:
+            return None, f"workflow_patch_failed:expected_frame_count_too_low:{expected_frame_count}"
+        ok_225, err_225 = _set_node_input(patched_workflow, "267:225", "value", int(expected_frame_count))
+        if not ok_225:
+            return None, f"workflow_patch_failed:{err_225 or 'missing_267_225_value'}"
+        node_267_225_value = _read_node_input(patched_workflow, "267:225", "value")
+        try:
+            patched_267_225_value = int(round(float(node_267_225_value)))
+        except Exception:
+            patched_267_225_value = 0
+        if patched_267_225_value < 2:
+            return None, f"workflow_patch_failed:patched_frame_count_too_low:{patched_267_225_value}"
+        node_267_228_length = _read_node_input(patched_workflow, "267:228", "length")
+        node_267_214_frames_number = _read_node_input(patched_workflow, "267:214", "frames_number")
+        node_267_260_fps = _read_node_input(patched_workflow, "267:260", "value")
+        node_267_242_fps = _read_node_input(patched_workflow, "267:242", "fps")
+        node_267_266_value = _read_node_input(patched_workflow, "267:266", "value")
+        node_267_247_text = _read_node_input(patched_workflow, "267:247", "text")
+        i2v_final_node_dump = {
+            "sceneId": str(scene_id or "").strip(),
+            "requestedDurationSec": float(original_requested_duration_sec if isinstance(original_requested_duration_sec, (float, int)) else requested_duration_sec),
+            "generationDurationSec": float(generation_duration_sec if isinstance(generation_duration_sec, (float, int)) else requested_duration_sec),
+            "targetDurationSec": float(target_duration_sec if isinstance(target_duration_sec, (float, int)) else requested_duration_sec),
+            "expectedFrameCount": int(expected_frame_count),
+            "node_267_225_value": patched_267_225_value,
+            "node_267_228_length": node_267_228_length,
+            "node_267_214_frames_number": node_267_214_frames_number,
+            "node_267_260_fps": node_267_260_fps,
+            "node_267_242_fps": node_267_242_fps,
+            "node_267_266_value": _preview_value(node_267_266_value, limit=220),
+            "node_267_247_text": _preview_value(node_267_247_text, limit=220),
+            "promptNodePatched": bool((workflow_discovery_debug or {}).get("positivePromptNodePatched")),
+            "negativeNodePatched": bool((workflow_discovery_debug or {}).get("negativePromptNodePatched")),
+        }
+        logger.info("[COMFY I2V FINAL NODE DUMP] %s", i2v_final_node_dump)
+        if not _is_linked_input(node_267_228_length):
+            logger.info(
+                "[COMFY I2V FRAME NODE DIRECT WRITE DETECTED] %s",
+                {"node": "267:228.length", "value": node_267_228_length},
+            )
+        if not _is_linked_input(node_267_214_frames_number):
+            logger.info(
+                "[COMFY I2V FRAME NODE DIRECT WRITE DETECTED] %s",
+                {"node": "267:214.frames_number", "value": node_267_214_frames_number},
+            )
+    try:
+        temp_dir = tempfile.gettempdir()
+        dump_filename = f"comfy_final_workflow_{str(scene_id or 'scene').strip() or 'scene'}_{int(time.time() * 1000)}.json"
+        final_workflow_dump_path = os.path.join(temp_dir, dump_filename)
+        with open(final_workflow_dump_path, "w", encoding="utf-8") as wf_dump_file:
+            json.dump(patched_workflow, wf_dump_file, ensure_ascii=False, indent=2)
+        logger.info(
+            "[COMFY WORKFLOW FINAL DUMP] %s",
+            {
+                "sceneId": str(scene_id or "").strip(),
+                "workflowKey": normalized_workflow_key,
+                "generationDurationSec": float(generation_duration_sec if isinstance(generation_duration_sec, (float, int)) else requested_duration_sec),
+                "expectedFrameCount": int(i2v_final_node_dump.get("expectedFrameCount") or frame_count or 0),
+                "finalWorkflowPathOrDumpId": final_workflow_dump_path,
+            },
+        )
+    except Exception as exc:
+        logger.warning("[COMFY WORKFLOW FINAL DUMP] failed sceneId=%s error=%s", str(scene_id or "").strip(), str(exc)[:300])
     patched_model_node_ids: list[str] = []
     if effective_model_spec:
         patched_model_node_ids, model_patch_err = _apply_model_spec_to_workflow(
@@ -4086,6 +4175,8 @@ def run_comfy_image_to_video(
             "resolved_negative_prompt_node_id": str((workflow_discovery_debug or {}).get("resolvedNegativePromptNodeId") or ""),
             "negative_prompt_source": str((workflow_discovery_debug or {}).get("negativePromptSource") or "missing"),
             "workflow_discovery": workflow_discovery_debug if isinstance(workflow_discovery_debug, dict) else {},
+            "i2v_final_node_dump": i2v_final_node_dump,
+            "final_workflow_path_or_dump_id": final_workflow_dump_path,
             "first_last_start_node_ids": first_last_start_node_ids,
             "first_last_end_node_ids": first_last_end_node_ids,
             "first_last_start_image_node_ids": first_last_start_image_node_ids,

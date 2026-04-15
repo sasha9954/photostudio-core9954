@@ -4791,6 +4791,11 @@ def _run_ffmpeg(cmd: list[str]) -> tuple[bool, str]:
 
 
 def _ffprobe_duration(path: str) -> tuple[float | None, str | None]:
+    duration_sec, _, err = _ffprobe_video_metrics(path)
+    return duration_sec, err
+
+
+def _ffprobe_video_metrics(path: str) -> tuple[float | None, int | None, str | None]:
     try:
         proc = subprocess.run(
             [
@@ -4798,25 +4803,39 @@ def _ffprobe_duration(path: str) -> tuple[float | None, str | None]:
                 "-v",
                 "error",
                 "-show_entries",
-                "format=duration",
+                "format=duration:stream=nb_frames",
+                "-select_streams",
+                "v:0",
                 "-of",
-                "default=noprint_wrappers=1:nokey=1",
+                "json",
                 path,
             ],
             capture_output=True,
             text=True,
         )
     except FileNotFoundError:
-        return None, "ffprobe_missing_install_and_add_to_PATH"
+        return None, None, "ffprobe_missing_install_and_add_to_PATH"
     if proc.returncode != 0:
-        return None, (proc.stderr or proc.stdout or "ffprobe_failed").strip()[:500]
+        return None, None, (proc.stderr or proc.stdout or "ffprobe_failed").strip()[:500]
     try:
-        duration = float((proc.stdout or "").strip())
+        parsed = json.loads(proc.stdout or "{}")
     except Exception:
-        return None, "ffprobe_duration_parse_failed"
+        return None, None, "ffprobe_json_parse_failed"
+    try:
+        duration = float((((parsed.get("format") or {}) if isinstance(parsed, dict) else {}).get("duration") or "").strip())
+    except Exception:
+        return None, None, "ffprobe_duration_parse_failed"
     if duration <= 0:
-        return None, "ffprobe_duration_non_positive"
-    return duration, None
+        return None, None, "ffprobe_duration_non_positive"
+    stream_items = (parsed.get("streams") or []) if isinstance(parsed, dict) else []
+    nb_frames: int | None = None
+    if isinstance(stream_items, list) and stream_items:
+        stream0 = stream_items[0] if isinstance(stream_items[0], dict) else {}
+        try:
+            nb_frames = int(float(stream0.get("nb_frames"))) if str(stream0.get("nb_frames") or "").strip() else None
+        except Exception:
+            nb_frames = None
+    return duration, nb_frames, None
 
 
 def _resolve_media_input(url: str, temp_files: list[str]) -> tuple[str | None, str | None]:
@@ -4950,11 +4969,31 @@ def _validate_video_ready_for_playback(
             if not resolve_err and resolved_path and os.path.isfile(resolved_path):
                 file_accessible = os.path.getsize(resolved_path) > 0
                 if file_accessible:
-                    ffprobe_duration, probe_err = _ffprobe_duration(resolved_path)
+                    ffprobe_duration, ffprobe_frames, probe_err = _ffprobe_video_metrics(resolved_path)
                     if probe_err == "ffprobe_missing_install_and_add_to_PATH":
                         raise RuntimeError("FFPROBE_MISSING")
                     last_duration = ffprobe_duration
                     if not probe_err and ffprobe_duration is not None and math.isfinite(ffprobe_duration) and ffprobe_duration > 0:
+                        if ffprobe_duration < 1.0 or (isinstance(ffprobe_frames, int) and ffprobe_frames <= 1):
+                            last_reason = "VIDEO_TOO_SHORT_OR_ONE_FRAME"
+                        else:
+                            print(
+                                "[SCENARIO VIDEO READY VALIDATION] "
+                                + json.dumps(
+                                    {
+                                        "sceneId": safe_scene_id,
+                                        "videoUrl": safe_video_url,
+                                        "attempt": attempt,
+                                        "ffprobeDurationSec": round(float(ffprobe_duration), 3),
+                                        "ffprobeNbFrames": int(ffprobe_frames) if isinstance(ffprobe_frames, int) else None,
+                                        "fileAccessible": True,
+                                        "ready": True,
+                                        "reason": "validated",
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            )
+                            return True, float(ffprobe_duration), "validated"
                         print(
                             "[SCENARIO VIDEO READY VALIDATION] "
                             + json.dumps(
@@ -4963,14 +5002,14 @@ def _validate_video_ready_for_playback(
                                     "videoUrl": safe_video_url,
                                     "attempt": attempt,
                                     "ffprobeDurationSec": round(float(ffprobe_duration), 3),
+                                    "ffprobeNbFrames": int(ffprobe_frames) if isinstance(ffprobe_frames, int) else None,
                                     "fileAccessible": True,
-                                    "ready": True,
-                                    "reason": "validated",
+                                    "ready": False,
+                                    "reason": last_reason,
                                 },
                                 ensure_ascii=False,
                             )
                         )
-                        return True, float(ffprobe_duration), "validated"
                     last_reason = str(probe_err or "ffprobe_duration_non_positive")
                 else:
                     last_reason = "resolved_file_empty"
@@ -14114,11 +14153,12 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                     "providerDurationSec": round(float(validated_duration_sec), 3) if isinstance(validated_duration_sec, (float, int)) and math.isfinite(validated_duration_sec) else out.get("providerDurationSec"),
                 }
             else:
+                failure_code = "VIDEO_TOO_SHORT_OR_ONE_FRAME" if str(validation_reason or "").strip() == "VIDEO_TOO_SHORT_OR_ONE_FRAME" else "VIDEO_NOT_READY_FOR_PLAYBACK"
                 status = "error"
                 out = {
                     **(out if isinstance(out, dict) else {}),
                     "ok": False,
-                    "code": "VIDEO_NOT_READY_FOR_PLAYBACK",
+                    "code": failure_code,
                     "hint": str(validation_reason or "video_duration_unreadable"),
                     "details": str(validation_reason or "video_duration_unreadable"),
                 }
@@ -15109,6 +15149,9 @@ def clip_video(payload: ClipVideoIn):
             scene_start_sec=scene_start_sec,
             scene_end_sec=scene_end_sec,
             scene_duration_sec=scene_duration_sec,
+            original_requested_duration_sec=_safe_positive_float(payload.requestedDurationSec),
+            generation_duration_sec=generation_duration_sec,
+            target_duration_sec=target_duration_sec,
         )
         if comfy_err or not comfy_out:
             err_text = str(comfy_err or "comfy_remote_failed")
@@ -15317,7 +15360,7 @@ def clip_video(payload: ClipVideoIn):
             "model": resolved_model_key,
             "taskId": prompt_id,
             "mode": str(comfy_out.get("mode") or mode),
-            "requestedDurationSec": round(float(generation_duration_sec), 3),
+            "requestedDurationSec": round(float(requested_duration), 3),
             "targetDurationSec": round(float(target_duration_sec), 3),
             "generationDurationSec": round(float(generation_duration_sec), 3),
             "providerDurationSec": round(float(source_video_duration_sec or comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or generation_duration_sec), 3),
@@ -15356,6 +15399,8 @@ def clip_video(payload: ClipVideoIn):
                 "resolvedNegativePromptNodeId": str(comfy_debug.get("resolved_negative_prompt_node_id") or ""),
                 "negativePromptSource": str(comfy_debug.get("negative_prompt_source") or "missing"),
                 "requestedDurationSec": float(requested_duration),
+                "generationDurationSec": float(generation_duration_sec),
+                "targetDurationSec": float(target_duration_sec),
                 "providerDurationSec": float(comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or requested_duration),
                 "sceneStartSec": scene_start_sec,
                 "sceneEndSec": scene_end_sec,
