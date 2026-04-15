@@ -224,6 +224,38 @@ LTX_I2V_COMPACT_NEGATIVE_FALLBACK = (
     "camera shake, aggressive motion, bullet time, dramatic camera rotation, background morphing, unstable geometry"
 )
 
+# Canon-derived structured presets for compact i2v intent selection.
+# The builder uses these lists as source-of-truth for allowed/forbidden motion logic.
+LTX_I2V_CANON_ALLOWED_BODY_ACTIONS: tuple[str, ...] = (
+    "The subject takes one to two calm forward steps.",
+    "The character gives a subtle side glance while continuing forward.",
+    "The subject shifts attention toward something ahead without stopping.",
+)
+LTX_I2V_CANON_ALLOWED_CAMERA_ACTIONS: tuple[str, ...] = (
+    "Camera remains mostly stable with a gentle push-in.",
+    "Camera slowly pulls back while preserving stable framing.",
+    "Camera gently tracks sideways with controlled parallax.",
+    "Camera follows the attention shift with a subtle lateral reveal.",
+)
+LTX_I2V_CANON_ALLOWED_EMOTION_ACCENTS: tuple[str, ...] = (
+    "Motion feels focused and tense.",
+    "Motion feels calm, readable, and physically natural.",
+    "Motion feels alert and grounded.",
+)
+LTX_I2V_CANON_FORBIDDEN_MOTION_MARKERS: tuple[str, ...] = (
+    "orbit",
+    "spin",
+    "acrobat",
+    "flip",
+    "dance",
+    "bullet time",
+    "matrix",
+    "dramatic camera rotation",
+    "fisheye",
+    "dutch angle",
+    "camera shake",
+)
+
 
 def _flag_enabled(name: str, default: bool = False) -> bool:
     raw = str(os.getenv(name, "")).strip().lower()
@@ -2626,44 +2658,76 @@ def _build_ltx_i2v_compact_prompt(
     shot_type: str | None,
     scene_id: str | None = None,
 ) -> dict[str, Any]:
-    source_text = " ".join(
-        part
-        for part in [
-            str(source_prompt or "").strip(),
-            str(transition_prompt or "").strip(),
-            str(scene_type or "").strip(),
-            str(shot_type or "").strip(),
-            json.dumps(scene_contract or {}, ensure_ascii=False),
+    def _normalize_intent_text(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        return " ".join(text.split())
+
+    def _build_ltx_i2v_intent_source() -> dict[str, Any]:
+        contract = scene_contract if isinstance(scene_contract, dict) else {}
+        parts: list[str] = []
+        fields_used: list[str] = []
+        direct_sources: list[tuple[str, Any]] = [
+            ("transition_prompt", transition_prompt),
+            ("source_prompt", source_prompt),
+            ("scene_type", scene_type),
+            ("shot_type", shot_type),
         ]
-        if str(part or "").strip()
-    ).lower()
+        contract_sources: list[tuple[str, Any]] = [
+            ("scene_contract.motion_intent", contract.get("motion_intent")),
+            ("scene_contract.emotional_intent", contract.get("emotional_intent")),
+            ("scene_contract.camera_pattern", contract.get("camera_pattern")),
+            ("scene_contract.i2v_motion_family", contract.get("i2v_motion_family")),
+        ]
+
+        for field_name, raw_value in [*direct_sources, *contract_sources]:
+            normalized = _normalize_intent_text(raw_value)
+            if not normalized:
+                continue
+            parts.append(normalized)
+            fields_used.append(field_name)
+
+        intent_text = " ".join(parts).strip()
+        return {
+            "intentSourceText": intent_text,
+            "intentSourceFieldsUsed": fields_used,
+            "intentSourcePreview": _prompt_preview(intent_text, 260),
+        }
+
+    intent_source_payload = _build_ltx_i2v_intent_source()
+    source_text = str(intent_source_payload.get("intentSourceText") or "")
 
     def _has_any(markers: list[str]) -> bool:
         return any(marker in source_text for marker in markers)
 
     chosen_body_action = "The person continues forward with a purposeful natural pace."
     if _has_any(["walk", "forward", "advance", "continue forward"]):
-        chosen_body_action = "The subject takes one to two calm forward steps."
+        chosen_body_action = LTX_I2V_CANON_ALLOWED_BODY_ACTIONS[0]
     if _has_any(["glance", "suspicion", "paranoia", "react", "tension", "tense"]):
-        chosen_body_action = "The character gives a subtle side glance while continuing forward."
+        chosen_body_action = LTX_I2V_CANON_ALLOWED_BODY_ACTIONS[1]
     if _has_any(["reveal", "attention shift", "look toward", "look ahead", "shift attention"]):
-        chosen_body_action = "The subject shifts attention toward something ahead without stopping."
+        chosen_body_action = LTX_I2V_CANON_ALLOWED_BODY_ACTIONS[2]
 
-    chosen_camera_action = "Camera remains mostly stable with a gentle push-in."
+    chosen_camera_action = LTX_I2V_CANON_ALLOWED_CAMERA_ACTIONS[0]
     if _has_any(["pull-back", "pull back", "reveal space", "distance"]):
-        chosen_camera_action = "Camera slowly pulls back while preserving stable framing."
+        chosen_camera_action = LTX_I2V_CANON_ALLOWED_CAMERA_ACTIONS[1]
     elif _has_any(["side", "lateral", "track", "tracking", "follow", "parallax"]):
-        chosen_camera_action = "Camera gently tracks sideways with controlled parallax."
+        chosen_camera_action = LTX_I2V_CANON_ALLOWED_CAMERA_ACTIONS[2]
     elif _has_any(["push-in", "push in", "move in", "closer", "tighter"]):
-        chosen_camera_action = "Camera remains mostly stable with a gentle push-in."
+        chosen_camera_action = LTX_I2V_CANON_ALLOWED_CAMERA_ACTIONS[0]
     if _has_any(["reveal", "attention shift", "look toward", "look ahead", "shift attention"]) and _has_any(["side", "lateral", "track", "follow"]):
-        chosen_camera_action = "Camera follows the attention shift with a subtle lateral reveal."
+        chosen_camera_action = LTX_I2V_CANON_ALLOWED_CAMERA_ACTIONS[3]
 
-    chosen_emotion = "Motion feels focused and tense."
+    chosen_emotion = LTX_I2V_CANON_ALLOWED_EMOTION_ACCENTS[0]
     if _has_any(["calm", "gentle", "soft"]):
-        chosen_emotion = "Motion feels calm, readable, and physically natural."
+        chosen_emotion = LTX_I2V_CANON_ALLOWED_EMOTION_ACCENTS[1]
     elif _has_any(["alert", "suspicion", "paranoia", "react"]):
-        chosen_emotion = "Motion feels alert and grounded."
+        chosen_emotion = LTX_I2V_CANON_ALLOWED_EMOTION_ACCENTS[2]
+
+    if _has_any(list(LTX_I2V_CANON_FORBIDDEN_MOTION_MARKERS)):
+        # Canon fallback: keep compact motion conservative when forbidden markers appear.
+        chosen_body_action = LTX_I2V_CANON_ALLOWED_BODY_ACTIONS[0]
+        chosen_camera_action = LTX_I2V_CANON_ALLOWED_CAMERA_ACTIONS[0]
+        chosen_emotion = LTX_I2V_CANON_ALLOWED_EMOTION_ACCENTS[0]
 
     continuity_line = (
         "Keep the same subject from the uploaded image, the same face if visible, the same outfit, "
@@ -2689,6 +2753,8 @@ def _build_ltx_i2v_compact_prompt(
         "continuityLockApplied": True,
         "promptBuilderMode": "ltx_i2v_canon_compact",
         "sceneId": str(scene_id or "").strip(),
+        "intentSourcePreview": intent_source_payload.get("intentSourcePreview"),
+        "intentSourceFieldsUsed": intent_source_payload.get("intentSourceFieldsUsed"),
     }
 
 
@@ -2836,6 +2902,8 @@ def _compose_video_effective_prompt(
             "chosenCameraAction": compact_build.get("chosenCameraAction"),
             "chosenEmotionAccent": compact_build.get("chosenEmotionAccent"),
             "continuityLockApplied": compact_build.get("continuityLockApplied"),
+            "intentSourcePreview": compact_build.get("intentSourcePreview"),
+            "intentSourceFieldsUsed": compact_build.get("intentSourceFieldsUsed"),
             "payloadVideoPromptPreview": _prompt_preview(base_prompt, 320),
             "payloadTransitionActionPromptPreview": _prompt_preview(transition_prompt, 320),
         }
@@ -15095,6 +15163,8 @@ def clip_video(payload: ClipVideoIn):
                     {
                         "sceneId": scene_id,
                         "promptBuilderMode": prompt_debug.get("promptBuilderMode"),
+                        "intentSourcePreview": prompt_debug.get("intentSourcePreview"),
+                        "intentSourceFieldsUsed": prompt_debug.get("intentSourceFieldsUsed"),
                         "chosenBodyAction": prompt_debug.get("chosenBodyAction"),
                         "chosenCameraAction": prompt_debug.get("chosenCameraAction"),
                         "chosenEmotionAccent": prompt_debug.get("chosenEmotionAccent"),
