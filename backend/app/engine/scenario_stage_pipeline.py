@@ -5646,6 +5646,15 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["active_route_capability_mode"] = str(diagnostics.get("active_route_capability_mode") or "")
     diagnostics["scene_plan_capability_guard_applied"] = False
     diagnostics["scene_plan_validation_error"] = ""
+    diagnostics["scene_plan_error_code"] = ""
+    diagnostics["scene_plan_scenes_version"] = ""
+    diagnostics["scene_plan_segment_count_expected"] = 0
+    diagnostics["scene_plan_segment_count_actual"] = 0
+    diagnostics["scene_plan_segment_coverage_ok"] = False
+    diagnostics["scene_plan_uses_segment_id_canonical"] = False
+    diagnostics["scene_plan_uses_legacy_scene_candidate_windows_bridge"] = False
+    diagnostics["scene_plan_uses_legacy_compiled_contract_bridge"] = False
+    diagnostics["scene_plan_role_source_precedence"] = []
     diagnostics["scene_plan_route_budget_retry_used"] = False
     diagnostics["scene_plan_route_budget_feedback"] = ""
     diagnostics["scene_plan_route_budget_ok"] = True
@@ -5732,6 +5741,15 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         scene_diag.get("capability_rules_source_version") or diagnostics.get("capability_rules_source_version") or ""
     )
     diagnostics["scene_plan_validation_error"] = str(result.get("validation_error") or "")
+    diagnostics["scene_plan_error_code"] = str(result.get("error_code") or scene_diag.get("error_code") or "")
+    diagnostics["scene_plan_scenes_version"] = str(_safe_dict(scene_plan).get("scenes_version") or scene_diag.get("scene_plan_scenes_version") or "")
+    diagnostics["scene_plan_segment_count_expected"] = int(scene_diag.get("segment_count_expected") or 0)
+    diagnostics["scene_plan_segment_count_actual"] = int(scene_diag.get("segment_count_actual") or 0)
+    diagnostics["scene_plan_segment_coverage_ok"] = bool(scene_diag.get("segment_coverage_ok"))
+    diagnostics["scene_plan_uses_segment_id_canonical"] = bool(scene_diag.get("uses_segment_id_canonical"))
+    diagnostics["scene_plan_uses_legacy_scene_candidate_windows_bridge"] = bool(scene_diag.get("scene_candidate_windows_bridge"))
+    diagnostics["scene_plan_uses_legacy_compiled_contract_bridge"] = bool(scene_diag.get("compiled_contract_bridge"))
+    diagnostics["scene_plan_role_source_precedence"] = _safe_list(scene_diag.get("role_source_precedence"))
     diagnostics["scene_plan_route_budget_ok"] = bool(route_budget_ok)
     diagnostics["scene_plan_route_budget_target"] = _safe_dict(route_budget_meta.get("target_route_mix"))
     diagnostics["scene_plan_route_budget_actual"] = _safe_dict(route_budget_meta.get("actual_route_mix"))
@@ -5739,6 +5757,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_longest_lipsync_streak"] = int(route_budget_meta.get("longest_lipsync_streak") or 0)
     if not route_budget_ok:
         diagnostics["scene_plan_validation_error"] = route_budget_feedback or diagnostics["scene_plan_validation_error"]
+        diagnostics["scene_plan_error_code"] = diagnostics["scene_plan_error_code"] or "SCENES_ROUTE_INCOMPATIBILITY"
     diagnostics["validation_error"] = str(diagnostics.get("scene_plan_validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
     diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("scenes")))

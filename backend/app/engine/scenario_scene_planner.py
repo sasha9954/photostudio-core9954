@@ -17,7 +17,29 @@ from app.engine.video_capability_canon import (
 
 SCENE_PLAN_PROMPT_VERSION = "scene_plan_v1"
 SCENE_PLAN_MODEL = "gemini-3.1-pro-preview"
+SCENES_VERSION = "1.1"
 ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
+ALLOWED_PACING = {"fluid", "staccato", "stable"}
+ALLOWED_ENERGY_ALIGNMENT = {"match", "counterpoint", "build_against", "release_after"}
+ALLOWED_FRAMING = {"close_up", "medium", "wide", "detail", "silhouette", "overhead"}
+ALLOWED_SUBJECT_PRIORITY = {"hero", "ensemble", "object", "environment"}
+ALLOWED_LAYOUT = {"centered", "rule_of_thirds", "off_balance", "symmetrical"}
+ALLOWED_DEPTH_STRATEGY = {"flat", "layered", "deep"}
+SCENES_FORBIDDEN_LEAK_TOKENS = {
+    "8k",
+    "cinematic quality",
+    "highly detailed",
+    "masterpiece",
+    "fps",
+    "lens",
+    "seed",
+    "sampler",
+    "positive_prompt",
+    "negative_prompt",
+    "workflow",
+    "ltx",
+    "renderer_family",
+}
 FIRST_LAST_MODES = {
     "push_in_emotional",
     "pull_back_release",
@@ -345,6 +367,41 @@ def _build_scene_windows(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
     return windows
 
 
+def _build_scene_segment_rows(audio_map: dict[str, Any], story_core: dict[str, Any], role_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    audio_segments = [_safe_dict(row) for row in _safe_list(audio_map.get("segments"))]
+    core_rows = {_safe_dict(row).get("segment_id"): _safe_dict(row) for row in _safe_list(story_core.get("narrative_segments"))}
+    cast_rows = {_safe_dict(row).get("segment_id"): _safe_dict(row) for row in _safe_list(role_plan.get("scene_casting"))}
+
+    normalized: list[dict[str, Any]] = []
+    for idx, segment in enumerate(audio_segments, start=1):
+        segment_id = str(segment.get("segment_id") or f"seg_{idx}").strip()
+        core = _safe_dict(core_rows.get(segment_id))
+        cast = _safe_dict(cast_rows.get(segment_id))
+        t0 = _round3(segment.get("t0"))
+        t1 = _round3(segment.get("t1"))
+        normalized.append(
+            {
+                "segment_id": segment_id,
+                "scene_id": segment_id,
+                "t0": t0,
+                "t1": t1,
+                "duration_sec": _round3(segment.get("duration_sec") or max(0.0, t1 - t0)),
+                "transcript_slice": str(segment.get("transcript_slice") or segment.get("text") or "").strip(),
+                "rhythmic_anchor": str(segment.get("rhythmic_anchor") or "").strip(),
+                "intensity": str(segment.get("intensity") or "").strip(),
+                "arc_role": str(core.get("arc_role") or "").strip(),
+                "beat_purpose": str(core.get("beat_purpose") or "").strip(),
+                "emotional_key": str(core.get("emotional_key") or "").strip(),
+                "primary_role": str(cast.get("primary_role") or "").strip(),
+                "secondary_roles": [str(v).strip() for v in _safe_list(cast.get("secondary_roles")) if str(v).strip()],
+                "presence_mode": str(cast.get("presence_mode") or "").strip(),
+                "presence_weight": str(cast.get("presence_weight") or "").strip(),
+                "performance_focus": bool(cast.get("performance_focus")),
+            }
+        )
+    return normalized
+
+
 def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     lookup: dict[str, dict[str, Any]] = {}
     scene_casting = _safe_list(role_plan.get("scene_casting"))
@@ -437,6 +494,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     ownership_binding_inventory = _build_ref_binding_inventory(refs_inventory)
     scene_windows = _build_scene_windows(audio_map)
+    scene_segment_rows = _build_scene_segment_rows(audio_map, story_core, role_plan)
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     story_guidance = story_guidance_route_mix_doctrine(story_core.get("story_guidance"))
     world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
@@ -467,6 +525,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         },
         "audio_map": {
             "sections": _safe_list(audio_map.get("sections")),
+            "segments": scene_segment_rows,
             "scene_windows": scene_windows,
             "cut_policy": _safe_dict(audio_map.get("cut_policy")),
             "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
@@ -516,10 +575,12 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     }
     aux = {
         "scene_windows": scene_windows,
+        "scene_segment_rows": scene_segment_rows,
         "role_lookup": _build_scene_role_lookup(role_plan),
         "world_summary_used": world_summary_used,
         "ownership_binding_inventory": ownership_binding_inventory,
         "compiled_contract": compiled_contract,
+        "scene_role_source_precedence": ["role_plan.scene_casting", "role_plan.roster", "legacy scene_roles / compiled_contract fallback"],
         # Bridge markers: scene_candidate_windows/compiled_contract are deprecated transition inputs.
         "uses_legacy_scene_candidate_windows_bridge": bool(scene_windows),
         "uses_legacy_compiled_contract_bridge": bool(compiled_contract),
@@ -597,12 +658,6 @@ def _apply_scene_contract_constraints(
 
 
 def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> str:
-    canon = _safe_dict(context.get("video_capability_canon"))
-    route_profiles = _safe_dict(canon.get("route_profiles"))
-    i2v_profile = _safe_dict(_safe_dict(route_profiles.get("i2v")).get("profile"))
-    i2v_safe = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("verified_safe")) if str(v).strip()])
-    i2v_experimental = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("experimental")) if str(v).strip()])
-    i2v_blocked = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("blocked")) if str(v).strip()])
     feedback_block = ""
     if validation_feedback:
         feedback_block = (
@@ -610,66 +665,30 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
             f"Fix exactly: {validation_feedback}\n"
         )
     return (
-        "You are SCENE PLAN stage for scenario pipeline.\\n"
-        "Return STRICT JSON only. No markdown.\\n"
-        "MODE IS CLIP ONLY.\\n"
-        "Build final watchable scene plan from fixed scene windows.\\n"
-        "Audio energy is the primary default driver of dramaturgy in clip/music_video mode.\\n"
-        "Do not read or reason from raw Scenario Director text in this stage; use role_plan.scene_casting/roster as cast source, with legacy compiled_contract only as fallback.\\n"
-        "Refs lock identity/world/style continuity; text sets premise only when present.\\n"
-        "Use scene windows exactly as provided.\\n"
-        "Do not add, merge, split, or invent extra scenes.\\n"
-        "Return exactly one scene row per provided fixed scene window.\\n"
-        "scene_id, t0, t1, duration_sec must remain aligned to provided windows.\\n"
-        "is_lip_sync_candidate=true means eligible, not mandatory ia2v selection.\\n"
-        "Keep route mix intelligent (not random), preserve role/world continuity, and keep rhythm/emotional variation.\\n"
-        "For 8 scenes, 4 i2v / 2 ia2v / 2 first_last is a soft heuristic only; audio behavior + continuity feasibility can override it.\\n"
-        "Do NOT assign ia2v to every performance scene. Do NOT flatten all scenes into one route.\\n"
-        "Route spacing policy: ia2v scenes must not be adjacent; spread ia2v as rare emotional accents with at least one non-ia2v between them whenever possible.\\n"
-        "first_last scenes should not be adjacent to another first_last unless unavoidable. Keep route rhythm staggered, not paired.\\n"
-        "Preserve realism and coherent lighting/world progression from story_core world continuity (role_plan world block is legacy fallback only).\\n"
-        "CLIP MODE CORE PRINCIPLE: visual/emotional arc under music energy, NOT literal travel-story by default.\\n"
-        "If user/director text does not explicitly demand travel plot, keep one coherent environment family and build progression through energy/intimacy/framing/pressure-release.\\n"
-        "Do not invent arbitrary location-chain city-route narratives from nowhere.\\n"
-        "Soft anti-repetition policy: avoid 3+ same-family transit/walk scenes in a row; when transit repeats, switch to a fresh visual pressure/release function.\\n"
-        "Encourage coherent world variety through spatial texture (compression/density/friction/partial release/vertical transition/open reveal/final settling) inside one grounded environment family.\\n"
-        "Add visual progression layer: repetitive phrases must not produce visually repetitive scenes.\\n"
-        "Progress through shot scale, camera intimacy, performance openness, and focal event type.\\n"
-        "Add motion/prop complexity risk tags for each scene for downstream prompt simplification and strategy redirection.\\n\\n"
-        "Use story_core.story_guidance as story-level planning grammar (not as scene rows): world progression, viewer contrast rules, realistic allowable beats, prop guidance, and anti-repetition pressure rules.\\n"
-        "VIDEO CAPABILITY CANON (from model profile, use as source of truth):\\n"
-        f"- MODEL: {str(canon.get('model_id') or DEFAULT_VIDEO_MODEL_ID)}; VERSION: {str(canon.get('capability_rules_source_version') or '')}.\\n"
-        f"- i2v VERIFIED_SAFE (default-on): {i2v_safe}.\\n"
-        f"- i2v EXPERIMENTAL (opt-in only): {i2v_experimental}.\\n"
-        f"- i2v BLOCKED (must not normalize): {i2v_blocked}.\\n"
-        "Never treat experimental as baseline and never select blocked patterns.\\n"
-        "Camera-led transitions are generally more reliable than fine-motor body actions; prefer camera/framing evolution when both can express the beat.\\n"
-        "Wearable continuity anchors must stay continuity/silhouette/mood anchors, not default action drivers.\\n"
-        "Use ownership_binding_inventory as planning grammar: main/support/antagonist/shared/world ownership plus carried/worn/held/pocketed/nearby/environment binding.\\n"
-        "Strong owner-lock for carried/held in owner-active scenes; moderate continuity for worn; lighter continuity for pocketed/nearby; world-driven anchoring for environment binding.\\n"
-        "Do not force object visibility in every scene, but do not randomly detach owner-bound carried objects from their owner continuity.\\n"
-        "Do not use wearable-touch finger choreography as generic fallback motion.\\n\\n"
-        "WATCHABILITY ROLE (MANDATORY): viewer-facing clip function of the scene, not role name.\\n"
-        "Each scene.watchability_role must be a short phrase that says why this scene matters to the viewer/clip arc.\\n"
-        "Avoid weak labels (hero/main character/character_1/route names/raw scene_function duplicates).\\n\\n"
-        "ROUTE SEMANTICS (MANDATORY):\\n"
-        "- i2v: baseline observation/transit/connective/environment continuity; also medium build motion when needed.\\n"
-        "- ia2v: performance-first peaks, phrase-led expressive scenes, readable face, upper-body emphasis.\\n"
-        "- first_last: controlled camera/framing/state transition only (near-neighbor A->B states in same world, same location family, same hero, same lighting family, same outfit continuity, same framing family; only one controlled delta).\\n"
-        "Choose first_last only for reveal/turn/payoff threshold moments where continuity can hold.\\n"
-        "Never use first_last for transit-through-space, turning a corner, walking into another place, location progression, world jump, implied geography change, or fine-motor prop choreography.\\n"
-        "For first_last scenes, include first_last_mode from allowed taxonomy: push_in_emotional, pull_back_release, small_side_arc, reveal_face_from_shadow, foreground_parallax, camera_settle, visibility_reveal.\\n"
-        "Prefer continuity-safe first_last modes (push_in_emotional / pull_back_release / reveal_face_from_shadow / camera_settle / visibility_reveal / safe foreground_parallax). Keep small_side_arc rare, low-priority, and only when explicitly justified.\\n"
-        "Low energy: held/restrained/observational/afterimage feel. Medium: build movement and pressure. High: concentrated performance intensity. Release tail: settle instead of new travel invention.\\n\\n"
+        "You are SCENES stage only.\\n"
+        "Return STRICT JSON only. No markdown, no prose.\\n"
+        "Return one storyboard row per segment_id from audio_map.segments.\\n"
+        "Do not invent or remove segments.\\n"
+        "Do not mutate cast. Use role_plan.scene_casting/roster as cast source; compiled_contract is legacy fallback only.\\n"
+        "Do not output prompt language, quality buzzwords, renderer parameters, API/workflow payload, or final video payload.\\n"
+        "Do not use raw director text as free authoring source beyond this package context.\\n"
+        "Use story_core doctrine as guidance only; do not change doctrine.\\n"
+        "Use technical capability canon only as allowed/discouraged/unstable route behavior context.\\n"
+        "Use route baseline only as capability context if available, not as prompt text.\\n"
+        "Do not change timing grid. segment_id/t0/t1/duration are fixed by input segments.\\n"
+        "Allowed enums:\\n"
+        "- route: i2v|ia2v|first_last\\n"
+        "- pacing: fluid|staccato|stable\\n"
+        "- energy_alignment: match|counterpoint|build_against|release_after\\n"
+        "- framing: close_up|medium|wide|detail|silhouette|overhead\\n"
+        "- subject_priority: hero|ensemble|object|environment\\n"
+        "- layout: centered|rule_of_thirds|off_balance|symmetrical\\n"
+        "- depth_strategy: flat|layered|deep\\n"
         f"{feedback_block}"
-        "Return EXACT contract keys:\\n"
+        "Output contract:\\n"
         "{\\n"
-        '  \"plan_version\": \"scene_plan_v1\",\\n'
-        '  \"mode\": \"clip\",\\n'
-        '  \"route_mix_summary\": {\"total_scenes\": 0, \"i2v\": 0, \"ia2v\": 0, \"first_last\": 0},\\n'
-        '  \"scenes\": [{\"scene_id\": \"sc_1\", \"t0\": 0.0, \"t1\": 1.0, \"duration_sec\": 1.0, \"primary_role\": \"character_1\", \"active_roles\": [\"character_1\"], \"scene_presence_mode\": \"solo_observational\", \"scene_function\": \"setup\", \"route\": \"i2v\", \"route_reason\": \"\", \"emotional_intent\": \"\", \"motion_intent\": \"\", \"watchability_role\": \"\", \"shot_scale\": \"wide\", \"camera_intimacy\": \"observational\", \"performance_openness\": \"restrained\", \"visual_event_type\": \"environment\", \"repeat_variation_rule\": \"\", \"first_last_mode\": \"\", \"motion_risk\": {\"motion_complexity\": \"low\", \"prop_interaction_complexity\": \"low\", \"finger_precision_risk\": \"low\", \"face_occlusion_risk\": \"low\", \"identity_drift_risk\": \"low\", \"ltx_motion_risk\": \"low\"}}],\\n'
-        '  \"scene_arc_summary\": \"\",\\n'
-        '  \"route_strategy_notes\": [\"\"]\\n'
+        '  "scenes_version":"1.1",\\n'
+        '  "storyboard":[{"segment_id":"seg_1","route":"i2v","route_reason":"","scene_goal":"","narrative_function":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":""}]\\n'
         "}\\n\\n"
         f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )
@@ -1188,393 +1207,212 @@ def _infer_watchability_role(scene: dict[str, Any], idx: int, total: int) -> str
 def _normalize_scene_plan(
     raw_plan: dict[str, Any],
     *,
-    scene_windows: list[dict[str, Any]],
+    scene_segment_rows: list[dict[str, Any]],
     role_lookup: dict[str, dict[str, Any]],
-    scene_contract_lookup: dict[str, dict[str, Any]],
-    global_contract: dict[str, Any],
     include_debug_raw: bool = False,
-    ownership_binding_inventory: list[dict[str, str]] | None = None,
-) -> tuple[dict[str, Any], bool, str, int, dict[str, Any]]:
-    known_ids = {str(row.get("scene_id") or ""): row for row in scene_windows}
-    raw_model_rows: list[dict[str, Any]] = []
-    raw_scenes_by_id: dict[str, dict[str, Any]] = {}
-    for row_raw in _safe_list(raw_plan.get("scenes")):
-        row = _safe_dict(row_raw)
-        raw_model_rows.append(row)
-        scene_id = str(row.get("scene_id") or "").strip()
-        model_t0 = _round3(row.get("t0"))
-        model_t1 = _round3(row.get("t1"))
-        source = _safe_dict(known_ids.get(scene_id))
-        aligned = bool(source) and model_t0 == _round3(source.get("t0")) and model_t1 == _round3(source.get("t1"))
-        if scene_id in known_ids and aligned and scene_id not in raw_scenes_by_id:
-            raw_scenes_by_id[scene_id] = row
-
-    used_fallback = False
-    watchability_fallback_count = 0
-    normalized_scenes: list[dict[str, Any]] = []
-    model_rows_used = set(raw_scenes_by_id.keys())
-    row_count_source = len(scene_windows)
-    row_count_model = len(raw_model_rows)
-    missing_rows_filled = 0
-    repaired_to_audio_windows = False
-    seen_phrase_counts: dict[str, int] = {}
-    scene_family_seen_counts: dict[str, int] = {}
-    transit_scene_streak = 0
-    intimate_scene_streak = 0
-    route_swaps_applied = 0
-    binding_rows = _safe_list(ownership_binding_inventory)
-    carried_owner_roles = {
-        str(item.get("ownershipRoleMapped") or "").strip().lower()
-        for item in binding_rows
-        if str(item.get("bindingType") or "").strip().lower() == "carried"
-    }
-    held_owner_roles = {
-        str(item.get("ownershipRoleMapped") or "").strip().lower()
-        for item in binding_rows
-        if str(item.get("bindingType") or "").strip().lower() == "held"
-    }
-    worn_owner_roles = {
-        str(item.get("ownershipRoleMapped") or "").strip().lower()
-        for item in binding_rows
-        if str(item.get("bindingType") or "").strip().lower() == "worn"
-    }
-    has_environment_binding = any(
-        _is_world_bound_binding_row(_safe_dict(item))
-        and str(item.get("bindingType") or "").strip().lower() == "environment"
-        for item in binding_rows
-    )
-
-    ordered_fallback_rows = [
-        _safe_dict(row_raw)
-        for row_raw in raw_model_rows
-        if str(_safe_dict(row_raw).get("scene_id") or "").strip() not in model_rows_used
-    ]
-    fallback_idx = 0
-    for idx, window in enumerate(scene_windows):
-        scene_id = str(window.get("scene_id") or "")
-        raw_row = _safe_dict(raw_scenes_by_id.get(scene_id))
-        if not raw_row:
-            if fallback_idx < len(ordered_fallback_rows):
-                raw_row = _safe_dict(ordered_fallback_rows[fallback_idx])
-                fallback_idx += 1
-                repaired_to_audio_windows = True
-            else:
-                missing_rows_filled += 1
-                repaired_to_audio_windows = True
-        role_row = _safe_dict(role_lookup.get(scene_id))
-        scene_contract = _safe_dict(scene_contract_lookup.get(scene_id))
-
-        route_raw = str(raw_row.get("route") or "").strip().lower()
-        route = route_raw if route_raw in ALLOWED_ROUTES else ""
-        if not route:
-            route = _default_route({**window, **role_row, **raw_row}, idx, len(scene_windows), scenes=normalized_scenes)
-            used_fallback = True
-
-        primary_role = str(raw_row.get("primary_role") or role_row.get("primary_role") or "").strip() or None
-        active_roles = [
-            str(item).strip() for item in _safe_list(raw_row.get("active_roles") or role_row.get("active_roles")) if str(item).strip()
-        ]
-        if primary_role and primary_role not in active_roles:
-            active_roles.insert(0, primary_role)
-
-        scene_presence_mode = str(raw_row.get("scene_presence_mode") or role_row.get("scene_presence_mode") or "solo_observational").strip()
-
-        scene_function = str(raw_row.get("scene_function") or window.get("scene_function") or "montage_progression").strip() or "montage_progression"
-        watchability_role_raw = str(raw_row.get("watchability_role") or "").strip()
-        phrase_text = str(window.get("phrase_text") or "").strip().lower()
-        phrase_repeat_idx = 0
-        if phrase_text:
-            phrase_repeat_idx = seen_phrase_counts.get(phrase_text, 0)
-            seen_phrase_counts[phrase_text] = phrase_repeat_idx + 1
-        shot_scale, camera_intimacy, performance_openness = _progression_by_position(idx, len(scene_windows))
-        visual_event_type_default = _visual_event_type({**window, **role_row, **raw_row, "route": route})
-        repeat_variation_rule = str(raw_row.get("repeat_variation_rule") or "").strip()
-        if not repeat_variation_rule:
-            if phrase_repeat_idx > 0:
-                repeat_variation_rule = f"repeat_phrase_variation_{phrase_repeat_idx}: change shot intimacy/focal emphasis versus prior similar phrase"
-            else:
-                repeat_variation_rule = "first_occurrence_anchor"
-        motion_risk = _infer_motion_risk({**window, **role_row, **raw_row}, phrase_text)
-
-        route_validation_status = "ok"
-        route_validation_reason = ""
-        suggested_route = ""
-        capability_warnings: list[str] = []
-        continuity_warnings: list[str] = []
-        anti_repeat_warnings: list[str] = []
-
-        if route == "first_last" and not _is_first_last_candidate({**window, **role_row, **raw_row, "route": route}, idx, len(scene_windows)):
-            route_validation_status = "risky"
-            route_validation_reason = "first_last_continuity_risk"
-            suggested_route = "i2v"
-            continuity_warnings.append("first_last_continuity_risk")
-
-        if route == "i2v":
-            candidate_family = str(raw_row.get("i2v_motion_family") or "").strip().lower()
-            if candidate_family and candidate_family not in I2V_MOTION_FAMILIES:
-                route_validation_status = "warning" if route_validation_status == "ok" else route_validation_status
-                capability_warnings.append("unsupported_i2v_motion_family")
-        auto_downgraded_first_last = False
-        if _should_auto_downgrade_first_last(
-            route=route,
-            route_validation_status=route_validation_status,
-            suggested_route=suggested_route,
-            route_validation_reason=route_validation_reason,
-            continuity_warnings=continuity_warnings,
-            visual_event_type=visual_event_type_default,
-        ):
-            route = "i2v"
-            route_validation_status = "warning"
-            route_validation_reason = "auto_downgraded_from_risky_first_last"
-            continuity_warnings.append("first_last_auto_downgraded_to_i2v")
-            auto_downgraded_first_last = True
-
-        scene_row = {
-            "scene_id": scene_id,
-            "t0": _round3(window.get("t0")),
-            "t1": _round3(window.get("t1")),
-            "duration_sec": _round3(window.get("duration_sec") or (_round3(window.get("t1")) - _round3(window.get("t0")))),
-            "primary_role": primary_role,
-            "active_roles": active_roles,
-            "scene_presence_mode": scene_presence_mode,
-            "prop_activation_mode": str(role_row.get("prop_activation_mode") or "").strip().lower() or "not_emphasized",
-            "scene_function": scene_function,
-            "route": route,
-            "route_reason": (
-                "auto_downgraded_to_i2v_after_risky_first_last_validation"
-                if auto_downgraded_first_last
-                else (str(raw_row.get("route_reason") or "").strip() or "route_selected_by_model")
-            ),
-            "emotional_intent": str(raw_row.get("emotional_intent") or "").strip() or "emotionally coherent clip beat",
-            "motion_intent": str(raw_row.get("motion_intent") or "").strip() or "watchable realistic movement",
-            "watchability_role": watchability_role_raw or _infer_watchability_role({**window, **role_row, **raw_row, "route": route}, idx, len(scene_windows)),
-            "performance_focus": bool(role_row.get("performance_focus")),
-            "energy": str(window.get("energy") or "").strip().lower(),
-            "shot_scale": str(raw_row.get("shot_scale") or "").strip().lower() or shot_scale,
-            "camera_intimacy": str(raw_row.get("camera_intimacy") or "").strip().lower() or camera_intimacy,
-            "performance_openness": str(raw_row.get("performance_openness") or "").strip().lower() or performance_openness,
-            "visual_event_type": str(raw_row.get("visual_event_type") or "").strip().lower() or visual_event_type_default,
-            "repeat_variation_rule": repeat_variation_rule,
-            "motion_risk": _safe_dict(raw_row.get("motion_risk")) or motion_risk,
-            "route_validation_status": route_validation_status,
-            "route_validation_reason": route_validation_reason,
-            "suggested_route": suggested_route,
-            "capability_warnings": capability_warnings,
-            "continuity_warnings": continuity_warnings,
-            "anti_repeat_warnings": anti_repeat_warnings,
-            "original_route": route_raw,
-        }
-        scene_row, contract_warnings = _apply_scene_contract_constraints(
-            scene_row=scene_row,
-            role_row=role_row,
-            scene_contract=scene_contract,
-            global_contract=global_contract,
-        )
-        if contract_warnings:
-            scene_row["continuity_warnings"] = [*_safe_list(scene_row.get("continuity_warnings")), *contract_warnings]
-        carried_owner_scene_for_env_guard = False
-        held_owner_scene_for_env_guard = False
-        if scene_row["primary_role"] and scene_row["primary_role"].lower() in carried_owner_roles:
-            if scene_row["visual_event_type"] in {"environment", "face"}:
-                scene_row["visual_event_type"] = "character_action"
-            if scene_row["motion_intent"] == "watchable realistic movement":
-                scene_row["motion_intent"] = "owner-bound carried object stays close to body and affects posture, pace, route, and concealment choices"
-            if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
-                scene_row["watchability_role"] = "owner-bound carried continuity anchor driving readable motion semantics"
-            scene_row["prop_activation_mode"] = "visible_anchor"
-            carried_owner_scene_for_env_guard = "props" in scene_row["active_roles"] and scene_row["prop_activation_mode"] == "visible_anchor"
-        elif scene_row["primary_role"] and scene_row["primary_role"].lower() in held_owner_roles:
-            held_transit_like_scene = scene_row["scene_presence_mode"] in {"transit", "private_release"} or any(
-                tag in " ".join(
-                    [
-                        str(scene_row.get("scene_function") or "").strip().lower(),
-                        str(scene_row.get("emotional_intent") or "").strip().lower(),
-                        str(scene_row.get("motion_intent") or "").strip().lower(),
-                        str(scene_row.get("watchability_role") or "").strip().lower(),
-                    ]
-                )
-                for tag in {"pressure", "evasion", "conceal", "escape", "release"}
-            )
-            if held_transit_like_scene and scene_row["visual_event_type"] in {"environment", "face"}:
-                scene_row["visual_event_type"] = "character_action"
-            if scene_row["motion_intent"] == "watchable realistic movement":
-                scene_row["motion_intent"] = (
-                    "same owner-bound held object stays with the hero, with readable handling that constrains posture, pace, and route choices"
-                    if held_transit_like_scene
-                    else "handling-driven held-object continuity with controlled readable movement"
-                )
-            if held_transit_like_scene and _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
-                scene_row["watchability_role"] = "owner-bound held continuity anchor shaping readable movement and handling choices"
-            if scene_row.get("prop_activation_mode") in {"not_emphasized", "anchor_worn"} and held_transit_like_scene:
-                scene_row["prop_activation_mode"] = "visible_anchor"
-            elif scene_row.get("prop_activation_mode") == "not_emphasized":
-                scene_row["prop_activation_mode"] = "anchor_worn"
-            held_owner_scene_for_env_guard = (
-                held_transit_like_scene and "props" in scene_row["active_roles"] and scene_row["prop_activation_mode"] == "visible_anchor"
-            )
-        elif scene_row["primary_role"] and scene_row["primary_role"].lower() in worn_owner_roles and scene_row["motion_intent"] == "watchable realistic movement":
-            scene_row["motion_intent"] = "silhouette continuity with worn anchor and controlled movement"
-        if (
-            has_environment_binding
-            and scene_row["scene_presence_mode"] in {"environment_anchor", "transit"}
-            and scene_row["visual_event_type"] == "character_action"
-            and not carried_owner_scene_for_env_guard
-            and not held_owner_scene_for_env_guard
-        ):
-            scene_row["visual_event_type"] = "environment"
-
-        if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
-            watchability_fallback_count += 1
-            capability_warnings.append("weak_watchability_role")
-
-        if _is_transit_like_scene(scene_row):
-            transit_scene_streak += 1
-        else:
-            transit_scene_streak = 0
-        if str(scene_row.get("visual_event_type") or "") == "face" and route == "ia2v":
-            intimate_scene_streak += 1
-        else:
-            intimate_scene_streak = 0
-        scene_family = str(scene_row.get("visual_event_type") or route)
-        scene_family_seen_counts[scene_family] = scene_family_seen_counts.get(scene_family, 0) + 1
-        family_repeat_idx = max(0, scene_family_seen_counts.get(scene_family, 1) - 1)
-        if transit_scene_streak >= 3 and _is_transit_like_scene(scene_row):
-            anti_repeat_warnings.append(f"transit_family_streak_{transit_scene_streak}")
-        if intimate_scene_streak >= 2 and scene_row.get("route") == "ia2v":
-            anti_repeat_warnings.append("adjacent_ia2v_intimacy_streak")
-        if family_repeat_idx > 0:
-            anti_repeat_warnings.append(f"family_repeat_{family_repeat_idx}")
-
-        if route == "first_last":
-            first_last_mode_raw = str(raw_row.get("first_last_mode") or "").strip().lower()
-            scene_row["first_last_mode"] = _stabilize_first_last_mode(
-                first_last_mode_raw,
-                scene_row,
-                idx,
-                len(scene_windows),
-            )
-        normalized_scenes.append(scene_row)
-
-    i2v_motion_family_counts = {family: 0 for family in sorted(I2V_MOTION_FAMILIES)}
-    i2v_rows_enriched_count = 0
-    unsupported_i2v_family_count = 0
-    prev_i2v_family = ""
-    transit_i2v_streak = 0
-    for idx, row in enumerate(normalized_scenes):
-        if str(row.get("route") or "") != "i2v":
-            transit_i2v_streak = 0
+) -> tuple[dict[str, Any], bool, str, int, dict[str, Any], str]:
+    raw_storyboard = [_safe_dict(row) for row in _safe_list(raw_plan.get("storyboard"))]
+    storyboard_by_id: dict[str, dict[str, Any]] = {}
+    duplicate_ids: list[str] = []
+    for row in raw_storyboard:
+        segment_id = str(row.get("segment_id") or "").strip()
+        if not segment_id:
             continue
-        raw_family = str(row.get("i2v_motion_family") or "").strip().lower()
-        if raw_family and raw_family in I2V_MOTION_FAMILIES:
-            family = raw_family
-            row["i2v_motion_family"] = family
-            row["i2v_prompt_duration_hint_sec"] = _pick_i2v_duration_hint(row.get("duration_sec"), family)
-        else:
-            if raw_family and raw_family not in I2V_MOTION_FAMILIES:
-                unsupported_i2v_family_count += 1
-            enriched = _select_i2v_motion_family(
-                row,
-                idx=idx,
-                total=len(normalized_scenes),
-                prev_i2v_family=prev_i2v_family,
-                transit_streak=transit_i2v_streak,
-            )
-            row.update(enriched)
-            family = str(row.get("i2v_motion_family") or "")
-        i2v_motion_family_counts[family] = i2v_motion_family_counts.get(family, 0) + 1
-        i2v_rows_enriched_count += 1
-        prev_i2v_family = family
-        transit_i2v_streak = transit_i2v_streak + 1 if family in TRANSIT_I2V_FAMILIES else 0
+        if segment_id in storyboard_by_id:
+            duplicate_ids.append(segment_id)
+            continue
+        storyboard_by_id[segment_id] = row
 
-    route_counts = {route_name: sum(1 for row in normalized_scenes if row.get("route") == route_name) for route_name in ("i2v", "ia2v", "first_last")}
-    has_adjacent_ia2v = _has_adjacent_route(normalized_scenes, "ia2v")
-    has_adjacent_first_last = _has_adjacent_route(normalized_scenes, "first_last")
-    route_spacing_warning = "adjacent_ia2v_detected" if has_adjacent_ia2v else ("adjacent_first_last_detected" if has_adjacent_first_last else "")
+    expected_segment_ids = [str(row.get("segment_id") or "").strip() for row in scene_segment_rows]
+    model_segment_ids = [str(row.get("segment_id") or "").strip() for row in raw_storyboard if str(row.get("segment_id") or "").strip()]
 
-    warnings_count = 0
-    unsupported_scene_count = 0
-    risky_scene_count = 0
-    for row in normalized_scenes:
-        warnings_count += (
-            len(_safe_list(row.get("capability_warnings")))
-            + len(_safe_list(row.get("continuity_warnings")))
-            + len(_safe_list(row.get("anti_repeat_warnings")))
+    normalized_storyboard: list[dict[str, Any]] = []
+    validation_error = ""
+    error_code = ""
+    watchability_fallback_count = 0
+    used_fallback = False
+
+    if duplicate_ids:
+        validation_error = "duplicate_segment_id"
+        error_code = "SCENES_SEGMENT_ID_MISMATCH"
+
+    if not validation_error and (len(raw_storyboard) != len(scene_segment_rows) or model_segment_ids != expected_segment_ids):
+        validation_error = "segment_id_sequence_mismatch"
+        error_code = "SCENES_SEGMENT_ID_MISMATCH"
+
+    prompt_leaks_detected = 0
+    technical_leaks_detected = 0
+    enum_invalid_count = 0
+    illegal_route_count = 0
+    cast_mutation_count = 0
+
+    for idx, source_row in enumerate(scene_segment_rows):
+        segment_id = str(source_row.get("segment_id") or "").strip()
+        raw_row = _safe_dict(storyboard_by_id.get(segment_id))
+        if not raw_row:
+            validation_error = validation_error or "missing_storyboard_row"
+            error_code = error_code or "SCENES_SEGMENT_ID_MISMATCH"
+            continue
+
+        route = str(raw_row.get("route") or "").strip().lower()
+        if route not in ALLOWED_ROUTES:
+            illegal_route_count += 1
+            validation_error = validation_error or "illegal_route"
+            error_code = error_code or "SCENES_ILLEGAL_ROUTE"
+
+        visual_motion = _safe_dict(raw_row.get("visual_motion"))
+        composition = _safe_dict(raw_row.get("composition"))
+
+        pacing = str(visual_motion.get("pacing") or "").strip().lower()
+        energy_alignment = str(visual_motion.get("energy_alignment") or "").strip().lower()
+        framing = str(composition.get("framing") or "").strip().lower()
+        subject_priority = str(composition.get("subject_priority") or "").strip().lower()
+        layout = str(composition.get("layout") or "").strip().lower()
+        depth_strategy = str(composition.get("depth_strategy") or "").strip().lower()
+
+        if pacing not in ALLOWED_PACING or energy_alignment not in ALLOWED_ENERGY_ALIGNMENT or framing not in ALLOWED_FRAMING or subject_priority not in ALLOWED_SUBJECT_PRIORITY or layout not in ALLOWED_LAYOUT or depth_strategy not in ALLOWED_DEPTH_STRATEGY:
+            enum_invalid_count += 1
+            validation_error = validation_error or "enum_invalid"
+            error_code = error_code or "SCENES_ENUM_INVALID"
+
+        content_blob = " ".join(
+            [
+                str(raw_row.get("route_reason") or ""),
+                str(raw_row.get("scene_goal") or ""),
+                str(raw_row.get("narrative_function") or ""),
+                str(raw_row.get("audio_visual_sync") or ""),
+                str(visual_motion.get("subject_motion") or ""),
+                str(visual_motion.get("camera_intent") or ""),
+            ]
+        ).lower()
+        has_prompt_leak = any(token in content_blob for token in {"8k", "cinematic quality", "highly detailed", "masterpiece", "positive_prompt", "negative_prompt"})
+        has_technical_leak = any(token in content_blob for token in {"fps", "lens", "seed", "sampler", "workflow", "ltx", "renderer_family"})
+        if has_prompt_leak:
+            prompt_leaks_detected += 1
+            validation_error = validation_error or "prompt_leaking"
+            error_code = error_code or "SCENES_PROMPT_LEAKING"
+        if has_technical_leak:
+            technical_leaks_detected += 1
+            validation_error = validation_error or "technical_leaking"
+            error_code = error_code or "SCENES_TECHNICAL_LEAKING"
+
+        row_str = json.dumps(raw_row, ensure_ascii=False).lower()
+        if any(token in row_str for token in SCENES_FORBIDDEN_LEAK_TOKENS):
+            technical_leaks_detected += 1
+            validation_error = validation_error or "technical_leaking"
+            error_code = error_code or "SCENES_TECHNICAL_LEAKING"
+
+        if raw_row.get("primary_role") is not None or raw_row.get("secondary_roles") is not None or raw_row.get("active_roles") is not None:
+            cast_mutation_count += 1
+            validation_error = validation_error or "cast_mutation"
+            error_code = error_code or "SCENES_CAST_MUTATION"
+
+        source_t0 = _round3(source_row.get("t0"))
+        source_t1 = _round3(source_row.get("t1"))
+        out_t0 = _round3(raw_row.get("t0") if raw_row.get("t0") is not None else source_t0)
+        out_t1 = _round3(raw_row.get("t1") if raw_row.get("t1") is not None else source_t1)
+        if out_t0 != source_t0 or out_t1 != source_t1:
+            validation_error = validation_error or "timing_drift"
+            error_code = error_code or "SCENES_TIMING_DRIFT"
+
+        normalized_storyboard.append(
+            {
+                "segment_id": segment_id,
+                "route": route,
+                "route_reason": str(raw_row.get("route_reason") or "").strip(),
+                "scene_goal": str(raw_row.get("scene_goal") or "").strip(),
+                "narrative_function": str(raw_row.get("narrative_function") or "").strip(),
+                "visual_motion": {
+                    "subject_motion": str(visual_motion.get("subject_motion") or "").strip(),
+                    "camera_intent": str(visual_motion.get("camera_intent") or "").strip(),
+                    "pacing": pacing,
+                    "energy_alignment": energy_alignment,
+                },
+                "composition": {
+                    "framing": framing,
+                    "subject_priority": subject_priority,
+                    "layout": layout,
+                    "depth_strategy": depth_strategy,
+                },
+                "audio_visual_sync": str(raw_row.get("audio_visual_sync") or "").strip(),
+            }
         )
-        status = str(row.get("route_validation_status") or "ok")
-        if status == "risky":
-            risky_scene_count += 1
-        if status == "unsupported":
-            unsupported_scene_count += 1
 
-    target_budget = _target_route_budget(len(normalized_scenes))
-    deviation_summary = {
-        route_name: int(route_counts.get(route_name, 0) - target_budget.get(route_name, 0)) for route_name in ("i2v", "ia2v", "first_last")
-    }
+    route_counts = {route_name: sum(1 for row in normalized_storyboard if row.get("route") == route_name) for route_name in ("i2v", "ia2v", "first_last")}
 
-    route_strategy_notes = [str(item).strip() for item in _safe_list(raw_plan.get("route_strategy_notes")) if str(item).strip()] or [
-        "i2v remains baseline route for connective watchability.",
-        "ia2v reserved for emotionally readable performance beats.",
-        "first_last reserved for explicit progression or payoff turns.",
-    ]
-    route_strategy_notes = route_strategy_notes[:5]
+    legacy_scenes: list[dict[str, Any]] = []
+    for row, source_row in zip(normalized_storyboard, scene_segment_rows, strict=False):
+        motion = _safe_dict(row.get("visual_motion"))
+        legacy_scenes.append(
+            {
+                "scene_id": str(row.get("segment_id") or ""),
+                "segment_id": str(row.get("segment_id") or ""),
+                "t0": _round3(source_row.get("t0")),
+                "t1": _round3(source_row.get("t1")),
+                "duration_sec": _round3(source_row.get("duration_sec")),
+                "route": str(row.get("route") or ""),
+                "route_reason": str(row.get("route_reason") or ""),
+                "scene_function": str(row.get("narrative_function") or ""),
+                "emotional_intent": str(row.get("scene_goal") or ""),
+                "motion_intent": str(motion.get("subject_motion") or ""),
+                "deprecated_bridge": True,
+            }
+        )
+
+    if not normalized_storyboard and not validation_error:
+        validation_error = "scene_plan_empty_after_normalization"
+        error_code = "SCENES_SCHEMA_INVALID"
 
     plan = {
         "plan_version": SCENE_PLAN_PROMPT_VERSION,
         "mode": "clip",
+        "scenes_version": SCENES_VERSION,
+        "storyboard": normalized_storyboard,
         "route_mix_summary": {
-            "total_scenes": len(normalized_scenes),
+            "total_scenes": len(normalized_storyboard),
             "i2v": route_counts["i2v"],
             "ia2v": route_counts["ia2v"],
             "first_last": route_counts["first_last"],
         },
-        "scenes": [_compact_scene_row(row) for row in normalized_scenes],
-        "scene_arc_summary": str(raw_plan.get("scene_arc_summary") or "").strip() or "Clip scene progression with balanced route rhythm.",
-        "route_strategy_notes": route_strategy_notes,
+        "scenes": legacy_scenes,
+        "scene_arc_summary": "",
+        "route_strategy_notes": ["scene_candidate_windows and compiled_contract are legacy bridge inputs"],
+        "deprecated_bridge": True,
     }
 
-    validation_error = "" if normalized_scenes else "scene_plan_empty_after_normalization"
-    synthetic_rows_dropped = max(0, row_count_model - row_count_source)
-    if row_count_model != row_count_source or synthetic_rows_dropped or missing_rows_filled:
-        repaired_to_audio_windows = True
     normalization_diag: dict[str, Any] = {
-        "window_count_source": row_count_source,
-        "window_count_model": row_count_model,
-        "window_count_normalized": len(normalized_scenes),
-        "repaired_to_audio_windows": repaired_to_audio_windows,
-        "synthetic_rows_dropped": synthetic_rows_dropped,
-        "missing_rows_filled": missing_rows_filled,
-        "normalization_mode": "validate_only",
-        "creative_rewrite_applied": False,
-        "route_swaps_applied": route_swaps_applied,
-        "warnings_count": warnings_count,
-        "unsupported_scene_count": unsupported_scene_count,
-        "risky_scene_count": risky_scene_count,
-        "route_spacing": {
-            "has_adjacent_ia2v": has_adjacent_ia2v,
-            "has_adjacent_first_last": has_adjacent_first_last,
-            "warning": route_spacing_warning,
-        },
-        "target_route_mix": target_budget,
+        "window_count_source": len(scene_segment_rows),
+        "window_count_model": len(raw_storyboard),
+        "window_count_normalized": len(normalized_storyboard),
+        "segment_count_expected": len(expected_segment_ids),
+        "segment_count_actual": len(normalized_storyboard),
+        "segment_coverage_ok": bool(expected_segment_ids == [str(row.get("segment_id") or "") for row in normalized_storyboard]),
+        "uses_segment_id_canonical": True,
+        "prompt_leaks_detected": prompt_leaks_detected,
+        "technical_leaks_detected": technical_leaks_detected,
+        "enum_invalid_count": enum_invalid_count,
+        "illegal_route_count": illegal_route_count,
+        "cast_mutation_count": cast_mutation_count,
+        "target_route_mix": _target_route_budget(len(normalized_storyboard)),
         "actual_route_mix": route_counts,
-        "deviation_summary": deviation_summary,
-        "i2v_motion_family_counts": i2v_motion_family_counts,
-        "unsupported_i2v_family_count": unsupported_i2v_family_count,
-        "i2v_rows_enriched_count": i2v_rows_enriched_count,
-        "original_scenes_count": len(raw_model_rows),
+        "route_spacing": {
+            "has_adjacent_ia2v": _has_adjacent_route(legacy_scenes, "ia2v"),
+            "has_adjacent_first_last": _has_adjacent_route(legacy_scenes, "first_last"),
+            "warning": "",
+        },
     }
     if include_debug_raw:
-        normalization_diag["original_scenes"] = raw_model_rows
-    return plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag
+        normalization_diag["original_scenes"] = raw_storyboard
 
+    if validation_error and not error_code:
+        error_code = "SCENES_SCHEMA_INVALID"
+    return plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code
 
 def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation_feedback: str = "") -> dict[str, Any]:
     context, aux = _build_scene_planning_context(package)
-    scene_windows = _safe_list(aux.get("scene_windows"))
+    scene_segment_rows = _safe_list(aux.get("scene_segment_rows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
     compiled_contract = _safe_dict(aux.get("compiled_contract"))
-    global_contract = _safe_dict(compiled_contract.get("global_contract"))
-    scene_contract_lookup = _build_scene_contract_lookup(compiled_contract)
-    ownership_binding_inventory = _safe_list(aux.get("ownership_binding_inventory"))
     world_summary_used = bool(aux.get("world_summary_used"))
     include_debug_raw = _scene_plan_debug_enabled(package)
     model_id = str(_safe_dict(context.get("video_capability_canon")).get("model_id") or DEFAULT_VIDEO_MODEL_ID)
@@ -1588,11 +1426,13 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
 
     diagnostics = {
         "prompt_version": SCENE_PLAN_PROMPT_VERSION,
-        "scene_candidate_windows_bridge": True,
+        "scene_candidate_windows_bridge": bool(aux.get("uses_legacy_scene_candidate_windows_bridge")),
         "compiled_contract_bridge": bool(compiled_contract),
-        "role_source_precedence": ["role_plan.scene_casting", "role_plan.roster", "legacy scene_roles / compiled_contract fallback"],
+        "role_source_precedence": _safe_list(aux.get("scene_role_source_precedence")),
         "used_model": SCENE_PLAN_MODEL,
-        "scene_count": len(scene_windows),
+        "scene_count": len(scene_segment_rows),
+        "scene_plan_scenes_version": SCENES_VERSION,
+        "scene_plan_uses_segment_id_canonical": True,
         "watchability_fallback_count": 0,
         "world_summary_used": world_summary_used,
         **capability_diag,
@@ -1630,15 +1470,19 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "window_count_source": int(normalization_diag.get("window_count_source") or 0),
             "window_count_model": int(normalization_diag.get("window_count_model") or 0),
             "window_count_normalized": int(normalization_diag.get("window_count_normalized") or 0),
-            "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
-            "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
-            "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
-            "normalization_mode": str(normalization_diag.get("normalization_mode") or ""),
-            "creative_rewrite_applied": bool(normalization_diag.get("creative_rewrite_applied")),
-            "route_swaps_applied": int(normalization_diag.get("route_swaps_applied") or 0),
-            "warnings_count": int(normalization_diag.get("warnings_count") or 0),
-            "unsupported_scene_count": int(normalization_diag.get("unsupported_scene_count") or 0),
-            "risky_scene_count": int(normalization_diag.get("risky_scene_count") or 0),
+            "segment_count_expected": int(normalization_diag.get("segment_count_expected") or 0),
+            "segment_count_actual": int(normalization_diag.get("segment_count_actual") or 0),
+            "segment_coverage_ok": bool(normalization_diag.get("segment_coverage_ok")),
+            "uses_segment_id_canonical": bool(normalization_diag.get("uses_segment_id_canonical")),
+            "repaired_to_audio_windows": False,
+            "synthetic_rows_dropped": 0,
+            "missing_rows_filled": 0,
+            "normalization_mode": "validate_only",
+            "creative_rewrite_applied": False,
+            "route_swaps_applied": 0,
+            "warnings_count": int(normalization_diag.get("enum_invalid_count") or 0),
+            "unsupported_scene_count": int(normalization_diag.get("illegal_route_count") or 0),
+            "risky_scene_count": 0,
             "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
             "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
             "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
@@ -1663,16 +1507,14 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             }
         return payload
 
-    if not scene_windows:
-        plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag = _normalize_scene_plan(
+    if not scene_segment_rows:
+        plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _normalize_scene_plan(
             {},
-            scene_windows=scene_windows,
+            scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
-            scene_contract_lookup=scene_contract_lookup,
-            global_contract=global_contract,
             include_debug_raw=include_debug_raw,
-            ownership_binding_inventory=ownership_binding_inventory,
         )
+        diagnostics["error_code"] = error_code or "SCENES_SCHEMA_INVALID"
         diagnostics.update(
             _collect_scene_plan_diagnostics(
                 scene_plan=plan,
@@ -1684,9 +1526,39 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
         return {
             "ok": False,
             "scene_plan": plan,
-            "error": "scene_windows_missing",
-            "validation_error": validation_error or "scene_windows_missing",
+            "error": "segment_rows_missing",
+            "validation_error": validation_error or "SCENES_SCHEMA_INVALID",
+            "error_code": diagnostics["error_code"],
             "used_fallback": True,
+            "diagnostics": diagnostics,
+        }
+
+    missing_role_segments = [str(row.get("segment_id") or "") for row in scene_segment_rows if not _safe_dict(role_lookup.get(str(row.get("segment_id") or "")))]
+    if missing_role_segments:
+        plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, _ = _normalize_scene_plan(
+            {},
+            scene_segment_rows=scene_segment_rows,
+            role_lookup=role_lookup,
+            include_debug_raw=include_debug_raw,
+        )
+        diagnostics["error_code"] = "SCENES_ROLE_SOURCE_MISSING"
+        diagnostics["validation_error"] = "missing_role_source_for_segments"
+        diagnostics["missing_role_source_segments"] = missing_role_segments
+        diagnostics.update(
+            _collect_scene_plan_diagnostics(
+                scene_plan=plan,
+                normalization_diag=normalization_diag,
+                watchability_fallback_count=watchability_fallback_count,
+                include_presence_modes=False,
+            )
+        )
+        return {
+            "ok": False,
+            "scene_plan": plan,
+            "error": "role_source_missing",
+            "validation_error": "missing_role_source_for_segments",
+            "error_code": "SCENES_ROLE_SOURCE_MISSING",
+            "used_fallback": used_fallback,
             "diagnostics": diagnostics,
         }
 
@@ -1705,15 +1577,13 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
 
         parsed = _extract_json_obj(_extract_gemini_text(response))
-        scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag = _normalize_scene_plan(
+        scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _normalize_scene_plan(
             parsed,
-            scene_windows=scene_windows,
+            scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
-            scene_contract_lookup=scene_contract_lookup,
-            global_contract=global_contract,
             include_debug_raw=include_debug_raw,
-            ownership_binding_inventory=ownership_binding_inventory,
         )
+        diagnostics["error_code"] = error_code
         diagnostics.update(
             _collect_scene_plan_diagnostics(
                 scene_plan=scene_plan,
@@ -1727,19 +1597,18 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "scene_plan": scene_plan,
             "error": "" if _safe_list(scene_plan.get("scenes")) else "invalid_scene_plan",
             "validation_error": validation_error,
+            "error_code": error_code,
             "used_fallback": used_fallback,
             "diagnostics": diagnostics,
         }
     except Exception as exc:  # noqa: BLE001
-        scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag = _normalize_scene_plan(
+        scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _normalize_scene_plan(
             {},
-            scene_windows=scene_windows,
+            scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
-            scene_contract_lookup=scene_contract_lookup,
-            global_contract=global_contract,
             include_debug_raw=include_debug_raw,
-            ownership_binding_inventory=ownership_binding_inventory,
         )
+        diagnostics["error_code"] = error_code or "SCENES_SCHEMA_INVALID"
         diagnostics.update(
             _collect_scene_plan_diagnostics(
                 scene_plan=scene_plan,
@@ -1753,6 +1622,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "scene_plan": scene_plan,
             "error": str(exc),
             "validation_error": validation_error,
+            "error_code": diagnostics["error_code"],
             "used_fallback": True,
             "diagnostics": diagnostics,
         }
