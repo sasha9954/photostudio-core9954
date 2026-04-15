@@ -75,6 +75,7 @@ _PLOT_LEAKAGE_PATTERNS = [
     re.compile(r"\b(scene|shot\s?list|storyboard|render|prompt|visual|lighting|composition)\b", re.IGNORECASE),
     re.compile(r"\b(hero|protagonist|character\s*[0-9]*|villain|antagonist|role\b)\b", re.IGNORECASE),
 ]
+_SEGMENT_ID_CANON_PATTERN = re.compile(r"^seg_\d{2}$")
 
 
 def _fmt(idx: int, msg: str) -> str:
@@ -117,6 +118,8 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
     gap_sum_sec = 0.0
     overlap_sum_sec = 0.0
     for idx, seg in enumerate(segments):
+        if not _SEGMENT_ID_CANON_PATTERN.fullmatch(str(seg.segment_id or "").strip()):
+            errors.append(_fmt(idx, f"segment_id must match canonical format seg_01..seg_99; got {seg.segment_id!r}"))
         if seg.t0 < 0.0 or seg.t1 < 0.0:
             errors.append(_fmt(idx, "negative timestamps are forbidden"))
         if seg.t0 >= seg.t1:

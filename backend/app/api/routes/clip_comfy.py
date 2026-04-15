@@ -20,6 +20,7 @@ from app.engine.clip_storyboard_pipeline import (
     run_clip_storyboard_pipeline,
 )
 from app.engine.scenario_stage_pipeline import (
+    _normalize_creative_config,
     build_runtime_diagnostics_summary,
     create_storyboard_package,
     mark_stale_downstream,
@@ -272,6 +273,14 @@ def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
     if source_value:
         normalized_source["source_value"] = source_value
     controls = req.get("director_controls") if isinstance(req.get("director_controls"), dict) else {}
+    if not controls and isinstance(req.get("directorControls"), dict):
+        controls = req.get("directorControls")
+    metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}
+    creative_config = req.get("creative_config") if isinstance(req.get("creative_config"), dict) else {}
+    if not creative_config:
+        creative_config = controls.get("creative_config") if isinstance(controls.get("creative_config"), dict) else {}
+    if not creative_config:
+        creative_config = metadata.get("creative_config") if isinstance(metadata.get("creative_config"), dict) else {}
     selected_props = [
         str(item).strip()
         for item in (req.get("selectedPropsRefUrls") if isinstance(req.get("selectedPropsRefUrls"), list) else [])
@@ -301,6 +310,7 @@ def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
         "director_mode": director_mode,
         "content_type": str(controls.get("contentType") or "music_video"),
         "format": str(controls.get("format") or req.get("format") or "9:16"),
+        "creative_config": _normalize_creative_config(creative_config),
         "connected_context_summary": (
             req.get("connected_context_summary") if isinstance(req.get("connected_context_summary"), dict) else {}
         ),
