@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
+from app.engine.scenario_story_guidance import story_guidance_to_notes_list
 from app.engine.video_capability_canon import (
     DEFAULT_VIDEO_MODEL_ID,
     build_capability_diagnostics_summary,
@@ -291,6 +292,7 @@ def _extract_gemini_text(resp: dict[str, Any]) -> str:
 
 
 def _build_scene_windows(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
+    # Transitional bridge input: scene_candidate_windows remains legacy until full segment_id-first PROMPTS flow.
     windows: list[dict[str, Any]] = []
     for idx, row_raw in enumerate(_safe_list(audio_map.get("scene_candidate_windows")), start=1):
         row = _safe_dict(row_raw)
@@ -837,7 +839,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
                 }
                 for sid, role in role_lookup.items()
             ],
-            "continuity_notes": _safe_list(role_plan.get("continuity_notes")),
+            "continuity_notes": story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8) or _safe_list(role_plan.get("continuity_notes")),
         },
         "scene_plan": {
             "route_mix_summary": _safe_dict(scene_plan.get("route_mix_summary")),
@@ -892,6 +894,9 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
         "world_continuity": _safe_dict(story_core.get("world_lock")) or _safe_dict(role_plan.get("world_continuity")),
         "ownership_binding_inventory": ownership_binding_inventory,
         "compiled_contract": compiled_contract,
+        # Bridge markers: scene_candidate_windows/scene_id flows and compiled_contract are temporary transition paths.
+        "uses_legacy_scene_candidate_windows_bridge": bool(scene_windows),
+        "uses_legacy_compiled_contract_bridge": bool(compiled_contract),
     }
     return _compact_prompt_payload(compact_context), aux
 
@@ -2116,6 +2121,9 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
 
     diagnostics = {
         "prompt_version": SCENE_PROMPTS_PROMPT_VERSION,
+        "scene_candidate_windows_bridge": bool(aux.get("uses_legacy_scene_candidate_windows_bridge")),
+        "compiled_contract_bridge": bool(aux.get("uses_legacy_compiled_contract_bridge")),
+        "role_source_precedence": ["role_plan.scene_casting", "role_plan.roster", "legacy scene_roles / compiled_contract fallback"],
         "used_model": used_model,
         "scene_count": len(scene_rows),
         "missing_photo_count": 0,

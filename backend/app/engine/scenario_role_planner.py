@@ -90,34 +90,76 @@ def _normalize_text(value: Any, *, max_len: int = 240) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())[:max_len]
 
 
-def _build_segment_rows(audio_map: dict[str, Any], story_core: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], str]:
+def _build_segment_rows(audio_map: dict[str, Any], story_core: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], str, dict[str, Any]]:
     audio_segments = [_safe_dict(row) for row in _safe_list(audio_map.get("segments"))]
     core_segments = [_safe_dict(row) for row in _safe_list(story_core.get("narrative_segments"))]
 
     audio_ids = [str(row.get("segment_id") or "").strip() for row in audio_segments]
     core_ids = [str(row.get("segment_id") or "").strip() for row in core_segments]
 
+    diagnostics: dict[str, Any] = {
+        "uses_audio_transcript_slice": False,
+        "uses_core_arc_role": False,
+        "uses_core_beat_purpose": False,
+        "uses_core_emotional_key": False,
+        "fell_back_to_legacy_audio_text_fields": False,
+        "fell_back_to_legacy_core_fields": False,
+        "missing_core_meaning_rows": 0,
+    }
+
     if not audio_ids or not core_ids:
-        return [], [], ROLES_CASTING_GAP
+        return [], [], ROLES_CASTING_GAP, diagnostics
     if any(not segment_id for segment_id in audio_ids) or any(not segment_id for segment_id in core_ids):
-        return [], [], ROLES_SEGMENT_ID_MISMATCH
+        return [], [], ROLES_SEGMENT_ID_MISMATCH, diagnostics
     if audio_ids != core_ids:
-        return [], [], ROLES_SEGMENT_ID_MISMATCH
+        return [], [], ROLES_SEGMENT_ID_MISMATCH, diagnostics
 
     segments: list[dict[str, Any]] = []
     for arow, crow in zip(audio_segments, core_segments, strict=False):
+        transcript_slice_raw = arow.get("transcript_slice")
+        if transcript_slice_raw not in (None, ""):
+            diagnostics["uses_audio_transcript_slice"] = True
+        elif arow.get("text") not in (None, "") or arow.get("transcript") not in (None, ""):
+            diagnostics["fell_back_to_legacy_audio_text_fields"] = True
+
+        arc_role_raw = crow.get("arc_role")
+        beat_purpose_raw = crow.get("beat_purpose")
+        emotional_key_raw = crow.get("emotional_key")
+
+        if arc_role_raw not in (None, ""):
+            diagnostics["uses_core_arc_role"] = True
+        if beat_purpose_raw not in (None, ""):
+            diagnostics["uses_core_beat_purpose"] = True
+        if emotional_key_raw not in (None, ""):
+            diagnostics["uses_core_emotional_key"] = True
+        if (
+            (arc_role_raw in (None, "") and (crow.get("segment_function") not in (None, "") or crow.get("narrative_function") not in (None, "")))
+            or (beat_purpose_raw in (None, "") and (crow.get("segment_function") not in (None, "") or crow.get("narrative_function") not in (None, "")))
+            or (emotional_key_raw in (None, "") and (crow.get("emotional_beat") not in (None, "") or crow.get("emotional_intent") not in (None, "")))
+        ):
+            diagnostics["fell_back_to_legacy_core_fields"] = True
+
+        arc_role = _normalize_text(crow.get("arc_role") or crow.get("segment_function") or crow.get("narrative_function") or "", max_len=220)
+        beat_purpose = _normalize_text(crow.get("beat_purpose") or crow.get("segment_function") or crow.get("narrative_function") or "", max_len=220)
+        emotional_key = _normalize_text(crow.get("emotional_key") or crow.get("emotional_beat") or crow.get("emotional_intent") or "", max_len=220)
+        if not (arc_role or beat_purpose or emotional_key):
+            diagnostics["missing_core_meaning_rows"] = int(diagnostics.get("missing_core_meaning_rows") or 0) + 1
+
         segments.append(
             {
                 "segment_id": str(arow.get("segment_id") or "").strip(),
                 "t0": arow.get("t0"),
                 "t1": arow.get("t1"),
                 "duration_sec": arow.get("duration_sec"),
-                "text": _normalize_text(arow.get("text") or arow.get("transcript") or "", max_len=320),
-                "segment_function": _normalize_text(crow.get("segment_function") or crow.get("narrative_function") or "", max_len=220),
-                "emotional_beat": _normalize_text(crow.get("emotional_beat") or crow.get("emotional_intent") or "", max_len=220),
+                "transcript_slice": _normalize_text(arow.get("transcript_slice") or arow.get("text") or arow.get("transcript") or "", max_len=320),
+                "arc_role": arc_role,
+                "beat_purpose": beat_purpose,
+                "emotional_key": emotional_key,
             }
         )
-    return segments, audio_ids, ""
+    if diagnostics["missing_core_meaning_rows"] > 0:
+        return [], [], ROLES_CASTING_GAP, diagnostics
+    return segments, audio_ids, "", diagnostics
 
 
 def _collect_allowed_entity_registry(package: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -345,7 +387,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
     audio_map = _safe_dict(package.get("audio_map"))
     story_core = _safe_dict(package.get("story_core"))
 
-    segment_rows, expected_segment_ids, segment_error = _build_segment_rows(audio_map, story_core)
+    segment_rows, expected_segment_ids, segment_error, segment_row_diagnostics = _build_segment_rows(audio_map, story_core)
     allowed_registry = _collect_allowed_entity_registry(package)
 
     diagnostics = {
@@ -356,7 +398,15 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "segment_coverage_ok": False,
         "retry_count": 0,
         "error_code": "",
+        "uses_audio_transcript_slice": False,
+        "uses_core_arc_role": False,
+        "uses_core_beat_purpose": False,
+        "uses_core_emotional_key": False,
+        "fell_back_to_legacy_audio_text_fields": False,
+        "fell_back_to_legacy_core_fields": False,
     }
+
+    diagnostics.update(segment_row_diagnostics)
 
     if segment_error:
         diagnostics["error_code"] = segment_error
@@ -392,8 +442,9 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             "narrative_segments": [
                 {
                     "segment_id": str(_safe_dict(row).get("segment_id") or "").strip(),
-                    "segment_function": _normalize_text(_safe_dict(row).get("segment_function") or _safe_dict(row).get("narrative_function") or "", max_len=220),
-                    "emotional_beat": _normalize_text(_safe_dict(row).get("emotional_beat") or _safe_dict(row).get("emotional_intent") or "", max_len=220),
+                    "arc_role": _normalize_text(_safe_dict(row).get("arc_role") or _safe_dict(row).get("segment_function") or _safe_dict(row).get("narrative_function") or "", max_len=220),
+                    "beat_purpose": _normalize_text(_safe_dict(row).get("beat_purpose") or _safe_dict(row).get("segment_function") or _safe_dict(row).get("narrative_function") or "", max_len=220),
+                    "emotional_key": _normalize_text(_safe_dict(row).get("emotional_key") or _safe_dict(row).get("emotional_beat") or _safe_dict(row).get("emotional_intent") or "", max_len=220),
                 }
                 for row in _safe_list(story_core.get("narrative_segments"))
             ],

@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
+from app.engine.scenario_story_guidance import story_guidance_to_notes_list
 
 FINAL_VIDEO_PROMPT_STAGE_VERSION = "gemini_final_video_prompt_v1"
 FINAL_VIDEO_PROMPT_MODEL = "gemini-2.5-flash"
@@ -185,7 +186,7 @@ def _build_scene_input_payload(scene: dict[str, Any], package: dict[str, Any]) -
     scene_plan = _safe_dict(package.get("scene_plan"))
     continuity = {
         "world_continuity": _safe_dict(story_core.get("world_lock")) or _safe_dict(role_plan.get("world_continuity")),
-        "continuity_notes": _safe_list(story_core.get("story_guidance"))[:8] or _safe_list(role_plan.get("continuity_notes"))[:8],
+        "continuity_notes": story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8) or _safe_list(role_plan.get("continuity_notes"))[:8],
         "route_mix_summary": _safe_dict(scene_plan.get("route_mix_summary")),
     }
     return {

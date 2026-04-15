@@ -28,6 +28,7 @@ from app.engine.scenario_role_planner import ROLE_PLAN_PROMPT_VERSION, build_gem
 from app.engine.scenario_scene_planner import SCENE_PLAN_PROMPT_VERSION, build_gemini_scene_plan
 from app.engine.scenario_scene_prompter import SCENE_PROMPTS_PROMPT_VERSION, build_gemini_scene_prompts
 from app.engine.scenario_video_prompt_writer import FINAL_VIDEO_PROMPT_STAGE_VERSION, generate_ltx_video_prompt_metadata
+from app.engine.scenario_story_guidance import story_guidance_to_notes_list
 from app.engine.video_capability_canon import (
     DEFAULT_VIDEO_MODEL_ID,
     build_capability_diagnostics_summary,
@@ -2692,6 +2693,10 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         for row in _safe_list(role_plan.get("scene_roles"))
         if str(_safe_dict(row).get("scene_id") or "").strip()
     }
+    has_scene_casting = bool(role_by_segment)
+    has_legacy_scene_roles = bool(role_by_scene)
+    finalize_used_legacy_scene_roles_fallback = False
+    finalize_scene_id_segment_id_mismatch_count = 0
     plan_by_scene = {
         str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
         for row in _safe_list(scene_plan.get("scenes"))
@@ -2709,6 +2714,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         if str(_safe_dict(row).get("scene_id") or "").strip()
     }
 
+    # Transitional bridge: finalize still keys rows by scene_id, expected to equal segment_id during migration.
     scene_ids: list[str] = []
     for source in (plan_by_scene, prompts_by_scene, role_by_segment, role_by_scene, final_video_prompt_by_scene):
         for scene_id in source.keys():
@@ -2718,7 +2724,17 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     final_scenes: list[dict[str, Any]] = []
     for idx, scene_id in enumerate(scene_ids, start=1):
         scene_plan_row = _safe_dict(plan_by_scene.get(scene_id))
-        role_row = _safe_dict(role_by_segment.get(scene_id)) or _safe_dict(role_by_scene.get(scene_id))
+        role_row_segment = _safe_dict(role_by_segment.get(scene_id))
+        role_row_scene = _safe_dict(role_by_scene.get(scene_id))
+        role_row = role_row_segment if role_row_segment else role_row_scene
+        if role_row_segment and role_row_scene:
+            # Transition guardrail: scene_casting is canonical; scene_roles is legacy fallback bridge only.
+            role_row = role_row_segment
+        elif role_row_scene and not role_row_segment:
+            finalize_used_legacy_scene_roles_fallback = True
+        segment_id_in_role_row = str(role_row.get("segment_id") or "").strip()
+        if role_row_segment and segment_id_in_role_row and scene_id and segment_id_in_role_row != scene_id:
+            finalize_scene_id_segment_id_mismatch_count += 1
         prompt_row = _safe_dict(prompts_by_scene.get(scene_id))
         final_video_prompt_row = _safe_dict(final_video_prompt_by_scene.get(scene_id))
         prompt_notes = _safe_dict(prompt_row.get("prompt_notes"))
@@ -2858,7 +2874,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "connected_context_summary": _safe_dict(input_pkg.get("connected_context_summary")),
             "role_type_by_role": assigned_roles,
             "world_continuity": _safe_dict(story_core.get("world_lock")),
-            "continuity_notes": _safe_list(story_core.get("story_guidance")),
+            "continuity_notes": story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8),
             "story_locks": {
                 "identity_lock": _safe_dict(story_core.get("identity_lock")),
                 "world_lock": _safe_dict(story_core.get("world_lock")),
@@ -2947,7 +2963,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "narrative_locks": _safe_dict(story_core.get("narrative_locks")),
         },
         "world_continuity": _safe_dict(story_core.get("world_lock")),
-        "continuity_notes": _safe_list(story_core.get("story_guidance")),
+        "continuity_notes": story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8),
         "route_mix_summary": _safe_dict(scene_plan.get("route_mix_summary")),
         "scene_arc_summary": str(scene_plan.get("scene_arc_summary") or "").strip(),
         "route_strategy_notes": _safe_list(scene_plan.get("route_strategy_notes")),
@@ -2973,8 +2989,20 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_used_scene_prompts"] = bool(prompts_by_scene)
     diagnostics["finalize_used_scene_plan"] = bool(plan_by_scene)
     diagnostics["finalize_used_role_plan"] = bool(role_by_segment or role_by_scene)
+    diagnostics["finalize_used_role_scene_casting"] = has_scene_casting
+    diagnostics["finalize_used_legacy_scene_roles_fallback"] = finalize_used_legacy_scene_roles_fallback
+    diagnostics["finalize_scene_id_segment_id_mismatch_count"] = int(finalize_scene_id_segment_id_mismatch_count)
+    diagnostics["finalize_scene_id_bridge_expected_segment_id"] = True
+    diagnostics["finalize_role_source_precedence"] = ["role_plan.scene_casting", "role_plan.scene_roles (fallback only)"]
+    diagnostics["finalize_has_both_scene_casting_and_scene_roles"] = has_scene_casting and has_legacy_scene_roles
     diagnostics["finalize_used_final_video_prompt"] = bool(final_video_prompt_by_scene)
     package["diagnostics"] = diagnostics
+    if finalize_scene_id_segment_id_mismatch_count > 0:
+        _append_diag_event(
+            package,
+            f"finalize_scene_id_segment_id_mismatch_count={finalize_scene_id_segment_id_mismatch_count}",
+            stage_id="finalize",
+        )
     _append_diag_event(package, f"final_storyboard built scenes={len(final_scenes)}", stage_id="finalize")
     return package
 

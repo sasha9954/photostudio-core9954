@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
+from app.engine.scenario_story_guidance import story_guidance_route_mix_doctrine, story_guidance_to_notes_list
 from app.engine.video_capability_canon import (
     DEFAULT_VIDEO_MODEL_ID,
     build_capability_diagnostics_summary,
@@ -322,6 +323,7 @@ def _extract_gemini_text(resp: dict[str, Any]) -> str:
 
 
 def _build_scene_windows(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
+    # Transitional bridge input: scene_candidate_windows remains legacy until full segment_id-first SCENES flow.
     windows: list[dict[str, Any]] = []
     for idx, row_raw in enumerate(_safe_list(audio_map.get("scene_candidate_windows")), start=1):
         row = _safe_dict(row_raw)
@@ -436,7 +438,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     ownership_binding_inventory = _build_ref_binding_inventory(refs_inventory)
     scene_windows = _build_scene_windows(audio_map)
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
-    story_guidance = _safe_dict(_safe_dict(story_core.get("story_guidance")).get("route_mix_doctrine_for_scenes"))
+    story_guidance = story_guidance_route_mix_doctrine(story_core.get("story_guidance"))
     world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
     model_id = _resolve_active_video_model_id(package)
     route_capability_profiles = {
@@ -481,7 +483,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
                 "scene_contracts": _safe_list(compiled_contract.get("scene_contracts")),
             },
             "role_arc_summary": str(role_plan.get("role_arc_summary") or ""),
-            "continuity_notes": _safe_list(role_plan.get("continuity_notes")),
+            "continuity_notes": story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8) or _safe_list(role_plan.get("continuity_notes")),
         },
         "ownership_binding_inventory": ownership_binding_inventory,
         "clip_scene_policy": {
@@ -518,6 +520,9 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         "world_summary_used": world_summary_used,
         "ownership_binding_inventory": ownership_binding_inventory,
         "compiled_contract": compiled_contract,
+        # Bridge markers: scene_candidate_windows/compiled_contract are deprecated transition inputs.
+        "uses_legacy_scene_candidate_windows_bridge": bool(scene_windows),
+        "uses_legacy_compiled_contract_bridge": bool(compiled_contract),
     }
     return context, aux
 
@@ -1583,6 +1588,9 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
 
     diagnostics = {
         "prompt_version": SCENE_PLAN_PROMPT_VERSION,
+        "scene_candidate_windows_bridge": True,
+        "compiled_contract_bridge": bool(compiled_contract),
+        "role_source_precedence": ["role_plan.scene_casting", "role_plan.roster", "legacy scene_roles / compiled_contract fallback"],
         "used_model": SCENE_PLAN_MODEL,
         "scene_count": len(scene_windows),
         "watchability_fallback_count": 0,

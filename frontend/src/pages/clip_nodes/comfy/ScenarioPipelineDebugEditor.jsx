@@ -136,9 +136,8 @@ function buildCompactDebugSnapshot({ contextSummary = {}, executedStages = [], d
     packageStats: {
       hasStoryCore: Boolean(safePkg?.story_core && typeof safePkg.story_core === "object" && Object.keys(safePkg.story_core).length),
       audioWindows: Array.isArray(safePkg?.audio_map?.scene_candidate_windows) ? safePkg.audio_map.scene_candidate_windows.length : 0,
-      rolePlanScenes: Array.isArray(safePkg?.role_plan?.scene_casting)
-        ? safePkg.role_plan.scene_casting.length
-        : (Array.isArray(safePkg?.role_plan?.scene_roles) ? safePkg.role_plan.scene_roles.length : 0),
+      rolePlanScenes: Array.isArray(safePkg?.role_plan?.scene_casting) ? safePkg.role_plan.scene_casting.length : 0,
+      rolePlanLegacySceneRoles: Array.isArray(safePkg?.role_plan?.scene_roles) ? safePkg.role_plan.scene_roles.length : 0,
       scenePlanScenes: Array.isArray(safePkg?.scene_plan?.scenes) ? safePkg.scene_plan.scenes.length : 0,
       scenePrompts: Array.isArray(safePkg?.scene_prompts?.scenes) ? safePkg.scene_prompts.scenes.length : 0,
       finalScenes: Array.isArray(safePkg?.final_storyboard?.scenes) ? safePkg.final_storyboard.scenes.length : 0,
@@ -263,6 +262,10 @@ export default function ScenarioPipelineDebugEditor({
   const rolePlanRoster = Array.isArray(rolePlan?.roster) ? rolePlan.roster : [];
   const rolePlanSceneCasting = Array.isArray(rolePlan?.scene_casting) ? rolePlan.scene_casting : [];
   const rolePlanSceneRoles = Array.isArray(rolePlan?.scene_roles) ? rolePlan.scene_roles : [];
+  const rolePlanCompiledContract = rolePlan?.compiled_contract && typeof rolePlan.compiled_contract === "object" ? rolePlan.compiled_contract : null;
+  const hasLegacySceneRoles = rolePlanSceneRoles.length > 0;
+  const hasLegacyCompiledContract = Boolean(rolePlanCompiledContract && Object.keys(rolePlanCompiledContract).length);
+  const hasCanonicalAndLegacyRoles = rolePlanSceneCasting.length > 0 && hasLegacySceneRoles;
   const scenePlanScenes = Array.isArray(scenePlan?.scenes) ? scenePlan.scenes : [];
   const scenePlanRouteMix = scenePlan?.route_mix_summary || {};
   const scenePlanRouteCounts = scenePlanScenes.reduce((acc, row) => {
@@ -350,10 +353,20 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>scene_casting_count</span><strong>{rolePlanSceneCasting.length}</strong></div>
         <div className="clipSB_storyboardKv"><span>presence_mode_distribution</span><strong>{Object.keys(presenceModeDistribution).length ? toJson(presenceModeDistribution) : "{}"}</strong></div>
         <div className="clipSB_storyboardKv"><span>presence_weight_distribution</span><strong>{Object.keys(presenceWeightDistribution).length ? toJson(presenceWeightDistribution) : "{}"}</strong></div>
-        <div className="clipSB_storyboardKv"><span>legacy scene_roles</span><strong>{rolePlanSceneRoles.length}</strong></div>
+        <div className="clipSB_storyboardKv"><span>has_legacy_scene_roles</span><strong>{String(hasLegacySceneRoles)}</strong></div>
+        <div className="clipSB_storyboardKv"><span>has_legacy_compiled_contract</span><strong>{String(hasLegacyCompiledContract)}</strong></div>
+        <div className="clipSB_storyboardKv"><span>legacy scene_roles_count</span><strong>{rolePlanSceneRoles.length}</strong></div>
         <div className="clipSB_storyboardKv"><span>legacy bridge</span><strong>{rolePlan?.legacy_bridge_generated ? "deprecated bridge present" : "none"}</strong></div>
+        {hasCanonicalAndLegacyRoles ? (
+          <div className="clipSB_storyboardKv"><span>transition_note</span><strong>canonical roles active; legacy bridge present</strong></div>
+        ) : null}
         <pre className="clipSB_pre">{toJson({
           roles_version: rolePlan?.roles_version || "",
+          roster_count: rolePlanRoster.length,
+          scene_casting_count: rolePlanSceneCasting.length,
+          has_legacy_scene_roles: hasLegacySceneRoles,
+          has_legacy_compiled_contract: hasLegacyCompiledContract,
+          transition_note: hasCanonicalAndLegacyRoles ? "canonical roles active; legacy bridge present" : "",
           roster: rolePlanRoster,
           scene_casting: rolePlanSceneCasting,
           world_continuity: worldContinuity,
@@ -364,6 +377,7 @@ export default function ScenarioPipelineDebugEditor({
             legacy_bridge_source: rolePlan?.legacy_bridge_source,
             deprecated: rolePlan?.deprecated,
             scene_roles: rolePlanSceneRoles,
+            compiled_contract: rolePlanCompiledContract,
           } : null,
         })}</pre>
       </div>
