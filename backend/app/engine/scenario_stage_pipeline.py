@@ -5593,6 +5593,17 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_roster_count"] = int(role_diag.get("roster_count") or len(_safe_list(role_plan.get("roster"))))
     diagnostics["role_plan_scene_casting_count"] = int(role_diag.get("scene_casting_count") or len(_safe_list(role_plan.get("scene_casting"))))
     diagnostics["role_plan_segment_coverage_ok"] = bool(role_diag.get("segment_coverage_ok"))
+    diagnostics["role_plan_uses_audio_transcript_slice"] = bool(role_diag.get("uses_audio_transcript_slice"))
+    diagnostics["role_plan_uses_core_arc_role"] = bool(role_diag.get("uses_core_arc_role"))
+    diagnostics["role_plan_uses_core_beat_purpose"] = bool(role_diag.get("uses_core_beat_purpose"))
+    diagnostics["role_plan_uses_core_emotional_key"] = bool(role_diag.get("uses_core_emotional_key"))
+    diagnostics["role_plan_fell_back_to_legacy_audio_text_fields"] = bool(role_diag.get("fell_back_to_legacy_audio_text_fields"))
+    diagnostics["role_plan_fell_back_to_legacy_core_fields"] = bool(role_diag.get("fell_back_to_legacy_core_fields"))
+    diagnostics["role_plan_missing_core_meaning_rows"] = int(role_diag.get("missing_core_meaning_rows") or 0)
+    diagnostics["role_plan_normalized_segment_rows_error"] = str(role_diag.get("normalized_segment_rows_error") or "")
+    diagnostics["role_plan_normalized_segment_rows_missing_core_meaning"] = str(
+        role_diag.get("normalized_segment_rows_missing_core_meaning") or ""
+    )
     diagnostics["role_plan_retry_count"] = int(result.get("retry_count") or role_diag.get("retry_count") or 0)
     diagnostics["role_plan_error_code"] = str(result.get("error_code") or role_diag.get("error_code") or "")
     diagnostics["role_plan_error"] = str(result.get("error") or "")
