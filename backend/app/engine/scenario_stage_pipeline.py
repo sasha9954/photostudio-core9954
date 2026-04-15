@@ -38,6 +38,12 @@ from app.engine.video_capability_canon import (
 logger = logging.getLogger(__name__)
 
 MAX_STORY_CORE_IMAGE_BYTES = 8 * 1024 * 1024
+CORE_SCHEMA_INVALID = "CORE_SCHEMA_INVALID"
+CORE_ID_MISMATCH = "CORE_ID_MISMATCH"
+CORE_TIMING_DRIFT = "CORE_TIMING_DRIFT"
+CORE_ROLE_SPAWNING = "CORE_ROLE_SPAWNING"
+CORE_TECHNICAL_SPAWNING = "CORE_TECHNICAL_SPAWNING"
+CORE_IDENTITY_CONFLICT = "CORE_IDENTITY_CONFLICT"
 
 STAGE_IDS = (
     "input_package",
@@ -836,6 +842,50 @@ def _coerce_scene_slots(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
     return fallback_slots
 
 
+def _coerce_core_audio_segments(audio_map: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    segments = [row for row in _safe_list(audio_map.get("segments")) if isinstance(row, dict)]
+    if segments:
+        normalized: list[dict[str, Any]] = []
+        for idx, row in enumerate(segments, start=1):
+            segment_id = str(row.get("segment_id") or row.get("id") or f"segment_{idx}").strip()
+            t0 = round(_to_float(row.get("t0"), 0.0), 3)
+            t1 = round(_to_float(row.get("t1"), t0), 3)
+            normalized.append(
+                {
+                    "segment_id": segment_id,
+                    "t0": t0,
+                    "t1": t1,
+                    "duration_sec": round(max(0.0, t1 - t0), 3),
+                    "transcript_slice": str(row.get("transcript_slice") or row.get("text") or "").strip()[:320],
+                    "intensity": max(0.0, min(1.0, _to_float(row.get("intensity"), 0.5))),
+                    "is_lip_sync_candidate": bool(row.get("is_lip_sync_candidate")),
+                    "rhythmic_anchor": str(row.get("rhythmic_anchor") or "none").strip().lower() or "none",
+                }
+            )
+        return normalized, "audio_map.segments[]"
+    # Legacy bridge only, non-canonical.
+    slots = _coerce_scene_slots(audio_map)
+    fallback: list[dict[str, Any]] = []
+    for idx, slot in enumerate(slots, start=1):
+        segment_id = str(slot.get("segment_id") or slot.get("id") or f"segment_{idx}").strip()
+        t0 = round(_to_float(slot.get("t0"), 0.0), 3)
+        t1 = round(_to_float(slot.get("t1"), t0), 3)
+        audio_features = _safe_dict(slot.get("audio_features"))
+        fallback.append(
+            {
+                "segment_id": segment_id,
+                "t0": t0,
+                "t1": t1,
+                "duration_sec": round(max(0.0, t1 - t0), 3),
+                "transcript_slice": str(slot.get("primary_phrase_text") or "").strip()[:320],
+                "intensity": max(0.0, min(1.0, _to_float(audio_features.get("energy_score"), 0.5))),
+                "is_lip_sync_candidate": bool(_to_float(audio_features.get("vocal_ratio"), 0.0) >= 0.55),
+                "rhythmic_anchor": "none",
+            }
+        )
+    return fallback, "legacy_bridge_scene_slots_or_windows"
+
+
 def _slot_story_function(slot: dict[str, Any], index: int, total: int) -> str:
     energy = _to_float(_safe_dict(slot.get("audio_features")).get("energy_score"), 0.5)
     vocal = _to_float(_safe_dict(slot.get("audio_features")).get("vocal_ratio"), 0.4)
@@ -948,8 +998,8 @@ def _build_story_core_v11(
     content_format = str(input_pkg.get("format") or input_pkg.get("content_format") or "").strip() or "short_form_video"
     ownership_binding_inventory = [row for row in _safe_list(input_pkg.get("ownership_binding_inventory")) if isinstance(row, dict)]
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
-    slots = _coerce_scene_slots(audio_map)
-    total_slots = len(slots)
+    core_segments, core_source = _coerce_core_audio_segments(audio_map)
+    total_slots = len(core_segments)
 
     primary_subject = _canonical_subject_id(assigned_roles.get("primary_role")) or "character_1"
     role_subjects = [
@@ -1045,9 +1095,15 @@ def _build_story_core_v11(
         "news": {"audio": 0.8, "continuity": 1.0, "causality": 1.35},
     }.get(content_type, {"audio": 1.0, "continuity": 1.0, "causality": 1.0})
     has_persistent_objects = any(str(obj.get("visibility_expectation") or "") == "persistent" for obj in continuity_objects)
-    for idx, slot in enumerate(slots):
-        slot_id = str(slot.get("id") or f"slot_{idx + 1}")
-        phrase = str(slot.get("primary_phrase_text") or "").strip()
+    for idx, segment in enumerate(core_segments):
+        slot_id = str(segment.get("segment_id") or f"segment_{idx + 1}")
+        phrase = str(segment.get("transcript_slice") or "").strip()
+        slot = {
+            "audio_features": {
+                "energy_score": _to_float(segment.get("intensity"), 0.5),
+                "vocal_ratio": 0.7 if bool(segment.get("is_lip_sync_candidate")) else 0.3,
+            }
+        }
         fn = _slot_story_function(slot, idx, total_slots)
         phrase_key = re.sub(r"\s+", " ", phrase.lower()).strip()
         energy = _to_float(_safe_dict(slot.get("audio_features")).get("energy_score"), 0.5)
@@ -1081,7 +1137,7 @@ def _build_story_core_v11(
             {
                 "beat_id": f"beat_{idx + 1}",
                 "slot_ids": [slot_id],
-                "time_range": {"t0": round(_to_float(slot.get("t0"), 0.0), 3), "t1": round(_to_float(slot.get("t1"), 0.0), 3)},
+                "time_range": {"t0": round(_to_float(segment.get("t0"), 0.0), 3), "t1": round(_to_float(segment.get("t1"), 0.0), 3)},
                 "story_function": fn,
                 "beat_primary_subject": beat_primary_subject,
                 "beat_secondary_subjects": beat_secondary,
@@ -1090,7 +1146,7 @@ def _build_story_core_v11(
                 "subject_presence_requirement": "primary_subject_visible_unless_explicit_handoff",
                 "continuity_visibility_requirement": "object_anchor_required" if object_presence_required else "world_anchor_or_subject_callback",
                 "beat_focus_hint": phrase[:180] or fn,
-                "source_slot_id": slot_id,
+                "source_segment_id": slot_id,
                 "group_reason": f"{fn}|density:{semantic_density}|continuity:{continuity_pressure}",
             }
         )
@@ -1220,11 +1276,41 @@ def _build_story_core_v11(
     dangling_tail = bool(beats and "afterimage" not in str(beats[-1].get("story_function") or "") and "release" not in str(beats[-1].get("story_function") or ""))
     callback_missing = bool(opening_anchor and ending_callback_rule and not beats)
     continuity_object_dropout = bool(continuity_objects and not continuity_matrix["subject_to_objects"])
+    parsed_narrative_segments = [row for row in _safe_list(parsed_story_core.get("narrative_segments")) if isinstance(row, dict)]
+    if parsed_narrative_segments:
+        narrative_segments = [
+            {
+                "segment_id": str(row.get("segment_id") or ""),
+                "arc_role": str(row.get("arc_role") or ""),
+                "beat_purpose": str(row.get("beat_purpose") or ""),
+                "emotional_key": str(row.get("emotional_key") or ""),
+            }
+            for row in parsed_narrative_segments
+        ]
+    else:
+        role_map = {
+            "opening_anchor": "setup",
+            "build_progression": "build",
+            "narrative_development": "build",
+            "transition_turn": "pivot",
+            "climax_pressure": "climax",
+            "afterimage_release": "afterglow",
+        }
+        narrative_segments = [
+            {
+                "segment_id": str(item.get("source_segment_id") or ""),
+                "arc_role": role_map.get(str(item.get("story_function") or ""), "release"),
+                "beat_purpose": str(item.get("beat_focus_hint") or item.get("story_function") or ""),
+                "emotional_key": str(item.get("narrative_load") or "medium"),
+            }
+            for item in beats
+        ]
 
     story_core_v1 = {
         "schema_version": "core_v1.1",
         "director_mode": director_mode,
         "story_truth_source": "note_refs_primary" if director_mode == "clip" else "mixed_inputs",
+        "audio_canonical_source_for_core": core_source,
         "audio_truth_scope": "timing_plus_emotion" if director_mode == "clip" else "timing_structure",
         "world_definition": world_definition,
         "narrative_backbone": {
@@ -1252,6 +1338,7 @@ def _build_story_core_v11(
             "afterimage_rule": "final beat must preserve world identity while reducing pressure",
             "callback_rules": ["ending_echoes_opening_anchor_with_contextual_change"],
         },
+        "narrative_segments": narrative_segments,
         "beat_map": {
             "slot_groups": slot_groups,
             "beats": beats,
@@ -1267,14 +1354,14 @@ def _build_story_core_v11(
         },
         "validation": {
             "validation_flags": {
-                "audio_slots_present": bool(slots),
+                "audio_segments_present": bool(core_segments),
                 "beat_slot_binding_valid": all(bool(_safe_list(item.get("slot_ids"))) for item in beats),
                 "world_anchor_present": bool(world_definition.get("environment_anchor")),
                 "narrative_spine_present": bool(primary_spine.strip()),
                 "subject_shadowing": subject_shadowing,
                 "continuity_break": continuity_break,
                 "world_drift": world_drift,
-                "audio_semantic_mismatch": bool(slots and not any(token in arc_tokens for token in ("transition_turn", "climax_pressure", "afterimage_release"))),
+                "audio_semantic_mismatch": bool(core_segments and not any(token in arc_tokens for token in ("transition_turn", "climax_pressure", "afterimage_release"))),
                 "dangling_tail": dangling_tail,
                 "opening_mismatch": opening_mismatch,
                 "missing_callback": callback_missing,
@@ -1282,7 +1369,7 @@ def _build_story_core_v11(
                 "semantic_stagnation_warning": bool(flatline_segments),
             },
             "warnings": (
-                [] if slots else ["beat_map_generated_without_scene_slots"]
+                [] if core_segments else ["beat_map_generated_without_audio_segments"]
             )
             + (["subject_shadowing_detected"] if subject_shadowing else [])
             + (["continuity_break_risk"] if continuity_break else [])
@@ -1292,7 +1379,7 @@ def _build_story_core_v11(
             "semantic_delta_score": semantic_delta_score,
             "arc_flatline_segments": flatline_segments,
             "core_fail_conditions": [
-                "missing_audio_map_scene_slots",
+                "missing_audio_map_segments",
                 "missing_primary_narrative_spine",
                 "empty_world_definition",
             ],
@@ -1634,9 +1721,9 @@ def _build_story_core_input_context(
     i2v_profile = get_video_model_capability_profile(model_id, "i2v")
     audio_dramaturgy = _safe_dict(audio_map.get("audio_dramaturgy"))
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
-    scene_windows = _safe_list(audio_map.get("scene_candidate_windows"))
-    total_scene_windows = len(scene_windows)
-    default_route_budget = _compute_route_budget_for_total(total_scene_windows, creative_config)
+    core_segments, core_source = _coerce_core_audio_segments(audio_map)
+    total_segments = len(core_segments)
+    default_route_budget = _compute_route_budget_for_total(total_segments, creative_config)
     audio_summary = {
         "duration_sec": _to_float(audio_map.get("duration_sec"), 0.0),
         "analysis_mode": str(audio_map.get("analysis_mode") or ""),
@@ -1644,7 +1731,20 @@ def _build_story_core_input_context(
         "energy_curve_summary": str(audio_dramaturgy.get("energy_curve_summary") or ""),
         "dominant_energy": str(audio_dramaturgy.get("dominant_energy") or ""),
         "window_counts": _safe_dict(audio_dramaturgy.get("window_counts")),
-        "scene_candidate_window_count": total_scene_windows,
+        "scene_candidate_window_count": len(_safe_list(audio_map.get("scene_candidate_windows"))),
+        "segment_count": total_segments,
+        "segments_source_of_truth": core_source,
+        "segments_preview": [
+            {
+                "segment_id": str(item.get("segment_id") or ""),
+                "t0": _to_float(item.get("t0"), 0.0),
+                "t1": _to_float(item.get("t1"), 0.0),
+                "intensity": _to_float(item.get("intensity"), 0.0),
+                "is_lip_sync_candidate": bool(item.get("is_lip_sync_candidate")),
+                "rhythmic_anchor": str(item.get("rhythmic_anchor") or "none"),
+            }
+            for item in core_segments[:16]
+        ],
     }
     director_world_lock_summary = _extract_director_world_lock_summary(input_pkg, story_user_concept)
     connected_role_summary = {
@@ -1668,6 +1768,12 @@ def _build_story_core_input_context(
             },
             "max_consecutive_lipsync": int(creative_config.get("max_consecutive_lipsync") or 2),
             "policy_note": "CORE writes doctrine only. SCENES assigns concrete route per segment.",
+        },
+        "core_audio_contract": {
+            "canonical_source": "audio_map.segments[]",
+            "canonical_key": "segment_id",
+            "legacy_fields_not_canonical": ["scene_slots", "phrase_units", "scene_candidate_windows"],
+            "required_1_to_1_output": "narrative_segments[] by segment_id",
         },
         "connected_role_summary": connected_role_summary,
         "compact_refs_manifest": compact_refs_manifest,
@@ -1853,6 +1959,126 @@ def _normalize_story_core_guidance(raw_guidance: Any) -> dict[str, Any]:
     }
 
 
+def _build_core_validation_feedback(code: str, errors: list[str]) -> str:
+    details = "; ".join([str(item) for item in errors[:6]])
+    return f"{code}: {details}"[:1400]
+
+
+def _validate_story_core_v11_payload(
+    *,
+    payload: dict[str, Any],
+    audio_segments: list[dict[str, Any]],
+    user_concept: str,
+) -> tuple[bool, str, list[str]]:
+    errors: list[str] = []
+    required_strings = ("core_version", "story_summary", "opening_anchor", "ending_callback_rule")
+    for key in required_strings:
+        if not str(payload.get(key) or "").strip():
+            errors.append(f"missing_or_empty:{key}")
+    if str(payload.get("core_version") or "").strip() != "1.1":
+        errors.append("core_version_must_be_1.1")
+    global_arc = _safe_dict(payload.get("global_arc"))
+    identity_doctrine = _safe_dict(payload.get("identity_doctrine"))
+    for key in ("exposition", "climax", "resolution"):
+        if not str(global_arc.get(key) or "").strip():
+            errors.append(f"missing_global_arc:{key}")
+    for key in ("hero_anchor", "world_doctrine", "style_doctrine"):
+        if not str(identity_doctrine.get(key) or "").strip():
+            errors.append(f"missing_identity_doctrine:{key}")
+    if errors:
+        return False, CORE_SCHEMA_INVALID, errors
+
+    narrative_segments = [row for row in _safe_list(payload.get("narrative_segments")) if isinstance(row, dict)]
+    if not narrative_segments:
+        return False, CORE_SCHEMA_INVALID, ["narrative_segments_missing_or_empty"]
+    allowed_roles = {"setup", "build", "pivot", "climax", "release", "afterglow"}
+    for idx, row in enumerate(narrative_segments, start=1):
+        if not str(row.get("segment_id") or "").strip():
+            errors.append(f"narrative_segments[{idx}] missing segment_id")
+        if str(row.get("arc_role") or "").strip() not in allowed_roles:
+            errors.append(f"narrative_segments[{idx}] invalid arc_role")
+        if not str(row.get("beat_purpose") or "").strip():
+            errors.append(f"narrative_segments[{idx}] missing beat_purpose")
+        if not str(row.get("emotional_key") or "").strip():
+            errors.append(f"narrative_segments[{idx}] missing emotional_key")
+    if errors:
+        return False, CORE_SCHEMA_INVALID, errors
+
+    expected_ids = [str(row.get("segment_id") or "").strip() for row in audio_segments if str(row.get("segment_id") or "").strip()]
+    actual_ids = [str(row.get("segment_id") or "").strip() for row in narrative_segments]
+    if expected_ids != actual_ids:
+        missing = [seg_id for seg_id in expected_ids if seg_id not in actual_ids]
+        extra = [seg_id for seg_id in actual_ids if seg_id not in expected_ids]
+        ordering_conflict = not missing and not extra
+        mismatch_errors: list[str] = []
+        if missing:
+            mismatch_errors.append(f"missing_segment_ids:{missing[:8]}")
+        if extra:
+            mismatch_errors.append(f"extra_segment_ids:{extra[:8]}")
+        if ordering_conflict:
+            mismatch_errors.append("segment_order_conflict")
+        return False, CORE_ID_MISMATCH, mismatch_errors or ["segment_id_1_to_1_mismatch"]
+
+    technical_tokens = ("i2v", "ia2v", "first_last", "camera", "framing", "motion", "prompt", "renderer", "delivery")
+    role_tokens = ("cast", "roles", "role_plan", "character_1:", "character_2:", "character_3:")
+    drift_keys = {"t0", "t1", "scene_slots", "scene_candidate_windows", "phrase_units"}
+    json_dump = json.dumps(payload, ensure_ascii=False).lower()
+    if any(token in json_dump for token in drift_keys):
+        return False, CORE_TIMING_DRIFT, ["core_payload_attempts_timing_or_legacy_grid_control"]
+    if any(token in json_dump for token in technical_tokens):
+        return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_technical_or_route_language"]
+    if any(token in json_dump for token in role_tokens):
+        return False, CORE_ROLE_SPAWNING, ["core_payload_contains_role_or_cast_assignment"]
+
+    concept = str(user_concept or "").strip().lower()
+    if concept:
+        if any(token in concept for token in ("no neon", "не неон", "not neon")) and "neon" in json_dump:
+            return False, CORE_IDENTITY_CONFLICT, ["concept_forbids_neon_but_core_introduced_neon"]
+        if any(token in concept for token in ("no club", "не клуб", "not club")) and "club" in json_dump:
+            return False, CORE_IDENTITY_CONFLICT, ["concept_forbids_club_but_core_introduced_club"]
+
+    return True, "", []
+
+
+def _normalize_story_core_contract_payload(
+    *,
+    parsed: dict[str, Any],
+    audio_segments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    fallback_guidance = _default_story_core_guidance()
+    raw_guidance = _safe_dict(parsed.get("story_guidance"))
+    return {
+        "core_version": "1.1",
+        "story_summary": str(parsed.get("story_summary") or "").strip(),
+        "opening_anchor": str(parsed.get("opening_anchor") or "").strip(),
+        "ending_callback_rule": str(parsed.get("ending_callback_rule") or "").strip(),
+        "global_arc": {
+            "exposition": str(_safe_dict(parsed.get("global_arc")).get("exposition") or "").strip(),
+            "climax": str(_safe_dict(parsed.get("global_arc")).get("climax") or "").strip(),
+            "resolution": str(_safe_dict(parsed.get("global_arc")).get("resolution") or "").strip(),
+        },
+        "identity_doctrine": {
+            "hero_anchor": str(_safe_dict(parsed.get("identity_doctrine")).get("hero_anchor") or "").strip(),
+            "world_doctrine": str(_safe_dict(parsed.get("identity_doctrine")).get("world_doctrine") or "").strip(),
+            "style_doctrine": str(_safe_dict(parsed.get("identity_doctrine")).get("style_doctrine") or "").strip(),
+        },
+        "route_mix_doctrine_for_scenes": _safe_dict(raw_guidance.get("route_mix_doctrine_for_scenes"))
+        or _safe_dict(parsed.get("route_mix_doctrine_for_scenes"))
+        or _safe_dict(fallback_guidance.get("route_mix_doctrine_for_scenes")),
+        "narrative_segments": [
+            {
+                "segment_id": str(row.get("segment_id") or "").strip(),
+                "arc_role": str(row.get("arc_role") or "").strip(),
+                "beat_purpose": str(row.get("beat_purpose") or "").strip(),
+                "emotional_key": str(row.get("emotional_key") or "").strip(),
+            }
+            for row in _safe_list(parsed.get("narrative_segments"))
+            if isinstance(row, dict)
+        ],
+        "audio_segment_count": len(audio_segments),
+    }
+
+
 def _build_story_core_prompt(
     core_input_context: dict[str, Any],
     assigned_roles: dict[str, Any],
@@ -1863,71 +2089,34 @@ def _build_story_core_prompt(
     compact_assigned_roles = _compact_prompt_payload(assigned_roles)
     mode = "directed" if story_core_mode == "directed" else "creative"
     mode_instructions = (
-        "MODE: DIRECTED MODE\n"
-        "- User text is narrative/directorial source of meaning.\n"
-        "- Do NOT replace user plot with a different premise.\n"
-        "- Preserve explicitly specified world, actions, relationships, and narrative direction.\n"
-        "- Audio map still controls pacing, escalation, release pattern, and scene behavior rhythm.\n"
-        "- Do NOT let text fully override audio-driven temporal behavior.\n"
+        "MODE: DIRECTED\n"
+        "- Preserve user concept as narrative meaning source.\n"
+        "- Audio segments still define temporal rhythm and escalation pattern.\n"
     )
     if mode == "creative":
         mode_instructions = (
-            "MODE: CREATIVE MODE\n"
-            "- User did not provide narrative directive text.\n"
-            "- Audio energy is the default dramaturgic driver.\n"
-            "- Clip mode is visual/emotional arc, not literal travel-story by default.\n"
-            "- Build compact emotional/visual arc from energy, phrasing, escalation, release, afterimage.\n"
-            "- Prefer one coherent world anchor with escalating emotional and physical intensity.\n"
-            "- Progress via framing intimacy, camera relationship, pressure/release, and performance openness.\n"
-            "- Do NOT invent multi-location travel plot or literal geography chain unless refs explicitly demand it.\n"
-            "- Do NOT expand a single locked environment into city/alley/courtyard/market progression from nowhere.\n"
-            "- Keep clip premise cinematic but concise, not over-plotted.\n"
-        )
-    else:
-        mode_instructions += (
-            "- Keep story core compact and clip-like, not screenplay-like.\n"
-            "- Avoid unnecessary geography expansion beyond user directive and refs.\n"
+            "MODE: CREATIVE\n"
+            "- Build compact meaning from audio segment progression, refs, and concept.\n"
+            "- Keep one coherent world family and identity continuity.\n"
         )
     return (
-        "You are STORY CORE stage of a scenario pipeline.\n"
-        "Return STRICT JSON only, no markdown.\n"
-        "story_core is source of truth for arc/identity/world/style/scenario layer.\n"
-        "Write narrative/scenario from track timing + refs cast + optional user concept.\n"
-        "Use refs as actors/objects anchors, not decorative prose inspiration.\n"
-        "If a character image reference is attached, treat it as the source of truth for hero appearance and gender presentation.\n"
-        "Connected prop refs are source-of-truth for object identity and object category.\n"
-        "Do not replace a referenced prop with a semantically related but different object.\n"
-        "Clothing/accessory props must stay clothing/accessory props.\n"
-        "Do not reinterpret wearable objects as weapons/tools unless explicitly stated in user text.\n"
-        "If prop is casual headwear (cap/hat/hood/scarf/other worn headwear), it must remain headwear.\n"
-        "Do not reinterpret headwear as weapon/tool unless explicitly stated in user text (example: baseball cap is not baseball bat).\n"
-        "Treat worn headwear as part of look continuity/silhouette, not default action object.\n"
-        "Ensure hair compatibility with headwear silhouette; preserve natural, readable hair behavior.\n"
-        "Avoid unnatural hair stuffing/compression under worn headwear and avoid incompatible top-volume conflicts.\n"
-        "If character ref attachment failed, keep character visuals conservative: keep only reliable role/gender-energy hints and avoid specific visual identity claims.\n"
-        "At CORE stage do not inject arbitrary accent colors or symbolic props not grounded in refs/audio/text.\n"
-        "Do not output route planning (no i2v/ia2v/first_last), no final prompts, no final package assembly.\n"
-        "Do not invent a contradictory hero identity against the attached character image reference.\n"
-        "Use the character image reference to infer hero gender presentation (male/female/androgynous), approximate age, visual mood, and core appearance markers.\n"
-        "Keep appearance notes compact and production-usable; do not describe every tiny detail, only stable identity-relevant ones.\n"
-        "Audio must be primary dramaturgic driver; lyrics are secondary optional signal.\n"
+        "You are STORY CORE v1.1 stage.\n"
+        "Return STRICT JSON only. No markdown.\n"
+        "AUDIO canonical source for CORE is audio_map.segments[] only.\n"
+        "Use segment_id as canonical key across output.\n"
+        "CORE scope = doctrine + narrative meaning per segment.\n"
+        "Forbidden at CORE: roles planning, scene rows, choreography, camera, motion, framing, route assignment, prompt writing, renderer/delivery fields.\n"
+        "Do not output t0/t1 or timing edits; never merge/delete/reorder segments.\n"
+        "You may include global route_mix_doctrine_for_scenes policy only (ratios/anti-streak/performance windows), never segment_id->route assignments.\n"
+        "Use creative_config only as doctrine input.\n"
+        "Output must include narrative_segments[] with EXACT 1:1 mapping to provided segment_id list and same order.\n"
+        "Each narrative_segments item requires: segment_id, arc_role(setup|build|pivot|climax|release|afterglow), beat_purpose, emotional_key.\n"
+        "Top-level required fields: core_version, story_summary, opening_anchor, ending_callback_rule, global_arc, identity_doctrine, narrative_segments.\n"
+        "global_arc fields: exposition, climax, resolution.\n"
+        "identity_doctrine fields: hero_anchor, world_doctrine, style_doctrine.\n"
+        "Keep doctrine concise, production-usable, and consistent with refs/user concept.\n"
         f"Video model capability bounds (must obey): {capability_bounds_text}\n"
-        "HARD CONTRACT: Director note/user concept world constraints are NON-NEGOTIABLE and override generic music-video tropes.\n"
-        "HARD CONTRACT: If note says no club/no neon/no warehouse and requests realistic grounded environment, NEVER switch to neon/club/warehouse aesthetics.\n"
-        "HARD CONTRACT: Audio affects rhythm/emotional arc/pacing only; audio cannot rewrite locked world constraints.\n"
-        "If lyrics are weak/repetitive, rely on rhythm/energy/repetition/emotional contour and user concept.\n"
-        "Scenes must be distinct even for repeating musical structures (action/space/shot scale/angle/world relation/prop relation/emotional evolution).\n"
-        "Narrative spine must stay with the designated primary narrative role; secondary performance roles must remain support unless current input explicitly sets co-lead behavior.\n"
-        "Use ownership_binding_inventory as active planning grammar (main/support/antagonist/shared/world x carried/worn/held/pocketed/nearby/environment).\n"
-        "Owner-bound carried/held objects should influence continuity pressure and movement behavior without forced tiny hand choreography.\n"
-        "Do not randomly detach owner-bound carried/held objects from their owner unless context explicitly motivates it.\n"
-        "Performance peaks must remain grounded in the same realistic world family and must not switch clip logic into concert/pop-video mode unless explicitly requested.\n"
-        "In story_guidance include route_mix_doctrine_for_scenes as global doctrine only (distribution intent, anti-streak limits, priority windows), not per-scene route assignment.\n"
-        "Required top-level keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock, story_guidance.\n"
-        "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
-        "story_guidance must be JSON object with keys:\n"
-        "route_mix_doctrine_for_scenes, world_progression_hints, viewer_contrast_rules, unexpected_realistic_beats, prop_guidance, narrative_pressure_rules, world_richness_rules.\n"
-        "Do NOT output scene rows, per-scene actions, or explicit scene-by-scene choreography in story_core.\n"
+        "HARD CONTRACT: respect explicit user world locks (e.g., no club/no neon) and avoid contradictions.\n"
         f"{mode_instructions}\n"
         f"story_core_mode={mode}\n\n"
         f"CORE_INPUT_CONTEXT:\n{json.dumps(compact_input, ensure_ascii=False)[:4200]}\n\n"
@@ -2644,6 +2833,16 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_director_world_lock_summary"] = ""
     diagnostics["story_core_compact_context_size_estimate"] = 0
     diagnostics["story_core_refs_sources_used"] = []
+    diagnostics["story_core_raw_response"] = ""
+    diagnostics["story_core_normalized_payload"] = {}
+    diagnostics["story_core_validation_errors"] = []
+    diagnostics["story_core_retry_used"] = False
+    diagnostics["story_core_retry_feedback"] = ""
+    diagnostics["story_core_last_error_code"] = ""
+    diagnostics["story_core_hard_fail"] = False
+    diagnostics["story_core_audio_canonical_source"] = "audio_map.segments[]"
+    diagnostics["story_core_legacy_fields_non_canonical"] = ["scene_slots", "phrase_units", "scene_candidate_windows"]
+    diagnostics["story_core_audio_segments_source"] = ""
     diagnostics["active_video_model_capability_profile"] = model_id
     diagnostics["active_route_capability_mode"] = "story_core_planning_bounds"
     diagnostics["story_core_capability_guard_applied"] = True
@@ -2712,62 +2911,112 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
             story_core_mode,
             capability_bounds_text,
         )
-        parts: list[dict[str, Any]] = [{"text": prompt}, *inline_ref_parts]
-        body = {
-            "contents": [{"role": "user", "parts": parts}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
-        }
-        response = post_generate_content(
-            api_key=api_key,
-            model="gemini-3.1-pro-preview",
-            body=body,
-            timeout=90,
-        )
-        if isinstance(response, dict) and response.get("__http_error__"):
-            raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
-        parsed = _extract_json_obj(_extract_gemini_text(response))
-        story_core = {
-            "story_summary": str(parsed.get("story_summary") or fallback["story_summary"]).strip(),
-            "opening_anchor": str(parsed.get("opening_anchor") or fallback["opening_anchor"]).strip(),
-            "ending_callback_rule": str(parsed.get("ending_callback_rule") or fallback["ending_callback_rule"]).strip(),
-            "global_arc": parsed.get("global_arc") or fallback["global_arc"],
-            "identity_lock": _safe_dict(parsed.get("identity_lock")) or fallback["identity_lock"],
-            "world_lock": _safe_dict(parsed.get("world_lock")) or fallback["world_lock"],
-            "style_lock": _safe_dict(parsed.get("style_lock")) or fallback["style_lock"],
-            "story_guidance": _normalize_story_core_guidance(parsed.get("story_guidance")),
-        }
-        story_core_v1 = _build_story_core_v11(
-            input_pkg=input_pkg,
-            audio_map=audio_map,
-            refs_inventory=refs_inventory,
-            assigned_roles=assigned_roles,
-            parsed_story_core=story_core,
-            fallback_story_core=fallback,
-        )
-        story_core["story_core_v1"] = story_core_v1
-        if not _is_usable_story_core(story_core):
-            raise ValueError("story_core_unusable_after_parse")
-        package["story_core"] = story_core
-        package["story_core_v1"] = story_core_v1
-        diagnostics = _safe_dict(package.get("diagnostics"))
-        diagnostics["story_core_used_fallback"] = False
-        package["diagnostics"] = diagnostics
-        _append_diag_event(package, "story_core generated", stage_id="story_core")
-        return package
+        core_segments, core_segments_source = _coerce_core_audio_segments(audio_map)
+        user_concept = _extract_story_user_concept(input_pkg)
+        validation_feedback = ""
+        retry_used = False
+        last_error_code = CORE_SCHEMA_INVALID
+        last_errors: list[str] = []
+        for attempt in range(2):
+            prompt_with_feedback = (
+                f"{prompt}\nVALIDATION_FEEDBACK_FROM_PREVIOUS_ATTEMPT:\n{validation_feedback}\n"
+                if validation_feedback
+                else prompt
+            )
+            parts: list[dict[str, Any]] = [{"text": prompt_with_feedback}, *inline_ref_parts]
+            body = {
+                "contents": [{"role": "user", "parts": parts}],
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+            }
+            response = post_generate_content(
+                api_key=api_key,
+                model="gemini-3.1-pro-preview",
+                body=body,
+                timeout=90,
+            )
+            if isinstance(response, dict) and response.get("__http_error__"):
+                last_error_code = CORE_SCHEMA_INVALID
+                last_errors = [f"gemini_http_error:{response.get('status')}:{response.get('text')}"]
+            else:
+                raw_text = _extract_gemini_text(response)
+                diagnostics = _safe_dict(package.get("diagnostics"))
+                diagnostics["story_core_raw_response"] = raw_text
+                parsed = _extract_json_obj(raw_text)
+                normalized_core = _normalize_story_core_contract_payload(parsed=parsed, audio_segments=core_segments)
+                diagnostics["story_core_normalized_payload"] = normalized_core
+                ok, error_code, validation_errors = _validate_story_core_v11_payload(
+                    payload=normalized_core,
+                    audio_segments=core_segments,
+                    user_concept=user_concept,
+                )
+                diagnostics["story_core_validation_errors"] = validation_errors
+                diagnostics["story_core_retry_used"] = retry_used
+                diagnostics["story_core_last_error_code"] = error_code if not ok else ""
+                diagnostics["story_core_audio_canonical_source"] = "audio_map.segments[]"
+                diagnostics["story_core_legacy_fields_non_canonical"] = ["scene_slots", "phrase_units", "scene_candidate_windows"]
+                diagnostics["story_core_audio_segments_source"] = core_segments_source
+                package["diagnostics"] = diagnostics
+                if ok:
+                    story_core = {
+                        "core_version": "1.1",
+                        "story_summary": str(normalized_core.get("story_summary") or "").strip(),
+                        "opening_anchor": str(normalized_core.get("opening_anchor") or "").strip(),
+                        "ending_callback_rule": str(normalized_core.get("ending_callback_rule") or "").strip(),
+                        "global_arc": _safe_dict(normalized_core.get("global_arc")),
+                        "identity_doctrine": _safe_dict(normalized_core.get("identity_doctrine")),
+                        "identity_lock": {"rule": str(_safe_dict(normalized_core.get("identity_doctrine")).get("hero_anchor") or "")},
+                        "world_lock": {"rule": str(_safe_dict(normalized_core.get("identity_doctrine")).get("world_doctrine") or "")},
+                        "style_lock": {"rule": str(_safe_dict(normalized_core.get("identity_doctrine")).get("style_doctrine") or "")},
+                        "story_guidance": {
+                            **_default_story_core_guidance(),
+                            "route_mix_doctrine_for_scenes": _safe_dict(normalized_core.get("route_mix_doctrine_for_scenes")),
+                        },
+                        "narrative_segments": _safe_list(normalized_core.get("narrative_segments")),
+                    }
+                    story_core_v1 = _build_story_core_v11(
+                        input_pkg=input_pkg,
+                        audio_map=audio_map,
+                        refs_inventory=refs_inventory,
+                        assigned_roles=assigned_roles,
+                        parsed_story_core=story_core,
+                        fallback_story_core=fallback,
+                    )
+                    story_core["story_core_v1"] = story_core_v1
+                    package["story_core"] = story_core
+                    package["story_core_v1"] = story_core_v1
+                    diagnostics = _safe_dict(package.get("diagnostics"))
+                    diagnostics["story_core_used_fallback"] = False
+                    diagnostics["story_core_retry_used"] = retry_used
+                    diagnostics["story_core_last_error_code"] = ""
+                    package["diagnostics"] = diagnostics
+                    _append_diag_event(package, "story_core generated", stage_id="story_core")
+                    return package
+                last_error_code = error_code or CORE_SCHEMA_INVALID
+                last_errors = validation_errors or ["story_core_validation_failed"]
+
+            validation_feedback = _build_core_validation_feedback(last_error_code, last_errors)
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            diagnostics["story_core_retry_used"] = retry_used
+            diagnostics["story_core_retry_feedback"] = validation_feedback
+            diagnostics["story_core_last_error_code"] = last_error_code
+            diagnostics["story_core_validation_errors"] = last_errors
+            package["diagnostics"] = diagnostics
+            if attempt == 0:
+                retry_used = True
+                _append_diag_event(package, f"story_core strict validation failed, requesting one retry: {validation_feedback}", stage_id="story_core")
+                continue
+            break
+        raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
     except Exception as exc:  # noqa: BLE001
         logger.exception("[scenario_stage_pipeline] story_core failed")
-        if _is_usable_story_core(fallback):
-            diagnostics = _safe_dict(package.get("diagnostics"))
-            warnings = _safe_list(diagnostics.get("warnings"))
-            warnings.append({"stage_id": "story_core", "message": f"fallback_used:{exc}"})
-            diagnostics["warnings"] = warnings[-80:]
-            diagnostics["story_core_used_fallback"] = True
-            package["diagnostics"] = diagnostics
-            package["story_core"] = fallback
-            package["story_core_v1"] = _safe_dict(fallback.get("story_core_v1"))
-            _append_diag_event(package, f"story_core fallback used: {exc}", stage_id="story_core")
-            return package
-        raise RuntimeError(f"story_core_failed_no_fallback:{exc}") from exc
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["story_core_used_fallback"] = False
+        diagnostics["story_core_hard_fail"] = True
+        warnings = _safe_list(diagnostics.get("warnings"))
+        warnings.append({"stage_id": "story_core", "message": f"hard_fail:{exc}"})
+        diagnostics["warnings"] = warnings[-80:]
+        package["diagnostics"] = diagnostics
+        raise RuntimeError(f"story_core_hard_fail:{exc}") from exc
 
 
 def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
