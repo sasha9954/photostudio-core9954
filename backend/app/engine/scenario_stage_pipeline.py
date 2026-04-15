@@ -2695,7 +2695,11 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     }
     has_scene_casting = bool(role_by_segment)
     has_legacy_scene_roles = bool(role_by_scene)
+    story_guidance_notes = story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8)
+    continuity_notes = story_guidance_notes if story_guidance_notes else _safe_list(role_plan.get("continuity_notes"))[:8]
     finalize_used_legacy_scene_roles_fallback = False
+    finalize_used_role_scene_casting = False
+    finalize_scene_ids_using_legacy_scene_roles_fallback: list[str] = []
     finalize_scene_id_segment_id_mismatch_count = 0
     plan_by_scene = {
         str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
@@ -2730,8 +2734,12 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         if role_row_segment and role_row_scene:
             # Transition guardrail: scene_casting is canonical; scene_roles is legacy fallback bridge only.
             role_row = role_row_segment
+        if role_row_segment:
+            finalize_used_role_scene_casting = True
         elif role_row_scene and not role_row_segment:
             finalize_used_legacy_scene_roles_fallback = True
+            if scene_id and len(finalize_scene_ids_using_legacy_scene_roles_fallback) < 20:
+                finalize_scene_ids_using_legacy_scene_roles_fallback.append(scene_id)
         segment_id_in_role_row = str(role_row.get("segment_id") or "").strip()
         if role_row_segment and segment_id_in_role_row and scene_id and segment_id_in_role_row != scene_id:
             finalize_scene_id_segment_id_mismatch_count += 1
@@ -2874,7 +2882,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "connected_context_summary": _safe_dict(input_pkg.get("connected_context_summary")),
             "role_type_by_role": assigned_roles,
             "world_continuity": _safe_dict(story_core.get("world_lock")),
-            "continuity_notes": story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8),
+            "continuity_notes": continuity_notes,
             "story_locks": {
                 "identity_lock": _safe_dict(story_core.get("identity_lock")),
                 "world_lock": _safe_dict(story_core.get("world_lock")),
@@ -2963,7 +2971,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "narrative_locks": _safe_dict(story_core.get("narrative_locks")),
         },
         "world_continuity": _safe_dict(story_core.get("world_lock")),
-        "continuity_notes": story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8),
+        "continuity_notes": continuity_notes,
         "route_mix_summary": _safe_dict(scene_plan.get("route_mix_summary")),
         "scene_arc_summary": str(scene_plan.get("scene_arc_summary") or "").strip(),
         "route_strategy_notes": _safe_list(scene_plan.get("route_strategy_notes")),
@@ -2989,8 +2997,14 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_used_scene_prompts"] = bool(prompts_by_scene)
     diagnostics["finalize_used_scene_plan"] = bool(plan_by_scene)
     diagnostics["finalize_used_role_plan"] = bool(role_by_segment or role_by_scene)
-    diagnostics["finalize_used_role_scene_casting"] = has_scene_casting
+    diagnostics["finalize_has_scene_casting"] = has_scene_casting
+    diagnostics["finalize_has_legacy_scene_roles"] = has_legacy_scene_roles
+    diagnostics["finalize_used_role_scene_casting"] = finalize_used_role_scene_casting
+    diagnostics["finalize_used_role_scene_casting_for_all_scenes"] = bool(scene_ids) and all(
+        scene_id in role_by_segment for scene_id in scene_ids
+    )
     diagnostics["finalize_used_legacy_scene_roles_fallback"] = finalize_used_legacy_scene_roles_fallback
+    diagnostics["finalize_scene_ids_using_legacy_scene_roles_fallback"] = finalize_scene_ids_using_legacy_scene_roles_fallback
     diagnostics["finalize_scene_id_segment_id_mismatch_count"] = int(finalize_scene_id_segment_id_mismatch_count)
     diagnostics["finalize_scene_id_bridge_expected_segment_id"] = True
     diagnostics["finalize_role_source_precedence"] = ["role_plan.scene_casting", "role_plan.scene_roles (fallback only)"]
