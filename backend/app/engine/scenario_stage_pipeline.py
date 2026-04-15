@@ -5672,37 +5672,57 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
         package=package,
     )
-    scene_plan = _safe_dict(result.get("scene_plan"))
-    route_budget_ok, route_budget_feedback, route_budget_meta = _validate_scene_plan_route_budget(
-        package=package,
-        scene_plan=scene_plan,
-        diagnostics=diagnostics,
-    )
-    if not route_budget_ok:
-        diagnostics["scene_plan_route_budget_retry_used"] = True
-        diagnostics["scene_plan_route_budget_feedback"] = route_budget_feedback
-        _append_diag_event(package, f"scene_plan route budget validation failed, retrying once: {route_budget_feedback}", stage_id="scene_plan")
+    initial_validation_error = str(result.get("validation_error") or "").strip()
+    if initial_validation_error:
+        validation_error_code = str(result.get("error_code") or "").strip()
+        validation_feedback = f"Previous output invalid: validation_error={initial_validation_error}; error_code={validation_error_code or 'SCENES_SCHEMA_INVALID'}"
+        _append_diag_event(package, f"scene_plan validation failed, retrying once: {validation_feedback}", stage_id="scene_plan")
         retry_result = build_gemini_scene_plan(
             api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
             package=package,
-            validation_feedback=route_budget_feedback,
-        )
-        retry_scene_plan = _safe_dict(retry_result.get("scene_plan"))
-        retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
-            package=package,
-            scene_plan=retry_scene_plan,
-            diagnostics=diagnostics,
+            validation_feedback=validation_feedback,
         )
         result = retry_result
-        scene_plan = retry_scene_plan
-        route_budget_ok = retry_ok
-        route_budget_feedback = retry_feedback
-        route_budget_meta = retry_meta
-        if not route_budget_ok:
+        if str(result.get("validation_error") or "").strip():
             result["ok"] = False
-            result["validation_error"] = route_budget_feedback or "scene_plan_route_budget_validation_failed"
-            result["error"] = result.get("error") or "scene_plan_route_budget_validation_failed"
-            hard_fail_error = str(result["validation_error"])
+            result["error"] = str(result.get("error") or result.get("validation_error") or "scene_plan_validation_failed")
+            hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_plan_validation_failed")
+
+    scene_plan = _safe_dict(result.get("scene_plan"))
+    route_budget_ok = True
+    route_budget_feedback = ""
+    route_budget_meta: dict[str, Any] = {}
+    if not hard_fail_error:
+        route_budget_ok, route_budget_feedback, route_budget_meta = _validate_scene_plan_route_budget(
+            package=package,
+            scene_plan=scene_plan,
+            diagnostics=diagnostics,
+        )
+        if not route_budget_ok:
+            diagnostics["scene_plan_route_budget_retry_used"] = True
+            diagnostics["scene_plan_route_budget_feedback"] = route_budget_feedback
+            _append_diag_event(package, f"scene_plan route budget validation failed, retrying once: {route_budget_feedback}", stage_id="scene_plan")
+            retry_result = build_gemini_scene_plan(
+                api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+                package=package,
+                validation_feedback=route_budget_feedback,
+            )
+            retry_scene_plan = _safe_dict(retry_result.get("scene_plan"))
+            retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
+                package=package,
+                scene_plan=retry_scene_plan,
+                diagnostics=diagnostics,
+            )
+            result = retry_result
+            scene_plan = retry_scene_plan
+            route_budget_ok = retry_ok
+            route_budget_feedback = retry_feedback
+            route_budget_meta = retry_meta
+            if not route_budget_ok:
+                result["ok"] = False
+                result["validation_error"] = route_budget_feedback or "scene_plan_route_budget_validation_failed"
+                result["error"] = result.get("error") or "scene_plan_route_budget_validation_failed"
+                hard_fail_error = str(result["validation_error"])
 
     scene_diag = _safe_dict(result.get("diagnostics"))
     route_counts = _safe_dict(scene_diag.get("route_counts"))
@@ -5711,7 +5731,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_prompt_version"] = str(scene_diag.get("prompt_version") or SCENE_PLAN_PROMPT_VERSION)
     diagnostics["scene_plan_used_model"] = str(scene_diag.get("used_model") or diagnostics.get("scene_plan_used_model") or "")
     diagnostics["scene_plan_used_fallback"] = bool(result.get("used_fallback"))
-    diagnostics["scene_plan_scene_count"] = int(scene_diag.get("scene_count") or len(_safe_list(scene_plan.get("scenes"))))
+    diagnostics["scene_plan_scene_count"] = int(scene_diag.get("scene_count") or len(_safe_list(scene_plan.get("storyboard"))))
     diagnostics["scene_plan_route_counts"] = {
         "i2v": int(route_counts.get("i2v") or _safe_dict(scene_plan.get("route_mix_summary")).get("i2v") or 0),
         "ia2v": int(route_counts.get("ia2v") or _safe_dict(scene_plan.get("route_mix_summary")).get("ia2v") or 0),
@@ -5760,16 +5780,20 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["scene_plan_error_code"] = diagnostics["scene_plan_error_code"] or "SCENES_ROUTE_INCOMPATIBILITY"
     diagnostics["validation_error"] = str(diagnostics.get("scene_plan_validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
-    diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("scenes")))
+    diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("storyboard")))
+    if not hard_fail_error:
+        result_has_validation_error = bool(str(result.get("validation_error") or "").strip())
+        if (not bool(result.get("ok"))) or result_has_validation_error:
+            hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_plan_invalid")
     package["diagnostics"] = diagnostics
     if hard_fail_error:
-        package["scene_plan"] = {"scenes": []}
+        package["scene_plan"] = {"storyboard": [], "scenes": []}
         _append_diag_event(package, f"scene_plan hard fail after retry: {hard_fail_error}", stage_id="scene_plan")
         raise RuntimeError(hard_fail_error)
 
     package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
 
-    if scene_plan and _safe_list(scene_plan.get("scenes")):
+    if scene_plan and _safe_list(scene_plan.get("storyboard")):
         _append_diag_event(package, "scene_plan generated", stage_id="scene_plan")
         if diagnostics.get("scene_plan_route_flat"):
             _append_diag_event(package, "scene_plan_route_flat warning", stage_id="scene_plan")

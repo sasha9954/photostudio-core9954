@@ -367,15 +367,23 @@ def _build_scene_windows(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
     return windows
 
 
-def _build_scene_segment_rows(audio_map: dict[str, Any], story_core: dict[str, Any], role_plan: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_scene_segment_rows(
+    audio_map: dict[str, Any],
+    story_core: dict[str, Any],
+    role_plan: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
     audio_segments = [_safe_dict(row) for row in _safe_list(audio_map.get("segments"))]
     core_rows = {_safe_dict(row).get("segment_id"): _safe_dict(row) for row in _safe_list(story_core.get("narrative_segments"))}
     cast_rows = {_safe_dict(row).get("segment_id"): _safe_dict(row) for row in _safe_list(role_plan.get("scene_casting"))}
 
     normalized: list[dict[str, Any]] = []
+    missing_core_source_segments: list[str] = []
     for idx, segment in enumerate(audio_segments, start=1):
         segment_id = str(segment.get("segment_id") or f"seg_{idx}").strip()
-        core = _safe_dict(core_rows.get(segment_id))
+        core_raw = core_rows.get(segment_id)
+        if not isinstance(core_raw, dict):
+            missing_core_source_segments.append(segment_id)
+        core = _safe_dict(core_raw)
         cast = _safe_dict(cast_rows.get(segment_id))
         t0 = _round3(segment.get("t0"))
         t1 = _round3(segment.get("t1"))
@@ -399,7 +407,7 @@ def _build_scene_segment_rows(audio_map: dict[str, Any], story_core: dict[str, A
                 "performance_focus": bool(cast.get("performance_focus")),
             }
         )
-    return normalized
+    return normalized, list(dict.fromkeys(missing_core_source_segments))
 
 
 def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -494,7 +502,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     ownership_binding_inventory = _build_ref_binding_inventory(refs_inventory)
     scene_windows = _build_scene_windows(audio_map)
-    scene_segment_rows = _build_scene_segment_rows(audio_map, story_core, role_plan)
+    scene_segment_rows, missing_core_source_segments = _build_scene_segment_rows(audio_map, story_core, role_plan)
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     story_guidance = story_guidance_route_mix_doctrine(story_core.get("story_guidance"))
     world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
@@ -576,6 +584,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     aux = {
         "scene_windows": scene_windows,
         "scene_segment_rows": scene_segment_rows,
+        "missing_core_source_segments": missing_core_source_segments,
         "role_lookup": _build_scene_role_lookup(role_plan),
         "world_summary_used": world_summary_used,
         "ownership_binding_inventory": ownership_binding_inventory,
@@ -1534,6 +1543,35 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
         }
 
     missing_role_segments = [str(row.get("segment_id") or "") for row in scene_segment_rows if not _safe_dict(role_lookup.get(str(row.get("segment_id") or "")))]
+    missing_core_segments = [str(item).strip() for item in _safe_list(aux.get("missing_core_source_segments")) if str(item).strip()]
+    if missing_core_segments:
+        plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, _ = _normalize_scene_plan(
+            {},
+            scene_segment_rows=scene_segment_rows,
+            role_lookup=role_lookup,
+            include_debug_raw=include_debug_raw,
+        )
+        diagnostics["error_code"] = "SCENES_CORE_SOURCE_MISSING"
+        diagnostics["validation_error"] = "missing_core_source_for_segments"
+        diagnostics["missing_core_source_segments"] = missing_core_segments
+        diagnostics.update(
+            _collect_scene_plan_diagnostics(
+                scene_plan=plan,
+                normalization_diag=normalization_diag,
+                watchability_fallback_count=watchability_fallback_count,
+                include_presence_modes=False,
+            )
+        )
+        return {
+            "ok": False,
+            "scene_plan": plan,
+            "error": "core_source_missing",
+            "validation_error": "missing_core_source_for_segments",
+            "error_code": "SCENES_CORE_SOURCE_MISSING",
+            "used_fallback": used_fallback,
+            "diagnostics": diagnostics,
+        }
+
     if missing_role_segments:
         plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, _ = _normalize_scene_plan(
             {},
@@ -1592,10 +1630,16 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
                 include_presence_modes=True,
             )
         )
+        storyboard_rows = _safe_list(scene_plan.get("storyboard"))
+        has_validation_error = bool(str(validation_error or "").strip())
+        ok = bool(storyboard_rows) and not has_validation_error
+        error_text = ""
+        if not ok:
+            error_text = str(validation_error or error_code or "invalid_scene_plan")
         return {
-            "ok": bool(_safe_list(scene_plan.get("scenes"))),
+            "ok": ok,
             "scene_plan": scene_plan,
-            "error": "" if _safe_list(scene_plan.get("scenes")) else "invalid_scene_plan",
+            "error": error_text,
             "validation_error": validation_error,
             "error_code": error_code,
             "used_fallback": used_fallback,
@@ -1618,7 +1662,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             )
         )
         return {
-            "ok": bool(_safe_list(scene_plan.get("scenes"))),
+            "ok": False,
             "scene_plan": scene_plan,
             "error": str(exc),
             "validation_error": validation_error,
