@@ -371,6 +371,29 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
     }
 
 
+def _build_route_mix_doctrine_for_scenes(creative_config: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
+    source = "custom_creative_config" if mode == "custom" else "auto_default"
+    if mode == "custom":
+        target_ratios = {
+            "ia2v": float(_clamp_ratio(creative_config.get("lipsync_ratio"), 0.25)),
+            "i2v": float(_clamp_ratio(creative_config.get("i2v_ratio"), 0.5)),
+            "first_last": float(_clamp_ratio(creative_config.get("first_last_ratio"), 0.25)),
+        }
+    else:
+        target_ratios = {"ia2v": 0.25, "i2v": 0.5, "first_last": 0.25}
+    doctrine = {
+        "core_scope_only": "doctrine_not_segment_assignment",
+        "short_clip_default_target_ratios": target_ratios,
+        "max_consecutive_lipsync": int(creative_config.get("max_consecutive_lipsync") or 2),
+        "preferred_routes": _safe_list(creative_config.get("preferred_routes")),
+        "lipsync_candidate_is_permission_not_obligation": True,
+        "avoid_long_consecutive_lipsync_streaks": True,
+        "prioritize_lipsync_for_strong_performance_windows": True,
+    }
+    return doctrine, source
+
+
 def _extract_request_creative_config(req: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
     direct = req.get("creative_config")
     if isinstance(direct, dict):
@@ -814,6 +837,7 @@ def _default_story_core(input_pkg: dict[str, Any]) -> dict[str, Any]:
         or ""
     ).strip()
     source_note = source_note[:800]
+    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     return {
         "story_summary": source_note or "Music-driven visual story with continuity locks.",
         "opening_anchor": "Open with a stable hero/world establishing frame.",
@@ -822,7 +846,7 @@ def _default_story_core(input_pkg: dict[str, Any]) -> dict[str, Any]:
         "identity_lock": {"rule": "Keep hero identity stable across all scenes."},
         "world_lock": {"rule": "Keep world/location logic coherent without random jumps."},
         "style_lock": {"rule": "Keep one cinematic style language across the whole track."},
-        "story_guidance": _default_story_core_guidance(),
+        "story_guidance": _default_story_core_guidance(creative_config),
     }
 
 
@@ -1825,15 +1849,11 @@ def _build_story_core_input_context(
     }
 
 
-def _default_story_core_guidance() -> dict[str, Any]:
+def _default_story_core_guidance(creative_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    normalized_creative_config = _normalize_creative_config(creative_config)
+    route_mix_doctrine, _ = _build_route_mix_doctrine_for_scenes(normalized_creative_config)
     return {
-        "route_mix_doctrine_for_scenes": {
-            "core_scope_only": "doctrine_not_segment_assignment",
-            "short_clip_default_target_ratios": {"ia2v": 0.25, "i2v": 0.5, "first_last": 0.25},
-            "lipsync_candidate_is_permission_not_obligation": True,
-            "avoid_long_consecutive_lipsync_streaks": True,
-            "prioritize_lipsync_for_strong_performance_windows": True,
-        },
+        "route_mix_doctrine_for_scenes": route_mix_doctrine,
         "world_progression_hints": [
             "single coherent world; world/location specifics must come from current text, refs, props, and already established context",
             "preserve identity, world, and style continuity across the full clip",
@@ -1895,8 +1915,8 @@ def _default_story_core_guidance() -> dict[str, Any]:
     }
 
 
-def _normalize_story_core_guidance(raw_guidance: Any) -> dict[str, Any]:
-    fallback = _default_story_core_guidance()
+def _normalize_story_core_guidance(raw_guidance: Any, creative_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    fallback = _default_story_core_guidance(creative_config)
     row = _safe_dict(raw_guidance)
     prop_guidance = _safe_dict(row.get("prop_guidance"))
     fallback_prop_guidance = _safe_dict(fallback.get("prop_guidance"))
@@ -2184,9 +2204,36 @@ def _normalize_story_core_contract_payload(
     *,
     parsed: dict[str, Any],
     audio_segments: list[dict[str, Any]],
+    creative_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    fallback_guidance = _default_story_core_guidance()
+    normalized_creative_config = _normalize_creative_config(creative_config)
+    configured_route_mix_doctrine, _ = _build_route_mix_doctrine_for_scenes(normalized_creative_config)
+    fallback_guidance = _default_story_core_guidance(normalized_creative_config)
     raw_guidance = _safe_dict(parsed.get("story_guidance"))
+    route_mix_row = (
+        _safe_dict(raw_guidance.get("route_mix_doctrine_for_scenes"))
+        or _safe_dict(parsed.get("route_mix_doctrine_for_scenes"))
+        or _safe_dict(fallback_guidance.get("route_mix_doctrine_for_scenes"))
+    )
+    route_mix_doctrine = {
+        **configured_route_mix_doctrine,
+        "core_scope_only": str(route_mix_row.get("core_scope_only") or configured_route_mix_doctrine.get("core_scope_only") or "").strip(),
+        "lipsync_candidate_is_permission_not_obligation": bool(
+            route_mix_row.get("lipsync_candidate_is_permission_not_obligation")
+            if "lipsync_candidate_is_permission_not_obligation" in route_mix_row
+            else configured_route_mix_doctrine.get("lipsync_candidate_is_permission_not_obligation")
+        ),
+        "avoid_long_consecutive_lipsync_streaks": bool(
+            route_mix_row.get("avoid_long_consecutive_lipsync_streaks")
+            if "avoid_long_consecutive_lipsync_streaks" in route_mix_row
+            else configured_route_mix_doctrine.get("avoid_long_consecutive_lipsync_streaks")
+        ),
+        "prioritize_lipsync_for_strong_performance_windows": bool(
+            route_mix_row.get("prioritize_lipsync_for_strong_performance_windows")
+            if "prioritize_lipsync_for_strong_performance_windows" in route_mix_row
+            else configured_route_mix_doctrine.get("prioritize_lipsync_for_strong_performance_windows")
+        ),
+    }
     return {
         "core_version": "1.1",
         "story_summary": str(parsed.get("story_summary") or "").strip(),
@@ -2202,9 +2249,7 @@ def _normalize_story_core_contract_payload(
             "world_doctrine": str(_safe_dict(parsed.get("identity_doctrine")).get("world_doctrine") or "").strip(),
             "style_doctrine": str(_safe_dict(parsed.get("identity_doctrine")).get("style_doctrine") or "").strip(),
         },
-        "route_mix_doctrine_for_scenes": _safe_dict(raw_guidance.get("route_mix_doctrine_for_scenes"))
-        or _safe_dict(parsed.get("route_mix_doctrine_for_scenes"))
-        or _safe_dict(fallback_guidance.get("route_mix_doctrine_for_scenes")),
+        "route_mix_doctrine_for_scenes": route_mix_doctrine,
         "narrative_segments": [
             {
                 "segment_id": str(row.get("segment_id") or "").strip(),
@@ -2927,6 +2972,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
 
 def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
+    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     audio_map = _safe_dict(package.get("audio_map"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     assigned_roles = _safe_dict(package.get("assigned_roles"))
@@ -2936,7 +2982,8 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     fallback = _default_story_core(input_pkg)
     if not _is_usable_audio_map(audio_map):
         raise RuntimeError("story_core_requires_audio_map")
-    fallback["story_guidance"] = _default_story_core_guidance()
+    fallback_route_mix_doctrine, route_mix_source = _build_route_mix_doctrine_for_scenes(creative_config)
+    fallback["story_guidance"] = _default_story_core_guidance(creative_config)
     fallback_core_v1 = _build_story_core_v11(
         input_pkg=input_pkg,
         audio_map=audio_map,
@@ -2966,7 +3013,10 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_grounding_level"] = grounding_level
     diagnostics["story_core_audio_informed"] = bool(audio_map)
     diagnostics["story_core_audio_dramaturgy_source"] = "audio_map" if audio_map else ""
-    diagnostics["story_core_creative_config_active"] = _normalize_creative_config(input_pkg.get("creative_config"))
+    diagnostics["story_core_creative_config_active"] = creative_config
+    diagnostics["story_core_route_mix_doctrine_source"] = route_mix_source
+    diagnostics["story_core_route_mix_doctrine_applied"] = fallback_route_mix_doctrine
+    diagnostics["story_core_route_mix_doctrine_ratios"] = _safe_dict(fallback_route_mix_doctrine.get("short_clip_default_target_ratios"))
     diagnostics["story_core_textual_directive_present"] = bool(_has_textual_directive(input_pkg))
     diagnostics["story_core_available_roles"] = []
     diagnostics["story_core_attached_ref_roles"] = []
@@ -3093,7 +3143,11 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics = _safe_dict(package.get("diagnostics"))
                 diagnostics["story_core_raw_response"] = raw_text
                 parsed = _extract_json_obj(raw_text)
-                normalized_core = _normalize_story_core_contract_payload(parsed=parsed, audio_segments=core_segments)
+                normalized_core = _normalize_story_core_contract_payload(
+                    parsed=parsed,
+                    audio_segments=core_segments,
+                    creative_config=creative_config,
+                )
                 diagnostics["story_core_normalized_payload"] = normalized_core
                 technical_spawn_debug: dict[str, Any] = {}
                 ok, error_code, validation_errors = _validate_story_core_v11_payload(
@@ -3131,7 +3185,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                         "world_lock": {"rule": str(_safe_dict(normalized_core.get("identity_doctrine")).get("world_doctrine") or "")},
                         "style_lock": {"rule": str(_safe_dict(normalized_core.get("identity_doctrine")).get("style_doctrine") or "")},
                         "story_guidance": {
-                            **_default_story_core_guidance(),
+                            **_default_story_core_guidance(creative_config),
                             "route_mix_doctrine_for_scenes": _safe_dict(normalized_core.get("route_mix_doctrine_for_scenes")),
                         },
                         "narrative_segments": _safe_list(normalized_core.get("narrative_segments")),
@@ -3151,6 +3205,13 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     diagnostics["story_core_used_fallback"] = False
                     diagnostics["story_core_retry_used"] = retry_used
                     diagnostics["story_core_last_error_code"] = ""
+                    diagnostics["story_core_route_mix_doctrine_source"] = route_mix_source
+                    diagnostics["story_core_route_mix_doctrine_applied"] = _safe_dict(
+                        normalized_core.get("route_mix_doctrine_for_scenes")
+                    )
+                    diagnostics["story_core_route_mix_doctrine_ratios"] = _safe_dict(
+                        _safe_dict(normalized_core.get("route_mix_doctrine_for_scenes")).get("short_clip_default_target_ratios")
+                    )
                     package["diagnostics"] = diagnostics
                     _append_diag_event(package, "story_core generated", stage_id="story_core")
                     return package
