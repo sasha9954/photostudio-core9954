@@ -442,6 +442,26 @@ def _compute_route_budget_for_total(total_scenes: int, creative_config: dict[str
     return {"i2v": i2v, "ia2v": ia2v, "first_last": first_last}
 
 
+def _is_all_lipsync_override_mode(
+    *,
+    total_scenes: int,
+    creative_config: dict[str, Any],
+    target_budget: dict[str, int],
+) -> bool:
+    if total_scenes <= 0:
+        return False
+    target_i2v = int(target_budget.get("i2v") or 0)
+    target_ia2v = int(target_budget.get("ia2v") or 0)
+    target_first_last = int(target_budget.get("first_last") or 0)
+    if target_i2v == 0 and target_first_last == 0 and target_ia2v == total_scenes:
+        return True
+
+    lipsync_ratio = _clamp_ratio(creative_config.get("lipsync_ratio"), 0.25)
+    i2v_ratio = _clamp_ratio(creative_config.get("i2v_ratio"), 0.5)
+    first_last_ratio = _clamp_ratio(creative_config.get("first_last_ratio"), 0.25)
+    return lipsync_ratio >= 0.999 and i2v_ratio <= 0.001 and first_last_ratio <= 0.001
+
+
 def _validate_scene_plan_route_budget(
     *,
     package: dict[str, Any],
@@ -466,15 +486,23 @@ def _validate_scene_plan_route_budget(
 
     target_budget = _compute_route_budget_for_total(len(scene_rows), creative_config)
     mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
+    all_lipsync_override = _is_all_lipsync_override_mode(
+        total_scenes=len(scene_rows),
+        creative_config=creative_config,
+        target_budget=target_budget,
+    )
+    validation_mode = "all_lipsync_override" if all_lipsync_override else "mixed"
     max_consecutive = int(creative_config.get("max_consecutive_lipsync") or 2)
     tolerance = 1 if len(scene_rows) >= 6 else 0
+    streak_guard_relaxed = all_lipsync_override
+    lipsync_streak_warning = "all_lipsync_override_active" if streak_guard_relaxed else ""
     errors: list[str] = []
     for route_name in ("ia2v", "i2v", "first_last"):
         if abs(route_counts.get(route_name, 0) - target_budget.get(route_name, 0)) > tolerance:
             errors.append(
                 f"route {route_name} count={route_counts.get(route_name, 0)} target≈{target_budget.get(route_name, 0)}"
             )
-    if longest_lipsync_streak > max_consecutive:
+    if longest_lipsync_streak > max_consecutive and not streak_guard_relaxed:
         errors.append(f"too many consecutive lipsync scenes: streak={longest_lipsync_streak} max={max_consecutive}")
     if mode == "auto" and route_counts.get("first_last", 0) <= 0 and len(scene_rows) >= 4:
         errors.append("first_last share missing for visual variety")
@@ -497,6 +525,10 @@ def _validate_scene_plan_route_budget(
         "max_consecutive_lipsync": max_consecutive,
         "longest_lipsync_streak": longest_lipsync_streak,
         "route_mix_mode": mode,
+        "route_budget_validation_mode": validation_mode,
+        "all_lipsync_mode": all_lipsync_override,
+        "lipsync_streak_guard_relaxed": streak_guard_relaxed,
+        "lipsync_streak_warning": lipsync_streak_warning,
         "creative_config": creative_config,
     }
     return (len(errors) == 0), feedback, details
@@ -5662,6 +5694,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_budget_actual"] = {}
     diagnostics["scene_plan_max_consecutive_lipsync"] = 0
     diagnostics["scene_plan_longest_lipsync_streak"] = 0
+    diagnostics["scene_plan_all_lipsync_mode"] = False
+    diagnostics["scene_plan_lipsync_streak_guard_relaxed"] = False
+    diagnostics["scene_plan_route_budget_validation_mode"] = "mixed"
+    diagnostics["scene_plan_lipsync_streak_warning"] = ""
     diagnostics["validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
@@ -5775,6 +5811,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_budget_actual"] = _safe_dict(route_budget_meta.get("actual_route_mix"))
     diagnostics["scene_plan_max_consecutive_lipsync"] = int(route_budget_meta.get("max_consecutive_lipsync") or 0)
     diagnostics["scene_plan_longest_lipsync_streak"] = int(route_budget_meta.get("longest_lipsync_streak") or 0)
+    diagnostics["scene_plan_all_lipsync_mode"] = bool(route_budget_meta.get("all_lipsync_mode"))
+    diagnostics["scene_plan_lipsync_streak_guard_relaxed"] = bool(route_budget_meta.get("lipsync_streak_guard_relaxed"))
+    diagnostics["scene_plan_route_budget_validation_mode"] = str(route_budget_meta.get("route_budget_validation_mode") or "mixed")
+    diagnostics["scene_plan_lipsync_streak_warning"] = str(route_budget_meta.get("lipsync_streak_warning") or "")
     if not route_budget_ok:
         diagnostics["scene_plan_validation_error"] = route_budget_feedback or diagnostics["scene_plan_validation_error"]
         diagnostics["scene_plan_error_code"] = diagnostics["scene_plan_error_code"] or "SCENES_ROUTE_INCOMPATIBILITY"
