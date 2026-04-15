@@ -373,11 +373,12 @@ def _compute_route_budget_for_total(total_scenes: int, creative_config: dict[str
 
     lipsync_ratio = _clamp_ratio(creative_config.get("lipsync_ratio"), 0.25)
     first_last_ratio = _clamp_ratio(creative_config.get("first_last_ratio"), 0.25)
+    route_mix_mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower()
     ia2v = int(round(total_scenes * lipsync_ratio))
     first_last = int(round(total_scenes * first_last_ratio))
     i2v = total_scenes - ia2v - first_last
 
-    if i2v < 1:
+    if route_mix_mode == "auto" and i2v < 1:
         deficit = 1 - i2v
         i2v = 1
         reducible_fl = min(deficit, max(0, first_last))
@@ -5121,6 +5122,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
     package["diagnostics"] = diagnostics
+    hard_fail_error = ""
 
     result = build_gemini_scene_plan(
         api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
@@ -5156,8 +5158,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             result["ok"] = False
             result["validation_error"] = route_budget_feedback or "scene_plan_route_budget_validation_failed"
             result["error"] = result.get("error") or "scene_plan_route_budget_validation_failed"
-
-    package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
+            hard_fail_error = str(result["validation_error"])
 
     scene_diag = _safe_dict(result.get("diagnostics"))
     route_counts = _safe_dict(scene_diag.get("route_counts"))
@@ -5207,6 +5208,12 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
     diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("scenes")))
     package["diagnostics"] = diagnostics
+    if hard_fail_error:
+        package["scene_plan"] = {"scenes": []}
+        _append_diag_event(package, f"scene_plan hard fail after retry: {hard_fail_error}", stage_id="scene_plan")
+        raise RuntimeError(hard_fail_error)
+
+    package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
 
     if scene_plan and _safe_list(scene_plan.get("scenes")):
         _append_diag_event(package, "scene_plan generated", stage_id="scene_plan")
