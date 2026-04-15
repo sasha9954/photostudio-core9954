@@ -421,6 +421,7 @@ def _validate_scene_plan_route_budget(
             current_lipsync_streak = 0
 
     target_budget = _compute_route_budget_for_total(len(scene_rows), creative_config)
+    mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
     max_consecutive = int(creative_config.get("max_consecutive_lipsync") or 2)
     tolerance = 1 if len(scene_rows) >= 6 else 0
     errors: list[str] = []
@@ -431,15 +432,19 @@ def _validate_scene_plan_route_budget(
             )
     if longest_lipsync_streak > max_consecutive:
         errors.append(f"too many consecutive lipsync scenes: streak={longest_lipsync_streak} max={max_consecutive}")
-    if route_counts.get("first_last", 0) <= 0 and len(scene_rows) >= 4:
+    if mode == "auto" and route_counts.get("first_last", 0) <= 0 and len(scene_rows) >= 4:
         errors.append("first_last share missing for visual variety")
-
-    mode = str(creative_config.get("route_mix_mode") or "auto")
+    if mode == "custom" and len(scene_rows) > 0 and sum(route_counts.values()) <= 0:
+        errors.append("route distribution invalid: no supported routes found")
     duration_sec = float(input_pkg.get("audio_duration_sec") or 0.0)
     feedback_prefix = (
         "short clip default expects mixed route distribution near 25/50/25"
         if mode == "auto" and duration_sec > 0 and duration_sec <= 45
-        else "route distribution violated creative_config doctrine"
+        else (
+            "route distribution violated custom target ratios"
+            if mode == "custom"
+            else "route distribution violated creative_config doctrine"
+        )
     )
     feedback = f"{feedback_prefix}; " + "; ".join(errors) if errors else ""
     details = {
