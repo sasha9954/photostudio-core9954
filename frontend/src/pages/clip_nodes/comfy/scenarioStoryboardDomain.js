@@ -1332,6 +1332,36 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     endFramePromptRu: normalizeText(source.endFramePromptRu ?? source.end_frame_prompt_ru ?? source.endFramePrompt ?? source.end_frame_prompt ?? source.last_frame_prompt ?? source.lastFramePrompt),
     endFramePromptEn: normalizeText(source.endFramePromptEn ?? source.end_frame_prompt_en ?? source.endFramePrompt ?? source.end_frame_prompt ?? source.last_frame_prompt ?? source.lastFramePrompt),
     imageUrl: normalizeText(source.imageUrl ?? source.image_url ?? source.previewUrl ?? source.preview_url),
+    generatedImageUrl: normalizeText(
+      source.generatedImageUrl
+      ?? source.generated_image_url
+      ?? source.resultImageUrl
+      ?? source.result_image_url
+      ?? source.finalImageUrl
+      ?? source.final_image_url
+      ?? source.imageUrl
+      ?? source.image_url
+    ),
+    resultImageUrl: normalizeText(
+      source.resultImageUrl
+      ?? source.result_image_url
+      ?? source.generatedImageUrl
+      ?? source.generated_image_url
+      ?? source.finalImageUrl
+      ?? source.final_image_url
+      ?? source.imageUrl
+      ?? source.image_url
+    ),
+    finalImageUrl: normalizeText(
+      source.finalImageUrl
+      ?? source.final_image_url
+      ?? source.resultImageUrl
+      ?? source.result_image_url
+      ?? source.generatedImageUrl
+      ?? source.generated_image_url
+      ?? source.imageUrl
+      ?? source.image_url
+    ),
     imageStatus: normalizeText(source.imageStatus ?? source.image_status),
     format: sceneFormat,
     imageFormat: sceneFormat,
