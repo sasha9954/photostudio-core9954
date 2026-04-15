@@ -122,6 +122,8 @@ def _build_prompt(
         '  "diagnostics": {"total_segments_duration": 0.0, "coverage_ok": true, "energy_peak_detected": false, "transcript_used": false, "dynamics_used": false, "validation_notes": []}\n'
         "}\n"
         "Rules:\n"
+        "- segment_id format is strict: seg_01, seg_02, ... seg_99 (prefix seg_ + exactly two digits).\n"
+        "- Never emit seg_001, seg_0, segment_1, or any alternative ID format.\n"
         "- segments must be ordered and contiguous without overlaps/gaps outside tiny tolerance.\n"
         "- Never round boundaries to whole seconds just because they look neat.\n"
         "- Use natural sub-second precision; do not bias toward integer timestamps.\n"

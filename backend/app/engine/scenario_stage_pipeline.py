@@ -371,6 +371,20 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
     }
 
 
+def _extract_request_creative_config(req: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    direct = req.get("creative_config")
+    if isinstance(direct, dict):
+        return direct
+    director_controls = _safe_dict(req.get("director_controls"))
+    if not director_controls:
+        director_controls = _safe_dict(req.get("directorControls"))
+    from_controls = director_controls.get("creative_config")
+    if isinstance(from_controls, dict):
+        return from_controls
+    from_metadata = _safe_dict(metadata).get("creative_config")
+    return from_metadata if isinstance(from_metadata, dict) else {}
+
+
 def _compute_route_budget_for_total(total_scenes: int, creative_config: dict[str, Any]) -> dict[str, int]:
     if total_scenes <= 0:
         return {"i2v": 0, "ia2v": 0, "first_last": 0}
@@ -1978,6 +1992,7 @@ def _validate_story_core_v11_payload(
     payload: dict[str, Any],
     audio_segments: list[dict[str, Any]],
     user_concept: str,
+    debug_capture: dict[str, Any] | None = None,
 ) -> tuple[bool, str, list[str]]:
     def _zone_text(value: Any) -> str:
         if isinstance(value, str):
@@ -2079,21 +2094,71 @@ def _validate_story_core_v11_payload(
     if any(token in json_dump for token in drift_keys):
         return False, CORE_TIMING_DRIFT, ["core_payload_attempts_timing_or_legacy_grid_control"]
 
-    forbidden_zones: list[Any] = [
-        payload.get("story_summary"),
-        payload.get("opening_anchor"),
-        payload.get("ending_callback_rule"),
-        payload.get("global_arc"),
-        payload.get("identity_doctrine"),
-        payload.get("narrative_segments"),
+    forbidden_zones: list[tuple[str, Any]] = [
+        ("story_summary", payload.get("story_summary")),
+        ("opening_anchor", payload.get("opening_anchor")),
+        ("ending_callback_rule", payload.get("ending_callback_rule")),
+        ("global_arc", payload.get("global_arc")),
+        ("identity_doctrine", payload.get("identity_doctrine")),
+        ("narrative_segments", payload.get("narrative_segments")),
     ]
-    forbidden_text = " ".join(_zone_text(zone) for zone in forbidden_zones if zone is not None).lower()
-    if any(re.search(pattern, forbidden_text) for pattern in technical_language_patterns):
-        return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_technical_language_in_forbidden_zone"]
-    if any(token in forbidden_text for token in route_tokens):
-        return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_route_language_in_forbidden_zone"]
-    if any(re.search(pattern, forbidden_text) for pattern in route_leakage_patterns):
-        return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_route_language_in_forbidden_zone"]
+    normalized_zones: list[tuple[str, str]] = [
+        (zone_name, _zone_text(zone_value).lower())
+        for zone_name, zone_value in forbidden_zones
+        if zone_value is not None
+    ]
+    forbidden_text = " ".join(text for _, text in normalized_zones)
+
+    def _capture_technical_debug(*, match_type: str, pattern: str, zone_name: str, zone_text: str, match_obj: re.Match[str] | None = None) -> None:
+        if debug_capture is None:
+            return
+        if match_obj:
+            start = max(0, match_obj.start() - 60)
+            end = min(len(zone_text), match_obj.end() + 60)
+            excerpt = zone_text[start:end]
+        else:
+            excerpt = zone_text[:180]
+        debug_capture["story_core_technical_spawn_match_type"] = match_type
+        debug_capture["story_core_technical_spawn_match_pattern"] = pattern
+        debug_capture["story_core_technical_spawn_match_zone"] = zone_name
+        debug_capture["story_core_technical_spawn_match_excerpt"] = excerpt[:240]
+
+    for pattern in technical_language_patterns:
+        compiled = re.compile(pattern)
+        for zone_name, zone_text in normalized_zones:
+            hit = compiled.search(zone_text)
+            if hit:
+                _capture_technical_debug(
+                    match_type="technical_language_pattern",
+                    pattern=pattern,
+                    zone_name=zone_name,
+                    zone_text=zone_text,
+                    match_obj=hit,
+                )
+                return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_technical_language_in_forbidden_zone"]
+    for token in route_tokens:
+        for zone_name, zone_text in normalized_zones:
+            if token in zone_text:
+                _capture_technical_debug(
+                    match_type="route_token",
+                    pattern=token,
+                    zone_name=zone_name,
+                    zone_text=zone_text,
+                )
+                return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_route_language_in_forbidden_zone"]
+    for pattern in route_leakage_patterns:
+        compiled = re.compile(pattern)
+        for zone_name, zone_text in normalized_zones:
+            hit = compiled.search(zone_text)
+            if hit:
+                _capture_technical_debug(
+                    match_type="route_leakage_pattern",
+                    pattern=pattern,
+                    zone_name=zone_name,
+                    zone_text=zone_text,
+                    match_obj=hit,
+                )
+                return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_route_language_in_forbidden_zone"]
 
     direct_route_assignment_patterns = (
         r"segment[_\s-]*id[^a-z0-9]{0,8}(seg[_\s-]*\d+)[^\n]{0,40}(->|=>|:|uses?|route)[^\n]{0,24}(i2v|ia2v|first_last)",
@@ -2216,6 +2281,9 @@ def _is_usable_story_core(story_core: dict[str, Any]) -> bool:
 def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     req = _safe_dict(payload)
     metadata = _safe_dict(req.get("metadata"))
+    director_controls = _safe_dict(req.get("director_controls"))
+    if not director_controls:
+        director_controls = _safe_dict(req.get("directorControls"))
     refs_inventory, ownership_binding_inventory = _normalize_refs_inventory(_safe_dict(req.get("context_refs")))
     source = _safe_dict(req.get("source"))
     source_mode = str(source.get("source_mode") or source.get("sourceMode") or "").strip().lower()
@@ -2235,17 +2303,13 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "transcript_text": str(req.get("transcriptText") or req.get("transcript") or "").strip(),
         "lyrics_text": str(req.get("lyricsText") or req.get("lyrics") or "").strip(),
         "spoken_text_hint": str(req.get("spokenTextHint") or "").strip(),
-        "content_type": str(_safe_dict(req.get("director_controls")).get("contentType") or "music_video"),
+        "content_type": str(director_controls.get("contentType") or "music_video"),
         "director_mode": _resolve_director_mode(
             req.get("director_mode") or metadata.get("director_mode"),
-            content_type=str(_safe_dict(req.get("director_controls")).get("contentType") or "music_video"),
+            content_type=str(director_controls.get("contentType") or "music_video"),
         ),
-        "format": str(_safe_dict(req.get("director_controls")).get("format") or req.get("format") or "9:16"),
-        "creative_config": _normalize_creative_config(
-            req.get("creative_config")
-            or _safe_dict(req.get("director_controls")).get("creative_config")
-            or _safe_dict(req.get("metadata")).get("creative_config")
-        ),
+        "format": str(director_controls.get("format") or req.get("format") or "9:16"),
+        "creative_config": _normalize_creative_config(_extract_request_creative_config(req, metadata)),
         "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
         "refs_by_role": _safe_dict(req.get("refsByRole")),
         "selected_refs": {
@@ -2296,6 +2360,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "story_core_prop_confusion_guard_applied": False,
             "story_core_ref_attachment_summary": {},
             "story_core_grounding_level": "standard",
+            "input_creative_config_active": _safe_dict(normalized_input.get("creative_config")),
         },
         "stage_statuses": stages,
         "contracts": {
@@ -2901,6 +2966,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_grounding_level"] = grounding_level
     diagnostics["story_core_audio_informed"] = bool(audio_map)
     diagnostics["story_core_audio_dramaturgy_source"] = "audio_map" if audio_map else ""
+    diagnostics["story_core_creative_config_active"] = _normalize_creative_config(input_pkg.get("creative_config"))
     diagnostics["story_core_textual_directive_present"] = bool(_has_textual_directive(input_pkg))
     diagnostics["story_core_available_roles"] = []
     diagnostics["story_core_attached_ref_roles"] = []
@@ -2924,6 +2990,10 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_audio_canonical_source"] = "audio_map.segments[]"
     diagnostics["story_core_legacy_fields_non_canonical"] = ["scene_slots", "phrase_units", "scene_candidate_windows"]
     diagnostics["story_core_audio_segments_source"] = ""
+    diagnostics["story_core_technical_spawn_match_type"] = ""
+    diagnostics["story_core_technical_spawn_match_pattern"] = ""
+    diagnostics["story_core_technical_spawn_match_excerpt"] = ""
+    diagnostics["story_core_technical_spawn_match_zone"] = ""
     diagnostics["active_video_model_capability_profile"] = model_id
     diagnostics["active_route_capability_mode"] = "story_core_planning_bounds"
     diagnostics["story_core_capability_guard_applied"] = True
@@ -3025,15 +3095,21 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 parsed = _extract_json_obj(raw_text)
                 normalized_core = _normalize_story_core_contract_payload(parsed=parsed, audio_segments=core_segments)
                 diagnostics["story_core_normalized_payload"] = normalized_core
+                technical_spawn_debug: dict[str, Any] = {}
                 ok, error_code, validation_errors = _validate_story_core_v11_payload(
                     payload=normalized_core,
                     audio_segments=core_segments,
                     user_concept=user_concept,
+                    debug_capture=technical_spawn_debug,
                 )
                 diagnostics["story_core_validation_errors"] = validation_errors
                 diagnostics["story_core_retry_used"] = retry_used
                 diagnostics["story_core_last_error_code"] = error_code if not ok else ""
                 diagnostics["story_core_id_mismatch_kind"] = ""
+                diagnostics["story_core_technical_spawn_match_type"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_type") or "")
+                diagnostics["story_core_technical_spawn_match_pattern"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_pattern") or "")
+                diagnostics["story_core_technical_spawn_match_excerpt"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_excerpt") or "")
+                diagnostics["story_core_technical_spawn_match_zone"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_zone") or "")
                 if not ok and error_code == CORE_ID_MISMATCH:
                     for validation_error in validation_errors:
                         if str(validation_error).startswith("id_mismatch_kind:"):
@@ -3109,7 +3185,12 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
 def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     package["refs_inventory"] = refs_inventory
-    package["input"] = _normalize_input_audio_source(_safe_dict(package.get("input")), refs_inventory)
+    input_pkg = _normalize_input_audio_source(_safe_dict(package.get("input")), refs_inventory)
+    input_pkg["creative_config"] = _normalize_creative_config(input_pkg.get("creative_config"))
+    package["input"] = input_pkg
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["input_creative_config_active"] = _safe_dict(input_pkg.get("creative_config"))
+    package["diagnostics"] = diagnostics
     _append_diag_event(package, "input_package normalized", stage_id="input_package")
     return package
 
