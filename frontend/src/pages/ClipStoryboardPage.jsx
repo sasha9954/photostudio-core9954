@@ -1589,6 +1589,10 @@ function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
       status: normalizeStoryboardGenerationStatus(prevValue.status),
       imageStatus: String(prevValue.imageStatus || ""),
       imageError: String(prevValue.imageError || ""),
+      lastAcceptedImageUrl: String(prevValue.lastAcceptedImageUrl || ""),
+      lastImageApiResult: prevValue?.lastImageApiResult && typeof prevValue.lastImageApiResult === "object"
+        ? { ...prevValue.lastImageApiResult }
+        : null,
       lastRejectedImageUrl: String(prevValue.lastRejectedImageUrl || ""),
       lastRejectedReason: String(prevValue.lastRejectedReason || ""),
       lastRejectedAt: String(prevValue.lastRejectedAt || ""),
@@ -13261,6 +13265,16 @@ Aspect ratio: ${imageFormat}`,
           imageDegraded,
         };
       }
+      console.info("[SCENARIO ACCEPTED IMAGE PERSIST]", {
+        sceneId,
+        applyAccepted,
+        writtenCanonicalImageUrl: normalizedSlot === "single" ? generatedImageUrl : "",
+        writtenGeneratedImageUrl: generatedImageUrl,
+        writtenResultImageUrl: generatedImageUrl,
+        writtenFinalImageUrl: generatedImageUrl,
+        writtenLastAcceptedImageUrl: generatedImageUrl,
+        reason: "accepted_image_apply",
+      });
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
       updateScenarioSceneGenerationRuntime(sceneId, {
         lastImageApiResult: imageApiRuntimeResult,
@@ -13783,6 +13797,26 @@ Aspect ratio: ${imageFormat}`,
       : {};
     const acceptedRuntimeImage = resolveAcceptedScenarioRuntimeImageUrl(targetSceneRuntime);
     const runtimeGeneratedImageUrl = String(acceptedRuntimeImage?.imageUrl || "").trim();
+    const canonicalImageAliasPresentPrecheck = Boolean(
+      String(
+        targetScene?.imageUrl
+        || targetScene?.generatedImageUrl
+        || targetScene?.resultImageUrl
+        || targetScene?.finalImageUrl
+        || targetScene?.startImageUrl
+        || targetScene?.endImageUrl
+        || ""
+      ).trim()
+    );
+    console.info("[SCENARIO VIDEO SOURCE PRECHECK]", {
+      sceneId,
+      canonicalImageAliasPresent: canonicalImageAliasPresentPrecheck,
+      lastAcceptedImageUrlPresent: Boolean(acceptedRuntimeImage?.lastAcceptedPresent),
+      runtimeImageAccepted: Boolean(acceptedRuntimeImage?.accepted),
+      finalVideoSourceDecision: canonicalImageAliasPresentPrecheck
+        ? "canonical_scene_fields"
+        : (runtimeGeneratedImageUrl ? "accepted_runtime_fallback" : "blocked_missing_source"),
+    });
     console.info("[SCENARIO VIDEO RUNTIME FALLBACK]", {
       sceneId,
       lastAcceptedImageUrlPresent: Boolean(acceptedRuntimeImage?.lastAcceptedPresent),
@@ -16751,6 +16785,53 @@ onClipSec: (nodeId, value) => {
             const preservedScene = preserveScenarioCanonicalResult(persistedScene || {}, rebuiltScene || {});
             const canonicalAudioResult = enforceCanonicalAudioSliceState(preservedScene || {});
             const hydratedScene = canonicalAudioResult.scene;
+            const canonicalImagePresent = Boolean(
+              String(
+                hydratedScene?.imageUrl
+                || hydratedScene?.generatedImageUrl
+                || hydratedScene?.resultImageUrl
+                || hydratedScene?.finalImageUrl
+                || hydratedScene?.startImageUrl
+                || hydratedScene?.endImageUrl
+                || ""
+              ).trim()
+            );
+            const persistedCanonicalImagePresent = Boolean(
+              String(
+                persistedScene?.imageUrl
+                || persistedScene?.generatedImageUrl
+                || persistedScene?.resultImageUrl
+                || persistedScene?.finalImageUrl
+                || persistedScene?.startImageUrl
+                || persistedScene?.endImageUrl
+                || ""
+              ).trim()
+            );
+            const acceptedRuntimePresent = Boolean(
+              String(
+                (generationSeedMap?.[sceneId] && typeof generationSeedMap[sceneId] === "object"
+                  ? generationSeedMap[sceneId].lastAcceptedImageUrl
+                  : "") || ""
+              ).trim()
+            );
+            console.info("[SCENARIO ACCEPTED IMAGE REHYDRATE]", {
+              sceneId,
+              canonicalImagePresent,
+              acceptedRuntimePresent,
+              imageLostAfterNormalize: persistedCanonicalImagePresent && !Boolean(
+                String(
+                  cleanedScene?.imageUrl
+                  || cleanedScene?.generatedImageUrl
+                  || cleanedScene?.resultImageUrl
+                  || cleanedScene?.finalImageUrl
+                  || cleanedScene?.startImageUrl
+                  || cleanedScene?.endImageUrl
+                  || ""
+                ).trim()
+              ),
+              imageLostAfterRebind: persistedCanonicalImagePresent && !canonicalImagePresent,
+              reason: "storyboard_refresh_rehydrate",
+            });
             if (CLIP_TRACE_SC2_GHOST_IMAGE) {
               console.debug("[SC2 GHOST TRACE] rebuild_scene", {
                 sceneId,
