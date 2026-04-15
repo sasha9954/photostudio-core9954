@@ -19,6 +19,12 @@ const OUTPUT_HANDLES = [
   { id: "storyboard_out", labelRu: "Storyboard" },
   { id: "preview_out", labelRu: "Preview" },
 ];
+const ROUTE_MIX_PRESETS = [
+  { key: "balanced", label: "Balanced", routeMixMode: "custom", lipsyncRatio: 0.25, firstLastRatio: 0.25, maxConsecutiveLipsync: 2 },
+  { key: "performance", label: "Performance Heavy", routeMixMode: "custom", lipsyncRatio: 0.5, firstLastRatio: 0.15, maxConsecutiveLipsync: 2 },
+  { key: "visual", label: "Visual Heavy", routeMixMode: "custom", lipsyncRatio: 0.1, firstLastRatio: 0.35, maxConsecutiveLipsync: 1 },
+  { key: "all_lipsync", label: "All Lipsync", routeMixMode: "custom", lipsyncRatio: 1.0, firstLastRatio: 0.0, maxConsecutiveLipsync: 6 },
+];
 
 export default function ComfyNarrativeNode({ id, data }) {
   const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
@@ -235,6 +241,17 @@ export default function ComfyNarrativeNode({ id, data }) {
                 />
               </label>
               <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">First/Last ratio: {Number(data?.firstLastRatio ?? 0.25).toFixed(2)}</div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={Number(data?.firstLastRatio ?? 0.25)}
+                  onChange={(e) => data?.onFieldChange?.(id, { firstLastRatio: Number(e.target.value) })}
+                />
+              </label>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
                 <div className="clipSB_brainLabel clipSB_brainLabel--compact">Max consecutive lipsync</div>
                 <input
                   className="clipSB_input"
@@ -246,6 +263,26 @@ export default function ComfyNarrativeNode({ id, data }) {
                   onChange={(e) => data?.onFieldChange?.(id, { maxConsecutiveLipsync: Number(e.target.value || 2) })}
                 />
               </label>
+              <div className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Quick presets</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 }}>
+                  {ROUTE_MIX_PRESETS.map((preset) => (
+                    <button
+                      key={preset.key}
+                      type="button"
+                      className="clipSB_btn clipSB_btnSecondary"
+                      onClick={() => data?.onFieldChange?.(id, {
+                        routeMixMode: preset.routeMixMode,
+                        lipsyncRatio: preset.lipsyncRatio,
+                        firstLastRatio: preset.firstLastRatio,
+                        maxConsecutiveLipsync: preset.maxConsecutiveLipsync,
+                      })}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </section>
 
             {errorMessage ? <div className="clipSB_narrativeEmptyHint" role="alert" style={{ marginTop: 8 }}>{errorMessage}</div> : null}
