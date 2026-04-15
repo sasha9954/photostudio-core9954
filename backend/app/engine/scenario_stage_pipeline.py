@@ -2045,19 +2045,33 @@ def _validate_story_core_v11_payload(
         return False, CORE_ID_MISMATCH, mismatch_errors or ["segment_id_1_to_1_mismatch"]
 
     route_tokens = ("i2v", "ia2v", "first_last")
-    technical_tokens = (
-        "camera",
-        "framing",
-        "shot",
-        "dolly",
-        "zoom",
-        "pan",
-        "tilt",
-        "motion",
-        "choreograph",
-        "prompt",
-        "renderer",
-        "delivery",
+    technical_language_patterns = (
+        r"\bcamera[_\s-]*intent\b",
+        r"\bcamera[_\s-]*move(s|ment)?\b",
+        r"\bcamera[_\s-]*tracks?\b",
+        r"\bcamera[_\s-]*motion\b",
+        r"\bshot[_\s-]*framing\b",
+        r"\bclose[_\s-]?up\b",
+        r"\bmedium[_\s-]*shot\b",
+        r"\bwide[_\s-]*shot\b",
+        r"\btracking[_\s-]*shot\b",
+        r"\bdolly\b",
+        r"\bzoom\b",
+        r"\bpan(?:\s+(?:left|right|up|down))?\b",
+        r"\btilt(?:\s+(?:up|down))?\b",
+        r"\bsubject[_\s-]*motion\b",
+        r"\bmotion[_\s-]*profile\b",
+        r"\b(?:positive|negative)[_\s-]*prompt\b",
+        r"\brenderer\b",
+        r"\bdelivery\b",
+        r"\bworkflow\b",
+        r"\bmodel[_\s-]*id\b",
+        r"\bframe[_\s-]*strategy\b",
+    )
+    route_leakage_patterns = (
+        r"\b(?:segment|scene)\s*\d+[^\n]{0,40}\buses?\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
+        r"\bsegment[_\s-]*id[^a-z0-9]{0,8}(seg[_\s-]*\d+)[^\n]{0,40}\buses?\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
+        r"\broute\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
     )
     role_tokens = ("cast", "roles", "role_plan", "character_1:", "character_2:", "character_3:")
     drift_keys = {"t0", "t1", "scene_slots", "scene_candidate_windows", "phrase_units"}
@@ -2074,9 +2088,11 @@ def _validate_story_core_v11_payload(
         payload.get("narrative_segments"),
     ]
     forbidden_text = " ".join(_zone_text(zone) for zone in forbidden_zones if zone is not None).lower()
-    if any(token in forbidden_text for token in technical_tokens):
+    if any(re.search(pattern, forbidden_text) for pattern in technical_language_patterns):
         return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_technical_language_in_forbidden_zone"]
     if any(token in forbidden_text for token in route_tokens):
+        return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_route_language_in_forbidden_zone"]
+    if any(re.search(pattern, forbidden_text) for pattern in route_leakage_patterns):
         return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_route_language_in_forbidden_zone"]
 
     direct_route_assignment_patterns = (
