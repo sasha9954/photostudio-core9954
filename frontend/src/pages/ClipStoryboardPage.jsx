@@ -378,6 +378,21 @@ function buildScenarioVideoVisualGlueText(scene = {}) {
   ].join("\n").trim();
 }
 
+
+function resolveScenarioSceneVideoMetadata(scene = {}) {
+  const metadata = scene?.video_metadata && typeof scene.video_metadata === "object"
+    ? scene.video_metadata
+    : (scene?.videoMetadata && typeof scene.videoMetadata === "object" ? scene.videoMetadata : {});
+  return {
+    ltxPositive: String(metadata?.ltx_positive ?? metadata?.ltxPositive ?? "").trim(),
+    ltxNegative: String(metadata?.ltx_negative ?? metadata?.ltxNegative ?? "").trim(),
+    motionTag: String(metadata?.motion_tag ?? metadata?.motionTag ?? "").trim(),
+    cameraTag: String(metadata?.camera_tag ?? metadata?.cameraTag ?? "").trim(),
+    promptSource: String(metadata?.prompt_source ?? metadata?.promptSource ?? "").trim(),
+    raw: metadata,
+  };
+}
+
 function hasScenarioContractValue(value) {
   if (Array.isArray(value)) return value.length > 0;
   if (value && typeof value === "object") return Object.keys(value).length > 0;
@@ -387,7 +402,10 @@ function hasScenarioContractValue(value) {
 
 function resolveScenarioSceneNegativePrompt(scene = {}) {
   const sceneContract = scene?.sceneContract && typeof scene.sceneContract === "object" ? scene.sceneContract : {};
+  const videoMetadata = resolveScenarioSceneVideoMetadata(scene);
   return String(
+    videoMetadata?.ltxNegative
+    ??
     scene?.videoNegativePrompt
     ?? scene?.video_negative_prompt
     ?? scene?.negativeVideoPrompt
@@ -445,8 +463,11 @@ function buildScenarioSceneContractPayload(scene = {}) {
     previousStableImageAnchorReason: scene?.previousStableImageAnchorReason,
     audioEmotionDirection: scene?.audioEmotionDirection,
   };
+  const videoMetadata = resolveScenarioSceneVideoMetadata(scene);
   return {
     sceneId: scene?.sceneId || "",
+    video_metadata: videoMetadata.raw,
+    videoMetadata: videoMetadata.raw,
     sceneIndex: resolvedSceneIndex,
     scene_index: resolvedSceneIndex,
     index: resolvedSceneIndex,
@@ -14250,17 +14271,20 @@ Aspect ratio: ${imageFormat}`,
       || ""
     ).trim();
     const strictFirstLastNegativePrompt = resolveScenarioSceneNegativePrompt(targetScene);
-    const sceneHumanVisualAnchors = strictFirstLastMode ? [] : buildScenarioHumanVisualAnchors(targetScene);
+    const sceneVideoMetadata = resolveScenarioSceneVideoMetadata(targetScene);
+    const hasVideoMetadata = Boolean(sceneVideoMetadata.ltxPositive && sceneVideoMetadata.ltxNegative);
+    const sceneHumanVisualAnchors = (strictFirstLastMode || hasVideoMetadata) ? [] : buildScenarioHumanVisualAnchors(targetScene);
     const humanAnchorBlock = sceneHumanVisualAnchors.length
       ? [
         "SCENE-SPECIFIC HUMAN VISUAL ANCHORS (SOURCE FRAME):",
         ...sceneHumanVisualAnchors.map((line) => `- ${line}`),
       ].join("\n")
       : "";
-    const videoVisualGlueText = strictFirstLastMode ? "" : buildScenarioVideoVisualGlueText(targetScene);
+    const videoVisualGlueText = (strictFirstLastMode || hasVideoMetadata) ? "" : buildScenarioVideoVisualGlueText(targetScene);
+    const legacyFinalVideoPrompt = [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
     const finalVideoPrompt = strictFirstLastMode
       ? strictFirstLastPositivePrompt
-      : [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
+      : (hasVideoMetadata ? sceneVideoMetadata.ltxPositive : legacyFinalVideoPrompt);
     const sourceImageUrl = requiresTwoFrames
       ? (resolvedFirstFrameUrl || "")
       : (continuationEnabled
@@ -14410,7 +14434,14 @@ Aspect ratio: ${imageFormat}`,
       };
       const payloadNegativePrompt = strictFirstLastMode
         ? strictFirstLastNegativePrompt
-        : resolveScenarioSceneNegativePrompt(targetScene);
+        : (hasVideoMetadata ? sceneVideoMetadata.ltxNegative : resolveScenarioSceneNegativePrompt(targetScene));
+      console.info("[SCENARIO VIDEO PROMPT SOURCE]", {
+        sceneId,
+        source: hasVideoMetadata ? "video_metadata" : "legacy_frontend_glue",
+        hasVideoMetadata,
+        finalVideoPromptPreview: String(finalVideoPrompt || "").slice(0, 280),
+        finalNegativePreview: String(payloadNegativePrompt || "").slice(0, 220),
+      });
       console.info("[SCENARIO NEGATIVE PROMPT TRACE]", {
         sceneId,
         strictFirstLastMode,
@@ -14480,6 +14511,8 @@ Aspect ratio: ${imageFormat}`,
         external_audio_used: shouldAttachAudioSlice,
         external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
         videoPrompt: finalVideoPrompt,
+        videoMetadata: sceneVideoMetadata.raw,
+        video_metadata: sceneVideoMetadata.raw,
         sceneHumanVisualAnchors,
         transitionActionPrompt,
         transitionType,

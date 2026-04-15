@@ -27,6 +27,7 @@ from app.engine.gemini_rest import post_generate_content
 from app.engine.scenario_role_planner import ROLE_PLAN_PROMPT_VERSION, build_gemini_role_plan
 from app.engine.scenario_scene_planner import SCENE_PLAN_PROMPT_VERSION, build_gemini_scene_plan
 from app.engine.scenario_scene_prompter import SCENE_PROMPTS_PROMPT_VERSION, build_gemini_scene_prompts
+from app.engine.scenario_video_prompt_writer import FINAL_VIDEO_PROMPT_STAGE_VERSION, generate_ltx_video_prompt_metadata
 from app.engine.video_capability_canon import (
     DEFAULT_VIDEO_MODEL_ID,
     build_capability_diagnostics_summary,
@@ -45,6 +46,7 @@ STAGE_IDS = (
     "role_plan",
     "scene_plan",
     "scene_prompts",
+    "final_video_prompt",
     "finalize",
 )
 
@@ -55,7 +57,8 @@ STAGE_DEPENDENCIES: dict[str, list[str]] = {
     "role_plan": ["input_package", "audio_map", "story_core"],
     "scene_plan": ["input_package", "audio_map", "story_core", "role_plan"],
     "scene_prompts": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan"],
-    "finalize": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts"],
+    "final_video_prompt": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts"],
+    "finalize": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt"],
 }
 
 DOWNSTREAM_BY_STAGE: dict[str, list[str]] = {
@@ -64,11 +67,12 @@ DOWNSTREAM_BY_STAGE: dict[str, list[str]] = {
 }
 
 MANUAL_RESET_DOWNSTREAM: dict[str, list[str]] = {
-    "audio_map": ["story_core", "role_plan", "scene_plan", "scene_prompts", "finalize"],
-    "story_core": ["role_plan", "scene_plan", "scene_prompts", "finalize"],
-    "role_plan": ["scene_plan", "scene_prompts", "finalize"],
-    "scene_plan": ["scene_prompts", "finalize"],
-    "scene_prompts": ["finalize"],
+    "audio_map": ["story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt", "finalize"],
+    "story_core": ["role_plan", "scene_plan", "scene_prompts", "final_video_prompt", "finalize"],
+    "role_plan": ["scene_plan", "scene_prompts", "final_video_prompt", "finalize"],
+    "scene_plan": ["scene_prompts", "final_video_prompt", "finalize"],
+    "scene_prompts": ["final_video_prompt", "finalize"],
+    "final_video_prompt": ["finalize"],
     "finalize": [],
 }
 
@@ -78,6 +82,7 @@ STAGE_SECTION_RESETTERS: dict[str, Any] = {
     "role_plan": lambda: {},
     "scene_plan": lambda: {"scenes": []},
     "scene_prompts": lambda: {"scenes": []},
+    "final_video_prompt": lambda: {"scenes": []},
     "finalize": lambda: {"scenes": []},
 }
 
@@ -87,6 +92,7 @@ STAGE_DIAGNOSTIC_PREFIXES: dict[str, tuple[str, ...]] = {
     "role_plan": ("role_plan_",),
     "scene_plan": ("scene_plan_",),
     "scene_prompts": ("scene_prompts_",),
+    "final_video_prompt": ("final_video_prompt_",),
     "finalize": ("finalize_",),
 }
 STAGE_PACKAGE_FIELD_BY_STAGE: dict[str, str] = {
@@ -96,6 +102,7 @@ STAGE_PACKAGE_FIELD_BY_STAGE: dict[str, str] = {
     "role_plan": "role_plan",
     "scene_plan": "scene_plan",
     "scene_prompts": "scene_prompts",
+    "final_video_prompt": "final_video_prompt",
     "finalize": "final_storyboard",
 }
 _OWNERSHIP_ROLE_MAP = {
@@ -133,7 +140,7 @@ def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
         return bool(_safe_dict(output))
     if stage_id == "audio_map":
         return _is_usable_audio_map(_safe_dict(output))
-    if stage_id in {"scene_plan", "scene_prompts", "finalize"}:
+    if stage_id in {"scene_plan", "scene_prompts", "final_video_prompt", "finalize"}:
         return isinstance(output, dict) and "scenes" in output
     return isinstance(output, dict) and bool(output)
 
@@ -1845,6 +1852,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "role_plan": {},
         "scene_plan": {"scenes": []},
         "scene_prompts": {"scenes": []},
+        "final_video_prompt": {"scenes": []},
         "final_storyboard": {"scenes": []},
         "diagnostics": {
             "warnings": [],
@@ -2133,6 +2141,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     role_plan = _safe_dict(package.get("role_plan"))
     scene_plan = _safe_dict(package.get("scene_plan"))
     scene_prompts = _safe_dict(package.get("scene_prompts"))
+    final_video_prompt = _safe_dict(package.get("final_video_prompt"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     assigned_roles = _safe_dict(package.get("assigned_roles"))
 
@@ -2152,8 +2161,14 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         if str(_safe_dict(row).get("scene_id") or "").strip()
     }
 
+    final_video_prompt_by_scene = {
+        str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(final_video_prompt.get("scenes"))
+        if str(_safe_dict(row).get("scene_id") or "").strip()
+    }
+
     scene_ids: list[str] = []
-    for source in (plan_by_scene, prompts_by_scene, role_by_scene):
+    for source in (plan_by_scene, prompts_by_scene, role_by_scene, final_video_prompt_by_scene):
         for scene_id in source.keys():
             if scene_id and scene_id not in scene_ids:
                 scene_ids.append(scene_id)
@@ -2163,7 +2178,9 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         scene_plan_row = _safe_dict(plan_by_scene.get(scene_id))
         role_row = _safe_dict(role_by_scene.get(scene_id))
         prompt_row = _safe_dict(prompts_by_scene.get(scene_id))
+        final_video_prompt_row = _safe_dict(final_video_prompt_by_scene.get(scene_id))
         prompt_notes = _safe_dict(prompt_row.get("prompt_notes"))
+        video_metadata = _safe_dict(final_video_prompt_row.get("video_metadata"))
 
         t0 = _to_float(
             scene_plan_row.get("t0")
@@ -2271,6 +2288,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "audio_slice_end_sec": audio_slice_end_sec,
             "audio_slice_expected_duration_sec": audio_slice_expected_duration_sec,
             "prompt_notes": prompt_notes,
+            "video_metadata": video_metadata,
             "scene_presence_mode": str(role_row.get("scene_presence_mode") or scene_plan_row.get("scene_presence_mode") or "").strip(),
             "route_reason": str(scene_plan_row.get("route_reason") or "").strip(),
             "motion_intent": str(scene_plan_row.get("motion_intent") or "").strip(),
@@ -2409,6 +2427,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_used_scene_prompts"] = bool(prompts_by_scene)
     diagnostics["finalize_used_scene_plan"] = bool(plan_by_scene)
     diagnostics["finalize_used_role_plan"] = bool(role_by_scene)
+    diagnostics["finalize_used_final_video_prompt"] = bool(final_video_prompt_by_scene)
     package["diagnostics"] = diagnostics
     _append_diag_event(package, f"final_storyboard built scenes={len(final_scenes)}", stage_id="finalize")
     return package
@@ -5150,6 +5169,43 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         _append_diag_event(package, "scene_prompts empty", stage_id="scene_prompts")
     return package
 
+def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["final_video_prompt_backend"] = "gemini"
+    diagnostics["final_video_prompt_prompt_version"] = FINAL_VIDEO_PROMPT_STAGE_VERSION
+    diagnostics["final_video_prompt_scene_count"] = 0
+    diagnostics["final_video_prompt_error"] = ""
+    package["diagnostics"] = diagnostics
+    package["final_video_prompt"] = {"scenes": []}
+
+    result = generate_ltx_video_prompt_metadata(
+        api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+        package=package,
+    )
+    final_video_prompt = _safe_dict(result.get("final_video_prompt"))
+    package["final_video_prompt"] = final_video_prompt
+
+    diag = _safe_dict(result.get("diagnostics"))
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["final_video_prompt_backend"] = str(diag.get("final_video_prompt_backend") or "gemini")
+    diagnostics["final_video_prompt_prompt_version"] = str(
+        diag.get("final_video_prompt_prompt_version") or FINAL_VIDEO_PROMPT_STAGE_VERSION
+    )
+    diagnostics["final_video_prompt_scene_count"] = int(diag.get("final_video_prompt_scene_count") or 0)
+    diagnostics["final_video_prompt_used_fallback"] = bool(diag.get("final_video_prompt_used_fallback"))
+    diagnostics["final_video_prompt_error"] = str(result.get("error") or "")
+    package["diagnostics"] = diagnostics
+
+    for row in _safe_list(diag.get("final_video_prompt_debug_rows")):
+        logger.info("[FINAL VIDEO PROMPT STAGE] %s", json.dumps(_safe_dict(row), ensure_ascii=False))
+
+    if _safe_list(final_video_prompt.get("scenes")):
+        _append_diag_event(package, "final_video_prompt generated", stage_id="final_video_prompt")
+    else:
+        _append_diag_event(package, "final_video_prompt empty", stage_id="final_video_prompt")
+    return package
+
+
 def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
@@ -5179,6 +5235,8 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
             pkg = _run_scene_plan_stage(pkg)
         elif stage_id == "scene_prompts":
             pkg = _run_scene_prompts_stage(pkg)
+        elif stage_id == "final_video_prompt":
+            pkg = _run_final_video_prompt_stage(pkg)
         elif stage_id == "finalize":
             pkg = _run_finalize_stage(pkg)
         _set_stage_status(pkg, stage_id, "done")

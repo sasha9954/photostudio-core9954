@@ -433,6 +433,8 @@ class ClipVideoIn(BaseModel):
     requiresContinuation: bool | None = None
     requiresAudioSensitiveVideo: bool | None = None
     sceneContract: dict | None = None
+    videoMetadata: dict | None = None
+    video_metadata: dict | None = None
     sceneActiveRoles: list[str] | None = None
     duetLockEnabled: bool | None = None
     duetIdentityContract: str | None = None
@@ -3029,6 +3031,75 @@ def _resolve_scene_video_negative_prompt(
     if normalized_workflow_key == "i2v" and normalized_model_key == "ltx23_dev_fp8":
         return _resolve_ltx_i2v_compact_negative_prompt(resolved)
     return resolved
+
+
+VIDEO_METADATA_MOTION_TAG_WHITELIST = {
+    "slow_walk",
+    "restrained_walk",
+    "purposeful_walk",
+    "walk_push_in",
+    "push_in",
+    "pull_back",
+    "side_tracking",
+    "head_turn",
+    "attention_shift",
+    "lateral_reveal",
+}
+VIDEO_METADATA_CAMERA_TAG_WHITELIST = {
+    "locked",
+    "push_in",
+    "pull_back",
+    "side_tracking",
+    "head_turn",
+    "attention_shift",
+    "lateral_reveal",
+}
+VIDEO_METADATA_NEGATIVE_FALLBACK = "identity drift, broken anatomy, camera shake, surreal motion, background morphing"
+
+
+def _to_snake_tag(value: Any) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    return re.sub(r"_+", "_", normalized).strip("_")
+
+
+def _resolve_scene_video_metadata(payload: ClipVideoIn, scene_contract: dict[str, Any] | None = None) -> dict[str, Any]:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    metadata = (
+        payload.videoMetadata
+        if isinstance(payload.videoMetadata, dict)
+        else payload.video_metadata if isinstance(payload.video_metadata, dict)
+        else contract.get("video_metadata") if isinstance(contract.get("video_metadata"), dict)
+        else contract.get("videoMetadata") if isinstance(contract.get("videoMetadata"), dict)
+        else {}
+    )
+    if not isinstance(metadata, dict):
+        return {}
+    ltx_positive = str(metadata.get("ltx_positive") or metadata.get("ltxPositive") or "").strip()
+    ltx_negative = str(metadata.get("ltx_negative") or metadata.get("ltxNegative") or "").strip()
+    motion_tag = _to_snake_tag(metadata.get("motion_tag") or metadata.get("motionTag"))
+    camera_tag = _to_snake_tag(metadata.get("camera_tag") or metadata.get("cameraTag"))
+    if motion_tag and motion_tag not in VIDEO_METADATA_MOTION_TAG_WHITELIST:
+        motion_tag = "restrained_walk"
+    if camera_tag and camera_tag not in VIDEO_METADATA_CAMERA_TAG_WHITELIST:
+        camera_tag = "locked"
+    if ltx_positive and len(ltx_positive) < 32:
+        fallback_scene_text = str(
+            contract.get("summary")
+            or contract.get("scene_goal")
+            or contract.get("video_prompt")
+            or contract.get("videoPrompt")
+            or ""
+        ).strip()
+        if fallback_scene_text:
+            ltx_positive = f"{fallback_scene_text}, {ltx_positive}".strip(", ")
+    return {
+        "ltx_positive": ltx_positive,
+        "ltx_negative": ltx_negative,
+        "motion_tag": motion_tag,
+        "camera_tag": camera_tag,
+        "prompt_source": str(metadata.get("prompt_source") or metadata.get("promptSource") or "gemini_final_video_prompt_v1").strip(),
+        "valid": bool(ltx_positive),
+    }
 
 
 def _infer_selected_view_hint(*values: Any) -> str:
@@ -15112,28 +15183,57 @@ def clip_video(payload: ClipVideoIn):
             or scene_contract_for_prompt.get("video_prompt")
             or ""
         ).strip()
-        effective_prompt, prompt_debug = _compose_video_effective_prompt(
-            video_prompt=scene_video_prompt,
-            transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
-            output_format=output_format,
-            requested_duration_sec=generation_duration_sec,
-            scene_human_visual_anchors=scene_human_visual_anchors,
-            scene_type=str(payload.sceneType or "").strip(),
-            shot_type=str(payload.shotType or "").strip(),
-            scene_contract=scene_contract_for_prompt,
-            scene_active_roles=payload.sceneActiveRoles,
-            duet_lock_enabled=payload.duetLockEnabled,
-            duet_identity_contract=payload.duetIdentityContract,
-            director_genre_intent=payload.directorGenreIntent,
-            workflow_key=final_workflow_key,
-            model_key=resolved_model_key,
-            scene_id=scene_id,
-        )
-        scene_video_negative_prompt = _resolve_scene_video_negative_prompt(
-            payload,
-            scene_contract_for_prompt,
-            workflow_key=final_workflow_key,
-            model_key=resolved_model_key,
+        scene_video_metadata = _resolve_scene_video_metadata(payload, scene_contract_for_prompt)
+        has_gemini_video_metadata = bool(scene_video_metadata.get("valid"))
+        if has_gemini_video_metadata:
+            effective_prompt = str(scene_video_metadata.get("ltx_positive") or "").strip()
+            scene_video_negative_prompt = str(scene_video_metadata.get("ltx_negative") or "").strip() or VIDEO_METADATA_NEGATIVE_FALLBACK
+            prompt_debug = {
+                "videoPromptLength": len(scene_video_prompt),
+                "transitionActionPromptLength": len(str(payload.transitionActionPrompt or "").strip()),
+                "effectivePromptLength": len(effective_prompt),
+                "requestedPromptPreview": _prompt_preview(scene_video_prompt, 500),
+                "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+                "effectivePromptSource": "gemini_video_metadata",
+                "promptBuilderMode": "gemini_video_metadata_guardrail",
+            }
+        else:
+            effective_prompt, prompt_debug = _compose_video_effective_prompt(
+                video_prompt=scene_video_prompt,
+                transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
+                output_format=output_format,
+                requested_duration_sec=generation_duration_sec,
+                scene_human_visual_anchors=scene_human_visual_anchors,
+                scene_type=str(payload.sceneType or "").strip(),
+                shot_type=str(payload.shotType or "").strip(),
+                scene_contract=scene_contract_for_prompt,
+                scene_active_roles=payload.sceneActiveRoles,
+                duet_lock_enabled=payload.duetLockEnabled,
+                duet_identity_contract=payload.duetIdentityContract,
+                director_genre_intent=payload.directorGenreIntent,
+                workflow_key=final_workflow_key,
+                model_key=resolved_model_key,
+                scene_id=scene_id,
+            )
+            scene_video_negative_prompt = _resolve_scene_video_negative_prompt(
+                payload,
+                scene_contract_for_prompt,
+                workflow_key=final_workflow_key,
+                model_key=resolved_model_key,
+            )
+        print(
+            "[CLIP VIDEO PROMPT SOURCE] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "source": "gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder",
+                    "motion_tag": str(scene_video_metadata.get("motion_tag") or ""),
+                    "camera_tag": str(scene_video_metadata.get("camera_tag") or ""),
+                    "finalPositivePromptPreview": _prompt_preview(effective_prompt, 280),
+                    "finalNegativePromptPreview": _prompt_preview(scene_video_negative_prompt, 220),
+                },
+                ensure_ascii=False,
+            )
         )
         print(
             "[CLIP VIDEO NEGATIVE TRACE] "
@@ -15853,24 +15953,54 @@ def clip_video(payload: ClipVideoIn):
     )
 
     scene_human_visual_anchors = [str(item or "").strip() for item in (payload.sceneHumanVisualAnchors or []) if str(item or "").strip()]
-    effective_prompt, prompt_debug = _compose_video_effective_prompt(
-        video_prompt=str(payload.videoPrompt or "").strip(),
-        transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
-        output_format=output_format,
-        requested_duration_sec=payload.requestedDurationSec,
-        scene_human_visual_anchors=scene_human_visual_anchors,
-        scene_type=str(payload.sceneType or "").strip(),
-        shot_type=str(payload.shotType or "").strip(),
-        scene_contract=payload.sceneContract if isinstance(payload.sceneContract, dict) else None,
-        scene_active_roles=payload.sceneActiveRoles,
-        duet_lock_enabled=payload.duetLockEnabled,
-        duet_identity_contract=payload.duetIdentityContract,
-        director_genre_intent=payload.directorGenreIntent,
-        workflow_key=final_workflow_key,
-    )
-    scene_video_negative_prompt = _resolve_scene_video_negative_prompt(
-        payload,
-        payload.sceneContract if isinstance(payload.sceneContract, dict) else {},
+    scene_contract_for_prompt = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+    scene_video_metadata = _resolve_scene_video_metadata(payload, scene_contract_for_prompt)
+    has_gemini_video_metadata = bool(scene_video_metadata.get("valid"))
+    if has_gemini_video_metadata:
+        effective_prompt = str(scene_video_metadata.get("ltx_positive") or "").strip()
+        scene_video_negative_prompt = str(scene_video_metadata.get("ltx_negative") or "").strip() or VIDEO_METADATA_NEGATIVE_FALLBACK
+        prompt_debug = {
+            "videoPromptLength": len(str(payload.videoPrompt or "").strip()),
+            "transitionActionPromptLength": len(str(payload.transitionActionPrompt or "").strip()),
+            "effectivePromptLength": len(effective_prompt),
+            "requestedPromptPreview": _prompt_preview(str(payload.videoPrompt or "").strip(), 500),
+            "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+            "effectivePromptSource": "gemini_video_metadata",
+            "promptBuilderMode": "gemini_video_metadata_guardrail",
+        }
+    else:
+        effective_prompt, prompt_debug = _compose_video_effective_prompt(
+            video_prompt=str(payload.videoPrompt or "").strip(),
+            transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
+            output_format=output_format,
+            requested_duration_sec=payload.requestedDurationSec,
+            scene_human_visual_anchors=scene_human_visual_anchors,
+            scene_type=str(payload.sceneType or "").strip(),
+            shot_type=str(payload.shotType or "").strip(),
+            scene_contract=scene_contract_for_prompt,
+            scene_active_roles=payload.sceneActiveRoles,
+            duet_lock_enabled=payload.duetLockEnabled,
+            duet_identity_contract=payload.duetIdentityContract,
+            director_genre_intent=payload.directorGenreIntent,
+            workflow_key=final_workflow_key,
+        )
+        scene_video_negative_prompt = _resolve_scene_video_negative_prompt(
+            payload,
+            scene_contract_for_prompt,
+        )
+    print(
+        "[CLIP VIDEO PROMPT SOURCE] "
+        + json.dumps(
+            {
+                "sceneId": scene_id,
+                "source": "gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder",
+                "motion_tag": str(scene_video_metadata.get("motion_tag") or ""),
+                "camera_tag": str(scene_video_metadata.get("camera_tag") or ""),
+                "finalPositivePromptPreview": _prompt_preview(effective_prompt, 280),
+                "finalNegativePromptPreview": _prompt_preview(scene_video_negative_prompt, 220),
+            },
+            ensure_ascii=False,
+        )
     )
     if scene_video_negative_prompt:
         prompt_debug["resolvedStrictNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
