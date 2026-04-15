@@ -776,6 +776,10 @@ export function getDefaultNarrativeNodeData() {
     narrativeMode: "cinematic_expand",
     styleProfile: "realistic",
     format: "9:16",
+    routeMixMode: "auto",
+    lipsyncRatio: 0.25,
+    firstLastRatio: 0.25,
+    maxConsecutiveLipsync: 2,
     directorNote: "",
     connectedInputs: {
       audio_in: null,
@@ -896,6 +900,17 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   const format = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
     ? String(state.format).trim()
     : "9:16";
+  const routeMixMode = String(state?.routeMixMode || "auto").trim().toLowerCase() === "custom" ? "custom" : "auto";
+  const lipsyncRatio = Math.max(0, Math.min(1, Number(state?.lipsyncRatio ?? 0.25) || 0));
+  const firstLastRatio = Math.max(0, Math.min(1, Number(state?.firstLastRatio ?? 0.25) || 0));
+  const maxConsecutiveLipsync = Math.max(1, Math.min(6, Number(state?.maxConsecutiveLipsync ?? 2) || 2));
+  const creativeConfig = {
+    route_mix_mode: routeMixMode,
+    lipsync_ratio: Number(lipsyncRatio.toFixed(3)),
+    first_last_ratio: Number(firstLastRatio.toFixed(3)),
+    preferred_routes: ["i2v", "first_last"],
+    max_consecutive_lipsync: maxConsecutiveLipsync,
+  };
 
   const payload = {
     mode: isMusicVideo ? "clip_pipeline" : "oneshot",
@@ -938,7 +953,9 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       contentType: safeContentType,
       format,
       preferAudioOverText,
+      creative_config: creativeConfig,
     },
+    creative_config: creativeConfig,
     connected_context_summary: connectedContextSummary,
     metadata: {
       director_mode: directorMode,
@@ -960,6 +977,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       },
       format,
       narrativeDirectiveSource: narrativeDirective.source,
+      creative_config: creativeConfig,
     },
   };
 
@@ -1127,7 +1145,9 @@ export function buildScenarioStageManualPayload({
       ...(source?.director_controls && typeof source.director_controls === "object" ? source.director_controls : {}),
       contentType: normalizeText(source?.contentType || target?.scenarioMode || basePayload?.director_controls?.contentType) || "music_video",
       format: normalizeText(source?.format || target?.format || basePayload?.director_controls?.format) || "9:16",
+      creative_config: source?.creative_config || source?.director_controls?.creative_config || basePayload?.creative_config || basePayload?.director_controls?.creative_config || {},
     },
+    creative_config: source?.creative_config || basePayload?.creative_config || {},
     contentType: normalizeText(source?.contentType || target?.scenarioMode || basePayload?.director_controls?.contentType) || "music_video",
     format: normalizeText(source?.format || target?.format || basePayload?.director_controls?.format) || "9:16",
     roleTypeByRole: source?.roleTypeByRole && typeof source.roleTypeByRole === "object" ? source.roleTypeByRole : (basePayload?.metadata?.roleTypeByRole || {}),

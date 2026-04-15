@@ -210,6 +210,44 @@ export default function ComfyNarrativeNode({ id, data }) {
               </select>
             </label>
 
+            <section className="clipSB_narrativeSection">
+              <div className="clipSB_brainLabel">Route mix policy</div>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Route mix mode</div>
+                <select
+                  className="clipSB_select clipSB_narrativeSelect"
+                  value={data?.routeMixMode || "auto"}
+                  onChange={(e) => data?.onFieldChange?.(id, { routeMixMode: e.target.value })}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Lipsync ratio: {Number(data?.lipsyncRatio ?? 0.25).toFixed(2)}</div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={Number(data?.lipsyncRatio ?? 0.25)}
+                  onChange={(e) => data?.onFieldChange?.(id, { lipsyncRatio: Number(e.target.value) })}
+                />
+              </label>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Max consecutive lipsync</div>
+                <input
+                  className="clipSB_input"
+                  type="number"
+                  min="1"
+                  max="6"
+                  step="1"
+                  value={Number(data?.maxConsecutiveLipsync ?? 2)}
+                  onChange={(e) => data?.onFieldChange?.(id, { maxConsecutiveLipsync: Number(e.target.value || 2) })}
+                />
+              </label>
+            </section>
+
             {errorMessage ? <div className="clipSB_narrativeEmptyHint" role="alert" style={{ marginTop: 8 }}>{errorMessage}</div> : null}
           </section>
         </div>

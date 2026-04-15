@@ -13,7 +13,7 @@ from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
 
-GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_map_v1_1_strict"
+GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_map_v1_2_phrase_safe"
 GEMINI_SEGMENTATION_MODEL = "gemini-3.1-pro-preview"
 _MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
 
@@ -123,6 +123,14 @@ def _build_prompt(
         "}\n"
         "Rules:\n"
         "- segments must be ordered and contiguous without overlaps/gaps outside tiny tolerance.\n"
+        "- Never round boundaries to whole seconds just because they look neat.\n"
+        "- Use natural sub-second precision; do not bias toward integer timestamps.\n"
+        "- Do not cut a sung phrase before it is acoustically complete.\n"
+        "- Respect final consonants, vocal tail, breath release, and reverb decay before ending a phrase segment.\n"
+        "- A ~0.5s early vocal cut is considered bad segmentation and must be avoided.\n"
+        "- Phrase endings must follow sung completion, not rough text chunk boundaries.\n"
+        "- Prefer musical phrase closure over evenly spaced or visually pretty timing.\n"
+        "- Do not split inside a continuing sung phrase.\n"
         "- 0 <= intensity <= 1.\n"
         "- rhythmic_anchor must be one of: beat, drop, transition, none.\n"
         "- transcript_slice must be literal transcript evidence snippets, never placeholders.\n"

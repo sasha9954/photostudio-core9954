@@ -162,6 +162,7 @@ class ScenarioDirectorControlsIn(BaseModel):
     contentType: str = "music_video"
     format: str = "9:16"
     preferAudioOverText: bool = True
+    creative_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScenarioDirectorGenerateIn(BaseModel):

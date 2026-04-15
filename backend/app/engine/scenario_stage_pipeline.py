@@ -331,6 +331,127 @@ def _resolve_director_mode(raw_mode: Any, *, content_type: str = "") -> str:
     return "story"
 
 
+def _clamp_ratio(value: Any, default: float) -> float:
+    try:
+        return min(1.0, max(0.0, float(value)))
+    except Exception:
+        return float(default)
+
+
+def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
+    row = _safe_dict(raw_config)
+    route_mix_mode = str(row.get("route_mix_mode") or row.get("routeMixMode") or "auto").strip().lower() or "auto"
+    if route_mix_mode not in {"auto", "custom"}:
+        route_mix_mode = "auto"
+    lipsync_ratio = _clamp_ratio(row.get("lipsync_ratio"), 0.25)
+    first_last_ratio = _clamp_ratio(row.get("first_last_ratio"), 0.25)
+    remaining = max(0.0, 1.0 - lipsync_ratio - first_last_ratio)
+    preferred_routes = [str(item).strip().lower() for item in _safe_list(row.get("preferred_routes")) if str(item).strip()]
+    preferred_routes = [route for route in preferred_routes if route in {"i2v", "ia2v", "first_last"}]
+    if not preferred_routes:
+        preferred_routes = ["i2v", "first_last"]
+    try:
+        max_consecutive_lipsync = int(row.get("max_consecutive_lipsync"))
+    except Exception:
+        max_consecutive_lipsync = 2
+    max_consecutive_lipsync = max(1, min(6, max_consecutive_lipsync))
+    return {
+        "route_mix_mode": route_mix_mode,
+        "lipsync_ratio": round(lipsync_ratio, 3),
+        "first_last_ratio": round(first_last_ratio, 3),
+        "i2v_ratio": round(remaining, 3),
+        "preferred_routes": preferred_routes,
+        "max_consecutive_lipsync": max_consecutive_lipsync,
+    }
+
+
+def _compute_route_budget_for_total(total_scenes: int, creative_config: dict[str, Any]) -> dict[str, int]:
+    if total_scenes <= 0:
+        return {"i2v": 0, "ia2v": 0, "first_last": 0}
+    if total_scenes == 1:
+        return {"i2v": 1, "ia2v": 0, "first_last": 0}
+
+    lipsync_ratio = _clamp_ratio(creative_config.get("lipsync_ratio"), 0.25)
+    first_last_ratio = _clamp_ratio(creative_config.get("first_last_ratio"), 0.25)
+    ia2v = int(round(total_scenes * lipsync_ratio))
+    first_last = int(round(total_scenes * first_last_ratio))
+    i2v = total_scenes - ia2v - first_last
+
+    if i2v < 1:
+        deficit = 1 - i2v
+        i2v = 1
+        reducible_fl = min(deficit, max(0, first_last))
+        first_last -= reducible_fl
+        deficit -= reducible_fl
+        if deficit > 0:
+            ia2v = max(0, ia2v - deficit)
+    while ia2v + i2v + first_last < total_scenes:
+        i2v += 1
+    while ia2v + i2v + first_last > total_scenes:
+        if first_last > 0:
+            first_last -= 1
+        elif ia2v > 0:
+            ia2v -= 1
+        else:
+            i2v = max(0, i2v - 1)
+    return {"i2v": i2v, "ia2v": ia2v, "first_last": first_last}
+
+
+def _validate_scene_plan_route_budget(
+    *,
+    package: dict[str, Any],
+    scene_plan: dict[str, Any],
+    diagnostics: dict[str, Any],
+) -> tuple[bool, str, dict[str, Any]]:
+    input_pkg = _safe_dict(package.get("input"))
+    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    scene_rows = [row for row in _safe_list(scene_plan.get("scenes")) if isinstance(row, dict)]
+    route_counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
+    longest_lipsync_streak = 0
+    current_lipsync_streak = 0
+    for row in scene_rows:
+        route = str(row.get("route") or "").strip().lower()
+        if route in route_counts:
+            route_counts[route] += 1
+        if route == "ia2v":
+            current_lipsync_streak += 1
+            longest_lipsync_streak = max(longest_lipsync_streak, current_lipsync_streak)
+        else:
+            current_lipsync_streak = 0
+
+    target_budget = _compute_route_budget_for_total(len(scene_rows), creative_config)
+    max_consecutive = int(creative_config.get("max_consecutive_lipsync") or 2)
+    tolerance = 1 if len(scene_rows) >= 6 else 0
+    errors: list[str] = []
+    for route_name in ("ia2v", "i2v", "first_last"):
+        if abs(route_counts.get(route_name, 0) - target_budget.get(route_name, 0)) > tolerance:
+            errors.append(
+                f"route {route_name} count={route_counts.get(route_name, 0)} target≈{target_budget.get(route_name, 0)}"
+            )
+    if longest_lipsync_streak > max_consecutive:
+        errors.append(f"too many consecutive lipsync scenes: streak={longest_lipsync_streak} max={max_consecutive}")
+    if route_counts.get("first_last", 0) <= 0 and len(scene_rows) >= 4:
+        errors.append("first_last share missing for visual variety")
+
+    mode = str(creative_config.get("route_mix_mode") or "auto")
+    duration_sec = float(input_pkg.get("audio_duration_sec") or 0.0)
+    feedback_prefix = (
+        "short clip default expects mixed route distribution near 25/50/25"
+        if mode == "auto" and duration_sec > 0 and duration_sec <= 45
+        else "route distribution violated creative_config doctrine"
+    )
+    feedback = f"{feedback_prefix}; " + "; ".join(errors) if errors else ""
+    details = {
+        "target_route_mix": target_budget,
+        "actual_route_mix": route_counts,
+        "max_consecutive_lipsync": max_consecutive,
+        "longest_lipsync_streak": longest_lipsync_streak,
+        "route_mix_mode": mode,
+        "creative_config": creative_config,
+    }
+    return (len(errors) == 0), feedback, details
+
+
 def _resolve_audio_semantic_source_type(input_pkg: dict[str, Any]) -> str:
     lyrics_text = str(input_pkg.get("lyrics_text") or "").strip()
     transcript_text = str(input_pkg.get("transcript_text") or "").strip()
@@ -1506,6 +1627,10 @@ def _build_story_core_input_context(
     model_id = _resolve_active_video_model_id(input_pkg)
     i2v_profile = get_video_model_capability_profile(model_id, "i2v")
     audio_dramaturgy = _safe_dict(audio_map.get("audio_dramaturgy"))
+    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    scene_windows = _safe_list(audio_map.get("scene_candidate_windows"))
+    total_scene_windows = len(scene_windows)
+    default_route_budget = _compute_route_budget_for_total(total_scene_windows, creative_config)
     audio_summary = {
         "duration_sec": _to_float(audio_map.get("duration_sec"), 0.0),
         "analysis_mode": str(audio_map.get("analysis_mode") or ""),
@@ -1513,6 +1638,7 @@ def _build_story_core_input_context(
         "energy_curve_summary": str(audio_dramaturgy.get("energy_curve_summary") or ""),
         "dominant_energy": str(audio_dramaturgy.get("dominant_energy") or ""),
         "window_counts": _safe_dict(audio_dramaturgy.get("window_counts")),
+        "scene_candidate_window_count": total_scene_windows,
     }
     director_world_lock_summary = _extract_director_world_lock_summary(input_pkg, story_user_concept)
     connected_role_summary = {
@@ -1526,6 +1652,17 @@ def _build_story_core_input_context(
         "note": str(input_pkg.get("note") or "").strip(),
         "user_concept": story_user_concept,
         "audio_summary": audio_summary,
+        "creative_config": creative_config,
+        "route_mix_doctrine_seed": {
+            "target_route_mix": default_route_budget,
+            "target_route_ratios": {
+                "ia2v": float(creative_config.get("lipsync_ratio") or 0.25),
+                "i2v": float(creative_config.get("i2v_ratio") or 0.5),
+                "first_last": float(creative_config.get("first_last_ratio") or 0.25),
+            },
+            "max_consecutive_lipsync": int(creative_config.get("max_consecutive_lipsync") or 2),
+            "policy_note": "CORE writes doctrine only. SCENES assigns concrete route per segment.",
+        },
         "connected_role_summary": connected_role_summary,
         "compact_refs_manifest": compact_refs_manifest,
         "assigned_roles": _safe_dict(input_pkg.get("assigned_roles_override")),
@@ -1564,6 +1701,13 @@ def _build_story_core_input_context(
 
 def _default_story_core_guidance() -> dict[str, Any]:
     return {
+        "route_mix_doctrine_for_scenes": {
+            "core_scope_only": "doctrine_not_segment_assignment",
+            "short_clip_default_target_ratios": {"ia2v": 0.25, "i2v": 0.5, "first_last": 0.25},
+            "lipsync_candidate_is_permission_not_obligation": True,
+            "avoid_long_consecutive_lipsync_streaks": True,
+            "prioritize_lipsync_for_strong_performance_windows": True,
+        },
         "world_progression_hints": [
             "single coherent world; world/location specifics must come from current text, refs, props, and already established context",
             "preserve identity, world, and style continuity across the full clip",
@@ -1631,6 +1775,8 @@ def _normalize_story_core_guidance(raw_guidance: Any) -> dict[str, Any]:
     prop_guidance = _safe_dict(row.get("prop_guidance"))
     fallback_prop_guidance = _safe_dict(fallback.get("prop_guidance"))
     return {
+        "route_mix_doctrine_for_scenes": _safe_dict(row.get("route_mix_doctrine_for_scenes"))
+        or _safe_dict(fallback.get("route_mix_doctrine_for_scenes")),
         "world_progression_hints": [str(item).strip() for item in _safe_list(row.get("world_progression_hints")) if str(item).strip()]
         or _safe_list(fallback.get("world_progression_hints")),
         "viewer_contrast_rules": [str(item).strip() for item in _safe_list(row.get("viewer_contrast_rules")) if str(item).strip()]
@@ -1770,10 +1916,11 @@ def _build_story_core_prompt(
         "Owner-bound carried/held objects should influence continuity pressure and movement behavior without forced tiny hand choreography.\n"
         "Do not randomly detach owner-bound carried/held objects from their owner unless context explicitly motivates it.\n"
         "Performance peaks must remain grounded in the same realistic world family and must not switch clip logic into concert/pop-video mode unless explicitly requested.\n"
+        "In story_guidance include route_mix_doctrine_for_scenes as global doctrine only (distribution intent, anti-streak limits, priority windows), not per-scene route assignment.\n"
         "Required top-level keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock, story_guidance.\n"
         "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
         "story_guidance must be JSON object with keys:\n"
-        "world_progression_hints, viewer_contrast_rules, unexpected_realistic_beats, prop_guidance, narrative_pressure_rules, world_richness_rules.\n"
+        "route_mix_doctrine_for_scenes, world_progression_hints, viewer_contrast_rules, unexpected_realistic_beats, prop_guidance, narrative_pressure_rules, world_richness_rules.\n"
         "Do NOT output scene rows, per-scene actions, or explicit scene-by-scene choreography in story_core.\n"
         f"{mode_instructions}\n"
         f"story_core_mode={mode}\n\n"
@@ -1819,6 +1966,11 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             content_type=str(_safe_dict(req.get("director_controls")).get("contentType") or "music_video"),
         ),
         "format": str(_safe_dict(req.get("director_controls")).get("format") or req.get("format") or "9:16"),
+        "creative_config": _normalize_creative_config(
+            req.get("creative_config")
+            or _safe_dict(req.get("director_controls")).get("creative_config")
+            or _safe_dict(req.get("metadata")).get("creative_config")
+        ),
         "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
         "refs_by_role": _safe_dict(req.get("refsByRole")),
         "selected_refs": {
@@ -4958,6 +5110,13 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["active_route_capability_mode"] = str(diagnostics.get("active_route_capability_mode") or "")
     diagnostics["scene_plan_capability_guard_applied"] = False
     diagnostics["scene_plan_validation_error"] = ""
+    diagnostics["scene_plan_route_budget_retry_used"] = False
+    diagnostics["scene_plan_route_budget_feedback"] = ""
+    diagnostics["scene_plan_route_budget_ok"] = True
+    diagnostics["scene_plan_route_budget_target"] = {}
+    diagnostics["scene_plan_route_budget_actual"] = {}
+    diagnostics["scene_plan_max_consecutive_lipsync"] = 0
+    diagnostics["scene_plan_longest_lipsync_streak"] = 0
     diagnostics["validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
@@ -4968,6 +5127,36 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         package=package,
     )
     scene_plan = _safe_dict(result.get("scene_plan"))
+    route_budget_ok, route_budget_feedback, route_budget_meta = _validate_scene_plan_route_budget(
+        package=package,
+        scene_plan=scene_plan,
+        diagnostics=diagnostics,
+    )
+    if not route_budget_ok:
+        diagnostics["scene_plan_route_budget_retry_used"] = True
+        diagnostics["scene_plan_route_budget_feedback"] = route_budget_feedback
+        _append_diag_event(package, f"scene_plan route budget validation failed, retrying once: {route_budget_feedback}", stage_id="scene_plan")
+        retry_result = build_gemini_scene_plan(
+            api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+            package=package,
+            validation_feedback=route_budget_feedback,
+        )
+        retry_scene_plan = _safe_dict(retry_result.get("scene_plan"))
+        retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
+            package=package,
+            scene_plan=retry_scene_plan,
+            diagnostics=diagnostics,
+        )
+        result = retry_result
+        scene_plan = retry_scene_plan
+        route_budget_ok = retry_ok
+        route_budget_feedback = retry_feedback
+        route_budget_meta = retry_meta
+        if not route_budget_ok:
+            result["ok"] = False
+            result["validation_error"] = route_budget_feedback or "scene_plan_route_budget_validation_failed"
+            result["error"] = result.get("error") or "scene_plan_route_budget_validation_failed"
+
     package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
 
     scene_diag = _safe_dict(result.get("diagnostics"))
@@ -5007,6 +5196,13 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         scene_diag.get("capability_rules_source_version") or diagnostics.get("capability_rules_source_version") or ""
     )
     diagnostics["scene_plan_validation_error"] = str(result.get("validation_error") or "")
+    diagnostics["scene_plan_route_budget_ok"] = bool(route_budget_ok)
+    diagnostics["scene_plan_route_budget_target"] = _safe_dict(route_budget_meta.get("target_route_mix"))
+    diagnostics["scene_plan_route_budget_actual"] = _safe_dict(route_budget_meta.get("actual_route_mix"))
+    diagnostics["scene_plan_max_consecutive_lipsync"] = int(route_budget_meta.get("max_consecutive_lipsync") or 0)
+    diagnostics["scene_plan_longest_lipsync_streak"] = int(route_budget_meta.get("longest_lipsync_streak") or 0)
+    if not route_budget_ok:
+        diagnostics["scene_plan_validation_error"] = route_budget_feedback or diagnostics["scene_plan_validation_error"]
     diagnostics["validation_error"] = str(diagnostics.get("scene_plan_validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
     diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("scenes")))

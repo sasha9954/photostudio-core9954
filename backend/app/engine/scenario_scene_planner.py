@@ -124,6 +124,36 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _clamp_ratio(value: Any, default: float) -> float:
+    try:
+        return min(1.0, max(0.0, float(value)))
+    except Exception:
+        return float(default)
+
+
+def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
+    row = _safe_dict(raw_config)
+    route_mix_mode = str(row.get("route_mix_mode") or row.get("routeMixMode") or "auto").strip().lower() or "auto"
+    if route_mix_mode not in {"auto", "custom"}:
+        route_mix_mode = "auto"
+    lipsync_ratio = _clamp_ratio(row.get("lipsync_ratio"), 0.25)
+    first_last_ratio = _clamp_ratio(row.get("first_last_ratio"), 0.25)
+    i2v_ratio = max(0.0, 1.0 - lipsync_ratio - first_last_ratio)
+    try:
+        max_consecutive_lipsync = int(row.get("max_consecutive_lipsync"))
+    except Exception:
+        max_consecutive_lipsync = 2
+    max_consecutive_lipsync = max(1, min(6, max_consecutive_lipsync))
+    return {
+        "route_mix_mode": route_mix_mode,
+        "lipsync_ratio": round(lipsync_ratio, 3),
+        "first_last_ratio": round(first_last_ratio, 3),
+        "i2v_ratio": round(i2v_ratio, 3),
+        "max_consecutive_lipsync": max_consecutive_lipsync,
+        "preferred_routes": [str(item).strip().lower() for item in _safe_list(row.get("preferred_routes")) if str(item).strip()],
+    }
+
+
 def _compact_scene_row(row: dict[str, Any]) -> dict[str, Any]:
     compact = {
         "scene_id": str(row.get("scene_id") or ""),
@@ -379,6 +409,8 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     ownership_binding_inventory = _build_ref_binding_inventory(refs_inventory)
     scene_windows = _build_scene_windows(audio_map)
+    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    story_guidance = _safe_dict(_safe_dict(story_core.get("story_guidance")).get("route_mix_doctrine_for_scenes"))
     world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
     model_id = _resolve_active_video_model_id(package)
     route_capability_profiles = {
@@ -403,6 +435,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "world_lock": _safe_dict(story_core.get("world_lock")),
             "style_lock": _safe_dict(story_core.get("style_lock")),
             "story_guidance": _safe_dict(story_core.get("story_guidance")),
+            "route_mix_doctrine_for_scenes": story_guidance,
         },
         "audio_map": {
             "sections": _safe_list(audio_map.get("sections")),
@@ -426,6 +459,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         "clip_scene_policy": {
             "target_route_mix_for_8_scenes": {"i2v": 4, "ia2v": 2, "first_last": 2},
             "target_route_mix_is_soft_heuristic_only": True,
+            "creative_config": creative_config,
             "ia2v_definition": "emotion-first performance shot; readable face/mouth; smooth camera; restrained motion",
             "i2v_definition": "baseline clip route for observation, transit, environment and connective montage scenes",
             "first_last_definition": "explicit state transition A->B for reveal/turn/payoff/release/callback scenes",
@@ -529,13 +563,19 @@ def _apply_scene_contract_constraints(
     return out, warnings
 
 
-def _build_prompt(context: dict[str, Any]) -> str:
+def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> str:
     canon = _safe_dict(context.get("video_capability_canon"))
     route_profiles = _safe_dict(canon.get("route_profiles"))
     i2v_profile = _safe_dict(_safe_dict(route_profiles.get("i2v")).get("profile"))
     i2v_safe = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("verified_safe")) if str(v).strip()])
     i2v_experimental = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("experimental")) if str(v).strip()])
     i2v_blocked = ", ".join([str(v).strip() for v in _safe_list(i2v_profile.get("blocked")) if str(v).strip()])
+    feedback_block = ""
+    if validation_feedback:
+        feedback_block = (
+            "PREVIOUS OUTPUT FAILED ROUTE-BUDGET VALIDATION.\n"
+            f"Fix exactly: {validation_feedback}\n"
+        )
     return (
         "You are SCENE PLAN stage for scenario pipeline.\\n"
         "Return STRICT JSON only. No markdown.\\n"
@@ -548,6 +588,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Do not add, merge, split, or invent extra scenes.\\n"
         "Return exactly one scene row per provided fixed scene window.\\n"
         "scene_id, t0, t1, duration_sec must remain aligned to provided windows.\\n"
+        "is_lip_sync_candidate=true means eligible, not mandatory ia2v selection.\\n"
         "Keep route mix intelligent (not random), preserve role/world continuity, and keep rhythm/emotional variation.\\n"
         "For 8 scenes, 4 i2v / 2 ia2v / 2 first_last is a soft heuristic only; audio behavior + continuity feasibility can override it.\\n"
         "Do NOT assign ia2v to every performance scene. Do NOT flatten all scenes into one route.\\n"
@@ -587,6 +628,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "For first_last scenes, include first_last_mode from allowed taxonomy: push_in_emotional, pull_back_release, small_side_arc, reveal_face_from_shadow, foreground_parallax, camera_settle, visibility_reveal.\\n"
         "Prefer continuity-safe first_last modes (push_in_emotional / pull_back_release / reveal_face_from_shadow / camera_settle / visibility_reveal / safe foreground_parallax). Keep small_side_arc rare, low-priority, and only when explicitly justified.\\n"
         "Low energy: held/restrained/observational/afterimage feel. Medium: build movement and pressure. High: concentrated performance intensity. Release tail: settle instead of new travel invention.\\n\\n"
+        f"{feedback_block}"
         "Return EXACT contract keys:\\n"
         "{\\n"
         '  \"plan_version\": \"scene_plan_v1\",\\n'
@@ -1492,7 +1534,7 @@ def _normalize_scene_plan(
     return plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag
 
 
-def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
+def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation_feedback: str = "") -> dict[str, Any]:
     context, aux = _build_scene_planning_context(package)
     scene_windows = _safe_list(aux.get("scene_windows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
@@ -1612,7 +1654,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             "diagnostics": diagnostics,
         }
 
-    prompt = _build_prompt(context)
+    prompt = _build_prompt(context, validation_feedback=validation_feedback)
     try:
         response = post_generate_content(
             api_key=str(api_key or "").strip(),
