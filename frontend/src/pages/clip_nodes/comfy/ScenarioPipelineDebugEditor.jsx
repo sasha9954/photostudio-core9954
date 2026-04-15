@@ -448,6 +448,24 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(finalMeta?.director_mode || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(finalMeta?.story_truth_source || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(finalMeta?.audio_truth_scope || "—")}</strong></div>
+        {Object.prototype.hasOwnProperty.call(allDiagnostics || {}, "finalize_used_legacy_scene_roles_fallback") ? (
+          <div className="clipSB_storyboardKv">
+            <span>finalize_used_legacy_scene_roles_fallback</span>
+            <strong>{String(allDiagnostics?.finalize_used_legacy_scene_roles_fallback)}</strong>
+          </div>
+        ) : null}
+        {Object.prototype.hasOwnProperty.call(allDiagnostics || {}, "finalize_scene_id_segment_id_mismatch_count") ? (
+          <div className="clipSB_storyboardKv">
+            <span>finalize_scene_id_segment_id_mismatch_count</span>
+            <strong>{String(allDiagnostics?.finalize_scene_id_segment_id_mismatch_count)}</strong>
+          </div>
+        ) : null}
+        {Object.prototype.hasOwnProperty.call(allDiagnostics || {}, "finalize_has_both_scene_casting_and_scene_roles") ? (
+          <div className="clipSB_storyboardKv">
+            <span>finalize_has_both_scene_casting_and_scene_roles</span>
+            <strong>{String(allDiagnostics?.finalize_has_both_scene_casting_and_scene_roles)}</strong>
+          </div>
+        ) : null}
         <pre className="clipSB_pre">{toJson(finalStoryboard?.scenes || [])}</pre>
       </div>
     ),

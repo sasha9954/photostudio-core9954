@@ -105,6 +105,8 @@ def _build_segment_rows(audio_map: dict[str, Any], story_core: dict[str, Any]) -
         "fell_back_to_legacy_audio_text_fields": False,
         "fell_back_to_legacy_core_fields": False,
         "missing_core_meaning_rows": 0,
+        "normalized_segment_rows_error": "",
+        "normalized_segment_rows_missing_core_meaning": "",
     }
 
     if not audio_ids or not core_ids:
@@ -158,6 +160,8 @@ def _build_segment_rows(audio_map: dict[str, Any], story_core: dict[str, Any]) -
             }
         )
     if diagnostics["missing_core_meaning_rows"] > 0:
+        diagnostics["normalized_segment_rows_error"] = "missing_core_meaning_rows"
+        diagnostics["normalized_segment_rows_missing_core_meaning"] = "mapped_to_roles_casting_gap"
         return [], [], ROLES_CASTING_GAP, diagnostics
     return segments, audio_ids, "", diagnostics
 
