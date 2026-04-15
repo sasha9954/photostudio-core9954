@@ -4500,7 +4500,15 @@ def _summarize_audio_map_v11(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _audio_map_v11_to_stage_payload(payload: dict[str, Any], *, duration_sec: float, analysis_mode: str) -> dict[str, Any]:
+def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any], *, duration_sec: float, analysis_mode: str) -> dict[str, Any]:
+    """
+    Build temporary legacy compatibility fields from AUDIO v1.1 segments.
+
+    Canonical AUDIO source of truth is `segments[]` (Gemini-authored). Derived fields
+    (`sections`, `phrase_units`, `scene_candidate_windows`, `candidate_cut_points_sec`)
+    exist only as a deprecated compatibility bridge for downstream consumers that have
+    not migrated to direct `segments[]` consumption yet.
+    """
     segments = [item for item in _safe_list(payload.get("segments")) if isinstance(item, dict)]
     phrase_units: list[dict[str, Any]] = []
     scene_candidate_windows: list[dict[str, Any]] = []
@@ -4514,6 +4522,8 @@ def _audio_map_v11_to_stage_payload(payload: dict[str, Any], *, duration_sec: fl
         text = str(seg.get("transcript_slice") or "").strip()
         intensity = _to_float(seg.get("intensity"), 0.0)
         rhythmic_anchor = str(seg.get("rhythmic_anchor") or "none").strip().lower() or "none"
+        if rhythmic_anchor not in {"beat", "drop", "transition", "none"}:
+            rhythmic_anchor = "none"
         energy = "high" if intensity >= 0.67 else ("medium" if intensity >= 0.33 else "low")
         phrase_units.append(
             {
@@ -4587,22 +4597,22 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     diagnostics["audio_map_source_audio_url"] = audio_url
     diagnostics["audio_map_used_model"] = ""
-    diagnostics["audio_map_analysis_mode"] = "timing_heuristics_v1"
+    diagnostics["audio_map_analysis_mode"] = "audio_map_v1_1_strict"
     diagnostics["audio_map_used_fallback"] = False
-    diagnostics["audio_map_phrase_mode"] = "audio_dynamics_v2"
-    diagnostics["audio_map_alignment_source"] = ""
-    diagnostics["audio_map_alignment_backend"] = ""
-    diagnostics["audio_map_alignment_attempted"] = False
-    diagnostics["audio_map_alignment_unavailable_reason"] = ""
-    diagnostics["audio_map_alignment_error_detail"] = ""
+    diagnostics["audio_map_phrase_mode"] = "audio_map_v1_1_strict"
     diagnostics["audio_map_segmentation_backend"] = "gemini"
     diagnostics["audio_map_segmentation_used_fallback"] = False
     diagnostics["audio_map_segmentation_validation_error"] = ""
+    diagnostics["audio_map_segmentation_validation_errors"] = []
     diagnostics["audio_map_segmentation_prompt_version"] = ""
     diagnostics["audio_map_segmentation_error"] = ""
     diagnostics["audio_map_segmentation_error_detail"] = ""
     diagnostics["audio_map_segmentation_payload_summary"] = {}
     diagnostics["audio_map_segmentation_normalized_summary"] = {}
+    diagnostics["audio_map_segmentation_retry_used"] = False
+    diagnostics["audio_map_segmentation_retry_feedback"] = ""
+    diagnostics["audio_map_segmentation_last_error_code"] = ""
+    diagnostics["audio_map_segmentation_last_errors"] = []
     diagnostics["audio_segmentation_source_mode"] = "none"
     diagnostics["audio_segmentation_local_path_found"] = False
     diagnostics["audio_segmentation_inline_attempted"] = False
@@ -4612,10 +4622,15 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_stage_branch"] = ""
     diagnostics["audio_map_primary_fallback_reason"] = ""
     diagnostics["audio_map_dynamics_error"] = ""
-    diagnostics["audio_map_primary_source"] = "fallback"
-    diagnostics["audio_map_model_led_segmentation"] = False
+    diagnostics["audio_map_primary_source"] = "gemini"
+    diagnostics["audio_map_model_led_segmentation"] = True
     diagnostics["audio_map_validation_flags"] = []
-    diagnostics["audio_map_backend_repair_applied"] = False
+    diagnostics["audio_map_source_of_truth"] = "segments_v1_1"
+    diagnostics["audio_map_legacy_compat_bridge"] = True
+    diagnostics["audio_map_legacy_scene_slots_derived"] = False
+    diagnostics["audio_map_legacy_scene_slots_deprecated"] = True
+    diagnostics["audio_map_gap_sum_sec"] = 0.0
+    diagnostics["audio_map_overlap_sum_sec"] = 0.0
     diagnostics["phrase_near_4_sec_count"] = 0
     diagnostics["phrase_near_4_sec_ratio"] = 0.0
     diagnostics["equal_phrase_duration_adjacent_pairs"] = 0
@@ -4666,7 +4681,8 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     def _validation_feedback(code: str, errors: list[str]) -> str:
         detail = "; ".join([str(item) for item in errors[:6]])
-        return f"{code}: {detail}"[:1500]
+        prefix = "Hard boundary violation. " if code == "AUDIO_PLOT_LEAKAGE" else ""
+        return f"{prefix}{code}: {detail}"[:1500]
 
     strict_result = None
     last_error_code = "AUDIO_SCHEMA_INVALID"
@@ -4701,17 +4717,26 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 last_error_code = "AUDIO_SCHEMA_INVALID"
                 last_errors = [str(gemini_result.get("error") or "gemini_generation_failed")]
                 validation_feedback = _validation_feedback(last_error_code, last_errors)
+                diagnostics["audio_map_segmentation_last_error_code"] = last_error_code
+                diagnostics["audio_map_segmentation_last_errors"] = last_errors
+                diagnostics["audio_map_segmentation_retry_feedback"] = validation_feedback
             else:
                 gemini_payload = _safe_dict(gemini_result.get("payload"))
                 strict_result = validate_audio_map_v11(gemini_payload, audio_duration_sec=duration_sec)
                 diagnostics["audio_map_segmentation_normalized_summary"] = _summarize_audio_map_v11(strict_result.normalized or gemini_payload)
                 diagnostics["audio_map_segmentation_validation_error"] = strict_result.error_code if not strict_result.ok else ""
                 diagnostics["audio_map_segmentation_validation_errors"] = strict_result.errors
+                diagnostics["audio_map_segmentation_last_error_code"] = strict_result.error_code if not strict_result.ok else ""
+                diagnostics["audio_map_segmentation_last_errors"] = strict_result.errors if not strict_result.ok else []
                 if strict_result.ok:
+                    normalized_diag = _safe_dict(strict_result.normalized.get("diagnostics")) if isinstance(strict_result.normalized, dict) else {}
+                    diagnostics["audio_map_gap_sum_sec"] = _to_float(normalized_diag.get("gap_sum_sec"), 0.0)
+                    diagnostics["audio_map_overlap_sum_sec"] = _to_float(normalized_diag.get("overlap_sum_sec"), 0.0)
                     break
                 last_error_code = strict_result.error_code
                 last_errors = strict_result.errors
                 validation_feedback = _validation_feedback(last_error_code, last_errors)
+                diagnostics["audio_map_segmentation_retry_feedback"] = validation_feedback
 
             if attempt == 0:
                 retry_used = True
@@ -4723,7 +4748,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         if not strict_result or not strict_result.ok:
             raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
 
-        audio_map = _audio_map_v11_to_stage_payload(
+        audio_map = _build_legacy_compat_audio_payload_from_segments_v11(
             strict_result.normalized,
             duration_sec=duration_sec,
             analysis_mode="audio_map_v1_1_strict",
@@ -4753,7 +4778,21 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         analysis=raw_analysis,
         duration_sec=duration_sec,
     )
+    # Deprecated compatibility bridge: downstream should migrate to direct segments[] usage.
+    for slot in scene_slots:
+        if isinstance(slot, dict):
+            slot.setdefault("legacy_derived", True)
+            slot.setdefault("deprecated_bridge", True)
+            slot.setdefault("canonical_source", "segments_v1_1")
     audio_map["scene_slots"] = scene_slots
+    audio_map["audio_map_source_of_truth"] = "segments_v1_1"
+    audio_map["audio_map_legacy_compat_bridge"] = True
+    audio_map["audio_map_legacy_scene_slots_derived"] = True
+    audio_map["audio_map_legacy_scene_slots_deprecated"] = True
+    audio_map["audio_map_legacy_bridge_note"] = (
+        "Derived fields (sections/phrase_units/scene_candidate_windows/scene_slots) are deprecated compatibility bridge; "
+        "segments[] is canonical source of truth."
+    )
     audio_map.setdefault("audio_map_alignment_source", "")
     audio_map.setdefault(
         "cut_policy",
@@ -4780,7 +4819,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_map["audio_map_primary_source"] = "gemini"
     audio_map["audio_map_model_led_segmentation"] = True
     audio_map["audio_map_validation_flags"] = validation_flags
-    audio_map["audio_map_backend_repair_applied"] = bool(diagnostics.get("audio_map_backend_repair_applied"))
+    audio_map["audio_map_backend_repair_applied"] = False
     audio_map["audio_map_music_signal_mode"] = music_signal_mode
     audio_map["audio_map_dynamics_available"] = dynamics_available
 
@@ -4794,19 +4833,20 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_validation_flags"] = validation_flags
     diagnostics["audio_map_primary_source"] = "gemini"
     diagnostics["audio_map_model_led_segmentation"] = True
-    diagnostics["audio_map_backend_repair_applied"] = bool(diagnostics.get("audio_map_backend_repair_applied"))
+    diagnostics["audio_map_backend_repair_applied"] = False
     diagnostics["audio_map_phrase_mode"] = str(audio_map.get("analysis_mode") or "audio_map_v1_1_strict")
     diagnostics["transcript_available"] = bool(audio_map.get("transcript_available"))
     diagnostics["word_timestamp_count"] = 0
     diagnostics["phrase_unit_count"] = len(_safe_list(audio_map.get("phrase_units")))
     diagnostics["scene_candidate_count"] = len(_safe_list(audio_map.get("scene_candidate_windows")))
     diagnostics["scene_slot_count"] = len(scene_slots)
+    diagnostics["audio_map_source_of_truth"] = "segments_v1_1"
+    diagnostics["audio_map_legacy_compat_bridge"] = True
+    diagnostics["audio_map_legacy_scene_slots_derived"] = True
+    diagnostics["audio_map_legacy_scene_slots_deprecated"] = True
+    diagnostics["audio_map_legacy_bridge_note"] = str(audio_map.get("audio_map_legacy_bridge_note") or "")
     diagnostics.update(_safe_dict(scene_slot_diag))
-    diagnostics["audio_map_alignment_source"] = str(audio_map.get("audio_map_alignment_source") or "")
-    diagnostics["audio_map_alignment_backend"] = str(diagnostics.get("audio_map_alignment_backend") or "")
-    diagnostics["audio_map_alignment_attempted"] = bool(diagnostics.get("audio_map_alignment_attempted"))
-    diagnostics["audio_map_alignment_unavailable_reason"] = str(diagnostics.get("audio_map_alignment_unavailable_reason") or "")
-    diagnostics["audio_map_alignment_error_detail"] = str(diagnostics.get("audio_map_alignment_error_detail") or "")
+    diagnostics["audio_map_alignment_source"] = str(audio_map.get("audio_map_alignment_source") or "gemini_audio_map_v1_1")
     diagnostics.update(grid_metrics)
     diagnostics["audio_map_music_signal_mode"] = music_signal_mode
     diagnostics["audio_map_dynamics_available"] = dynamics_available

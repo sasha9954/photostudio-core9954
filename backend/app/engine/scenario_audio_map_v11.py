@@ -105,8 +105,8 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
     normalized = model.model_dump(mode="python")
     segments = model.segments
     duration = max(0.0, float(audio_duration_sec or 0.0))
-    gap_tolerance = 0.35
-    boundary_tolerance = 0.35
+    gap_tolerance = 0.12
+    boundary_tolerance = 0.12
     overlap_tolerance = 0.001
     boundary_lock_tolerance = 0.08
 
@@ -114,6 +114,8 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
         return AudioMapValidationResult(False, ERROR_AUDIO_EMPTY_MAP, "segments are required", ["segments empty"], normalized)
 
     prev_t1: float | None = None
+    gap_sum_sec = 0.0
+    overlap_sum_sec = 0.0
     for idx, seg in enumerate(segments):
         if seg.t0 < 0.0 or seg.t1 < 0.0:
             errors.append(_fmt(idx, "negative timestamps are forbidden"))
@@ -123,8 +125,11 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
             errors.append(_fmt(idx, "transcript_slice placeholder/empty is forbidden"))
         if prev_t1 is not None:
             if seg.t0 + overlap_tolerance < prev_t1:
+                overlap_sum_sec += max(0.0, prev_t1 - seg.t0)
                 return AudioMapValidationResult(False, ERROR_AUDIO_OVERLAP, "segment overlap detected", [_fmt(idx, f"overlap with prev ending at {prev_t1:.3f}")], normalized)
             gap = seg.t0 - prev_t1
+            if gap > 0.0:
+                gap_sum_sec += gap
             if gap > gap_tolerance:
                 return AudioMapValidationResult(False, ERROR_AUDIO_GAP, "segment gap exceeds tolerance", [_fmt(idx, f"gap={gap:.3f}s")], normalized)
         prev_t1 = seg.t1
@@ -167,5 +172,10 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
             leakage_errors.append(_fmt(idx, f"plot leakage vocabulary detected: {seg.transcript_slice[:120]!r}"))
     if leakage_errors:
         return AudioMapValidationResult(False, ERROR_AUDIO_PLOT_LEAKAGE, "audio payload leaked scene/plot vocabulary", leakage_errors, normalized)
+
+    normalized_diag = normalized.setdefault("diagnostics", {}) if isinstance(normalized, dict) else {}
+    if isinstance(normalized_diag, dict):
+        normalized_diag["gap_sum_sec"] = round(gap_sum_sec, 4)
+        normalized_diag["overlap_sum_sec"] = round(overlap_sum_sec, 4)
 
     return AudioMapValidationResult(True, "", "", [], normalized)
