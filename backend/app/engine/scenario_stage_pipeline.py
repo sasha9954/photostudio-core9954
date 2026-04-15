@@ -1960,6 +1960,15 @@ def _normalize_story_core_guidance(raw_guidance: Any) -> dict[str, Any]:
 
 
 def _build_core_validation_feedback(code: str, errors: list[str]) -> str:
+    if code == CORE_ID_MISMATCH:
+        details = "; ".join([str(item) for item in errors[:6]])
+        return (
+            "CORE_ID_MISMATCH: ID renaming is forbidden. Keep AUDIO segment_id values immutable and verbatim. "
+            "Copy segment_id exactly from audio_map.segments[] in the same order. "
+            "Do not rename/normalize/shorten/re-index/regenerate IDs. "
+            "Do not convert seg_01 -> seg_0. Preserve zero padding exactly. "
+            f"Mismatch details: {details}"
+        )[:1400]
     details = "; ".join([str(item) for item in errors[:6]])
     return f"{code}: {details}"[:1400]
 
@@ -2025,6 +2034,14 @@ def _validate_story_core_v11_payload(
             mismatch_errors.append(f"extra_segment_ids:{extra[:8]}")
         if ordering_conflict:
             mismatch_errors.append("segment_order_conflict")
+        expected_numeric = [re.sub(r"\D+", "", seg_id) for seg_id in expected_ids]
+        actual_numeric = [re.sub(r"\D+", "", seg_id) for seg_id in actual_ids]
+        if (
+            len(expected_ids) == len(actual_ids)
+            and expected_numeric == actual_numeric
+            and expected_ids != actual_ids
+        ):
+            mismatch_errors.append("id_mismatch_kind:renamed_segment_ids")
         return False, CORE_ID_MISMATCH, mismatch_errors or ["segment_id_1_to_1_mismatch"]
 
     route_tokens = ("i2v", "ia2v", "first_last")
@@ -2145,7 +2162,12 @@ def _build_story_core_prompt(
         "You are STORY CORE v1.1 stage.\n"
         "Return STRICT JSON only. No markdown.\n"
         "AUDIO canonical source for CORE is audio_map.segments[] only.\n"
-        "Use segment_id as canonical key across output.\n"
+        "HARD CONTRACT: segment_id from AUDIO is immutable.\n"
+        "Use the provided segment_id values exactly as given (verbatim copy from AUDIO).\n"
+        "Do not rename, normalize, shorten, re-index, regenerate, or synthesize segment IDs.\n"
+        "Do not convert to zero-based IDs or alter zero padding (seg_01 must remain seg_01; seg_0 is invalid).\n"
+        "narrative_segments[] must preserve exact segment_id values and exact order from audio_map.segments[].\n"
+        "Any new/generated/reformatted segment_id is invalid.\n"
         "CORE scope = doctrine + narrative meaning per segment.\n"
         "Forbidden at CORE: roles planning, scene rows, choreography, camera, motion, framing, route assignment, prompt writing, renderer/delivery fields.\n"
         "Do not output t0/t1 or timing edits; never merge/delete/reorder segments.\n"
@@ -2882,6 +2904,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_retry_feedback"] = ""
     diagnostics["story_core_last_error_code"] = ""
     diagnostics["story_core_hard_fail"] = False
+    diagnostics["story_core_id_mismatch_kind"] = ""
     diagnostics["story_core_audio_canonical_source"] = "audio_map.segments[]"
     diagnostics["story_core_legacy_fields_non_canonical"] = ["scene_slots", "phrase_units", "scene_candidate_windows"]
     diagnostics["story_core_audio_segments_source"] = ""
@@ -2994,6 +3017,12 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["story_core_validation_errors"] = validation_errors
                 diagnostics["story_core_retry_used"] = retry_used
                 diagnostics["story_core_last_error_code"] = error_code if not ok else ""
+                diagnostics["story_core_id_mismatch_kind"] = ""
+                if not ok and error_code == CORE_ID_MISMATCH:
+                    for validation_error in validation_errors:
+                        if str(validation_error).startswith("id_mismatch_kind:"):
+                            diagnostics["story_core_id_mismatch_kind"] = str(validation_error).split(":", 1)[1].strip()
+                            break
                 diagnostics["story_core_audio_canonical_source"] = "audio_map.segments[]"
                 diagnostics["story_core_legacy_fields_non_canonical"] = ["scene_slots", "phrase_units", "scene_candidate_windows"]
                 diagnostics["story_core_audio_segments_source"] = core_segments_source
