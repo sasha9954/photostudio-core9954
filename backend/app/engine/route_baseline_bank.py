@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 ROUTE_BASELINE_BANK_VERSION = "1.1"
@@ -96,4 +97,4 @@ _ROUTE_BASELINE_BANK: dict[str, dict[str, Any]] = {
 
 
 def get_route_baseline_bank() -> dict[str, dict[str, Any]]:
-    return {key: dict(value) for key, value in _ROUTE_BASELINE_BANK.items()}
+    return copy.deepcopy(_ROUTE_BASELINE_BANK)
