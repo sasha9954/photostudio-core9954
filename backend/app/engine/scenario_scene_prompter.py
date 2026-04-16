@@ -15,7 +15,7 @@ from app.engine.video_capability_canon import (
     get_video_model_capability_profile,
 )
 
-SCENE_PROMPTS_PROMPT_VERSION = "scene_prompts_v1"
+SCENE_PROMPTS_PROMPT_VERSION = "scene_prompts_v1.1"
 ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
 
 _GLOBAL_NEGATIVE_PROMPT = (
@@ -2299,3 +2299,430 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             "used_fallback": True,
             "diagnostics": diagnostics,
         }
+
+PROMPTS_ERROR_CODES = {
+    "PROMPTS_SCHEMA_INVALID",
+    "PROMPTS_SEGMENT_ID_MISMATCH",
+    "PROMPTS_ROUTE_MUTATION",
+    "PROMPTS_ROLE_OMISSION",
+    "PROMPTS_IDENTITY_DRIFT",
+    "PROMPTS_WORLD_DRIFT",
+    "PROMPTS_TECHNICAL_TAGGING",
+    "PROMPTS_QUALITY_BUZZWORDS",
+    "PROMPTS_CAMERA_LEAKAGE",
+    "PROMPTS_ROUTE_DELIVERY_LEAKAGE",
+    "PROMPTS_MISSING_TRANSITION_DESCRIPTION",
+}
+
+_TECHNICAL_TAG_PATTERNS = (
+    "fps",
+    "seed",
+    "renderer",
+    "workflow",
+    "model_id",
+    "ltx",
+    "lens",
+    "iso",
+    "shutter",
+)
+_QUALITY_BUZZWORDS = (
+    "8k",
+    "ultra hd",
+    "masterpiece",
+    "best quality",
+    "cinematic quality",
+)
+_CAMERA_LEAK_PATTERNS = ("camera movement", "dolly", "gimbal", "crane", "rack focus")
+_ROUTE_DELIVERY_PATTERNS = ("route payload", "delivery payload", "api call", "json rpc")
+
+
+def _scene_plan_storyboard(scene_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    storyboard = _safe_list(scene_plan.get("storyboard"))
+    if storyboard:
+        return [_safe_dict(row) for row in storyboard]
+    return [_safe_dict(row) for row in _safe_list(scene_plan.get("scenes"))]
+
+
+def _index_by_segment(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        segment_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
+        if segment_id:
+            out[segment_id] = row
+    return out
+
+
+def _build_prompt_rows(package: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    scene_plan = _safe_dict(package.get("scene_plan"))
+    story_core = _safe_dict(package.get("story_core"))
+    audio_map = _safe_dict(package.get("audio_map"))
+    role_plan = _safe_dict(package.get("role_plan"))
+
+    storyboard = _scene_plan_storyboard(scene_plan)
+    audio_by_segment = _index_by_segment([_safe_dict(row) for row in _safe_list(audio_map.get("segments"))])
+    narrative_by_segment = _index_by_segment([_safe_dict(row) for row in _safe_list(story_core.get("narrative_segments"))])
+    role_casting_by_segment = _index_by_segment([_safe_dict(row) for row in _safe_list(role_plan.get("scene_casting"))])
+
+    rows: list[dict[str, Any]] = []
+    for idx, scene_row in enumerate(storyboard, start=1):
+        segment_id = str(scene_row.get("segment_id") or scene_row.get("scene_id") or f"seg_{idx}").strip()
+        route = str(scene_row.get("route") or "i2v").strip().lower()
+        role_row = _safe_dict(role_casting_by_segment.get(segment_id))
+        audio_row = _safe_dict(audio_by_segment.get(segment_id))
+        narrative_row = _safe_dict(narrative_by_segment.get(segment_id))
+        composition = _safe_dict(scene_row.get("composition"))
+        visual_motion = _safe_dict(scene_row.get("visual_motion"))
+
+        rows.append(
+            {
+                "segment_id": segment_id,
+                "route": route,
+                "scene_goal": str(scene_row.get("scene_goal") or "").strip(),
+                "narrative_function": str(scene_row.get("narrative_function") or scene_row.get("scene_function") or "").strip(),
+                "subject_motion": str(visual_motion.get("subject_motion") or scene_row.get("subject_motion") or scene_row.get("motion_intent") or "").strip(),
+                "camera_intent": str(visual_motion.get("camera_intent") or scene_row.get("camera_intent") or "").strip(),
+                "pacing": str(visual_motion.get("pacing") or scene_row.get("pacing") or "").strip(),
+                "energy_alignment": str(visual_motion.get("energy_alignment") or scene_row.get("energy_alignment") or "").strip(),
+                "framing": str(composition.get("framing") or scene_row.get("framing") or "").strip(),
+                "subject_priority": str(composition.get("subject_priority") or scene_row.get("subject_priority") or "").strip(),
+                "layout": str(composition.get("layout") or scene_row.get("layout") or "").strip(),
+                "depth_strategy": str(composition.get("depth_strategy") or scene_row.get("depth_strategy") or "").strip(),
+                "audio_visual_sync": str(scene_row.get("audio_visual_sync") or "").strip(),
+                "transcript_slice": str(audio_row.get("transcript_slice") or "").strip(),
+                "intensity": str(audio_row.get("intensity") or "").strip(),
+                "rhythmic_anchor": str(audio_row.get("rhythmic_anchor") or "").strip(),
+                "primary_role": str(role_row.get("primary_role") or "").strip(),
+                "secondary_roles": [str(v).strip() for v in _safe_list(role_row.get("secondary_roles")) if str(v).strip()],
+                "presence_mode": str(role_row.get("presence_mode") or "").strip(),
+                "presence_weight": str(role_row.get("presence_weight") or "").strip(),
+                "emotional_key": str(narrative_row.get("emotional_key") or scene_row.get("emotional_intent") or "").strip(),
+                "beat_purpose": str(narrative_row.get("beat_purpose") or scene_row.get("scene_goal") or "").strip(),
+            }
+        )
+
+    return rows, {
+        "story_core": story_core,
+        "scene_plan": scene_plan,
+        "uses_segment_id_canonical": bool(_safe_list(scene_plan.get("storyboard"))),
+    }
+
+
+def _build_global_style_anchor(story_core: dict[str, Any]) -> str:
+    identity = _build_identity_lock_summary(story_core)
+    world = _build_world_lock_summary(story_core)
+    style = _build_style_lock_summary(story_core)
+    parts = [
+        "Same woman by reference with stable face identity, body proportions, outfit and silhouette continuity unless story explicitly changes them",
+        "Same world family across all segments with location-zone variation only, no random location drift",
+        "Grounded realism contract with one coherent lighting family and stable mood progression",
+    ]
+    if identity:
+        parts.append(f"Identity lock: {identity}")
+    if world:
+        parts.append(f"World lock: {world}")
+    if style:
+        parts.append(f"Style lock: {style}")
+    return "; ".join(parts)[:1200]
+
+
+def _build_prompts_v11_prompt(*, prompt_rows: list[dict[str, Any]], global_style_anchor: str, package: dict[str, Any]) -> str:
+    story_core = _safe_dict(package.get("story_core"))
+    role_plan = _safe_dict(package.get("role_plan"))
+    audio_map = _safe_dict(package.get("audio_map"))
+    scene_plan = _safe_dict(package.get("scene_plan"))
+    connected_context_summary = _safe_dict(package.get("connected_context_summary"))
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
+    context = {
+        "story_core": {
+            "story_summary": str(story_core.get("story_summary") or ""),
+            "opening_anchor": str(story_core.get("opening_anchor") or ""),
+            "ending_callback_rule": str(story_core.get("ending_callback_rule") or ""),
+            "global_arc": str(story_core.get("global_arc") or ""),
+            "identity_lock": _safe_dict(story_core.get("identity_lock")),
+            "world_lock": _safe_dict(story_core.get("world_lock")),
+            "style_lock": _safe_dict(story_core.get("style_lock")),
+            "story_guidance": story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=16),
+        },
+        "roles": {
+            "roster": _safe_list(role_plan.get("roster")),
+            "scene_casting": _safe_list(role_plan.get("scene_casting")),
+        },
+        "audio_map": {
+            "segments": _safe_list(audio_map.get("segments")),
+        },
+        "scene_plan": {
+            "scenes_version": str(scene_plan.get("scenes_version") or ""),
+            "storyboard": _scene_plan_storyboard(scene_plan),
+        },
+        "connected_context_summary": connected_context_summary,
+        "refs_inventory_keys": list(refs_inventory.keys())[:40],
+        "global_style_anchor": global_style_anchor,
+        "prompt_rows": prompt_rows,
+    }
+    return (
+        "You are PROMPTS stage only for GEMINI-FIRST pipeline.\n"
+        "Return STRICT JSON only. No markdown, no prose outside JSON.\n"
+        "Output schema:\n"
+        "{\"prompts_version\":\"1.1\",\"global_style_anchor\":\"\",\"segments\":[{\"segment_id\":\"\",\"visual_description\":{\"subject_description\":\"\",\"background_description\":\"\",\"negative_description\":\"\"},\"character_state\":{\"emotion\":\"\",\"pose_presence\":\"\",\"facial_expression\":\"\"},\"environment_details\":{\"lighting\":\"\",\"atmosphere\":\"\",\"key_elements\":\"\"},\"transition_description\":null,\"prompt_notes\":[\"\"]}]}\n"
+        "Rules:\n"
+        "- One segment row per segment_id from prompt_rows.\n"
+        "- Use SCENES as directing source, CORE as doctrine/meaning, ROLES as cast presence, AUDIO only as timing/emotional evidence.\n"
+        "- Do not mutate route, cast, timing, doctrine, segment ids.\n"
+        "- Preserve same identity and same world family unless explicitly changed upstream.\n"
+        "- PROMPTS must stay engine-agnostic and useful for PHOTO and VIDEO preparation.\n"
+        "- Do not output engine params, renderer-specific phrasing, quality buzzwords, workflow tags, model tags, camera/fps/lens/seed specs.\n"
+        "- Do not reconstruct final video prompt and do not output route-delivery payload.\n"
+        "- transition_description is mandatory only when route == first_last, otherwise set null.\n"
+        "- negative_description must be descriptive guardrails (identity/world/wardrobe drift prevention), not model-tech blacklist.\n\n"
+        f"CONTEXT:\n{json.dumps(context, ensure_ascii=False)}"
+    )
+
+
+def _coerce_prompts_v11_payload(raw: Any) -> dict[str, Any]:
+    data = _safe_dict(raw)
+    if not data:
+        return {}
+    if _safe_list(data.get("segments")):
+        return data
+    for key in ("result", "data", "output"):
+        nested = _safe_dict(data.get(key))
+        if _safe_list(nested.get("segments")):
+            return nested
+    return data
+
+
+def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_segment = {str(_safe_dict(row).get("segment_id") or ""): _safe_dict(row) for row in _safe_list(prompts_v11.get("segments"))}
+    scenes: list[dict[str, Any]] = []
+    for row in prompt_rows:
+        segment_id = str(row.get("segment_id") or "")
+        route = str(row.get("route") or "i2v")
+        seg = _safe_dict(by_segment.get(segment_id))
+        visual = _safe_dict(seg.get("visual_description"))
+        environment = _safe_dict(seg.get("environment_details"))
+        character = _safe_dict(seg.get("character_state"))
+        transition = _safe_dict(seg.get("transition_description"))
+        photo_prompt = "; ".join(
+            [
+                str(visual.get("subject_description") or "").strip(),
+                str(visual.get("background_description") or "").strip(),
+                str(environment.get("lighting") or "").strip(),
+                str(environment.get("atmosphere") or "").strip(),
+            ]
+        ).strip("; ")
+        video_prompt = "; ".join(
+            [
+                str(character.get("emotion") or "").strip(),
+                str(character.get("pose_presence") or "").strip(),
+                str(row.get("subject_motion") or "").strip(),
+                str(row.get("camera_intent") or "").strip(),
+            ]
+        ).strip("; ")
+        scenes.append(
+            {
+                "scene_id": segment_id,
+                "segment_id": segment_id,
+                "route": route,
+                "photo_prompt": photo_prompt,
+                "video_prompt": video_prompt,
+                "negative_prompt": str(visual.get("negative_description") or "").strip(),
+                "positive_video_prompt": video_prompt,
+                "negative_video_prompt": str(visual.get("negative_description") or "").strip(),
+                "start_image_prompt": str(transition.get("start_state_description") or "").strip() if route == "first_last" else "",
+                "end_image_prompt": str(transition.get("end_state_description") or "").strip() if route == "first_last" else "",
+                "prompt_notes": {
+                    "emotion": str(character.get("emotion") or "").strip(),
+                    "world_anchor": str(prompts_v11.get("global_style_anchor") or "")[:300],
+                    "legacy_bridge_from": "prompts_v1.1",
+                },
+            }
+        )
+    return {
+        "plan_version": SCENE_PROMPTS_PROMPT_VERSION,
+        "mode": "clip",
+        "scenes": scenes,
+        "global_prompt_rules": ["legacy_bridge_from_prompts_v1.1"],
+    }
+
+
+def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[str, Any]]) -> tuple[str, str, dict[str, Any]]:
+    expected_segment_ids = [str(_safe_dict(row).get("segment_id") or "") for row in prompt_rows]
+    expected_route = {str(_safe_dict(row).get("segment_id") or ""): str(_safe_dict(row).get("route") or "i2v") for row in prompt_rows}
+    actual_segments = _safe_list(prompts_v11.get("segments"))
+    actual_segment_ids = [str(_safe_dict(row).get("segment_id") or "") for row in actual_segments]
+
+    if str(prompts_v11.get("prompts_version") or "") != "1.1":
+        return "PROMPTS_SCHEMA_INVALID", "prompts_version_must_be_1.1", {}
+    if not str(prompts_v11.get("global_style_anchor") or "").strip() or not actual_segments:
+        return "PROMPTS_SCHEMA_INVALID", "missing_global_style_anchor_or_segments", {}
+    if set(actual_segment_ids) != set(expected_segment_ids):
+        return "PROMPTS_SEGMENT_ID_MISMATCH", "segment_ids_mismatch", {}
+
+    transition_required_count = 0
+    transition_present_count = 0
+    for segment in actual_segments:
+        row = _safe_dict(segment)
+        segment_id = str(row.get("segment_id") or "")
+        route = expected_route.get(segment_id, "i2v")
+        visual = _safe_dict(row.get("visual_description"))
+        if not _safe_dict(row.get("character_state")) or not _safe_dict(row.get("environment_details")) or not visual:
+            return "PROMPTS_SCHEMA_INVALID", f"missing_required_block:{segment_id}", {}
+
+        blob = " ".join(
+            [
+                str(prompts_v11.get("global_style_anchor") or ""),
+                str(visual.get("subject_description") or ""),
+                str(visual.get("background_description") or ""),
+                str(visual.get("negative_description") or ""),
+                json.dumps(_safe_dict(row.get("character_state")), ensure_ascii=False),
+                json.dumps(_safe_dict(row.get("environment_details")), ensure_ascii=False),
+                " ".join(str(v) for v in _safe_list(row.get("prompt_notes"))),
+            ]
+        ).lower()
+        if any(token in blob for token in _TECHNICAL_TAG_PATTERNS):
+            return "PROMPTS_TECHNICAL_TAGGING", f"technical_tagging:{segment_id}", {}
+        if any(token in blob for token in _QUALITY_BUZZWORDS):
+            return "PROMPTS_QUALITY_BUZZWORDS", f"quality_buzzwords:{segment_id}", {}
+        if any(token in blob for token in _CAMERA_LEAK_PATTERNS):
+            return "PROMPTS_CAMERA_LEAKAGE", f"camera_leakage:{segment_id}", {}
+        if any(token in blob for token in _ROUTE_DELIVERY_PATTERNS):
+            return "PROMPTS_ROUTE_DELIVERY_LEAKAGE", f"route_delivery_leakage:{segment_id}", {}
+
+        if route == "first_last":
+            transition_required_count += 1
+            transition = _safe_dict(row.get("transition_description"))
+            if str(transition.get("start_state_description") or "").strip() and str(transition.get("end_state_description") or "").strip():
+                transition_present_count += 1
+            else:
+                return "PROMPTS_MISSING_TRANSITION_DESCRIPTION", f"missing_transition_description:{segment_id}", {}
+
+    return "", "", {
+        "scene_prompts_transition_required_count": transition_required_count,
+        "scene_prompts_transition_present_count": transition_present_count,
+    }
+
+
+def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
+    prompt_rows, aux = _build_prompt_rows(package)
+    story_core = _safe_dict(aux.get("story_core"))
+    global_style_anchor = _build_global_style_anchor(story_core)
+    diagnostics: dict[str, Any] = {
+        "scene_prompts_backend": "gemini",
+        "scene_prompts_prompt_version": SCENE_PROMPTS_PROMPT_VERSION,
+        "scene_prompts_stage_source": "current_package",
+        "scene_count": len(prompt_rows),
+        "scene_prompts_prompts_version": "1.1",
+        "scene_prompts_segment_count_expected": len(prompt_rows),
+        "scene_prompts_segment_count_actual": 0,
+        "scene_prompts_segment_coverage_ok": False,
+        "scene_prompts_uses_segment_id_canonical": bool(aux.get("uses_segment_id_canonical")),
+        "scene_prompts_uses_legacy_bridge": True,
+        "scene_prompts_global_style_anchor_present": bool(global_style_anchor),
+        "scene_prompts_transition_required_count": sum(1 for row in prompt_rows if str(row.get("route") or "") == "first_last"),
+        "scene_prompts_transition_present_count": 0,
+        "scene_prompts_error_code": "",
+        "scene_prompts_validation_error": "",
+    }
+
+    empty_canonical = {"prompts_version": "1.1", "global_style_anchor": global_style_anchor, "segments": []}
+    if not prompt_rows:
+        diagnostics["scene_prompts_segment_coverage_ok"] = True
+        diagnostics["scene_prompts_uses_legacy_bridge"] = False
+        return {
+            "ok": True,
+            "scene_prompts": {**empty_canonical, "legacy_bridge": {"plan_version": SCENE_PROMPTS_PROMPT_VERSION, "mode": "clip", "scenes": []}},
+            "error": "",
+            "validation_error": "",
+            "used_fallback": False,
+            "diagnostics": diagnostics,
+        }
+
+    prompt = _build_prompts_v11_prompt(prompt_rows=prompt_rows, global_style_anchor=global_style_anchor, package=package)
+    raw_payload: dict[str, Any] = {}
+    error = ""
+    try:
+        response = post_generate_content(
+            api_key=str(api_key or "").strip(),
+            model="gemini-3-flash-preview",
+            body={
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+            },
+            timeout=90,
+        )
+        if isinstance(response, dict) and response.get("__http_error__"):
+            raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
+        raw_payload = _coerce_prompts_v11_payload(_extract_json_obj(_extract_gemini_text(response)))
+    except Exception as exc:  # noqa: BLE001
+        error = str(exc)
+
+    if not raw_payload:
+        raw_payload = {
+            "prompts_version": "1.1",
+            "global_style_anchor": global_style_anchor,
+            "segments": [
+                {
+                    "segment_id": str(row.get("segment_id") or ""),
+                    "visual_description": {
+                        "subject_description": f"Same primary subject continuity, segment intent: {str(row.get('scene_goal') or '')}".strip(),
+                        "background_description": "Same world family and location lineage with local zone variation only.",
+                        "negative_description": "No identity drift, no wardrobe drift, no world drift, no second hero in center focus, no fantasy.",
+                    },
+                    "character_state": {
+                        "emotion": str(row.get("emotional_key") or row.get("beat_purpose") or "controlled emotional progression"),
+                        "pose_presence": str(row.get("subject_motion") or "grounded readable presence"),
+                        "facial_expression": "Readable grounded expression aligned with beat purpose.",
+                    },
+                    "environment_details": {
+                        "lighting": "Same lighting family with grounded realism continuity.",
+                        "atmosphere": "Consistent club/world atmosphere with coherent shadows, reflections, and haze when applicable.",
+                        "key_elements": str(row.get("layout") or row.get("framing") or "world key elements stay consistent"),
+                    },
+                    "transition_description": {
+                        "start_state_description": "Starting state aligned with scene entry continuity.",
+                        "end_state_description": "Ending state aligned with same-world continuity and beat progression.",
+                    }
+                    if str(row.get("route") or "") == "first_last"
+                    else None,
+                    "prompt_notes": [
+                        str(row.get("audio_visual_sync") or "").strip(),
+                        str(row.get("transcript_slice") or "").strip(),
+                    ],
+                }
+                for row in prompt_rows
+            ],
+        }
+
+    if not str(raw_payload.get("global_style_anchor") or "").strip():
+        raw_payload["global_style_anchor"] = global_style_anchor
+
+    error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows)
+    diagnostics["scene_prompts_error_code"] = error_code
+    diagnostics["scene_prompts_validation_error"] = validation_error
+    diagnostics.update(validation_diag)
+    diagnostics["scene_prompts_segment_count_actual"] = len(_safe_list(raw_payload.get("segments")))
+    diagnostics["scene_prompts_segment_coverage_ok"] = (
+        diagnostics["scene_prompts_segment_count_actual"] == diagnostics["scene_prompts_segment_count_expected"]
+    )
+
+    legacy_bridge = _build_legacy_bridge_from_v11(raw_payload, prompt_rows)
+    scene_prompts = {
+        "prompts_version": str(raw_payload.get("prompts_version") or "1.1"),
+        "global_style_anchor": str(raw_payload.get("global_style_anchor") or global_style_anchor),
+        "segments": _safe_list(raw_payload.get("segments")),
+        "legacy_bridge": legacy_bridge,
+        "plan_version": SCENE_PROMPTS_PROMPT_VERSION,
+        "mode": "clip",
+        "scenes": _safe_list(legacy_bridge.get("scenes")),
+        "global_prompt_rules": _safe_list(legacy_bridge.get("global_prompt_rules")),
+    }
+    ok = not error_code and bool(_safe_list(scene_prompts.get("segments")))
+    final_error = error or (error_code.lower() if error_code else "")
+    return {
+        "ok": ok,
+        "scene_prompts": scene_prompts,
+        "error": final_error,
+        "validation_error": validation_error,
+        "used_fallback": bool(error or error_code),
+        "diagnostics": diagnostics,
+    }

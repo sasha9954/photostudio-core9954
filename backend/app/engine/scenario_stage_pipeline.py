@@ -5863,6 +5863,16 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_missing_video_count"] = 0
     diagnostics["scene_prompts_ia2v_audio_driven_count"] = 0
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = 0
+    diagnostics["scene_prompts_prompts_version"] = ""
+    diagnostics["scene_prompts_segment_count_expected"] = 0
+    diagnostics["scene_prompts_segment_count_actual"] = 0
+    diagnostics["scene_prompts_segment_coverage_ok"] = False
+    diagnostics["scene_prompts_uses_segment_id_canonical"] = False
+    diagnostics["scene_prompts_uses_legacy_bridge"] = False
+    diagnostics["scene_prompts_global_style_anchor_present"] = False
+    diagnostics["scene_prompts_transition_required_count"] = 0
+    diagnostics["scene_prompts_transition_present_count"] = 0
+    diagnostics["scene_prompts_error_code"] = ""
     diagnostics["prompt_capability_guard_applied"] = False
     diagnostics["scene_prompts_validation_error"] = ""
     diagnostics["validation_error"] = ""
@@ -5929,6 +5939,22 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
     diagnostics["scene_prompts_used_fallback"] = bool(result.get("used_fallback"))
     diagnostics["scene_prompts_scene_count"] = int(prompts_diag.get("scene_count") or len(_safe_list(scene_prompts.get("scenes"))))
+    diagnostics["scene_prompts_prompts_version"] = str(
+        prompts_diag.get("scene_prompts_prompts_version") or scene_prompts.get("prompts_version") or ""
+    )
+    diagnostics["scene_prompts_segment_count_expected"] = int(prompts_diag.get("scene_prompts_segment_count_expected") or 0)
+    diagnostics["scene_prompts_segment_count_actual"] = int(
+        prompts_diag.get("scene_prompts_segment_count_actual") or len(_safe_list(scene_prompts.get("segments")))
+    )
+    diagnostics["scene_prompts_segment_coverage_ok"] = bool(prompts_diag.get("scene_prompts_segment_coverage_ok"))
+    diagnostics["scene_prompts_uses_segment_id_canonical"] = bool(prompts_diag.get("scene_prompts_uses_segment_id_canonical"))
+    diagnostics["scene_prompts_uses_legacy_bridge"] = bool(prompts_diag.get("scene_prompts_uses_legacy_bridge"))
+    diagnostics["scene_prompts_global_style_anchor_present"] = bool(
+        prompts_diag.get("scene_prompts_global_style_anchor_present") or scene_prompts.get("global_style_anchor")
+    )
+    diagnostics["scene_prompts_transition_required_count"] = int(prompts_diag.get("scene_prompts_transition_required_count") or 0)
+    diagnostics["scene_prompts_transition_present_count"] = int(prompts_diag.get("scene_prompts_transition_present_count") or 0)
+    diagnostics["scene_prompts_error_code"] = str(prompts_diag.get("scene_prompts_error_code") or "")
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = int(
         prompts_diag.get("scene_prompts_route_semantics_mismatch_count")
         or diagnostics.get("scene_prompts_route_semantics_mismatch_count")
