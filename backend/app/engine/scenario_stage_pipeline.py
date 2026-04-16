@@ -5869,6 +5869,10 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_segment_coverage_ok"] = False
     diagnostics["scene_prompts_uses_segment_id_canonical"] = False
     diagnostics["scene_prompts_uses_legacy_bridge"] = False
+    diagnostics["scene_prompts_legacy_bridge_generated"] = False
+    diagnostics["scene_prompts_legacy_bridge_present"] = False
+    diagnostics["scene_prompts_legacy_bridge_mode"] = ""
+    diagnostics["scene_prompts_canonical_source"] = ""
     diagnostics["scene_prompts_global_style_anchor_present"] = False
     diagnostics["scene_prompts_transition_required_count"] = 0
     diagnostics["scene_prompts_transition_present_count"] = 0

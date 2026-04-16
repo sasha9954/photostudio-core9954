@@ -2161,11 +2161,87 @@ _WORLD_DRIFT_TOKENS = (
     "different world",
 )
 
+_LOCAL_ZONE_FALLBACK_SEQUENCE = (
+    "entrance shadow pocket",
+    "reflective glass pocket",
+    "bar threshold pocket",
+    "face-light pivot pocket",
+    "dance-floor edge anticipation pocket",
+    "performance-dominant threshold pocket",
+    "shadow retreat release pocket",
+    "afterglow lingering observation pocket",
+)
+
+_LOCAL_ZONE_HINT_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("entrance shadow pocket", ("entrance", "arrival", "approach", "door", "intro", "shadow", "hide", "conceal")),
+    ("reflective glass pocket", ("reflect", "reflection", "mirror", "glass", "window", "chrome", "gloss", "shimmer")),
+    ("bar threshold pocket", ("bar", "counter", "stool", "pour", "drink", "bottle", "neat")),
+    ("face-light pivot pocket", ("face", "portrait", "close", "intimate", "pivot", "turn", "gaze", "eye contact")),
+    ("dance-floor edge anticipation pocket", ("dance", "floor", "edge", "anticipation", "build", "pre-drop", "rise")),
+    ("performance-dominant threshold pocket", ("performance", "dominant", "climax", "peak", "front", "center")),
+    ("shadow retreat release pocket", ("retreat", "withdraw", "cooldown", "recover", "exhale", "release", "backstep")),
+    ("afterglow lingering observation pocket", ("afterglow", "linger", "observ", "settle", "ending", "outro", "resolve", "calm")),
+)
+
 _CAMERA_TECH_LEAK_REGEXES: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:dolly|gimbal|crane|rack focus|whip pan|orbit shot|steadicam|handheld rig)\b", re.IGNORECASE),
     re.compile(r"\b(?:lens|focal length|iso|shutter|aperture)\b", re.IGNORECASE),
     re.compile(r"\bcamera movement\b.{0,30}\b(?:fast|aggressive|jerky|rig|operator)\b", re.IGNORECASE),
 )
+
+
+def _suggest_local_zone_hint(
+    *,
+    scene_row: dict[str, Any],
+    narrative_row: dict[str, Any],
+    idx: int,
+    total: int,
+) -> tuple[str, str]:
+    explicit_hint = str(scene_row.get("location_zone") or scene_row.get("zone_hint") or scene_row.get("location_hint") or "").strip()
+    if explicit_hint:
+        return explicit_hint[:120], "explicit"
+
+    evidence = " ".join(
+        [
+            str(scene_row.get("scene_goal") or ""),
+            str(scene_row.get("narrative_function") or scene_row.get("scene_function") or ""),
+            str(scene_row.get("emotional_intent") or ""),
+            str(scene_row.get("framing") or ""),
+            str(scene_row.get("layout") or ""),
+            str(_safe_dict(scene_row.get("composition")).get("framing") or ""),
+            str(_safe_dict(scene_row.get("composition")).get("layout") or ""),
+            str(_safe_dict(scene_row.get("visual_motion")).get("camera_intent") or ""),
+            str(_safe_dict(scene_row.get("visual_motion")).get("energy_alignment") or ""),
+            str(narrative_row.get("beat_purpose") or ""),
+            str(narrative_row.get("emotional_key") or ""),
+        ]
+    ).lower()
+    for zone_hint, keys in _LOCAL_ZONE_HINT_PATTERNS:
+        if any(key in evidence for key in keys):
+            return zone_hint, "derived"
+
+    safe_total = max(int(total or 1), 1)
+    step = max(min(idx - 1, safe_total - 1), 0)
+    fallback_idx = min(step, len(_LOCAL_ZONE_FALLBACK_SEQUENCE) - 1)
+    return _LOCAL_ZONE_FALLBACK_SEQUENCE[fallback_idx], "sequence"
+
+
+def _legacy_bridge_requested(package: dict[str, Any]) -> bool:
+    input_pkg = _safe_dict(package.get("input"))
+    feature_flags = _safe_dict(input_pkg.get("feature_flags"))
+    diagnostics_flags = _safe_dict(package.get("diagnostics"))
+    truthy_keys = (
+        "use_legacy_scene_prompts",
+        "require_legacy_scene_prompts",
+        "legacy_scene_prompts_required",
+        "scene_prompts_legacy_bridge_required",
+    )
+    nodes = (package, input_pkg, feature_flags, diagnostics_flags)
+    for node in nodes:
+        for key in truthy_keys:
+            if bool(node.get(key)):
+                return True
+    return False
 
 
 def _scene_plan_storyboard(scene_plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2204,6 +2280,12 @@ def _build_prompt_rows(package: dict[str, Any]) -> tuple[list[dict[str, Any]], d
         narrative_row = _safe_dict(narrative_by_segment.get(segment_id))
         composition = _safe_dict(scene_row.get("composition"))
         visual_motion = _safe_dict(scene_row.get("visual_motion"))
+        local_zone_hint, local_zone_hint_source = _suggest_local_zone_hint(
+            scene_row=scene_row,
+            narrative_row=narrative_row,
+            idx=idx,
+            total=len(storyboard),
+        )
 
         rows.append(
             {
@@ -2220,7 +2302,8 @@ def _build_prompt_rows(package: dict[str, Any]) -> tuple[list[dict[str, Any]], d
                 "layout": str(composition.get("layout") or scene_row.get("layout") or "").strip(),
                 "depth_strategy": str(composition.get("depth_strategy") or scene_row.get("depth_strategy") or "").strip(),
                 "audio_visual_sync": str(scene_row.get("audio_visual_sync") or "").strip(),
-                "local_zone_hint": str(scene_row.get("location_zone") or scene_row.get("zone_hint") or scene_row.get("location_hint") or "").strip(),
+                "local_zone_hint": local_zone_hint,
+                "local_zone_hint_source": local_zone_hint_source,
                 "transcript_slice": str(audio_row.get("transcript_slice") or "").strip(),
                 "intensity": str(audio_row.get("intensity") or "").strip(),
                 "rhythmic_anchor": str(audio_row.get("rhythmic_anchor") or "").strip(),
@@ -2333,8 +2416,10 @@ def _build_prompts_v11_prompt(
         "- Do not reconstruct final video prompt and do not output route-delivery payload.\n"
         "- Translate SCENES signal (scene_goal, narrative_function, subject_motion, camera_intent, pacing, energy_alignment, framing, subject_priority, layout, depth_strategy, audio_visual_sync) into natural descriptive writing rather than technical labels.\n"
         "- Make subject_description stable and specific across segments (same woman identity and wardrobe continuity), while changing micro-performance and local action intent by segment.\n"
-        "- Make background_description and environment_details anchor the same club family while clearly differentiating local visual pockets (corridor, reflective glass edge, bar threshold, dance-floor edge, shadow retreat, afterglow pocket).\n"
-        "- Lighting/atmosphere should evolve per beat within one light family; avoid flat repeated prose.\n"
+        "- Make background_description and environment_details anchor the same club family while clearly differentiating local visual pockets (entrance shadow, reflective glass, bar threshold, face-light pivot, dance-floor edge anticipation, performance threshold, shadow retreat, afterglow observation).\n"
+        "- Use prompt_rows.local_zone_hint as deterministic local pocket guidance and keep progression coherent; do not invent a new venue or cast.\n"
+        "- Lighting/atmosphere should evolve per beat within one light family with pocket-level differences in density and contrast; avoid flat repeated prose.\n"
+        "- Express segment-to-segment emotional curve with compact beat language (anticipation -> peak -> release -> lingering afterglow) while preserving continuity.\n"
         "- Use descriptive framing language (intimate/nearer/opener/layered/deeper) allowed; avoid camera-tech jargon.\n"
         "- transition_description is mandatory only when route == first_last, otherwise set null.\n"
         "- negative_description must be descriptive guardrails (identity/world/wardrobe drift prevention), not model-tech blacklist.\n\n"
@@ -2547,7 +2632,11 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_segment_count_actual": 0,
         "scene_prompts_segment_coverage_ok": False,
         "scene_prompts_uses_segment_id_canonical": bool(aux.get("uses_segment_id_canonical")),
-        "scene_prompts_uses_legacy_bridge": True,
+        "scene_prompts_uses_legacy_bridge": False,
+        "scene_prompts_legacy_bridge_generated": False,
+        "scene_prompts_legacy_bridge_present": False,
+        "scene_prompts_legacy_bridge_mode": "compatibility_derived_alias",
+        "scene_prompts_canonical_source": "prompts_v1.1_segments",
         "scene_prompts_global_style_anchor_present": bool(global_style_anchor),
         "scene_prompts_transition_required_count": sum(1 for row in prompt_rows if str(row.get("route") or "") == "first_last"),
         "scene_prompts_transition_present_count": 0,
@@ -2556,6 +2645,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "active_video_model_capability_profile": active_model_id,
         "active_route_capability_mode": route_capability_mode,
         "prompt_capability_guard_applied": prompt_capability_guard_applied,
+        "capability_rules_source_version": get_capability_rules_source_version(),
     }
 
     empty_canonical = {"prompts_version": "1.1", "global_style_anchor": global_style_anchor, "segments": []}
@@ -2608,6 +2698,9 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
     )
 
     legacy_bridge = _build_legacy_bridge_from_v11(raw_payload, prompt_rows)
+    diagnostics["scene_prompts_legacy_bridge_generated"] = bool(_safe_list(legacy_bridge.get("scenes")))
+    diagnostics["scene_prompts_legacy_bridge_present"] = bool(legacy_bridge)
+    diagnostics["scene_prompts_uses_legacy_bridge"] = bool(_legacy_bridge_requested(package))
     scene_prompts = {
         "prompts_version": str(raw_payload.get("prompts_version") or "1.1"),
         "global_style_anchor": str(raw_payload.get("global_style_anchor") or global_style_anchor),
