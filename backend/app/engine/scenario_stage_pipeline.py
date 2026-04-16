@@ -2817,6 +2817,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     ]
     finalize_missing_role_scene_casting_count = len(finalize_missing_role_scene_casting_segment_ids)
     finalize_missing_role_scene_casting_segment_ids = finalize_missing_role_scene_casting_segment_ids[:diagnostic_limit]
+    finalize_segments_without_scene_casting_and_without_role_refs_ids: list[str] = []
 
     final_scenes: list[dict[str, Any]] = []
     for idx, segment_id in enumerate(ordered_segment_ids, start=1):
@@ -2860,33 +2861,44 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             prompt_row.get("route")
             or scene_plan_row.get("route")
         )
-        active_roles = _safe_list(role_row.get("active_roles"))
-        secondary_roles = _safe_list(role_row.get("secondary_roles"))
-        primary_role = str(role_row.get("primary_role") or "").strip()
-        if not active_roles:
-            active_roles = list(
-                dict.fromkeys([primary_role, *[str(role).strip() for role in secondary_roles if str(role).strip()]])
+        has_canonical_scene_casting_row = bool(role_row_segment)
+        if has_canonical_scene_casting_row:
+            active_roles = _safe_list(role_row.get("active_roles"))
+            secondary_roles = _safe_list(role_row.get("secondary_roles"))
+            primary_role = str(role_row.get("primary_role") or "").strip()
+            if not active_roles:
+                active_roles = list(
+                    dict.fromkeys([primary_role, *[str(role).strip() for role in secondary_roles if str(role).strip()]])
+                )
+            must_appear = list(
+                dict.fromkeys(
+                    [
+                        *([primary_role] if primary_role else []),
+                        *[str(role).strip() for role in active_roles if str(role).strip()],
+                    ]
+                )
             )
-        must_appear = list(
-            dict.fromkeys(
-                [
-                    *([primary_role] if primary_role else []),
-                    *[str(role).strip() for role in active_roles if str(role).strip()],
-                ]
+            refs_by_role_input = _safe_dict(input_pkg.get("refs_by_role"))
+            refs_used_by_role_from_input = {
+                role: _safe_list(refs_by_role_input.get(role))
+                for role in must_appear
+                if _safe_list(refs_by_role_input.get(role))
+            }
+            refs_used_by_role = (
+                refs_used_by_role_from_input
+                if refs_used_by_role_from_input
+                else _build_refs_by_role_fallback(refs_inventory, active_roles, primary_role)
             )
-        )
-        refs_by_role_input = _safe_dict(input_pkg.get("refs_by_role"))
-        refs_used_by_role_from_input = {
-            role: _safe_list(refs_by_role_input.get(role))
-            for role in must_appear
-            if _safe_list(refs_by_role_input.get(role))
-        }
-        refs_used_by_role = (
-            refs_used_by_role_from_input
-            if refs_used_by_role_from_input
-            else _build_refs_by_role_fallback(refs_inventory, active_roles, primary_role)
-        )
-        refs_used = list(refs_used_by_role.keys())
+            refs_used = list(refs_used_by_role.keys())
+        else:
+            primary_role = ""
+            secondary_roles = []
+            active_roles = []
+            must_appear = []
+            refs_used_by_role_from_input = {}
+            refs_used_by_role = {}
+            refs_used = []
+            finalize_segments_without_scene_casting_and_without_role_refs_ids.append(segment_id)
         audio_slice_start_sec = t0 if route_contract["route"] == "ia2v" else 0.0
         audio_slice_end_sec = t1 if route_contract["route"] == "ia2v" else 0.0
         audio_slice_expected_duration_sec = max(0.0, audio_slice_end_sec - audio_slice_start_sec)
@@ -3125,6 +3137,13 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_legacy_scene_roles_ignored"] = True
     diagnostics["finalize_missing_role_scene_casting_count"] = int(finalize_missing_role_scene_casting_count)
     diagnostics["finalize_missing_role_scene_casting_segment_ids"] = finalize_missing_role_scene_casting_segment_ids
+    diagnostics["finalize_role_ref_fallback_requires_scene_casting"] = True
+    diagnostics["finalize_segments_without_scene_casting_and_without_role_refs_count"] = int(
+        len(finalize_segments_without_scene_casting_and_without_role_refs_ids)
+    )
+    diagnostics["finalize_segments_without_scene_casting_and_without_role_refs_ids"] = (
+        finalize_segments_without_scene_casting_and_without_role_refs_ids[:diagnostic_limit]
+    )
     diagnostics["finalize_canonical_join_key"] = "segment_id"
     diagnostics["finalize_used_legacy_scene_id_bridge"] = finalize_legacy_scene_id_bridge_count > 0
     diagnostics["finalize_legacy_scene_id_bridge_count"] = finalize_legacy_scene_id_bridge_count
