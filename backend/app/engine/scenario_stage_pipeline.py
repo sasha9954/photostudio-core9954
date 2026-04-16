@@ -5884,10 +5884,30 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     package["diagnostics"] = diagnostics
     package["scene_prompts"] = {"scenes": []}
 
+    hard_fail_error = ""
+
     result = build_gemini_scene_prompts(
         api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
         package=package,
     )
+    initial_validation_error = str(result.get("validation_error") or "").strip()
+    if initial_validation_error:
+        validation_error_code = str(result.get("error_code") or _safe_dict(result.get("diagnostics")).get("scene_prompts_error_code") or "").strip()
+        validation_feedback = (
+            f"Previous output invalid: validation_error={initial_validation_error}; "
+            f"error_code={validation_error_code or 'PROMPTS_SCHEMA_INVALID'}"
+        )
+        _append_diag_event(package, f"scene_prompts validation failed, retrying once: {validation_feedback}", stage_id="scene_prompts")
+        retry_result = build_gemini_scene_prompts(
+            api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+            package=package,
+            validation_feedback=validation_feedback,
+        )
+        result = retry_result
+        if str(result.get("validation_error") or "").strip():
+            result["ok"] = False
+            result["error"] = str(result.get("error") or result.get("validation_error") or "scene_prompts_validation_failed")
+            hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_prompts_validation_failed")
 
     scene_prompts = _safe_dict(result.get("scene_prompts"))
     package["scene_prompts"] = _attach_downstream_mode_metadata(scene_prompts, package)
@@ -5938,7 +5958,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         prompts_diag.get("scene_prompts_backend") or diagnostics.get("scene_prompts_backend") or "gemini"
     )
     diagnostics["scene_prompts_used_fallback"] = bool(result.get("used_fallback"))
-    diagnostics["scene_prompts_scene_count"] = int(prompts_diag.get("scene_count") or len(_safe_list(scene_prompts.get("scenes"))))
+    diagnostics["scene_prompts_scene_count"] = int(prompts_diag.get("scene_count") or len(_safe_list(scene_prompts.get("segments"))))
     diagnostics["scene_prompts_prompts_version"] = str(
         prompts_diag.get("scene_prompts_prompts_version") or scene_prompts.get("prompts_version") or ""
     )
@@ -5973,10 +5993,20 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["validation_error"] = str(diagnostics.get("scene_prompts_validation_error") or "")
     diagnostics["scene_prompts_error"] = str(result.get("error") or "")
-    diagnostics["scene_prompts_empty"] = not bool(scene_prompts and _safe_list(scene_prompts.get("scenes")))
+    diagnostics["scene_prompts_empty"] = not bool(scene_prompts and _safe_list(scene_prompts.get("segments")))
+    if not hard_fail_error:
+        result_has_validation_error = bool(str(result.get("validation_error") or "").strip())
+        result_has_segments = bool(_safe_list(scene_prompts.get("segments")))
+        if (not bool(result.get("ok"))) or result_has_validation_error or (not result_has_segments):
+            hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_prompts_invalid")
     package["diagnostics"] = diagnostics
 
-    if scene_prompts and _safe_list(scene_prompts.get("scenes")):
+    if hard_fail_error:
+        package["scene_prompts"] = {"prompts_version": "1.1", "global_style_anchor": "", "segments": [], "scenes": []}
+        _append_diag_event(package, f"scene_prompts hard fail after retry: {hard_fail_error}", stage_id="scene_prompts")
+        raise RuntimeError(hard_fail_error)
+
+    if scene_prompts and _safe_list(scene_prompts.get("segments")):
         _append_diag_event(package, "scene_prompts generated", stage_id="scene_prompts")
         if int(diagnostics.get("scene_prompts_route_semantics_mismatch_count") or 0) > 0:
             _append_diag_event(package, "scene_prompts_route_semantics_mismatch warning", stage_id="scene_prompts")

@@ -2103,203 +2103,6 @@ def _normalize_scene_prompts(
     )
 
 
-def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
-    context, aux = _build_compact_context(package)
-    scene_rows = _safe_list(aux.get("scene_rows"))
-    role_lookup = _safe_dict(aux.get("role_lookup"))
-    scene_contract_lookup, global_contract = _build_scene_contract_lookup(_safe_dict(aux.get("compiled_contract")))
-
-    used_model = "gemini-3-flash-preview"
-    model_id = str(_safe_dict(context.get("video_capability_canon")).get("model_id") or DEFAULT_VIDEO_MODEL_ID)
-    capability_diag = build_capability_diagnostics_summary(
-        model_id=model_id,
-        route_type="mixed",
-        story_core_guard_applied=False,
-        scene_plan_guard_applied=False,
-        prompt_guard_applied=True,
-    )
-
-    diagnostics = {
-        "prompt_version": SCENE_PROMPTS_PROMPT_VERSION,
-        "scene_candidate_windows_bridge": bool(aux.get("uses_legacy_scene_candidate_windows_bridge")),
-        "compiled_contract_bridge": bool(aux.get("uses_legacy_compiled_contract_bridge")),
-        "role_source_precedence": ["role_plan.scene_casting", "role_plan.roster", "legacy scene_roles / compiled_contract fallback"],
-        "used_model": used_model,
-        "scene_count": len(scene_rows),
-        "missing_photo_count": 0,
-        "missing_video_count": 0,
-        "ia2v_audio_driven_count": 0,
-        "scene_prompts_route_mismatch_count": 0,
-        "scene_prompts_semantic_mismatch_count": 0,
-        "scene_prompts_repaired_scene_ids": [],
-        "scene_prompts_semantic_mismatch_scene_ids": [],
-        "scene_prompts_missing_photo_scene_ids": [],
-        "scene_prompts_missing_video_scene_ids": [],
-        "scene_prompts_missing_field_by_scene": {},
-        "scene_prompts_mismatch_reason_by_scene": {},
-        "scene_prompts_rows_rebuilt_from_scene_plan_count": 0,
-        "scene_prompts_positive_negative_leak_stripped_count": 0,
-        "scene_prompts_route_semantics_mismatch_count": 0,
-        "i2v_template_rebuilt_count": 0,
-        "i2v_unknown_family_fallback_count": 0,
-        "i2v_prompt_family_counts": {},
-        "i2v_template_override_applied": False,
-        **capability_diag,
-    }
-
-    if not scene_rows:
-        empty = {
-            "plan_version": SCENE_PROMPTS_PROMPT_VERSION,
-            "mode": "clip",
-            "scenes": [],
-            "global_prompt_rules": list(_GLOBAL_PROMPT_RULES),
-        }
-        return {
-            "ok": False,
-            "scene_prompts": empty,
-            "error": "scene_plan_missing",
-            "validation_error": "scene_plan_missing",
-            "used_fallback": True,
-            "diagnostics": diagnostics,
-        }
-
-    prompt = _build_prompt(context)
-    try:
-        response = post_generate_content(
-            api_key=str(api_key or "").strip(),
-            model=used_model,
-            body={
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
-            },
-            timeout=90,
-        )
-        if isinstance(response, dict) and response.get("__http_error__"):
-            raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
-
-        parsed = _coerce_scene_prompts_payload(_extract_json_obj(_extract_gemini_text(response)))
-        (
-            scene_prompts,
-            used_fallback,
-            validation_error,
-            missing_photo,
-            missing_video,
-            ia2v_audio_driven,
-            route_mismatch_count,
-            semantic_mismatch_count,
-            rows_rebuilt_from_scene_plan_count,
-            positive_negative_leak_stripped_count,
-            normalization_diag,
-        ) = _normalize_scene_prompts(
-            package,
-            parsed,
-            scene_rows=scene_rows,
-            role_lookup=role_lookup,
-            scene_contract_lookup=scene_contract_lookup,
-            global_contract=global_contract,
-            story_core=_safe_dict(aux.get("story_core")),
-            world_continuity=_safe_dict(aux.get("world_continuity")),
-        )
-        diagnostics.update(
-            {
-                "missing_photo_count": int(missing_photo),
-                "missing_video_count": int(missing_video),
-                "ia2v_audio_driven_count": int(ia2v_audio_driven),
-                "scene_prompts_route_mismatch_count": int(route_mismatch_count),
-                "scene_prompts_semantic_mismatch_count": int(semantic_mismatch_count),
-                "scene_prompts_rows_rebuilt_from_scene_plan_count": int(rows_rebuilt_from_scene_plan_count),
-                "scene_prompts_positive_negative_leak_stripped_count": int(positive_negative_leak_stripped_count),
-                "scene_prompts_route_semantics_mismatch_count": int(route_mismatch_count + semantic_mismatch_count),
-                "i2v_template_rebuilt_count": int(normalization_diag.get("i2v_template_rebuilt_count") or 0),
-                "i2v_unknown_family_fallback_count": int(normalization_diag.get("i2v_unknown_family_fallback_count") or 0),
-                "i2v_prompt_family_counts": _safe_dict(normalization_diag.get("i2v_prompt_family_counts")),
-                "i2v_template_override_applied": bool(normalization_diag.get("i2v_template_override_applied")),
-                "rows_source_count": int(normalization_diag.get("rows_source_count") or 0),
-                "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
-                "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),
-                "repaired_from_current_package_count": int(normalization_diag.get("repaired_from_current_package_count") or 0),
-                "scene_prompts_repaired_scene_ids": _safe_list(normalization_diag.get("scene_prompts_repaired_scene_ids")),
-                "unrelated_rows_discarded_count": int(normalization_diag.get("unrelated_rows_discarded_count") or 0),
-                "scene_prompts_semantic_mismatch_scene_ids": _safe_list(
-                    normalization_diag.get("scene_prompts_semantic_mismatch_scene_ids")
-                ),
-                "scene_prompts_missing_photo_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_photo_scene_ids")),
-                "scene_prompts_missing_video_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_video_scene_ids")),
-                "scene_prompts_missing_field_by_scene": _safe_dict(normalization_diag.get("scene_prompts_missing_field_by_scene")),
-                "scene_prompts_mismatch_reason_by_scene": _safe_dict(normalization_diag.get("scene_prompts_mismatch_reason_by_scene")),
-                "stage_source": str(normalization_diag.get("stage_source") or "current_package"),
-            }
-        )
-        return {
-            "ok": bool(_safe_list(scene_prompts.get("scenes"))),
-            "scene_prompts": scene_prompts,
-            "error": "" if _safe_list(scene_prompts.get("scenes")) else "invalid_scene_prompts",
-            "validation_error": validation_error,
-            "used_fallback": used_fallback,
-            "diagnostics": diagnostics,
-        }
-    except Exception as exc:  # noqa: BLE001
-        (
-            scene_prompts,
-            used_fallback,
-            validation_error,
-            missing_photo,
-            missing_video,
-            ia2v_audio_driven,
-            route_mismatch_count,
-            semantic_mismatch_count,
-            rows_rebuilt_from_scene_plan_count,
-            positive_negative_leak_stripped_count,
-            normalization_diag,
-        ) = _normalize_scene_prompts(
-            package,
-            {},
-            scene_rows=scene_rows,
-            role_lookup=role_lookup,
-            scene_contract_lookup=scene_contract_lookup,
-            global_contract=global_contract,
-            story_core=_safe_dict(aux.get("story_core")),
-            world_continuity=_safe_dict(aux.get("world_continuity")),
-        )
-        diagnostics.update(
-            {
-                "missing_photo_count": int(missing_photo),
-                "missing_video_count": int(missing_video),
-                "ia2v_audio_driven_count": int(ia2v_audio_driven),
-                "scene_prompts_route_mismatch_count": int(route_mismatch_count),
-                "scene_prompts_semantic_mismatch_count": int(semantic_mismatch_count),
-                "scene_prompts_rows_rebuilt_from_scene_plan_count": int(rows_rebuilt_from_scene_plan_count),
-                "scene_prompts_positive_negative_leak_stripped_count": int(positive_negative_leak_stripped_count),
-                "scene_prompts_route_semantics_mismatch_count": int(route_mismatch_count + semantic_mismatch_count),
-                "i2v_template_rebuilt_count": int(normalization_diag.get("i2v_template_rebuilt_count") or 0),
-                "i2v_unknown_family_fallback_count": int(normalization_diag.get("i2v_unknown_family_fallback_count") or 0),
-                "i2v_prompt_family_counts": _safe_dict(normalization_diag.get("i2v_prompt_family_counts")),
-                "i2v_template_override_applied": bool(normalization_diag.get("i2v_template_override_applied")),
-                "rows_source_count": int(normalization_diag.get("rows_source_count") or 0),
-                "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
-                "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),
-                "repaired_from_current_package_count": int(normalization_diag.get("repaired_from_current_package_count") or 0),
-                "scene_prompts_repaired_scene_ids": _safe_list(normalization_diag.get("scene_prompts_repaired_scene_ids")),
-                "unrelated_rows_discarded_count": int(normalization_diag.get("unrelated_rows_discarded_count") or 0),
-                "scene_prompts_semantic_mismatch_scene_ids": _safe_list(
-                    normalization_diag.get("scene_prompts_semantic_mismatch_scene_ids")
-                ),
-                "scene_prompts_missing_photo_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_photo_scene_ids")),
-                "scene_prompts_missing_video_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_video_scene_ids")),
-                "scene_prompts_missing_field_by_scene": _safe_dict(normalization_diag.get("scene_prompts_missing_field_by_scene")),
-                "scene_prompts_mismatch_reason_by_scene": _safe_dict(normalization_diag.get("scene_prompts_mismatch_reason_by_scene")),
-                "stage_source": str(normalization_diag.get("stage_source") or "current_package"),
-            }
-        )
-        return {
-            "ok": bool(_safe_list(scene_prompts.get("scenes"))),
-            "scene_prompts": scene_prompts,
-            "error": str(exc),
-            "validation_error": validation_error,
-            "used_fallback": True,
-            "diagnostics": diagnostics,
-        }
-
 PROMPTS_ERROR_CODES = {
     "PROMPTS_SCHEMA_INVALID",
     "PROMPTS_SEGMENT_ID_MISMATCH",
@@ -2334,6 +2137,29 @@ _QUALITY_BUZZWORDS = (
 )
 _CAMERA_LEAK_PATTERNS = ("camera movement", "dolly", "gimbal", "crane", "rack focus")
 _ROUTE_DELIVERY_PATTERNS = ("route payload", "delivery payload", "api call", "json rpc")
+_GENERIC_SUBJECT_TOKENS = ("person", "someone", "subject", "individual", "figure", "human")
+_IDENTITY_DRIFT_TOKENS = (
+    "different subject",
+    "new heroine",
+    "new hero",
+    "another woman",
+    "another man",
+    "new character",
+    "identity change",
+    "different face",
+    "different outfit",
+)
+_WORLD_DRIFT_TOKENS = (
+    "fantasy",
+    "alien",
+    "spaceship",
+    "medieval castle",
+    "dragon",
+    "cyberpunk neon city",
+    "post apocalyptic",
+    "new world",
+    "different world",
+)
 
 
 def _scene_plan_storyboard(scene_plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2425,12 +2251,21 @@ def _build_global_style_anchor(story_core: dict[str, Any]) -> str:
     return "; ".join(parts)[:1200]
 
 
-def _build_prompts_v11_prompt(*, prompt_rows: list[dict[str, Any]], global_style_anchor: str, package: dict[str, Any]) -> str:
+def _build_prompts_v11_prompt(
+    *,
+    prompt_rows: list[dict[str, Any]],
+    global_style_anchor: str,
+    package: dict[str, Any],
+    validation_feedback: str = "",
+) -> str:
+    input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
     role_plan = _safe_dict(package.get("role_plan"))
     audio_map = _safe_dict(package.get("audio_map"))
     scene_plan = _safe_dict(package.get("scene_plan"))
-    connected_context_summary = _safe_dict(package.get("connected_context_summary"))
+    connected_context_summary = _safe_dict(input_pkg.get("connected_context_summary")) or _safe_dict(
+        package.get("connected_context_summary")
+    )
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     context = {
         "story_core": {
@@ -2459,6 +2294,7 @@ def _build_prompts_v11_prompt(*, prompt_rows: list[dict[str, Any]], global_style
         "global_style_anchor": global_style_anchor,
         "prompt_rows": prompt_rows,
     }
+    feedback_block = f"\nVALIDATION_FEEDBACK:\n{validation_feedback}\n" if str(validation_feedback or "").strip() else ""
     return (
         "You are PROMPTS stage only for GEMINI-FIRST pipeline.\n"
         "Return STRICT JSON only. No markdown, no prose outside JSON.\n"
@@ -2474,6 +2310,7 @@ def _build_prompts_v11_prompt(*, prompt_rows: list[dict[str, Any]], global_style
         "- Do not reconstruct final video prompt and do not output route-delivery payload.\n"
         "- transition_description is mandatory only when route == first_last, otherwise set null.\n"
         "- negative_description must be descriptive guardrails (identity/world/wardrobe drift prevention), not model-tech blacklist.\n\n"
+        f"{feedback_block}"
         f"CONTEXT:\n{json.dumps(context, ensure_ascii=False)}"
     )
 
@@ -2492,6 +2329,7 @@ def _coerce_prompts_v11_payload(raw: Any) -> dict[str, Any]:
 
 
 def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    # Deterministic compatibility bridge only (derived from canonical v1.1; no creative authorship).
     by_segment = {str(_safe_dict(row).get("segment_id") or ""): _safe_dict(row) for row in _safe_list(prompts_v11.get("segments"))}
     scenes: list[dict[str, Any]] = []
     for row in prompt_rows:
@@ -2545,8 +2383,55 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
     }
 
 
-def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[str, Any]]) -> tuple[str, str, dict[str, Any]]:
+def _is_generic_subject_text(text: str) -> bool:
+    clean = str(text or "").strip().lower()
+    if not clean:
+        return True
+    words = [w for w in re.split(r"[^a-z0-9]+", clean) if w]
+    if len(words) <= 2:
+        return True
+    return clean in _GENERIC_SUBJECT_TOKENS
+
+
+def _has_role_omission(segment: dict[str, Any], role_row: dict[str, Any]) -> bool:
+    primary_role = str(_safe_dict(role_row).get("primary_role") or "").strip()
+    if not primary_role:
+        return False
+    visual = _safe_dict(segment.get("visual_description"))
+    character = _safe_dict(segment.get("character_state"))
+    subject = str(visual.get("subject_description") or "")
+    pose = str(character.get("pose_presence") or "")
+    facial = str(character.get("facial_expression") or "")
+    return _is_generic_subject_text(subject) and _is_generic_subject_text(pose) and _is_generic_subject_text(facial)
+
+
+def _build_drift_evidence_bundle(*, prompts_v11: dict[str, Any], segment: dict[str, Any], prompt_row: dict[str, Any], package: dict[str, Any]) -> str:
+    story_core = _safe_dict(package.get("story_core"))
+    connected_context_summary = _safe_dict(_safe_dict(package.get("input")).get("connected_context_summary")) or _safe_dict(
+        package.get("connected_context_summary")
+    )
+    visual = _safe_dict(segment.get("visual_description"))
+    environment = _safe_dict(segment.get("environment_details"))
+    return " ".join(
+        [
+            str(prompts_v11.get("global_style_anchor") or ""),
+            str(visual.get("subject_description") or ""),
+            str(visual.get("background_description") or ""),
+            str(visual.get("negative_description") or ""),
+            json.dumps(environment, ensure_ascii=False),
+            str(_safe_dict(story_core.get("identity_lock")).get("summary") or ""),
+            str(_safe_dict(story_core.get("world_lock")).get("summary") or ""),
+            str(_safe_dict(story_core.get("style_lock")).get("summary") or ""),
+            json.dumps(connected_context_summary, ensure_ascii=False),
+            str(prompt_row.get("primary_role") or ""),
+            " ".join(str(v) for v in _safe_list(prompt_row.get("secondary_roles"))),
+        ]
+    ).lower()
+
+
+def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[str, Any]], package: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     expected_segment_ids = [str(_safe_dict(row).get("segment_id") or "") for row in prompt_rows]
+    prompt_rows_by_segment = {str(_safe_dict(row).get("segment_id") or ""): _safe_dict(row) for row in prompt_rows}
     expected_route = {str(_safe_dict(row).get("segment_id") or ""): str(_safe_dict(row).get("route") or "i2v") for row in prompt_rows}
     actual_segments = _safe_list(prompts_v11.get("segments"))
     actual_segment_ids = [str(_safe_dict(row).get("segment_id") or "") for row in actual_segments]
@@ -2563,6 +2448,7 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
     for segment in actual_segments:
         row = _safe_dict(segment)
         segment_id = str(row.get("segment_id") or "")
+        prompt_row = _safe_dict(prompt_rows_by_segment.get(segment_id))
         route = expected_route.get(segment_id, "i2v")
         visual = _safe_dict(row.get("visual_description"))
         if not _safe_dict(row.get("character_state")) or not _safe_dict(row.get("environment_details")) or not visual:
@@ -2587,6 +2473,19 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
             return "PROMPTS_CAMERA_LEAKAGE", f"camera_leakage:{segment_id}", {}
         if any(token in blob for token in _ROUTE_DELIVERY_PATTERNS):
             return "PROMPTS_ROUTE_DELIVERY_LEAKAGE", f"route_delivery_leakage:{segment_id}", {}
+        if _has_role_omission(row, prompt_row):
+            return "PROMPTS_ROLE_OMISSION", f"role_omission:{segment_id}", {}
+
+        drift_blob = _build_drift_evidence_bundle(
+            prompts_v11=prompts_v11,
+            segment=row,
+            prompt_row=prompt_row,
+            package=package,
+        )
+        if any(token in drift_blob for token in _IDENTITY_DRIFT_TOKENS):
+            return "PROMPTS_IDENTITY_DRIFT", f"identity_drift:{segment_id}", {}
+        if any(token in drift_blob for token in _WORLD_DRIFT_TOKENS):
+            return "PROMPTS_WORLD_DRIFT", f"world_drift:{segment_id}", {}
 
         if route == "first_last":
             transition_required_count += 1
@@ -2602,7 +2501,7 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
     }
 
 
-def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
+def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validation_feedback: str = "") -> dict[str, Any]:
     prompt_rows, aux = _build_prompt_rows(package)
     story_core = _safe_dict(aux.get("story_core"))
     global_style_anchor = _build_global_style_anchor(story_core)
@@ -2637,7 +2536,12 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             "diagnostics": diagnostics,
         }
 
-    prompt = _build_prompts_v11_prompt(prompt_rows=prompt_rows, global_style_anchor=global_style_anchor, package=package)
+    prompt = _build_prompts_v11_prompt(
+        prompt_rows=prompt_rows,
+        global_style_anchor=global_style_anchor,
+        package=package,
+        validation_feedback=validation_feedback,
+    )
     raw_payload: dict[str, Any] = {}
     error = ""
     try:
@@ -2656,47 +2560,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
 
-    if not raw_payload:
-        raw_payload = {
-            "prompts_version": "1.1",
-            "global_style_anchor": global_style_anchor,
-            "segments": [
-                {
-                    "segment_id": str(row.get("segment_id") or ""),
-                    "visual_description": {
-                        "subject_description": f"Same primary subject continuity, segment intent: {str(row.get('scene_goal') or '')}".strip(),
-                        "background_description": "Same world family and location lineage with local zone variation only.",
-                        "negative_description": "No identity drift, no wardrobe drift, no world drift, no second hero in center focus, no fantasy.",
-                    },
-                    "character_state": {
-                        "emotion": str(row.get("emotional_key") or row.get("beat_purpose") or "controlled emotional progression"),
-                        "pose_presence": str(row.get("subject_motion") or "grounded readable presence"),
-                        "facial_expression": "Readable grounded expression aligned with beat purpose.",
-                    },
-                    "environment_details": {
-                        "lighting": "Same lighting family with grounded realism continuity.",
-                        "atmosphere": "Consistent club/world atmosphere with coherent shadows, reflections, and haze when applicable.",
-                        "key_elements": str(row.get("layout") or row.get("framing") or "world key elements stay consistent"),
-                    },
-                    "transition_description": {
-                        "start_state_description": "Starting state aligned with scene entry continuity.",
-                        "end_state_description": "Ending state aligned with same-world continuity and beat progression.",
-                    }
-                    if str(row.get("route") or "") == "first_last"
-                    else None,
-                    "prompt_notes": [
-                        str(row.get("audio_visual_sync") or "").strip(),
-                        str(row.get("transcript_slice") or "").strip(),
-                    ],
-                }
-                for row in prompt_rows
-            ],
-        }
-
     if not str(raw_payload.get("global_style_anchor") or "").strip():
         raw_payload["global_style_anchor"] = global_style_anchor
 
-    error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows)
+    error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
     diagnostics["scene_prompts_error_code"] = error_code
     diagnostics["scene_prompts_validation_error"] = validation_error
     diagnostics.update(validation_diag)
@@ -2716,13 +2583,18 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
         "scenes": _safe_list(legacy_bridge.get("scenes")),
         "global_prompt_rules": _safe_list(legacy_bridge.get("global_prompt_rules")),
     }
-    ok = not error_code and bool(_safe_list(scene_prompts.get("segments")))
-    final_error = error or (error_code.lower() if error_code else "")
+    has_validation_error = bool(validation_error)
+    has_error_code = bool(error_code)
+    has_transport_error = bool(error)
+    has_segments = bool(_safe_list(scene_prompts.get("segments")))
+    ok = (not has_transport_error) and (not has_error_code) and (not has_validation_error) and has_segments
+    final_error = error or (error_code.lower() if error_code else "") or ("scene_prompts_empty" if not has_segments else "")
     return {
         "ok": ok,
         "scene_prompts": scene_prompts,
         "error": final_error,
+        "error_code": error_code,
         "validation_error": validation_error,
-        "used_fallback": bool(error or error_code),
+        "used_fallback": False,
         "diagnostics": diagnostics,
     }
