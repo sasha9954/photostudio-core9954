@@ -2811,7 +2811,7 @@ function hasScenarioStagePayload(stageId = "", storyboardPackage = {}) {
     const stage = pkg?.final_video_prompt && typeof pkg.final_video_prompt === "object" ? pkg.final_video_prompt : {};
     if (Array.isArray(stage?.segments) && stage.segments.length > 0) return true;
     if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
-    return Object.keys(stage).length > 0;
+    return false;
   }
   if (normalized === "finalize") {
     const stage = pkg?.final_storyboard && typeof pkg.final_storyboard === "object" ? pkg.final_storyboard : {};

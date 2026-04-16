@@ -150,7 +150,13 @@ def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     if stage_id in {"scene_plan", "scene_prompts", "finalize"}:
         return isinstance(output, dict) and "scenes" in output
     if stage_id == "final_video_prompt":
-        return isinstance(output, dict) and ("segments" in output or "scenes" in output)
+        if not isinstance(output, dict):
+            return False
+        segments = output.get("segments")
+        if isinstance(segments, list) and len(segments) > 0:
+            return True
+        scenes = output.get("scenes")
+        return isinstance(scenes, list) and len(scenes) > 0
     return isinstance(output, dict) and bool(output)
 
 

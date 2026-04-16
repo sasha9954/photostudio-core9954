@@ -15,6 +15,7 @@ FINAL_VIDEO_PROMPT_EMPTY = "FINAL_VIDEO_PROMPT_EMPTY"
 FINAL_VIDEO_PROMPT_SCHEMA_INVALID = "FINAL_VIDEO_PROMPT_SCHEMA_INVALID"
 FINAL_VIDEO_PROMPT_SEGMENT_ID_MISMATCH = "FINAL_VIDEO_PROMPT_SEGMENT_ID_MISMATCH"
 FINAL_VIDEO_PROMPT_ROUTE_MISMATCH = "FINAL_VIDEO_PROMPT_ROUTE_MISMATCH"
+FINAL_VIDEO_PROMPT_UPSTREAM_ROUTE_MISSING = "FINAL_VIDEO_PROMPT_UPSTREAM_ROUTE_MISSING"
 FINAL_VIDEO_PROMPT_MISSING_ENGINE_HINTS = "FINAL_VIDEO_PROMPT_MISSING_ENGINE_HINTS"
 FINAL_VIDEO_PROMPT_MISSING_FRAME_PROMPTS = "FINAL_VIDEO_PROMPT_MISSING_FRAME_PROMPTS"
 FINAL_VIDEO_PROMPT_WORKFLOW_CONFLICT = "FINAL_VIDEO_PROMPT_WORKFLOW_CONFLICT"
@@ -151,7 +152,7 @@ def _build_upstream_segments(package: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         route = _normalize_route(row.get("route") or row.get("video_generation_route") or row.get("route_type"))
         if not route:
-            route = "i2v"
+            raise ValueError(FINAL_VIDEO_PROMPT_UPSTREAM_ROUTE_MISSING)
         out.append(
             {
                 "segment_id": segment_id,
@@ -358,7 +359,13 @@ def _apply_deprecated_bridge(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
-    upstream_segments = _build_upstream_segments(package)
+    upstream_segments: list[dict[str, Any]] = []
+    upstream_error = ""
+    try:
+        upstream_segments = _build_upstream_segments(package)
+    except Exception as exc:
+        upstream_error = _clean_text(exc) or FINAL_VIDEO_PROMPT_UPSTREAM_ROUTE_MISSING
+
     diagnostics: dict[str, Any] = {
         "final_video_prompt_backend": "gemini",
         "final_video_prompt_prompt_version": FINAL_VIDEO_PROMPT_STAGE_VERSION,
@@ -370,6 +377,14 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
         "final_video_prompt_validation_errors_by_segment": {},
         "final_video_prompt_route_baseline_bank_version": ROUTE_BASELINE_BANK_VERSION,
     }
+    if upstream_error:
+        diagnostics["final_video_prompt_errors"] = [upstream_error]
+        return {
+            "ok": False,
+            "final_video_prompt": {"delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION, "segments": [], "scenes": []},
+            "diagnostics": diagnostics,
+            "error": upstream_error,
+        }
 
     if not upstream_segments:
         diagnostics["final_video_prompt_errors"] = [FINAL_VIDEO_PROMPT_EMPTY]
