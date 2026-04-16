@@ -433,6 +433,10 @@ class ClipVideoIn(BaseModel):
     requiresContinuation: bool | None = None
     requiresAudioSensitiveVideo: bool | None = None
     sceneContract: dict | None = None
+    routePayload: dict | None = None
+    route_payload: dict | None = None
+    engineHints: dict | None = None
+    engine_hints: dict | None = None
     videoMetadata: dict | None = None
     video_metadata: dict | None = None
     sceneActiveRoles: list[str] | None = None
@@ -3082,16 +3086,6 @@ def _resolve_scene_video_metadata(payload: ClipVideoIn, scene_contract: dict[str
         motion_tag = "restrained_walk"
     if camera_tag and camera_tag not in VIDEO_METADATA_CAMERA_TAG_WHITELIST:
         camera_tag = "locked"
-    if ltx_positive and len(ltx_positive) < 32:
-        fallback_scene_text = str(
-            contract.get("summary")
-            or contract.get("scene_goal")
-            or contract.get("video_prompt")
-            or contract.get("videoPrompt")
-            or ""
-        ).strip()
-        if fallback_scene_text:
-            ltx_positive = f"{fallback_scene_text}, {ltx_positive}".strip(", ")
     return {
         "ltx_positive": ltx_positive,
         "ltx_negative": ltx_negative,
@@ -3099,6 +3093,46 @@ def _resolve_scene_video_metadata(payload: ClipVideoIn, scene_contract: dict[str
         "camera_tag": camera_tag,
         "prompt_source": str(metadata.get("prompt_source") or metadata.get("promptSource") or "gemini_final_video_prompt_v1").strip(),
         "valid": bool(ltx_positive),
+    }
+
+
+def _resolve_scene_final_video_contract(payload: ClipVideoIn, scene_contract: dict[str, Any] | None = None) -> dict[str, Any]:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    route_payload = (
+        payload.routePayload
+        if isinstance(payload.routePayload, dict)
+        else payload.route_payload if isinstance(payload.route_payload, dict)
+        else contract.get("route_payload") if isinstance(contract.get("route_payload"), dict)
+        else contract.get("routePayload") if isinstance(contract.get("routePayload"), dict)
+        else {}
+    )
+    engine_hints = (
+        payload.engineHints
+        if isinstance(payload.engineHints, dict)
+        else payload.engine_hints if isinstance(payload.engine_hints, dict)
+        else contract.get("engine_hints") if isinstance(contract.get("engine_hints"), dict)
+        else contract.get("engineHints") if isinstance(contract.get("engineHints"), dict)
+        else {}
+    )
+    video_metadata = (
+        payload.videoMetadata
+        if isinstance(payload.videoMetadata, dict)
+        else payload.video_metadata if isinstance(payload.video_metadata, dict)
+        else contract.get("video_metadata") if isinstance(contract.get("video_metadata"), dict)
+        else contract.get("videoMetadata") if isinstance(contract.get("videoMetadata"), dict)
+        else {}
+    )
+    positive_prompt = str(route_payload.get("positive_prompt") or route_payload.get("positivePrompt") or "").strip()
+    negative_prompt = str(route_payload.get("negative_prompt") or route_payload.get("negativePrompt") or "").strip()
+    return {
+        "positive_prompt": positive_prompt,
+        "negative_prompt": negative_prompt,
+        "first_frame_prompt": route_payload.get("first_frame_prompt") or route_payload.get("firstFramePrompt"),
+        "last_frame_prompt": route_payload.get("last_frame_prompt") or route_payload.get("lastFramePrompt"),
+        "engine_hints": engine_hints if isinstance(engine_hints, dict) else {},
+        "video_metadata": video_metadata if isinstance(video_metadata, dict) else {},
+        "prompt_source": str(contract.get("prompt_source") or contract.get("promptSource") or "gemini_final_video_prompt_v11").strip(),
+        "valid": bool(positive_prompt and negative_prompt),
     }
 
 
@@ -15216,6 +15250,7 @@ def clip_video(payload: ClipVideoIn):
             or scene_contract_for_prompt.get("video_prompt")
             or ""
         ).strip()
+        scene_final_contract = _resolve_scene_final_video_contract(payload, scene_contract_for_prompt)
         scene_video_metadata = _resolve_scene_video_metadata(payload, scene_contract_for_prompt)
         metadata_route_allowed = _is_video_metadata_route_allowed(
             payload=payload,
@@ -15223,8 +15258,21 @@ def clip_video(payload: ClipVideoIn):
             workflow_key=final_workflow_key,
             model_key=resolved_model_key,
         )
+        has_canonical_final_contract = bool(scene_final_contract.get("valid"))
         has_gemini_video_metadata = bool(metadata_route_allowed and scene_video_metadata.get("valid"))
-        if has_gemini_video_metadata:
+        if has_canonical_final_contract:
+            effective_prompt = str(scene_final_contract.get("positive_prompt") or "").strip()
+            scene_video_negative_prompt = str(scene_final_contract.get("negative_prompt") or "").strip()
+            prompt_debug = {
+                "videoPromptLength": len(scene_video_prompt),
+                "transitionActionPromptLength": len(str(payload.transitionActionPrompt or "").strip()),
+                "effectivePromptLength": len(effective_prompt),
+                "requestedPromptPreview": _prompt_preview(scene_video_prompt, 500),
+                "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+                "effectivePromptSource": "canonical_final_video_prompt_contract",
+                "promptBuilderMode": "scenario_manifest_only",
+            }
+        elif has_gemini_video_metadata:
             effective_prompt = str(scene_video_metadata.get("ltx_positive") or "").strip()
             scene_video_negative_prompt = str(scene_video_metadata.get("ltx_negative") or "").strip() or VIDEO_METADATA_NEGATIVE_FALLBACK
             prompt_debug = {
@@ -15263,9 +15311,9 @@ def clip_video(payload: ClipVideoIn):
         print(
             "[CLIP VIDEO PROMPT SOURCE] "
             + json.dumps(
-                {
+            {
                     "sceneId": scene_id,
-                    "source": "gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder",
+                    "source": "canonical_final_video_prompt_contract" if has_canonical_final_contract else ("gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder"),
                     "workflowKey": final_workflow_key,
                     "metadataRouteAllowed": metadata_route_allowed,
                     "motion_tag": str(scene_video_metadata.get("motion_tag") or ""),
@@ -15995,6 +16043,7 @@ def clip_video(payload: ClipVideoIn):
 
     scene_human_visual_anchors = [str(item or "").strip() for item in (payload.sceneHumanVisualAnchors or []) if str(item or "").strip()]
     scene_contract_for_prompt = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+    scene_final_contract = _resolve_scene_final_video_contract(payload, scene_contract_for_prompt)
     scene_video_metadata = _resolve_scene_video_metadata(payload, scene_contract_for_prompt)
     metadata_route_allowed = _is_video_metadata_route_allowed(
         payload=payload,
@@ -16002,8 +16051,21 @@ def clip_video(payload: ClipVideoIn):
         workflow_key=final_workflow_key,
         model_key=resolved_model_key,
     )
+    has_canonical_final_contract = bool(scene_final_contract.get("valid"))
     has_gemini_video_metadata = bool(metadata_route_allowed and scene_video_metadata.get("valid"))
-    if has_gemini_video_metadata:
+    if has_canonical_final_contract:
+        effective_prompt = str(scene_final_contract.get("positive_prompt") or "").strip()
+        scene_video_negative_prompt = str(scene_final_contract.get("negative_prompt") or "").strip()
+        prompt_debug = {
+            "videoPromptLength": len(str(payload.videoPrompt or "").strip()),
+            "transitionActionPromptLength": len(str(payload.transitionActionPrompt or "").strip()),
+            "effectivePromptLength": len(effective_prompt),
+            "requestedPromptPreview": _prompt_preview(str(payload.videoPrompt or "").strip(), 500),
+            "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+            "effectivePromptSource": "canonical_final_video_prompt_contract",
+            "promptBuilderMode": "scenario_manifest_only",
+        }
+    elif has_gemini_video_metadata:
         effective_prompt = str(scene_video_metadata.get("ltx_positive") or "").strip()
         scene_video_negative_prompt = str(scene_video_metadata.get("ltx_negative") or "").strip() or VIDEO_METADATA_NEGATIVE_FALLBACK
         prompt_debug = {
@@ -16040,7 +16102,7 @@ def clip_video(payload: ClipVideoIn):
         + json.dumps(
             {
                 "sceneId": scene_id,
-                "source": "gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder",
+                "source": "canonical_final_video_prompt_contract" if has_canonical_final_contract else ("gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder"),
                 "workflowKey": final_workflow_key,
                 "metadataRouteAllowed": metadata_route_allowed,
                 "motion_tag": str(scene_video_metadata.get("motion_tag") or ""),
