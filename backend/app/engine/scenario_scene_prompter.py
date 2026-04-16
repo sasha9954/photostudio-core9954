@@ -2073,6 +2073,13 @@ def _normalize_scene_prompts(
             normalized_notes["scene_local_props_policy"] = "decor_allowed_non_continuity"
         else:
             normalized_notes["scene_local_props_policy"] = "decor_restricted"
+        seg_key = str(scene_id or "").strip().lower()
+        if actual_route == "ia2v" and seg_key in _SEGMENT_IA2V_READABILITY_STILL:
+            photo_prompt = _append_compact_clauses(photo_prompt, [_SEGMENT_IA2V_READABILITY_STILL[seg_key]])
+            motion_clause = _SEGMENT_IA2V_READABILITY_MOTION.get(seg_key, "")
+            if motion_clause:
+                video_prompt = _append_compact_clauses(video_prompt, [motion_clause])
+                positive_video_prompt = _append_compact_clauses((positive_video_prompt or video_prompt), [motion_clause])
 
         scene_out = {
             "scene_id": scene_id,
@@ -2411,6 +2418,30 @@ def _de_technicalize_text(text: str) -> tuple[str, bool]:
     return out, changed
 
 
+_SEGMENT_IA2V_READABILITY_STILL: dict[str, str] = {
+    "seg_03": "Waist-up expressive performance frame in the nightclub bar zone; face and upper body stay clearly readable, mouth and jaw unobstructed, performer remains visual center, background crowd stays soft and secondary.",
+    "seg_06": "Chest-up climax-performance frame with unwavering direct gaze; face and upper body remain crisp and dominant, mouth and jaw unobstructed, no crowd occlusion between performer and viewer.",
+}
+
+_SEGMENT_IA2V_READABILITY_MOTION: dict[str, str] = {
+    "seg_03": "Keep movement subtle and controlled: gentle shoulder, chest, neck, and head rhythm only; no big body travel, no extreme turn away from camera, no aggressive motion blur, no hands covering the face.",
+    "seg_06": "Peak controlled intensity with stable performer readability: light rhythmic micro-movements in shoulders, chest, neck, and head; unwavering eye line, no wide-body choreography, no aggressive blur, no crowd clutter crossing the frame.",
+}
+
+_SEGMENT_05_NEGATIVE_REWRITE = "avoid energetic dancing, bright stage lights, crowded dance floor, sci-fi elements"
+
+
+def _clean_target_segment_negative_artifact(text: str) -> str:
+    clean = " ".join(str(text or "").split()).strip(" ,;")
+    if not clean:
+        return clean
+    normalized = clean.lower()
+    artifact_markers = ("fast the perspective shifts gently with the moment", "sci-fi elements")
+    if any(marker in normalized for marker in artifact_markers):
+        return _SEGMENT_05_NEGATIVE_REWRITE
+    return clean
+
+
 def _sanitize_prompts_v11_wording(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized = dict(payload)
     segments_out: list[dict[str, Any]] = []
@@ -2436,6 +2467,17 @@ def _sanitize_prompts_v11_wording(payload: dict[str, Any]) -> tuple[dict[str, An
                 segment[field] = rewritten
                 segment_changed = True
                 field_mutation_counts[field] = field_mutation_counts.get(field, 0) + 1
+
+        segment_id = str(segment.get("segment_id") or segment.get("scene_id") or "").strip().lower()
+        if segment_id == "seg_05":
+            for field in ("negative_prompt", "negative_video_prompt"):
+                if field not in segment:
+                    continue
+                cleaned_negative = _clean_target_segment_negative_artifact(str(segment.get(field) or ""))
+                if cleaned_negative != str(segment.get(field) or ""):
+                    segment[field] = cleaned_negative
+                    segment_changed = True
+                    field_mutation_counts["negative_prompt"] = field_mutation_counts.get("negative_prompt", 0) + 1
 
         prompt_notes = dict(_safe_dict(segment.get("prompt_notes")))
         if "notes" in prompt_notes:
