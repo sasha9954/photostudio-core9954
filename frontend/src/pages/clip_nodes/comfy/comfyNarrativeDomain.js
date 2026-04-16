@@ -1017,70 +1017,40 @@ export function buildScenarioStageManualPayload({
   const existingStoryboardPackage = (
     storyboardPackage && typeof storyboardPackage === "object" && Object.keys(storyboardPackage).length
   ) ? storyboardPackage : (target?.storyboardPackage && typeof target.storyboardPackage === "object" ? target.storyboardPackage : {});
-  const buildCompactDiagnostics = (diag = {}, currentStage = "") => {
-    const safeDiag = diag && typeof diag === "object" ? diag : {};
-    const warnings = Array.isArray(safeDiag?.warnings) ? safeDiag.warnings : [];
-    const errors = Array.isArray(safeDiag?.errors) ? safeDiag.errors : [];
-    return {
-      current_stage: currentStage,
-      warnings_count: warnings.length,
-      errors_count: errors.length,
-      validation_error: normalizeText(
-        safeDiag?.[`${currentStage}_validation_error`]
-        || safeDiag?.validation_error
-      ),
-      story_core_mode: safeDiag?.story_core_mode,
-      story_core_grounding_level: safeDiag?.story_core_grounding_level,
-      story_core_payload_mode: "lean",
-    };
+  const cloneScenarioManualPackage = (pkg = {}) => {
+    if (!pkg || typeof pkg !== "object") return {};
+    try {
+      return JSON.parse(JSON.stringify(pkg));
+    } catch (_error) {
+      return { ...pkg };
+    }
   };
-  const buildLeanManualPackage = (pkg = {}, currentStage = "") => {
+  const summarizeManualPackage = (pkg = {}) => {
     const safePkg = pkg && typeof pkg === "object" ? pkg : {};
-    const input = safePkg?.input && typeof safePkg.input === "object" ? safePkg.input : {};
-    const refsInventory = safePkg?.refs_inventory && typeof safePkg.refs_inventory === "object" ? safePkg.refs_inventory : {};
-    const assignedRoles = safePkg?.assigned_roles && typeof safePkg.assigned_roles === "object" ? safePkg.assigned_roles : {};
-    const audioMap = safePkg?.audio_map && typeof safePkg.audio_map === "object" ? safePkg.audio_map : {};
-    const stageStatuses = safePkg?.stage_statuses && typeof safePkg.stage_statuses === "object" ? safePkg.stage_statuses : {};
-    const diagnostics = safePkg?.diagnostics && typeof safePkg.diagnostics === "object" ? safePkg.diagnostics : {};
-    const stageSectionById = {
-      story_core: ["story_core"],
-      role_plan: ["story_core", "role_plan"],
-      scene_plan: ["story_core", "role_plan", "scene_plan"],
-      scene_prompts: ["story_core", "role_plan", "scene_plan", "scene_prompts"],
-      finalize: ["story_core", "role_plan", "scene_plan", "scene_prompts", "final_storyboard"],
+    const storyCore = safePkg?.story_core && typeof safePkg.story_core === "object" ? safePkg.story_core : {};
+    const rolePlan = safePkg?.role_plan && typeof safePkg.role_plan === "object" ? safePkg.role_plan : {};
+    const scenePlan = safePkg?.scene_plan && typeof safePkg.scene_plan === "object" ? safePkg.scene_plan : {};
+    const scenePrompts = safePkg?.scene_prompts && typeof safePkg.scene_prompts === "object" ? safePkg.scene_prompts : {};
+    return {
+      has_story_core: Boolean(String(storyCore?.core_version || "").trim() && Array.isArray(storyCore?.narrative_segments) && storyCore.narrative_segments.length),
+      has_role_plan: Boolean(String(rolePlan?.roles_version || "").trim() && Array.isArray(rolePlan?.roster) && rolePlan.roster.length),
+      has_scene_plan: Boolean(Array.isArray(scenePlan?.segments) ? scenePlan.segments.length : (Array.isArray(scenePlan?.scenes) ? scenePlan.scenes.length : 0)),
+      has_scene_prompts: Boolean(String(scenePrompts?.prompts_version || "").trim() && Array.isArray(scenePrompts?.segments) && scenePrompts.segments.length),
+      story_core_segments: Array.isArray(storyCore?.narrative_segments) ? storyCore.narrative_segments.length : 0,
+      role_plan_roster_count: Array.isArray(rolePlan?.roster) ? rolePlan.roster.length : 0,
+      scene_plan_segment_count: Array.isArray(scenePlan?.segments) ? scenePlan.segments.length : (Array.isArray(scenePlan?.scenes) ? scenePlan.scenes.length : 0),
+      scene_prompts_segment_count: Array.isArray(scenePrompts?.segments) ? scenePrompts.segments.length : 0,
+      scene_prompts_prompts_version: String(scenePrompts?.prompts_version || "").trim(),
     };
-    const keepSections = stageSectionById[currentStage] || [];
-    const leanPkg = {
-      input,
-      refs_inventory: refsInventory,
-      assigned_roles: assignedRoles,
-      audio_map: audioMap,
-      stage_statuses: Object.fromEntries(
-        Object.entries(stageStatuses).map(([key, value]) => {
-          const row = value && typeof value === "object" ? value : {};
-          return [key, {
-            status: normalizeText(row?.status) || "idle",
-            updated_at: normalizeText(row?.updated_at),
-            error: normalizeText(row?.error),
-            run_count: Number(row?.run_count || 0) || 0,
-          }];
-        })
-      ),
-      diagnostics: buildCompactDiagnostics(diagnostics, currentStage),
-    };
-    keepSections.forEach((sectionKey) => {
-      const value = safePkg?.[sectionKey];
-      if (value && typeof value === "object") leanPkg[sectionKey] = value;
-    });
-    if (!Object.prototype.hasOwnProperty.call(leanPkg, "final_storyboard")) leanPkg.final_storyboard = { scenes: [] };
-    if (!Object.prototype.hasOwnProperty.call(leanPkg, "scene_prompts")) leanPkg.scene_prompts = { scenes: [] };
-    if (!Object.prototype.hasOwnProperty.call(leanPkg, "scene_plan")) leanPkg.scene_plan = { scenes: [] };
-    if (!Object.prototype.hasOwnProperty.call(leanPkg, "role_plan")) leanPkg.role_plan = {};
-    if (!Object.prototype.hasOwnProperty.call(leanPkg, "story_core")) leanPkg.story_core = {};
-    return leanPkg;
   };
   const normalizedStageId = normalizeText(stageId);
-  const stageStoryboardPackage = buildLeanManualPackage(existingStoryboardPackage, normalizedStageId);
+  const stageStoryboardPackage = cloneScenarioManualPackage(existingStoryboardPackage);
+  console.debug("[SCENARIO STAGE MANUAL PAYLOAD]", {
+    stageId: normalizedStageId,
+    requestSource: normalizeText(requestSource),
+    summary: summarizeManualPackage(stageStoryboardPackage),
+    packageKeys: Object.keys(stageStoryboardPackage || {}),
+  });
 
   const rawContextRefs = source?.connectedInputs && typeof source.connectedInputs === "object"
     ? source.connectedInputs

@@ -2932,6 +2932,36 @@ function buildScenarioResponseSummary(response) {
   };
 }
 
+function summarizeScenarioPackageForDiagnostics(storyboardPackage = {}) {
+  const pkg = storyboardPackage && typeof storyboardPackage === "object" && !Array.isArray(storyboardPackage)
+    ? storyboardPackage
+    : {};
+  const storyCore = pkg?.story_core && typeof pkg.story_core === "object" ? pkg.story_core : {};
+  const rolePlan = pkg?.role_plan && typeof pkg.role_plan === "object" ? pkg.role_plan : {};
+  const scenePlan = pkg?.scene_plan && typeof pkg.scene_plan === "object" ? pkg.scene_plan : {};
+  const scenePrompts = pkg?.scene_prompts && typeof pkg.scene_prompts === "object" ? pkg.scene_prompts : {};
+  const roleRosterCount = Array.isArray(rolePlan?.roster)
+    ? rolePlan.roster.length
+    : (Array.isArray(rolePlan?.roles) ? rolePlan.roles.length : (Array.isArray(rolePlan?.cast) ? rolePlan.cast.length : 0));
+  const scenePlanSegmentCount = Array.isArray(scenePlan?.segments)
+    ? scenePlan.segments.length
+    : (Array.isArray(scenePlan?.scenes) ? scenePlan.scenes.length : 0);
+  const scenePromptsSegmentCount = Array.isArray(scenePrompts?.segments)
+    ? scenePrompts.segments.length
+    : (Array.isArray(scenePrompts?.scenes) ? scenePrompts.scenes.length : 0);
+  return {
+    has_story_core: hasScenarioStagePayload("story_core", pkg),
+    has_role_plan: hasScenarioStagePayload("role_plan", pkg),
+    has_scene_plan: hasScenarioStagePayload("scene_plan", pkg),
+    has_scene_prompts: hasScenarioStagePayload("scene_prompts", pkg),
+    story_core_segment_count: Array.isArray(storyCore?.narrative_segments) ? storyCore.narrative_segments.length : 0,
+    role_plan_roster_count: roleRosterCount,
+    scene_plan_segment_count: scenePlanSegmentCount,
+    scene_prompts_segment_count: scenePromptsSegmentCount,
+    scene_prompts_prompts_version: String(scenePrompts?.prompts_version || "").trim(),
+  };
+}
+
 function stripRawScenarioPayload(outputs) {
   if (!outputs || typeof outputs !== "object" || Array.isArray(outputs)) return {};
   const nextOutputs = { ...outputs };
@@ -2978,6 +3008,20 @@ function mergeScenarioPackagePreservingAudioMap({
   }
 
   const nextPackage = { ...responseSafe };
+  const preserveIfIncomingWeaker = (stageId, packageKey) => {
+    const previousValid = hasScenarioStagePayload(stageId, previousSafe);
+    const incomingValid = hasScenarioStagePayload(stageId, responseSafe);
+    if (!previousValid || incomingValid) return false;
+    if (!Object.prototype.hasOwnProperty.call(previousSafe, packageKey)) return false;
+    nextPackage[packageKey] = previousSafe[packageKey];
+    return true;
+  };
+  const preservedCriticalStoryCore = preserveIfIncomingWeaker("story_core", "story_core");
+  const preservedCriticalRolePlan = preserveIfIncomingWeaker("role_plan", "role_plan");
+  const preservedCriticalScenePlan = preserveIfIncomingWeaker("scene_plan", "scene_plan");
+  const preservedCriticalScenePrompts = preserveIfIncomingWeaker("scene_prompts", "scene_prompts");
+  const preservedCriticalFinalVideoPrompt = preserveIfIncomingWeaker("final_video_prompt", "final_video_prompt");
+  const preservedCriticalFinalStoryboard = preserveIfIncomingWeaker("finalize", "final_storyboard");
   const preservePayload = (stageId, packageKey) => {
     const shouldPreserve = decision.applyDecision === "merge_preserve_downstream"
       && getScenarioStageDepth(stageId) > incomingDepth
@@ -3054,6 +3098,12 @@ function mergeScenarioPackagePreservingAudioMap({
     preservedScenePrompts,
     preservedFinalVideoPrompt,
     preservedFinalStoryboard,
+    preservedCriticalStoryCore,
+    preservedCriticalRolePlan,
+    preservedCriticalScenePlan,
+    preservedCriticalScenePrompts,
+    preservedCriticalFinalVideoPrompt,
+    preservedCriticalFinalStoryboard,
     becauseIncomingStageWas: incomingStageId || normalizedRequestedStageId || "unknown",
   });
   return nextPackage;
@@ -17980,6 +18030,12 @@ onClipSec: (nodeId, value) => {
                   autoRun,
                   storyboardPackage: debugNode?.data?.storyboardPackage || {},
                   requestSource: "scenario_pipeline_debug:manual_stage",
+                });
+                console.debug("[SCENARIO MANUAL STAGE REQUEST]", {
+                  stageId,
+                  autoRun,
+                  packageSummary: summarizeScenarioPackageForDiagnostics(payload?.storyboardPackage || {}),
+                  packageKeys: Object.keys(payload?.storyboardPackage || {}),
                 });
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id === nodeId && nodeItem.type === "scenarioPipelineDebug") {

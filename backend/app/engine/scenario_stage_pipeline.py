@@ -2647,6 +2647,25 @@ def build_runtime_diagnostics_summary(
     return summary
 
 
+def build_stage_payload_health_summary(package: dict[str, Any]) -> dict[str, Any]:
+    pkg = _safe_dict(package)
+    story_core = _safe_dict(pkg.get("story_core"))
+    role_plan = _safe_dict(pkg.get("role_plan"))
+    scene_plan = _safe_dict(pkg.get("scene_plan"))
+    scene_prompts = _safe_dict(pkg.get("scene_prompts"))
+    return {
+        "has_story_core": _has_valid_story_core_payload(story_core),
+        "has_role_plan": _has_valid_role_plan_payload(role_plan),
+        "has_scene_plan": _has_valid_scene_plan_payload(scene_plan),
+        "has_scene_prompts": _has_valid_scene_prompts_payload(scene_prompts),
+        "story_core_segment_count": len(_safe_list(story_core.get("narrative_segments"))),
+        "role_plan_roster_count": len(_safe_list(role_plan.get("roster"))),
+        "scene_plan_segment_count": len(_safe_list(scene_plan.get("segments"))) or len(_safe_list(scene_plan.get("scenes"))),
+        "scene_prompts_segment_count": len(_safe_list(scene_prompts.get("segments"))) or len(_safe_list(scene_prompts.get("scenes"))),
+        "scene_prompts_prompts_version": str(scene_prompts.get("prompts_version") or "").strip(),
+    }
+
+
 def _to_float(value: Any, fallback: float = 0.0) -> float:
     try:
         if hasattr(value, "item") and callable(getattr(value, "item")):
@@ -6031,19 +6050,27 @@ def run_manual_stage(
     executed_stage_ids: list[str] = []
     if stage_id == "final_video_prompt":
         deps = STAGE_DEPENDENCIES.get(stage_id, [])
+        incoming_payload_summary = build_stage_payload_health_summary(pkg)
         reusable_upstream = [dep_stage for dep_stage in deps if _can_reuse_stage_output(pkg, dep_stage)]
         missing_upstream = [dep_stage for dep_stage in deps if dep_stage not in reusable_upstream]
         diagnostics = _safe_dict(pkg.get("diagnostics"))
         diagnostics["continuation_mode"] = "manual_final_video_prompt_isolated"
+        diagnostics["final_video_prompt_incoming_payload_summary"] = incoming_payload_summary
         diagnostics["upstream_package_complete"] = not bool(missing_upstream)
         diagnostics["reused_upstream_stages"] = reusable_upstream
         diagnostics["regenerated_stages"] = [stage_id]
         if missing_upstream:
             diagnostics["final_video_prompt_missing_upstream"] = missing_upstream
             diagnostics["final_video_prompt_missing_upstream_reasons"] = [f"missing_{dep}_payload" for dep in missing_upstream]
+            diagnostics["final_video_prompt_missing_upstream_payload_summary"] = incoming_payload_summary
             pkg["diagnostics"] = diagnostics
             error_code = f"final_video_prompt_incomplete_dependencies:{','.join(diagnostics['final_video_prompt_missing_upstream_reasons'])}"
             _set_stage_status(pkg, stage_id, "error", error=error_code)
+            _append_diag_event(
+                pkg,
+                f"manual final_video_prompt dependency gate failed summary={incoming_payload_summary}",
+                stage_id=stage_id,
+            )
             _append_diag_event(pkg, error_code, stage_id=stage_id)
             return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
         pkg["diagnostics"] = diagnostics
