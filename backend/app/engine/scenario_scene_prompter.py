@@ -2243,6 +2243,25 @@ _CAMERA_TECH_LEAK_REGEXES: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bcamera movement\b.{0,30}\b(?:fast|aggressive|jerky|rig|operator)\b", re.IGNORECASE),
 )
 
+_DETECH_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bstable framing\b", re.IGNORECASE), "she remains steadily held in view"),
+    (re.compile(r"\bslight push[\-\s]?in\b", re.IGNORECASE), "the sense of nearness gently increases"),
+    (re.compile(r"\bcamera pushes? in\b", re.IGNORECASE), "attention moves closer to her expression"),
+    (re.compile(r"\bpush[\-\s]?in\b", re.IGNORECASE), "the view eases closer"),
+    (re.compile(r"\bcamera pulls? back\b", re.IGNORECASE), "the space around her opens slightly"),
+    (re.compile(r"\bpull[\-\s]?back\b", re.IGNORECASE), "the view opens slightly around her"),
+    (re.compile(r"\blateral tracking\b", re.IGNORECASE), "her movement is followed smoothly across the space"),
+    (re.compile(r"\btracking shot\b", re.IGNORECASE), "her movement is followed with smooth continuity"),
+    (re.compile(r"\bcamera moves?\b", re.IGNORECASE), "the view shifts with her"),
+    (re.compile(r"\bcamera movement\b", re.IGNORECASE), "the perspective shifts gently with the moment"),
+    (re.compile(r"\bframing reset\b", re.IGNORECASE), "the view settles into a refreshed composition"),
+    (re.compile(r"\bclose[\-\s]?up\b", re.IGNORECASE), "an intimate near view"),
+    (re.compile(r"\bmedium shot\b", re.IGNORECASE), "a more open view of her upper body"),
+    (re.compile(r"\bwide shot\b", re.IGNORECASE), "a wider view of her within the surrounding space"),
+    (re.compile(r"\bdolly\b", re.IGNORECASE), "smooth forward or backward perspective shift"),
+    (re.compile(r"\bzoom\b", re.IGNORECASE), "a gradual change in perceived nearness"),
+)
+
 
 def _suggest_local_zone_hint(
     *,
@@ -2377,6 +2396,89 @@ def _build_prompt_rows(package: dict[str, Any]) -> tuple[list[dict[str, Any]], d
     }
 
 
+def _de_technicalize_text(text: str) -> tuple[str, bool]:
+    clean = " ".join(str(text or "").strip().split())
+    if not clean:
+        return "", False
+    changed = False
+    out = clean
+    for pattern, replacement in _DETECH_REPLACEMENTS:
+        updated = pattern.sub(replacement, out)
+        if updated != out:
+            changed = True
+            out = updated
+    out = re.sub(r"\s{2,}", " ", out).strip(" ,;")
+    return out, changed
+
+
+def _sanitize_prompts_v11_wording(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized = dict(payload)
+    segments_out: list[dict[str, Any]] = []
+    changed_segment_ids: list[str] = []
+    field_mutation_counts: dict[str, int] = {
+        "photo_prompt": 0,
+        "video_prompt": 0,
+        "negative_prompt": 0,
+        "prompt_notes.notes[]": 0,
+        "prompt_notes.transition.*": 0,
+        "first_frame_prompt": 0,
+        "last_frame_prompt": 0,
+    }
+    for raw_segment in _safe_list(payload.get("segments")):
+        segment = dict(_safe_dict(raw_segment))
+        segment_changed = False
+
+        for field in ("photo_prompt", "video_prompt", "negative_prompt", "first_frame_prompt", "last_frame_prompt"):
+            if field not in segment:
+                continue
+            rewritten, changed = _de_technicalize_text(str(segment.get(field) or ""))
+            if changed:
+                segment[field] = rewritten
+                segment_changed = True
+                field_mutation_counts[field] = field_mutation_counts.get(field, 0) + 1
+
+        prompt_notes = dict(_safe_dict(segment.get("prompt_notes")))
+        if "notes" in prompt_notes:
+            notes_out: list[str] = []
+            notes_changed = False
+            for note in _safe_list(prompt_notes.get("notes")):
+                rewritten_note, note_changed = _de_technicalize_text(str(note or ""))
+                notes_out.append(rewritten_note)
+                if note_changed:
+                    notes_changed = True
+                    field_mutation_counts["prompt_notes.notes[]"] += 1
+            if notes_changed:
+                prompt_notes["notes"] = notes_out
+                segment_changed = True
+
+        transition = dict(_safe_dict(prompt_notes.get("transition")))
+        transition_changed = False
+        for transition_key in ("start_state", "end_state", "state_delta"):
+            if transition_key not in transition:
+                continue
+            rewritten_transition, changed = _de_technicalize_text(str(transition.get(transition_key) or ""))
+            if changed:
+                transition[transition_key] = rewritten_transition
+                transition_changed = True
+                field_mutation_counts["prompt_notes.transition.*"] += 1
+        if transition_changed:
+            prompt_notes["transition"] = transition
+            segment_changed = True
+
+        if segment_changed:
+            segment["prompt_notes"] = prompt_notes
+            changed_segment_ids.append(str(segment.get("segment_id") or "").strip())
+        segments_out.append(segment)
+
+    normalized["segments"] = segments_out
+    non_zero_counts = {k: v for k, v in field_mutation_counts.items() if v > 0}
+    return normalized, {
+        "scene_prompts_de_technicalization_applied": bool(changed_segment_ids),
+        "scene_prompts_de_technicalized_segment_ids": [seg for seg in changed_segment_ids if seg],
+        "scene_prompts_de_technicalized_field_counts": non_zero_counts,
+    }
+
+
 def _build_global_style_anchor(story_core: dict[str, Any]) -> str:
     identity = _build_identity_lock_summary(story_core)
     world = _build_world_lock_summary(story_core)
@@ -2476,6 +2578,10 @@ def _build_prompts_v11_prompt(
         "- Do not output engine params, renderer-specific phrasing, quality buzzwords, workflow tags, model tags, camera/fps/lens/seed specs.\n"
         "- Do not reconstruct final video prompt and do not output route-delivery payload.\n"
         "- Translate SCENES signal (scene_goal, narrative_function, subject_motion, camera_intent, pacing, energy_alignment, framing, subject_priority, layout, depth_strategy, audio_visual_sync) into natural descriptive writing rather than technical labels.\n"
+        "- Never copy technical scene labels verbatim into final prompts.\n"
+        "- camera_intent must be translated into natural descriptive prose.\n"
+        "- framing/motion hints must be expressed without camera jargon.\n"
+        "- Forbidden literal leakage examples in final prompt text: stable framing, push-in, pull-back, lateral tracking, dolly, zoom, camera move, tracking shot, medium shot, close-up, wide shot.\n"
         "- Make photo_prompt and video_prompt stable/specific across segments (same woman identity and wardrobe continuity), while changing micro-performance and local action intent by segment.\n"
         "- Keep prompts within the same club-family world while differentiating local visual pockets (entrance shadow, reflective glass, bar threshold, face-light pivot, dance-floor edge anticipation, performance threshold, shadow retreat, afterglow observation).\n"
         "- Use prompt_rows.local_zone_hint as deterministic local pocket guidance and keep progression coherent; do not invent a new venue or cast.\n"
@@ -2858,6 +2964,9 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         raw_payload["global_style_anchor"] = global_style_anchor
     if not str(raw_payload.get("prompts_version") or "").strip():
         raw_payload["prompts_version"] = "1.1"
+
+    raw_payload, de_technicalization_diag = _sanitize_prompts_v11_wording(raw_payload)
+    diagnostics.update(de_technicalization_diag)
 
     error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
     diagnostics["scene_prompts_error_code"] = error_code
