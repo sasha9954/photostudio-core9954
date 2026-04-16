@@ -177,7 +177,9 @@ def _has_valid_scene_plan_payload(output: Any) -> bool:
 
 def _has_valid_scene_prompts_payload(output: Any) -> bool:
     payload = _safe_dict(output)
-    return bool(_safe_list(payload.get("segments"))) or bool(_safe_list(payload.get("scenes")))
+    prompts_version = str(payload.get("prompts_version") or "").strip()
+    segments = _safe_list(payload.get("segments"))
+    return prompts_version == "1.1" and bool(segments)
 
 
 def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
@@ -5755,6 +5757,17 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_transition_required_count"] = 0
     diagnostics["scene_prompts_transition_present_count"] = 0
     diagnostics["scene_prompts_error_code"] = ""
+    diagnostics["scene_prompts_raw_model_response_preview"] = ""
+    diagnostics["scene_prompts_parsed_payload_preview"] = ""
+    diagnostics["scene_prompts_sanitized_payload_preview"] = ""
+    diagnostics["scene_prompts_normalized_scene_prompts_preview"] = ""
+    diagnostics["scene_prompts_dropped_non_canonical_fields"] = []
+    diagnostics["scene_prompts_expected_segment_ids"] = []
+    diagnostics["scene_prompts_seen_segment_ids"] = []
+    diagnostics["scene_prompts_missing_segment_ids"] = []
+    diagnostics["scene_prompts_extra_segment_ids"] = []
+    diagnostics["scene_prompts_snapshot_restored"] = False
+    diagnostics["scene_prompts_failure_reason"] = ""
     diagnostics["prompt_capability_guard_applied"] = False
     diagnostics["scene_prompts_validation_error"] = ""
     diagnostics["validation_error"] = ""
@@ -5763,6 +5776,8 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     previous_signature = str(diagnostics.get("scene_prompts_upstream_signature") or "")
     diagnostics["scene_prompts_upstream_changed"] = bool(previous_signature and previous_signature != current_signature)
     diagnostics["scene_prompts_upstream_signature"] = current_signature
+    previous_scene_prompts = _safe_dict(package.get("scene_prompts"))
+    previous_scene_prompts_valid = _has_valid_scene_prompts_payload(previous_scene_prompts)
     package["diagnostics"] = diagnostics
     package["scene_prompts"] = {"scenes": []}
 
@@ -5857,6 +5872,20 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_transition_required_count"] = int(prompts_diag.get("scene_prompts_transition_required_count") or 0)
     diagnostics["scene_prompts_transition_present_count"] = int(prompts_diag.get("scene_prompts_transition_present_count") or 0)
     diagnostics["scene_prompts_error_code"] = str(prompts_diag.get("scene_prompts_error_code") or "")
+    diagnostics["scene_prompts_raw_model_response_preview"] = str(prompts_diag.get("scene_prompts_raw_model_response_preview") or "")
+    diagnostics["scene_prompts_parsed_payload_preview"] = str(prompts_diag.get("scene_prompts_parsed_payload_preview") or "")
+    diagnostics["scene_prompts_sanitized_payload_preview"] = str(prompts_diag.get("scene_prompts_sanitized_payload_preview") or "")
+    diagnostics["scene_prompts_normalized_scene_prompts_preview"] = str(
+        prompts_diag.get("scene_prompts_normalized_scene_prompts_preview") or ""
+    )
+    diagnostics["scene_prompts_dropped_non_canonical_fields"] = _safe_list(
+        prompts_diag.get("scene_prompts_dropped_non_canonical_fields")
+    )
+    diagnostics["scene_prompts_expected_segment_ids"] = _safe_list(prompts_diag.get("scene_prompts_expected_segment_ids"))
+    diagnostics["scene_prompts_seen_segment_ids"] = _safe_list(prompts_diag.get("scene_prompts_seen_segment_ids"))
+    diagnostics["scene_prompts_missing_segment_ids"] = _safe_list(prompts_diag.get("scene_prompts_missing_segment_ids"))
+    diagnostics["scene_prompts_extra_segment_ids"] = _safe_list(prompts_diag.get("scene_prompts_extra_segment_ids"))
+    diagnostics["scene_prompts_failure_reason"] = str(prompts_diag.get("scene_prompts_failure_reason") or "")
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = int(
         prompts_diag.get("scene_prompts_route_semantics_mismatch_count")
         or diagnostics.get("scene_prompts_route_semantics_mismatch_count")
@@ -5879,12 +5908,19 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     if not hard_fail_error:
         result_has_validation_error = bool(str(result.get("validation_error") or "").strip())
         result_has_segments = bool(_safe_list(scene_prompts.get("segments")))
-        if (not bool(result.get("ok"))) or result_has_validation_error or (not result_has_segments):
+        result_prompts_version = str(scene_prompts.get("prompts_version") or "").strip()
+        coverage_ok = bool(diagnostics.get("scene_prompts_segment_coverage_ok"))
+        if (not bool(result.get("ok"))) or result_has_validation_error or (not result_has_segments) or (result_prompts_version != "1.1") or (not coverage_ok):
             hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_prompts_invalid")
+            diagnostics["scene_prompts_failure_reason"] = diagnostics.get("scene_prompts_failure_reason") or hard_fail_error
     package["diagnostics"] = diagnostics
 
     if hard_fail_error:
-        package["scene_prompts"] = {"prompts_version": "1.1", "global_style_anchor": "", "segments": [], "scenes": []}
+        if previous_scene_prompts_valid:
+            package["scene_prompts"] = previous_scene_prompts
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            diagnostics["scene_prompts_snapshot_restored"] = True
+            package["diagnostics"] = diagnostics
         _append_diag_event(package, f"scene_prompts hard fail after retry: {hard_fail_error}", stage_id="scene_prompts")
         raise RuntimeError(hard_fail_error)
 
