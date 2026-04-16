@@ -2417,7 +2417,6 @@ def _build_drift_evidence_bundle(*, prompts_v11: dict[str, Any], segment: dict[s
             str(prompts_v11.get("global_style_anchor") or ""),
             str(visual.get("subject_description") or ""),
             str(visual.get("background_description") or ""),
-            str(visual.get("negative_description") or ""),
             json.dumps(environment, ensure_ascii=False),
             str(_safe_dict(story_core.get("identity_lock")).get("summary") or ""),
             str(_safe_dict(story_core.get("world_lock")).get("summary") or ""),
