@@ -380,16 +380,32 @@ function buildScenarioVideoVisualGlueText(scene = {}) {
 
 
 function resolveScenarioSceneVideoMetadata(scene = {}) {
+  const routePayload = scene?.route_payload && typeof scene.route_payload === "object"
+    ? scene.route_payload
+    : (scene?.routePayload && typeof scene.routePayload === "object" ? scene.routePayload : {});
+  const engineHints = scene?.engine_hints && typeof scene.engine_hints === "object"
+    ? scene.engine_hints
+    : (scene?.engineHints && typeof scene.engineHints === "object" ? scene.engineHints : {});
   const metadata = scene?.video_metadata && typeof scene.video_metadata === "object"
     ? scene.video_metadata
     : (scene?.videoMetadata && typeof scene.videoMetadata === "object" ? scene.videoMetadata : {});
   return {
-    ltxPositive: String(metadata?.ltx_positive ?? metadata?.ltxPositive ?? "").trim(),
-    ltxNegative: String(metadata?.ltx_negative ?? metadata?.ltxNegative ?? "").trim(),
-    motionTag: String(metadata?.motion_tag ?? metadata?.motionTag ?? "").trim(),
-    cameraTag: String(metadata?.camera_tag ?? metadata?.cameraTag ?? "").trim(),
-    promptSource: String(metadata?.prompt_source ?? metadata?.promptSource ?? "").trim(),
-    raw: metadata,
+    positivePrompt: String(routePayload?.positive_prompt ?? routePayload?.positivePrompt ?? "").trim(),
+    negativePrompt: String(routePayload?.negative_prompt ?? routePayload?.negativePrompt ?? "").trim(),
+    firstFramePrompt: String(routePayload?.first_frame_prompt ?? routePayload?.firstFramePrompt ?? "").trim(),
+    lastFramePrompt: String(routePayload?.last_frame_prompt ?? routePayload?.lastFramePrompt ?? "").trim(),
+    routeType: String(metadata?.route_type ?? metadata?.routeType ?? "").trim(),
+    promptSource: String(scene?.prompt_source ?? scene?.promptSource ?? "").trim(),
+    routePayload,
+    engineHints,
+    videoMetadata: metadata,
+    raw: {
+      route_payload: routePayload,
+      engine_hints: engineHints,
+      video_metadata: metadata,
+      audio_behavior_hints: String(scene?.audio_behavior_hints ?? scene?.audioBehaviorHints ?? "").trim(),
+      prompt_source: String(scene?.prompt_source ?? scene?.promptSource ?? "").trim(),
+    },
   };
 }
 
@@ -404,7 +420,7 @@ function resolveScenarioSceneNegativePrompt(scene = {}) {
   const sceneContract = scene?.sceneContract && typeof scene.sceneContract === "object" ? scene.sceneContract : {};
   const videoMetadata = resolveScenarioSceneVideoMetadata(scene);
   return String(
-    videoMetadata?.ltxNegative
+    videoMetadata?.negativePrompt
     ??
     scene?.videoNegativePrompt
     ?? scene?.video_negative_prompt
@@ -466,8 +482,12 @@ function buildScenarioSceneContractPayload(scene = {}) {
   const videoMetadata = resolveScenarioSceneVideoMetadata(scene);
   return {
     sceneId: scene?.sceneId || "",
-    video_metadata: videoMetadata.raw,
-    videoMetadata: videoMetadata.raw,
+    route_payload: videoMetadata.routePayload,
+    routePayload: videoMetadata.routePayload,
+    engine_hints: videoMetadata.engineHints,
+    engineHints: videoMetadata.engineHints,
+    video_metadata: videoMetadata.videoMetadata,
+    videoMetadata: videoMetadata.videoMetadata,
     sceneIndex: resolvedSceneIndex,
     scene_index: resolvedSceneIndex,
     index: resolvedSceneIndex,
@@ -2586,6 +2606,7 @@ const SCENARIO_PIPELINE_STAGE_ORDER = [
   "role_plan",
   "scene_plan",
   "scene_prompts",
+  "final_video_prompt",
   "finalize",
 ];
 const SCENARIO_STAGE_DEPTH_BY_ID = {
@@ -2595,7 +2616,8 @@ const SCENARIO_STAGE_DEPTH_BY_ID = {
   role_plan: 3,
   scene_plan: 4,
   scene_prompts: 5,
-  finalize: 6,
+  final_video_prompt: 6,
+  finalize: 7,
 };
 
 const STAGE_LABEL_BY_ID = {
@@ -2604,6 +2626,7 @@ const STAGE_LABEL_BY_ID = {
   role_plan: "ROLES",
   scene_plan: "SCENES",
   scene_prompts: "PROMPTS",
+  final_video_prompt: "FINAL VIDEO PROMPT",
   finalize: "FINAL",
 };
 
@@ -2613,6 +2636,7 @@ const SCENARIO_PIPELINE_STAGE_PACKAGE_KEYS = {
   role_plan: ["role_plan"],
   scene_plan: ["scene_plan"],
   scene_prompts: ["scene_prompts"],
+  final_video_prompt: ["final_video_prompt"],
   finalize: ["final_storyboard"],
 };
 
@@ -2779,6 +2803,13 @@ function hasScenarioStagePayload(stageId = "", storyboardPackage = {}) {
   }
   if (normalized === "scene_prompts") {
     const stage = pkg?.scene_prompts && typeof pkg.scene_prompts === "object" ? pkg.scene_prompts : {};
+    if (Array.isArray(stage?.segments) && stage.segments.length > 0) return true;
+    if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
+    return Object.keys(stage).length > 0;
+  }
+  if (normalized === "final_video_prompt") {
+    const stage = pkg?.final_video_prompt && typeof pkg.final_video_prompt === "object" ? pkg.final_video_prompt : {};
+    if (Array.isArray(stage?.segments) && stage.segments.length > 0) return true;
     if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
     return Object.keys(stage).length > 0;
   }
@@ -2949,6 +2980,7 @@ function mergeScenarioPackagePreservingAudioMap({
   const preservedRolePlan = preservePayload("role_plan", "role_plan");
   const preservedScenePlan = preservePayload("scene_plan", "scene_plan");
   const preservedScenePrompts = preservePayload("scene_prompts", "scene_prompts");
+  const preservedFinalVideoPrompt = preservePayload("final_video_prompt", "final_video_prompt");
   const preservedFinalStoryboard = preservePayload("finalize", "final_storyboard");
 
   const previousStatuses = previousSafe?.stage_statuses && typeof previousSafe.stage_statuses === "object" ? previousSafe.stage_statuses : {};
@@ -2981,6 +3013,7 @@ function mergeScenarioPackagePreservingAudioMap({
     preservedRolePlan,
     preservedScenePlan,
     preservedScenePrompts,
+    preservedFinalVideoPrompt,
     preservedFinalStoryboard,
     becauseIncomingStageWas: incomingStageId || normalizedRequestedStageId || "unknown",
   });
@@ -14259,40 +14292,19 @@ Aspect ratio: ${imageFormat}`,
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
       : "";
-    const strictFirstLastMode = String(effectiveWorkflowKey || "").trim().toLowerCase() === "f_l";
-    const metadataWorkflowAllowed = String(effectiveWorkflowKey || "").trim().toLowerCase() === "i2v";
-    const metadataModelAllowed = String(resolvedModelKey || "").trim().toLowerCase() === "ltx23_dev_fp8";
-    const metadataRouteAllowed = Boolean(
-      metadataWorkflowAllowed
-      && metadataModelAllowed
-      && !strictFirstLastMode
-      && !lipSyncRoute
-    );
-    const originalVideoPrompt = getSceneTransitionPrompt(targetScene);
-    const strictFirstLastPositivePrompt = String(
-      targetScene?.transitionActionPrompt
-      || targetScene?.positiveVideoPrompt
-      || targetScene?.positive_video_prompt
-      || targetScene?.sceneContract?.positiveVideoPrompt
-      || targetScene?.sceneContract?.positive_video_prompt
-      || originalVideoPrompt
-      || ""
-    ).trim();
-    const strictFirstLastNegativePrompt = resolveScenarioSceneNegativePrompt(targetScene);
     const sceneVideoMetadata = resolveScenarioSceneVideoMetadata(targetScene);
-    const hasVideoMetadata = Boolean(metadataRouteAllowed && sceneVideoMetadata.ltxPositive);
-    const sceneHumanVisualAnchors = (strictFirstLastMode || hasVideoMetadata) ? [] : buildScenarioHumanVisualAnchors(targetScene);
-    const humanAnchorBlock = sceneHumanVisualAnchors.length
-      ? [
-        "SCENE-SPECIFIC HUMAN VISUAL ANCHORS (SOURCE FRAME):",
-        ...sceneHumanVisualAnchors.map((line) => `- ${line}`),
-      ].join("\n")
-      : "";
-    const videoVisualGlueText = (strictFirstLastMode || hasVideoMetadata) ? "" : buildScenarioVideoVisualGlueText(targetScene);
-    const legacyFinalVideoPrompt = [videoVisualGlueText, humanAnchorBlock, originalVideoPrompt].filter(Boolean).join("\n\n").trim();
-    const finalVideoPrompt = strictFirstLastMode
-      ? strictFirstLastPositivePrompt
-      : (hasVideoMetadata ? sceneVideoMetadata.ltxPositive : legacyFinalVideoPrompt);
+    const canonicalFinalPromptMissing = !sceneVideoMetadata.positivePrompt || !sceneVideoMetadata.negativePrompt;
+    if (canonicalFinalPromptMissing) {
+      const errorCode = "final_video_prompt_missing";
+      setScenarioVideoError("Отсутствует canonical FINAL VIDEO PROMPT. Выполните стадию FINAL VIDEO PROMPT и повторите.");
+      if (targetSceneIndex >= 0) {
+        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: errorCode, videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
+      }
+      return;
+    }
+    const strictFirstLastMode = String(effectiveWorkflowKey || "").trim().toLowerCase() === "f_l";
+    const finalVideoPrompt = sceneVideoMetadata.positivePrompt;
+    const sceneHumanVisualAnchors = [];
     const sourceImageUrl = requiresTwoFrames
       ? (resolvedFirstFrameUrl || "")
       : (continuationEnabled
@@ -14427,10 +14439,7 @@ Aspect ratio: ${imageFormat}`,
         sceneId,
         selectedTab: String(options?.selectedTab || options?.activeTab || ""),
       });
-      const transitionActionPrompt = [
-        continuityBridgePrompt,
-        strictFirstLastMode ? strictFirstLastPositivePrompt : getSceneTransitionPrompt(targetScene),
-      ].filter(Boolean).join("\n");
+      const transitionActionPrompt = continuityBridgePrompt || "";
       const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
       const scenarioContractPayloadSanitized = {
         ...scenarioContractPayload,
@@ -14440,17 +14449,11 @@ Aspect ratio: ${imageFormat}`,
         continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
         continuationSourceAssetType: safeContinuationSourceAssetType,
       };
-      const payloadNegativePrompt = strictFirstLastMode
-        ? strictFirstLastNegativePrompt
-        : (hasVideoMetadata
-          ? (sceneVideoMetadata.ltxNegative || resolveScenarioSceneNegativePrompt(targetScene))
-          : resolveScenarioSceneNegativePrompt(targetScene));
+      const payloadNegativePrompt = sceneVideoMetadata.negativePrompt || resolveScenarioSceneNegativePrompt(targetScene);
       console.info("[SCENARIO VIDEO PROMPT SOURCE]", {
         sceneId,
-        source: hasVideoMetadata ? "video_metadata" : "legacy_frontend_glue",
+        source: "canonical_final_video_prompt_contract",
         route: String(effectiveWorkflowKey || ""),
-        hasVideoMetadata,
-        metadataRouteAllowed,
         finalVideoPromptPreview: String(finalVideoPrompt || "").slice(0, 280),
         finalNegativePreview: String(payloadNegativePrompt || "").slice(0, 220),
       });
@@ -14473,7 +14476,7 @@ Aspect ratio: ${imageFormat}`,
           negativePrompt: String(targetScene?.sceneContract?.negativePrompt ?? "").trim(),
           negative_prompt: String(targetScene?.sceneContract?.negative_prompt ?? "").trim(),
         },
-        resolvedStrictFirstLastNegativePrompt: strictFirstLastNegativePrompt,
+        resolvedStrictFirstLastNegativePrompt: sceneVideoMetadata.negativePrompt,
         payloadVideoNegativePrompt: payloadNegativePrompt,
         payloadVideo_negative_prompt: payloadNegativePrompt,
       });
@@ -14523,8 +14526,12 @@ Aspect ratio: ${imageFormat}`,
         external_audio_used: shouldAttachAudioSlice,
         external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
         videoPrompt: finalVideoPrompt,
-        videoMetadata: sceneVideoMetadata.raw,
-        video_metadata: sceneVideoMetadata.raw,
+        routePayload: sceneVideoMetadata.routePayload,
+        route_payload: sceneVideoMetadata.routePayload,
+        engineHints: sceneVideoMetadata.engineHints,
+        engine_hints: sceneVideoMetadata.engineHints,
+        videoMetadata: sceneVideoMetadata.videoMetadata,
+        video_metadata: sceneVideoMetadata.videoMetadata,
         sceneHumanVisualAnchors,
         transitionActionPrompt,
         transitionType,
@@ -14569,11 +14576,11 @@ Aspect ratio: ${imageFormat}`,
         video_negative_prompt: payloadNegativePrompt,
         promptDebug: {
           routeAwareStrictModeApplied: strictFirstLastMode,
-          resolvedStrictPositivePromptPreview: strictFirstLastMode ? strictFirstLastPositivePrompt.slice(0, 280) : "",
-          resolvedStrictNegativePromptPreview: strictFirstLastMode ? strictFirstLastNegativePrompt.slice(0, 280) : "",
+          resolvedStrictPositivePromptPreview: String(sceneVideoMetadata.positivePrompt || "").slice(0, 280),
+          resolvedStrictNegativePromptPreview: String(sceneVideoMetadata.negativePrompt || "").slice(0, 280),
           humanAnchorsSuppressedForFirstLast: strictFirstLastMode,
           globalConsistencySuppressedForFirstLast: strictFirstLastMode,
-          effectivePromptSource: strictFirstLastMode ? "strict_first_last_only" : "mixed",
+          effectivePromptSource: "canonical_final_video_prompt_contract",
           payloadVideoPromptPreview: String(finalVideoPrompt || "").slice(0, 280),
           payloadTransitionActionPromptPreview: String(transitionActionPrompt || "").slice(0, 280),
           payloadVideoNegativePromptPreview: String(payloadNegativePrompt || "").slice(0, 280),
