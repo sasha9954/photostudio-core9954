@@ -263,6 +263,60 @@ def _extract_json_obj(text: str) -> Any:
     return {}
 
 
+def _strip_json_code_fences(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    fenced = re.sub(r"^\s*```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    fenced = re.sub(r"\s*```\s*$", "", fenced, flags=re.IGNORECASE)
+    return fenced.strip()
+
+
+def _preview_payload(value: Any, *, max_len: int = 1200) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except Exception:
+        text = str(value or "")
+    compact = re.sub(r"\s+", " ", text).strip()
+    return compact[:max_len]
+
+
+def _coerce_prompt_notes(notes: Any) -> dict[str, Any]:
+    if isinstance(notes, dict):
+        return {str(k): v for k, v in notes.items()}
+    if isinstance(notes, list):
+        cleaned = [str(v).strip() for v in notes if str(v or "").strip()]
+        return {"notes": cleaned} if cleaned else {}
+    if isinstance(notes, str):
+        cleaned = str(notes).strip()
+        return {"notes": [cleaned]} if cleaned else {}
+    return {}
+
+
+def _segment_has_transition_payload(segment: dict[str, Any]) -> bool:
+    row = _safe_dict(segment)
+    route = str(row.get("route") or "").strip().lower()
+    notes = _safe_dict(row.get("prompt_notes"))
+    transition = _safe_dict(notes.get("transition"))
+    start = str(
+        transition.get("start_state")
+        or notes.get("start_state")
+        or row.get("first_frame_prompt")
+        or row.get("start_image_prompt")
+        or ""
+    ).strip()
+    end = str(
+        transition.get("end_state")
+        or notes.get("end_state")
+        or row.get("last_frame_prompt")
+        or row.get("end_image_prompt")
+        or ""
+    ).strip()
+    if route != "first_last":
+        return True
+    return bool(start and end)
+
+
 def _coerce_scene_prompts_payload(raw: Any) -> dict[str, Any]:
     data = _safe_dict(raw)
     if isinstance(raw, list):
@@ -2428,17 +2482,108 @@ def _build_prompts_v11_prompt(
     )
 
 
-def _coerce_prompts_v11_payload(raw: Any) -> dict[str, Any]:
+def _coerce_prompts_v11_payload(raw: Any, prompt_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
+    prompt_route_by_segment = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): str(_safe_dict(row).get("route") or "i2v").strip() or "i2v"
+        for row in prompt_rows
+    }
+    dropped_fields: set[str] = set()
     data = _safe_dict(raw)
     if not data:
-        return {}
-    if _safe_list(data.get("segments")):
-        return data
-    for key in ("result", "data", "output"):
+        return {}, []
+
+    candidates = [data]
+    for key in ("result", "data", "output", "payload", "scene_prompts"):
         nested = _safe_dict(data.get(key))
-        if _safe_list(nested.get("segments")):
-            return nested
-    return data
+        if nested:
+            candidates.append(nested)
+    chosen = next((item for item in candidates if _safe_list(item.get("segments")) or _safe_list(item.get("scenes"))), data)
+
+    normalized: dict[str, Any] = {
+        "prompts_version": str(chosen.get("prompts_version") or data.get("prompts_version") or "").strip(),
+        "global_style_anchor": str(chosen.get("global_style_anchor") or data.get("global_style_anchor") or "").strip(),
+        "segments": [],
+    }
+    for key in chosen.keys():
+        if key not in {"prompts_version", "global_style_anchor", "segments", "scenes"}:
+            dropped_fields.add(str(key))
+
+    raw_segments = _safe_list(chosen.get("segments"))
+    if not raw_segments:
+        raw_segments = _safe_list(chosen.get("scenes"))
+
+    for item in raw_segments:
+        row = _safe_dict(item)
+        segment_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
+        if not segment_id:
+            continue
+        route = str(row.get("route") or prompt_route_by_segment.get(segment_id) or "i2v").strip().lower()
+        if route not in ALLOWED_ROUTES:
+            route = str(prompt_route_by_segment.get(segment_id) or "i2v")
+        notes = _coerce_prompt_notes(row.get("prompt_notes"))
+        transition = _safe_dict(row.get("transition_description"))
+        start_state = str(
+            transition.get("start_state_description")
+            or notes.get("start_state")
+            or row.get("first_frame_prompt")
+            or row.get("start_image_prompt")
+            or ""
+        ).strip()
+        end_state = str(
+            transition.get("end_state_description")
+            or notes.get("end_state")
+            or row.get("last_frame_prompt")
+            or row.get("end_image_prompt")
+            or ""
+        ).strip()
+        if route == "first_last":
+            transition_notes = _safe_dict(notes.get("transition"))
+            transition_notes["start_state"] = start_state
+            transition_notes["end_state"] = end_state
+            if str(transition.get("state_delta") or "").strip():
+                transition_notes["state_delta"] = str(transition.get("state_delta") or "").strip()
+            notes["transition"] = transition_notes
+            if start_state:
+                notes.setdefault("start_state", start_state)
+            if end_state:
+                notes.setdefault("end_state", end_state)
+
+        segment_row = {
+            "segment_id": segment_id,
+            "scene_id": str(row.get("scene_id") or segment_id).strip(),
+            "route": route,
+            "photo_prompt": str(row.get("photo_prompt") or "").strip(),
+            "video_prompt": str(row.get("video_prompt") or row.get("positive_video_prompt") or "").strip(),
+            "negative_prompt": str(row.get("negative_prompt") or row.get("negative_video_prompt") or "").strip(),
+            "prompt_notes": notes,
+        }
+        if start_state:
+            segment_row["first_frame_prompt"] = start_state
+        if end_state:
+            segment_row["last_frame_prompt"] = end_state
+        for key in row.keys():
+            if key not in {
+                "segment_id",
+                "scene_id",
+                "route",
+                "photo_prompt",
+                "video_prompt",
+                "negative_prompt",
+                "prompt_notes",
+                "positive_video_prompt",
+                "negative_video_prompt",
+                "first_frame_prompt",
+                "last_frame_prompt",
+                "start_image_prompt",
+                "end_image_prompt",
+                "transition_description",
+            }:
+                dropped_fields.add(str(key))
+        normalized["segments"].append(segment_row)
+
+    if not normalized["prompts_version"]:
+        normalized["prompts_version"] = "1.1"
+    return normalized, sorted(dropped_fields)
 
 
 def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2453,7 +2598,9 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
         environment = _safe_dict(seg.get("environment_details"))
         character = _safe_dict(seg.get("character_state"))
         transition = _safe_dict(seg.get("transition_description"))
-        photo_prompt = "; ".join(
+        prompt_notes = _safe_dict(seg.get("prompt_notes"))
+        transition_notes = _safe_dict(prompt_notes.get("transition"))
+        photo_prompt = str(seg.get("photo_prompt") or "").strip() or "; ".join(
             [
                 str(visual.get("subject_description") or "").strip(),
                 str(visual.get("background_description") or "").strip(),
@@ -2461,7 +2608,7 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
                 str(environment.get("atmosphere") or "").strip(),
             ]
         ).strip("; ")
-        video_prompt = "; ".join(
+        video_prompt = str(seg.get("video_prompt") or "").strip() or "; ".join(
             [
                 str(character.get("emotion") or "").strip(),
                 str(character.get("pose_presence") or "").strip(),
@@ -2469,6 +2616,9 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
                 str(row.get("camera_intent") or "").strip(),
             ]
         ).strip("; ")
+        negative_prompt = str(seg.get("negative_prompt") or "").strip() or str(visual.get("negative_description") or "").strip()
+        start_prompt = str(seg.get("first_frame_prompt") or seg.get("start_image_prompt") or transition_notes.get("start_state") or transition.get("start_state_description") or "").strip()
+        end_prompt = str(seg.get("last_frame_prompt") or seg.get("end_image_prompt") or transition_notes.get("end_state") or transition.get("end_state_description") or "").strip()
         scenes.append(
             {
                 "scene_id": segment_id,
@@ -2476,13 +2626,13 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
                 "route": route,
                 "photo_prompt": photo_prompt,
                 "video_prompt": video_prompt,
-                "negative_prompt": str(visual.get("negative_description") or "").strip(),
+                "negative_prompt": negative_prompt,
                 "positive_video_prompt": video_prompt,
-                "negative_video_prompt": str(visual.get("negative_description") or "").strip(),
-                "start_image_prompt": str(transition.get("start_state_description") or "").strip() if route == "first_last" else "",
-                "end_image_prompt": str(transition.get("end_state_description") or "").strip() if route == "first_last" else "",
+                "negative_video_prompt": negative_prompt,
+                "start_image_prompt": start_prompt if route == "first_last" else "",
+                "end_image_prompt": end_prompt if route == "first_last" else "",
                 "prompt_notes": {
-                    "emotion": str(character.get("emotion") or "").strip(),
+                    "emotion": str(prompt_notes.get("emotion") or character.get("emotion") or "").strip(),
                     "world_anchor": str(prompts_v11.get("global_style_anchor") or "")[:300],
                     "legacy_bridge_from": "prompts_v1.1",
                 },
@@ -2528,9 +2678,11 @@ def _build_drift_evidence_bundle(*, prompts_v11: dict[str, Any], segment: dict[s
     return " ".join(
         [
             str(prompts_v11.get("global_style_anchor") or ""),
-            str(visual.get("subject_description") or ""),
-            str(visual.get("background_description") or ""),
+            str(segment.get("photo_prompt") or visual.get("subject_description") or ""),
+            str(segment.get("video_prompt") or visual.get("background_description") or ""),
+            str(segment.get("negative_prompt") or ""),
             json.dumps(environment, ensure_ascii=False),
+            json.dumps(_safe_dict(segment.get("prompt_notes")), ensure_ascii=False),
             str(_safe_dict(story_core.get("identity_lock")).get("summary") or ""),
             str(_safe_dict(story_core.get("world_lock")).get("summary") or ""),
             str(_safe_dict(story_core.get("style_lock")).get("summary") or ""),
@@ -2562,19 +2714,20 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
         segment_id = str(row.get("segment_id") or "")
         prompt_row = _safe_dict(prompt_rows_by_segment.get(segment_id))
         route = expected_route.get(segment_id, "i2v")
-        visual = _safe_dict(row.get("visual_description"))
-        if not _safe_dict(row.get("character_state")) or not _safe_dict(row.get("environment_details")) or not visual:
-            return "PROMPTS_SCHEMA_INVALID", f"missing_required_block:{segment_id}", {}
+        if not str(row.get("scene_id") or "").strip():
+            return "PROMPTS_SCHEMA_INVALID", f"missing_scene_id:{segment_id}", {}
+        if str(row.get("route") or "").strip() not in ALLOWED_ROUTES:
+            return "PROMPTS_SCHEMA_INVALID", f"invalid_route:{segment_id}", {}
+        if not str(row.get("photo_prompt") or "").strip() or not str(row.get("video_prompt") or "").strip():
+            return "PROMPTS_SCHEMA_INVALID", f"missing_prompt_fields:{segment_id}", {}
 
         blob = " ".join(
             [
                 str(prompts_v11.get("global_style_anchor") or ""),
-                str(visual.get("subject_description") or ""),
-                str(visual.get("background_description") or ""),
-                str(visual.get("negative_description") or ""),
-                json.dumps(_safe_dict(row.get("character_state")), ensure_ascii=False),
-                json.dumps(_safe_dict(row.get("environment_details")), ensure_ascii=False),
-                " ".join(str(v) for v in _safe_list(row.get("prompt_notes"))),
+                str(row.get("photo_prompt") or ""),
+                str(row.get("video_prompt") or ""),
+                str(row.get("negative_prompt") or ""),
+                json.dumps(_safe_dict(row.get("prompt_notes")), ensure_ascii=False),
             ]
         ).lower()
         if any(token in blob for token in _TECHNICAL_TAG_PATTERNS):
@@ -2587,7 +2740,13 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
             return "PROMPTS_CAMERA_LEAKAGE", f"camera_leakage:{segment_id}", {}
         if any(token in blob for token in _ROUTE_DELIVERY_PATTERNS):
             return "PROMPTS_ROUTE_DELIVERY_LEAKAGE", f"route_delivery_leakage:{segment_id}", {}
-        if _has_role_omission(row, prompt_row):
+        if _has_role_omission(
+            {
+                "visual_description": {"subject_description": str(row.get("photo_prompt") or "")},
+                "character_state": {"pose_presence": str(row.get("video_prompt") or "")},
+            },
+            prompt_row,
+        ):
             return "PROMPTS_ROLE_OMISSION", f"role_omission:{segment_id}", {}
 
         drift_blob = _build_drift_evidence_bundle(
@@ -2603,8 +2762,7 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
 
         if route == "first_last":
             transition_required_count += 1
-            transition = _safe_dict(row.get("transition_description"))
-            if str(transition.get("start_state_description") or "").strip() and str(transition.get("end_state_description") or "").strip():
+            if _segment_has_transition_payload(row):
                 transition_present_count += 1
             else:
                 return "PROMPTS_MISSING_TRANSITION_DESCRIPTION", f"missing_transition_description:{segment_id}", {}
@@ -2642,6 +2800,17 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_transition_present_count": 0,
         "scene_prompts_error_code": "",
         "scene_prompts_validation_error": "",
+        "scene_prompts_raw_model_response_preview": "",
+        "scene_prompts_parsed_payload_preview": "",
+        "scene_prompts_sanitized_payload_preview": "",
+        "scene_prompts_normalized_scene_prompts_preview": "",
+        "scene_prompts_dropped_non_canonical_fields": [],
+        "scene_prompts_expected_segment_ids": [str(_safe_dict(row).get("segment_id") or "") for row in prompt_rows],
+        "scene_prompts_seen_segment_ids": [],
+        "scene_prompts_missing_segment_ids": [],
+        "scene_prompts_extra_segment_ids": [],
+        "scene_prompts_snapshot_restored": False,
+        "scene_prompts_failure_reason": "",
         "active_video_model_capability_profile": active_model_id,
         "active_route_capability_mode": route_capability_mode,
         "prompt_capability_guard_applied": prompt_capability_guard_applied,
@@ -2681,28 +2850,56 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         )
         if isinstance(response, dict) and response.get("__http_error__"):
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
-        raw_payload = _coerce_prompts_v11_payload(_extract_json_obj(_extract_gemini_text(response)))
+        raw_text = _extract_gemini_text(response)
+        diagnostics["scene_prompts_raw_model_response_preview"] = _preview_payload(raw_text)
+        sanitized_text = _strip_json_code_fences(raw_text)
+        parsed_payload = _extract_json_obj(sanitized_text)
+        diagnostics["scene_prompts_parsed_payload_preview"] = _preview_payload(parsed_payload)
+        raw_payload, dropped_fields = _coerce_prompts_v11_payload(parsed_payload, prompt_rows)
+        diagnostics["scene_prompts_sanitized_payload_preview"] = _preview_payload(raw_payload)
+        diagnostics["scene_prompts_dropped_non_canonical_fields"] = dropped_fields
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
+        diagnostics["scene_prompts_failure_reason"] = f"transport_or_parse_error:{error[:240]}"
 
     if not str(raw_payload.get("global_style_anchor") or "").strip():
         raw_payload["global_style_anchor"] = global_style_anchor
+    if not str(raw_payload.get("prompts_version") or "").strip():
+        raw_payload["prompts_version"] = "1.1"
 
     error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
     diagnostics["scene_prompts_error_code"] = error_code
     diagnostics["scene_prompts_validation_error"] = validation_error
     diagnostics.update(validation_diag)
     diagnostics["scene_prompts_segment_count_actual"] = len(_safe_list(raw_payload.get("segments")))
+    diagnostics["scene_prompts_seen_segment_ids"] = [
+        str(_safe_dict(row).get("segment_id") or "").strip() for row in _safe_list(raw_payload.get("segments"))
+    ]
+    expected_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in prompt_rows]
+    seen_ids = [seg for seg in diagnostics["scene_prompts_seen_segment_ids"] if seg]
+    diagnostics["scene_prompts_missing_segment_ids"] = [seg for seg in expected_ids if seg not in seen_ids]
+    diagnostics["scene_prompts_extra_segment_ids"] = [seg for seg in seen_ids if seg not in expected_ids]
     diagnostics["scene_prompts_segment_coverage_ok"] = (
         diagnostics["scene_prompts_segment_count_actual"] == diagnostics["scene_prompts_segment_count_expected"]
+        and not diagnostics["scene_prompts_missing_segment_ids"]
+        and not diagnostics["scene_prompts_extra_segment_ids"]
     )
+    diagnostics["scene_prompts_normalized_scene_prompts_preview"] = _preview_payload(
+        {
+            "prompts_version": raw_payload.get("prompts_version"),
+            "global_style_anchor": raw_payload.get("global_style_anchor"),
+            "segments": _safe_list(raw_payload.get("segments"))[:2],
+        }
+    )
+    if error_code or validation_error:
+        diagnostics["scene_prompts_failure_reason"] = str(validation_error or error_code).strip()
 
     legacy_bridge = _build_legacy_bridge_from_v11(raw_payload, prompt_rows)
     diagnostics["scene_prompts_legacy_bridge_generated"] = bool(_safe_list(legacy_bridge.get("scenes")))
     diagnostics["scene_prompts_legacy_bridge_present"] = bool(legacy_bridge)
     diagnostics["scene_prompts_uses_legacy_bridge"] = bool(_legacy_bridge_requested(package))
     scene_prompts = {
-        "prompts_version": str(raw_payload.get("prompts_version") or "1.1"),
+        "prompts_version": str(raw_payload.get("prompts_version") or ""),
         "global_style_anchor": str(raw_payload.get("global_style_anchor") or global_style_anchor),
         "segments": _safe_list(raw_payload.get("segments")),
         "legacy_bridge": legacy_bridge,
@@ -2715,7 +2912,14 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
     has_error_code = bool(error_code)
     has_transport_error = bool(error)
     has_segments = bool(_safe_list(scene_prompts.get("segments")))
-    ok = (not has_transport_error) and (not has_error_code) and (not has_validation_error) and has_segments
+    ok = (
+        (not has_transport_error)
+        and (not has_error_code)
+        and (not has_validation_error)
+        and has_segments
+        and scene_prompts.get("prompts_version") == "1.1"
+        and bool(diagnostics.get("scene_prompts_segment_coverage_ok"))
+    )
     final_error = error or (error_code.lower() if error_code else "") or ("scene_prompts_empty" if not has_segments else "")
     return {
         "ok": ok,
