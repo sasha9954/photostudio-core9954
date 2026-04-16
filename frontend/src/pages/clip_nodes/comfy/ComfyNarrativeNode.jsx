@@ -29,6 +29,8 @@ const ROUTE_MIX_PRESETS = [
 
 export default function ComfyNarrativeNode({ id, data }) {
   const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
+  const selectedRouteMode = String(data?.routeMode || "").trim().toLowerCase() || "auto";
+  const activeRoutePreset = ROUTE_MIX_PRESETS.find((preset) => preset.routeMode === selectedRouteMode) || ROUTE_MIX_PRESETS[0];
   const resolvedSource = data?.resolvedSource || {};
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
   const activeSourceMode = resolvedSource?.mode || null;
@@ -220,18 +222,30 @@ export default function ComfyNarrativeNode({ id, data }) {
             <section className="clipSB_narrativeSection">
               <div className="clipSB_brainLabel">Route mode</div>
               <div className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_narrativeEmptyHint" style={{ marginBottom: 6 }}>
+                  Selected route mode: <strong>{activeRoutePreset.label}</strong>
+                </div>
+                <div className="clipSB_narrativeEmptyHint" style={{ marginBottom: 8 }}>
+                  Will send routeMode: <strong>{selectedRouteMode}</strong> → creative_config.route_mode
+                </div>
                 <div className="clipSB_brainLabel clipSB_brainLabel--compact">Presets</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 }}>
-                  {ROUTE_MIX_PRESETS.map((preset) => (
-                    <button
-                      key={preset.key}
-                      type="button"
-                      className="clipSB_btn clipSB_btnSecondary"
-                      onClick={() => data?.onFieldChange?.(id, { routeMode: preset.routeMode })}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
+                  {ROUTE_MIX_PRESETS.map((preset) => {
+                    const isSelected = preset.routeMode === selectedRouteMode;
+                    return (
+                      <button
+                        key={preset.key}
+                        type="button"
+                        className="clipSB_btn clipSB_btnSecondary"
+                        aria-pressed={isSelected ? "true" : "false"}
+                        style={isSelected ? { borderColor: "#4f7cff", background: "rgba(79, 124, 255, 0.22)", color: "#fff", fontWeight: 700 } : undefined}
+                        onClick={() => data?.onFieldChange?.(id, { routeMode: preset.routeMode })}
+                      >
+                        {preset.label}
+                        {isSelected ? " ✓" : ""}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </section>

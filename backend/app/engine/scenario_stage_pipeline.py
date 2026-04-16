@@ -489,6 +489,7 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
 
 def _build_route_mix_doctrine_for_scenes(creative_config: dict[str, Any]) -> tuple[dict[str, Any], str]:
     route_mode = str(creative_config.get("route_mode") or "auto").strip().lower() or "auto"
+    is_full_lipsync_mode = route_mode == "full_lipsync"
     mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
     source = f"route_mode:{route_mode}"
     if mode == "custom":
@@ -504,9 +505,10 @@ def _build_route_mix_doctrine_for_scenes(creative_config: dict[str, Any]) -> tup
         "short_clip_default_target_ratios": target_ratios,
         "max_consecutive_lipsync": int(creative_config.get("max_consecutive_lipsync") or 2),
         "preferred_routes": _safe_list(creative_config.get("preferred_routes")),
-        "lipsync_candidate_is_permission_not_obligation": True,
-        "avoid_long_consecutive_lipsync_streaks": route_mode != "full_lipsync",
-        "prioritize_lipsync_for_strong_performance_windows": route_mode in {"auto", "balanced_mix", "full_lipsync"},
+        "lipsync_candidate_is_permission_not_obligation": not is_full_lipsync_mode,
+        "avoid_long_consecutive_lipsync_streaks": not is_full_lipsync_mode,
+        "prioritize_lipsync_for_strong_performance_windows": route_mode in {"auto", "balanced_mix"} or is_full_lipsync_mode,
+        "full_lipsync_mode_hard_override": is_full_lipsync_mode,
         "resolved_route_mode": route_mode,
     }
     return doctrine, source
