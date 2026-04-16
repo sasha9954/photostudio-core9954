@@ -2784,22 +2784,36 @@ function hasScenarioStagePayload(stageId = "", storyboardPackage = {}) {
     : {};
   const normalized = String(stageId || "").trim().toLowerCase();
   if (!normalized) return false;
+  if (normalized === "input_package") {
+    const stage = pkg?.input && typeof pkg.input === "object" ? pkg.input : {};
+    return Object.keys(stage).length > 0;
+  }
   if (normalized === "audio_map") {
     const stage = pkg?.audio_map && typeof pkg.audio_map === "object" ? pkg.audio_map : {};
     return Object.keys(stage).length > 0;
   }
   if (normalized === "story_core") {
     const stage = pkg?.story_core && typeof pkg.story_core === "object" ? pkg.story_core : {};
-    return Object.keys(stage).length > 0;
+    if (!String(stage?.core_version || "").trim()) return false;
+    return Array.isArray(stage?.narrative_segments) && stage.narrative_segments.length > 0;
   }
   if (normalized === "role_plan") {
     const stage = pkg?.role_plan && typeof pkg.role_plan === "object" ? pkg.role_plan : {};
-    return Object.keys(stage).length > 0;
+    const sceneCasting = stage?.scene_casting;
+    if (sceneCasting && typeof sceneCasting === "object" && !Array.isArray(sceneCasting) && Object.keys(sceneCasting).length > 0) return true;
+    if (Array.isArray(sceneCasting) && sceneCasting.length > 0) return true;
+    if (Array.isArray(stage?.roles) && stage.roles.length > 0) return true;
+    if (Array.isArray(stage?.cast) && stage.cast.length > 0) return true;
+    if (Array.isArray(stage?.segments) && stage.segments.length > 0) return true;
+    return false;
   }
   if (normalized === "scene_plan") {
     const stage = pkg?.scene_plan && typeof pkg.scene_plan === "object" ? pkg.scene_plan : {};
+    if (Array.isArray(stage?.segments) && stage.segments.length > 0) return true;
     if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
-    return Object.keys(stage).length > 0;
+    if (stage?.storyboard && typeof stage.storyboard === "object" && !Array.isArray(stage.storyboard) && Object.keys(stage.storyboard).length > 0) return true;
+    if (Array.isArray(stage?.storyboard) && stage.storyboard.length > 0) return true;
+    return false;
   }
   if (normalized === "scene_prompts") {
     const stage = pkg?.scene_prompts && typeof pkg.scene_prompts === "object" ? pkg.scene_prompts : {};
@@ -2982,6 +2996,20 @@ function mergeScenarioPackagePreservingAudioMap({
   const preservedScenePrompts = preservePayload("scene_prompts", "scene_prompts");
   const preservedFinalVideoPrompt = preservePayload("final_video_prompt", "final_video_prompt");
   const preservedFinalStoryboard = preservePayload("finalize", "final_storyboard");
+  if (
+    normalizedRequestedStageId === "final_video_prompt"
+    && hasScenarioStagePayload("final_video_prompt", previousSafe)
+    && !hasScenarioStagePayload("final_video_prompt", responseSafe)
+  ) {
+    nextPackage.final_video_prompt = previousSafe.final_video_prompt;
+  }
+  if (
+    normalizedRequestedStageId === "finalize"
+    && hasScenarioStagePayload("finalize", previousSafe)
+    && !hasScenarioStagePayload("finalize", responseSafe)
+  ) {
+    nextPackage.final_storyboard = previousSafe.final_storyboard;
+  }
 
   const previousStatuses = previousSafe?.stage_statuses && typeof previousSafe.stage_statuses === "object" ? previousSafe.stage_statuses : {};
   const incomingStatuses = responseSafe?.stage_statuses && typeof responseSafe.stage_statuses === "object" ? responseSafe.stage_statuses : {};
@@ -2998,6 +3026,17 @@ function mergeScenarioPackagePreservingAudioMap({
     if (shouldPreserveStatus) mergedStatuses[stageId] = previousRow;
   });
   if (Object.keys(mergedStatuses).length) nextPackage.stage_statuses = mergedStatuses;
+  const syncedStatuses = nextPackage?.stage_statuses && typeof nextPackage.stage_statuses === "object" ? { ...nextPackage.stage_statuses } : {};
+  getScenarioPipelineStageOrder().forEach((stageId) => {
+    const row = syncedStatuses?.[stageId] && typeof syncedStatuses[stageId] === "object" ? { ...syncedStatuses[stageId] } : null;
+    if (!row) return;
+    if (normalizeScenarioPipelineStageStatus(row?.status) !== "done") return;
+    if (hasScenarioStagePayload(stageId, nextPackage)) return;
+    row.status = "stale";
+    row.error = row?.error || "payload_missing";
+    syncedStatuses[stageId] = row;
+  });
+  if (Object.keys(syncedStatuses).length) nextPackage.stage_statuses = syncedStatuses;
 
   console.debug("[SCENARIO APPLY GUARD]", {
     incomingStage: incomingStageId,
