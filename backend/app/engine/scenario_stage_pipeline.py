@@ -396,34 +396,101 @@ def _clamp_ratio(value: Any, default: float) -> float:
 
 def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
     row = _safe_dict(raw_config)
-    route_mix_mode = str(row.get("route_mix_mode") or row.get("routeMixMode") or "auto").strip().lower() or "auto"
-    if route_mix_mode not in {"auto", "custom"}:
-        route_mix_mode = "auto"
-    lipsync_ratio = _clamp_ratio(row.get("lipsync_ratio"), 0.25)
-    first_last_ratio = _clamp_ratio(row.get("first_last_ratio"), 0.25)
-    remaining = max(0.0, 1.0 - lipsync_ratio - first_last_ratio)
-    preferred_routes = [str(item).strip().lower() for item in _safe_list(row.get("preferred_routes")) if str(item).strip()]
-    preferred_routes = [route for route in preferred_routes if route in {"i2v", "ia2v", "first_last"}]
-    if not preferred_routes:
-        preferred_routes = ["i2v", "first_last"]
-    try:
-        max_consecutive_lipsync = int(row.get("max_consecutive_lipsync"))
-    except Exception:
+    route_mode = str(row.get("route_mode") or row.get("routeMode") or "").strip().lower()
+    route_mode_source = "route_mode"
+    if route_mode not in {"auto", "full_lipsync", "full_i2v", "full_first_last", "balanced_mix"}:
+        lipsync_ratio_raw = _clamp_ratio(row.get("lipsync_ratio"), 0.25)
+        first_last_ratio_raw = _clamp_ratio(row.get("first_last_ratio"), 0.25)
+        i2v_ratio_raw = _clamp_ratio(row.get("i2v_ratio"), max(0.0, 1.0 - lipsync_ratio_raw - first_last_ratio_raw))
+        if lipsync_ratio_raw >= 0.999 and i2v_ratio_raw <= 0.001 and first_last_ratio_raw <= 0.001:
+            route_mode = "full_lipsync"
+        elif i2v_ratio_raw >= 0.999 and lipsync_ratio_raw <= 0.001 and first_last_ratio_raw <= 0.001:
+            route_mode = "full_i2v"
+        elif first_last_ratio_raw >= 0.999 and lipsync_ratio_raw <= 0.001 and i2v_ratio_raw <= 0.001:
+            route_mode = "full_first_last"
+        elif str(row.get("route_mix_mode") or row.get("routeMixMode") or "").strip().lower() == "custom":
+            route_mode = "balanced_mix"
+        else:
+            route_mode = "auto"
+        route_mode_source = "legacy_inference"
+
+    if route_mode == "full_lipsync":
+        route_mix_mode = "custom"
+        lipsync_ratio = 1.0
+        first_last_ratio = 0.0
+        remaining = 0.0
+        preferred_routes = ["ia2v"]
+        max_consecutive_lipsync = 999
+    elif route_mode == "full_i2v":
+        route_mix_mode = "custom"
+        lipsync_ratio = 0.0
+        first_last_ratio = 0.0
+        remaining = 1.0
+        preferred_routes = ["i2v"]
         max_consecutive_lipsync = 2
-    max_consecutive_lipsync = max(1, min(6, max_consecutive_lipsync))
+    elif route_mode == "full_first_last":
+        route_mix_mode = "custom"
+        lipsync_ratio = 0.0
+        first_last_ratio = 1.0
+        remaining = 0.0
+        preferred_routes = ["first_last"]
+        max_consecutive_lipsync = 2
+    elif route_mode == "balanced_mix":
+        route_mix_mode = "custom"
+        lipsync_ratio = 0.25
+        first_last_ratio = 0.25
+        remaining = 0.5
+        preferred_routes = ["ia2v", "i2v", "first_last"]
+        max_consecutive_lipsync = 2
+    else:
+        route_mix_mode = "auto"
+        lipsync_ratio = 0.25
+        first_last_ratio = 0.25
+        remaining = 0.5
+        preferred_routes = ["i2v", "first_last"]
+        max_consecutive_lipsync = 2
+
+    conflict_detected = (
+        (_clamp_ratio(row.get("lipsync_ratio"), lipsync_ratio) >= 0.999 and route_mode != "full_lipsync")
+        or ("i2v" in _safe_list(row.get("preferred_routes")) and route_mode == "full_lipsync")
+        or ("first_last" in _safe_list(row.get("preferred_routes")) and route_mode == "full_lipsync")
+    )
+    try:
+        raw_max_consecutive_lipsync = int(row.get("max_consecutive_lipsync"))
+    except Exception:
+        raw_max_consecutive_lipsync = 2
+    if route_mode == "full_lipsync":
+        max_consecutive_lipsync = 999
+    else:
+        max_consecutive_lipsync = max(1, min(6, raw_max_consecutive_lipsync))
     return {
+        "route_mode": route_mode,
+        "resolved_route_mode": route_mode,
+        "route_mode_source": route_mode_source,
+        "route_mode_conflict_detected_before_normalization": bool(conflict_detected),
+        "route_mode_conflict_fixed": bool(conflict_detected),
         "route_mix_mode": route_mix_mode,
         "lipsync_ratio": round(lipsync_ratio, 3),
         "first_last_ratio": round(first_last_ratio, 3),
         "i2v_ratio": round(remaining, 3),
         "preferred_routes": preferred_routes,
         "max_consecutive_lipsync": max_consecutive_lipsync,
+        "all_lipsync_mode": route_mode == "full_lipsync",
+        "resolved_creative_config": {
+            "route_mix_mode": route_mix_mode,
+            "lipsync_ratio": round(lipsync_ratio, 3),
+            "i2v_ratio": round(remaining, 3),
+            "first_last_ratio": round(first_last_ratio, 3),
+            "preferred_routes": preferred_routes,
+            "max_consecutive_lipsync": max_consecutive_lipsync,
+        },
     }
 
 
 def _build_route_mix_doctrine_for_scenes(creative_config: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    route_mode = str(creative_config.get("route_mode") or "auto").strip().lower() or "auto"
     mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
-    source = "custom_creative_config" if mode == "custom" else "auto_default"
+    source = f"route_mode:{route_mode}"
     if mode == "custom":
         target_ratios = {
             "ia2v": float(_clamp_ratio(creative_config.get("lipsync_ratio"), 0.25)),
@@ -438,8 +505,9 @@ def _build_route_mix_doctrine_for_scenes(creative_config: dict[str, Any]) -> tup
         "max_consecutive_lipsync": int(creative_config.get("max_consecutive_lipsync") or 2),
         "preferred_routes": _safe_list(creative_config.get("preferred_routes")),
         "lipsync_candidate_is_permission_not_obligation": True,
-        "avoid_long_consecutive_lipsync_streaks": True,
-        "prioritize_lipsync_for_strong_performance_windows": True,
+        "avoid_long_consecutive_lipsync_streaks": route_mode != "full_lipsync",
+        "prioritize_lipsync_for_strong_performance_windows": route_mode in {"auto", "balanced_mix", "full_lipsync"},
+        "resolved_route_mode": route_mode,
     }
     return doctrine, source
 
@@ -535,6 +603,7 @@ def _validate_scene_plan_route_budget(
 
     target_budget = _compute_route_budget_for_total(len(scene_rows), creative_config)
     mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
+    route_mode = str(creative_config.get("route_mode") or "auto").strip().lower() or "auto"
     all_lipsync_override = _is_all_lipsync_override_mode(
         total_scenes=len(scene_rows),
         creative_config=creative_config,
@@ -543,7 +612,7 @@ def _validate_scene_plan_route_budget(
     validation_mode = "all_lipsync_override" if all_lipsync_override else "mixed"
     max_consecutive = int(creative_config.get("max_consecutive_lipsync") or 2)
     tolerance = 1 if len(scene_rows) >= 6 else 0
-    streak_guard_relaxed = all_lipsync_override
+    streak_guard_relaxed = all_lipsync_override or route_mode == "full_lipsync"
     lipsync_streak_warning = "all_lipsync_override_active" if streak_guard_relaxed else ""
     errors: list[str] = []
     for route_name in ("ia2v", "i2v", "first_last"):
@@ -574,6 +643,7 @@ def _validate_scene_plan_route_budget(
         "max_consecutive_lipsync": max_consecutive,
         "longest_lipsync_streak": longest_lipsync_streak,
         "route_mix_mode": mode,
+        "route_mode": route_mode,
         "route_budget_validation_mode": validation_mode,
         "all_lipsync_mode": all_lipsync_override,
         "lipsync_streak_guard_relaxed": streak_guard_relaxed,
@@ -3496,6 +3566,13 @@ def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
     package["input"] = input_pkg
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["input_creative_config_active"] = _safe_dict(input_pkg.get("creative_config"))
+    diagnostics["resolved_route_mode"] = str(_safe_dict(input_pkg.get("creative_config")).get("resolved_route_mode") or "")
+    diagnostics["route_mode_source"] = str(_safe_dict(input_pkg.get("creative_config")).get("route_mode_source") or "")
+    diagnostics["route_mode_conflict_detected_before_normalization"] = bool(
+        _safe_dict(input_pkg.get("creative_config")).get("route_mode_conflict_detected_before_normalization")
+    )
+    diagnostics["route_mode_conflict_fixed"] = bool(_safe_dict(input_pkg.get("creative_config")).get("route_mode_conflict_fixed"))
+    diagnostics["resolved_creative_config"] = _safe_dict(_safe_dict(input_pkg.get("creative_config")).get("resolved_creative_config"))
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "input_package normalized", stage_id="input_package")
     return package

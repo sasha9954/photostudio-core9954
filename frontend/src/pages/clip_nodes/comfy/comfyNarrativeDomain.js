@@ -776,10 +776,7 @@ export function getDefaultNarrativeNodeData() {
     narrativeMode: "cinematic_expand",
     styleProfile: "realistic",
     format: "9:16",
-    routeMixMode: "auto",
-    lipsyncRatio: 0.25,
-    firstLastRatio: 0.25,
-    maxConsecutiveLipsync: 2,
+    routeMode: "auto",
     directorNote: "",
     connectedInputs: {
       audio_in: null,
@@ -814,6 +811,83 @@ export function getDefaultNarrativeNodeData() {
       brainPackage: null,
       bgMusicPrompt: "",
       directorOutput: null,
+    },
+  };
+}
+
+const ROUTE_MODE_PRESET_CONFIG = {
+  auto: {
+    route_mode: "auto",
+    route_mix_mode: "auto",
+    lipsync_ratio: 0.25,
+    first_last_ratio: 0.25,
+    i2v_ratio: 0.5,
+    preferred_routes: ["i2v", "first_last"],
+    max_consecutive_lipsync: 2,
+    all_lipsync_mode: false,
+  },
+  full_lipsync: {
+    route_mode: "full_lipsync",
+    route_mix_mode: "custom",
+    lipsync_ratio: 1,
+    first_last_ratio: 0,
+    i2v_ratio: 0,
+    preferred_routes: ["ia2v"],
+    max_consecutive_lipsync: 999,
+    all_lipsync_mode: true,
+  },
+  full_i2v: {
+    route_mode: "full_i2v",
+    route_mix_mode: "custom",
+    lipsync_ratio: 0,
+    first_last_ratio: 0,
+    i2v_ratio: 1,
+    preferred_routes: ["i2v"],
+    max_consecutive_lipsync: 2,
+    all_lipsync_mode: false,
+  },
+  full_first_last: {
+    route_mode: "full_first_last",
+    route_mix_mode: "custom",
+    lipsync_ratio: 0,
+    first_last_ratio: 1,
+    i2v_ratio: 0,
+    preferred_routes: ["first_last"],
+    max_consecutive_lipsync: 2,
+    all_lipsync_mode: false,
+  },
+  balanced_mix: {
+    route_mode: "balanced_mix",
+    route_mix_mode: "custom",
+    lipsync_ratio: 0.25,
+    first_last_ratio: 0.25,
+    i2v_ratio: 0.5,
+    preferred_routes: ["ia2v", "i2v", "first_last"],
+    max_consecutive_lipsync: 2,
+    all_lipsync_mode: false,
+  },
+};
+
+function resolveRouteMode(value) {
+  const routeMode = String(value || "").trim().toLowerCase();
+  return ROUTE_MODE_PRESET_CONFIG[routeMode] ? routeMode : "auto";
+}
+
+function resolveCreativeConfigFromRouteMode(routeMode) {
+  const preset = ROUTE_MODE_PRESET_CONFIG[resolveRouteMode(routeMode)] || ROUTE_MODE_PRESET_CONFIG.auto;
+  return {
+    ...preset,
+    resolved_route_mode: preset.route_mode,
+    route_mode_source: "ui_preset",
+    route_mode_conflict_detected_before_normalization: false,
+    route_mode_conflict_fixed: false,
+    resolved_creative_config: {
+      route_mix_mode: preset.route_mix_mode,
+      lipsync_ratio: preset.lipsync_ratio,
+      i2v_ratio: preset.i2v_ratio,
+      first_last_ratio: preset.first_last_ratio,
+      preferred_routes: preset.preferred_routes,
+      max_consecutive_lipsync: preset.max_consecutive_lipsync,
     },
   };
 }
@@ -900,17 +974,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   const format = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
     ? String(state.format).trim()
     : "9:16";
-  const routeMixMode = String(state?.routeMixMode || "auto").trim().toLowerCase() === "custom" ? "custom" : "auto";
-  const lipsyncRatio = Math.max(0, Math.min(1, Number(state?.lipsyncRatio ?? 0.25) || 0));
-  const firstLastRatio = Math.max(0, Math.min(1, Number(state?.firstLastRatio ?? 0.25) || 0));
-  const maxConsecutiveLipsync = Math.max(1, Math.min(6, Number(state?.maxConsecutiveLipsync ?? 2) || 2));
-  const creativeConfig = {
-    route_mix_mode: routeMixMode,
-    lipsync_ratio: Number(lipsyncRatio.toFixed(3)),
-    first_last_ratio: Number(firstLastRatio.toFixed(3)),
-    preferred_routes: ["i2v", "first_last"],
-    max_consecutive_lipsync: maxConsecutiveLipsync,
-  };
+  const routeMode = resolveRouteMode(state?.routeMode);
+  const creativeConfig = resolveCreativeConfigFromRouteMode(routeMode);
 
   const payload = {
     mode: isMusicVideo ? "clip_pipeline" : "oneshot",
