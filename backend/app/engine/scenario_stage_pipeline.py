@@ -2792,44 +2792,39 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     plan_by_segment = _rows_by_segment(scene_plan_rows)
     prompts_by_segment = _rows_by_segment(scene_prompts_rows)
     role_by_segment = _rows_by_segment(role_scene_casting_rows)
-    role_by_scene = _rows_by_segment(role_scene_roles_rows)
     final_video_prompt_by_segment = _rows_by_segment(final_video_prompt_normalized_rows)
 
     has_scene_casting = bool(role_by_segment)
-    has_legacy_scene_roles = bool(role_by_scene)
+    has_legacy_scene_roles = bool(role_scene_roles_rows)
     story_guidance_notes = story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8)
     continuity_notes = story_guidance_notes if story_guidance_notes else _safe_list(role_plan.get("continuity_notes"))[:8]
-    finalize_used_legacy_scene_roles_fallback = False
     finalize_used_role_scene_casting = False
-    finalize_scene_ids_using_legacy_scene_roles_fallback: list[str] = []
+    finalize_legacy_scene_roles_row_count = len(role_scene_roles_rows)
     ordered_segment_ids: list[str] = []
     for source_rows in (
         scene_plan_rows,
         scene_prompts_rows,
         role_scene_casting_rows,
         final_video_prompt_normalized_rows,
-        role_scene_roles_rows,
     ):
         for source_row in source_rows:
             segment_id = str(_safe_dict(source_row).get("segment_id") or "").strip()
             if segment_id and segment_id not in ordered_segment_ids:
                 ordered_segment_ids.append(segment_id)
 
+    finalize_missing_role_scene_casting_segment_ids = [
+        segment_id for segment_id in ordered_segment_ids if segment_id not in role_by_segment
+    ]
+    finalize_missing_role_scene_casting_count = len(finalize_missing_role_scene_casting_segment_ids)
+    finalize_missing_role_scene_casting_segment_ids = finalize_missing_role_scene_casting_segment_ids[:diagnostic_limit]
+
     final_scenes: list[dict[str, Any]] = []
     for idx, segment_id in enumerate(ordered_segment_ids, start=1):
         scene_plan_row = _safe_dict(plan_by_segment.get(segment_id))
         role_row_segment = _safe_dict(role_by_segment.get(segment_id))
-        role_row_scene = _safe_dict(role_by_scene.get(segment_id))
-        role_row = role_row_segment if role_row_segment else role_row_scene
-        if role_row_segment and role_row_scene:
-            # Transition guardrail: scene_casting is canonical; scene_roles is legacy fallback bridge only.
-            role_row = role_row_segment
+        role_row = role_row_segment
         if role_row_segment:
             finalize_used_role_scene_casting = True
-        elif role_row_scene and not role_row_segment:
-            finalize_used_legacy_scene_roles_fallback = True
-            if segment_id and len(finalize_scene_ids_using_legacy_scene_roles_fallback) < diagnostic_limit:
-                finalize_scene_ids_using_legacy_scene_roles_fallback.append(segment_id)
         prompt_row = _safe_dict(prompts_by_segment.get(segment_id))
         final_video_prompt_row = _safe_dict(final_video_prompt_by_segment.get(segment_id))
         prompt_notes = _safe_dict(prompt_row.get("prompt_notes"))
@@ -2867,7 +2862,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         active_roles = _safe_list(role_row.get("active_roles"))
         secondary_roles = _safe_list(role_row.get("secondary_roles"))
-        primary_role = str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip()
+        primary_role = str(role_row.get("primary_role") or "").strip()
         if not active_roles:
             active_roles = list(
                 dict.fromkeys([primary_role, *[str(role).strip() for role in secondary_roles if str(role).strip()]])
@@ -2875,7 +2870,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         must_appear = list(
             dict.fromkeys(
                 [
-                    primary_role,
+                    *([primary_role] if primary_role else []),
                     *[str(role).strip() for role in active_roles if str(role).strip()],
                 ]
             )
@@ -3100,10 +3095,11 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     }
     final_storyboard = _attach_downstream_mode_metadata(final_storyboard, package)
     logger.info(
-        "[FINALIZE STORYBOARD BUILD] planSceneCount=%s promptSceneCount=%s roleSceneCount=%s finalSceneCount=%s segmentIds=%s",
+        "[FINALIZE STORYBOARD BUILD] planSceneCount=%s promptSceneCount=%s roleSceneCount=%s legacyRoleSceneRolesCount=%s finalSceneCount=%s segmentIds=%s",
         len(plan_by_segment),
         len(prompts_by_segment),
-        len(role_by_segment) or len(role_by_scene),
+        len(role_by_segment),
+        finalize_legacy_scene_roles_row_count,
         len(final_scenes),
         ordered_segment_ids,
     )
@@ -3115,15 +3111,20 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_scene_count"] = len(final_scenes)
     diagnostics["finalize_used_scene_prompts"] = bool(prompts_by_segment)
     diagnostics["finalize_used_scene_plan"] = bool(plan_by_segment)
-    diagnostics["finalize_used_role_plan"] = bool(role_by_segment or role_by_scene)
+    diagnostics["finalize_used_role_plan"] = bool(role_by_segment)
     diagnostics["finalize_has_scene_casting"] = has_scene_casting
     diagnostics["finalize_has_legacy_scene_roles"] = has_legacy_scene_roles
     diagnostics["finalize_used_role_scene_casting"] = finalize_used_role_scene_casting
     diagnostics["finalize_used_role_scene_casting_for_all_scenes"] = bool(ordered_segment_ids) and all(
         segment_id in role_by_segment for segment_id in ordered_segment_ids
     )
-    diagnostics["finalize_used_legacy_scene_roles_fallback"] = finalize_used_legacy_scene_roles_fallback
-    diagnostics["finalize_scene_ids_using_legacy_scene_roles_fallback"] = finalize_scene_ids_using_legacy_scene_roles_fallback
+    diagnostics["finalize_used_legacy_scene_roles_fallback"] = False
+    diagnostics["finalize_scene_ids_using_legacy_scene_roles_fallback"] = []
+    diagnostics["finalize_legacy_scene_roles_present"] = bool(role_scene_roles_rows)
+    diagnostics["finalize_legacy_scene_roles_row_count"] = int(finalize_legacy_scene_roles_row_count)
+    diagnostics["finalize_legacy_scene_roles_ignored"] = True
+    diagnostics["finalize_missing_role_scene_casting_count"] = int(finalize_missing_role_scene_casting_count)
+    diagnostics["finalize_missing_role_scene_casting_segment_ids"] = finalize_missing_role_scene_casting_segment_ids
     diagnostics["finalize_canonical_join_key"] = "segment_id"
     diagnostics["finalize_used_legacy_scene_id_bridge"] = finalize_legacy_scene_id_bridge_count > 0
     diagnostics["finalize_legacy_scene_id_bridge_count"] = finalize_legacy_scene_id_bridge_count
@@ -3132,7 +3133,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_segment_id_scene_id_mismatches"] = finalize_segment_id_scene_id_mismatches
     diagnostics["finalize_missing_segment_id_rows_by_stage"] = finalize_missing_segment_id_rows_by_stage
     diagnostics["finalize_scene_id_segment_id_mismatch_count"] = int(finalize_segment_id_scene_id_mismatch_count)
-    diagnostics["finalize_role_source_precedence"] = ["role_plan.scene_casting", "role_plan.scene_roles (fallback only)"]
+    diagnostics["finalize_role_source_precedence"] = ["role_plan.scene_casting"]
     diagnostics["finalize_has_both_scene_casting_and_scene_roles"] = has_scene_casting and has_legacy_scene_roles
     diagnostics["finalize_used_final_video_prompt"] = bool(final_video_prompt_by_segment)
     package["diagnostics"] = diagnostics
