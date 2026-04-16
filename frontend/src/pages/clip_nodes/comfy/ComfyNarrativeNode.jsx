@@ -20,17 +20,14 @@ const OUTPUT_HANDLES = [
   { id: "preview_out", labelRu: "Preview" },
 ];
 const ROUTE_MIX_PRESETS = [
-  { key: "auto", label: "AUTO", routeMode: "auto" },
-  { key: "full_lipsync", label: "FULL LIP-SYNC", routeMode: "full_lipsync" },
-  { key: "full_i2v", label: "FULL I2V", routeMode: "full_i2v" },
-  { key: "full_first_last", label: "FULL FIRST_LAST", routeMode: "full_first_last" },
-  { key: "balanced_mix", label: "BALANCED MIX", routeMode: "balanced_mix" },
+  { key: "balanced", label: "Balanced", routeMixMode: "custom", lipsyncRatio: 0.25, firstLastRatio: 0.25, maxConsecutiveLipsync: 2 },
+  { key: "performance", label: "Performance Heavy", routeMixMode: "custom", lipsyncRatio: 0.5, firstLastRatio: 0.15, maxConsecutiveLipsync: 2 },
+  { key: "visual", label: "Visual Heavy", routeMixMode: "custom", lipsyncRatio: 0.1, firstLastRatio: 0.35, maxConsecutiveLipsync: 1 },
+  { key: "all_lipsync", label: "All Lipsync", routeMixMode: "custom", lipsyncRatio: 1.0, firstLastRatio: 0.0, maxConsecutiveLipsync: 6 },
 ];
 
 export default function ComfyNarrativeNode({ id, data }) {
   const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
-  const selectedRouteMode = String(data?.routeMode || "").trim().toLowerCase() || "auto";
-  const activeRoutePreset = ROUTE_MIX_PRESETS.find((preset) => preset.routeMode === selectedRouteMode) || ROUTE_MIX_PRESETS[0];
   const resolvedSource = data?.resolvedSource || {};
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
   const activeSourceMode = resolvedSource?.mode || null;
@@ -220,32 +217,70 @@ export default function ComfyNarrativeNode({ id, data }) {
             </label>
 
             <section className="clipSB_narrativeSection">
-              <div className="clipSB_brainLabel">Route mode</div>
+              <div className="clipSB_brainLabel">Route mix policy</div>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Route mix mode</div>
+                <select
+                  className="clipSB_select clipSB_narrativeSelect"
+                  value={data?.routeMixMode || "auto"}
+                  onChange={(e) => data?.onFieldChange?.(id, { routeMixMode: e.target.value })}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Lipsync ratio: {Number(data?.lipsyncRatio ?? 0.25).toFixed(2)}</div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={Number(data?.lipsyncRatio ?? 0.25)}
+                  onChange={(e) => data?.onFieldChange?.(id, { lipsyncRatio: Number(e.target.value) })}
+                />
+              </label>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">First/Last ratio: {Number(data?.firstLastRatio ?? 0.25).toFixed(2)}</div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={Number(data?.firstLastRatio ?? 0.25)}
+                  onChange={(e) => data?.onFieldChange?.(id, { firstLastRatio: Number(e.target.value) })}
+                />
+              </label>
+              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Max consecutive lipsync</div>
+                <input
+                  className="clipSB_input"
+                  type="number"
+                  min="1"
+                  max="6"
+                  step="1"
+                  value={Number(data?.maxConsecutiveLipsync ?? 2)}
+                  onChange={(e) => data?.onFieldChange?.(id, { maxConsecutiveLipsync: Number(e.target.value || 2) })}
+                />
+              </label>
               <div className="clipSB_narrativeField clipSB_narrativeField--compact">
-                <div className="clipSB_narrativeEmptyHint" style={{ marginBottom: 6 }}>
-                  Selected route mode: <strong>{activeRoutePreset.label}</strong>
-                </div>
-                <div className="clipSB_narrativeEmptyHint" style={{ marginBottom: 8 }}>
-                  Will send routeMode: <strong>{selectedRouteMode}</strong> → creative_config.route_mode
-                </div>
-                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Presets</div>
+                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Quick presets</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 }}>
-                  {ROUTE_MIX_PRESETS.map((preset) => {
-                    const isSelected = preset.routeMode === selectedRouteMode;
-                    return (
-                      <button
-                        key={preset.key}
-                        type="button"
-                        className="clipSB_btn clipSB_btnSecondary"
-                        aria-pressed={isSelected ? "true" : "false"}
-                        style={isSelected ? { borderColor: "#4f7cff", background: "rgba(79, 124, 255, 0.22)", color: "#fff", fontWeight: 700 } : undefined}
-                        onClick={() => data?.onFieldChange?.(id, { routeMode: preset.routeMode })}
-                      >
-                        {preset.label}
-                        {isSelected ? " ✓" : ""}
-                      </button>
-                    );
-                  })}
+                  {ROUTE_MIX_PRESETS.map((preset) => (
+                    <button
+                      key={preset.key}
+                      type="button"
+                      className="clipSB_btn clipSB_btnSecondary"
+                      onClick={() => data?.onFieldChange?.(id, {
+                        routeMixMode: preset.routeMixMode,
+                        lipsyncRatio: preset.lipsyncRatio,
+                        firstLastRatio: preset.firstLastRatio,
+                        maxConsecutiveLipsync: preset.maxConsecutiveLipsync,
+                      })}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
                 </div>
               </div>
             </section>

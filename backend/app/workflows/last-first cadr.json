@@ -1,0 +1,558 @@
+{
+  "68": {
+    "inputs": {
+      "filename_prefix": "video/ltx2.3_flf2v",
+      "format": "auto",
+      "codec": "auto",
+      "video-preview": "",
+      "video": [
+        "139:122",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Сохранить видео"
+    }
+  },
+  "137": {
+    "inputs": {
+      "image": "aa.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Загрузить изображение"
+    }
+  },
+  "138": {
+    "inputs": {
+      "image": "bb.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Загрузить изображение"
+    }
+  },
+  "139:99": {
+    "inputs": {
+      "img_compression": 25,
+      "image": [
+        "139:125",
+        0
+      ]
+    },
+    "class_type": "LTXVPreprocess",
+    "_meta": {
+      "title": "LTXVPreprocess"
+    }
+  },
+  "139:100": {
+    "inputs": {
+      "noise_seed": 318988599395310
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "Случайный шум"
+    }
+  },
+  "139:101": {
+    "inputs": {
+      "frames_number": [
+        "139:144",
+        1
+      ],
+      "frame_rate": [
+        "139:114",
+        0
+      ],
+      "batch_size": 1,
+      "audio_vae": [
+        "139:126",
+        0
+      ]
+    },
+    "class_type": "LTXVEmptyLatentAudio",
+    "_meta": {
+      "title": "LTXV Пустое латентное аудио"
+    }
+  },
+  "139:104": {
+    "inputs": {
+      "img_compression": 25,
+      "image": [
+        "139:124",
+        0
+      ]
+    },
+    "class_type": "LTXVPreprocess",
+    "_meta": {
+      "title": "LTXVPreprocess"
+    }
+  },
+  "139:106": {
+    "inputs": {
+      "positive": [
+        "139:111",
+        0
+      ],
+      "negative": [
+        "139:111",
+        1
+      ],
+      "latent": [
+        "139:121",
+        0
+      ]
+    },
+    "class_type": "LTXVCropGuides",
+    "_meta": {
+      "title": "LTXVCropGuides"
+    }
+  },
+  "139:108": {
+    "inputs": {
+      "width": [
+        "139:110",
+        0
+      ],
+      "height": [
+        "139:110",
+        1
+      ],
+      "length": [
+        "139:144",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLTXVLatentVideo",
+    "_meta": {
+      "title": "Пустой LTXVLatentVideo"
+    }
+  },
+  "139:109": {
+    "inputs": {
+      "frame_rate": [
+        "139:123",
+        0
+      ],
+      "positive": [
+        "139:128",
+        0
+      ],
+      "negative": [
+        "139:112",
+        0
+      ]
+    },
+    "class_type": "LTXVConditioning",
+    "_meta": {
+      "title": "Кондиционирование LTXV"
+    }
+  },
+  "139:110": {
+    "inputs": {
+      "image": [
+        "139:124",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Получить размер изображения"
+    }
+  },
+  "139:111": {
+    "inputs": {
+      "frame_idx": -1,
+      "strength": 0.7,
+      "positive": [
+        "139:115",
+        0
+      ],
+      "negative": [
+        "139:115",
+        1
+      ],
+      "vae": [
+        "139:127",
+        2
+      ],
+      "latent": [
+        "139:115",
+        2
+      ],
+      "image": [
+        "139:99",
+        0
+      ]
+    },
+    "class_type": "LTXVAddGuide",
+    "_meta": {
+      "title": "LTXVAddGuide"
+    }
+  },
+  "139:114": {
+    "inputs": {
+      "value": 25
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Frame Rate(int)"
+    }
+  },
+  "139:115": {
+    "inputs": {
+      "frame_idx": 0,
+      "strength": 0.7,
+      "positive": [
+        "139:109",
+        0
+      ],
+      "negative": [
+        "139:109",
+        1
+      ],
+      "vae": [
+        "139:127",
+        2
+      ],
+      "latent": [
+        "139:108",
+        0
+      ],
+      "image": [
+        "139:104",
+        0
+      ]
+    },
+    "class_type": "LTXVAddGuide",
+    "_meta": {
+      "title": "LTXVAddGuide"
+    }
+  },
+  "139:116": {
+    "inputs": {
+      "cfg": 1,
+      "model": [
+        "139:129",
+        0
+      ],
+      "positive": [
+        "139:111",
+        0
+      ],
+      "negative": [
+        "139:111",
+        1
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFG Гид"
+    }
+  },
+  "139:117": {
+    "inputs": {
+      "eta": 0,
+      "s_noise": 1
+    },
+    "class_type": "SamplerEulerAncestral",
+    "_meta": {
+      "title": "Сэмплер Эйлера (Анастр.)"
+    }
+  },
+  "139:118": {
+    "inputs": {
+      "sigmas": "1., 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0"
+    },
+    "class_type": "ManualSigmas",
+    "_meta": {
+      "title": "ManualSigmas"
+    }
+  },
+  "139:119": {
+    "inputs": {
+      "video_latent": [
+        "139:111",
+        2
+      ],
+      "audio_latent": [
+        "139:101",
+        0
+      ]
+    },
+    "class_type": "LTXVConcatAVLatent",
+    "_meta": {
+      "title": "LTXVConcatAVLatent"
+    }
+  },
+  "139:120": {
+    "inputs": {
+      "noise": [
+        "139:100",
+        0
+      ],
+      "guider": [
+        "139:116",
+        0
+      ],
+      "sampler": [
+        "139:117",
+        0
+      ],
+      "sigmas": [
+        "139:118",
+        0
+      ],
+      "latent_image": [
+        "139:119",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "Пользовательский сэмплер (Расширенный)"
+    }
+  },
+  "139:123": {
+    "inputs": {
+      "expression": "a",
+      "values.a": [
+        "139:114",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Математическое выражение"
+    }
+  },
+  "139:124": {
+    "inputs": {
+      "resize_type": "scale dimensions",
+      "resize_type.width": [
+        "139:113",
+        0
+      ],
+      "resize_type.height": [
+        "139:98",
+        0
+      ],
+      "resize_type.crop": "center",
+      "scale_method": "nearest-exact",
+      "input": [
+        "138",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Изменить размер изображения/маски"
+    }
+  },
+  "139:125": {
+    "inputs": {
+      "resize_type": "scale dimensions",
+      "resize_type.width": [
+        "139:113",
+        0
+      ],
+      "resize_type.height": [
+        "139:98",
+        0
+      ],
+      "resize_type.crop": "center",
+      "scale_method": "nearest-exact",
+      "input": [
+        "137",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Изменить размер изображения/маски"
+    }
+  },
+  "139:113": {
+    "inputs": {
+      "value": 720
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Width"
+    }
+  },
+  "139:98": {
+    "inputs": {
+      "value": 1280
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Height"
+    }
+  },
+  "139:122": {
+    "inputs": {
+      "fps": [
+        "139:123",
+        0
+      ],
+      "images": [
+        "139:105",
+        0
+      ],
+      "audio": [
+        "139:107",
+        0
+      ]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Создать видео"
+    }
+  },
+  "139:105": {
+    "inputs": {
+      "tile_size": 768,
+      "overlap": 64,
+      "temporal_size": 4096,
+      "temporal_overlap": 64,
+      "samples": [
+        "139:106",
+        2
+      ],
+      "vae": [
+        "139:127",
+        2
+      ]
+    },
+    "class_type": "VAEDecodeTiled",
+    "_meta": {
+      "title": "Декодировать VAE (плитками)"
+    }
+  },
+  "139:107": {
+    "inputs": {
+      "samples": [
+        "139:121",
+        1
+      ],
+      "audio_vae": [
+        "139:126",
+        0
+      ]
+    },
+    "class_type": "LTXVAudioVAEDecode",
+    "_meta": {
+      "title": "LTXV Декодирование аудио VAE"
+    }
+  },
+  "139:121": {
+    "inputs": {
+      "av_latent": [
+        "139:120",
+        1
+      ]
+    },
+    "class_type": "LTXVSeparateAVLatent",
+    "_meta": {
+      "title": "LTXVSeparateAVLatent"
+    }
+  },
+  "139:128": {
+    "inputs": {
+      "text": "Use the first image as the exact start frame and the second image as the exact end frame. Locked transition for the protagonist in urban: one controlled only: brim lifts relative to start while the cap remains worn, the face opens more, and direct gaze becomes visible. Preserve same exact wall geometry, framing, perspective, camera distance, clothing, body proportions, and lighting. No camera drift, no zoom, no reframing, no layout change, no extra objects, no geometry morphing. Keep cap attached/worn with no drift or detachment.",
+      "clip": [
+        "139:103",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Кодирование текста CLIP (Запрос)"
+    }
+  },
+  "139:127": {
+    "inputs": {
+      "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Загрузить сheckpoint"
+    }
+  },
+  "139:126": {
+    "inputs": {
+      "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors"
+    },
+    "class_type": "LTXVAudioVAELoader",
+    "_meta": {
+      "title": "LTXV Загрузчик аудио VAE"
+    }
+  },
+  "139:103": {
+    "inputs": {
+      "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
+      "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
+      "device": "default"
+    },
+    "class_type": "LTXAVTextEncoderLoader",
+    "_meta": {
+      "title": "LTXV Загрузчик аудио-текстового энкодера"
+    }
+  },
+  "139:129": {
+    "inputs": {
+      "lora_name": "ltx2.3-transition.safetensors",
+      "strength_model": 1,
+      "model": [
+        "139:127",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Загрузчик LoRA (Только модель)"
+    }
+  },
+  "139:143": {
+    "inputs": {
+      "value": 6
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Duration"
+    }
+  },
+  "139:144": {
+    "inputs": {
+      "expression": "a * b + 1",
+      "values.a": [
+        "139:143",
+        0
+      ],
+      "values.b": [
+        "139:114",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Математическое выражение"
+    }
+  },
+  "139:112": {
+    "inputs": {
+      "text": "Use the first image as the exact start frame and the second image as the exact end frame. Locked transition for the protagonist in urban: one controlled only: brim lifts relative to start while the cap remains worn, the face opens more, and direct gaze becomes visible. Preserve same exact wall geometry, framing, perspective, camera distance, clothing, body proportions, and lighting. No camera drift, no zoom, no reframing, no layout change, no extra objects, no geometry morphing. Keep cap attached/worn with no drift or detachment.. DANCE MOTION SAFETY: smooth dynamic nightclub realism, controlled musical movement, beat-shaped but readable motion, stable anatomy-safe choreography, elegant club-energy not frantic chaos. Use groove/sway/step/pivot/rebound/pose and phrase-shaped accents with moderate amplitude. Avoid jerky dance, fast flailing arms, abrupt spins, violent head whipping, high-frequency shaking, extreme rotation velocity, aggressive torso snapping, stroboscopic pose changes, ultra-fast partner turbulence.. CAMERA ORBIT SAFETY: if orbit is used, keep slow horizontal arc around performer at eye/chest/waist level, prefer right-to-left or left-to-right around subject plane, preserve stable horizon and subject readability. Forbidden: top orbit, overhead spin, top-down path, head-top camera circle, drone-like loop, roll-tilt orbit.",
+      "clip": [
+        "139:103",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Кодирование текста CLIP (Запрос)"
+    }
+  }
+}

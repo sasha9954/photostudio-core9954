@@ -1315,7 +1315,7 @@ def _build_i2v_base_guardrail(*, role_label: str, world_anchor: str, lighting_an
         f"Exact first-frame identity anchor for {role_label}: same primary subject identity, same face, same wardrobe family when locked. "
         f"Keep the same world family ({world_anchor}) and lighting family ({lighting_anchor or 'current locked lighting family'}) when locked by current context. "
         "Preserve same background geometry and grounded documentary realism. "
-        "No identity drift, no wardrobe change, no location change, no broken anatomy, no floating limbs, no leg warping, no face deformation, no jittery motion, no slow-motion feel, no stylized action feel, no bullet-time effect."
+        "No identity drift, no wardrobe change, no location change, no broken anatomy, no floating limbs, no leg warping, no face deformation, no camera shake, no slow-motion feel, no stylized action feel, no bullet-time effect."
     )
 
 
@@ -2190,49 +2190,6 @@ _CAMERA_TECH_LEAK_REGEXES: tuple[re.Pattern[str], ...] = (
 )
 
 
-def _clip_validation_excerpt(text: str, *, start: int, end: int, radius: int = 56, max_len: int = 140) -> str:
-    source = str(text or "")
-    if not source:
-        return ""
-    safe_start = max(0, int(start))
-    safe_end = max(safe_start, int(end))
-    left = max(0, safe_start - radius)
-    right = min(len(source), safe_end + radius)
-    excerpt = source[left:right].strip()
-    return excerpt[:max_len]
-
-
-def _build_prompts_validation_zones(*, prompts_v11: dict[str, Any], row: dict[str, Any]) -> list[tuple[str, str]]:
-    visual = _safe_dict(row.get("visual_description"))
-    character = _safe_dict(row.get("character_state"))
-    environment = _safe_dict(row.get("environment_details"))
-    prompt_notes = row.get("prompt_notes")
-    return [
-        ("global_style_anchor", str(prompts_v11.get("global_style_anchor") or "")),
-        ("subject_description", str(visual.get("subject_description") or "")),
-        ("background_description", str(visual.get("background_description") or "")),
-        ("negative_description", str(visual.get("negative_description") or "")),
-        ("character_state", json.dumps(character, ensure_ascii=False)),
-        ("environment_details", json.dumps(environment, ensure_ascii=False)),
-        ("prompt_notes", " ".join(str(v) for v in _safe_list(prompt_notes))),
-    ]
-
-
-def _locate_text_match(*, zones: list[tuple[str, str]], token: str) -> dict[str, str]:
-    needle = str(token or "").lower()
-    for field_name, text in zones:
-        haystack = str(text or "")
-        lower = haystack.lower()
-        offset = lower.find(needle)
-        if offset >= 0:
-            return {
-                "match_field": field_name,
-                "match_pattern": token,
-                "match_excerpt": _clip_validation_excerpt(haystack, start=offset, end=offset + len(needle)),
-            }
-    return {"match_field": "", "match_pattern": token, "match_excerpt": ""}
-
-
 def _suggest_local_zone_hint(
     *,
     scene_row: dict[str, Any],
@@ -2464,8 +2421,6 @@ def _build_prompts_v11_prompt(
         "- Lighting/atmosphere should evolve per beat within one light family with pocket-level differences in density and contrast; avoid flat repeated prose.\n"
         "- Express segment-to-segment emotional curve with compact beat language (anticipation -> peak -> release -> lingering afterglow) while preserving continuity.\n"
         "- Use descriptive framing language (intimate/nearer/opener/layered/deeper) allowed; avoid camera-tech jargon.\n"
-        "- negative_description must stay visual/plain-language only: never use camera/optics terms (e.g., lens, lens flare, focal length, aperture, iso, shutter, dolly, crane, steadicam, gimbal, rack focus, handheld rig).\n"
-        "- Prefer engine-agnostic negatives such as: no distracting bright streaks, no sudden bright artifacts, avoid washed-out highlights, keep background lighting controlled, no distracting visual artifacts.\n"
         "- transition_description is mandatory only when route == first_last, otherwise set null.\n"
         "- negative_description must be descriptive guardrails (identity/world/wardrobe drift prevention), not model-tech blacklist.\n\n"
         f"{feedback_block}"
@@ -2484,32 +2439,6 @@ def _coerce_prompts_v11_payload(raw: Any) -> dict[str, Any]:
         if _safe_list(nested.get("segments")):
             return nested
     return data
-
-
-_AUTHORING_NEGATIVE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\blens flares\b", re.IGNORECASE), "distracting bright streaks"),
-    (re.compile(r"\blens flare\b", re.IGNORECASE), "distracting bright streak"),
-    (re.compile(r"\bcamera shake\b", re.IGNORECASE), "jittery motion"),
-    (re.compile(r"\boptical distortion\b", re.IGNORECASE), "visual distortion"),
-    (re.compile(r"\bfocal[- ]length artifacts?\b", re.IGNORECASE), "unnatural visual artifacts"),
-)
-
-
-def _apply_authoring_negative_cleanup(prompts_v11: dict[str, Any]) -> dict[str, Any]:
-    segments = _safe_list(prompts_v11.get("segments"))
-    if not segments:
-        return prompts_v11
-    for segment in segments:
-        visual = _safe_dict(_safe_dict(segment).get("visual_description"))
-        text = str(visual.get("negative_description") or "")
-        if not text:
-            continue
-        cleaned = text
-        for pattern, replacement in _AUTHORING_NEGATIVE_REPLACEMENTS:
-            cleaned = pattern.sub(replacement, cleaned)
-        if cleaned != text:
-            visual["negative_description"] = cleaned
-    return prompts_v11
 
 
 def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2649,16 +2578,7 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
             ]
         ).lower()
         if any(token in blob for token in _TECHNICAL_TAG_PATTERNS):
-            zones = _build_prompts_validation_zones(prompts_v11=prompts_v11, row=row)
-            hit = next((token for token in _TECHNICAL_TAG_PATTERNS if token in blob), "")
-            match = _locate_text_match(zones=zones, token=hit)
-            return "PROMPTS_TECHNICAL_TAGGING", f"technical_tagging:{segment_id}", {
-                "scene_prompts_offending_segment_id": segment_id,
-                "scene_prompts_technical_tagging_match_type": "technical_tag_token",
-                "scene_prompts_technical_tagging_match_pattern": str(match.get("match_pattern") or ""),
-                "scene_prompts_technical_tagging_match_excerpt": str(match.get("match_excerpt") or ""),
-                "scene_prompts_technical_tagging_match_field": str(match.get("match_field") or ""),
-            }
+            return "PROMPTS_TECHNICAL_TAGGING", f"technical_tagging:{segment_id}", {}
         if any(token in blob for token in _QUALITY_BUZZWORDS):
             return "PROMPTS_QUALITY_BUZZWORDS", f"quality_buzzwords:{segment_id}", {}
         if any(token in blob for token in _CAMERA_LEAK_PATTERNS) and any(regex.search(blob) for regex in _CAMERA_TECH_LEAK_REGEXES):
@@ -2722,11 +2642,6 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_transition_present_count": 0,
         "scene_prompts_error_code": "",
         "scene_prompts_validation_error": "",
-        "scene_prompts_offending_segment_id": "",
-        "scene_prompts_technical_tagging_match_type": "",
-        "scene_prompts_technical_tagging_match_pattern": "",
-        "scene_prompts_technical_tagging_match_excerpt": "",
-        "scene_prompts_technical_tagging_match_field": "",
         "active_video_model_capability_profile": active_model_id,
         "active_route_capability_mode": route_capability_mode,
         "prompt_capability_guard_applied": prompt_capability_guard_applied,
@@ -2772,7 +2687,6 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
 
     if not str(raw_payload.get("global_style_anchor") or "").strip():
         raw_payload["global_style_anchor"] = global_style_anchor
-    raw_payload = _apply_authoring_negative_cleanup(raw_payload)
 
     error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
     diagnostics["scene_prompts_error_code"] = error_code

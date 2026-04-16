@@ -4,6 +4,7 @@
       "filename_prefix": "video/LTX_2.3_i2v",
       "format": "auto",
       "codec": "auto",
+      "video-preview": "",
       "video": [
         "267:242",
         0
@@ -16,7 +17,7 @@
   },
   "269": {
     "inputs": {
-      "image": "egyptian_queen.png"
+      "image": "роза крутиться.jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -34,7 +35,7 @@
   },
   "267:237": {
     "inputs": {
-      "noise_seed": 723381549937839
+      "noise_seed": 385403310505555
     },
     "class_type": "RandomNoise",
     "_meta": {
@@ -280,7 +281,7 @@
     },
     "class_type": "ComfyMathExpression",
     "_meta": {
-      "title": "Math Expression"
+      "title": "Математическое выражение"
     }
   },
   "267:259": {
@@ -293,7 +294,7 @@
     },
     "class_type": "ComfyMathExpression",
     "_meta": {
-      "title": "Math Expression"
+      "title": "Математическое выражение"
     }
   },
   "267:228": {
@@ -368,7 +369,7 @@
     },
     "class_type": "ComfyMathExpression",
     "_meta": {
-      "title": "Math Expression"
+      "title": "Математическое выражение"
     }
   },
   "267:258": {
@@ -543,19 +544,6 @@
       "title": "Width"
     }
   },
-  "267:247": {
-    "inputs": {
-      "text": "pc game, console game, video game, cartoon, childish, ugly",
-      "clip": [
-        "267:272",
-        1
-      ]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": {
-      "title": "Кодирование текста CLIP (Запрос)"
-    }
-  },
   "267:231": {
     "inputs": {
       "cfg": 1,
@@ -628,6 +616,8 @@
       "sampling_mode.min_p": 0.05,
       "sampling_mode.repetition_penalty": 1.05,
       "sampling_mode.seed": 0,
+      "sampling_mode.presence_penalty": 0,
+      "thinking": false,
       "clip": [
         "267:272",
         1
@@ -644,8 +634,8 @@
   },
   "267:275": {
     "inputs": {
-      "preview_markdown": "",
-      "preview_text": "",
+      "preview_markdown": "Style: realistic - cinematic - The woman glances at her watch and smiles warmly. She speaks in a cheerful, friendly voice, \"I think we're right on time!\" In the background, a café barista prepares drinks at the counter. The barista calls out in a clear, upbeat tone, \"Two cappuccinos ready!\" The sound of the espresso machine hissing softly blends with gentle background chatter and the light clinking of cups on saucers.",
+      "preview_text": "Style: realistic - cinematic - The woman glances at her watch and smiles warmly. She speaks in a cheerful, friendly voice, \"I think we're right on time!\" In the background, a café barista prepares drinks at the counter. The barista calls out in a clear, upbeat tone, \"Two cappuccinos ready!\" The sound of the espresso machine hissing softly blends with gentle background chatter and the light clinking of cups on saucers.",
       "previewMode": null,
       "source": [
         "267:274",
@@ -694,7 +684,7 @@
   },
   "267:266": {
     "inputs": {
-      "value": ""
+      "value": "Use the uploaded image as the exact first frame and identity anchor. Keep the same woman, same face, same hairstyle, same black voluminous dress with rose details and magenta hem, same black boots, same neon club interior, same glowing geometric lights, same “POЗA” sign, same haze, same lighting, same background geometry, and the same grounded cinematic realism. No identity drift, no wardrobe change, no location change, no extra choreography, no surreal motion, no broken anatomy, no face deformation, no leg warping, no camera shake.\n\nFor 4.0 seconds, the woman continues a controlled realistic spin that grows naturally out of the exact first-frame motion. Her movement should feel fluid, confident, and physically believable, not chaotic. The dress creates a wide circular fabric sweep with strong readable motion in the magenta hem, while her upper body stays elegant and balanced. Keep her arms simple and stable, with no complex hand gestures. Her head and shoulders respond naturally to the turn, with a calm focused expression and only subtle changes in gaze. The camera should gently follow the motion with a slight cinematic push-in and minimal lateral adjustment, preserving stable framing and clear subject readability. Motion must feel real-time, alive, and grounded, not slow-motion and not stylized. Preserve the same club depth, same neon atmosphere, same sign placement, and the same physically coherent world throughout."
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -710,6 +700,19 @@
       "clip": [
         "267:243",
         0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Кодирование текста CLIP (Запрос)"
+    }
+  },
+  "267:247": {
+    "inputs": {
+      "text": "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, camera shake, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, static camera, no parallax, head turn only without camera follow, background morphing, unstable geometry",
+      "clip": [
+        "267:272",
+        1
       ]
     },
     "class_type": "CLIPTextEncode",

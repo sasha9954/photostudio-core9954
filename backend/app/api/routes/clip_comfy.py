@@ -884,18 +884,8 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
             },
             "debugMode": debug_mode,
         }
-        diagnostics = package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {}
-        if bool(diagnostics.get("manual_stage_run_blocked_by_missing_upstream")):
-            response_payload["blocked"] = True
-            response_payload["continuation_mode"] = "blocked_by_missing_upstream"
-            response_payload["blocked_upstream_stages"] = (
-                diagnostics.get("blocked_upstream_stages")
-                if isinstance(diagnostics.get("blocked_upstream_stages"), list)
-                else []
-            )
-            response_payload["manual_stage_run_policy_applied"] = True
-            response_payload["manual_requested_stage_requires_complete_upstream"] = True
         if debug_mode:
+            diagnostics = package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {}
             response_payload["storyboardOut"] = (
                 package.get("final_storyboard") if isinstance(package.get("final_storyboard"), dict) else {}
             )

@@ -6,7 +6,6 @@ const STAGE_BUTTONS = [
   { id: "role_plan", label: "ROLES" },
   { id: "scene_plan", label: "SCENES" },
   { id: "scene_prompts", label: "PROMPTS" },
-  { id: "final_video_prompt", label: "FINAL VIDEO PROMPT" },
   { id: "finalize", label: "FINAL" },
 ];
 
@@ -16,7 +15,6 @@ const TABS = [
   { id: "role_plan", label: "ROLE PLAN" },
   { id: "scene_plan", label: "SCENE PLAN" },
   { id: "scene_prompts", label: "PROMPTS" },
-  { id: "final_video_prompt", label: "FINAL VIDEO PROMPT" },
   { id: "final", label: "FINAL" },
   { id: "diagnostics", label: "DIAGNOSTICS" },
   { id: "raw", label: "RAW JSON" },
@@ -28,28 +26,21 @@ const TAB_STAGE_ID = {
   role_plan: "role_plan",
   scene_plan: "scene_plan",
   scene_prompts: "scene_prompts",
-  final_video_prompt: "final_video_prompt",
   final: "finalize",
 };
 
-const MANUAL_STAGE_UPSTREAM_REQUIREMENTS = {
-  role_plan: ["story_core", "audio_map", "input_package"],
-  scene_plan: ["role_plan", "story_core", "audio_map", "input_package"],
-  scene_prompts: ["scene_plan", "role_plan", "story_core", "audio_map", "input_package"],
-  final_video_prompt: ["scene_prompts", "scene_plan", "role_plan", "story_core", "audio_map", "input_package"],
-  finalize: ["final_video_prompt", "scene_prompts", "scene_plan", "role_plan", "story_core", "audio_map", "input_package"],
-};
+const FINALIZE_UPSTREAM_STAGES = [
+  "story_core",
+  "audio_map",
+  "role_plan",
+  "scene_plan",
+  "scene_prompts",
+];
 
-function collectManualBlockedUpstreamStages(stageId, stageStatuses = {}) {
-  const requiredStages = Array.isArray(MANUAL_STAGE_UPSTREAM_REQUIREMENTS?.[stageId])
-    ? MANUAL_STAGE_UPSTREAM_REQUIREMENTS[stageId]
-    : [];
-  if (!requiredStages.length) return [];
+function collectFinalizeStaleStages(stageStatuses = {}) {
   const suspiciousReasonPattern = /(stale|invalid|dirty|outdated|rerun|re-run|upstream|changed|not done)/i;
-  return requiredStages.filter((requiredStageId) => {
-    const row = stageStatuses?.[requiredStageId] && typeof stageStatuses[requiredStageId] === "object"
-      ? stageStatuses[requiredStageId]
-      : {};
+  return FINALIZE_UPSTREAM_STAGES.filter((stageId) => {
+    const row = stageStatuses?.[stageId] && typeof stageStatuses[stageId] === "object" ? stageStatuses[stageId] : {};
     const status = String(row?.status || "idle").trim().toLowerCase();
     const reason = String(
       row?.reason
@@ -149,9 +140,6 @@ function buildCompactDebugSnapshot({ contextSummary = {}, executedStages = [], d
       rolePlanLegacySceneRoles: Array.isArray(safePkg?.role_plan?.scene_roles) ? safePkg.role_plan.scene_roles.length : 0,
       scenePlanScenes: Array.isArray(safePkg?.scene_plan?.scenes) ? safePkg.scene_plan.scenes.length : 0,
       scenePrompts: Array.isArray(safePkg?.scene_prompts?.scenes) ? safePkg.scene_prompts.scenes.length : 0,
-      finalVideoPromptSegments: Array.isArray(safePkg?.final_video_prompt?.segments)
-        ? safePkg.final_video_prompt.segments.length
-        : (Array.isArray(safePkg?.final_video_prompt?.scenes) ? safePkg.final_video_prompt.scenes.length : 0),
       finalScenes: Array.isArray(safePkg?.final_storyboard?.scenes) ? safePkg.final_storyboard.scenes.length : 0,
     },
     shortStoryCoreSummary: {
@@ -183,7 +171,7 @@ export default function ScenarioPipelineDebugEditor({
 }) {
   const [busyStage, setBusyStage] = useState("");
   const [activeTab, setActiveTab] = useState("audio_map");
-  const [manualWarning, setManualWarning] = useState({ open: false, stageId: "", staleStages: [] });
+  const [finalizeWarning, setFinalizeWarning] = useState({ open: false, staleStages: [] });
   const [rebuildHint, setRebuildHint] = useState("");
 
   const chips = useMemo(() => STAGE_BUTTONS.map((stage) => {
@@ -205,14 +193,14 @@ export default function ScenarioPipelineDebugEditor({
   };
 
   const runStage = async (stageId, autoRun = false) => {
-    if (stageId && !autoRun) {
-      const staleStages = collectManualBlockedUpstreamStages(stageId, stageStatuses);
+    if (stageId === "finalize" && !autoRun) {
+      const staleStages = collectFinalizeStaleStages(stageStatuses);
       if (staleStages.length > 0) {
-        setManualWarning({ open: true, stageId, staleStages });
+        setFinalizeWarning({ open: true, staleStages });
         return;
       }
     }
-    if (manualWarning.open) setManualWarning({ open: false, stageId: "", staleStages: [] });
+    if (finalizeWarning.open) setFinalizeWarning({ open: false, staleStages: [] });
     if (rebuildHint) setRebuildHint("");
     await executeStageRun(stageId, autoRun);
   };
@@ -230,10 +218,6 @@ export default function ScenarioPipelineDebugEditor({
   const rolePlan = resolvedStoryboardPackage?.role_plan || {};
   const scenePlan = resolvedStoryboardPackage?.scene_plan || {};
   const prompts = resolvedStoryboardPackage?.scene_prompts || {};
-  const finalVideoPrompt = resolvedStoryboardPackage?.final_video_prompt || {};
-  const finalVideoPromptSegments = Array.isArray(finalVideoPrompt?.segments)
-    ? finalVideoPrompt.segments
-    : (Array.isArray(finalVideoPrompt?.scenes) ? finalVideoPrompt.scenes : []);
   const promptScenes = Array.isArray(prompts?.scenes) ? prompts.scenes : [];
   const finalStoryboard = resolvedStoryboardPackage?.final_storyboard || {};
   const allDiagnostics = Object.keys(diagnostics || {}).length ? diagnostics : (resolvedStoryboardPackage?.diagnostics || {});
@@ -459,27 +443,6 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>SCENE PROMPTS</span><strong>scene_prompts empty</strong></div>
       </div>
     ),
-    final_video_prompt: finalVideoPromptSegments.length ? (
-      <div>
-        <div className="clipSB_storyboardKv"><span>delivery_version</span><strong>{String(finalVideoPrompt?.delivery_version || "—")}</strong></div>
-        <div className="clipSB_storyboardKv"><span>segment_count</span><strong>{finalVideoPromptSegments.length}</strong></div>
-        <div className="clipSB_storyboardKv"><span>package_key</span><strong>final_video_prompt</strong></div>
-        <pre className="clipSB_pre">{toJson(finalVideoPromptSegments.map((row) => ({
-          segment_id: row?.segment_id,
-          route_type: row?.video_metadata?.route_type,
-          frame_strategy: row?.engine_hints?.frame_strategy,
-          audio_sync_mode: row?.engine_hints?.audio_sync_mode,
-          motion_strength: row?.engine_hints?.motion_strength,
-          transition_kind: row?.engine_hints?.transition_kind,
-          canonical_source_used: true,
-          deprecated_bridge_used: Boolean(row?.deprecated_bridge_used),
-        })))}</pre>
-      </div>
-    ) : (
-      <div>
-        <div className="clipSB_storyboardKv"><span>FINAL VIDEO PROMPT</span><strong>final_video_prompt empty</strong></div>
-      </div>
-    ),
     final: (
       <div>
         <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(finalMeta?.director_mode || "—")}</strong></div>
@@ -559,13 +522,13 @@ export default function ScenarioPipelineDebugEditor({
               </span>
             ))}
           </div>
-          {manualWarning.open ? (
+          {finalizeWarning.open ? (
             <div className="clipSB_scenarioFinalizeNotice">
               <div className="clipSB_scenarioFinalizeNoticeText">
-                Ручной запуск стадии <strong>{manualWarning.stageId}</strong> заблокирован: есть неготовые или неактуальные upstream-стадии.
-                {manualWarning.staleStages.length ? (
+                В пакете могут быть неактуальные стадии. Можно собрать Final из текущего пакета, но результат может не включать последние изменения.
+                {finalizeWarning.staleStages.length ? (
                   <span className="clipSB_scenarioFinalizeNoticeStages">
-                    Блокирующие стадии: {manualWarning.staleStages.join(", ")}
+                    Неактуальные стадии: {finalizeWarning.staleStages.join(", ")}
                   </span>
                 ) : null}
               </div>
@@ -573,7 +536,17 @@ export default function ScenarioPipelineDebugEditor({
                 <button
                   className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn"
                   type="button"
-                  onClick={() => setManualWarning({ open: false, stageId: "", staleStages: [] })}
+                  onClick={() => {
+                    setFinalizeWarning({ open: false, staleStages: [] });
+                    void executeStageRun("finalize", false);
+                  }}
+                >
+                  Собрать текущий Final
+                </button>
+                <button
+                  className="clipSB_btn clipSB_btnSecondary clipSB_scenarioEditorStageBtn"
+                  type="button"
+                  onClick={() => setFinalizeWarning({ open: false, staleStages: [] })}
                 >
                   Отмена
                 </button>
@@ -581,10 +554,10 @@ export default function ScenarioPipelineDebugEditor({
                   className="clipSB_btn clipSB_scenarioEditorStageBtn"
                   type="button"
                   onClick={() => {
-                    const firstStale = String(manualWarning.staleStages?.[0] || "").trim();
+                    const firstStale = String(finalizeWarning.staleStages?.[0] || "").trim();
                     if (firstStale && TAB_STAGE_ID[firstStale]) setActiveTab(firstStale);
-                    setManualWarning({ open: false, stageId: "", staleStages: [] });
-                    setRebuildHint("Запустите блокирующие стадии кнопками сверху, затем повторите ручной запуск.");
+                    setFinalizeWarning({ open: false, staleStages: [] });
+                    setRebuildHint("Запустите нужные стадии кнопками сверху, затем снова нажмите FINAL.");
                   }}
                 >
                   Обновить стадии сначала
@@ -592,7 +565,7 @@ export default function ScenarioPipelineDebugEditor({
               </div>
             </div>
           ) : null}
-          {!manualWarning.open && rebuildHint ? (
+          {!finalizeWarning.open && rebuildHint ? (
             <div className="clipSB_scenarioFinalizeHint">{rebuildHint}</div>
           ) : null}
           <div className="clipSB_scenarioEditorTabsRow">

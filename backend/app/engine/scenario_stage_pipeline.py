@@ -89,7 +89,7 @@ STAGE_SECTION_RESETTERS: dict[str, Any] = {
     "role_plan": lambda: {},
     "scene_plan": lambda: {"scenes": []},
     "scene_prompts": lambda: {"scenes": []},
-    "final_video_prompt": lambda: {"delivery_version": "1.1", "segments": [], "scenes": []},
+    "final_video_prompt": lambda: {"scenes": []},
     "finalize": lambda: {"scenes": []},
 }
 
@@ -140,28 +140,6 @@ def _stage_output_field(stage_id: str) -> str:
     return STAGE_PACKAGE_FIELD_BY_STAGE.get(stage_id, stage_id)
 
 
-def _is_usable_scene_plan_snapshot(value: Any) -> bool:
-    row = _safe_dict(value)
-    return bool(_safe_list(row.get("scenes")))
-
-
-def _is_usable_scene_prompts_snapshot(value: Any) -> bool:
-    row = _safe_dict(value)
-    segments = _safe_list(row.get("segments"))
-    if segments:
-        return True
-    scenes = _safe_list(row.get("scenes"))
-    return bool(scenes)
-
-
-def _is_usable_finalize_snapshot(value: Any) -> bool:
-    row = _safe_dict(value)
-    final_storyboard = _safe_dict(row.get("final_storyboard"))
-    if final_storyboard:
-        return bool(_safe_list(final_storyboard.get("scenes")))
-    return bool(_safe_list(row.get("scenes")))
-
-
 def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     safe_pkg = _safe_dict(package)
     output = safe_pkg.get(_stage_output_field(stage_id))
@@ -169,36 +147,9 @@ def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
         return bool(_safe_dict(output))
     if stage_id == "audio_map":
         return _is_usable_audio_map(_safe_dict(output))
-    if stage_id == "scene_plan":
-        return _is_usable_scene_plan_snapshot(output)
-    if stage_id == "scene_prompts":
-        return _is_usable_scene_prompts_snapshot(output)
-    if stage_id == "finalize":
-        return _is_usable_finalize_snapshot(output)
-    if stage_id == "final_video_prompt":
-        return _is_usable_scene_prompts_snapshot(output)
+    if stage_id in {"scene_plan", "scene_prompts", "final_video_prompt", "finalize"}:
+        return isinstance(output, dict) and "scenes" in output
     return isinstance(output, dict) and bool(output)
-
-
-def _is_usable_final_video_prompt_snapshot(value: Any) -> bool:
-    row = _safe_dict(value)
-    segments = _safe_list(row.get("segments"))
-    scenes = _safe_list(row.get("scenes"))
-    return bool(segments) or bool(scenes)
-
-
-def _is_usable_final_storyboard_snapshot(value: Any) -> bool:
-    return _is_usable_finalize_snapshot(value)
-
-
-def _mark_preserved_snapshot_diagnostic(package: dict[str, Any], stage_id: str) -> None:
-    diagnostics = _safe_dict(package.get("diagnostics"))
-    preserved_ids = [str(item).strip() for item in _safe_list(diagnostics.get("preserved_snapshot_stage_ids")) if str(item).strip()]
-    if stage_id not in preserved_ids:
-        preserved_ids.append(stage_id)
-    diagnostics["preserved_snapshot_stage_ids"] = preserved_ids
-    diagnostics["manual_rerun_preserved_downstream_snapshot"] = bool(preserved_ids)
-    package["diagnostics"] = diagnostics
 
 
 def _can_reuse_stage_output(package: dict[str, Any], stage_id: str) -> bool:
@@ -396,102 +347,34 @@ def _clamp_ratio(value: Any, default: float) -> float:
 
 def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
     row = _safe_dict(raw_config)
-    route_mode = str(row.get("route_mode") or row.get("routeMode") or "").strip().lower()
-    route_mode_source = "route_mode"
-    if route_mode not in {"auto", "full_lipsync", "full_i2v", "full_first_last", "balanced_mix"}:
-        lipsync_ratio_raw = _clamp_ratio(row.get("lipsync_ratio"), 0.25)
-        first_last_ratio_raw = _clamp_ratio(row.get("first_last_ratio"), 0.25)
-        i2v_ratio_raw = _clamp_ratio(row.get("i2v_ratio"), max(0.0, 1.0 - lipsync_ratio_raw - first_last_ratio_raw))
-        if lipsync_ratio_raw >= 0.999 and i2v_ratio_raw <= 0.001 and first_last_ratio_raw <= 0.001:
-            route_mode = "full_lipsync"
-        elif i2v_ratio_raw >= 0.999 and lipsync_ratio_raw <= 0.001 and first_last_ratio_raw <= 0.001:
-            route_mode = "full_i2v"
-        elif first_last_ratio_raw >= 0.999 and lipsync_ratio_raw <= 0.001 and i2v_ratio_raw <= 0.001:
-            route_mode = "full_first_last"
-        elif str(row.get("route_mix_mode") or row.get("routeMixMode") or "").strip().lower() == "custom":
-            route_mode = "balanced_mix"
-        else:
-            route_mode = "auto"
-        route_mode_source = "legacy_inference"
-
-    if route_mode == "full_lipsync":
-        route_mix_mode = "custom"
-        lipsync_ratio = 1.0
-        first_last_ratio = 0.0
-        remaining = 0.0
-        preferred_routes = ["ia2v"]
-        max_consecutive_lipsync = 999
-    elif route_mode == "full_i2v":
-        route_mix_mode = "custom"
-        lipsync_ratio = 0.0
-        first_last_ratio = 0.0
-        remaining = 1.0
-        preferred_routes = ["i2v"]
-        max_consecutive_lipsync = 2
-    elif route_mode == "full_first_last":
-        route_mix_mode = "custom"
-        lipsync_ratio = 0.0
-        first_last_ratio = 1.0
-        remaining = 0.0
-        preferred_routes = ["first_last"]
-        max_consecutive_lipsync = 2
-    elif route_mode == "balanced_mix":
-        route_mix_mode = "custom"
-        lipsync_ratio = 0.25
-        first_last_ratio = 0.25
-        remaining = 0.5
-        preferred_routes = ["ia2v", "i2v", "first_last"]
-        max_consecutive_lipsync = 2
-    else:
+    route_mix_mode = str(row.get("route_mix_mode") or row.get("routeMixMode") or "auto").strip().lower() or "auto"
+    if route_mix_mode not in {"auto", "custom"}:
         route_mix_mode = "auto"
-        lipsync_ratio = 0.25
-        first_last_ratio = 0.25
-        remaining = 0.5
+    lipsync_ratio = _clamp_ratio(row.get("lipsync_ratio"), 0.25)
+    first_last_ratio = _clamp_ratio(row.get("first_last_ratio"), 0.25)
+    remaining = max(0.0, 1.0 - lipsync_ratio - first_last_ratio)
+    preferred_routes = [str(item).strip().lower() for item in _safe_list(row.get("preferred_routes")) if str(item).strip()]
+    preferred_routes = [route for route in preferred_routes if route in {"i2v", "ia2v", "first_last"}]
+    if not preferred_routes:
         preferred_routes = ["i2v", "first_last"]
-        max_consecutive_lipsync = 2
-
-    conflict_detected = (
-        (_clamp_ratio(row.get("lipsync_ratio"), lipsync_ratio) >= 0.999 and route_mode != "full_lipsync")
-        or ("i2v" in _safe_list(row.get("preferred_routes")) and route_mode == "full_lipsync")
-        or ("first_last" in _safe_list(row.get("preferred_routes")) and route_mode == "full_lipsync")
-    )
     try:
-        raw_max_consecutive_lipsync = int(row.get("max_consecutive_lipsync"))
+        max_consecutive_lipsync = int(row.get("max_consecutive_lipsync"))
     except Exception:
-        raw_max_consecutive_lipsync = 2
-    if route_mode == "full_lipsync":
-        max_consecutive_lipsync = 999
-    else:
-        max_consecutive_lipsync = max(1, min(6, raw_max_consecutive_lipsync))
+        max_consecutive_lipsync = 2
+    max_consecutive_lipsync = max(1, min(6, max_consecutive_lipsync))
     return {
-        "route_mode": route_mode,
-        "resolved_route_mode": route_mode,
-        "route_mode_source": route_mode_source,
-        "route_mode_conflict_detected_before_normalization": bool(conflict_detected),
-        "route_mode_conflict_fixed": bool(conflict_detected),
         "route_mix_mode": route_mix_mode,
         "lipsync_ratio": round(lipsync_ratio, 3),
         "first_last_ratio": round(first_last_ratio, 3),
         "i2v_ratio": round(remaining, 3),
         "preferred_routes": preferred_routes,
         "max_consecutive_lipsync": max_consecutive_lipsync,
-        "all_lipsync_mode": route_mode == "full_lipsync",
-        "resolved_creative_config": {
-            "route_mix_mode": route_mix_mode,
-            "lipsync_ratio": round(lipsync_ratio, 3),
-            "i2v_ratio": round(remaining, 3),
-            "first_last_ratio": round(first_last_ratio, 3),
-            "preferred_routes": preferred_routes,
-            "max_consecutive_lipsync": max_consecutive_lipsync,
-        },
     }
 
 
 def _build_route_mix_doctrine_for_scenes(creative_config: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    route_mode = str(creative_config.get("route_mode") or "auto").strip().lower() or "auto"
-    is_full_lipsync_mode = route_mode == "full_lipsync"
     mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
-    source = f"route_mode:{route_mode}"
+    source = "custom_creative_config" if mode == "custom" else "auto_default"
     if mode == "custom":
         target_ratios = {
             "ia2v": float(_clamp_ratio(creative_config.get("lipsync_ratio"), 0.25)),
@@ -505,11 +388,9 @@ def _build_route_mix_doctrine_for_scenes(creative_config: dict[str, Any]) -> tup
         "short_clip_default_target_ratios": target_ratios,
         "max_consecutive_lipsync": int(creative_config.get("max_consecutive_lipsync") or 2),
         "preferred_routes": _safe_list(creative_config.get("preferred_routes")),
-        "lipsync_candidate_is_permission_not_obligation": not is_full_lipsync_mode,
-        "avoid_long_consecutive_lipsync_streaks": not is_full_lipsync_mode,
-        "prioritize_lipsync_for_strong_performance_windows": route_mode in {"auto", "balanced_mix"} or is_full_lipsync_mode,
-        "full_lipsync_mode_hard_override": is_full_lipsync_mode,
-        "resolved_route_mode": route_mode,
+        "lipsync_candidate_is_permission_not_obligation": True,
+        "avoid_long_consecutive_lipsync_streaks": True,
+        "prioritize_lipsync_for_strong_performance_windows": True,
     }
     return doctrine, source
 
@@ -605,7 +486,6 @@ def _validate_scene_plan_route_budget(
 
     target_budget = _compute_route_budget_for_total(len(scene_rows), creative_config)
     mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
-    route_mode = str(creative_config.get("route_mode") or "auto").strip().lower() or "auto"
     all_lipsync_override = _is_all_lipsync_override_mode(
         total_scenes=len(scene_rows),
         creative_config=creative_config,
@@ -614,7 +494,7 @@ def _validate_scene_plan_route_budget(
     validation_mode = "all_lipsync_override" if all_lipsync_override else "mixed"
     max_consecutive = int(creative_config.get("max_consecutive_lipsync") or 2)
     tolerance = 1 if len(scene_rows) >= 6 else 0
-    streak_guard_relaxed = all_lipsync_override or route_mode == "full_lipsync"
+    streak_guard_relaxed = all_lipsync_override
     lipsync_streak_warning = "all_lipsync_override_active" if streak_guard_relaxed else ""
     errors: list[str] = []
     for route_name in ("ia2v", "i2v", "first_last"):
@@ -645,7 +525,6 @@ def _validate_scene_plan_route_budget(
         "max_consecutive_lipsync": max_consecutive,
         "longest_lipsync_streak": longest_lipsync_streak,
         "route_mix_mode": mode,
-        "route_mode": route_mode,
         "route_budget_validation_mode": validation_mode,
         "all_lipsync_mode": all_lipsync_override,
         "lipsync_streak_guard_relaxed": streak_guard_relaxed,
@@ -2542,7 +2421,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "role_plan": {},
         "scene_plan": {"scenes": []},
         "scene_prompts": {"scenes": []},
-        "final_video_prompt": {"delivery_version": "1.1", "segments": [], "scenes": []},
+        "final_video_prompt": {"scenes": []},
         "final_storyboard": {"scenes": []},
         "diagnostics": {
             "warnings": [],
@@ -2624,19 +2503,11 @@ def invalidate_downstream_stages(package: dict[str, Any], from_stage_id: str, re
     statuses = _safe_dict(pkg.get("stage_statuses"))
     diagnostics = _safe_dict(pkg.get("diagnostics"))
     for stage_id in downstream:
-        if stage_id == "final_video_prompt" and _is_usable_final_video_prompt_snapshot(pkg.get("final_video_prompt")):
-            diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = True
-            _mark_preserved_snapshot_diagnostic(pkg, "final_video_prompt")
-            diagnostics = _safe_dict(pkg.get("diagnostics"))
-        elif stage_id == "finalize" and _is_usable_final_storyboard_snapshot(pkg.get("final_storyboard")):
-            diagnostics["final_storyboard_preserved_last_successful_snapshot"] = True
-            _mark_preserved_snapshot_diagnostic(pkg, "finalize")
-            diagnostics = _safe_dict(pkg.get("diagnostics"))
+        if stage_id == "finalize":
+            pkg["final_storyboard"] = {"scenes": []}
         elif stage_id in STAGE_SECTION_RESETTERS:
-            # Manual reruns may mark downstream as stale, but payload snapshots must remain intact
-            # for debugging and for dependency checks in later manual runs.
-            _mark_preserved_snapshot_diagnostic(pkg, stage_id)
-            diagnostics = _safe_dict(pkg.get("diagnostics"))
+            section_name = "final_storyboard" if stage_id == "finalize" else stage_id
+            pkg[section_name] = STAGE_SECTION_RESETTERS[stage_id]()
         stage_state = _safe_dict(statuses.get(stage_id))
         stage_state["status"] = "stale"
         stage_state["updated_at"] = _utc_iso()
@@ -2844,116 +2715,70 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     assigned_roles = _safe_dict(package.get("assigned_roles"))
 
-    diagnostic_limit = 20
-    finalize_missing_segment_id_rows_by_stage: dict[str, list[dict[str, Any]]] = {
-        "scene_plan": [],
-        "scene_prompts": [],
-        "role_plan_scene_casting": [],
-        "role_plan_scene_roles": [],
-        "final_video_prompt": [],
+    role_by_segment = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(role_plan.get("scene_casting"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
     }
-    finalize_segment_id_scene_id_mismatches: list[dict[str, Any]] = []
-    finalize_legacy_scene_id_bridge_segment_ids: list[str] = []
-    finalize_legacy_scene_id_bridge_seen: set[str] = set()
-
-    def _normalize_stage_rows(rows: list[Any], *, stage_name: str) -> list[dict[str, Any]]:
-        normalized_rows: list[dict[str, Any]] = []
-        for idx, row in enumerate(rows):
-            safe_row = _safe_dict(row)
-            segment_id = str(safe_row.get("segment_id") or "").strip()
-            scene_id_alias = str(safe_row.get("scene_id") or "").strip()
-            used_legacy_scene_id_bridge = False
-            if not segment_id and scene_id_alias:
-                segment_id = scene_id_alias
-                used_legacy_scene_id_bridge = True
-                if segment_id and segment_id not in finalize_legacy_scene_id_bridge_seen and len(finalize_legacy_scene_id_bridge_segment_ids) < diagnostic_limit:
-                    finalize_legacy_scene_id_bridge_seen.add(segment_id)
-                    finalize_legacy_scene_id_bridge_segment_ids.append(segment_id)
-            if segment_id and scene_id_alias and segment_id != scene_id_alias and len(finalize_segment_id_scene_id_mismatches) < diagnostic_limit:
-                finalize_segment_id_scene_id_mismatches.append(
-                    {
-                        "stage": stage_name,
-                        "segment_id": segment_id,
-                        "scene_id": scene_id_alias,
-                        "index": idx,
-                    }
-                )
-            if not segment_id and len(finalize_missing_segment_id_rows_by_stage.get(stage_name, [])) < diagnostic_limit:
-                finalize_missing_segment_id_rows_by_stage[stage_name].append(
-                    {
-                        "index": idx,
-                        "scene_id": scene_id_alias,
-                    }
-                )
-            normalized_rows.append(
-                {
-                    "segment_id": segment_id,
-                    "scene_id_alias": scene_id_alias,
-                    "row": safe_row,
-                    "used_legacy_scene_id_bridge": used_legacy_scene_id_bridge,
-                }
-            )
-        return normalized_rows
-
-    scene_plan_rows = _normalize_stage_rows(_safe_list(scene_plan.get("scenes")), stage_name="scene_plan")
-    scene_prompts_source_rows = _safe_list(scene_prompts.get("segments")) or _safe_list(scene_prompts.get("scenes"))
-    scene_prompts_rows = _normalize_stage_rows(scene_prompts_source_rows, stage_name="scene_prompts")
-    role_scene_casting_rows = _normalize_stage_rows(_safe_list(role_plan.get("scene_casting")), stage_name="role_plan_scene_casting")
-    role_scene_roles_rows = _normalize_stage_rows(_safe_list(role_plan.get("scene_roles")), stage_name="role_plan_scene_roles")
-    final_video_prompt_rows = _safe_list(final_video_prompt.get("segments")) or _safe_list(final_video_prompt.get("scenes"))
-    final_video_prompt_normalized_rows = _normalize_stage_rows(final_video_prompt_rows, stage_name="final_video_prompt")
-
-    def _rows_by_segment(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-        return {
-            str(_safe_dict(item).get("segment_id") or "").strip(): _safe_dict(item).get("row") or {}
-            for item in rows
-            if str(_safe_dict(item).get("segment_id") or "").strip()
-        }
-
-    plan_by_segment = _rows_by_segment(scene_plan_rows)
-    prompts_by_segment = _rows_by_segment(scene_prompts_rows)
-    role_by_segment = _rows_by_segment(role_scene_casting_rows)
-    final_video_prompt_by_segment = _rows_by_segment(final_video_prompt_normalized_rows)
-
+    role_by_scene = {
+        str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(role_plan.get("scene_roles"))
+        if str(_safe_dict(row).get("scene_id") or "").strip()
+    }
     has_scene_casting = bool(role_by_segment)
-    has_legacy_scene_roles = bool(role_scene_roles_rows)
+    has_legacy_scene_roles = bool(role_by_scene)
     story_guidance_notes = story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8)
     continuity_notes = story_guidance_notes if story_guidance_notes else _safe_list(role_plan.get("continuity_notes"))[:8]
+    finalize_used_legacy_scene_roles_fallback = False
     finalize_used_role_scene_casting = False
-    finalize_legacy_scene_roles_row_count = len(role_scene_roles_rows)
-    ordered_segment_ids: list[str] = []
-    for source_rows in (
-        scene_plan_rows,
-        scene_prompts_rows,
-        role_scene_casting_rows,
-        final_video_prompt_normalized_rows,
-    ):
-        for source_row in source_rows:
-            segment_id = str(_safe_dict(source_row).get("segment_id") or "").strip()
-            if segment_id and segment_id not in ordered_segment_ids:
-                ordered_segment_ids.append(segment_id)
+    finalize_scene_ids_using_legacy_scene_roles_fallback: list[str] = []
+    finalize_scene_id_segment_id_mismatch_count = 0
+    plan_by_scene = {
+        str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(scene_plan.get("scenes"))
+        if str(_safe_dict(row).get("scene_id") or "").strip()
+    }
+    prompts_by_scene = {
+        str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(scene_prompts.get("scenes"))
+        if str(_safe_dict(row).get("scene_id") or "").strip()
+    }
 
-    finalize_missing_role_scene_casting_segment_ids = [
-        segment_id for segment_id in ordered_segment_ids if segment_id not in role_by_segment
-    ]
-    finalize_missing_role_scene_casting_count = len(finalize_missing_role_scene_casting_segment_ids)
-    finalize_missing_role_scene_casting_segment_ids = finalize_missing_role_scene_casting_segment_ids[:diagnostic_limit]
-    finalize_segments_without_scene_casting_and_without_role_refs_ids: list[str] = []
+    final_video_prompt_by_scene = {
+        str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(final_video_prompt.get("scenes"))
+        if str(_safe_dict(row).get("scene_id") or "").strip()
+    }
+
+    # Transitional bridge: finalize still keys rows by scene_id, expected to equal segment_id during migration.
+    scene_ids: list[str] = []
+    for source in (plan_by_scene, prompts_by_scene, role_by_segment, role_by_scene, final_video_prompt_by_scene):
+        for scene_id in source.keys():
+            if scene_id and scene_id not in scene_ids:
+                scene_ids.append(scene_id)
 
     final_scenes: list[dict[str, Any]] = []
-    for idx, segment_id in enumerate(ordered_segment_ids, start=1):
-        scene_plan_row = _safe_dict(plan_by_segment.get(segment_id))
-        role_row_segment = _safe_dict(role_by_segment.get(segment_id))
-        role_row = role_row_segment
+    for idx, scene_id in enumerate(scene_ids, start=1):
+        scene_plan_row = _safe_dict(plan_by_scene.get(scene_id))
+        role_row_segment = _safe_dict(role_by_segment.get(scene_id))
+        role_row_scene = _safe_dict(role_by_scene.get(scene_id))
+        role_row = role_row_segment if role_row_segment else role_row_scene
+        if role_row_segment and role_row_scene:
+            # Transition guardrail: scene_casting is canonical; scene_roles is legacy fallback bridge only.
+            role_row = role_row_segment
         if role_row_segment:
             finalize_used_role_scene_casting = True
-        prompt_row = _safe_dict(prompts_by_segment.get(segment_id))
-        final_video_prompt_row = _safe_dict(final_video_prompt_by_segment.get(segment_id))
+        elif role_row_scene and not role_row_segment:
+            finalize_used_legacy_scene_roles_fallback = True
+            if scene_id and len(finalize_scene_ids_using_legacy_scene_roles_fallback) < 20:
+                finalize_scene_ids_using_legacy_scene_roles_fallback.append(scene_id)
+        segment_id_in_role_row = str(role_row.get("segment_id") or "").strip()
+        if role_row_segment and segment_id_in_role_row and scene_id and segment_id_in_role_row != scene_id:
+            finalize_scene_id_segment_id_mismatch_count += 1
+        prompt_row = _safe_dict(prompts_by_scene.get(scene_id))
+        final_video_prompt_row = _safe_dict(final_video_prompt_by_scene.get(scene_id))
         prompt_notes = _safe_dict(prompt_row.get("prompt_notes"))
-        route_payload = _safe_dict(final_video_prompt_row.get("route_payload"))
-        engine_hints = _safe_dict(final_video_prompt_row.get("engine_hints"))
         video_metadata = _safe_dict(final_video_prompt_row.get("video_metadata"))
-        audio_behavior_hints = str(final_video_prompt_row.get("audio_behavior_hints") or "").strip()
 
         t0 = _to_float(
             scene_plan_row.get("t0")
@@ -2982,44 +2807,33 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             prompt_row.get("route")
             or scene_plan_row.get("route")
         )
-        has_canonical_scene_casting_row = bool(role_row_segment)
-        if has_canonical_scene_casting_row:
-            active_roles = _safe_list(role_row.get("active_roles"))
-            secondary_roles = _safe_list(role_row.get("secondary_roles"))
-            primary_role = str(role_row.get("primary_role") or "").strip()
-            if not active_roles:
-                active_roles = list(
-                    dict.fromkeys([primary_role, *[str(role).strip() for role in secondary_roles if str(role).strip()]])
-                )
-            must_appear = list(
-                dict.fromkeys(
-                    [
-                        *([primary_role] if primary_role else []),
-                        *[str(role).strip() for role in active_roles if str(role).strip()],
-                    ]
-                )
+        active_roles = _safe_list(role_row.get("active_roles"))
+        secondary_roles = _safe_list(role_row.get("secondary_roles"))
+        primary_role = str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip()
+        if not active_roles:
+            active_roles = list(
+                dict.fromkeys([primary_role, *[str(role).strip() for role in secondary_roles if str(role).strip()]])
             )
-            refs_by_role_input = _safe_dict(input_pkg.get("refs_by_role"))
-            refs_used_by_role_from_input = {
-                role: _safe_list(refs_by_role_input.get(role))
-                for role in must_appear
-                if _safe_list(refs_by_role_input.get(role))
-            }
-            refs_used_by_role = (
-                refs_used_by_role_from_input
-                if refs_used_by_role_from_input
-                else _build_refs_by_role_fallback(refs_inventory, active_roles, primary_role)
+        must_appear = list(
+            dict.fromkeys(
+                [
+                    primary_role,
+                    *[str(role).strip() for role in active_roles if str(role).strip()],
+                ]
             )
-            refs_used = list(refs_used_by_role.keys())
-        else:
-            primary_role = ""
-            secondary_roles = []
-            active_roles = []
-            must_appear = []
-            refs_used_by_role_from_input = {}
-            refs_used_by_role = {}
-            refs_used = []
-            finalize_segments_without_scene_casting_and_without_role_refs_ids.append(segment_id)
+        )
+        refs_by_role_input = _safe_dict(input_pkg.get("refs_by_role"))
+        refs_used_by_role_from_input = {
+            role: _safe_list(refs_by_role_input.get(role))
+            for role in must_appear
+            if _safe_list(refs_by_role_input.get(role))
+        }
+        refs_used_by_role = (
+            refs_used_by_role_from_input
+            if refs_used_by_role_from_input
+            else _build_refs_by_role_fallback(refs_inventory, active_roles, primary_role)
+        )
+        refs_used = list(refs_used_by_role.keys())
         audio_slice_start_sec = t0 if route_contract["route"] == "ia2v" else 0.0
         audio_slice_end_sec = t1 if route_contract["route"] == "ia2v" else 0.0
         audio_slice_expected_duration_sec = max(0.0, audio_slice_end_sec - audio_slice_start_sec)
@@ -3045,17 +2859,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             scene_plan_row.get("watchability_role"),
         )
 
-        canonical_segment_id = segment_id or f"sc_{idx}"
-        scene_id_alias = _first_text(
-            role_row.get("scene_id"),
-            scene_plan_row.get("scene_id"),
-            prompt_row.get("scene_id"),
-            final_video_prompt_row.get("scene_id"),
-            canonical_segment_id,
-        )
         scene_contract: dict[str, Any] = {
-            "scene_id": scene_id_alias or canonical_segment_id,
-            "segment_id": canonical_segment_id,
+            "scene_id": scene_id or f"sc_{idx}",
             "t0": t0,
             "t1": t1,
             "duration_sec": duration_sec,
@@ -3086,9 +2891,6 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "audio_slice_expected_duration_sec": audio_slice_expected_duration_sec,
             "prompt_notes": prompt_notes,
             "video_metadata": video_metadata,
-            "route_payload": route_payload,
-            "engine_hints": engine_hints,
-            "audio_behavior_hints": audio_behavior_hints,
             "scene_presence_mode": str(role_row.get("presence_mode") or role_row.get("scene_presence_mode") or scene_plan_row.get("scene_presence_mode") or "").strip(),
             "presence_weight": str(role_row.get("presence_weight") or "").strip(),
             "route_reason": str(scene_plan_row.get("route_reason") or "").strip(),
@@ -3121,16 +2923,11 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         }
 
         if route_contract["route"] == "first_last":
-            if str(route_payload.get("positive_prompt") or "").strip():
-                scene_contract["video_prompt"] = str(route_payload.get("positive_prompt") or "").strip()
-            elif scene_contract.get("positive_video_prompt"):
+            if scene_contract.get("positive_video_prompt"):
                 scene_contract["video_prompt"] = str(scene_contract.get("positive_video_prompt") or "").strip()
-            if str(route_payload.get("negative_prompt") or "").strip():
-                scene_contract["negative_prompt"] = str(route_payload.get("negative_prompt") or "").strip()
-            elif scene_contract.get("negative_video_prompt"):
+            if scene_contract.get("negative_video_prompt"):
                 scene_contract["negative_prompt"] = str(scene_contract.get("negative_video_prompt") or "").strip()
             start_image_prompt = _first_text(
-                route_payload.get("first_frame_prompt"),
                 prompt_row.get("start_image_prompt"),
                 prompt_row.get("startImagePrompt"),
                 prompt_row.get("first_frame_prompt"),
@@ -3138,7 +2935,6 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 prompt_row.get("photo_prompt"),
             )
             end_image_prompt = _first_text(
-                route_payload.get("last_frame_prompt"),
                 prompt_row.get("end_image_prompt"),
                 prompt_row.get("endImagePrompt"),
                 prompt_row.get("last_frame_prompt"),
@@ -3147,7 +2943,6 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 prompt_row.get("resolvedFramePrompt"),
             )
             first_frame_prompt = _first_text(
-                route_payload.get("first_frame_prompt"),
                 prompt_row.get("first_frame_prompt"),
                 prompt_row.get("firstFramePrompt"),
                 prompt_row.get("start_frame_prompt"),
@@ -3160,7 +2955,6 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 scene_plan_row.get("scene_description"),
             )
             last_frame_prompt = _first_text(
-                route_payload.get("last_frame_prompt"),
                 prompt_row.get("last_frame_prompt"),
                 prompt_row.get("lastFramePrompt"),
                 prompt_row.get("end_frame_prompt"),
@@ -3183,13 +2977,6 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             scene_contract["end_image_prompt"] = end_image_prompt
             scene_contract["first_frame_prompt"] = first_frame_prompt
             scene_contract["last_frame_prompt"] = last_frame_prompt
-        else:
-            if str(route_payload.get("positive_prompt") or "").strip():
-                scene_contract["video_prompt"] = str(route_payload.get("positive_prompt") or "").strip()
-            if str(route_payload.get("negative_prompt") or "").strip():
-                scene_contract["negative_prompt"] = str(route_payload.get("negative_prompt") or "").strip()
-            scene_contract["first_frame_prompt"] = None
-            scene_contract["last_frame_prompt"] = None
 
         final_scenes.append(scene_contract)
 
@@ -3228,59 +3015,38 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     }
     final_storyboard = _attach_downstream_mode_metadata(final_storyboard, package)
     logger.info(
-        "[FINALIZE STORYBOARD BUILD] planSceneCount=%s promptSceneCount=%s roleSceneCount=%s legacyRoleSceneRolesCount=%s finalSceneCount=%s segmentIds=%s",
-        len(plan_by_segment),
-        len(prompts_by_segment),
-        len(role_by_segment),
-        finalize_legacy_scene_roles_row_count,
+        "[FINALIZE STORYBOARD BUILD] planSceneCount=%s promptSceneCount=%s roleSceneCount=%s finalSceneCount=%s sceneIds=%s",
+        len(plan_by_scene),
+        len(prompts_by_scene),
+        len(role_by_segment) or len(role_by_scene),
         len(final_scenes),
-        ordered_segment_ids,
+        scene_ids,
     )
     package["final_storyboard"] = final_storyboard
 
     diagnostics = _safe_dict(package.get("diagnostics"))
-    finalize_segment_id_scene_id_mismatch_count = len(finalize_segment_id_scene_id_mismatches)
-    finalize_legacy_scene_id_bridge_count = len(finalize_legacy_scene_id_bridge_segment_ids)
     diagnostics["finalize_scene_count"] = len(final_scenes)
-    diagnostics["finalize_used_scene_prompts"] = bool(prompts_by_segment)
-    diagnostics["finalize_used_scene_plan"] = bool(plan_by_segment)
-    diagnostics["finalize_used_role_plan"] = bool(role_by_segment)
+    diagnostics["finalize_used_scene_prompts"] = bool(prompts_by_scene)
+    diagnostics["finalize_used_scene_plan"] = bool(plan_by_scene)
+    diagnostics["finalize_used_role_plan"] = bool(role_by_segment or role_by_scene)
     diagnostics["finalize_has_scene_casting"] = has_scene_casting
     diagnostics["finalize_has_legacy_scene_roles"] = has_legacy_scene_roles
     diagnostics["finalize_used_role_scene_casting"] = finalize_used_role_scene_casting
-    diagnostics["finalize_used_role_scene_casting_for_all_scenes"] = bool(ordered_segment_ids) and all(
-        segment_id in role_by_segment for segment_id in ordered_segment_ids
+    diagnostics["finalize_used_role_scene_casting_for_all_scenes"] = bool(scene_ids) and all(
+        scene_id in role_by_segment for scene_id in scene_ids
     )
-    diagnostics["finalize_used_legacy_scene_roles_fallback"] = False
-    diagnostics["finalize_scene_ids_using_legacy_scene_roles_fallback"] = []
-    diagnostics["finalize_legacy_scene_roles_present"] = bool(role_scene_roles_rows)
-    diagnostics["finalize_legacy_scene_roles_row_count"] = int(finalize_legacy_scene_roles_row_count)
-    diagnostics["finalize_legacy_scene_roles_ignored"] = True
-    diagnostics["finalize_missing_role_scene_casting_count"] = int(finalize_missing_role_scene_casting_count)
-    diagnostics["finalize_missing_role_scene_casting_segment_ids"] = finalize_missing_role_scene_casting_segment_ids
-    diagnostics["finalize_role_ref_fallback_requires_scene_casting"] = True
-    diagnostics["finalize_segments_without_scene_casting_and_without_role_refs_count"] = int(
-        len(finalize_segments_without_scene_casting_and_without_role_refs_ids)
-    )
-    diagnostics["finalize_segments_without_scene_casting_and_without_role_refs_ids"] = (
-        finalize_segments_without_scene_casting_and_without_role_refs_ids[:diagnostic_limit]
-    )
-    diagnostics["finalize_canonical_join_key"] = "segment_id"
-    diagnostics["finalize_used_legacy_scene_id_bridge"] = finalize_legacy_scene_id_bridge_count > 0
-    diagnostics["finalize_legacy_scene_id_bridge_count"] = finalize_legacy_scene_id_bridge_count
-    diagnostics["finalize_legacy_scene_id_bridge_segment_ids"] = finalize_legacy_scene_id_bridge_segment_ids
-    diagnostics["finalize_segment_id_scene_id_mismatch_count"] = int(finalize_segment_id_scene_id_mismatch_count)
-    diagnostics["finalize_segment_id_scene_id_mismatches"] = finalize_segment_id_scene_id_mismatches
-    diagnostics["finalize_missing_segment_id_rows_by_stage"] = finalize_missing_segment_id_rows_by_stage
-    diagnostics["finalize_scene_id_segment_id_mismatch_count"] = int(finalize_segment_id_scene_id_mismatch_count)
-    diagnostics["finalize_role_source_precedence"] = ["role_plan.scene_casting"]
+    diagnostics["finalize_used_legacy_scene_roles_fallback"] = finalize_used_legacy_scene_roles_fallback
+    diagnostics["finalize_scene_ids_using_legacy_scene_roles_fallback"] = finalize_scene_ids_using_legacy_scene_roles_fallback
+    diagnostics["finalize_scene_id_segment_id_mismatch_count"] = int(finalize_scene_id_segment_id_mismatch_count)
+    diagnostics["finalize_scene_id_bridge_expected_segment_id"] = True
+    diagnostics["finalize_role_source_precedence"] = ["role_plan.scene_casting", "role_plan.scene_roles (fallback only)"]
     diagnostics["finalize_has_both_scene_casting_and_scene_roles"] = has_scene_casting and has_legacy_scene_roles
-    diagnostics["finalize_used_final_video_prompt"] = bool(final_video_prompt_by_segment)
+    diagnostics["finalize_used_final_video_prompt"] = bool(final_video_prompt_by_scene)
     package["diagnostics"] = diagnostics
-    if finalize_segment_id_scene_id_mismatch_count > 0:
+    if finalize_scene_id_segment_id_mismatch_count > 0:
         _append_diag_event(
             package,
-            f"finalize_segment_id_scene_id_mismatch_count={finalize_segment_id_scene_id_mismatch_count}",
+            f"finalize_scene_id_segment_id_mismatch_count={finalize_scene_id_segment_id_mismatch_count}",
             stage_id="finalize",
         )
     _append_diag_event(package, f"final_storyboard built scenes={len(final_scenes)}", stage_id="finalize")
@@ -3568,13 +3334,6 @@ def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
     package["input"] = input_pkg
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["input_creative_config_active"] = _safe_dict(input_pkg.get("creative_config"))
-    diagnostics["resolved_route_mode"] = str(_safe_dict(input_pkg.get("creative_config")).get("resolved_route_mode") or "")
-    diagnostics["route_mode_source"] = str(_safe_dict(input_pkg.get("creative_config")).get("route_mode_source") or "")
-    diagnostics["route_mode_conflict_detected_before_normalization"] = bool(
-        _safe_dict(input_pkg.get("creative_config")).get("route_mode_conflict_detected_before_normalization")
-    )
-    diagnostics["route_mode_conflict_fixed"] = bool(_safe_dict(input_pkg.get("creative_config")).get("route_mode_conflict_fixed"))
-    diagnostics["resolved_creative_config"] = _safe_dict(_safe_dict(input_pkg.get("creative_config")).get("resolved_creative_config"))
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "input_package normalized", stage_id="input_package")
     return package
@@ -6118,16 +5877,8 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_transition_required_count"] = 0
     diagnostics["scene_prompts_transition_present_count"] = 0
     diagnostics["scene_prompts_error_code"] = ""
-    diagnostics["scene_prompts_last_error_code"] = ""
-    diagnostics["scene_prompts_retry_used"] = False
-    diagnostics["scene_prompts_retry_feedback"] = ""
     diagnostics["prompt_capability_guard_applied"] = False
     diagnostics["scene_prompts_validation_error"] = ""
-    diagnostics["scene_prompts_offending_segment_id"] = ""
-    diagnostics["scene_prompts_technical_tagging_match_type"] = ""
-    diagnostics["scene_prompts_technical_tagging_match_pattern"] = ""
-    diagnostics["scene_prompts_technical_tagging_match_excerpt"] = ""
-    diagnostics["scene_prompts_technical_tagging_match_field"] = ""
     diagnostics["validation_error"] = ""
     diagnostics["scene_prompts_error"] = ""
     diagnostics["scene_prompts_empty"] = False
@@ -6146,15 +5897,10 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     initial_validation_error = str(result.get("validation_error") or "").strip()
     if initial_validation_error:
         validation_error_code = str(result.get("error_code") or _safe_dict(result.get("diagnostics")).get("scene_prompts_error_code") or "").strip()
-        diagnostics = _safe_dict(package.get("diagnostics"))
-        diagnostics["scene_prompts_retry_used"] = True
-        diagnostics["scene_prompts_last_error_code"] = validation_error_code or "PROMPTS_SCHEMA_INVALID"
         validation_feedback = (
             f"Previous output invalid: validation_error={initial_validation_error}; "
             f"error_code={validation_error_code or 'PROMPTS_SCHEMA_INVALID'}"
         )
-        diagnostics["scene_prompts_retry_feedback"] = f"{validation_error_code or 'PROMPTS_SCHEMA_INVALID'}: {initial_validation_error}"
-        package["diagnostics"] = diagnostics
         _append_diag_event(package, f"scene_prompts validation failed, retrying once: {validation_feedback}", stage_id="scene_prompts")
         retry_result = build_gemini_scene_prompts(
             api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
@@ -6233,9 +5979,6 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_transition_required_count"] = int(prompts_diag.get("scene_prompts_transition_required_count") or 0)
     diagnostics["scene_prompts_transition_present_count"] = int(prompts_diag.get("scene_prompts_transition_present_count") or 0)
     diagnostics["scene_prompts_error_code"] = str(prompts_diag.get("scene_prompts_error_code") or "")
-    diagnostics["scene_prompts_last_error_code"] = str(
-        prompts_diag.get("scene_prompts_error_code") or diagnostics.get("scene_prompts_last_error_code") or ""
-    )
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = int(
         prompts_diag.get("scene_prompts_route_semantics_mismatch_count")
         or diagnostics.get("scene_prompts_route_semantics_mismatch_count")
@@ -6276,23 +6019,20 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     return package
 
 def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
-    previous_final_video_prompt = _safe_dict(package.get("final_video_prompt"))
-    has_previous_final_video_prompt_snapshot = _is_usable_final_video_prompt_snapshot(previous_final_video_prompt)
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["final_video_prompt_backend"] = "gemini"
     diagnostics["final_video_prompt_prompt_version"] = FINAL_VIDEO_PROMPT_STAGE_VERSION
     diagnostics["final_video_prompt_scene_count"] = 0
-    diagnostics["final_video_prompt_segment_count"] = 0
     diagnostics["final_video_prompt_error"] = ""
-    diagnostics["final_video_prompt_hard_failed"] = False
-    diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = False
     package["diagnostics"] = diagnostics
+    package["final_video_prompt"] = {"scenes": []}
 
     result = generate_ltx_video_prompt_metadata(
         api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
         package=package,
     )
     final_video_prompt = _safe_dict(result.get("final_video_prompt"))
+    package["final_video_prompt"] = final_video_prompt
 
     diag = _safe_dict(result.get("diagnostics"))
     diagnostics = _safe_dict(package.get("diagnostics"))
@@ -6301,28 +6041,17 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
         diag.get("final_video_prompt_prompt_version") or FINAL_VIDEO_PROMPT_STAGE_VERSION
     )
     diagnostics["final_video_prompt_scene_count"] = int(diag.get("final_video_prompt_scene_count") or 0)
-    diagnostics["final_video_prompt_segment_count"] = int(diag.get("final_video_prompt_segment_count") or 0)
     diagnostics["final_video_prompt_used_fallback"] = bool(diag.get("final_video_prompt_used_fallback"))
-    diagnostics["final_video_prompt_retry_count"] = int(diag.get("final_video_prompt_retry_count") or 0)
-    diagnostics["final_video_prompt_errors"] = _safe_list(diag.get("final_video_prompt_errors"))
     diagnostics["final_video_prompt_error"] = str(result.get("error") or "")
     package["diagnostics"] = diagnostics
 
-    final_segments = _safe_list(final_video_prompt.get("segments")) or _safe_list(final_video_prompt.get("scenes"))
-    if bool(result.get("ok")) and final_segments:
-        package["final_video_prompt"] = final_video_prompt
+    for row in _safe_list(diag.get("final_video_prompt_debug_rows")):
+        logger.info("[FINAL VIDEO PROMPT STAGE] %s", json.dumps(_safe_dict(row), ensure_ascii=False))
+
+    if _safe_list(final_video_prompt.get("scenes")):
         _append_diag_event(package, "final_video_prompt generated", stage_id="final_video_prompt")
     else:
-        diagnostics["final_video_prompt_hard_failed"] = True
-        if has_previous_final_video_prompt_snapshot:
-            package["final_video_prompt"] = deepcopy(previous_final_video_prompt)
-            diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = True
-            _mark_preserved_snapshot_diagnostic(package, "final_video_prompt")
-            diagnostics = _safe_dict(package.get("diagnostics"))
-        package["diagnostics"] = diagnostics
-        hard_fail_error = str(result.get("error") or "final_video_prompt_invalid")
-        _append_diag_event(package, f"final_video_prompt hard fail after retry: {hard_fail_error}", stage_id="final_video_prompt")
-        raise RuntimeError(hard_fail_error)
+        _append_diag_event(package, "final_video_prompt empty", stage_id="final_video_prompt")
     return package
 
 
@@ -6342,10 +6071,6 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         _safe_dict(pkg.get("diagnostics")).setdefault("errors", []).append(f"{stage_id}: {error_code} {missing}")
         return pkg
 
-    previous_final_storyboard_snapshot = deepcopy(_safe_dict(pkg.get("final_storyboard")))
-    has_previous_final_storyboard_snapshot = _is_usable_final_storyboard_snapshot(previous_final_storyboard_snapshot)
-    previous_final_video_prompt_snapshot = deepcopy(_safe_dict(pkg.get("final_video_prompt")))
-    has_previous_final_video_prompt_snapshot = _is_usable_final_video_prompt_snapshot(previous_final_video_prompt_snapshot)
     try:
         if stage_id == "input_package":
             pkg = _run_input_package_stage(pkg)
@@ -6365,18 +6090,6 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
             pkg = _run_finalize_stage(pkg)
         _set_stage_status(pkg, stage_id, "done")
     except Exception as exc:  # noqa: BLE001
-        diagnostics = _safe_dict(pkg.get("diagnostics"))
-        if stage_id == "finalize" and has_previous_final_storyboard_snapshot:
-            pkg["final_storyboard"] = deepcopy(previous_final_storyboard_snapshot)
-            diagnostics["final_storyboard_preserved_last_successful_snapshot"] = True
-            pkg["diagnostics"] = diagnostics
-            _mark_preserved_snapshot_diagnostic(pkg, "finalize")
-        if stage_id == "final_video_prompt" and has_previous_final_video_prompt_snapshot:
-            pkg["final_video_prompt"] = deepcopy(previous_final_video_prompt_snapshot)
-            diagnostics = _safe_dict(pkg.get("diagnostics"))
-            diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = True
-            pkg["diagnostics"] = diagnostics
-            _mark_preserved_snapshot_diagnostic(pkg, "final_video_prompt")
         _set_stage_status(pkg, stage_id, "error", error=str(exc))
         diagnostics = _safe_dict(pkg.get("diagnostics"))
         errors = _safe_list(diagnostics.get("errors"))
@@ -6399,11 +6112,22 @@ def run_manual_stage(
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
     executed_stage_ids: list[str] = []
+    if stage_id == "finalize":
+        # Guardrail: pressing FINAL must not retrigger upstream creative Gemini stages.
+        # Finalize can run only from already prepared normalized outputs.
+        pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
+        pkg = run_stage(stage_id, pkg, payload)
+        executed_stage_ids.append(stage_id)
+        return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
     reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
     missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
-    continuation_mode = "reuse_existing_package"
-    dep_sequence = []
+    continuation_mode = "reuse_existing_package" if not missing_upstream else "recompute_missing_upstream"
+    if missing_upstream:
+        first_missing_idx = dep_sequence.index(missing_upstream[0])
+        dep_sequence = dep_sequence[first_missing_idx:]
+    else:
+        dep_sequence = []
     preserve_audio_map_for_story_core = stage_id == "story_core" and _is_usable_audio_map(_safe_dict(pkg.get("audio_map")))
     if preserve_audio_map_for_story_core:
         # Manual CORE rerun must preserve upstream audio_map and skip audio_map dependency rebuild.
@@ -6420,36 +6144,10 @@ def run_manual_stage(
     diagnostics["continuation_mode"] = continuation_mode
     diagnostics["upstream_package_complete"] = not bool(missing_upstream)
     diagnostics["reused_upstream_stages"] = reusable_upstream
-    diagnostics["regenerated_stages"] = [stage_id]
-    diagnostics["manual_stage_run_policy_applied"] = False
-    diagnostics["manual_requested_stage_requires_complete_upstream"] = False
-    diagnostics["manual_stage_run_blocked_by_missing_upstream"] = False
-    diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = False
-    diagnostics["final_storyboard_preserved_last_successful_snapshot"] = False
-    diagnostics["manual_rerun_preserved_downstream_snapshot"] = False
-    diagnostics["preserved_snapshot_stage_ids"] = []
-    diagnostics["blocked_upstream_stages"] = []
-    pkg["diagnostics"] = diagnostics
+    diagnostics["regenerated_stages"] = list(dep_sequence) + [stage_id]
     if missing_upstream:
-        diagnostics["continuation_mode"] = "blocked_by_missing_upstream"
-        diagnostics["manual_stage_run_policy_applied"] = True
-        diagnostics["manual_requested_stage_requires_complete_upstream"] = True
-        diagnostics["manual_stage_run_blocked_by_missing_upstream"] = True
-        diagnostics["blocked_upstream_stages"] = missing_upstream
-        diagnostics["regenerated_stages"] = []
-        if _is_usable_final_video_prompt_snapshot(pkg.get("final_video_prompt")):
-            diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = True
-            diagnostics["preserved_snapshot_stage_ids"] = ["final_video_prompt"]
-        if _is_usable_final_storyboard_snapshot(pkg.get("final_storyboard")):
-            diagnostics["final_storyboard_preserved_last_successful_snapshot"] = True
-            diagnostics["preserved_snapshot_stage_ids"] = list(
-                dict.fromkeys([*_safe_list(diagnostics.get("preserved_snapshot_stage_ids")), "finalize"])
-            )
-        diagnostics["manual_rerun_preserved_downstream_snapshot"] = bool(
-            _safe_list(diagnostics.get("preserved_snapshot_stage_ids"))
-        )
-        pkg["diagnostics"] = diagnostics
-        return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
+        diagnostics["recompute_missing_upstream_stages"] = missing_upstream
+    pkg["diagnostics"] = diagnostics
     for dep_stage in dep_sequence:
         pkg = run_stage(dep_stage, pkg, payload)
         executed_stage_ids.append(dep_stage)

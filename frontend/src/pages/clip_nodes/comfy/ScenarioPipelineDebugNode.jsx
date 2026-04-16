@@ -1,7 +1,7 @@
 import React from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 
-const STAGE_ORDER = ["audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt", "finalize"];
+const STAGE_ORDER = ["story_core", "audio_map", "role_plan", "scene_plan", "scene_prompts", "finalize"];
 
 function countByStatus(stageStatuses = {}) {
   const counters = { idle: 0, running: 0, done: 0, stale: 0, error: 0 };
@@ -36,7 +36,7 @@ export default function ScenarioPipelineDebugNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Refs / Roles</span><strong>{refsCount} / {rolesCount}</strong></div>
           <div className="clipSB_assemblyRow"><span>Audio</span><strong>{hasAudio ? "yes" : "no"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Source</span><strong>{isConnectedToDirector ? "Director" : "Not connected"}</strong></div>
-          <div className="clipSB_assemblyRow"><span>Done</span><strong>{statusSummary.done}/7</strong></div>
+          <div className="clipSB_assemblyRow"><span>Done</span><strong>{statusSummary.done}/6</strong></div>
           <div className="clipSB_assemblyRow"><span>storyboard_out</span><strong>{storyboardOutStatus}</strong></div>
           <div className="clipSB_assemblyRow"><span>Scenes</span><strong>{storyboardSceneCount}</strong></div>
         </div>
