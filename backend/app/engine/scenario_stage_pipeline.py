@@ -159,13 +159,10 @@ def _has_valid_story_core_payload(output: Any) -> bool:
 
 def _has_valid_role_plan_payload(output: Any) -> bool:
     payload = _safe_dict(output)
-    scene_casting = payload.get("scene_casting")
-    if _has_non_empty_collection(scene_casting):
-        return True
-    for key in ("roles", "cast", "segments"):
-        if _has_non_empty_collection(payload.get(key)):
-            return True
-    return False
+    roles_version = str(payload.get("roles_version") or "").strip()
+    roster = _safe_list(payload.get("roster"))
+    scene_casting = _safe_list(payload.get("scene_casting"))
+    return bool(roles_version) and bool(roster) and bool(scene_casting)
 
 
 def _has_valid_scene_plan_payload(output: Any) -> bool:
@@ -5422,7 +5419,21 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_skipped"] = False
     diagnostics["role_plan_skip_reason"] = ""
     diagnostics["role_plan_empty"] = False
+    diagnostics["role_plan_snapshot_restored"] = False
+    diagnostics["role_plan_failure_reason"] = ""
+    diagnostics["role_plan_raw_model_response_preview"] = ""
+    diagnostics["role_plan_normalized_preview"] = ""
+    diagnostics["role_plan_technical_leak_trigger"] = ""
+    diagnostics["role_plan_technical_leak_field"] = ""
+    diagnostics["role_plan_technical_leak_token"] = ""
+    diagnostics["role_plan_dropped_non_canonical_fields"] = []
+    diagnostics["role_plan_coverage_expected_segment_ids"] = []
+    diagnostics["role_plan_coverage_seen_segment_ids"] = []
+    diagnostics["role_plan_coverage_missing_segment_ids"] = []
+    diagnostics["role_plan_coverage_extra_segment_ids"] = []
     package["diagnostics"] = diagnostics
+    previous_role_plan = _safe_dict(package.get("role_plan"))
+    previous_role_plan_valid = _has_valid_role_plan_payload(previous_role_plan)
 
     if content_type and content_type not in {"music_video", "clip", "story"}:
         package["role_plan"] = _attach_downstream_mode_metadata({}, package)
@@ -5467,16 +5478,57 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_error"] = str(result.get("error") or "")
     diagnostics["role_plan_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["validation_error"] = str(result.get("validation_error") or "")
+    diagnostics["role_plan_raw_model_response_preview"] = str(role_diag.get("raw_model_response_preview") or "")
+    diagnostics["role_plan_normalized_preview"] = str(role_diag.get("normalized_role_plan_preview") or "")
+    diagnostics["role_plan_technical_leak_trigger"] = str(role_diag.get("technical_leak_trigger") or "")
+    diagnostics["role_plan_technical_leak_field"] = str(role_diag.get("technical_leak_field") or "")
+    diagnostics["role_plan_technical_leak_token"] = str(role_diag.get("technical_leak_token") or "")
+    diagnostics["role_plan_dropped_non_canonical_fields"] = _safe_list(role_diag.get("dropped_non_canonical_fields"))
+    diagnostics["role_plan_coverage_expected_segment_ids"] = _safe_list(role_diag.get("coverage_expected_segment_ids"))
+    diagnostics["role_plan_coverage_seen_segment_ids"] = _safe_list(role_diag.get("coverage_seen_segment_ids"))
+    diagnostics["role_plan_coverage_missing_segment_ids"] = _safe_list(role_diag.get("coverage_missing_segment_ids"))
+    diagnostics["role_plan_coverage_extra_segment_ids"] = _safe_list(role_diag.get("coverage_extra_segment_ids"))
     diagnostics["role_plan_skipped"] = False
     diagnostics["role_plan_skip_reason"] = ""
-    diagnostics["role_plan_empty"] = not bool(role_plan and _safe_list(role_plan.get("scene_casting")))
+    diagnostics["role_plan_empty"] = not _has_valid_role_plan_payload(role_plan)
     package["diagnostics"] = diagnostics
 
-    if role_plan and _safe_list(role_plan.get("scene_casting")):
+    role_plan_valid = _has_valid_role_plan_payload(role_plan)
+    has_error_flags = bool(
+        diagnostics.get("role_plan_error")
+        or diagnostics.get("role_plan_validation_error")
+        or diagnostics.get("role_plan_error_code")
+    )
+    has_counts = int(diagnostics.get("role_plan_roster_count") or 0) > 0 and int(diagnostics.get("role_plan_scene_casting_count") or 0) > 0
+    has_coverage = bool(diagnostics.get("role_plan_segment_coverage_ok"))
+    stage_success = bool(result.get("ok")) and role_plan_valid and not has_error_flags and has_counts and has_coverage
+
+    if stage_success:
+        diagnostics["role_plan_snapshot_restored"] = False
+        diagnostics["role_plan_failure_reason"] = ""
+        package["diagnostics"] = diagnostics
         _append_diag_event(package, "role_plan generated", stage_id="role_plan")
+        return package
+
+    if previous_role_plan_valid:
+        package["role_plan"] = _attach_downstream_mode_metadata(previous_role_plan, package)
+        diagnostics["role_plan_snapshot_restored"] = True
+        _append_diag_event(package, "role_plan invalid: restored previous snapshot", stage_id="role_plan")
     else:
-        _append_diag_event(package, "role_plan empty", stage_id="role_plan")
-    return package
+        package["role_plan"] = _attach_downstream_mode_metadata({}, package)
+        diagnostics["role_plan_snapshot_restored"] = False
+        _append_diag_event(package, "role_plan invalid: no previous snapshot", stage_id="role_plan")
+
+    failure_reason = (
+        str(diagnostics.get("role_plan_validation_error") or "")
+        or str(diagnostics.get("role_plan_error_code") or "")
+        or str(diagnostics.get("role_plan_error") or "")
+        or "role_plan_invalid_empty_or_uncovered"
+    )
+    diagnostics["role_plan_failure_reason"] = failure_reason
+    diagnostics["role_plan_empty"] = True
+    package["diagnostics"] = diagnostics
+    raise RuntimeError(failure_reason)
 
 
 def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:

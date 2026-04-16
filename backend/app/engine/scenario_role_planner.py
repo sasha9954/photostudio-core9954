@@ -25,6 +25,16 @@ ALLOWED_PRESENCE_WEIGHTS = {"anchor", "primary", "support", "background"}
 _ACTION_LEAK_TOKENS = {"fight", "run", "chase", "jump", "shoot", "explosion"}
 _TECH_LEAK_TOKENS = {"fps", "lens", "focal", "camera", "exposure", "iso", "render", "seed", "sampler"}
 _ROUTE_LEAK_TOKENS = {"route", "i2v", "ia2v", "first_last", "camera_move", "camera motion"}
+_ROLE_PLAN_ALLOWED_KEYS = {"roles_version", "roster", "scene_casting"}
+_ROSTER_ALLOWED_KEYS = {"entity_id", "role_name", "continuity_rules"}
+_SCENE_CASTING_ALLOWED_KEYS = {
+    "segment_id",
+    "primary_role",
+    "secondary_roles",
+    "presence_mode",
+    "presence_weight",
+    "performance_focus",
+}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -48,6 +58,34 @@ def _extract_json_obj(text: str) -> dict[str, Any]:
                 return json.loads(raw[first : last + 1])
             except Exception:
                 return {}
+    return {}
+
+
+def _strip_code_fences(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", raw, count=1)
+        raw = re.sub(r"\s*```$", "", raw, count=1)
+    return raw.strip()
+
+
+def _extract_strict_json_payload(text: str) -> dict[str, Any]:
+    payload = _extract_json_obj(_strip_code_fences(text))
+    if payload:
+        return payload
+    raw = _strip_code_fences(text)
+    decoder = json.JSONDecoder()
+    for idx, char in enumerate(raw):
+        if char != "{":
+            continue
+        try:
+            obj, _end = decoder.raw_decode(raw[idx:])
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
     return {}
 
 
@@ -240,6 +278,80 @@ def _extract_error_from_leakage(roles_payload: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_leakage_details(roles_payload: dict[str, Any]) -> tuple[str, str, str]:
+    def _walk(node: Any, path: str) -> tuple[str, str, str]:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                next_path = f"{path}.{key}" if path else str(key)
+                code, leak_path, token = _walk(value, next_path)
+                if code:
+                    return code, leak_path, token
+        elif isinstance(node, list):
+            for idx, value in enumerate(node):
+                next_path = f"{path}[{idx}]"
+                code, leak_path, token = _walk(value, next_path)
+                if code:
+                    return code, leak_path, token
+        elif isinstance(node, str):
+            lowered = node.lower()
+            for token in _ROUTE_LEAK_TOKENS:
+                if token in lowered:
+                    return ROLES_CREATIVE_ROUTE, path, token
+            for token in _TECH_LEAK_TOKENS:
+                if token in lowered:
+                    return ROLES_TECHNICAL_LEAKING, path, token
+            for token in _ACTION_LEAK_TOKENS:
+                if token in lowered:
+                    return ROLES_ACTION_LEAKING, path, token
+        return "", "", ""
+
+    return _walk(roles_payload, "")
+
+
+def _cleanup_roles_payload(raw_payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    payload = _safe_dict(raw_payload)
+    dropped_fields: list[str] = []
+    cleaned: dict[str, Any] = {
+        "roles_version": _normalize_text(payload.get("roles_version"), max_len=20) or ROLES_VERSION,
+        "roster": [],
+        "scene_casting": [],
+    }
+
+    for key in payload.keys():
+        if str(key) not in _ROLE_PLAN_ALLOWED_KEYS:
+            dropped_fields.append(str(key))
+
+    for row_raw in _safe_list(payload.get("roster")):
+        row = _safe_dict(row_raw)
+        for key in row.keys():
+            if str(key) not in _ROSTER_ALLOWED_KEYS:
+                dropped_fields.append(f"roster.{key}")
+        cleaned["roster"].append(
+            {
+                "entity_id": row.get("entity_id"),
+                "role_name": row.get("role_name"),
+                "continuity_rules": row.get("continuity_rules"),
+            }
+        )
+
+    for row_raw in _safe_list(payload.get("scene_casting")):
+        row = _safe_dict(row_raw)
+        for key in row.keys():
+            if str(key) not in _SCENE_CASTING_ALLOWED_KEYS:
+                dropped_fields.append(f"scene_casting.{key}")
+        cleaned["scene_casting"].append(
+            {
+                "segment_id": row.get("segment_id"),
+                "primary_role": row.get("primary_role"),
+                "secondary_roles": row.get("secondary_roles"),
+                "presence_mode": row.get("presence_mode"),
+                "presence_weight": row.get("presence_weight"),
+                "performance_focus": row.get("performance_focus"),
+            }
+        )
+    return cleaned, sorted(list(dict.fromkeys(dropped_fields)))
+
+
 def _normalize_roster(raw_roster: Any, allowed_registry: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row_raw in _safe_list(raw_roster):
@@ -402,6 +514,18 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "segment_coverage_ok": False,
         "retry_count": 0,
         "error_code": "",
+        "raw_model_response_preview": "",
+        "parsed_payload_preview": "",
+        "sanitized_payload_preview": "",
+        "normalized_role_plan_preview": "",
+        "technical_leak_trigger": "",
+        "technical_leak_field": "",
+        "technical_leak_token": "",
+        "dropped_non_canonical_fields": [],
+        "coverage_expected_segment_ids": expected_segment_ids,
+        "coverage_seen_segment_ids": [],
+        "coverage_missing_segment_ids": expected_segment_ids,
+        "coverage_extra_segment_ids": [],
         "uses_audio_transcript_slice": False,
         "uses_core_arc_role": False,
         "uses_core_beat_purpose": False,
@@ -442,7 +566,10 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "mode": "clip",
         "content_type": str(input_pkg.get("content_type") or ""),
         "story_core": {
-            "story_summary": _normalize_text(story_core.get("story_summary"), max_len=1000),
+            "identity_doctrine": _normalize_text(story_core.get("identity_doctrine"), max_len=1200),
+            "identity_lock": _safe_dict(story_core.get("identity_lock")),
+            "world_lock": _safe_dict(story_core.get("world_lock")),
+            "style_lock": _safe_dict(story_core.get("style_lock")),
             "narrative_segments": [
                 {
                     "segment_id": str(_safe_dict(row).get("segment_id") or "").strip(),
@@ -457,6 +584,8 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             "segments": segment_rows,
         },
         "allowed_entity_registry": list(allowed_registry.values()),
+        "assigned_roles": _safe_dict(package.get("assigned_roles")),
+        "connected_refs_summary": _safe_dict(_safe_dict(input_pkg.get("connected_context_summary"))),
         "entity_registry_sources": ["input.refs_by_role", "refs_inventory", "assigned_roles", "connected_context_summary"],
     }
 
@@ -479,14 +608,36 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             if isinstance(response, dict) and response.get("__http_error__"):
                 raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
 
-            parsed = _extract_json_obj(_extract_gemini_text(response))
+            raw_model_text = _extract_gemini_text(response)
+            diagnostics["raw_model_response_preview"] = _normalize_text(raw_model_text, max_len=500)
+            parsed = _extract_strict_json_payload(raw_model_text)
+            diagnostics["parsed_payload_preview"] = _normalize_text(json.dumps(parsed, ensure_ascii=False), max_len=500)
+            sanitized, dropped_fields = _cleanup_roles_payload(parsed)
+            diagnostics["dropped_non_canonical_fields"] = dropped_fields[:60]
+            diagnostics["sanitized_payload_preview"] = _normalize_text(json.dumps(sanitized, ensure_ascii=False), max_len=500)
+            seen_segment_ids = [
+                str(_safe_dict(row).get("segment_id") or "").strip()
+                for row in _safe_list(sanitized.get("scene_casting"))
+                if str(_safe_dict(row).get("segment_id") or "").strip()
+            ]
+            expected_set = set(expected_segment_ids)
+            seen_set = set(seen_segment_ids)
+            diagnostics["coverage_seen_segment_ids"] = seen_segment_ids
+            diagnostics["coverage_missing_segment_ids"] = sorted(list(expected_set - seen_set))
+            diagnostics["coverage_extra_segment_ids"] = sorted(list(seen_set - expected_set))
             normalized, validation_error = _validate_roles_payload(
-                roles_payload=parsed,
+                roles_payload=sanitized,
                 expected_segment_ids=expected_segment_ids,
                 allowed_registry=allowed_registry,
             )
             if validation_error:
                 last_error = validation_error
+                diagnostics["error_code"] = validation_error
+                if validation_error in {ROLES_TECHNICAL_LEAKING, ROLES_CREATIVE_ROUTE, ROLES_ACTION_LEAKING}:
+                    leak_code, leak_path, leak_token = _extract_leakage_details(sanitized)
+                    diagnostics["technical_leak_trigger"] = leak_code or validation_error
+                    diagnostics["technical_leak_field"] = leak_path
+                    diagnostics["technical_leak_token"] = leak_token
                 if attempt < attempts - 1:
                     prompt = (
                         f"{prompt}\n\nPREVIOUS_VALIDATION_ERROR={validation_error}. "
@@ -502,6 +653,10 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                     "roster_count": len(_safe_list(normalized.get("roster"))),
                     "scene_casting_count": len(_safe_list(normalized.get("scene_casting"))),
                     "segment_coverage_ok": True,
+                    "coverage_seen_segment_ids": seen_segment_ids,
+                    "coverage_missing_segment_ids": sorted(list(expected_set - seen_set)),
+                    "coverage_extra_segment_ids": sorted(list(seen_set - expected_set)),
+                    "normalized_role_plan_preview": _normalize_text(json.dumps(normalized, ensure_ascii=False), max_len=500),
                     "error_code": "",
                 }
             )
