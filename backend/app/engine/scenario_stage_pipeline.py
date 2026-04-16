@@ -140,6 +140,28 @@ def _stage_output_field(stage_id: str) -> str:
     return STAGE_PACKAGE_FIELD_BY_STAGE.get(stage_id, stage_id)
 
 
+def _is_usable_scene_plan_snapshot(value: Any) -> bool:
+    row = _safe_dict(value)
+    return bool(_safe_list(row.get("scenes")))
+
+
+def _is_usable_scene_prompts_snapshot(value: Any) -> bool:
+    row = _safe_dict(value)
+    segments = _safe_list(row.get("segments"))
+    if segments:
+        return True
+    scenes = _safe_list(row.get("scenes"))
+    return bool(scenes)
+
+
+def _is_usable_finalize_snapshot(value: Any) -> bool:
+    row = _safe_dict(value)
+    final_storyboard = _safe_dict(row.get("final_storyboard"))
+    if final_storyboard:
+        return bool(_safe_list(final_storyboard.get("scenes")))
+    return bool(_safe_list(row.get("scenes")))
+
+
 def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     safe_pkg = _safe_dict(package)
     output = safe_pkg.get(_stage_output_field(stage_id))
@@ -147,16 +169,14 @@ def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
         return bool(_safe_dict(output))
     if stage_id == "audio_map":
         return _is_usable_audio_map(_safe_dict(output))
-    if stage_id in {"scene_plan", "scene_prompts", "finalize"}:
-        return isinstance(output, dict) and "scenes" in output
+    if stage_id == "scene_plan":
+        return _is_usable_scene_plan_snapshot(output)
+    if stage_id == "scene_prompts":
+        return _is_usable_scene_prompts_snapshot(output)
+    if stage_id == "finalize":
+        return _is_usable_finalize_snapshot(output)
     if stage_id == "final_video_prompt":
-        if not isinstance(output, dict):
-            return False
-        segments = output.get("segments")
-        if isinstance(segments, list) and len(segments) > 0:
-            return True
-        scenes = output.get("scenes")
-        return isinstance(scenes, list) and len(scenes) > 0
+        return _is_usable_scene_prompts_snapshot(output)
     return isinstance(output, dict) and bool(output)
 
 
@@ -168,8 +188,7 @@ def _is_usable_final_video_prompt_snapshot(value: Any) -> bool:
 
 
 def _is_usable_final_storyboard_snapshot(value: Any) -> bool:
-    row = _safe_dict(value)
-    return bool(_safe_list(row.get("scenes")))
+    return _is_usable_finalize_snapshot(value)
 
 
 def _mark_preserved_snapshot_diagnostic(package: dict[str, Any], stage_id: str) -> None:
@@ -2533,16 +2552,18 @@ def invalidate_downstream_stages(package: dict[str, Any], from_stage_id: str, re
     statuses = _safe_dict(pkg.get("stage_statuses"))
     diagnostics = _safe_dict(pkg.get("diagnostics"))
     for stage_id in downstream:
-        if stage_id in STAGE_SECTION_RESETTERS and stage_id not in {"final_video_prompt", "finalize"}:
-            section_name = "final_storyboard" if stage_id == "finalize" else stage_id
-            pkg[section_name] = STAGE_SECTION_RESETTERS[stage_id]()
-        elif stage_id == "final_video_prompt" and _is_usable_final_video_prompt_snapshot(pkg.get("final_video_prompt")):
+        if stage_id == "final_video_prompt" and _is_usable_final_video_prompt_snapshot(pkg.get("final_video_prompt")):
             diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = True
             _mark_preserved_snapshot_diagnostic(pkg, "final_video_prompt")
             diagnostics = _safe_dict(pkg.get("diagnostics"))
         elif stage_id == "finalize" and _is_usable_final_storyboard_snapshot(pkg.get("final_storyboard")):
             diagnostics["final_storyboard_preserved_last_successful_snapshot"] = True
             _mark_preserved_snapshot_diagnostic(pkg, "finalize")
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
+        elif stage_id in STAGE_SECTION_RESETTERS:
+            # Manual reruns may mark downstream as stale, but payload snapshots must remain intact
+            # for debugging and for dependency checks in later manual runs.
+            _mark_preserved_snapshot_diagnostic(pkg, stage_id)
             diagnostics = _safe_dict(pkg.get("diagnostics"))
         stage_state = _safe_dict(statuses.get(stage_id))
         stage_state["status"] = "stale"
