@@ -144,6 +144,45 @@ def _stage_output_field(stage_id: str) -> str:
     return STAGE_PACKAGE_FIELD_BY_STAGE.get(stage_id, stage_id)
 
 
+def _has_non_empty_collection(value: Any) -> bool:
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    return False
+
+
+def _has_valid_story_core_payload(output: Any) -> bool:
+    payload = _safe_dict(output)
+    return bool(str(payload.get("core_version") or "").strip()) and bool(_safe_list(payload.get("narrative_segments")))
+
+
+def _has_valid_role_plan_payload(output: Any) -> bool:
+    payload = _safe_dict(output)
+    scene_casting = payload.get("scene_casting")
+    if _has_non_empty_collection(scene_casting):
+        return True
+    for key in ("roles", "cast", "segments"):
+        if _has_non_empty_collection(payload.get(key)):
+            return True
+    return False
+
+
+def _has_valid_scene_plan_payload(output: Any) -> bool:
+    payload = _safe_dict(output)
+    if bool(_safe_list(payload.get("segments"))):
+        return True
+    if bool(_safe_list(payload.get("scenes"))):
+        return True
+    storyboard = payload.get("storyboard")
+    return _has_non_empty_collection(storyboard)
+
+
+def _has_valid_scene_prompts_payload(output: Any) -> bool:
+    payload = _safe_dict(output)
+    return bool(_safe_list(payload.get("segments"))) or bool(_safe_list(payload.get("scenes")))
+
+
 def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     safe_pkg = _safe_dict(package)
     output = safe_pkg.get(_stage_output_field(stage_id))
@@ -151,10 +190,17 @@ def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
         return bool(_safe_dict(output))
     if stage_id == "audio_map":
         return _is_usable_audio_map(_safe_dict(output))
-    if stage_id in {"scene_plan", "scene_prompts"}:
-        return isinstance(output, dict) and ("scenes" in output or "segments" in output)
+    if stage_id == "story_core":
+        return _has_valid_story_core_payload(output)
+    if stage_id == "role_plan":
+        return _has_valid_role_plan_payload(output)
+    if stage_id == "scene_plan":
+        return _has_valid_scene_plan_payload(output)
+    if stage_id == "scene_prompts":
+        return _has_valid_scene_prompts_payload(output)
     if stage_id == "final_video_prompt":
-        return isinstance(output, dict) and bool(_safe_list(_safe_dict(output).get("segments")))
+        payload = _safe_dict(output)
+        return bool(_safe_list(payload.get("segments"))) or bool(_safe_list(payload.get("scenes")))
     if stage_id == "finalize":
         return isinstance(output, dict) and bool(_safe_list(_safe_dict(output).get("render_manifest")))
     return isinstance(output, dict) and bool(output)
@@ -5842,11 +5888,15 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
     pkg["updated_at"] = _utc_iso()
 
     deps = STAGE_DEPENDENCIES.get(stage_id, [])
-    statuses = _safe_dict(pkg.get("stage_statuses"))
-    missing = [dep for dep in deps if str(_safe_dict(statuses.get(dep)).get("status") or "") not in {"done"}]
+    missing = [dep for dep in deps if not _can_reuse_stage_output(pkg, dep)]
     if missing:
-        error_code = "missing_upstream_stage" if stage_id == "finalize" else "missing_dependencies"
-        _set_stage_status(pkg, stage_id, "error", error=f"{error_code}:{','.join(missing)}")
+        if stage_id == "final_video_prompt":
+            missing_reasons = [f"missing_{dep}_payload" for dep in missing]
+            error_code = f"final_video_prompt_incomplete_dependencies:{','.join(missing_reasons)}"
+        else:
+            error_code = "missing_upstream_stage" if stage_id == "finalize" else "missing_dependencies"
+            error_code = f"{error_code}:{','.join(missing)}"
+        _set_stage_status(pkg, stage_id, "error", error=error_code)
         _safe_dict(pkg.get("diagnostics")).setdefault("errors", []).append(f"{stage_id}: {error_code} {missing}")
         return pkg
 
@@ -5891,6 +5941,28 @@ def run_manual_stage(
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
     executed_stage_ids: list[str] = []
+    if stage_id == "final_video_prompt":
+        deps = STAGE_DEPENDENCIES.get(stage_id, [])
+        reusable_upstream = [dep_stage for dep_stage in deps if _can_reuse_stage_output(pkg, dep_stage)]
+        missing_upstream = [dep_stage for dep_stage in deps if dep_stage not in reusable_upstream]
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics["continuation_mode"] = "manual_final_video_prompt_isolated"
+        diagnostics["upstream_package_complete"] = not bool(missing_upstream)
+        diagnostics["reused_upstream_stages"] = reusable_upstream
+        diagnostics["regenerated_stages"] = [stage_id]
+        if missing_upstream:
+            diagnostics["final_video_prompt_missing_upstream"] = missing_upstream
+            diagnostics["final_video_prompt_missing_upstream_reasons"] = [f"missing_{dep}_payload" for dep in missing_upstream]
+            pkg["diagnostics"] = diagnostics
+            error_code = f"final_video_prompt_incomplete_dependencies:{','.join(diagnostics['final_video_prompt_missing_upstream_reasons'])}"
+            _set_stage_status(pkg, stage_id, "error", error=error_code)
+            _append_diag_event(pkg, error_code, stage_id=stage_id)
+            return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
+        pkg["diagnostics"] = diagnostics
+        pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
+        pkg = run_stage(stage_id, pkg, payload)
+        executed_stage_ids.append(stage_id)
+        return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     if stage_id == "finalize":
         # Guardrail: pressing FINAL must not retrigger upstream creative Gemini stages.
         # Finalize can run only from already prepared normalized outputs.
