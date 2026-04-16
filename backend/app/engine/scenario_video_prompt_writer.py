@@ -9,6 +9,11 @@ from app.engine.prompt_polish_policies import (
     clean_negative_prompt_artifacts,
 )
 from app.engine.route_baseline_bank import ROUTE_BASELINE_BANK
+from app.engine.scenario_stage_timeout_policy import (
+    get_scenario_stage_timeout,
+    is_timeout_error,
+    scenario_timeout_policy_name,
+)
 from app.engine.scenario_story_guidance import story_guidance_to_notes_list
 
 FINAL_VIDEO_PROMPT_STAGE_VERSION = "gemini_final_video_prompt_v11"
@@ -454,6 +459,9 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
     last_error = ""
     attempts = 0
     normalized_payload: dict[str, Any] = {}
+    configured_timeout = get_scenario_stage_timeout("final_video_prompt")
+    timed_out = False
+    response_was_empty_after_timeout = False
 
     for _ in range(2):
         attempts += 1
@@ -465,16 +473,19 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
                     "contents": [{"role": "user", "parts": [{"text": instruction}]}],
                     "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
                 },
-                timeout=120,
+                timeout=configured_timeout,
             )
             if isinstance(response, dict) and response.get("__http_error__"):
-                raise RuntimeError(f"gemini_http_error:{response.get('status')}")
+                raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
             parsed = _extract_json_obj(_extract_gemini_text(response))
             normalized_payload = _sanitize_output(parsed, segment_rows)
             last_error = ""
             break
         except Exception as exc:
             last_error = str(exc)[:220] or "final_video_prompt_generation_failed"
+            if is_timeout_error(last_error):
+                timed_out = True
+                response_was_empty_after_timeout = True
             normalized_payload = {}
 
     ok = bool(normalized_payload and _safe_list(normalized_payload.get("segments")))
@@ -487,8 +498,13 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "final_video_prompt_backend": "gemini",
             "final_video_prompt_attempts": attempts,
             "final_video_prompt_used_fallback": False,
-            "final_video_prompt_error": "" if ok else (last_error or "final_video_prompt_generation_failed"),
+            "final_video_prompt_error": "" if ok else ("final_video_prompt_timeout" if timed_out else (last_error or "final_video_prompt_generation_failed")),
             "final_video_prompt_segment_ids": [str(_safe_dict(row).get("segment_id") or "") for row in segment_rows],
+            "final_video_prompt_configured_timeout_sec": configured_timeout,
+            "final_video_prompt_timeout_stage_policy_name": scenario_timeout_policy_name("final_video_prompt"),
+            "final_video_prompt_timed_out": timed_out,
+            "final_video_prompt_timeout_retry_attempted": bool(timed_out and attempts > 1),
+            "final_video_prompt_response_was_empty_after_timeout": response_was_empty_after_timeout,
         },
-        "error": "" if ok else (last_error or "final_video_prompt_generation_failed"),
+        "error": "" if ok else ("final_video_prompt_timeout" if timed_out else (last_error or "final_video_prompt_generation_failed")),
     }
