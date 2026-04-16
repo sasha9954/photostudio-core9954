@@ -9,6 +9,11 @@ from app.engine.prompt_polish_policies import (
     build_ia2v_readability_clauses,
     clean_negative_prompt_artifacts,
 )
+from app.engine.scenario_stage_timeout_policy import (
+    get_scenario_stage_timeout,
+    is_timeout_error,
+    scenario_timeout_policy_name,
+)
 from app.engine.scenario_story_guidance import story_guidance_to_notes_list
 from app.engine.video_capability_canon import (
     DEFAULT_VIDEO_MODEL_ID,
@@ -2942,6 +2947,11 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_extra_segment_ids": [],
         "scene_prompts_snapshot_restored": False,
         "scene_prompts_failure_reason": "",
+        "scene_prompts_configured_timeout_sec": get_scenario_stage_timeout("scene_prompts"),
+        "scene_prompts_timeout_stage_policy_name": scenario_timeout_policy_name("scene_prompts"),
+        "scene_prompts_timed_out": False,
+        "scene_prompts_timeout_retry_attempted": False,
+        "scene_prompts_response_was_empty_after_timeout": False,
         "active_video_model_capability_profile": active_model_id,
         "active_route_capability_mode": route_capability_mode,
         "prompt_capability_guard_applied": prompt_capability_guard_applied,
@@ -2969,6 +2979,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
     )
     raw_payload: dict[str, Any] = {}
     error = ""
+    configured_timeout = get_scenario_stage_timeout("scene_prompts")
     try:
         response = post_generate_content(
             api_key=str(api_key or "").strip(),
@@ -2977,7 +2988,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
             },
-            timeout=90,
+            timeout=configured_timeout,
         )
         if isinstance(response, dict) and response.get("__http_error__"):
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
@@ -2991,7 +3002,12 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         diagnostics["scene_prompts_dropped_non_canonical_fields"] = dropped_fields
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
-        diagnostics["scene_prompts_failure_reason"] = f"transport_or_parse_error:{error[:240]}"
+        timeout_error = is_timeout_error(error)
+        diagnostics["scene_prompts_timed_out"] = timeout_error
+        diagnostics["scene_prompts_response_was_empty_after_timeout"] = timeout_error
+        diagnostics["scene_prompts_failure_reason"] = (
+            "scene_prompts_timeout" if timeout_error else f"transport_or_parse_error:{error[:240]}"
+        )
 
     if not str(raw_payload.get("global_style_anchor") or "").strip():
         raw_payload["global_style_anchor"] = global_style_anchor
@@ -3027,6 +3043,12 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
     )
     if error_code or validation_error:
         diagnostics["scene_prompts_failure_reason"] = str(validation_error or error_code).strip()
+    if diagnostics.get("scene_prompts_timed_out"):
+        diagnostics["scene_prompts_error_code"] = "scene_prompts_timeout"
+        validation_reason = str(diagnostics.get("scene_prompts_failure_reason") or "").strip()
+        diagnostics["scene_prompts_failure_reason"] = (
+            f"scene_prompts_timeout; downstream_validation={validation_reason}" if validation_reason else "scene_prompts_timeout"
+        )
 
     legacy_bridge = _build_legacy_bridge_from_v11(raw_payload, prompt_rows)
     diagnostics["scene_prompts_legacy_bridge_generated"] = bool(_safe_list(legacy_bridge.get("scenes")))
@@ -3054,12 +3076,16 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         and scene_prompts.get("prompts_version") == "1.1"
         and bool(diagnostics.get("scene_prompts_segment_coverage_ok"))
     )
-    final_error = error or (error_code.lower() if error_code else "") or ("scene_prompts_empty" if not has_segments else "")
+    final_error = (
+        "scene_prompts_timeout"
+        if diagnostics.get("scene_prompts_timed_out")
+        else error or (error_code.lower() if error_code else "") or ("scene_prompts_empty" if not has_segments else "")
+    )
     return {
         "ok": ok,
         "scene_prompts": scene_prompts,
         "error": final_error,
-        "error_code": error_code,
+        "error_code": ("scene_prompts_timeout" if diagnostics.get("scene_prompts_timed_out") else error_code),
         "validation_error": validation_error,
         "used_fallback": False,
         "diagnostics": diagnostics,

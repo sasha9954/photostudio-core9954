@@ -5,6 +5,11 @@ import re
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
+from app.engine.scenario_stage_timeout_policy import (
+    get_scenario_stage_timeout,
+    is_timeout_error,
+    scenario_timeout_policy_name,
+)
 
 ROLE_PLAN_PROMPT_VERSION = "roles_v1_1"
 ROLES_VERSION = "1.1"
@@ -532,6 +537,11 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "uses_core_emotional_key": False,
         "fell_back_to_legacy_audio_text_fields": False,
         "fell_back_to_legacy_core_fields": False,
+        "configured_timeout_sec": get_scenario_stage_timeout("role_plan"),
+        "timeout_stage_policy_name": scenario_timeout_policy_name("role_plan"),
+        "timed_out": False,
+        "timeout_retry_attempted": False,
+        "response_was_empty_after_timeout": False,
     }
 
     diagnostics.update(segment_row_diagnostics)
@@ -592,6 +602,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
     prompt = _build_roles_prompt(context)
     attempts = 2
     last_error = ROLES_SCHEMA_INVALID
+    configured_timeout = get_scenario_stage_timeout("role_plan")
 
     for attempt in range(attempts):
         diagnostics["retry_count"] = attempt
@@ -603,7 +614,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                     "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
                 },
-                timeout=90,
+                timeout=configured_timeout,
             )
             if isinstance(response, dict) and response.get("__http_error__"):
                 raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
@@ -672,6 +683,14 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             }
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc) or ROLES_SCHEMA_INVALID
+            if is_timeout_error(last_error):
+                diagnostics["timed_out"] = True
+                diagnostics["error_code"] = "role_plan_timeout"
+                diagnostics["response_was_empty_after_timeout"] = not bool(
+                    str(diagnostics.get("raw_model_response_preview") or "").strip()
+                )
+                diagnostics["timeout_retry_attempted"] = attempt < attempts - 1
+                last_error = "role_plan_timeout"
             if attempt < attempts - 1:
                 continue
 

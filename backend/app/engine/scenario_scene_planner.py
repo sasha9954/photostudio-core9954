@@ -4,6 +4,11 @@ import json
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
+from app.engine.scenario_stage_timeout_policy import (
+    get_scenario_stage_timeout,
+    is_timeout_error,
+    scenario_timeout_policy_name,
+)
 from app.engine.scenario_story_guidance import story_guidance_route_mix_doctrine, story_guidance_to_notes_list
 from app.engine.video_capability_canon import (
     DEFAULT_VIDEO_MODEL_ID,
@@ -1444,6 +1449,11 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
         "scene_plan_uses_segment_id_canonical": True,
         "watchability_fallback_count": 0,
         "world_summary_used": world_summary_used,
+        "configured_timeout_sec": get_scenario_stage_timeout("scene_plan"),
+        "timeout_stage_policy_name": scenario_timeout_policy_name("scene_plan"),
+        "timed_out": False,
+        "timeout_retry_attempted": False,
+        "response_was_empty_after_timeout": False,
         **capability_diag,
     }
 
@@ -1601,6 +1611,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
         }
 
     prompt = _build_prompt(context, validation_feedback=validation_feedback)
+    configured_timeout = get_scenario_stage_timeout("scene_plan")
     try:
         response = post_generate_content(
             api_key=str(api_key or "").strip(),
@@ -1609,7 +1620,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
             },
-            timeout=90,
+            timeout=configured_timeout,
         )
         if isinstance(response, dict) and response.get("__http_error__"):
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
@@ -1646,13 +1657,17 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "diagnostics": diagnostics,
         }
     except Exception as exc:  # noqa: BLE001
+        timeout_error = is_timeout_error(exc)
+        if timeout_error:
+            diagnostics["timed_out"] = True
+            diagnostics["response_was_empty_after_timeout"] = True
         scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _normalize_scene_plan(
             {},
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             include_debug_raw=include_debug_raw,
         )
-        diagnostics["error_code"] = error_code or "SCENES_SCHEMA_INVALID"
+        diagnostics["error_code"] = "scene_plan_timeout" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID")
         diagnostics.update(
             _collect_scene_plan_diagnostics(
                 scene_plan=scene_plan,
@@ -1664,7 +1679,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
         return {
             "ok": False,
             "scene_plan": scene_plan,
-            "error": str(exc),
+            "error": "scene_plan_timeout" if timeout_error else str(exc),
             "validation_error": validation_error,
             "error_code": diagnostics["error_code"],
             "used_fallback": True,

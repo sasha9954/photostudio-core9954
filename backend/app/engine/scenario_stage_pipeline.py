@@ -33,6 +33,11 @@ from app.engine.scenario_video_prompt_writer import (
     generate_ltx_video_prompt_metadata,
 )
 from app.engine.scenario_story_guidance import story_guidance_to_notes_list
+from app.engine.scenario_stage_timeout_policy import (
+    get_scenario_stage_timeout,
+    is_timeout_error,
+    scenario_timeout_policy_name,
+)
 from app.engine.video_capability_canon import (
     DEFAULT_VIDEO_MODEL_ID,
     build_capability_diagnostics_summary,
@@ -2962,6 +2967,11 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_retry_used"] = False
     diagnostics["story_core_retry_feedback"] = ""
     diagnostics["story_core_last_error_code"] = ""
+    diagnostics["story_core_configured_timeout_sec"] = get_scenario_stage_timeout("story_core")
+    diagnostics["story_core_timeout_stage_policy_name"] = scenario_timeout_policy_name("story_core")
+    diagnostics["story_core_timed_out"] = False
+    diagnostics["story_core_timeout_retry_attempted"] = False
+    diagnostics["story_core_response_was_empty_after_timeout"] = False
     diagnostics["story_core_hard_fail"] = False
     diagnostics["story_core_id_mismatch_kind"] = ""
     diagnostics["story_core_audio_canonical_source"] = "audio_map.segments[]"
@@ -3045,6 +3055,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         retry_used = False
         last_error_code = CORE_SCHEMA_INVALID
         last_errors: list[str] = []
+        configured_timeout = get_scenario_stage_timeout("story_core")
         for attempt in range(2):
             prompt_with_feedback = (
                 f"{prompt}\nVALIDATION_FEEDBACK_FROM_PREVIOUS_ATTEMPT:\n{validation_feedback}\n"
@@ -3060,11 +3071,18 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 api_key=api_key,
                 model="gemini-3.1-pro-preview",
                 body=body,
-                timeout=90,
+                timeout=configured_timeout,
             )
             if isinstance(response, dict) and response.get("__http_error__"):
-                last_error_code = CORE_SCHEMA_INVALID
+                timeout_error = is_timeout_error(response.get("text"))
+                last_error_code = "story_core_timeout" if timeout_error else CORE_SCHEMA_INVALID
                 last_errors = [f"gemini_http_error:{response.get('status')}:{response.get('text')}"]
+                if timeout_error:
+                    diagnostics = _safe_dict(package.get("diagnostics"))
+                    diagnostics["story_core_timed_out"] = True
+                    diagnostics["story_core_response_was_empty_after_timeout"] = True
+                    diagnostics["story_core_timeout_retry_attempted"] = attempt == 0
+                    package["diagnostics"] = diagnostics
             else:
                 raw_text = _extract_gemini_text(response)
                 diagnostics = _safe_dict(package.get("diagnostics"))
@@ -3161,6 +3179,12 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.exception("[scenario_stage_pipeline] story_core failed")
         diagnostics = _safe_dict(package.get("diagnostics"))
+        if is_timeout_error(exc):
+            diagnostics["story_core_timed_out"] = True
+            diagnostics["story_core_last_error_code"] = "story_core_timeout"
+            diagnostics["story_core_response_was_empty_after_timeout"] = not bool(
+                str(diagnostics.get("story_core_raw_response") or "").strip()
+            )
         diagnostics["story_core_used_fallback"] = False
         diagnostics["story_core_hard_fail"] = True
         warnings = _safe_list(diagnostics.get("warnings"))
@@ -5442,6 +5466,11 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_empty"] = False
     diagnostics["role_plan_snapshot_restored"] = False
     diagnostics["role_plan_failure_reason"] = ""
+    diagnostics["role_plan_configured_timeout_sec"] = get_scenario_stage_timeout("role_plan")
+    diagnostics["role_plan_timeout_stage_policy_name"] = scenario_timeout_policy_name("role_plan")
+    diagnostics["role_plan_timed_out"] = False
+    diagnostics["role_plan_timeout_retry_attempted"] = False
+    diagnostics["role_plan_response_was_empty_after_timeout"] = False
     diagnostics["role_plan_raw_model_response_preview"] = ""
     diagnostics["role_plan_normalized_preview"] = ""
     diagnostics["role_plan_technical_leak_trigger"] = ""
@@ -5509,6 +5538,15 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_coverage_seen_segment_ids"] = _safe_list(role_diag.get("coverage_seen_segment_ids"))
     diagnostics["role_plan_coverage_missing_segment_ids"] = _safe_list(role_diag.get("coverage_missing_segment_ids"))
     diagnostics["role_plan_coverage_extra_segment_ids"] = _safe_list(role_diag.get("coverage_extra_segment_ids"))
+    diagnostics["role_plan_configured_timeout_sec"] = int(
+        role_diag.get("configured_timeout_sec") or diagnostics.get("role_plan_configured_timeout_sec") or 0
+    )
+    diagnostics["role_plan_timeout_stage_policy_name"] = str(
+        role_diag.get("timeout_stage_policy_name") or diagnostics.get("role_plan_timeout_stage_policy_name") or ""
+    )
+    diagnostics["role_plan_timed_out"] = bool(role_diag.get("timed_out"))
+    diagnostics["role_plan_timeout_retry_attempted"] = bool(role_diag.get("timeout_retry_attempted"))
+    diagnostics["role_plan_response_was_empty_after_timeout"] = bool(role_diag.get("response_was_empty_after_timeout"))
     diagnostics["role_plan_skipped"] = False
     diagnostics["role_plan_skip_reason"] = ""
     diagnostics["role_plan_empty"] = not _has_valid_role_plan_payload(role_plan)
@@ -5600,6 +5638,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
+    diagnostics["scene_plan_configured_timeout_sec"] = get_scenario_stage_timeout("scene_plan")
+    diagnostics["scene_plan_timeout_stage_policy_name"] = scenario_timeout_policy_name("scene_plan")
+    diagnostics["scene_plan_timed_out"] = False
+    diagnostics["scene_plan_timeout_retry_attempted"] = False
+    diagnostics["scene_plan_response_was_empty_after_timeout"] = False
     package["diagnostics"] = diagnostics
     hard_fail_error = ""
 
@@ -5705,6 +5748,15 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_uses_legacy_scene_candidate_windows_bridge"] = bool(scene_diag.get("scene_candidate_windows_bridge"))
     diagnostics["scene_plan_uses_legacy_compiled_contract_bridge"] = bool(scene_diag.get("compiled_contract_bridge"))
     diagnostics["scene_plan_role_source_precedence"] = _safe_list(scene_diag.get("role_source_precedence"))
+    diagnostics["scene_plan_configured_timeout_sec"] = int(
+        scene_diag.get("configured_timeout_sec") or diagnostics.get("scene_plan_configured_timeout_sec") or 0
+    )
+    diagnostics["scene_plan_timeout_stage_policy_name"] = str(
+        scene_diag.get("timeout_stage_policy_name") or diagnostics.get("scene_plan_timeout_stage_policy_name") or ""
+    )
+    diagnostics["scene_plan_timed_out"] = bool(scene_diag.get("timed_out"))
+    diagnostics["scene_plan_timeout_retry_attempted"] = bool(scene_diag.get("timeout_retry_attempted"))
+    diagnostics["scene_plan_response_was_empty_after_timeout"] = bool(scene_diag.get("response_was_empty_after_timeout"))
     diagnostics["scene_plan_route_budget_ok"] = bool(route_budget_ok)
     diagnostics["scene_plan_route_budget_target"] = _safe_dict(route_budget_meta.get("target_route_mix"))
     diagnostics["scene_plan_route_budget_actual"] = _safe_dict(route_budget_meta.get("actual_route_mix"))
@@ -5787,6 +5839,11 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_extra_segment_ids"] = []
     diagnostics["scene_prompts_snapshot_restored"] = False
     diagnostics["scene_prompts_failure_reason"] = ""
+    diagnostics["scene_prompts_configured_timeout_sec"] = get_scenario_stage_timeout("scene_prompts")
+    diagnostics["scene_prompts_timeout_stage_policy_name"] = scenario_timeout_policy_name("scene_prompts")
+    diagnostics["scene_prompts_timed_out"] = False
+    diagnostics["scene_prompts_timeout_retry_attempted"] = False
+    diagnostics["scene_prompts_response_was_empty_after_timeout"] = False
     diagnostics["prompt_capability_guard_applied"] = False
     diagnostics["scene_prompts_validation_error"] = ""
     diagnostics["validation_error"] = ""
@@ -5808,6 +5865,10 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
     initial_validation_error = str(result.get("validation_error") or "").strip()
     if initial_validation_error:
+        initial_diag = _safe_dict(result.get("diagnostics"))
+        if bool(initial_diag.get("scene_prompts_timed_out")):
+            initial_diag["scene_prompts_timeout_retry_attempted"] = True
+            result["diagnostics"] = initial_diag
         validation_error_code = str(result.get("error_code") or _safe_dict(result.get("diagnostics")).get("scene_prompts_error_code") or "").strip()
         validation_feedback = (
             f"Previous output invalid: validation_error={initial_validation_error}; "
@@ -5905,6 +5966,17 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_missing_segment_ids"] = _safe_list(prompts_diag.get("scene_prompts_missing_segment_ids"))
     diagnostics["scene_prompts_extra_segment_ids"] = _safe_list(prompts_diag.get("scene_prompts_extra_segment_ids"))
     diagnostics["scene_prompts_failure_reason"] = str(prompts_diag.get("scene_prompts_failure_reason") or "")
+    diagnostics["scene_prompts_configured_timeout_sec"] = int(
+        prompts_diag.get("scene_prompts_configured_timeout_sec") or diagnostics.get("scene_prompts_configured_timeout_sec") or 0
+    )
+    diagnostics["scene_prompts_timeout_stage_policy_name"] = str(
+        prompts_diag.get("scene_prompts_timeout_stage_policy_name") or diagnostics.get("scene_prompts_timeout_stage_policy_name") or ""
+    )
+    diagnostics["scene_prompts_timed_out"] = bool(prompts_diag.get("scene_prompts_timed_out"))
+    diagnostics["scene_prompts_timeout_retry_attempted"] = bool(prompts_diag.get("scene_prompts_timeout_retry_attempted"))
+    diagnostics["scene_prompts_response_was_empty_after_timeout"] = bool(
+        prompts_diag.get("scene_prompts_response_was_empty_after_timeout")
+    )
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = int(
         prompts_diag.get("scene_prompts_route_semantics_mismatch_count")
         or diagnostics.get("scene_prompts_route_semantics_mismatch_count")
@@ -5957,6 +6029,12 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["final_video_prompt_prompt_version"] = FINAL_VIDEO_PROMPT_STAGE_VERSION
     diagnostics["final_video_prompt_segment_count"] = 0
     diagnostics["final_video_prompt_error"] = ""
+    diagnostics["final_video_prompt_snapshot_restored"] = False
+    diagnostics["final_video_prompt_configured_timeout_sec"] = get_scenario_stage_timeout("final_video_prompt")
+    diagnostics["final_video_prompt_timeout_stage_policy_name"] = scenario_timeout_policy_name("final_video_prompt")
+    diagnostics["final_video_prompt_timed_out"] = False
+    diagnostics["final_video_prompt_timeout_retry_attempted"] = False
+    diagnostics["final_video_prompt_response_was_empty_after_timeout"] = False
     package["diagnostics"] = diagnostics
 
     previous_payload = _safe_dict(package.get("final_video_prompt"))
@@ -5974,15 +6052,32 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["final_video_prompt_segment_count"] = int(diag.get("final_video_prompt_segment_count") or 0)
     diagnostics["final_video_prompt_used_fallback"] = bool(diag.get("final_video_prompt_used_fallback"))
     diagnostics["final_video_prompt_error"] = str(result.get("error") or "")
+    diagnostics["final_video_prompt_configured_timeout_sec"] = int(
+        diag.get("final_video_prompt_configured_timeout_sec") or diagnostics.get("final_video_prompt_configured_timeout_sec") or 0
+    )
+    diagnostics["final_video_prompt_timeout_stage_policy_name"] = str(
+        diag.get("final_video_prompt_timeout_stage_policy_name") or diagnostics.get("final_video_prompt_timeout_stage_policy_name") or ""
+    )
+    diagnostics["final_video_prompt_timed_out"] = bool(diag.get("final_video_prompt_timed_out"))
+    diagnostics["final_video_prompt_timeout_retry_attempted"] = bool(diag.get("final_video_prompt_timeout_retry_attempted"))
+    diagnostics["final_video_prompt_response_was_empty_after_timeout"] = bool(
+        diag.get("final_video_prompt_response_was_empty_after_timeout")
+    )
     package["diagnostics"] = diagnostics
 
     final_video_prompt = _safe_dict(result.get("final_video_prompt"))
     if _safe_list(final_video_prompt.get("segments")):
         package["final_video_prompt"] = final_video_prompt
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["final_video_prompt_snapshot_restored"] = False
+        package["diagnostics"] = diagnostics
         _append_diag_event(package, "final_video_prompt generated", stage_id="final_video_prompt")
         return package
 
     package["final_video_prompt"] = previous_payload if previous_payload else package.get("final_video_prompt", {})
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["final_video_prompt_snapshot_restored"] = bool(previous_payload)
+    package["diagnostics"] = diagnostics
     _append_diag_event(package, "final_video_prompt empty", stage_id="final_video_prompt")
     raise RuntimeError(str(result.get("error") or "final_video_prompt_empty"))
 

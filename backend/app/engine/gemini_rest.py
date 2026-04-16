@@ -80,8 +80,16 @@ def post_generate_content(api_key: str, model: str, body: Dict[str, Any], timeou
             headers=headers,
             timeout=timeout,
         )
+    except requests.Timeout as e:
+        return {
+            "__http_error__": True,
+            "status": 0,
+            "text": f"REQUEST_TIMEOUT: {e!r}",
+            "timed_out": True,
+            "error_type": "timeout",
+        }
     except Exception as e:
-        return {"__http_error__": True, "status": 0, "text": f"REQUEST_FAILED: {e!r}"}
+        return {"__http_error__": True, "status": 0, "text": f"REQUEST_FAILED: {e!r}", "timed_out": False}
 
     if not r.ok:
         # Try to extract a human readable error
