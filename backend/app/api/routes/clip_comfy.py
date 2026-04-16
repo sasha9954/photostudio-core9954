@@ -22,6 +22,7 @@ from app.engine.clip_storyboard_pipeline import (
 from app.engine.scenario_stage_pipeline import (
     _normalize_creative_config,
     build_runtime_diagnostics_summary,
+    build_stage_payload_health_summary,
     create_storyboard_package,
     mark_stale_downstream,
     resolve_stage_sequence,
@@ -850,6 +851,12 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
         package, package_changed = _sync_stage_package_input(package, req)
         if package_changed:
             package = mark_stale_downstream(package, "input_package", reason="payload_refresh")
+        logger.info(
+            "[scenario_stage_v1] incoming-manual-package stage_id=%s summary=%s keys=%s",
+            stage_id,
+            build_stage_payload_health_summary(package),
+            sorted(list(package.keys())),
+        )
         mark_stale_from = str(req.get("markStaleFrom") or "").strip()
         if mark_stale_from:
             package = mark_stale_downstream(package, mark_stale_from, reason=str(req.get("staleReason") or ""))
