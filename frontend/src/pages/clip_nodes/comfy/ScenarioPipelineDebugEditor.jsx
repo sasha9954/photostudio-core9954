@@ -41,15 +41,67 @@ const FINALIZE_UPSTREAM_STAGES = [
   "final_video_prompt",
 ];
 
-function collectFinalizeStaleStages(stageStatuses = {}) {
+function hasStagePayloadForFinalize(stageId = "", storyboardPackage = {}) {
+  const pkg = storyboardPackage && typeof storyboardPackage === "object" && !Array.isArray(storyboardPackage)
+    ? storyboardPackage
+    : {};
+  const normalized = String(stageId || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (normalized === "audio_map") {
+    const stage = pkg?.audio_map && typeof pkg.audio_map === "object" ? pkg.audio_map : {};
+    return Object.keys(stage).length > 0;
+  }
+  if (normalized === "story_core") {
+    const stage = pkg?.story_core && typeof pkg.story_core === "object" ? pkg.story_core : {};
+    return Boolean(String(stage?.core_version || "").trim()) && Array.isArray(stage?.narrative_segments) && stage.narrative_segments.length > 0;
+  }
+  if (normalized === "role_plan") {
+    const stage = pkg?.role_plan && typeof pkg.role_plan === "object" ? pkg.role_plan : {};
+    const sceneCasting = stage?.scene_casting;
+    if (sceneCasting && typeof sceneCasting === "object" && !Array.isArray(sceneCasting) && Object.keys(sceneCasting).length > 0) return true;
+    if (Array.isArray(sceneCasting) && sceneCasting.length > 0) return true;
+    if (Array.isArray(stage?.roster) && stage.roster.length > 0) return true;
+    if (Array.isArray(stage?.roles) && stage.roles.length > 0) return true;
+    if (Array.isArray(stage?.cast) && stage.cast.length > 0) return true;
+    return false;
+  }
+  if (normalized === "scene_plan") {
+    const stage = pkg?.scene_plan && typeof pkg.scene_plan === "object" ? pkg.scene_plan : {};
+    if (Array.isArray(stage?.segments) && stage.segments.length > 0) return true;
+    if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
+    if (stage?.storyboard && typeof stage.storyboard === "object" && !Array.isArray(stage.storyboard)) return Object.keys(stage.storyboard).length > 0;
+    return false;
+  }
+  if (normalized === "scene_prompts") {
+    const stage = pkg?.scene_prompts && typeof pkg.scene_prompts === "object" ? pkg.scene_prompts : {};
+    if (Array.isArray(stage?.segments) && stage.segments.length > 0) return true;
+    if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
+    return Boolean(String(stage?.prompts_version || "").trim()) && Object.keys(stage).length > 0;
+  }
+  if (normalized === "final_video_prompt") {
+    const stage = pkg?.final_video_prompt && typeof pkg.final_video_prompt === "object" ? pkg.final_video_prompt : {};
+    if (Array.isArray(stage?.segments) && stage.segments.length > 0) return true;
+    if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
+    return false;
+  }
+  return false;
+}
+
+function collectFinalizeStaleStages(stageStatuses = {}, storyboardPackage = {}) {
   const suspiciousReasonPattern = /(stale|invalid|dirty|outdated|rerun|re-run|upstream|changed|not done)/i;
   return FINALIZE_UPSTREAM_STAGES.filter((stageId) => {
     const row = stageStatuses?.[stageId] && typeof stageStatuses[stageId] === "object" ? stageStatuses[stageId] : {};
     const status = String(row?.status || "idle").trim().toLowerCase();
+    const hasValidPayload = hasStagePayloadForFinalize(stageId, storyboardPackage);
+    const rerunMarkerPresent = Boolean(String(row?.updated_at || "").trim()) || Number(row?.run_count || 0) > 0;
+    if (status === "done" && hasValidPayload && rerunMarkerPresent) return false;
+    if (status === "done" && hasValidPayload) return false;
     const reason = String(
       row?.reason
       || row?.statusReason
       || row?.invalidateReason
+      || row?.staleReason
+      || row?.stale_reason
       || row?.invalidatedReason
       || row?.message
       || ""
@@ -58,7 +110,7 @@ function collectFinalizeStaleStages(stageStatuses = {}) {
     const hasError = status === "error" || Boolean(errorText);
     const hasInvalidationMarker = Boolean(row?.invalidated || row?.invalid || row?.dirty || row?.stale);
     const reasonLooksSuspicious = suspiciousReasonPattern.test(reason);
-    return status !== "done" || hasError || hasInvalidationMarker || reasonLooksSuspicious;
+    return status !== "done" || !hasValidPayload || hasError || hasInvalidationMarker || reasonLooksSuspicious;
   });
 }
 
@@ -198,7 +250,7 @@ export default function ScenarioPipelineDebugEditor({
 
   const runStage = async (stageId, autoRun = false) => {
     if (stageId === "finalize" && !autoRun) {
-      const staleStages = collectFinalizeStaleStages(stageStatuses);
+      const staleStages = collectFinalizeStaleStages(stageStatuses, storyboardPackage);
       if (staleStages.length > 0) {
         setFinalizeWarning({ open: true, staleStages });
         return;

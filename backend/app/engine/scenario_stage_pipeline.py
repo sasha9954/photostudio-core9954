@@ -2584,10 +2584,29 @@ def _set_stage_status(package: dict[str, Any], stage_id: str, status: str, *, er
     stage_state["status"] = status
     stage_state["updated_at"] = _utc_iso()
     stage_state["error"] = str(error or "")
+    if status in {"running", "done"}:
+        for key in (
+            "invalidated",
+            "invalid",
+            "dirty",
+            "stale",
+            "staleReason",
+            "stale_reason",
+            "reason",
+            "statusReason",
+            "invalidateReason",
+            "invalidatedReason",
+        ):
+            stage_state.pop(key, None)
     if status in {"done", "error"}:
         stage_state["run_count"] = int(stage_state.get("run_count") or 0) + 1
     statuses[stage_id] = stage_state
     package["stage_statuses"] = statuses
+    if status == "done":
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        if str(diagnostics.get("stale_reason") or "").strip():
+            diagnostics["stale_reason"] = ""
+        package["diagnostics"] = diagnostics
 
 
 def _append_diag_event(package: dict[str, Any], message: str, *, stage_id: str = "") -> None:
@@ -2782,7 +2801,9 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
     audio_map = _safe_dict(package.get("audio_map"))
+    role_plan = _safe_dict(package.get("role_plan"))
     scene_plan = _safe_dict(package.get("scene_plan"))
+    scene_prompts = _safe_dict(package.get("scene_prompts"))
     final_video_prompt = _safe_dict(package.get("final_video_prompt"))
 
     plan_by_id = {
@@ -2802,6 +2823,28 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         for row in _safe_list(final_video_prompt.get("segments"))
         if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
     ]
+    prompts_by_id = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(scene_prompts.get("segments"))
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    }
+    if not prompts_by_id:
+        prompts_by_id = {
+            str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+            for row in _safe_list(scene_prompts.get("scenes"))
+            if str(_safe_dict(row).get("scene_id") or "").strip()
+        }
+    role_casting_by_id = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(role_plan.get("scene_casting"))
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    }
+    if not role_casting_by_id:
+        role_casting_by_id = {
+            str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+            for row in _safe_list(role_plan.get("scene_roles"))
+            if str(_safe_dict(row).get("scene_id") or "").strip()
+        }
 
     render_manifest: list[dict[str, Any]] = []
     compat_scenes: list[dict[str, Any]] = []
@@ -2809,6 +2852,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         segment_id = str(segment.get("segment_id") or segment.get("scene_id") or f"seg_{idx}").strip()
         scene_id = str(segment.get("scene_id") or segment_id).strip()
         plan_row = _safe_dict(plan_by_id.get(segment_id) or plan_by_id.get(scene_id))
+        prompts_row = _safe_dict(prompts_by_id.get(segment_id) or prompts_by_id.get(scene_id))
+        role_casting_row = _safe_dict(role_casting_by_id.get(segment_id) or role_casting_by_id.get(scene_id))
 
         route_payload = _safe_dict(segment.get("route_payload"))
         engine_hints = _safe_dict(segment.get("engine_hints"))
@@ -2854,6 +2899,9 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 "engine_hints": engine_hints,
                 "audio_behavior_hints": manifest_row["audio_behavior_hints"],
                 "prompt_source": manifest_row["prompt_source"],
+                "scene_plan": plan_row,
+                "scene_prompt": prompts_row,
+                "role_plan": role_casting_row,
                 "t0": t0,
                 "t1": t1,
                 "duration_sec": duration_sec,
@@ -2871,6 +2919,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         ),
         "story_summary": str(story_core.get("story_summary") or "").strip(),
         "director_summary": str(story_core.get("director_summary") or "").strip(),
+        "story_title": str(story_core.get("story_title") or input_pkg.get("title") or "").strip(),
     }
 
     integrity_input = {
@@ -2887,6 +2936,15 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         "render_manifest": render_manifest,
         "integrity_hash": integrity_hash,
         "scenes": compat_scenes,
+        "source_package_snapshot": {
+            "input": input_pkg,
+            "audio_map": audio_map,
+            "story_core": story_core,
+            "role_plan": role_plan,
+            "scene_plan": scene_plan,
+            "scene_prompts": scene_prompts,
+            "final_video_prompt": final_video_prompt,
+        },
     }
     final_storyboard = _attach_downstream_mode_metadata(final_storyboard, package)
     package["final_storyboard"] = final_storyboard
