@@ -2458,25 +2458,32 @@ def _build_prompts_v11_prompt(
         "You are PROMPTS stage only for GEMINI-FIRST pipeline.\n"
         "Return STRICT JSON only. No markdown, no prose outside JSON.\n"
         "Output schema:\n"
-        "{\"prompts_version\":\"1.1\",\"global_style_anchor\":\"\",\"segments\":[{\"segment_id\":\"\",\"visual_description\":{\"subject_description\":\"\",\"background_description\":\"\",\"negative_description\":\"\"},\"character_state\":{\"emotion\":\"\",\"pose_presence\":\"\",\"facial_expression\":\"\"},\"environment_details\":{\"lighting\":\"\",\"atmosphere\":\"\",\"key_elements\":\"\"},\"transition_description\":null,\"prompt_notes\":[\"\"]}]}\n"
+        "{\"prompts_version\":\"1.1\",\"global_style_anchor\":\"\",\"segments\":[{\"segment_id\":\"\",\"scene_id\":\"\",\"route\":\"i2v|ia2v|first_last\",\"photo_prompt\":\"\",\"video_prompt\":\"\",\"negative_prompt\":\"\",\"prompt_notes\":{\"emotion\":\"\",\"world_anchor\":\"\",\"notes\":[\"\"],\"transition\":{\"start_state\":\"\",\"end_state\":\"\",\"state_delta\":\"\"}},\"first_frame_prompt\":\"\",\"last_frame_prompt\":\"\"}]}\n"
         "Rules:\n"
         "- One segment row per segment_id from prompt_rows.\n"
+        "- prompts_version must be exactly \"1.1\".\n"
         "- Use SCENES as directing source, CORE as doctrine/meaning, ROLES as cast presence, AUDIO only as timing/emotional evidence.\n"
-        "- Do not mutate route, cast, timing, doctrine, segment ids.\n"
+        "- Do not mutate route, cast, timing, doctrine, segment ids, or scene ids.\n"
+        "- segment_id and scene_id must be present for every segment.\n"
+        "- route must be copied exactly from upstream prompt_rows row for that segment.\n"
         "- Preserve same identity and same world family unless explicitly changed upstream.\n"
         "- Keep all segments inside one coherent world family; segment variation must come from local pocket/zone, emotional beat, and framing emphasis, never from random new geography.\n"
         "- PROMPTS must stay engine-agnostic and useful for PHOTO and VIDEO preparation.\n"
+        "- photo_prompt = engine-agnostic still-image prompt for scene image generation.\n"
+        "- video_prompt = engine-agnostic motion-oriented scene description, still NOT final engine delivery contract.\n"
+        "- negative_prompt = descriptive continuity/drift guardrails only.\n"
+        "- prompt_notes must be an OBJECT (not list): emotion, world_anchor, notes[], and optional transition object.\n"
         "- Do not output engine params, renderer-specific phrasing, quality buzzwords, workflow tags, model tags, camera/fps/lens/seed specs.\n"
         "- Do not reconstruct final video prompt and do not output route-delivery payload.\n"
         "- Translate SCENES signal (scene_goal, narrative_function, subject_motion, camera_intent, pacing, energy_alignment, framing, subject_priority, layout, depth_strategy, audio_visual_sync) into natural descriptive writing rather than technical labels.\n"
-        "- Make subject_description stable and specific across segments (same woman identity and wardrobe continuity), while changing micro-performance and local action intent by segment.\n"
-        "- Make background_description and environment_details anchor the same club family while clearly differentiating local visual pockets (entrance shadow, reflective glass, bar threshold, face-light pivot, dance-floor edge anticipation, performance threshold, shadow retreat, afterglow observation).\n"
+        "- Make photo_prompt and video_prompt stable/specific across segments (same woman identity and wardrobe continuity), while changing micro-performance and local action intent by segment.\n"
+        "- Keep prompts within the same club-family world while differentiating local visual pockets (entrance shadow, reflective glass, bar threshold, face-light pivot, dance-floor edge anticipation, performance threshold, shadow retreat, afterglow observation).\n"
         "- Use prompt_rows.local_zone_hint as deterministic local pocket guidance and keep progression coherent; do not invent a new venue or cast.\n"
         "- Lighting/atmosphere should evolve per beat within one light family with pocket-level differences in density and contrast; avoid flat repeated prose.\n"
         "- Express segment-to-segment emotional curve with compact beat language (anticipation -> peak -> release -> lingering afterglow) while preserving continuity.\n"
         "- Use descriptive framing language (intimate/nearer/opener/layered/deeper) allowed; avoid camera-tech jargon.\n"
-        "- transition_description is mandatory only when route == first_last, otherwise set null.\n"
-        "- negative_description must be descriptive guardrails (identity/world/wardrobe drift prevention), not model-tech blacklist.\n\n"
+        "- For route == first_last: prompt_notes.transition.start_state and prompt_notes.transition.end_state are required; you may also duplicate them into first_frame_prompt and last_frame_prompt.\n"
+        "- For routes i2v/ia2v: prompt_notes.transition may be omitted or empty; first_frame_prompt and last_frame_prompt should be empty strings.\n\n"
         f"{feedback_block}"
         f"CONTEXT:\n{json.dumps(context, ensure_ascii=False)}"
     )
@@ -2594,31 +2601,13 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
         segment_id = str(row.get("segment_id") or "")
         route = str(row.get("route") or "i2v")
         seg = _safe_dict(by_segment.get(segment_id))
-        visual = _safe_dict(seg.get("visual_description"))
-        environment = _safe_dict(seg.get("environment_details"))
-        character = _safe_dict(seg.get("character_state"))
-        transition = _safe_dict(seg.get("transition_description"))
         prompt_notes = _safe_dict(seg.get("prompt_notes"))
         transition_notes = _safe_dict(prompt_notes.get("transition"))
-        photo_prompt = str(seg.get("photo_prompt") or "").strip() or "; ".join(
-            [
-                str(visual.get("subject_description") or "").strip(),
-                str(visual.get("background_description") or "").strip(),
-                str(environment.get("lighting") or "").strip(),
-                str(environment.get("atmosphere") or "").strip(),
-            ]
-        ).strip("; ")
-        video_prompt = str(seg.get("video_prompt") or "").strip() or "; ".join(
-            [
-                str(character.get("emotion") or "").strip(),
-                str(character.get("pose_presence") or "").strip(),
-                str(row.get("subject_motion") or "").strip(),
-                str(row.get("camera_intent") or "").strip(),
-            ]
-        ).strip("; ")
-        negative_prompt = str(seg.get("negative_prompt") or "").strip() or str(visual.get("negative_description") or "").strip()
-        start_prompt = str(seg.get("first_frame_prompt") or seg.get("start_image_prompt") or transition_notes.get("start_state") or transition.get("start_state_description") or "").strip()
-        end_prompt = str(seg.get("last_frame_prompt") or seg.get("end_image_prompt") or transition_notes.get("end_state") or transition.get("end_state_description") or "").strip()
+        photo_prompt = str(seg.get("photo_prompt") or "").strip()
+        video_prompt = str(seg.get("video_prompt") or "").strip()
+        negative_prompt = str(seg.get("negative_prompt") or "").strip()
+        start_prompt = str(seg.get("first_frame_prompt") or transition_notes.get("start_state") or "").strip()
+        end_prompt = str(seg.get("last_frame_prompt") or transition_notes.get("end_state") or "").strip()
         scenes.append(
             {
                 "scene_id": segment_id,
@@ -2632,7 +2621,7 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
                 "start_image_prompt": start_prompt if route == "first_last" else "",
                 "end_image_prompt": end_prompt if route == "first_last" else "",
                 "prompt_notes": {
-                    "emotion": str(prompt_notes.get("emotion") or character.get("emotion") or "").strip(),
+                    "emotion": str(prompt_notes.get("emotion") or "").strip(),
                     "world_anchor": str(prompts_v11.get("global_style_anchor") or "")[:300],
                     "legacy_bridge_from": "prompts_v1.1",
                 },
@@ -2716,8 +2705,11 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
         route = expected_route.get(segment_id, "i2v")
         if not str(row.get("scene_id") or "").strip():
             return "PROMPTS_SCHEMA_INVALID", f"missing_scene_id:{segment_id}", {}
-        if str(row.get("route") or "").strip() not in ALLOWED_ROUTES:
+        actual_route = str(row.get("route") or "").strip()
+        if actual_route not in ALLOWED_ROUTES:
             return "PROMPTS_SCHEMA_INVALID", f"invalid_route:{segment_id}", {}
+        if actual_route != route:
+            return "PROMPTS_SCHEMA_INVALID", f"route_mismatch:{segment_id}", {}
         if not str(row.get("photo_prompt") or "").strip() or not str(row.get("video_prompt") or "").strip():
             return "PROMPTS_SCHEMA_INVALID", f"missing_prompt_fields:{segment_id}", {}
 
