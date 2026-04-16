@@ -2161,6 +2161,12 @@ _WORLD_DRIFT_TOKENS = (
     "different world",
 )
 
+_CAMERA_TECH_LEAK_REGEXES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:dolly|gimbal|crane|rack focus|whip pan|orbit shot|steadicam|handheld rig)\b", re.IGNORECASE),
+    re.compile(r"\b(?:lens|focal length|iso|shutter|aperture)\b", re.IGNORECASE),
+    re.compile(r"\bcamera movement\b.{0,30}\b(?:fast|aggressive|jerky|rig|operator)\b", re.IGNORECASE),
+)
+
 
 def _scene_plan_storyboard(scene_plan: dict[str, Any]) -> list[dict[str, Any]]:
     storyboard = _safe_list(scene_plan.get("storyboard"))
@@ -2214,6 +2220,7 @@ def _build_prompt_rows(package: dict[str, Any]) -> tuple[list[dict[str, Any]], d
                 "layout": str(composition.get("layout") or scene_row.get("layout") or "").strip(),
                 "depth_strategy": str(composition.get("depth_strategy") or scene_row.get("depth_strategy") or "").strip(),
                 "audio_visual_sync": str(scene_row.get("audio_visual_sync") or "").strip(),
+                "local_zone_hint": str(scene_row.get("location_zone") or scene_row.get("zone_hint") or scene_row.get("location_hint") or "").strip(),
                 "transcript_slice": str(audio_row.get("transcript_slice") or "").strip(),
                 "intensity": str(audio_row.get("intensity") or "").strip(),
                 "rhythmic_anchor": str(audio_row.get("rhythmic_anchor") or "").strip(),
@@ -2267,6 +2274,14 @@ def _build_prompts_v11_prompt(
         package.get("connected_context_summary")
     )
     refs_inventory = _safe_dict(package.get("refs_inventory"))
+    active_model_id = _resolve_active_video_model_id(package)
+    capability_summary = build_capability_diagnostics_summary(
+        model_id=active_model_id,
+        route_type="scene_prompts_engine_agnostic_guard",
+        story_core_guard_applied=False,
+        scene_plan_guard_applied=False,
+        prompt_guard_applied=True,
+    )
     context = {
         "story_core": {
             "story_summary": str(story_core.get("story_summary") or ""),
@@ -2291,6 +2306,13 @@ def _build_prompts_v11_prompt(
         },
         "connected_context_summary": connected_context_summary,
         "refs_inventory_keys": list(refs_inventory.keys())[:40],
+        "capability_context": {
+            "active_video_model_capability_profile": active_model_id,
+            "active_route_capability_mode": "scene_prompts_engine_agnostic_guard",
+            "prompt_capability_guard_applied": True,
+            "capability_rules_source_version": get_capability_rules_source_version(),
+            "summary": capability_summary,
+        },
         "global_style_anchor": global_style_anchor,
         "prompt_rows": prompt_rows,
     }
@@ -2305,9 +2327,15 @@ def _build_prompts_v11_prompt(
         "- Use SCENES as directing source, CORE as doctrine/meaning, ROLES as cast presence, AUDIO only as timing/emotional evidence.\n"
         "- Do not mutate route, cast, timing, doctrine, segment ids.\n"
         "- Preserve same identity and same world family unless explicitly changed upstream.\n"
+        "- Keep all segments inside one coherent world family; segment variation must come from local pocket/zone, emotional beat, and framing emphasis, never from random new geography.\n"
         "- PROMPTS must stay engine-agnostic and useful for PHOTO and VIDEO preparation.\n"
         "- Do not output engine params, renderer-specific phrasing, quality buzzwords, workflow tags, model tags, camera/fps/lens/seed specs.\n"
         "- Do not reconstruct final video prompt and do not output route-delivery payload.\n"
+        "- Translate SCENES signal (scene_goal, narrative_function, subject_motion, camera_intent, pacing, energy_alignment, framing, subject_priority, layout, depth_strategy, audio_visual_sync) into natural descriptive writing rather than technical labels.\n"
+        "- Make subject_description stable and specific across segments (same woman identity and wardrobe continuity), while changing micro-performance and local action intent by segment.\n"
+        "- Make background_description and environment_details anchor the same club family while clearly differentiating local visual pockets (corridor, reflective glass edge, bar threshold, dance-floor edge, shadow retreat, afterglow pocket).\n"
+        "- Lighting/atmosphere should evolve per beat within one light family; avoid flat repeated prose.\n"
+        "- Use descriptive framing language (intimate/nearer/opener/layered/deeper) allowed; avoid camera-tech jargon.\n"
         "- transition_description is mandatory only when route == first_last, otherwise set null.\n"
         "- negative_description must be descriptive guardrails (identity/world/wardrobe drift prevention), not model-tech blacklist.\n\n"
         f"{feedback_block}"
@@ -2468,7 +2496,9 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
             return "PROMPTS_TECHNICAL_TAGGING", f"technical_tagging:{segment_id}", {}
         if any(token in blob for token in _QUALITY_BUZZWORDS):
             return "PROMPTS_QUALITY_BUZZWORDS", f"quality_buzzwords:{segment_id}", {}
-        if any(token in blob for token in _CAMERA_LEAK_PATTERNS):
+        if any(token in blob for token in _CAMERA_LEAK_PATTERNS) and any(regex.search(blob) for regex in _CAMERA_TECH_LEAK_REGEXES):
+            return "PROMPTS_CAMERA_LEAKAGE", f"camera_leakage:{segment_id}", {}
+        if any(regex.search(blob) for regex in _CAMERA_TECH_LEAK_REGEXES):
             return "PROMPTS_CAMERA_LEAKAGE", f"camera_leakage:{segment_id}", {}
         if any(token in blob for token in _ROUTE_DELIVERY_PATTERNS):
             return "PROMPTS_ROUTE_DELIVERY_LEAKAGE", f"route_delivery_leakage:{segment_id}", {}
@@ -2504,6 +2534,9 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
     prompt_rows, aux = _build_prompt_rows(package)
     story_core = _safe_dict(aux.get("story_core"))
     global_style_anchor = _build_global_style_anchor(story_core)
+    active_model_id = _resolve_active_video_model_id(package)
+    route_capability_mode = "scene_prompts_engine_agnostic_guard"
+    prompt_capability_guard_applied = bool(active_model_id)
     diagnostics: dict[str, Any] = {
         "scene_prompts_backend": "gemini",
         "scene_prompts_prompt_version": SCENE_PROMPTS_PROMPT_VERSION,
@@ -2520,6 +2553,9 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_transition_present_count": 0,
         "scene_prompts_error_code": "",
         "scene_prompts_validation_error": "",
+        "active_video_model_capability_profile": active_model_id,
+        "active_route_capability_mode": route_capability_mode,
+        "prompt_capability_guard_applied": prompt_capability_guard_applied,
     }
 
     empty_canonical = {"prompts_version": "1.1", "global_style_anchor": global_style_anchor, "segments": []}
