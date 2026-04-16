@@ -743,11 +743,25 @@ export function resolveScenarioWorkflowKey(scene = {}) {
 
 export function resolveScenarioFinalRouteKey(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
+  const renderManifestRow = source.render_manifest_row && typeof source.render_manifest_row === "object"
+    ? source.render_manifest_row
+    : (source.renderManifestRow && typeof source.renderManifestRow === "object" ? source.renderManifestRow : {});
+  const sceneVideoMetadata = source.video_metadata && typeof source.video_metadata === "object"
+    ? source.video_metadata
+    : (source.videoMetadata && typeof source.videoMetadata === "object" ? source.videoMetadata : {});
+  const manifestVideoMetadata = renderManifestRow.video_metadata && typeof renderManifestRow.video_metadata === "object"
+    ? renderManifestRow.video_metadata
+    : (renderManifestRow.videoMetadata && typeof renderManifestRow.videoMetadata === "object" ? renderManifestRow.videoMetadata : {});
   const routeCandidates = [
     source.finalRoute,
     source.sourceRoute,
     source.source_route,
     source.route,
+    renderManifestRow.route,
+    sceneVideoMetadata.route_type,
+    sceneVideoMetadata.routeType,
+    manifestVideoMetadata.route_type,
+    manifestVideoMetadata.routeType,
     source.resolvedWorkflowKey,
     source.resolved_workflow_key,
     source.plannedVideoGenerationRoute,
@@ -782,8 +796,20 @@ function normalizeScenarioRouteToCanonical(value = "") {
 
 export function resolveScenarioSceneVideoProfile(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
+  const renderManifestRow = source.render_manifest_row && typeof source.render_manifest_row === "object"
+    ? source.render_manifest_row
+    : (source.renderManifestRow && typeof source.renderManifestRow === "object" ? source.renderManifestRow : {});
+  const sceneVideoMetadata = source.video_metadata && typeof source.video_metadata === "object"
+    ? source.video_metadata
+    : (source.videoMetadata && typeof source.videoMetadata === "object" ? source.videoMetadata : {});
+  const manifestVideoMetadata = renderManifestRow.video_metadata && typeof renderManifestRow.video_metadata === "object"
+    ? renderManifestRow.video_metadata
+    : (renderManifestRow.videoMetadata && typeof renderManifestRow.videoMetadata === "object" ? renderManifestRow.videoMetadata : {});
   const candidates = [
     ["route", source.route],
+    ["render_manifest_row.route", renderManifestRow.route],
+    ["video_metadata.route_type", sceneVideoMetadata.route_type ?? sceneVideoMetadata.routeType],
+    ["render_manifest_row.video_metadata.route_type", manifestVideoMetadata.route_type ?? manifestVideoMetadata.routeType],
     ["finalRoute", source.finalRoute],
     ["resolvedWorkflowKey", source.resolvedWorkflowKey ?? source.resolved_workflow_key],
     ["videoGenerationRoute", source.videoGenerationRoute ?? source.video_generation_route],
@@ -1709,6 +1735,17 @@ export function normalizeScenarioStoryboardPackage({
   const inputScenesFromFinalStoryboard = Array.isArray(storyboardOut?.final_storyboard?.scenes)
     ? storyboardOut.final_storyboard.scenes
     : [];
+  const finalStoryboardRenderManifestRows = Array.isArray(storyboardOut?.final_storyboard?.render_manifest)
+    ? storyboardOut.final_storyboard.render_manifest
+    : [];
+  const finalStoryboardManifestById = finalStoryboardRenderManifestRows.reduce((acc, row) => {
+    const safeRow = row && typeof row === "object" ? row : {};
+    const segmentId = normalizeText(safeRow?.segment_id);
+    const sceneId = normalizeText(safeRow?.scene_id);
+    if (segmentId) acc[`segment:${segmentId}`] = safeRow;
+    if (sceneId) acc[`scene:${sceneId}`] = safeRow;
+    return acc;
+  }, {});
   const inputScenesFromDirectorOutput = Array.isArray(directorOutput?.scenes)
     ? directorOutput.scenes
     : [];
@@ -1726,7 +1763,34 @@ export function normalizeScenarioStoryboardPackage({
       : inputScenesFromStoryboardOut.length
         ? "storyboardOut.scenes"
         : "empty";
-  const canonicalScenesRaw = inputSceneCandidates;
+  const canonicalScenesRaw = inputSceneCandidates.map((scene) => {
+    const safeScene = scene && typeof scene === "object" ? scene : {};
+    const sceneId = normalizeText(safeScene?.scene_id ?? safeScene?.sceneId);
+    const segmentId = normalizeText(safeScene?.segment_id ?? safeScene?.segmentId);
+    const manifestRow = finalStoryboardManifestById[`segment:${segmentId}`]
+      || finalStoryboardManifestById[`scene:${sceneId}`]
+      || null;
+    if (!manifestRow) return safeScene;
+    return {
+      ...manifestRow,
+      ...safeScene,
+      render_manifest_row: manifestRow,
+      renderManifestRow: manifestRow,
+      route: normalizeText(safeScene?.route) || normalizeText(manifestRow?.route) || normalizeText(safeScene?.video_metadata?.route_type) || normalizeText(manifestRow?.video_metadata?.route_type),
+      video_metadata: (safeScene?.video_metadata && typeof safeScene.video_metadata === "object")
+        ? safeScene.video_metadata
+        : (manifestRow?.video_metadata && typeof manifestRow.video_metadata === "object" ? manifestRow.video_metadata : {}),
+      route_payload: (safeScene?.route_payload && typeof safeScene.route_payload === "object")
+        ? safeScene.route_payload
+        : (manifestRow?.route_payload && typeof manifestRow.route_payload === "object" ? manifestRow.route_payload : {}),
+      engine_hints: (safeScene?.engine_hints && typeof safeScene.engine_hints === "object")
+        ? safeScene.engine_hints
+        : (manifestRow?.engine_hints && typeof manifestRow.engine_hints === "object" ? manifestRow.engine_hints : {}),
+      linked_assets: (safeScene?.linked_assets && typeof safeScene.linked_assets === "object")
+        ? safeScene.linked_assets
+        : (manifestRow?.linked_assets && typeof manifestRow.linked_assets === "object" ? manifestRow.linked_assets : {}),
+    };
+  });
   const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
   const globalCameraProfile = buildGlobalCameraProfile(storyboardOut || {}, directorOutput || {});
   const format = resolveFormatAlias(

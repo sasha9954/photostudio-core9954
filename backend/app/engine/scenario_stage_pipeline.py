@@ -2848,6 +2848,84 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     render_manifest: list[dict[str, Any]] = []
     compat_scenes: list[dict[str, Any]] = []
+    project_audio_url = str(input_pkg.get("audio_url") or "").strip()
+
+    def _resolve_route_for_finalize_row(segment_row: dict[str, Any], plan_row_data: dict[str, Any], metadata_row: dict[str, Any]) -> str:
+        route_candidates = [
+            segment_row.get("route"),
+            segment_row.get("video_generation_route"),
+            segment_row.get("planned_video_generation_route"),
+            segment_row.get("resolved_workflow_key"),
+            plan_row_data.get("route"),
+            plan_row_data.get("video_generation_route"),
+            plan_row_data.get("planned_video_generation_route"),
+            metadata_row.get("route_type"),
+        ]
+        for candidate in route_candidates:
+            normalized = str(candidate or "").strip().lower()
+            if not normalized:
+                continue
+            if normalized in {"first_last", "first-last", "f_l"}:
+                return "first_last"
+            if normalized in {"ia2v", "lip_sync", "lip_sync_music", "avatar_lipsync"}:
+                return "ia2v"
+            if normalized in {"i2v", "image_video", "image_to_video", "standard_video"}:
+                return "i2v"
+            return normalized
+        return "i2v"
+
+    def _build_linked_assets(
+        segment_row: dict[str, Any],
+        plan_row_data: dict[str, Any],
+        prompts_row_data: dict[str, Any],
+        role_row_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        refs_by_role = _safe_dict(input_pkg.get("refs_by_role"))
+        selected_refs = _safe_dict(input_pkg.get("selected_refs"))
+        connected_refs_by_role = _safe_dict(_safe_dict(input_pkg.get("connected_context_summary")).get("refsByRole"))
+        role_keys = [str(role_row_data.get("primary_role") or "").strip()]
+        role_keys.extend(str(item).strip() for item in _safe_list(role_row_data.get("secondary_roles")) if str(item).strip())
+        role_keys = [role for role in role_keys if role]
+        character_refs: dict[str, list[str]] = {}
+        for role in role_keys:
+            values = []
+            values.extend(str(item).strip() for item in _safe_list(refs_by_role.get(role)) if str(item).strip())
+            values.extend(str(item).strip() for item in _safe_list(connected_refs_by_role.get(role)) if str(item).strip())
+            deduped = []
+            seen: set[str] = set()
+            for item in values:
+                if item in seen:
+                    continue
+                seen.add(item)
+                deduped.append(item)
+            if deduped:
+                character_refs[role] = deduped
+
+        source_image_refs_candidates = [
+            segment_row.get("source_image_refs"),
+            plan_row_data.get("source_image_refs"),
+            prompts_row_data.get("source_image_refs"),
+            plan_row_data.get("image_refs"),
+            prompts_row_data.get("image_refs"),
+            selected_refs.get("props"),
+        ]
+        source_image_refs: list[str] = []
+        for candidate in source_image_refs_candidates:
+            for item in _safe_list(candidate):
+                value = str(item or "").strip()
+                if value and value not in source_image_refs:
+                    source_image_refs.append(value)
+
+        refs_payload = _safe_dict(segment_row.get("refs"))
+        return {
+            "audio_url": project_audio_url or None,
+            "character_refs": character_refs,
+            "refs": refs_payload if refs_payload else {},
+            "source_image_refs": source_image_refs,
+            "start_frame_asset": segment_row.get("start_frame_asset"),
+            "end_frame_asset": segment_row.get("end_frame_asset"),
+        }
+
     for idx, segment in enumerate(final_segments, start=1):
         segment_id = str(segment.get("segment_id") or segment.get("scene_id") or f"seg_{idx}").strip()
         scene_id = str(segment.get("scene_id") or segment_id).strip()
@@ -2858,6 +2936,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         route_payload = _safe_dict(segment.get("route_payload"))
         engine_hints = _safe_dict(segment.get("engine_hints"))
         video_metadata = _safe_dict(segment.get("video_metadata"))
+        route = _resolve_route_for_finalize_row(segment, plan_row, video_metadata)
+        linked_assets = _build_linked_assets(segment, plan_row, prompts_row, role_casting_row)
 
         t0 = _to_float(plan_row.get("t0"), 0.0)
         t1 = _to_float(plan_row.get("t1"), t0)
@@ -2873,6 +2953,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 "t1": t1,
                 "duration_sec": duration_sec,
             },
+            "route": route,
             "route_payload": {
                 "positive_prompt": str(route_payload.get("positive_prompt") or "").strip(),
                 "negative_prompt": str(route_payload.get("negative_prompt") or "").strip(),
@@ -2881,6 +2962,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             },
             "engine_hints": engine_hints,
             "video_metadata": video_metadata,
+            "linked_assets": linked_assets,
             "audio_behavior_hints": str(segment.get("audio_behavior_hints") or "").strip(),
             "prompt_source": str(segment.get("prompt_source") or "").strip(),
         }
@@ -2890,13 +2972,14 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             {
                 "scene_id": scene_id,
                 "segment_id": segment_id,
-                "route": str(video_metadata.get("route_type") or "").strip(),
+                "route": route,
                 "video_prompt": manifest_row["route_payload"]["positive_prompt"],
                 "negative_video_prompt": manifest_row["route_payload"]["negative_prompt"],
                 "first_frame_prompt": manifest_row["route_payload"].get("first_frame_prompt"),
                 "last_frame_prompt": manifest_row["route_payload"].get("last_frame_prompt"),
                 "video_metadata": video_metadata,
                 "engine_hints": engine_hints,
+                "linked_assets": linked_assets,
                 "audio_behavior_hints": manifest_row["audio_behavior_hints"],
                 "prompt_source": manifest_row["prompt_source"],
                 "scene_plan": plan_row,
