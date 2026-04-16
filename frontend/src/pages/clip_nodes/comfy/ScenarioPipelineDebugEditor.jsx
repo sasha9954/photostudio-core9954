@@ -6,6 +6,7 @@ const STAGE_BUTTONS = [
   { id: "role_plan", label: "ROLES" },
   { id: "scene_plan", label: "SCENES" },
   { id: "scene_prompts", label: "PROMPTS" },
+  { id: "final_video_prompt", label: "FINAL VIDEO PROMPT" },
   { id: "finalize", label: "FINAL" },
 ];
 
@@ -15,6 +16,7 @@ const TABS = [
   { id: "role_plan", label: "ROLE PLAN" },
   { id: "scene_plan", label: "SCENE PLAN" },
   { id: "scene_prompts", label: "PROMPTS" },
+  { id: "final_video_prompt", label: "FINAL VIDEO PROMPT" },
   { id: "final", label: "FINAL" },
   { id: "diagnostics", label: "DIAGNOSTICS" },
   { id: "raw", label: "RAW JSON" },
@@ -26,6 +28,7 @@ const TAB_STAGE_ID = {
   role_plan: "role_plan",
   scene_plan: "scene_plan",
   scene_prompts: "scene_prompts",
+  final_video_prompt: "final_video_prompt",
   final: "finalize",
 };
 
@@ -35,6 +38,7 @@ const FINALIZE_UPSTREAM_STAGES = [
   "role_plan",
   "scene_plan",
   "scene_prompts",
+  "final_video_prompt",
 ];
 
 function collectFinalizeStaleStages(stageStatuses = {}) {
@@ -219,6 +223,8 @@ export default function ScenarioPipelineDebugEditor({
   const scenePlan = resolvedStoryboardPackage?.scene_plan || {};
   const prompts = resolvedStoryboardPackage?.scene_prompts || {};
   const promptScenes = Array.isArray(prompts?.scenes) ? prompts.scenes : [];
+  const finalVideoPrompt = resolvedStoryboardPackage?.final_video_prompt || {};
+  const finalVideoPromptScenes = Array.isArray(finalVideoPrompt?.scenes) ? finalVideoPrompt.scenes : [];
   const finalStoryboard = resolvedStoryboardPackage?.final_storyboard || {};
   const allDiagnostics = Object.keys(diagnostics || {}).length ? diagnostics : (resolvedStoryboardPackage?.diagnostics || {});
   const directorMode = String(
@@ -233,6 +239,7 @@ export default function ScenarioPipelineDebugEditor({
   const rolePlanMeta = resolveInheritedModeMetadata({ stageOutput: rolePlan, storyboardPackage: resolvedStoryboardPackage, contextSummary });
   const scenePlanMeta = resolveInheritedModeMetadata({ stageOutput: scenePlan, storyboardPackage: resolvedStoryboardPackage, contextSummary });
   const promptsMeta = resolveInheritedModeMetadata({ stageOutput: prompts, storyboardPackage: resolvedStoryboardPackage, contextSummary });
+  const finalVideoPromptMeta = resolveInheritedModeMetadata({ stageOutput: finalVideoPrompt, storyboardPackage: resolvedStoryboardPackage, contextSummary });
   const finalMeta = resolveInheritedModeMetadata({ stageOutput: finalStoryboard, storyboardPackage: resolvedStoryboardPackage, contextSummary });
 
   const audioSections = Array.isArray(audioMap?.sections) ? audioMap.sections : [];
@@ -441,6 +448,30 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(promptsMeta?.story_truth_source || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(promptsMeta?.audio_truth_scope || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>SCENE PROMPTS</span><strong>scene_prompts empty</strong></div>
+      </div>
+    ),
+    final_video_prompt: finalVideoPromptScenes.length ? (
+      <div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(finalVideoPromptMeta?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(finalVideoPromptMeta?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(finalVideoPromptMeta?.audio_truth_scope || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>scene_count</span><strong>{finalVideoPromptScenes.length}</strong></div>
+        <pre className="clipSB_pre">{toJson(finalVideoPromptScenes.map((row) => ({
+          scene_id: row?.scene_id,
+          route: row?.route,
+          video_prompt: row?.video_prompt,
+          negative_prompt: row?.negative_prompt,
+          transition_action_prompt: row?.transition_action_prompt,
+          cinematic_transition_prompt: row?.cinematic_transition_prompt,
+        })))}</pre>
+        <pre className="clipSB_pre">{toJson(finalVideoPrompt)}</pre>
+      </div>
+    ) : (
+      <div>
+        <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(finalVideoPromptMeta?.director_mode || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(finalVideoPromptMeta?.story_truth_source || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(finalVideoPromptMeta?.audio_truth_scope || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>FINAL VIDEO PROMPT</span><strong>final_video_prompt empty</strong></div>
       </div>
     ),
     final: (
