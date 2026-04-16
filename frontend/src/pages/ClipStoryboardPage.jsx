@@ -389,12 +389,27 @@ function resolveScenarioSceneVideoMetadata(scene = {}) {
   const metadata = scene?.video_metadata && typeof scene.video_metadata === "object"
     ? scene.video_metadata
     : (scene?.videoMetadata && typeof scene.videoMetadata === "object" ? scene.videoMetadata : {});
+  const renderManifestRow = scene?.render_manifest_row && typeof scene.render_manifest_row === "object"
+    ? scene.render_manifest_row
+    : (scene?.renderManifestRow && typeof scene.renderManifestRow === "object" ? scene.renderManifestRow : {});
+  const renderManifestMetadata = renderManifestRow?.video_metadata && typeof renderManifestRow.video_metadata === "object"
+    ? renderManifestRow.video_metadata
+    : (renderManifestRow?.videoMetadata && typeof renderManifestRow.videoMetadata === "object" ? renderManifestRow.videoMetadata : {});
+  const routeType = String(
+    scene?.route
+    ?? renderManifestRow?.route
+    ?? metadata?.route_type
+    ?? metadata?.routeType
+    ?? renderManifestMetadata?.route_type
+    ?? renderManifestMetadata?.routeType
+    ?? ""
+  ).trim();
   return {
     positivePrompt: String(routePayload?.positive_prompt ?? routePayload?.positivePrompt ?? "").trim(),
     negativePrompt: String(routePayload?.negative_prompt ?? routePayload?.negativePrompt ?? "").trim(),
     firstFramePrompt: String(routePayload?.first_frame_prompt ?? routePayload?.firstFramePrompt ?? "").trim(),
     lastFramePrompt: String(routePayload?.last_frame_prompt ?? routePayload?.lastFramePrompt ?? "").trim(),
-    routeType: String(metadata?.route_type ?? metadata?.routeType ?? "").trim(),
+    routeType,
     promptSource: String(scene?.prompt_source ?? scene?.promptSource ?? "").trim(),
     routePayload,
     engineHints,
