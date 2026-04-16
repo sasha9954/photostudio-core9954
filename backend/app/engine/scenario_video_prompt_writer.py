@@ -4,6 +4,10 @@ import json
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
+from app.engine.prompt_polish_policies import (
+    build_ia2v_readability_clauses,
+    clean_negative_prompt_artifacts,
+)
 from app.engine.route_baseline_bank import ROUTE_BASELINE_BANK
 from app.engine.scenario_story_guidance import story_guidance_to_notes_list
 
@@ -17,11 +21,6 @@ _ALLOWED_AUGMENTATION = {"low", "medium", "high"}
 _ALLOWED_TRANSITION_KIND = {"none", "controlled", "bridge", "morph_guarded"}
 _ALLOWED_AUDIO_SYNC = {"none", "beat_sensitive", "phrase_sensitive"}
 _ALLOWED_FRAME_STRATEGY = {"single_init", "start_end"}
-_TARGET_IA2V_READABILITY_FINAL: dict[str, str] = {
-    "seg_03": "Waist-up performance readability in the nightclub bar zone, face and upper body clearly visible, unobstructed mouth and jaw, subtle controlled shoulder/chest/neck/head rhythm, performer remains visual center.",
-    "seg_06": "Strongest climax-performance readability: chest-up expressive frame, unwavering direct gaze, unobstructed mouth and jaw, light rhythmic micro-movements only, no wide choreography, no crowd occlusion crossing the performer.",
-}
-_SEGMENT_05_NEGATIVE_REWRITE = "avoid energetic dancing, bright stage lights, crowded dance floor, sci-fi elements"
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -70,16 +69,6 @@ def _normalize_route(route_value: Any) -> str:
     if route not in _ALLOWED_ROUTES:
         route = "i2v"
     return route
-
-
-def _clean_target_segment_negative_artifact(text: str) -> str:
-    clean = " ".join(str(text or "").split()).strip(" ,;")
-    if not clean:
-        return clean
-    normalized = clean.lower()
-    if "fast the perspective shifts gently with the moment" in normalized or "sci-fi elements" in normalized:
-        return _SEGMENT_05_NEGATIVE_REWRITE
-    return clean
 
 
 def _engine_hints_defaults(route: str) -> dict[str, Any]:
@@ -322,13 +311,25 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     fallback_prompt_row = _safe_dict(fallback_row.get("prompt_row"))
     positive_prompt = str(route_payload.get("positive_prompt") or fallback_prompt_row.get("positive_video_prompt") or fallback_prompt_row.get("video_prompt") or "").strip()
     negative_prompt = str(route_payload.get("negative_prompt") or fallback_prompt_row.get("negative_video_prompt") or fallback_prompt_row.get("negative_prompt") or "").strip()
-    segment_key = segment_id.lower()
-    if route == "ia2v" and segment_key in _TARGET_IA2V_READABILITY_FINAL:
-        clause = _TARGET_IA2V_READABILITY_FINAL[segment_key]
-        if clause.lower() not in positive_prompt.lower():
-            positive_prompt = f"{positive_prompt.rstrip('. ')}. {clause}".strip()
-    if segment_key == "seg_05":
-        negative_prompt = _clean_target_segment_negative_artifact(negative_prompt)
+    if route == "ia2v":
+        plan_row = _safe_dict(fallback_row.get("plan_row"))
+        role_row = _safe_dict(fallback_row.get("role_row"))
+        semantic_context = " ".join(
+            [
+                str(plan_row.get("narrative_function") or plan_row.get("scene_function") or ""),
+                str(plan_row.get("scene_goal") or ""),
+                str(plan_row.get("emotional_intent") or ""),
+                str(plan_row.get("subject_priority") or ""),
+                str(plan_row.get("framing") or ""),
+                str(role_row.get("primary_role") or ""),
+            ]
+        )
+        clauses = build_ia2v_readability_clauses(existing_text=positive_prompt, semantic_context=semantic_context)
+        for clause in clauses:
+            if clause.lower() in positive_prompt.lower():
+                continue
+            positive_prompt = f"{positive_prompt.rstrip('. ')}. {clause}".strip() if positive_prompt else clause
+    negative_prompt = clean_negative_prompt_artifacts(negative_prompt)
 
     first_frame_raw = route_payload.get("first_frame_prompt")
     last_frame_raw = route_payload.get("last_frame_prompt")
