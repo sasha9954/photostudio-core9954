@@ -203,6 +203,36 @@ function getFramePromptPlaceholder(kind = "start") {
     : "Опишите стартовый визуальный state (как выглядит первый кадр).";
 }
 
+function resolveSceneImagePromptForDisplay(scene = {}) {
+  const readFirstNonEmpty = (candidates = []) => {
+    for (const value of candidates) {
+      const text = String(value || "").trim();
+      if (text) return text;
+    }
+    return "";
+  };
+
+  const finalVideoSegmentPrompt = readFirstNonEmpty([
+    scene?.finalVideoPromptSegmentPrompt,
+    scene?.final_video_prompt_segment_prompt,
+    scene?.finalVideoSegmentPrompt,
+    scene?.final_video_segment_prompt,
+    scene?.segmentPrompt,
+    scene?.segment_prompt,
+    scene?.finalVideoPrompt?.segmentPrompt,
+    scene?.final_video_prompt?.segment_prompt,
+  ]);
+
+  return readFirstNonEmpty([
+    scene?.image_prompt,
+    scene?.scene_prompt,
+    finalVideoSegmentPrompt,
+    scene?.imagePromptEn,
+    scene?.videoPrompt,
+    scene?.imagePromptRu,
+  ]);
+}
+
 
 
 function isShortMusicIntroPhrase(phrase = {}) {
@@ -842,6 +872,8 @@ export default function ScenarioStoryboardEditor({
   const isBgAudioSelected = activeSelectionType === "bg_audio";
   const sceneNeedsTwoFrames = isFirstLastScene(selectedScene);
   const isFirstLastVideoMode = sceneNeedsTwoFrames;
+  const imagePromptRuValue = String(selectedScene?.imagePromptRu || "").trim();
+  const resolvedImagePromptForDisplay = resolveSceneImagePromptForDisplay(selectedScene || {});
   const derivedFramePrompts = deriveFirstLastFramePrompts(selectedScene || {});
   const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || derivedFramePrompts.start || "");
   const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
@@ -1469,13 +1501,26 @@ export default function ScenarioStoryboardEditor({
                     <>
                       <div className="clipSB_scenarioEditorImageBody clipSB_scenarioEditorImageBodyMain">
                         <div className="clipSB_scenarioEditorImageLeft clipSB_scenarioEditorImageLeftMain">
+                          <div className="clipSB_hint">Resolved image prompt (generation source)</div>
                           <textarea
                             className="clipSB_textarea clipSB_scenarioEditorImagePromptTextarea"
                             rows={6}
-                            value={String(selectedScene?.imagePromptRu || "")}
-                            onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptRu: event.target.value })}
-                            placeholder="imagePromptRu"
+                            value={resolvedImagePromptForDisplay}
+                            readOnly
+                            placeholder="resolved image prompt"
                           />
+                          {imagePromptRuValue ? (
+                            <details className="clipSB_scenarioEditorImageEn" style={{ marginTop: 8 }}>
+                              <summary>Промт изображения RU</summary>
+                              <textarea
+                                className="clipSB_textarea"
+                                rows={2}
+                                value={imagePromptRuValue}
+                                onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptRu: event.target.value })}
+                                placeholder="imagePromptRu"
+                              />
+                            </details>
+                          ) : null}
                           <details className="clipSB_scenarioEditorImageEn">
                             <summary>EN</summary>
                             <textarea
