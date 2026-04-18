@@ -12152,7 +12152,12 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
 
     const sceneId = String(comfySelectedScene?.sceneId || "").trim();
     if (!sceneId) {
-      blockScenarioVideoGeneration("scene_id_required", "Не удалось определить sceneId для video generation.");
+      const msg = "Не удалось определить sceneId для audio slice.";
+      updateComfyScene(comfySafeIndex, {
+        audioSliceStatus: "error",
+        audioSliceError: msg,
+        audioSliceLoadError: msg,
+      });
       return;
     }
     const startSec = Number(comfySelectedScene?.startSec ?? comfySelectedScene?.start ?? comfySelectedScene?.t0 ?? 0);
