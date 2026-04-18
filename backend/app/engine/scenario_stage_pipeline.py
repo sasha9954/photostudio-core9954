@@ -23,7 +23,7 @@ from app.core.static_paths import ASSETS_DIR
 from app.engine.audio_analyzer import analyze_audio
 from app.engine.audio_scene_segmenter import build_gemini_audio_segmentation
 from app.engine.scenario_audio_map_v11 import validate_audio_map_v11
-from app.engine.gemini_rest import post_generate_content
+from app.engine.gemini_rest import post_generate_content, resolve_gemini_api_key
 from app.engine.scenario_role_planner import ROLE_PLAN_PROMPT_VERSION, build_gemini_role_plan
 from app.engine.scenario_scene_planner import SCENE_PLAN_PROMPT_VERSION, build_gemini_scene_plan
 from app.engine.scenario_scene_prompter import SCENE_PROMPTS_PROMPT_VERSION, build_gemini_scene_prompts
@@ -54,6 +54,27 @@ CORE_TIMING_DRIFT = "CORE_TIMING_DRIFT"
 CORE_ROLE_SPAWNING = "CORE_ROLE_SPAWNING"
 CORE_TECHNICAL_SPAWNING = "CORE_TECHNICAL_SPAWNING"
 CORE_IDENTITY_CONFLICT = "CORE_IDENTITY_CONFLICT"
+
+
+def _resolve_stage_gemini_api_key(
+    package: dict[str, Any],
+    *,
+    stage_id: str,
+) -> str:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    key_resolution = resolve_gemini_api_key()
+    diagnostics["gemini_api_key_source"] = str(key_resolution.get("source") or "missing")
+    diagnostics["gemini_api_key_valid"] = bool(key_resolution.get("valid"))
+    diagnostics["gemini_api_key_error"] = str(key_resolution.get("error") or "")
+    package["diagnostics"] = diagnostics
+    if not bool(key_resolution.get("valid")):
+        _append_diag_event(
+            package,
+            f"{stage_id} invalid gemini key: {diagnostics['gemini_api_key_error'] or 'empty'}",
+            stage_id=stage_id,
+        )
+        raise RuntimeError(f"GEMINI_API_KEY_INVALID:{diagnostics['gemini_api_key_error'] or 'empty'}")
+    return str(key_resolution.get("api_key") or "").strip()
 
 STAGE_IDS = (
     "input_package",
@@ -3131,7 +3152,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "story_core audio-informed build requested", stage_id="story_core")
     try:
-        api_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+        api_key = _resolve_stage_gemini_api_key(package, stage_id="story_core")
         inline_ref_parts, inline_ref_diag = _build_story_core_inline_ref_parts(
             input_pkg=input_pkg,
             refs_inventory=refs_inventory,
@@ -5373,7 +5394,11 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["word_timestamp_count"] = 0
     diagnostics["phrase_unit_count"] = 0
     diagnostics["scene_candidate_count"] = 0
+    diagnostics["gemini_api_key_source"] = "missing"
+    diagnostics["gemini_api_key_valid"] = False
+    diagnostics["gemini_api_key_error"] = "empty"
     package["diagnostics"] = diagnostics
+    gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="audio_map")
 
     if duration_sec <= 0:
         raise RuntimeError("AUDIO_TIMING_VIOLATION:audio_duration_missing_or_invalid")
@@ -5420,7 +5445,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     try:
         for attempt in range(2):
             gemini_result = build_gemini_audio_segmentation(
-                api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+                api_key=gemini_api_key,
                 audio_path=analysis_path,
                 audio_url=audio_url,
                 duration_sec=duration_sec,
@@ -5622,6 +5647,9 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_coverage_seen_segment_ids"] = []
     diagnostics["role_plan_coverage_missing_segment_ids"] = []
     diagnostics["role_plan_coverage_extra_segment_ids"] = []
+    diagnostics["gemini_api_key_source"] = "missing"
+    diagnostics["gemini_api_key_valid"] = False
+    diagnostics["gemini_api_key_error"] = "empty"
     package["diagnostics"] = diagnostics
     previous_role_plan = _safe_dict(package.get("role_plan"))
     previous_role_plan_valid = _has_valid_role_plan_payload(previous_role_plan)
@@ -5637,8 +5665,9 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         _append_diag_event(package, f"role_plan skipped for content_type={content_type}", stage_id="role_plan")
         return package
 
+    gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="role_plan")
     result = build_gemini_role_plan(
-        api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+        api_key=gemini_api_key,
         package=package,
     )
     role_plan = _safe_dict(result.get("role_plan"))
@@ -5784,11 +5813,15 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_timed_out"] = False
     diagnostics["scene_plan_timeout_retry_attempted"] = False
     diagnostics["scene_plan_response_was_empty_after_timeout"] = False
+    diagnostics["gemini_api_key_source"] = "missing"
+    diagnostics["gemini_api_key_valid"] = False
+    diagnostics["gemini_api_key_error"] = "empty"
     package["diagnostics"] = diagnostics
+    gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="scene_plan")
     hard_fail_error = ""
 
     result = build_gemini_scene_plan(
-        api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+        api_key=gemini_api_key,
         package=package,
     )
     initial_validation_error = str(result.get("validation_error") or "").strip()
@@ -5797,7 +5830,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         validation_feedback = f"Previous output invalid: validation_error={initial_validation_error}; error_code={validation_error_code or 'SCENES_SCHEMA_INVALID'}"
         _append_diag_event(package, f"scene_plan validation failed, retrying once: {validation_feedback}", stage_id="scene_plan")
         retry_result = build_gemini_scene_plan(
-            api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+            api_key=gemini_api_key,
             package=package,
             validation_feedback=validation_feedback,
         )
@@ -5822,7 +5855,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             diagnostics["scene_plan_route_budget_feedback"] = route_budget_feedback
             _append_diag_event(package, f"scene_plan route budget validation failed, retrying once: {route_budget_feedback}", stage_id="scene_plan")
             retry_result = build_gemini_scene_plan(
-                api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+                api_key=gemini_api_key,
                 package=package,
                 validation_feedback=route_budget_feedback,
             )
@@ -5995,13 +6028,17 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_upstream_signature"] = current_signature
     previous_scene_prompts = _safe_dict(package.get("scene_prompts"))
     previous_scene_prompts_valid = _has_valid_scene_prompts_payload(previous_scene_prompts)
+    diagnostics["gemini_api_key_source"] = "missing"
+    diagnostics["gemini_api_key_valid"] = False
+    diagnostics["gemini_api_key_error"] = "empty"
     package["diagnostics"] = diagnostics
     package["scene_prompts"] = {"scenes": []}
+    gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="scene_prompts")
 
     hard_fail_error = ""
 
     result = build_gemini_scene_prompts(
-        api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+        api_key=gemini_api_key,
         package=package,
     )
     initial_validation_error = str(result.get("validation_error") or "").strip()
@@ -6017,7 +6054,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         _append_diag_event(package, f"scene_prompts validation failed, retrying once: {validation_feedback}", stage_id="scene_prompts")
         retry_result = build_gemini_scene_prompts(
-            api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+            api_key=gemini_api_key,
             package=package,
             validation_feedback=validation_feedback,
         )
@@ -6176,11 +6213,15 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["final_video_prompt_timed_out"] = False
     diagnostics["final_video_prompt_timeout_retry_attempted"] = False
     diagnostics["final_video_prompt_response_was_empty_after_timeout"] = False
+    diagnostics["gemini_api_key_source"] = "missing"
+    diagnostics["gemini_api_key_valid"] = False
+    diagnostics["gemini_api_key_error"] = "empty"
     package["diagnostics"] = diagnostics
+    gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="final_video_prompt")
 
     previous_payload = _safe_dict(package.get("final_video_prompt"))
     result = generate_ltx_video_prompt_metadata(
-        api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+        api_key=gemini_api_key,
         package=package,
     )
 

@@ -1,5 +1,52 @@
 import json
+import os
 from typing import Any, Dict, Optional
+
+from app.core.config import settings
+
+
+GEMINI_KEY_PLACEHOLDERS = {
+    "ТВОЙ_КЛЮЧ",
+    "YOUR_KEY",
+    "PASTE_KEY_HERE",
+    "AIza...",
+}
+
+
+def _classify_gemini_api_key(api_key: str) -> tuple[bool, str]:
+    raw = str(api_key or "").strip()
+    if not raw:
+        return False, "empty"
+    if raw in GEMINI_KEY_PLACEHOLDERS:
+        return False, "placeholder"
+    try:
+        raw.encode("ascii")
+    except UnicodeEncodeError:
+        return False, "non_ascii"
+    return True, ""
+
+
+def resolve_gemini_api_key() -> dict[str, str | bool]:
+    settings_key = str(getattr(settings, "GEMINI_API_KEY", "") or "").strip()
+    env_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+
+    source = "missing"
+    selected = ""
+    if settings_key:
+        source = "settings"
+        selected = settings_key
+    elif env_key:
+        source = "env"
+        selected = env_key
+
+    valid, error = _classify_gemini_api_key(selected)
+    return {
+        "api_key": selected,
+        "source": source,
+        "valid": valid,
+        "error": error,
+    }
+
 
 class GeminiRestError(RuntimeError):
     def __init__(self, message: str, status_code: int | None = None, body: object | None = None):
@@ -38,8 +85,26 @@ def post_generate_content(api_key: str, model: str, body: Dict[str, Any], timeou
     Returns JSON dict. On HTTP/transport error returns:
       {"__http_error__": True, "status": <int>, "text": <str>}
     """
-    if not api_key:
-        return {"__http_error__": True, "status": 0, "text": "GEMINI_API_KEY is empty"}
+    key_resolution = resolve_gemini_api_key() if not str(api_key or "").strip() else {
+        "api_key": str(api_key or "").strip(),
+        "source": "explicit",
+        "valid": True,
+        "error": "",
+    }
+    if key_resolution["source"] == "explicit":
+        explicit_valid, explicit_error = _classify_gemini_api_key(str(key_resolution["api_key"]))
+        key_resolution["valid"] = explicit_valid
+        key_resolution["error"] = explicit_error
+    api_key = str(key_resolution["api_key"] or "").strip()
+    if not bool(key_resolution["valid"]):
+        return {
+            "__http_error__": True,
+            "status": 0,
+            "text": f"GEMINI_API_KEY_INVALID:{key_resolution['error'] or 'empty'}",
+            "error_code": "GEMINI_API_KEY_INVALID",
+            "key_error": key_resolution["error"] or "empty",
+            "key_source": key_resolution["source"],
+        }
 
     # Normalize model to a safe ASCII id (no "models/" prefix).
     m = (model or "").strip()
