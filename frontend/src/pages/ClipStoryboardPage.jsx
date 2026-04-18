@@ -12590,10 +12590,63 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     );
     const { width, height } = getSceneImageSize(imageFormat);
 
-    const sceneDeltaRaw = getSceneFramePromptByStrategy(targetScene, normalizedSlot);
-    const sceneDelta = isTwoFrameScene
-      ? ensureFirstLastSlotPrompt(targetScene, normalizedSlot, sceneDeltaRaw)
+    const scenarioPackageForImage = targetNode?.data?.scenarioPackage && typeof targetNode.data.scenarioPackage === "object"
+      ? targetNode.data.scenarioPackage
+      : {};
+    const promptContext = resolveScenarioImagePromptContext({
+      scene: targetScene,
+      scenarioPackage: scenarioPackageForImage,
+      slot: normalizedSlot,
+    });
+    const readFirstNonEmpty = (...values) => {
+      for (const value of values) {
+        const text = String(value || "").trim();
+        if (text) return text;
+      }
+      return "";
+    };
+    const sceneDeltaRawByStrategy = String(getSceneFramePromptByStrategy(targetScene, normalizedSlot) || "").trim();
+    const sceneDeltaRaw = readFirstNonEmpty(
+      sceneDeltaRawByStrategy,
+      promptContext?.imagePrompt,
+      targetScene?.image_prompt,
+      targetScene?.scene_prompt,
+      targetScene?.imagePromptEn,
+      targetScene?.videoPrompt,
+      targetScene?.imagePromptRu,
+      targetScene?.sceneText,
+      targetScene?.visualDescription,
+    );
+    const firstLastSlotPrompt = (normalizedSlot === "start")
+      ? readFirstNonEmpty(targetScene?.first_frame_prompt, targetScene?.startFramePrompt)
+      : (normalizedSlot === "end")
+        ? readFirstNonEmpty(targetScene?.last_frame_prompt, targetScene?.endFramePrompt)
+        : "";
+    const resolvedPromptBeforeContract = isTwoFrameScene
+      ? readFirstNonEmpty(firstLastSlotPrompt, sceneDeltaRaw)
       : sceneDeltaRaw;
+    const sceneDelta = isTwoFrameScene
+      ? ensureFirstLastSlotPrompt(targetScene, normalizedSlot, resolvedPromptBeforeContract)
+      : resolvedPromptBeforeContract;
+    const promptContextSource = String(promptContext?.promptSource || "").trim() || "unknown";
+    const promptSourceEffectivePrecheck = String(
+      promptContextSource !== "unknown"
+        ? promptContextSource
+        : (
+          sceneDeltaRawByStrategy
+            ? `strategy:${imageStrategy || "single"}`
+            : (promptContext?.imagePrompt ? "prompt_context.imagePrompt" : "")
+        )
+    ).trim() || "unknown";
+    const sceneRouteRaw = String(
+      targetScene?.route
+      || targetScene?.video_generation_route
+      || targetScene?.planned_video_generation_route
+      || canonicalRoute
+      || imageStrategy
+      || ""
+    ).trim().toLowerCase();
+    let promptBlockReason = "";
     const continuityContractLines = [
       "FIRST_LAST CONTINUITY CONTRACT:",
       "- same characters and same identity",
@@ -12607,6 +12660,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const firstLastContinuityClause = continuityContractLines.join("\n");
 
     if (!sceneDelta) {
+      promptBlockReason = "missing_scene_delta";
+      console.debug("[SCENARIO IMAGE PROMPT SOURCE CHECK]", {
+        sceneId,
+        slot: normalizedSlot,
+        route: sceneRouteRaw || "unknown",
+        sceneDeltaRawPresent: Boolean(sceneDeltaRawByStrategy),
+        promptContextSource,
+        promptContextImagePromptPresent: Boolean(String(promptContext?.imagePrompt || "").trim()),
+        finalSceneDeltaPresent: false,
+        blockReason: promptBlockReason,
+      });
       console.debug("[SCENARIO IMAGE BUTTON STATE]", {
         sceneId,
         action: "generate_image",
@@ -12638,7 +12702,25 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     }
     const visualGlueText = buildScenarioVisualGlueText(targetScene);
     const applyFirstLastContinuityContract = isTwoFrameScene && normalizedSlot === "end";
-    const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}`.trim();
+    const ia2vPerformanceGuidance = [
+      "Performance framing guidance:",
+      "- face readable",
+      "- mouth/jaw unobstructed",
+      "- performer centered",
+      "- no crowd occlusion",
+    ].join("\n");
+    const applyIa2vGuidance = sceneRouteRaw.includes("ia2v") || canonicalRoute === "lip_sync_music";
+    const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}${applyIa2vGuidance ? `\n\n${ia2vPerformanceGuidance}` : ""}`.trim();
+    console.debug("[SCENARIO IMAGE PROMPT SOURCE CHECK]", {
+      sceneId,
+      slot: normalizedSlot,
+      route: sceneRouteRaw || "unknown",
+      sceneDeltaRawPresent: Boolean(sceneDeltaRawByStrategy),
+      promptContextSource,
+      promptContextImagePromptPresent: Boolean(String(promptContext?.imagePrompt || "").trim()),
+      finalSceneDeltaPresent: Boolean(finalSceneDelta),
+      blockReason: promptBlockReason || "none",
+    });
     if (isTwoFrameScene) {
       const firstLastDerived = deriveFirstLastFramePrompts(targetScene || {});
       const startPromptCheck = ensureFirstLastSlotPrompt(targetScene, "start", firstLastDerived.start || getSceneFramePromptByStrategy(targetScene, "start"));
@@ -12671,14 +12753,6 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const scenarioContractPayloadSanitized = {
         ...scenarioContractPayload,
       };
-      const scenarioPackageForImage = targetNode?.data?.scenarioPackage && typeof targetNode.data.scenarioPackage === "object"
-        ? targetNode.data.scenarioPackage
-        : {};
-      const promptContext = resolveScenarioImagePromptContext({
-        scene: targetScene,
-        scenarioPackage: scenarioPackageForImage,
-        slot: normalizedSlot,
-      });
       const finalStoryboardSceneForRequest = promptContext?.finalStoryboardScene || null;
       sceneText = String(promptContext?.sceneText || sceneText || "").trim();
       const refsByRoleForImage = buildScenarioRefsByRoleForImage({
@@ -13255,6 +13329,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       ).trim();
       const promptSourceEffective = String(
         promptContext?.promptSource
+        || promptSourceEffectivePrecheck
         || scenarioContractPayload?.promptSource
         || refsForImageRequest?.promptSource
         || targetScene?.promptSource
