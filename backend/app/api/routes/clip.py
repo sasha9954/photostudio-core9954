@@ -104,6 +104,14 @@ ENTITY_CRITICAL_FIELDS: dict[str, list[str]] = {
         "construction_identity",
     ],
 }
+IDENTITY_LOCK_ALLOWED_VARIATIONS = [
+    "camera angle",
+    "pose",
+    "facial expression",
+    "lighting",
+    "framing",
+    "environment placement",
+]
 
 LTX_I2V_CANON_HINT_POSITIVE = """
 Write LTX i2v prompts as short, physically readable motion instructions, not as abstract cinematic prose.
@@ -262,6 +270,26 @@ def _flag_enabled(name: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw in {"1", "true", "yes", "on"}
+
+
+def _apply_identity_lock_variation_guard(
+    reference_profiles: dict[str, Any] | None,
+    *,
+    identity_lock_applied: bool,
+    task_mode: str,
+    has_character_1_ref: bool,
+) -> dict[str, Any]:
+    profiles = reference_profiles if isinstance(reference_profiles, dict) else {}
+    if not profiles:
+        return profiles
+    if not identity_lock_applied or task_mode != "keep_identity" or not has_character_1_ref:
+        return profiles
+    for role in ("character_1", "character_2", "character_3"):
+        profile = profiles.get(role) if isinstance(profiles.get(role), dict) else None
+        if not profile:
+            continue
+        profile["allowedVariations"] = list(IDENTITY_LOCK_ALLOWED_VARIATIONS)
+    return profiles
 
 
 def _resolve_direct_gemini_storyboard_mode_from_payload(payload: Any, *, default: bool = False) -> bool:
@@ -11689,6 +11717,19 @@ def _build_comfy_image_prompt_assembly(
             "- never let lyrical narrative override face/hair/outfit continuity",
             "- prompt priority: identity/outfit lock → pose/framing/body orientation → venue continuity → short emotional subtext → safe motion hint",
         ])
+    strict_reference_identity_block = ""
+    has_character_1_ref = bool((refs_by_role.get("character_1") or []))
+    if has_character_1_ref and bool(contract.get("identityLockApplied", contract.get("identityLock"))):
+        strict_reference_identity_block = "\n".join([
+            "REFERENCE-LOCKED APPEARANCE CONSTRAINTS (HARD):",
+            "- preserve exact blonde hair color and hair length/structure from reference",
+            "- preserve same apparent age; do not make her older or more mature",
+            "- preserve same beige crop top / neckline / shoulder coverage / fitted ribbed fabric read",
+            "- preserve same light blue jeans color and cut family",
+            "- do not change top into black/dark/alternate garment",
+            "- do not change neckline depth or crop length",
+            "- do not glamorize into a different actress",
+        ])
     if task_mode == "virtual_try_on":
         non_lip_identity_first_block = "\n".join([
             "VIRTUAL TRY-ON EXECUTION:",
@@ -11796,6 +11837,7 @@ def _build_comfy_image_prompt_assembly(
             global_garment_lock_block,
             lip_sync_audio_emotion_block,
             non_lip_identity_first_block,
+            strict_reference_identity_block,
             scene_meaning_block,
             forbidden_changes_block,
             "CHARACTER ANCHOR:\n" + f"- {effective_character_anchor or 'coherent single-character identity across all scenes'}",
@@ -11807,6 +11849,7 @@ def _build_comfy_image_prompt_assembly(
             outfit_continuity_lock_block,
             location_continuity_lock_block,
             non_lip_identity_first_block,
+            strict_reference_identity_block,
             opening_shot_realism_block,
             framing_and_staging_block,
             identity_layer_block,
@@ -12260,7 +12303,7 @@ def clip_image(payload: ClipImageIn):
         role: [{"url": url, "name": ""} for url in (comfy_refs_by_role.get(role) or [])]
         for role in COMFY_REF_ROLES
     })
-    reference_profiles_summary = summarize_profiles(reference_profiles)
+    reference_profiles_summary: dict[str, Any] = {}
     connected_inputs = getattr(refs_obj, "connectedInputs", None)
     connected_inputs = connected_inputs if isinstance(connected_inputs, dict) else {}
     comfy_roles = COMFY_REF_ROLES
@@ -12638,6 +12681,14 @@ def clip_image(payload: ClipImageIn):
     scene_contract["authoritativeUpperGarmentIdentity"] = authoritative_upper_identity
     if is_lip_sync_route and scene_contract["active_connected_character_roles"] == ["character_1"]:
         scene_contract["single_character_mode_enforced"] = True
+    task_mode_guard = str(scene_contract.get("taskMode") or "keep_identity").strip().lower() or "keep_identity"
+    reference_profiles = _apply_identity_lock_variation_guard(
+        reference_profiles,
+        identity_lock_applied=bool(scene_contract.get("identityLockApplied", scene_contract.get("identityLock"))),
+        task_mode=task_mode_guard,
+        has_character_1_ref=has_character_1_ref,
+    )
+    reference_profiles_summary = summarize_profiles(reference_profiles)
     dropped_by_must_not_appear = sorted([role for role in (scene_contract.get("resolvedRoles") or []) if role in must_not_appear_roles])
     connected_refs_by_role = (connected_inputs.get("refsByRole") or {}) if isinstance(connected_inputs, dict) else {}
     refs_used_compact = scene_refs_used if isinstance(scene_refs_used, list) else (list((scene_refs_used or {}).keys()) if isinstance(scene_refs_used, dict) else [])
