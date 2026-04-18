@@ -873,7 +873,18 @@ export default function ScenarioStoryboardEditor({
   const sceneNeedsTwoFrames = isFirstLastScene(selectedScene);
   const isFirstLastVideoMode = sceneNeedsTwoFrames;
   const imagePromptRuValue = String(selectedScene?.imagePromptRu || "").trim();
+  const imagePromptEnValue = String(selectedScene?.imagePromptEn || "").trim();
+  const videoPromptValue = String(selectedScene?.videoPrompt || "").trim();
+  const promptNotesValue = String(selectedScene?.promptNotes || "").trim();
   const resolvedImagePromptForDisplay = resolveSceneImagePromptForDisplay(selectedScene || {});
+  const hasImagePromptPreview = Boolean(resolvedImagePromptForDisplay);
+  const hasPromptDebugDetails = Boolean(
+    resolvedImagePromptForDisplay
+    || imagePromptRuValue
+    || imagePromptEnValue
+    || videoPromptValue
+    || promptNotesValue
+  );
   const derivedFramePrompts = deriveFirstLastFramePrompts(selectedScene || {});
   const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || derivedFramePrompts.start || "");
   const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
@@ -1501,36 +1512,53 @@ export default function ScenarioStoryboardEditor({
                     <>
                       <div className="clipSB_scenarioEditorImageBody clipSB_scenarioEditorImageBodyMain">
                         <div className="clipSB_scenarioEditorImageLeft clipSB_scenarioEditorImageLeftMain">
-                          <div className="clipSB_hint">Resolved image prompt (generation source)</div>
-                          <textarea
-                            className="clipSB_textarea clipSB_scenarioEditorImagePromptTextarea"
-                            rows={6}
-                            value={resolvedImagePromptForDisplay}
-                            readOnly
-                            placeholder="resolved image prompt"
-                          />
-                          {imagePromptRuValue ? (
+                          {hasImagePromptPreview ? (
+                            <div
+                              className="clipSB_storyboardKv clipSB_copySelectable nodrag nopan"
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              style={{ marginBottom: 8 }}
+                            >
+                              <span>Промт кадра</span>
+                              <div
+                                style={{
+                                  marginTop: 4,
+                                  padding: "8px 10px",
+                                  borderRadius: 8,
+                                  border: "1px solid rgba(255,255,255,0.12)",
+                                  background: "rgba(255,255,255,0.04)",
+                                  whiteSpace: "pre-wrap",
+                                  lineHeight: 1.35,
+                                  maxHeight: "4.1em",
+                                  overflow: "hidden",
+                                }}
+                              >
+                                {resolvedImagePromptForDisplay}
+                              </div>
+                            </div>
+                          ) : null}
+                          {hasPromptDebugDetails ? (
                             <details className="clipSB_scenarioEditorImageEn" style={{ marginTop: 8 }}>
-                              <summary>Промт изображения RU</summary>
-                              <textarea
-                                className="clipSB_textarea"
-                                rows={2}
-                                value={imagePromptRuValue}
-                                onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptRu: event.target.value })}
-                                placeholder="imagePromptRu"
-                              />
+                              <summary>Показать prompt / debug</summary>
+                              <div className="clipSB_scenarioEditorHintList" style={{ marginTop: 8, gap: 8 }}>
+                                {resolvedImagePromptForDisplay ? (
+                                  <ScenarioReadonlyTextField label="resolvedImagePromptForDisplay" value={resolvedImagePromptForDisplay} minRows={2} />
+                                ) : null}
+                                {imagePromptRuValue ? (
+                                  <ScenarioReadonlyTextField label="imagePromptRu" value={imagePromptRuValue} minRows={2} />
+                                ) : null}
+                                {imagePromptEnValue ? (
+                                  <ScenarioReadonlyTextField label="imagePromptEn" value={imagePromptEnValue} minRows={2} />
+                                ) : null}
+                                {videoPromptValue ? (
+                                  <ScenarioReadonlyTextField label="videoPrompt" value={videoPromptValue} minRows={2} />
+                                ) : null}
+                                {promptNotesValue ? (
+                                  <ScenarioReadonlyTextField label="promptNotes" value={promptNotesValue} minRows={2} />
+                                ) : null}
+                              </div>
                             </details>
                           ) : null}
-                          <details className="clipSB_scenarioEditorImageEn">
-                            <summary>EN</summary>
-                            <textarea
-                              className="clipSB_textarea"
-                              rows={2}
-                              value={String(selectedScene?.imagePromptEn || "")}
-                              onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { imagePromptEn: event.target.value })}
-                              placeholder="imagePromptEn"
-                            />
-                          </details>
                           <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorImageBtnRow">
                             <button
                               className="clipSB_btn"
