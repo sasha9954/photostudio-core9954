@@ -1183,9 +1183,82 @@ function collectScenarioImageRefsByRole({
   scenarioFlowSourceNode = {},
   nodes = [],
 } = {}) {
+  const LIVE_REF_URL_CANDIDATE_PATHS = [
+    "url",
+    "imageUrl",
+    "image_url",
+    "preview",
+    "value",
+    "assetUrl",
+    "fileUrl",
+    "src",
+    "output.url",
+    "output.imageUrl",
+    "outputs.url",
+    "outputs.imageUrl",
+    "outputs.refs",
+    "refs",
+    "images",
+    "items",
+  ];
+  const PROFILE_FALLBACK_KEYS = ["profile", "referenceProfile", "description", "caption", "analysis", "detectedAppearance", "appearance", "promptProfile"];
+  const getByPath = (source, path) => path.split(".").reduce((acc, key) => ((acc && typeof acc === "object") ? acc?.[key] : undefined), source);
+  const readRoleFromNode = (node = {}) => {
+    const candidates = [
+      node?.data?.role,
+      node?.data?.refRole,
+      node?.data?.roleType,
+      node?.data?.type,
+      node?.data?.kind,
+      node?.data?.id,
+      node?.id,
+      node?.type,
+      node?.data?.title,
+      node?.data?.label,
+    ];
+    for (const rawCandidate of candidates) {
+      const normalized = normalizeScenarioRoleName(rawCandidate);
+      if (SCENARIO_IMAGE_ROLE_KEYS.includes(normalized)) return normalized;
+    }
+    const fuzzyText = candidates.map((value) => String(value || "").toLowerCase()).join(" ");
+    if (/character[_\s-]?1|ref_character_1|character1|персонаж|character|героин/i.test(fuzzyText)) return "character_1";
+    if (/location|локаци|place|environment|world|фон/i.test(fuzzyText)) return "location";
+    if (/style|стил/i.test(fuzzyText)) return "style";
+    if (/props|prop|предмет|item|object/i.test(fuzzyText)) return "props";
+    return "";
+  };
+  const isLikelyRefNode = (node = {}) => {
+    const nodeType = String(node?.type || "").toLowerCase();
+    const nodeId = String(node?.id || "").toLowerCase();
+    const nodeTitle = String(node?.data?.title || "").toLowerCase();
+    const nodeLabel = String(node?.data?.label || "").toLowerCase();
+    const dataType = String(node?.data?.type || "").toLowerCase();
+    const dataKind = String(node?.data?.kind || "").toLowerCase();
+    return (
+      nodeType.includes("ref")
+      || nodeId.includes("ref")
+      || nodeTitle.includes("ref")
+      || nodeLabel.includes("ref")
+      || dataType.includes("ref")
+      || dataKind.includes("ref")
+    );
+  };
+  const resolveNodeUrls = (nodeData = {}) => {
+    const result = [];
+    LIVE_REF_URL_CANDIDATE_PATHS.forEach((path) => {
+      result.push(...toUrlList(getByPath(nodeData, path)));
+    });
+    return [...new Set(result.map((value) => String(value || "").trim()).filter(Boolean))];
+  };
+  const resolveProfileFallbackText = (nodeData = {}) => PROFILE_FALLBACK_KEYS
+    .map((key) => nodeData?.[key])
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .find(Boolean) || "";
   const sourceByRole = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
   let sourceUsed = "none";
   const sourceUsedByRole = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, "none"]));
+  const profileFallbackByRole = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, ""]));
+  const liveRefNodeCandidates = [];
   const appendFrom = (label, source) => {
     const extracted = extractScenarioRefsByRoleFromSource(source);
     SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
@@ -1206,16 +1279,41 @@ function collectScenarioImageRefsByRole({
     appendFrom(label, directPayload);
   };
 
-  appendFrom("live_graph.connected_ref_nodes", (Array.isArray(nodes) ? nodes : []).filter((node) => {
-    const nodeType = String(node?.type || "").toLowerCase();
-    const nodeId = String(node?.id || "").toLowerCase();
-    const role = normalizeScenarioRoleName(node?.data?.role || node?.data?.type || node?.data?.refRole || node?.data?.id || "");
-    return role === "character_1" || nodeType.includes("refcharacter1") || nodeType.includes("ref_character_1") || nodeId.includes("character_1");
-  }).map((node) => node?.data || {}));
-  appendFrom("scenarioBrainRefs.character_1", { character_1: scenarioBrainRefs?.character_1, refsByRole: scenarioBrainRefs?.refsByRole });
-  appendFrom("targetScene.refsByRole", targetScene?.refsByRole);
-  appendFrom("targetScene.context_refs", targetScene?.context_refs);
-  appendFrom("targetScene.connected_context_summary", targetScene?.connected_context_summary || targetScene?.connectedContextSummary);
+  (Array.isArray(nodes) ? nodes : []).forEach((node) => {
+    const nodeData = node?.data && typeof node.data === "object" ? node.data : {};
+    const role = readRoleFromNode(node);
+    const looksLikeRefNode = isLikelyRefNode(node);
+    const urls = resolveNodeUrls(nodeData);
+    const profileText = resolveProfileFallbackText(nodeData);
+    if (!looksLikeRefNode && !urls.length && !profileText) return;
+    const snapshot = {
+      nodeId: String(node?.id || ""),
+      nodeType: String(node?.type || ""),
+      role,
+      dataRole: String(nodeData?.role || ""),
+      dataType: String(nodeData?.type || ""),
+      dataRefRole: String(nodeData?.refRole || ""),
+      dataLabel: String(nodeData?.label || ""),
+      dataKeys: Object.keys(nodeData || {}),
+      foundUrlCount: urls.length,
+      firstUrl: urls[0] || "",
+      hasProfileFallback: Boolean(profileText),
+    };
+    liveRefNodeCandidates.push(snapshot);
+    if (!role) return;
+    if (urls.length > 0) {
+      appendFromRoleDirect("live_graph.all_ref_nodes", role, urls);
+      if (sourceUsedByRole[role] === "none") sourceUsedByRole[role] = "live_graph.all_ref_nodes";
+    }
+    if (!profileFallbackByRole[role] && profileText) profileFallbackByRole[role] = profileText;
+  });
+
+  // Priority 2: connected source node data
+  appendFrom("connected_source.targetNode.data", targetNode?.data || {});
+  appendFrom("connected_source.scenarioFlowSourceNode.data", scenarioFlowSourceNode?.data || {});
+  // Priority 3: scenarioBrainRefs
+  appendFrom("scenarioBrainRefs", scenarioBrainRefs || {});
+  // Priority 4: scenarioPackage refs inventory
   Object.entries(REF_INVENTORY_ROLE_MAP).forEach(([role, refKeys]) => {
     const keys = Array.isArray(refKeys) ? refKeys : [];
     keys.forEach((refKey) => {
@@ -1235,6 +1333,9 @@ function collectScenarioImageRefsByRole({
         scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.refs_inventory?.[refKey]?.refs
       );
     });
+  });
+  // Priority 5: scenarioPackage input connected refs
+  Object.entries(REF_INVENTORY_ROLE_MAP).forEach(([role]) => {
     appendFromRoleDirect(
       `scenarioPackage.input.connected_context_summary.connectedRefsPresentByRole.${role}`,
       role,
@@ -1251,14 +1352,19 @@ function collectScenarioImageRefsByRole({
       scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.connectedRefsPresentByRole?.[role]
     );
   });
-  appendFrom("targetNode.data", targetNode?.data || {});
-  appendFrom("scenarioFlowSourceNode.data", scenarioFlowSourceNode?.data || {});
+  // Priority 6: final storyboard snapshot refs
+  appendFrom("scenarioPackage.final_storyboard.source_package_snapshot", scenarioPackageForImage?.final_storyboard?.source_package_snapshot || {});
+  appendFrom("targetScene.refsByRole", targetScene?.refsByRole);
+  appendFrom("targetScene.context_refs", targetScene?.context_refs);
+  appendFrom("targetScene.connected_context_summary", targetScene?.connected_context_summary || targetScene?.connectedContextSummary);
   appendFrom("scenarioPackageForImage", scenarioPackageForImage || {});
 
   return {
     refsByRole: sourceByRole,
     sourceUsed,
     sourceUsedByRole,
+    liveRefNodeCandidates,
+    profileFallbackByRole,
   };
 }
 
@@ -12919,7 +13025,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       "- no crowd occlusion",
     ].join("\n");
     const applyIa2vGuidance = sceneRouteRaw.includes("ia2v") || canonicalRoute === "lip_sync_music";
-    const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}${applyIa2vGuidance ? `\n\n${ia2vPerformanceGuidance}` : ""}`.trim();
+    let finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}${applyIa2vGuidance ? `\n\n${ia2vPerformanceGuidance}` : ""}`.trim();
     console.debug("[SCENARIO IMAGE PROMPT SOURCE CHECK]", {
       sceneId,
       slot: normalizedSlot,
@@ -12972,6 +13078,44 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         scenarioBrainRefs,
         scenarioPackage: scenarioPackageForImage,
       });
+      const scenarioLiveRefNodesSnapshot = (Array.isArray(nodesRef.current || nodes || []) ? (nodesRef.current || nodes || []) : [])
+        .map((node) => {
+          const nodeData = node?.data && typeof node.data === "object" ? node.data : {};
+          const nodeType = String(node?.type || "");
+          const nodeId = String(node?.id || "");
+          const label = String(nodeData?.label || nodeData?.title || "");
+          const looksLikeRef = /ref/i.test(nodeType) || /ref/i.test(nodeId) || /ref/i.test(label) || /ref/i.test(String(nodeData?.kind || "")) || /ref/i.test(String(nodeData?.type || ""));
+          if (!looksLikeRef) return null;
+          return {
+            nodeId,
+            nodeType,
+            dataRole: String(nodeData?.role || ""),
+            dataType: String(nodeData?.type || ""),
+            dataRefRole: String(nodeData?.refRole || ""),
+            dataLabel: String(nodeData?.label || ""),
+            dataKeys: Object.keys(nodeData || {}),
+            urls: {
+              url: nodeData?.url || "",
+              imageUrl: nodeData?.imageUrl || "",
+              image_url: nodeData?.image_url || "",
+              preview: nodeData?.preview || "",
+              value: nodeData?.value || "",
+              assetUrl: nodeData?.assetUrl || "",
+              fileUrl: nodeData?.fileUrl || "",
+              output: nodeData?.output || null,
+              outputs: nodeData?.outputs || null,
+              refs: nodeData?.refs || null,
+              images: nodeData?.images || null,
+              items: nodeData?.items || null,
+            },
+          };
+        })
+        .filter(Boolean);
+      console.debug("[SCENARIO LIVE REF NODES SNAPSHOT]", {
+        sceneId,
+        count: scenarioLiveRefNodesSnapshot.length,
+        nodes: scenarioLiveRefNodesSnapshot,
+      });
       const collectedScenarioImageRefs = collectScenarioImageRefsByRole({
         targetScene,
         targetNode,
@@ -12988,6 +13132,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         sceneId,
         refsByRoleCounts: summarizeRefsByRole(refsByRoleForImage || {}),
         sourceUsedByRole: collectedScenarioImageRefs?.sourceUsedByRole || {},
+        liveRefNodeCandidates: Array.isArray(collectedScenarioImageRefs?.liveRefNodeCandidates) ? collectedScenarioImageRefs.liveRefNodeCandidates : [],
         previewsByRole: Object.fromEntries(
           SCENARIO_IMAGE_ROLE_KEYS.map((role) => [
             role,
@@ -13555,20 +13700,48 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const promptContextText = `${sceneText} ${targetScene?.imagePromptRu || targetScene?.imagePromptEn || targetScene?.imagePrompt || ""} ${targetScene?.videoPromptRu || targetScene?.videoPromptEn || targetScene?.videoPrompt || ""}`.toLowerCase();
       const sameWomanByReferenceRequested = /\bsame woman\b|\bsame girl\b|\bby reference\b|та\s+же\s+женщин|та\s+же\s+девушк|по\s+референс/i.test(promptContextText);
       const hasCharacter1Ref = Array.isArray(refsByRoleEffective?.character_1) && refsByRoleEffective.character_1.length > 0;
+      const roleContractRequiresCharacter1 = [
+        refsForImageRequest?.primaryRole,
+        derivedRoleContract?.primaryRole,
+        ...(Array.isArray(refsForImageRequest?.sceneActiveRoles) ? refsForImageRequest.sceneActiveRoles : []),
+        ...(Array.isArray(derivedRoleContract?.sceneActiveRoles) ? derivedRoleContract.sceneActiveRoles : []),
+        ...(Array.isArray(refsForImageRequest?.mustAppear) ? refsForImageRequest.mustAppear : []),
+        ...(Array.isArray(derivedRoleContract?.mustAppear) ? derivedRoleContract.mustAppear : []),
+      ].map((value) => normalizeScenarioRoleName(value)).includes("character_1");
+      const character1ProfileFallbackText = String(collectedScenarioImageRefs?.profileFallbackByRole?.character_1 || "").trim();
+      if (!hasCharacter1Ref && character1ProfileFallbackText) {
+        const profileClause = `REFERENCE PROFILE FALLBACK: ${character1ProfileFallbackText}`;
+        finalSceneDelta = `${finalSceneDelta}\n\n${profileClause}`.trim();
+      }
       const shouldUseCharacter1 = hasCharacter1Ref || sameWomanByReferenceRequested || primaryRoleEffective === "character_1";
-      if (primaryRoleEffective === "character_1" && (!Array.isArray(refsByRoleEffective?.character_1) || refsByRoleEffective.character_1.length === 0)) {
-        if (sameWomanByReferenceRequested || primaryRoleEffective === "character_1") {
-          console.warn("[SCENARIO IMAGE REF MISSING]", {
+      if (!hasCharacter1Ref && (sameWomanByReferenceRequested || roleContractRequiresCharacter1 || primaryRoleEffective === "character_1")) {
+        if (!character1ProfileFallbackText) {
+          const hardBlockReason = sameWomanByReferenceRequested
+            ? "prompt_requires_same_woman_by_reference"
+            : (roleContractRequiresCharacter1 ? "role_contract_requires_character_1" : "primary_role_character_1_without_ref");
+          const hardBlockPayload = {
             sceneId,
-            primaryRole: primaryRoleEffective,
-            promptRequiresCharacterReference: sameWomanByReferenceRequested,
+            reason: hardBlockReason,
+            liveRefNodeCandidates: Array.isArray(collectedScenarioImageRefs?.liveRefNodeCandidates) ? collectedScenarioImageRefs.liveRefNodeCandidates : [],
             refsByRoleCounts: summarizeRefsByRole(refsByRoleEffective || {}),
-          });
-          setScenarioImageError("Референс character_1 не передан в генерацию");
+          };
+          console.error("[SCENARIO IMAGE REF MISSING HARD BLOCK]", hardBlockPayload);
+          setScenarioImageError("Референс character_1 не найден. Проверь REF node / подключение к Storyboard.");
           updateScenarioSceneGenerationRuntime(sceneId, {
-            imageError: "Референс character_1 не передан в генерацию",
+            imageStatus: "error",
+            imageGenerationStep: "",
+            imageError: "Референс character_1 не найден. Проверь REF node / подключение к Storyboard.",
           }, { nodeId: targetNodeId });
+          const hardBlockError = new Error("scenario_character_1_ref_missing_hard_block");
+          hardBlockError.code = "scenario_character_1_ref_missing_hard_block";
+          hardBlockError.details = hardBlockPayload;
+          throw hardBlockError;
         }
+        console.warn("[SCENARIO IMAGE REF PROFILE FALLBACK]", {
+          sceneId,
+          reason: sameWomanByReferenceRequested ? "prompt_requires_reference" : "role_requires_character_1",
+          profilePreview: character1ProfileFallbackText.slice(0, 240),
+        });
       }
       const ensuredCharacter1Refs = Array.isArray(refsByRoleEffective?.character_1)
         ? refsByRoleEffective.character_1.map((value) => String(value || "").trim()).filter(Boolean)
@@ -13609,7 +13782,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || targetScene?.promptSource
         || "unknown"
       ).trim();
-      const imagePromptEffective = String(
+      let imagePromptEffective = String(
         promptContext?.imagePrompt
         || targetScene?.image_prompt
         || targetScene?.scene_prompt
@@ -13622,6 +13795,9 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || targetScene?.imagePrompt
         || ""
       ).trim();
+      if (!hasCharacter1Ref && character1ProfileFallbackText) {
+        imagePromptEffective = `${imagePromptEffective}\n\nREFERENCE PROFILE FALLBACK: ${character1ProfileFallbackText}`.trim();
+      }
       const videoPromptEffective = String(
         promptContext?.videoPrompt
         || targetScene?.video_prompt
