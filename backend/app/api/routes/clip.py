@@ -12155,6 +12155,7 @@ def clip_image(payload: ClipImageIn):
     raw_refs_used_by_role_incoming = getattr(refs_obj, "refsUsedByRole", None) or getattr(refs_obj, "refs_used_by_role", None)
     raw_scene_contract_refs_by_role = raw_scene_contract.get("refsByRole") if isinstance(raw_scene_contract, dict) else {}
     raw_scene_contract_refs_used_by_role = raw_scene_contract.get("refsUsedByRole") if isinstance(raw_scene_contract, dict) else {}
+    payload_map = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else {}
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole=" + json.dumps(raw_refs_by_role_incoming, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsUsedByRole=" + json.dumps(raw_refs_used_by_role_incoming, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] incoming sceneContract.raw.refsByRole=" + json.dumps(raw_scene_contract_refs_by_role, ensure_ascii=False))
@@ -12177,6 +12178,13 @@ def clip_image(payload: ClipImageIn):
     incoming_ref_sources = [
         raw_refs_by_role_incoming,
         raw_refs_used_by_role_incoming,
+        payload_map.get("refsByRole") if isinstance(payload_map, dict) else {},
+        payload_map.get("refs_by_role") if isinstance(payload_map, dict) else {},
+        payload_map.get("sceneContract", {}).get("refsByRole") if isinstance(payload_map.get("sceneContract"), dict) else {},
+        payload_map.get("sceneContract", {}).get("refs_by_role") if isinstance(payload_map.get("sceneContract"), dict) else {},
+        payload_map.get("refs", {}).get("refsByRole") if isinstance(payload_map.get("refs"), dict) else {},
+        payload_map.get("refs", {}).get("context_refs") if isinstance(payload_map.get("refs"), dict) else {},
+        payload_map.get("refs", {}).get("connectedInputs") if isinstance(payload_map.get("refs"), dict) else {},
         raw_refs_payload_map.get("refsByRole") if isinstance(raw_refs_payload_map, dict) else {},
         raw_refs_payload_map.get("refs_by_role") if isinstance(raw_refs_payload_map, dict) else {},
         raw_refs_payload_map.get("refsUsedByRole") if isinstance(raw_refs_payload_map, dict) else {},
@@ -12242,6 +12250,9 @@ def clip_image(payload: ClipImageIn):
         "workflowKey": workflow_key,
         "refsByRoleCounts": {role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES},
         "hasCharacter1Ref": bool(len(comfy_refs_by_role.get("character_1") or []) > 0),
+        "rawRefCandidatesByRole": canonical_ref_diagnostics.get("rawRefCandidatesByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
+        "canonicalRefCountByRole": canonical_ref_diagnostics.get("canonicalRefCountByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
+        "attachedCountsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES},
         "connectedInputsCount": len((getattr(refs_obj, "connectedInputs", None) or {}) if isinstance(getattr(refs_obj, "connectedInputs", None), dict) else {}),
         "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
     }, ensure_ascii=False))
