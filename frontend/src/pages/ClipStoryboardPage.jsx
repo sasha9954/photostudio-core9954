@@ -15109,7 +15109,12 @@ Aspect ratio: ${imageFormat}`,
     ) && !requiresTwoFrames;
     const fallbackContinuationToI2V = requiresContinuation && !requiresTwoFrames;
     const effectiveRequiresContinuation = fallbackContinuationToI2V ? false : requiresContinuation;
-    const effectiveWorkflowKey = fallbackContinuationToI2V ? "i2v" : resolvedWorkflowKey;
+    const effectiveWorkflowKeyRaw = fallbackContinuationToI2V ? "i2v" : resolvedWorkflowKey;
+    const effectiveWorkflowKey = String(effectiveWorkflowKeyRaw || "").trim().toLowerCase() === "image_video"
+      ? "i2v"
+      : (["first_last", "f_l"].includes(String(effectiveWorkflowKeyRaw || "").trim().toLowerCase())
+        ? "first_last"
+        : String(effectiveWorkflowKeyRaw || "").trim().toLowerCase());
     const effectiveContentType = String(
       scenarioFlowSourceNode?.data?.contentType
       || targetScene?.contentType
@@ -15144,6 +15149,14 @@ Aspect ratio: ${imageFormat}`,
     const hasImageForVideo = requiresTwoFrames
       ? !!resolvedFirstFrameUrl && !!resolvedLastFrameUrl
       : (effectiveRequiresContinuation ? !!(resolvedFirstFrameUrl || frameImageUrl) : !!frameImageUrl);
+    const rawRoute = String(
+      targetScene?.sourceRoute
+      || targetScene?.videoGenerationRoute
+      || targetScene?.plannedVideoGenerationRoute
+      || targetScene?.route
+      || targetScene?.ltxMode
+      || ""
+    ).trim().toLowerCase();
     if (canonicalSyncAllowed) {
       updateScenarioScene(sceneId, {
         imageUrl: frameImageUrl,
@@ -15179,6 +15192,19 @@ Aspect ratio: ${imageFormat}`,
         : (runtimeFallbackRejectedOrUnaccepted
           ? "runtime_fallback_rejected_or_unaccepted"
           : (effectiveWorkflowKey === "lip_sync_music" ? "lip_sync_missing_source_image" : "i2v_missing_source_image"));
+      console.warn("[SCENARIO VIDEO BLOCKED]", {
+        sceneId,
+        rawRoute,
+        workflowKey: effectiveWorkflowKey,
+        hasSourceImage: Boolean(frameImageUrl),
+        hasStartImage: Boolean(resolvedFirstFrameUrl),
+        hasEndImage: Boolean(resolvedLastFrameUrl),
+        hasAudioSlice: Boolean(targetScene?.audioSliceUrl),
+        audioSliceKind: String(targetScene?.audioSliceKind || targetScene?.audio_slice_kind || "").trim().toLowerCase() || "none",
+        musicVocalLipSyncAllowed: Boolean(targetScene?.musicVocalLipSyncAllowed ?? targetScene?.music_vocal_lipsync_allowed),
+        willSendVideo: false,
+        blockReason: validateReason,
+      });
       logScenarioVideoBlocked("validate_images", validateReason, {
         sceneId,
         workflow: effectiveWorkflowKey,
@@ -15190,7 +15216,13 @@ Aspect ratio: ${imageFormat}`,
         debugSourceFieldsUsed,
         selectedIndex: targetSceneIndex,
       });
-      blockScenarioVideoGeneration(validateReason, "Для этой сцены не хватает source-кадров для video flow (см. [SCENARIO VIDEO REQUEST SUMMARY]).");
+      const firstLastBlock = requiresTwoFrames && (!resolvedFirstFrameUrl || !resolvedLastFrameUrl);
+      blockScenarioVideoGeneration(
+        validateReason,
+        firstLastBlock
+          ? "Для first_last нужны первый и последний кадр."
+          : "Для этой сцены не хватает source-кадров для video flow (см. [SCENARIO VIDEO REQUEST SUMMARY])."
+      );
     }
 
     if (!hasImageForVideo) return;
@@ -15359,7 +15391,30 @@ Aspect ratio: ${imageFormat}`,
     }
     const musicVocalLipSyncAllowed = Boolean(effectiveMusicVocalLipSyncAllowed);
     const audioSliceKind = String(effectiveAudioSliceKind || "").trim().toLowerCase();
+    let blockReason = "";
+    if (!hasImageForVideo) {
+      blockReason = effectiveWorkflowKey === "first_last" ? "first_last_missing_frame_pair" : "missing_source_image";
+    } else if (lipSyncRoute && !attachedAudioSliceUrl) {
+      blockReason = "lip_sync_audio_missing";
+    } else if (lipSyncRoute && (!musicVocalLipSyncAllowed || audioSliceKind !== "music_vocal")) {
+      blockReason = "audio_slice_not_vocal";
+    }
+    const sendCheckPayload = {
+      sceneId,
+      rawRoute,
+      workflowKey: effectiveWorkflowKey,
+      hasSourceImage: Boolean(frameImageUrl),
+      hasStartImage: Boolean(resolvedFirstFrameUrl),
+      hasEndImage: Boolean(resolvedLastFrameUrl),
+      hasAudioSlice: Boolean(attachedAudioSliceUrl),
+      audioSliceKind: audioSliceKind || "none",
+      musicVocalLipSyncAllowed,
+      willSendVideo: !blockReason,
+      blockReason,
+    };
+    console.info("[SCENARIO VIDEO SEND CHECK]", sendCheckPayload);
     if (effectiveWorkflowKey === "lip_sync_music" && !attachedAudioSliceUrl) {
+      console.warn("[SCENARIO VIDEO BLOCKED]", sendCheckPayload);
       logScenarioVideoBlocked("validate_audio", "lip_sync_audio_missing", {
         sceneId,
         workflow: effectiveWorkflowKey,
@@ -15374,13 +15429,15 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     if (effectiveWorkflowKey === "lip_sync_music" && (!musicVocalLipSyncAllowed || audioSliceKind !== "music_vocal")) {
+      const blockedPayload = { ...sendCheckPayload, blockReason: "audio_slice_not_vocal", willSendVideo: false };
+      console.warn("[SCENARIO VIDEO BLOCKED]", blockedPayload);
       logScenarioVideoBlocked("validate_audio", "lip_sync_music_vocal_flag_missing", {
         sceneId,
         workflow: effectiveWorkflowKey,
         musicVocalLipSyncAllowed,
         audioSliceKind: audioSliceKind || "none",
       });
-      blockScenarioVideoGeneration("lip_sync_music_vocal_flag_missing", "Для lipSync нужен slice с music+vocal compatibility.");
+      blockScenarioVideoGeneration("audio_slice_not_vocal", "Для lip-sync нет vocal audio slice. Сначала нужен вокальный audio slice.");
       return;
     }
     if (effectiveWorkflowKey === "lip_sync_music") {
@@ -15417,8 +15474,10 @@ Aspect ratio: ${imageFormat}`,
     const explicitModel = resolveScenarioExplicitModelKey(targetScene);
     const workflowDefaultModelMap = {
       i2v: "ltx23_dev_fp8",
+      image_video: "ltx23_dev_fp8",
       lip_sync_music: "ltx23_dev_fp8",
       i2v_sound: "ltx23_dev_fp8",
+      first_last: "ltx23_distilled_fp8",
       f_l: "ltx23_distilled_fp8",
       f_l_sound: "ltx23_distilled_fp8",
     };
@@ -15608,6 +15667,19 @@ Aspect ratio: ${imageFormat}`,
     })));
     try {
       const endpoint = "/api/clip/video/start";
+      console.info("[SCENARIO VIDEO SEND START]", {
+        sceneId,
+        rawRoute,
+        workflowKey: effectiveWorkflowKey,
+        hasSourceImage: Boolean(frameImageUrl),
+        hasStartImage: Boolean(resolvedFirstFrameUrl),
+        hasEndImage: Boolean(resolvedLastFrameUrl),
+        hasAudioSlice: Boolean(attachedAudioSliceUrl),
+        audioSliceKind: audioSliceKind || "none",
+        musicVocalLipSyncAllowed,
+        willSendVideo: true,
+        blockReason: "",
+      });
       console.debug("[SCENARIO VIDEO SEND ROUTE]", {
         route: endpoint,
         sceneId,
@@ -15853,6 +15925,15 @@ Aspect ratio: ${imageFormat}`,
         method: "POST",
         timeoutMs: VIDEO_START_TIMEOUT_MS,
         body: videoStartPayload,
+      });
+      console.info("[SCENARIO VIDEO SEND DONE]", {
+        sceneId,
+        rawRoute,
+        workflowKey: effectiveWorkflowKey,
+        ok: Boolean(out?.ok),
+        jobId: String(out?.jobId || ""),
+        status: String(out?.status || ""),
+        code: String(out?.code || ""),
       });
       console.info("[SCENARIO VIDEO START RESPONSE]", {
         endpoint,
@@ -16105,6 +16186,12 @@ Aspect ratio: ${imageFormat}`,
       }
 
     } catch (e) {
+      console.error("[SCENARIO VIDEO SEND ERROR]", {
+        sceneId,
+        rawRoute,
+        workflowKey: effectiveWorkflowKey,
+        error: String(e?.message || e || ""),
+      });
       console.error(e);
       const errorMessage = String(e?.message || e || "");
       const errorType = errorMessage.toLowerCase().includes("timeout") ? "timeout" : "start";
