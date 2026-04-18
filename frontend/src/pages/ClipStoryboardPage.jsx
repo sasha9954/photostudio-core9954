@@ -1269,13 +1269,23 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
 function resolveStoryboardSceneBySegmentId(segmentId = "", ...sources) {
   const normalizedSegmentId = String(segmentId || "").trim();
   if (!normalizedSegmentId) return null;
+  const idAliases = ["sceneId", "scene_id", "segment_id", "segmentId", "id"];
+  const readSceneId = (item = {}) => {
+    for (const key of idAliases) {
+      const value = String(item?.[key] || "").trim();
+      if (value) return value;
+    }
+    return "";
+  };
   for (const source of sources) {
     if (!source || typeof source !== "object") continue;
-    const scenes = Array.isArray(source?.scenes) ? source.scenes : [];
-    const hit = scenes.find((item) => {
-      const sceneId = String(item?.sceneId || item?.scene_id || item?.segment_id || item?.segmentId || "").trim();
-      return sceneId === normalizedSegmentId;
-    });
+    const candidates = [
+      ...(Array.isArray(source?.scenes) ? source.scenes : []),
+      ...(Array.isArray(source?.segments) ? source.segments : []),
+      ...(Array.isArray(source?.render_manifest) ? source.render_manifest : []),
+      ...(Array.isArray(source?.renderManifest) ? source.renderManifest : []),
+    ];
+    const hit = candidates.find((item) => readSceneId(item) === normalizedSegmentId);
     if (hit) return hit;
   }
   return null;
@@ -13489,11 +13499,24 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       });
       console.debug("[SCENARIO IMAGE TRACE B sceneContractForRequest]", sceneContractForRequest);
       console.debug("[SCENARIO IMAGE TRACE C refsPayloadForRequest]", refsPayloadForRequest);
+      const imageWorkflowKey = String(
+        targetScene?.imageWorkflowKey
+        || targetScene?.image_workflow_key
+        || ""
+      ).trim();
+      const resolvedWorkflowKey = String(
+        targetScene?.resolvedWorkflowKey
+        || targetScene?.resolved_workflow_key
+        || ""
+      ).trim();
       const finalRequestBody = {
         ...scenarioContractPayload,
         sceneId,
         segment_id: sceneId,
-        route: canonicalRoute || imageStrategy || "",
+        route: sceneRouteRaw || canonicalRoute || imageStrategy || "",
+        workflowKey: imageWorkflowKey || resolvedWorkflowKey || "",
+        prompt: imagePromptEffective || sceneText || finalSceneDelta || "",
+        scene_text: sceneText,
         sceneDelta: `${finalSceneDelta}
 Aspect ratio: ${imageFormat}`,
         sceneText,
