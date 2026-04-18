@@ -193,6 +193,7 @@ function shouldTraceRoleContractScene(sceneId = "") {
   return String(sceneId || "").trim() === needle;
 }
 const SCENARIO_DIRECTOR_LONG_TIMEOUT_MS = 300_000;
+const IMAGE_GENERATION_TIMEOUT_MS = 180_000;
 const VIDEO_START_TIMEOUT_MS = 25_000;
 const VIDEO_STATUS_TIMEOUT_MS = 15_000;
 const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
@@ -2483,6 +2484,27 @@ function normalizeLipSyncSceneStatePatch(scene = {}, patch = {}) {
 function isVideoJobInProgress(status) {
   const normalized = String(status || "").trim().toLowerCase();
   return normalized === "queued" || normalized === "running";
+}
+
+function isSceneVideoUiGeneratingStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  return normalized === "preparing" || normalized === "sending" || normalized === "polling";
+}
+
+async function withTimeoutGuard(promise, timeoutMs, timeoutMessage = "request_timeout") {
+  let timeoutId = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          reject(new Error(timeoutMessage));
+        }, Number(timeoutMs) || 0);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+  }
 }
 
 function getSceneUiDescription(scene) {
@@ -9672,6 +9694,8 @@ const comfyRefsByRole = (comfyNode?.data?.plannerMeta?.plannerInput?.refsByRole 
 const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1] || null) : null;
   const [scenarioImageLoading, setScenarioImageLoading] = useState(false);
   const [scenarioImageError, setScenarioImageError] = useState("");
+  const scenarioImageLocksRef = useRef(new Set());
+  const scenarioVideoLocksRef = useRef(new Set());
 
   const [scenarioAudioSliceLoading, setScenarioAudioSliceLoading] = useState(false);
   const [scenarioVideoError, setScenarioVideoError] = useState("");
@@ -9713,18 +9737,27 @@ const comfySelectedAudioSliceError = String(
 ).trim();
 const comfySelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(comfySelectedScene?.audioSliceUrl), [comfySelectedScene?.audioSliceUrl]);
 const scenarioVideoLoading = isVideoJobInProgress(scenarioSelected?.videoStatus);
+const scenarioRuntimeImageStatus = String(scenarioSelectedRuntime?.imageStatus || "").trim().toLowerCase();
+const scenarioRuntimeVideoStatus = String(scenarioSelectedRuntime?.videoStatus || "").trim().toLowerCase();
+const scenarioSceneImageBusy = scenarioRuntimeImageStatus === "generating";
+const scenarioSceneVideoBusy = isSceneVideoUiGeneratingStatus(scenarioRuntimeVideoStatus) || scenarioVideoLoading;
 const comfyVideoLoading = isVideoJobInProgress(comfySelectedScene?.videoStatus);
 const comfyHasActiveVideoJobForScene = comfyVideoLoading;
 const scenarioHasVideoUrl = Boolean(String(scenarioSelected?.videoUrl || "").trim());
 const comfyHasVideoUrl = Boolean(String(comfySelectedScene?.videoUrl || "").trim());
-const scenarioShowingGeneratingOverlay = scenarioVideoLoading && !scenarioHasVideoUrl;
+const scenarioShowingGeneratingOverlay = scenarioSceneVideoBusy;
 const comfyShowingGeneratingOverlay = comfyHasActiveVideoJobForScene && Boolean(comfySelectedScene?.imageUrl) && !comfyHasVideoUrl;
 const comfyShowVideoSection = Boolean(
   comfySelectedScene?.videoPanelOpen
   || comfyHasVideoUrl
   || comfyHasActiveVideoJobForScene
 );
-const scenarioCreateButtonBusy = scenarioVideoLoading;
+const scenarioCreateButtonBusy = scenarioSceneVideoBusy;
+const scenarioImageOverlayStageText = String(scenarioSelectedRuntime?.imageGenerationStep || "").trim() || "Готовлю сцену…";
+const scenarioVideoOverlayStageText = String(scenarioSelectedRuntime?.videoGenerationStep || "").trim() || "Готовлю source-кадр…";
+const scenarioImageInlineError = String(scenarioSelectedRuntime?.imageError || scenarioImageError || "").trim();
+const scenarioVideoInlineError = String(scenarioSelectedRuntime?.videoError || scenarioSelected?.videoError || scenarioVideoError || "").trim();
+const scenarioImageOverlayVisible = scenarioSceneImageBusy;
 
   useEffect(() => {
     if (!scenarioSelected) return;
@@ -10221,6 +10254,11 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
       videoStatus: startMeta.status,
       videoError: "",
     }, { jobId: String(startMeta.jobId || ""), status: String(startMeta.status || "queued"), message: "polling_started" });
+    updateScenarioSceneGenerationRuntime(sceneId, {
+      videoStatus: "polling",
+      videoGenerationStep: "Жду видео от провайдера…",
+      videoError: "",
+    });
     stopScenarioVideoPolling(sceneId);
 
     console.info("[CLIP VIDEO POLLING START]", {
@@ -10308,6 +10346,11 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
           videoStatus: "error",
           videoError: "video_job_stale_timeout",
         }, { jobId: String(currentMeta?.jobId || ""), status: "error", code: "video_job_stale_timeout", message: "polling_stale_timeout" });
+        updateScenarioSceneGenerationRuntime(sceneId, {
+          videoStatus: "error",
+          videoGenerationStep: "",
+          videoError: "video_job_stale_timeout",
+        });
         clearActiveVideoJob(sceneId);
         return;
       }
@@ -10506,6 +10549,11 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoPanelActivated: true,
             ...workflowInspectionPatch,
           }, { jobId: String(settledMeta?.jobId || ""), status: "done", message: "video_ready" });
+          updateScenarioSceneGenerationRuntime(sceneId, {
+            videoStatus: "done",
+            videoGenerationStep: "",
+            videoError: "",
+          });
           console.info("[SCENARIO VIDEO DURATION TRACE]", {
             sceneId,
             requestedDurationSec: normalizeDurationSec(out?.debug?.requestedDurationSec ?? out?.requestedDurationSec),
@@ -10547,6 +10595,11 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             hint: String(out?.hint || ""),
             message: extractScenarioVideoError(out),
           });
+          updateScenarioSceneGenerationRuntime(sceneId, {
+            videoStatus: "error",
+            videoGenerationStep: "",
+            videoError: extractScenarioVideoError(out),
+          });
           const sceneAfterError = getScenarioSceneState(sceneId);
           const generatingFlagAfter = isVideoJobInProgress(sceneAfterError?.videoStatus);
           logPollingTerminalPanelState(status, true);
@@ -10572,6 +10625,11 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
         }
 
         scheduleScenarioPoll(1800, "status_running");
+        updateScenarioSceneGenerationRuntime(sceneId, {
+          videoStatus: "polling",
+          videoGenerationStep: "Проверяю результат…",
+          videoError: "",
+        });
       } catch (e) {
         const errMsg = String(e?.message || "").toLowerCase();
         if (errMsg.includes("job_id_not_found_or_expired")) {
@@ -10595,6 +10653,11 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoJobId: String(toleratedMeta?.jobId || ""),
             videoPanelActivated: true,
           }, { jobId: String(toleratedMeta?.jobId || ""), status: "not_found", code: "video_job_not_found", message: String(e?.message || e) });
+          updateScenarioSceneGenerationRuntime(sceneId, {
+            videoStatus: "error",
+            videoGenerationStep: "",
+            videoError: String(e?.message || e || "video_job_not_found"),
+          });
           logPollingTerminalPanelState("not_found", true);
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
@@ -10611,13 +10674,18 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
           videoError: propagatedError,
           videoPanelActivated: true,
         }, { jobId: String((scenarioVideoJobsBySceneRef.current.get(sceneId) || {})?.jobId || ""), status: "error", message: propagatedError });
+        updateScenarioSceneGenerationRuntime(sceneId, {
+          videoStatus: "error",
+          videoGenerationStep: "",
+          videoError: propagatedError,
+        });
         logPollingTerminalPanelState("error", true);
         clearActiveVideoJob(sceneId, { status: "error", jobId: String((scenarioVideoJobsBySceneRef.current.get(sceneId) || {})?.jobId || "") });
       }
     };
 
     scheduleScenarioPoll(250, "initial_after_start");
-  }, [clearActiveVideoJob, isScenarioVideoJobNotFound, persistActiveVideoJob, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
+  }, [clearActiveVideoJob, isScenarioVideoJobNotFound, persistActiveVideoJob, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
 
   useEffect(() => () => {
     scenarioActivePollingJobIdsRef.current.clear();
@@ -12083,7 +12151,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     }
 
     const sceneId = String(comfySelectedScene?.sceneId || "").trim();
-    if (!sceneId) throw new Error("scene_id_required");
+    if (!sceneId) {
+      blockScenarioVideoGeneration("scene_id_required", "Не удалось определить sceneId для video generation.");
+      return;
+    }
     const startSec = Number(comfySelectedScene?.startSec ?? comfySelectedScene?.start ?? comfySelectedScene?.t0 ?? 0);
     const endSec = Number(comfySelectedScene?.endSec ?? comfySelectedScene?.end ?? comfySelectedScene?.t1 ?? startSec);
     const expectedDuration = Math.max(0, endSec - startSec);
@@ -12470,6 +12541,24 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     }
     const sceneId = requestSceneId;
     if (!sceneId) throw new Error("scene_id_required");
+    const imageLockKey = `${targetNodeId}:${sceneId}:${normalizedSlot}`;
+    const previousImageRuntimeStatus = String(targetScene?.imageStatus || "").trim().toLowerCase();
+    const existingRuntimeStatus = String(
+      targetNode?.data?.sceneGeneration?.[sceneId]?.imageStatus
+      || ""
+    ).trim().toLowerCase();
+    if (existingRuntimeStatus === "generating" || scenarioImageLocksRef.current.has(imageLockKey)) {
+      console.debug("[SCENARIO IMAGE BUTTON STATE]", {
+        sceneId,
+        action: "generate_image",
+        previousStatus: existingRuntimeStatus || previousImageRuntimeStatus || "idle",
+        nextStatus: existingRuntimeStatus || "generating",
+        lockActive: true,
+        reason: "double_click_ignored",
+      });
+      return;
+    }
+    scenarioImageLocksRef.current.add(imageLockKey);
     const requestStoryboardRevision = String(targetNode?.data?.storyboardRevision || "").trim();
     const requestStoryboardSignature = String(
       targetNode?.data?.storyboardSignature
@@ -12513,6 +12602,14 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const firstLastContinuityClause = continuityContractLines.join("\n");
 
     if (!sceneDelta) {
+      console.debug("[SCENARIO IMAGE BUTTON STATE]", {
+        sceneId,
+        action: "generate_image",
+        previousStatus: previousImageRuntimeStatus || "idle",
+        nextStatus: "error",
+        lockActive: true,
+        reason: "validation_block_missing_scene_prompt",
+      });
       console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] missing_scene_delta", {
         sceneId,
         targetSceneIndex,
@@ -12520,6 +12617,18 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         normalizedSlot,
       });
       setScenarioImageError("Добавьте prompt для генерации кадра");
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        imageStatus: "error",
+        imageGenerationStep: "",
+        imageError: "Добавьте prompt для генерации кадра",
+      }, { nodeId: targetNodeId });
+      scenarioImageLocksRef.current.delete(imageLockKey);
+      console.debug("[SCENARIO GENERATION UI RESET]", {
+        sceneId,
+        action: "generate_image",
+        finalStatus: "error",
+        clearedLoading: true,
+      });
       return;
     }
     const visualGlueText = buildScenarioVisualGlueText(targetScene);
@@ -12539,6 +12648,19 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
 
     setScenarioImageLoading(true);
     setScenarioImageError("");
+    updateScenarioSceneGenerationRuntime(sceneId, {
+      imageStatus: "generating",
+      imageGenerationStep: "Готовлю сцену…",
+      imageError: "",
+    }, { nodeId: targetNodeId });
+    console.debug("[SCENARIO IMAGE BUTTON STATE]", {
+      sceneId,
+      action: "generate_image",
+      previousStatus: existingRuntimeStatus || previousImageRuntimeStatus || "idle",
+      nextStatus: "generating",
+      lockActive: true,
+      reason: `slot:${normalizedSlot}`,
+    });
     try {
       const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
       const scenarioContractPayloadSanitized = {
@@ -13314,10 +13436,17 @@ Aspect ratio: ${imageFormat}`,
         hasCharacter1Ref: Number(finalRefsByRoleCounts?.character_1 || 0) > 0,
         hasLocationRef: Number(finalRefsByRoleCounts?.location || 0) > 0,
       });
-      const out = await fetchJson(`/api/clip/image`, {
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        imageGenerationStep: "Передаю референсы…",
+      }, { nodeId: targetNodeId });
+      const out = await withTimeoutGuard(fetchJson(`/api/clip/image`, {
         method: "POST",
+        timeoutMs: IMAGE_GENERATION_TIMEOUT_MS,
         body: finalRequestBody,
-      });
+      }), IMAGE_GENERATION_TIMEOUT_MS, "image_generation_timeout");
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        imageGenerationStep: "Gemini собирает кадр…",
+      }, { nodeId: targetNodeId });
       const responseSceneId = String(out?.sceneId || "").trim();
       const generatedImageUrl = resolveScenarioImageUrlFromApiResponse(out);
       const resultStatus = String(out?.resultStatus || "").trim();
@@ -13365,6 +13494,9 @@ Aspect ratio: ${imageFormat}`,
         responseError.payload = out;
         throw responseError;
       }
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        imageGenerationStep: "Проверяю ссылку на изображение…",
+      }, { nodeId: targetNodeId });
 
       const imageDegraded = responseDegraded;
       const imageDegradeReason = String(out?.degradeReason || out?.hint || "").trim();
@@ -13493,6 +13625,9 @@ Aspect ratio: ${imageFormat}`,
         return;
       }
       let runtimeImagePatch = {};
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        imageGenerationStep: "Сохраняю кадр в сцену…",
+      }, { nodeId: targetNodeId });
       if ((imageStrategy === "continuation" || isTwoFrameScene) && normalizedSlot === "start") {
         updateScenarioScene(sceneId, {
           imageUrl: "",
@@ -13640,6 +13775,8 @@ Aspect ratio: ${imageFormat}`,
       }
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
       updateScenarioSceneGenerationRuntime(sceneId, {
+        imageStatus: "done",
+        imageGenerationStep: "",
         lastImageApiResult: imageApiRuntimeResult,
         lastAcceptedImageUrl: generatedImageUrl,
         lastRejectedImageUrl: "",
@@ -13743,8 +13880,16 @@ Aspect ratio: ${imageFormat}`,
         ? { startFrameStatus: "error", startFrameError: imageErrorMessage }
         : normalizedSlot === "end"
           ? { endFrameStatus: "error", endFrameError: imageErrorMessage }
-          : { imageStatus: "error", imageError: imageErrorMessage };
+          : { imageStatus: "error", imageError: imageErrorMessage, imageGenerationStep: "" };
       updateScenarioSceneGenerationRuntime(sceneId, runtimeErrorPatch, { nodeId: targetNodeId });
+      console.debug("[SCENARIO IMAGE BUTTON STATE]", {
+        sceneId,
+        action: "generate_image",
+        previousStatus: "generating",
+        nextStatus: "error",
+        lockActive: true,
+        reason: String(e?.message || e || "unknown_error"),
+      });
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
         console.debug("[SCENARIO IMAGE STATUS SYNC]", {
           sceneId,
@@ -13757,6 +13902,13 @@ Aspect ratio: ${imageFormat}`,
       setScenarioImageError(imageErrorMessage);
     } finally {
       setScenarioImageLoading(false);
+      scenarioImageLocksRef.current.delete(imageLockKey);
+      console.debug("[SCENARIO GENERATION UI RESET]", {
+        sceneId,
+        action: "generate_image",
+        finalStatus: String((nodesRef.current || []).find((nodeItem) => nodeItem?.id === targetNodeId)?.data?.sceneGeneration?.[sceneId]?.imageStatus || "").trim() || "idle",
+        clearedLoading: true,
+      });
     }
   }, [activeScenarioStoryboardNode?.id, clearActiveVideoJob, notify, resolveScenarioLiveBinding, resolveScenarioSceneIndex, resolveScenarioStoryboardTargetNode, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, scenarioSelected?.sceneId, scenarioBrainRefs, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
 
@@ -14151,6 +14303,69 @@ Aspect ratio: ${imageFormat}`,
       });
       return;
     }
+    const videoLockKey = `${targetNodeId}:${sceneId}`;
+    const previousVideoRuntimeStatus = String(
+      targetNode?.data?.sceneGeneration?.[sceneId]?.videoStatus
+      || targetScene?.videoStatus
+      || ""
+    ).trim().toLowerCase();
+    if (isSceneVideoUiGeneratingStatus(previousVideoRuntimeStatus) || scenarioVideoLocksRef.current.has(videoLockKey)) {
+      console.debug("[SCENARIO VIDEO BUTTON STATE]", {
+        sceneId,
+        action: "generate_video",
+        previousStatus: previousVideoRuntimeStatus || "idle",
+        nextStatus: previousVideoRuntimeStatus || "preparing",
+        lockActive: true,
+        reason: "double_click_ignored",
+      });
+      return;
+    }
+    scenarioVideoLocksRef.current.add(videoLockKey);
+    const blockScenarioVideoGeneration = (blockReason, message) => {
+      const finalMessage = String(message || blockReason || "video_generation_blocked").trim();
+      setScenarioVideoError(finalMessage);
+      if (targetSceneIndex >= 0) {
+        updateScenarioScene(targetSceneIndex, {
+          videoStatus: "error",
+          videoError: String(blockReason || "video_generation_blocked"),
+          videoPanelActivated: true,
+        }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
+      }
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        videoStatus: "error",
+        videoGenerationStep: "",
+        videoError: finalMessage,
+      }, { nodeId: targetNodeId });
+      console.debug("[SCENARIO VIDEO BUTTON STATE]", {
+        sceneId,
+        action: "generate_video",
+        previousStatus: previousVideoRuntimeStatus || "idle",
+        nextStatus: "error",
+        lockActive: true,
+        reason: "validation_block",
+        blockReason: String(blockReason || ""),
+      });
+      scenarioVideoLocksRef.current.delete(videoLockKey);
+      console.debug("[SCENARIO GENERATION UI RESET]", {
+        sceneId,
+        action: "generate_video",
+        finalStatus: "error",
+        clearedLoading: true,
+      });
+    };
+    updateScenarioSceneGenerationRuntime(sceneId, {
+      videoStatus: "preparing",
+      videoGenerationStep: "Готовлю source-кадр…",
+      videoError: "",
+    }, { nodeId: targetNodeId });
+    console.debug("[SCENARIO VIDEO BUTTON STATE]", {
+      sceneId,
+      action: "generate_video",
+      previousStatus: previousVideoRuntimeStatus || "idle",
+      nextStatus: "preparing",
+      lockActive: true,
+      reason: "start_generation",
+    });
     const targetPreviousScene = targetSceneIndex > 0 ? targetScenes[targetSceneIndex - 1] : null;
     const runtimeByScene = targetNode?.data?.sceneGeneration && typeof targetNode.data.sceneGeneration === "object"
       ? targetNode.data.sceneGeneration
@@ -14301,10 +14516,7 @@ Aspect ratio: ${imageFormat}`,
         debugSourceFieldsUsed,
         selectedIndex: targetSceneIndex,
       });
-      setScenarioVideoError("Для этой сцены не хватает source-кадров для video flow (см. [SCENARIO VIDEO REQUEST SUMMARY]).");
-      if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: validateReason, videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
-      }
+      blockScenarioVideoGeneration(validateReason, "Для этой сцены не хватает source-кадров для video flow (см. [SCENARIO VIDEO REQUEST SUMMARY]).");
     }
 
     if (!hasImageForVideo) return;
@@ -14396,6 +14608,10 @@ Aspect ratio: ${imageFormat}`,
       });
     }
     if (lipSyncRoute && (!attachedAudioSliceUrl || staleSliceMetadataDetected)) {
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        videoStatus: "preparing",
+        videoGenerationStep: "Готовлю lip/audio-aware сцену…",
+      }, { nodeId: targetNodeId });
       reextractTriggered = true;
       try {
         const extracted = await handleScenarioEditorExtractSceneAudio(targetNodeId, sceneId);
@@ -14464,10 +14680,7 @@ Aspect ratio: ${imageFormat}`,
         workflow: effectiveWorkflowKey,
         contentType: effectiveContentType,
       });
-      setScenarioVideoError("Sound dialogue workflows отключены для music_video по умолчанию.");
-      if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "sound_workflow_blocked_for_clip", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
-      }
+      blockScenarioVideoGeneration("sound_workflow_blocked_for_clip", "Sound dialogue workflows отключены для music_video по умолчанию.");
       return;
     }
     const musicVocalLipSyncAllowed = Boolean(effectiveMusicVocalLipSyncAllowed);
@@ -14483,10 +14696,7 @@ Aspect ratio: ${imageFormat}`,
         hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
         selectedIndex: targetSceneIndex,
       });
-      setScenarioVideoError("Для lipSync не удалось автоматически подготовить audioSlice. Проверьте исходное аудио и попробуйте снова.");
-      if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "lip_sync_audio_missing", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
-      }
+      blockScenarioVideoGeneration("lip_sync_audio_missing", "Для lipSync не удалось автоматически подготовить audioSlice. Проверьте исходное аудио и попробуйте снова.");
       return;
     }
     if (effectiveWorkflowKey === "lip_sync_music" && (!musicVocalLipSyncAllowed || audioSliceKind !== "music_vocal")) {
@@ -14496,11 +14706,23 @@ Aspect ratio: ${imageFormat}`,
         musicVocalLipSyncAllowed,
         audioSliceKind: audioSliceKind || "none",
       });
-      setScenarioVideoError("Для lipSync нужен slice с music+vocal compatibility.");
-      if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: "lip_sync_music_vocal_flag_missing", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
-      }
+      blockScenarioVideoGeneration("lip_sync_music_vocal_flag_missing", "Для lipSync нужен slice с music+vocal compatibility.");
       return;
+    }
+    if (effectiveWorkflowKey === "lip_sync_music") {
+      console.debug("[SCENARIO IA2V SEND CHECK]", {
+        sceneId,
+        route: effectiveWorkflowKey,
+        hasImageUrl: Boolean(frameImageUrl),
+        hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
+        blockReason: (!attachedAudioSliceUrl || !musicVocalLipSyncAllowed || audioSliceKind !== "music_vocal")
+          ? "lip_sync_validation_failed"
+          : "",
+      });
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        videoStatus: "preparing",
+        videoGenerationStep: "Проверяю source image + audio slice…",
+      }, { nodeId: targetNodeId });
     }
 
     console.info("[SCENARIO VIDEO FLOW]", {
@@ -14561,11 +14783,19 @@ Aspect ratio: ${imageFormat}`,
     const canonicalFinalPromptMissing = !sceneVideoMetadata.positivePrompt || !sceneVideoMetadata.negativePrompt;
     if (canonicalFinalPromptMissing) {
       const errorCode = "final_video_prompt_missing";
-      setScenarioVideoError("Отсутствует canonical FINAL VIDEO PROMPT. Выполните стадию FINAL VIDEO PROMPT и повторите.");
-      if (targetSceneIndex >= 0) {
-        updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: errorCode, videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
-      }
+      blockScenarioVideoGeneration(errorCode, "Отсутствует canonical FINAL VIDEO PROMPT. Выполните стадию FINAL VIDEO PROMPT и повторите.");
       return;
+    }
+    if (requiresTwoFrames) {
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        videoStatus: "preparing",
+        videoGenerationStep: "Проверяю первый и последний кадр…",
+      }, { nodeId: targetNodeId });
+    } else {
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        videoStatus: "preparing",
+        videoGenerationStep: "Проверяю route и workflow…",
+      }, { nodeId: targetNodeId });
     }
     const strictFirstLastMode = String(effectiveWorkflowKey || "").trim().toLowerCase() === "f_l";
     const finalVideoPrompt = sceneVideoMetadata.positivePrompt;
@@ -14644,6 +14874,11 @@ Aspect ratio: ${imageFormat}`,
     }
 
     console.log("[StoryboardVideo] video_loading_on reason=generate_video", { sceneId });
+    updateScenarioSceneGenerationRuntime(sceneId, {
+      videoStatus: "sending",
+      videoGenerationStep: "Отправляю в LTX/Kling…",
+      videoError: "",
+    }, { nodeId: targetNodeId });
     updateScenarioScene(targetSceneIndex, { videoUrl: "", videoStatus: "queued", videoError: "", videoJobId: "", videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
     setScenarioVideoError("");
     console.log("[StoryboardVideo] generate", {
@@ -15089,6 +15324,11 @@ Aspect ratio: ${imageFormat}`,
           status: "queued",
         };
         updateScenarioScene(targetSceneIndex, { videoJobId: startedMeta.jobId, videoStatus: "queued", videoError: "" }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
+        updateScenarioSceneGenerationRuntime(sceneId, {
+          videoStatus: "polling",
+          videoGenerationStep: "Жду видео от провайдера…",
+          videoError: "",
+        }, { nodeId: targetNodeId });
         let shouldStartPolling = true;
         try {
           console.info("[SCENARIO VIDEO STATUS INFO]", {
@@ -15131,6 +15371,11 @@ Aspect ratio: ${imageFormat}`,
               videoPanelActivated: true,
             }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
             clearActiveVideoJob(sceneId, { status: "done", jobId: startedMeta.jobId });
+            updateScenarioSceneGenerationRuntime(sceneId, {
+              videoStatus: "done",
+              videoGenerationStep: "",
+              videoError: "",
+            }, { nodeId: targetNodeId });
             console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: true });
             console.info("[SCENARIO VIDEO SUCCESS FLOW]", { sceneId, openNextSceneWithoutVideoSkipped: true });
             shouldStartPolling = false;
@@ -15140,12 +15385,22 @@ Aspect ratio: ${imageFormat}`,
               videoPanelActivated: true,
             }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
             clearActiveVideoJob(sceneId, { status: immediateStatus, jobId: startedMeta.jobId });
+            updateScenarioSceneGenerationRuntime(sceneId, {
+              videoStatus: "error",
+              videoGenerationStep: "",
+              videoError: String(immediateOut?.error || immediateOut?.hint || immediateOut?.code || immediateStatus || "video_generation_failed"),
+            }, { nodeId: targetNodeId });
             console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: immediateStatus, videoPanelActivatedAfterApply: true });
             shouldStartPolling = false;
           } else {
             updateScenarioScene(targetSceneIndex, {
               ...buildCanonicalVideoStatusPatch(immediateStatus, { ...immediateOut, jobId: startedMeta.jobId }, targetScene),
             }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
+            updateScenarioSceneGenerationRuntime(sceneId, {
+              videoStatus: "polling",
+              videoGenerationStep: "Проверяю результат…",
+              videoError: "",
+            }, { nodeId: targetNodeId });
           }
         } catch (immediateStatusError) {
           const message = String(immediateStatusError?.message || immediateStatusError || "");
@@ -15187,10 +15442,31 @@ Aspect ratio: ${imageFormat}`,
       });
       setScenarioVideoError(String(e?.message || e));
       updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e), videoPanelActivated: true }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
+      updateScenarioSceneGenerationRuntime(sceneId, {
+        videoStatus: "error",
+        videoGenerationStep: "",
+        videoError: errorMessage || "video_generation_failed",
+      }, { nodeId: targetNodeId });
+      console.debug("[SCENARIO VIDEO BUTTON STATE]", {
+        sceneId,
+        action: "generate_video",
+        previousStatus: "sending",
+        nextStatus: "error",
+        lockActive: true,
+        reason: errorType,
+      });
       console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "error", videoPanelActivatedAfterApply: true });
       clearActiveVideoJob(sceneId, { status: "error" });
+    } finally {
+      scenarioVideoLocksRef.current.delete(videoLockKey);
+      console.debug("[SCENARIO GENERATION UI RESET]", {
+        sceneId,
+        action: "generate_video",
+        finalStatus: String((nodesRef.current || []).find((nodeItem) => nodeItem?.id === targetNodeId)?.data?.sceneGeneration?.[sceneId]?.videoStatus || "").trim() || "idle",
+        clearedLoading: true,
+      });
     }
-  }, [clearActiveVideoJob, handleScenarioEditorExtractSceneAudio, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioSelected?.sceneId, startScenarioVideoPolling, updateScenarioScene]);
+  }, [clearActiveVideoJob, handleScenarioEditorExtractSceneAudio, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioSelected?.sceneId, startScenarioVideoPolling, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
@@ -21788,14 +22064,21 @@ const hydrate = useCallback((source = "unknown") => {
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Start preview отсутствует</div>
                             )}
+                            {scenarioImageOverlayVisible ? (
+                              <div className="generationOverlay">
+                                <div className="generationOverlayPulse" />
+                                <div className="generationOverlayText">{scenarioImageOverlayStageText}</div>
+                                <div className="generationOverlayDots" aria-hidden="true"><span /><span /><span /></div>
+                              </div>
+                            ) : null}
                           </div>
                           <div style={{ display: "flex", gap: 8, marginTop: 8, marginBottom: 10 }}>
                             <button
                               className="clipSB_btn clipSB_btnSecondary"
                               onClick={() => handleGenerateScenarioImage("start")}
-                              disabled={scenarioImageLoading || !!scenarioSelected.inheritPreviousEndAsStart}
+                              disabled={scenarioSceneImageBusy || !!scenarioSelected.inheritPreviousEndAsStart}
                             >
-                              {scenarioImageLoading ? "Генерация..." : "Сгенерировать start"}
+                              {scenarioSceneImageBusy ? "Генерация..." : "Сгенерировать start"}
                             </button>
                             <button
                               className="clipSB_btn clipSB_btnSecondary"
@@ -21821,17 +22104,24 @@ const hydrate = useCallback((source = "unknown") => {
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">End preview отсутствует</div>
                             )}
+                            {scenarioImageOverlayVisible ? (
+                              <div className="generationOverlay">
+                                <div className="generationOverlayPulse" />
+                                <div className="generationOverlayText">{scenarioImageOverlayStageText}</div>
+                                <div className="generationOverlayDots" aria-hidden="true"><span /><span /><span /></div>
+                              </div>
+                            ) : null}
                           </div>
                           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleGenerateScenarioImage("end")} disabled={scenarioImageLoading}>
-                              {scenarioImageLoading ? "Генерация..." : "Сгенерировать end"}
+                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleGenerateScenarioImage("end")} disabled={scenarioSceneImageBusy}>
+                              {scenarioSceneImageBusy ? "Генерация..." : "Сгенерировать end"}
                             </button>
                             <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleClearScenarioImage("end")}>Очистить end</button>
                             {scenarioCanShowAddToVideoButton ? (
                               <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioAddToVideo}>Добавить в Видео</button>
                             ) : null}
                           </div>
-                          {scenarioImageError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioImageError}</div> : null}
+                          {scenarioImageInlineError ? <div className="generationErrorInline">{scenarioImageInlineError}</div> : null}
                         </div>
                       </>
                     ) : (
@@ -21874,17 +22164,24 @@ const hydrate = useCallback((source = "unknown") => {
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Превью отсутствует</div>
                             )}
+                            {scenarioImageOverlayVisible ? (
+                              <div className="generationOverlay">
+                                <div className="generationOverlayPulse" />
+                                <div className="generationOverlayText">{scenarioImageOverlayStageText}</div>
+                                <div className="generationOverlayDots" aria-hidden="true"><span /><span /><span /></div>
+                              </div>
+                            ) : null}
                           </div>
                           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleGenerateScenarioImage("single")} disabled={scenarioImageLoading}>
-                              {scenarioImageLoading ? "Генерация..." : "Сгенерировать изображение"}
+                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleGenerateScenarioImage("single")} disabled={scenarioSceneImageBusy}>
+                              {scenarioSceneImageBusy ? "Генерация..." : "Сгенерировать изображение"}
                             </button>
                             <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleClearScenarioImage("single")}>Очистить изображение</button>
                             {scenarioCanShowAddToVideoButton ? (
                               <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioAddToVideo}>Добавить в Видео</button>
                             ) : null}
                           </div>
-                          {scenarioImageError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioImageError}</div> : null}
+                          {scenarioImageInlineError ? <div className="generationErrorInline">{scenarioImageInlineError}</div> : null}
                         </div>
 
                         <div className="clipSB_scenarioEditRow">
@@ -22052,8 +22349,10 @@ const hydrate = useCallback((source = "unknown") => {
                                 )}
 
                                 {scenarioShowingGeneratingOverlay ? (
-                                  <div className="clipSB_videoOverlay">
-                                    <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
+                                  <div className="generationOverlay">
+                                    <div className="generationOverlayPulse" />
+                                    <div className="generationOverlayText">{scenarioVideoOverlayStageText}</div>
+                                    <div className="generationOverlayDots" aria-hidden="true"><span /><span /><span /></div>
                                   </div>
                                 ) : null}
                               </div>
@@ -22078,8 +22377,10 @@ const hydrate = useCallback((source = "unknown") => {
                             )}
 
                             {scenarioShowingGeneratingOverlay ? (
-                              <div className="clipSB_videoOverlay">
-                                <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
+                              <div className="generationOverlay">
+                                <div className="generationOverlayPulse" />
+                                <div className="generationOverlayText">{scenarioVideoOverlayStageText}</div>
+                                <div className="generationOverlayDots" aria-hidden="true"><span /><span /><span /></div>
                               </div>
                             ) : null}
                           </div>
@@ -22114,7 +22415,7 @@ const hydrate = useCallback((source = "unknown") => {
                             Удалить видео
                           </button>
                         </div>
-                        {(scenarioSelected?.videoError || scenarioVideoError) ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioSelected?.videoError || scenarioVideoError}</div> : null}
+                        {scenarioVideoInlineError ? <div className="generationErrorInline">{scenarioVideoInlineError}</div> : null}
                       </div>
                     ) : null}
                   </>
