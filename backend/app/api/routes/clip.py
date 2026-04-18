@@ -11990,15 +11990,31 @@ def _build_comfy_image_prompt_assembly(
 
 @router.post("/clip/image")
 def clip_image(payload: ClipImageIn):
+    api_started_at = time.monotonic()
+    gemini_started = False
     scene_id = (payload.sceneId or "").strip()
     prompt = (payload.prompt or "").strip()
     scene_delta = (payload.sceneDelta or prompt).strip()
     style = (payload.style or "default").strip()
+    route_value = str(getattr(payload, "route", "") or "").strip()
+    workflow_key = str(
+        getattr(payload, "resolvedWorkflowKey", None)
+        or getattr(payload, "workflowKey", None)
+        or ""
+    ).strip()
 
     if not scene_id:
         return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "sceneId_required"})
     if not scene_delta:
         return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "sceneDelta_or_prompt_required"})
+    print("[CLIP IMAGE API START] " + json.dumps({
+        "sceneId": scene_id,
+        "route": route_value,
+        "workflowKey": workflow_key,
+        "sceneDeltaLength": len(scene_delta),
+        "promptLength": len(prompt),
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+    }, ensure_ascii=False))
 
     width = max(256, min(2048, int(payload.width or 1024)))
     height = max(256, min(2048, int(payload.height or 1024)))
@@ -12014,6 +12030,16 @@ def clip_image(payload: ClipImageIn):
     session_style_anchor = str(getattr(refs_obj, "sessionStyleAnchor", "") or "").strip()
     session_baseline = getattr(refs_obj, "sessionBaseline", None)
     raw_scene_contract = _extract_clip_image_scene_contract(payload, refs_obj=refs_obj)
+    print("[CLIP IMAGE PROMPT SUMMARY] " + json.dumps({
+        "sceneId": scene_id,
+        "route": route_value,
+        "workflowKey": workflow_key,
+        "sceneTextLength": len(scene_text),
+        "sceneDeltaLength": len(scene_delta),
+        "imagePromptLength": len(str(getattr(payload, "image_prompt", "") or "")),
+        "videoPromptLength": len(str(getattr(payload, "video_prompt", "") or "")),
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+    }, ensure_ascii=False))
     hero_contract_debug = raw_scene_contract.get("heroAppearanceContract")
     outfit_profile_debug = (
         raw_scene_contract.get("effectiveOutfitProfile")
@@ -12210,6 +12236,15 @@ def clip_image(payload: ClipImageIn):
     print("[COMFY IMAGE DEBUG] cleaned refsByRole counts=" + json.dumps({role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_1=" + json.dumps(comfy_refs_by_role.get("character_1") or [], ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_2=" + json.dumps(comfy_refs_by_role.get("character_2") or [], ensure_ascii=False))
+    print("[CLIP IMAGE REFS SUMMARY] " + json.dumps({
+        "sceneId": scene_id,
+        "route": route_value,
+        "workflowKey": workflow_key,
+        "refsByRoleCounts": {role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES},
+        "hasCharacter1Ref": bool(len(comfy_refs_by_role.get("character_1") or []) > 0),
+        "connectedInputsCount": len((getattr(refs_obj, "connectedInputs", None) or {}) if isinstance(getattr(refs_obj, "connectedInputs", None), dict) else {}),
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+    }, ensure_ascii=False))
     reference_profiles = build_reference_profiles({
         role: [{"url": url, "name": ""} for url in (comfy_refs_by_role.get(role) or [])]
         for role in COMFY_REF_ROLES
@@ -13670,6 +13705,14 @@ def clip_image(payload: ClipImageIn):
         refs_debug["skippedRoles"] = skipped_roles + filtered_out_by_scene_contract
         refs_debug["modelPartsSummary"] = model_parts_summary
         print("[COMFY IMAGE DEBUG] model parts summary=" + json.dumps(model_parts_summary, ensure_ascii=False))
+        gemini_started = True
+        print("[CLIP IMAGE GEMINI START] " + json.dumps({
+            "sceneId": scene_id,
+            "route": route_value,
+            "workflowKey": workflow_key,
+            "model": str(model),
+            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+        }, ensure_ascii=False))
         print("[CLIP IMAGE GEMINI] request model=" + str(model))
         print("[CLIP IMAGE GEMINI] request config=" + json.dumps(body.get("generationConfig") or {}, ensure_ascii=False))
         resp = post_generate_content(api_key, model, body, timeout=120)
@@ -13696,6 +13739,15 @@ def clip_image(payload: ClipImageIn):
         decoded = _decode_gemini_image(resp_dict)
         image_found = bool(decoded)
         print("[CLIP IMAGE GEMINI] decoded image found=" + json.dumps({"found": image_found}, ensure_ascii=False))
+        print("[CLIP IMAGE GEMINI DONE] " + json.dumps({
+            "sceneId": scene_id,
+            "model": str(model),
+            "httpStatus": response_summary.get("status"),
+            "httpError": bool(response_summary.get("httpError")),
+            "imagePartCount": response_summary.get("imagePartCount"),
+            "decodedImageFound": image_found,
+            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+        }, ensure_ascii=False))
         fallback_debug = {
             "httpStatus": response_summary.get("status"),
             "httpError": bool(response_summary.get("httpError")),
@@ -13739,6 +13791,15 @@ def clip_image(payload: ClipImageIn):
                 response_summary.get("imagePartCount"),
                 True,
             )
+            print("[CLIP IMAGE API DONE] " + json.dumps({
+                "sceneId": scene_id,
+                "ok": True,
+                "engine": "gemini",
+                "model": str(model),
+                "geminiStarted": gemini_started,
+                "imageBytesReturned": True,
+                "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+            }, ensure_ascii=False))
             return {
                 "ok": True,
                 "sceneId": scene_id,
@@ -13767,6 +13828,15 @@ def clip_image(payload: ClipImageIn):
             response_summary.get("imagePartCount"),
             False,
         )
+        print("[CLIP IMAGE API DONE] " + json.dumps({
+            "sceneId": scene_id,
+            "ok": True,
+            "engine": "mock",
+            "model": str(model),
+            "geminiStarted": gemini_started,
+            "imageBytesReturned": False,
+            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+        }, ensure_ascii=False))
         return {
             "ok": True,
             "sceneId": scene_id,
@@ -13783,8 +13853,20 @@ def clip_image(payload: ClipImageIn):
             "generationMode": generation_mode,
         }
     except ValueError as e:
+        print("[CLIP IMAGE API ERROR] " + json.dumps({
+            "sceneId": scene_id,
+            "error": str(e)[:300],
+            "geminiStarted": gemini_started,
+            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+        }, ensure_ascii=False))
         return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": str(e)[:300]})
     except Exception as e:
+        print("[CLIP IMAGE API ERROR] " + json.dumps({
+            "sceneId": scene_id,
+            "error": str(e)[:500],
+            "geminiStarted": gemini_started,
+            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+        }, ensure_ascii=False))
         logger.exception(
             "[SCENARIO IMAGE EXCEPTION] sceneId=%s error=%s modelUsed=%s generationMode=%s",
             scene_id,
@@ -13807,6 +13889,15 @@ def clip_image(payload: ClipImageIn):
                 None,
                 False,
             )
+            print("[CLIP IMAGE API DONE] " + json.dumps({
+                "sceneId": scene_id,
+                "ok": True,
+                "engine": "mock",
+                "model": str(model if 'model' in locals() else ""),
+                "geminiStarted": gemini_started,
+                "imageBytesReturned": False,
+                "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+            }, ensure_ascii=False))
             return {
                 "ok": True,
                 "sceneId": scene_id,
