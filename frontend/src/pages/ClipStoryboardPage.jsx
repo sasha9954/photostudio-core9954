@@ -23207,6 +23207,15 @@ const hydrate = useCallback((source = "unknown") => {
         onClose={() => setIsScenarioStoryboardOpen(false)}
         onUpdateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneUpdate}
         onGenerateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneGenerate}
+        onGenerateVideo={(scene, options = {}) => {
+          const explicitSceneId = String(options?.sceneId || scene?.sceneId || "").trim();
+          const explicitSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : undefined;
+          handleScenarioGenerateVideo({
+            ...options,
+            sceneId: explicitSceneId,
+            sceneIndex: explicitSceneIndex,
+          });
+        }}
         onUpdateMusic={activeScenarioStoryboardNode?.data?.onScenarioMusicUpdate}
         onGenerateMusic={activeScenarioStoryboardNode?.data?.onScenarioMusicGenerate}
         onExtractSceneAudio={handleScenarioEditorExtractSceneAudio}
