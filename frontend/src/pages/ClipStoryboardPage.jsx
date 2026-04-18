@@ -698,6 +698,54 @@ const REF_INVENTORY_ROLE_MAP = {
   props: ["ref_props", "ref_items"],
 };
 
+function toUrlList(value) {
+  if (!value) return [];
+  const result = [];
+
+  const pushUrl = (item) => {
+    if (!item) return;
+    if (typeof item === "string") {
+      const text = item.trim();
+      if (text) result.push(text);
+      return;
+    }
+    if (Array.isArray(item)) {
+      item.forEach(pushUrl);
+      return;
+    }
+    if (typeof item === "object") {
+      [
+        item.url,
+        item.src,
+        item.imageUrl,
+        item.image_url,
+        item.preview,
+        item.value,
+        item.fileUrl,
+        item.assetUrl,
+      ].forEach(pushUrl);
+
+      if (Array.isArray(item.refs)) item.refs.forEach(pushUrl);
+      if (Array.isArray(item.images)) item.images.forEach(pushUrl);
+      if (Array.isArray(item.urls)) item.urls.forEach(pushUrl);
+    }
+  };
+
+  pushUrl(value);
+
+  return [...new Set(
+    result
+      .map((url) => String(url || "").trim())
+      .filter(Boolean)
+      .filter((url) => (
+        /^https?:\/\//i.test(url)
+        || /^\/?static\//i.test(url)
+        || /^data:image\//i.test(url)
+        || /\.(jpg|jpeg|png|webp)(\?|#|$)/i.test(url)
+      )),
+  )];
+}
+
 function extractScenarioRefsByRoleFromSource(source = null) {
   if (!source || typeof source !== "object") return Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
   const NON_URL_REF_MARKERS = new Set(["required", "omit", "present", "true", "false", "hero", "location"]);
@@ -1047,9 +1095,6 @@ function collectScenarioNarrativeRefs({ sourceNode = null } = {}) {
 }
 
 function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, scenarioPackage = {} } = {}) {
-  const toUrlList = (items) => (Array.isArray(items)
-    ? items.map((item) => String(typeof item === "string" ? item : item?.url || "").trim()).filter(Boolean)
-    : []);
   const humanRoles = ["character_1", "character_2", "character_3"];
   const enforceHumanRoleIsolation = (roleMapInput = {}) => {
     const outMap = { ...roleMapInput };
