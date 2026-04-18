@@ -872,19 +872,8 @@ export default function ScenarioStoryboardEditor({
   const isBgAudioSelected = activeSelectionType === "bg_audio";
   const sceneNeedsTwoFrames = isFirstLastScene(selectedScene);
   const isFirstLastVideoMode = sceneNeedsTwoFrames;
-  const imagePromptRuValue = String(selectedScene?.imagePromptRu || "").trim();
-  const imagePromptEnValue = String(selectedScene?.imagePromptEn || "").trim();
-  const videoPromptValue = String(selectedScene?.videoPrompt || "").trim();
-  const promptNotesValue = String(selectedScene?.promptNotes || "").trim();
   const resolvedImagePromptForDisplay = resolveSceneImagePromptForDisplay(selectedScene || {});
   const hasImagePromptPreview = Boolean(resolvedImagePromptForDisplay);
-  const hasPromptDebugDetails = Boolean(
-    resolvedImagePromptForDisplay
-    || imagePromptRuValue
-    || imagePromptEnValue
-    || videoPromptValue
-    || promptNotesValue
-  );
   const derivedFramePrompts = deriveFirstLastFramePrompts(selectedScene || {});
   const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || derivedFramePrompts.start || "");
   const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
@@ -1529,36 +1518,19 @@ export default function ScenarioStoryboardEditor({
                                   background: "rgba(255,255,255,0.04)",
                                   whiteSpace: "pre-wrap",
                                   lineHeight: 1.35,
-                                  maxHeight: "4.1em",
-                                  overflow: "hidden",
+                                  minHeight: 120,
+                                  maxHeight: 180,
+                                  overflowY: "auto",
+                                  overflowX: "hidden",
+                                  userSelect: "text",
                                 }}
                               >
                                 {resolvedImagePromptForDisplay}
                               </div>
                             </div>
-                          ) : null}
-                          {hasPromptDebugDetails ? (
-                            <details className="clipSB_scenarioEditorImageEn" style={{ marginTop: 8 }}>
-                              <summary>Показать prompt / debug</summary>
-                              <div className="clipSB_scenarioEditorHintList" style={{ marginTop: 8, gap: 8 }}>
-                                {resolvedImagePromptForDisplay ? (
-                                  <ScenarioReadonlyTextField label="resolvedImagePromptForDisplay" value={resolvedImagePromptForDisplay} minRows={2} />
-                                ) : null}
-                                {imagePromptRuValue ? (
-                                  <ScenarioReadonlyTextField label="imagePromptRu" value={imagePromptRuValue} minRows={2} />
-                                ) : null}
-                                {imagePromptEnValue ? (
-                                  <ScenarioReadonlyTextField label="imagePromptEn" value={imagePromptEnValue} minRows={2} />
-                                ) : null}
-                                {videoPromptValue ? (
-                                  <ScenarioReadonlyTextField label="videoPrompt" value={videoPromptValue} minRows={2} />
-                                ) : null}
-                                {promptNotesValue ? (
-                                  <ScenarioReadonlyTextField label="promptNotes" value={promptNotesValue} minRows={2} />
-                                ) : null}
-                              </div>
-                            </details>
-                          ) : null}
+                          ) : (
+                            <div className="clipSB_hint" style={{ marginBottom: 8 }}>Промт кадра пока не собран</div>
+                          )}
                           <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorImageBtnRow">
                             <button
                               className="clipSB_btn"
