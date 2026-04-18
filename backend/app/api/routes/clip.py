@@ -11474,7 +11474,7 @@ def _build_comfy_image_prompt_assembly(
         hair_continuity_guard_block = "\n".join([
             "HAIR CONTINUITY GUARD (STRICT):",
             "- keep same hair length, same color family, same root-to-end contrast, same wave pattern, same volume read",
-            "- do not drift into different curl tightness, different length, different blonde tone, or different parting",
+            "- do not drift into different curl tightness, different length, different color family tone, or different parting",
         ])
 
     character_role_priority_lines = [
@@ -11720,16 +11720,103 @@ def _build_comfy_image_prompt_assembly(
     strict_reference_identity_block = ""
     has_character_1_ref = bool((refs_by_role.get("character_1") or []))
     if has_character_1_ref and bool(contract.get("identityLockApplied", contract.get("identityLock"))):
-        strict_reference_identity_block = "\n".join([
+        reference_profile = profiles.get("character_1") if isinstance(profiles.get("character_1"), dict) else {}
+        profile_invariants = [str(x or "").strip() for x in (reference_profile.get("invariants") or []) if str(x or "").strip()][:4]
+        profile_forbidden_changes = [str(x or "").strip() for x in (reference_profile.get("forbiddenChanges") or []) if str(x or "").strip()][:4]
+        reference_profiles_summary = contract.get("referenceProfilesSummary") if isinstance(contract.get("referenceProfilesSummary"), dict) else {}
+        summary_character_1 = reference_profiles_summary.get("character_1") if isinstance(reference_profiles_summary.get("character_1"), dict) else {}
+        summary_invariants = [str(x or "").strip() for x in (summary_character_1.get("invariants") or []) if str(x or "").strip()][:4]
+        summary_forbidden_changes = [str(x or "").strip() for x in (summary_character_1.get("forbiddenChanges") or []) if str(x or "").strip()][:4]
+
+        appearance_fields = [
+            "face_identity",
+            "hair_identity",
+            "body_identity",
+            "body_fullness_identity",
+            "height_impression_identity",
+            "garment_top_identity",
+            "neckline_identity",
+            "silhouette_identity",
+            "color_identity",
+            "material_identity",
+            "accessory_identity",
+            "footwear_identity",
+            "signature_details_identity",
+        ]
+        outfit_fields = [
+            "garment_category",
+            "garment_top_identity",
+            "neckline_identity",
+            "coverage_identity",
+            "construction_identity",
+            "silhouette_identity",
+            "material_identity",
+            "color_identity",
+            "footwear_identity",
+            "accessory_identity",
+            "signature_details_identity",
+        ]
+
+        def _known_contract_value(value: Any) -> str:
+            text = str(value or "").strip()
+            return text if _is_known_outfit_value(text) else ""
+
+        appearance_known = [
+            f"{key}={value}"
+            for key in appearance_fields
+            for value in [_known_contract_value(hero_appearance_contract.get(key))]
+            if value
+        ]
+        outfit_known = [
+            f"{key}={value}"
+            for key in outfit_fields
+            for value in [_known_contract_value(effective_outfit_profile.get(key) or source_outfit_profile.get(key) or outfit_profile.get(key))]
+            if value
+        ]
+
+        hair_identity_hint = _known_contract_value(hero_appearance_contract.get("hair_identity"))
+        if not hair_identity_hint:
+            hair_identity_hint = "; ".join(profile_invariants[:2] or summary_invariants[:2])
+
+        strict_reference_identity_lines = [
             "REFERENCE-LOCKED APPEARANCE CONSTRAINTS (HARD):",
-            "- preserve exact blonde hair color and hair length/structure from reference",
-            "- preserve same apparent age; do not make her older or more mature",
-            "- preserve same beige crop top / neckline / shoulder coverage / fitted ribbed fabric read",
-            "- preserve same light blue jeans color and cut family",
-            "- do not change top into black/dark/alternate garment",
-            "- do not change neckline depth or crop length",
-            "- do not glamorize into a different actress",
+            "- preserve exact face identity from character reference",
+        ]
+        if hair_identity_hint:
+            strict_reference_identity_lines.append(
+                f"- preserve exact hair identity from character reference: {hair_identity_hint}"
+            )
+        else:
+            strict_reference_identity_lines.append(
+                "- preserve exact hair identity from character reference"
+            )
+        strict_reference_identity_lines.extend([
+            "- preserve same apparent age; do not age up/down the character",
+            "- preserve same body proportions/fullness/height impression from reference",
         ])
+        if appearance_known or outfit_known:
+            strict_reference_identity_lines.append(
+                "- preserve exact outfit identity from reference: "
+                + "; ".join((appearance_known + outfit_known)[:8])
+            )
+        else:
+            strict_reference_identity_lines.append(
+                "- preserve reference outfit identity; do not invent alternate wardrobe"
+            )
+        strict_reference_identity_lines.extend([
+            "- do not replace outfit with a different garment family",
+            "- do not change neckline, shoulder coverage, crop length, fabric read, color family, footwear, or accessories when known",
+            "- do not glamorize into a different actress/model",
+        ])
+        if profile_invariants or summary_invariants:
+            strict_reference_identity_lines.append(
+                "- reference profile invariants: " + "; ".join((profile_invariants or summary_invariants)[:4])
+            )
+        if profile_forbidden_changes or summary_forbidden_changes:
+            strict_reference_identity_lines.append(
+                "- reference forbidden changes: " + "; ".join((profile_forbidden_changes or summary_forbidden_changes)[:4])
+            )
+        strict_reference_identity_block = "\n".join(strict_reference_identity_lines)
     if task_mode == "virtual_try_on":
         non_lip_identity_first_block = "\n".join([
             "VIRTUAL TRY-ON EXECUTION:",
