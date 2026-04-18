@@ -1268,14 +1268,34 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
 function resolveStoryboardSceneBySegmentId(segmentId = "", ...sources) {
   const normalizedSegmentId = String(segmentId || "").trim();
   if (!normalizedSegmentId) return null;
+  const segmentIdAliases = ["sceneId", "scene_id", "segment_id", "segmentId", "id"];
+  const pickSceneId = (item = {}) => {
+    for (const alias of segmentIdAliases) {
+      const value = String(item?.[alias] || "").trim();
+      if (value) return value;
+    }
+    return "";
+  };
   for (const source of sources) {
     if (!source || typeof source !== "object") continue;
-    const scenes = Array.isArray(source?.scenes) ? source.scenes : [];
-    const hit = scenes.find((item) => {
-      const sceneId = String(item?.sceneId || item?.scene_id || item?.segment_id || item?.segmentId || "").trim();
+    const sceneCollections = [
+      ...(Array.isArray(source?.scenes) ? [source.scenes] : []),
+      ...(Array.isArray(source?.segments) ? [source.segments] : []),
+      ...(Array.isArray(source?.render_manifest) ? [source.render_manifest] : []),
+      ...(Array.isArray(source?.renderManifest) ? [source.renderManifest] : []),
+    ];
+    for (const collection of sceneCollections) {
+      const hit = collection.find((item) => {
+        const sceneId = pickSceneId(item);
+        return sceneId === normalizedSegmentId;
+      });
+      if (hit) return hit;
+    }
+    const directHit = source && typeof source === "object" ? (() => {
+      const sceneId = pickSceneId(source);
       return sceneId === normalizedSegmentId;
-    });
-    if (hit) return hit;
+    })() : false;
+    if (directHit) return source;
   }
   return null;
 }
@@ -12429,7 +12449,14 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
 
     const videoProfile = resolveScenarioSceneVideoProfile(targetScene || {});
     const canonicalRoute = String(videoProfile?.canonicalRoute || "").trim().toLowerCase();
+    const rawRouteLabel = String(videoProfile?.displayRouteLabel || videoProfile?.routeRaw || "").trim().toLowerCase();
     const imageStrategy = String(targetScene?.imageStrategy || videoProfile?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
+    const imageWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
+      canonicalRoute
+      || targetScene?.resolvedWorkflowKey
+      || resolveScenarioWorkflowKey(targetScene)
+    );
+    const ia2vImageRoute = rawRouteLabel === "ia2v" || imageWorkflowKey === "lip_sync_music";
     const requestedSlotRaw = String(slot || "single").trim().toLowerCase();
     const requestedSlot = (requestedSlotRaw === "start" || requestedSlotRaw === "first")
       ? "start"
@@ -12460,6 +12487,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       normalizedSlot,
     });
     if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start" && !!targetScene?.inheritPreviousEndAsStart) {
+      console.debug("[SCENARIO IA2V SEND CHECK]", {
+        sceneId: String(targetScene?.sceneId || ""),
+        rawRoute: rawRouteLabel || canonicalRoute || "",
+        workflowKey: imageWorkflowKey || "",
+        imageStrategy,
+        hasSourceImage: false,
+        hasAudioSlice: Boolean(targetScene?.audioSliceUrl),
+        willSendImage: false,
+        willSendVideo: false,
+        blockReason: "inherit_previous_end_as_start",
+      });
       console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] blocked_by_inherit_previous_end_as_start", {
         sceneId: String(targetScene?.sceneId || ""),
         targetSceneIndex,
@@ -12513,6 +12551,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const firstLastContinuityClause = continuityContractLines.join("\n");
 
     if (!sceneDelta) {
+      console.debug("[SCENARIO IA2V SEND CHECK]", {
+        sceneId,
+        rawRoute: rawRouteLabel || canonicalRoute || "",
+        workflowKey: imageWorkflowKey || "",
+        imageStrategy,
+        hasSourceImage: false,
+        hasAudioSlice: Boolean(targetScene?.audioSliceUrl),
+        willSendImage: false,
+        willSendVideo: false,
+        blockReason: "missing_scene_delta",
+      });
       console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] missing_scene_delta", {
         sceneId,
         targetSceneIndex,
@@ -12524,7 +12573,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     }
     const visualGlueText = buildScenarioVisualGlueText(targetScene);
     const applyFirstLastContinuityContract = isTwoFrameScene && normalizedSlot === "end";
-    const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}`.trim();
+    const ia2vPerformanceGuidance = ia2vImageRoute
+      ? "\n\nIA2V PERFORMANCE GUIDANCE: face readable, mouth and jaw unobstructed, upper-body framing allowed (chest-up/waist-up), performer centered, no crowd occlusion, no extreme turn away from camera."
+      : "";
+    const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}${ia2vPerformanceGuidance}`.trim();
     if (isTwoFrameScene) {
       const firstLastDerived = deriveFirstLastFramePrompts(targetScene || {});
       const startPromptCheck = ensureFirstLastSlotPrompt(targetScene, "start", firstLastDerived.start || getSceneFramePromptByStrategy(targetScene, "start"));
@@ -13044,6 +13096,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         scenarioPackageForImage?.final_storyboard?.render_manifest?.refsByRole,
         scenarioPackageForImage?.final_storyboard?.render_manifest?.refs_by_role,
         extractRefsInventoryLikeByRole(scenarioPackageForImage?.input?.connected_context_summary),
+        extractRefsInventoryLikeByRole(scenarioPackageForImage?.refs_inventory),
         extractRefsInventoryLikeByRole(scenarioPackageForImage?.final_storyboard?.source_package_snapshot),
         extractRefsInventoryLikeByRole(scenarioPackageForImage?.final_storyboard?.render_manifest),
       );
@@ -13231,10 +13284,12 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         ...scenarioContractPayload,
         sceneId,
         segment_id: sceneId,
-        route: canonicalRoute || imageStrategy || "",
+        route: rawRouteLabel || canonicalRoute || imageStrategy || "",
+        workflowKey: imageWorkflowKey || "",
         sceneDelta: `${finalSceneDelta}
 Aspect ratio: ${imageFormat}`,
         sceneText,
+        scene_text: sceneText,
         width,
         height,
         sceneObject: targetScene,
@@ -13280,8 +13335,20 @@ Aspect ratio: ${imageFormat}`,
         image_prompt: imagePromptEffective,
         video_prompt: videoPromptEffective,
         prompt_notes: promptNotesEffective,
+        prompt: imagePromptEffective || sceneText || finalSceneDelta,
         refs: refsPayloadForRequest,
       };
+      console.debug("[SCENARIO IA2V SEND CHECK]", {
+        sceneId,
+        rawRoute: rawRouteLabel || canonicalRoute || "",
+        workflowKey: imageWorkflowKey || "",
+        imageStrategy,
+        hasSourceImage: false,
+        hasAudioSlice: Boolean(targetScene?.audioSliceUrl),
+        willSendImage: true,
+        willSendVideo: false,
+        blockReason: "",
+      });
       console.debug("[SCENARIO IMAGE TRACE D finalRequestBody]", finalRequestBody);
       const finalRefsByRoleCounts = summarizeRefsByRole(finalRequestBody?.refs?.refsByRole || {});
       console.debug("[SCENARIO IMAGE TRACE E authoritative body check]", {
@@ -14191,9 +14258,13 @@ Aspect ratio: ${imageFormat}`,
     });
     const targetEffectiveStartImageUrl = effectiveStartImageUrl;
     const imageStrategy = String(targetScene?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
+    const videoProfile = resolveScenarioSceneVideoProfile(targetScene || {});
+    const rawRoute = String(videoProfile?.displayRouteLabel || videoProfile?.routeRaw || "").trim().toLowerCase();
     const explicitWorkflow = resolveScenarioExplicitWorkflowKey(targetScene);
     const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
-      explicitWorkflow
+      videoProfile?.canonicalRoute
+      || normalizeDirectRouteToWorkflowKey(rawRoute)
+      || explicitWorkflow
       || targetScene?.resolvedWorkflowKey
       || resolveScenarioWorkflowKey(targetScene)
     );
@@ -14255,6 +14326,7 @@ Aspect ratio: ${imageFormat}`,
     const hasImageForVideo = requiresTwoFrames
       ? !!resolvedFirstFrameUrl && !!resolvedLastFrameUrl
       : (effectiveRequiresContinuation ? !!(resolvedFirstFrameUrl || frameImageUrl) : !!frameImageUrl);
+    const hasAudioSliceForVideo = Boolean(targetScene?.audioSliceUrl);
     if (canonicalSyncAllowed) {
       updateScenarioScene(sceneId, {
         imageUrl: frameImageUrl,
@@ -14281,6 +14353,17 @@ Aspect ratio: ${imageFormat}`,
       debugSourceFieldsUsed,
     });
     if (!hasImageForVideo) {
+      console.debug("[SCENARIO IA2V SEND CHECK]", {
+        sceneId,
+        rawRoute: rawRoute || "",
+        workflowKey: effectiveWorkflowKey || "",
+        imageStrategy,
+        hasSourceImage: false,
+        hasAudioSlice: hasAudioSliceForVideo,
+        willSendImage: false,
+        willSendVideo: false,
+        blockReason: "missing_source_image",
+      });
       const runtimeFallbackRejectedOrUnaccepted = !canonicalImageAliasPresent
         && !runtimeGeneratedImageUrl
         && Boolean(targetSceneRuntime?.lastImageApiResult?.imageUrl)
@@ -14473,6 +14556,17 @@ Aspect ratio: ${imageFormat}`,
     const musicVocalLipSyncAllowed = Boolean(effectiveMusicVocalLipSyncAllowed);
     const audioSliceKind = String(effectiveAudioSliceKind || "").trim().toLowerCase();
     if (effectiveWorkflowKey === "lip_sync_music" && !attachedAudioSliceUrl) {
+      console.debug("[SCENARIO IA2V SEND CHECK]", {
+        sceneId,
+        rawRoute: rawRoute || "",
+        workflowKey: effectiveWorkflowKey || "",
+        imageStrategy,
+        hasSourceImage: Boolean(frameImageUrl),
+        hasAudioSlice: false,
+        willSendImage: false,
+        willSendVideo: false,
+        blockReason: "lip_sync_audio_missing",
+      });
       logScenarioVideoBlocked("validate_audio", "lip_sync_audio_missing", {
         sceneId,
         workflow: effectiveWorkflowKey,
@@ -14490,6 +14584,17 @@ Aspect ratio: ${imageFormat}`,
       return;
     }
     if (effectiveWorkflowKey === "lip_sync_music" && (!musicVocalLipSyncAllowed || audioSliceKind !== "music_vocal")) {
+      console.debug("[SCENARIO IA2V SEND CHECK]", {
+        sceneId,
+        rawRoute: rawRoute || "",
+        workflowKey: effectiveWorkflowKey || "",
+        imageStrategy,
+        hasSourceImage: Boolean(frameImageUrl),
+        hasAudioSlice: Boolean(attachedAudioSliceUrl),
+        willSendImage: false,
+        willSendVideo: false,
+        blockReason: "lip_sync_music_vocal_flag_missing",
+      });
       logScenarioVideoBlocked("validate_audio", "lip_sync_music_vocal_flag_missing", {
         sceneId,
         workflow: effectiveWorkflowKey,
@@ -14901,6 +15006,17 @@ Aspect ratio: ${imageFormat}`,
         lastFrameUrl: resolvedLastFrameUrl,
         sourceOfTruthKeys,
         payload: videoStartPayload,
+      });
+      console.debug("[SCENARIO IA2V SEND CHECK]", {
+        sceneId,
+        rawRoute: rawRoute || "",
+        workflowKey: String(videoStartPayload?.resolvedWorkflowKey || effectiveWorkflowKey || ""),
+        imageStrategy,
+        hasSourceImage: Boolean(videoStartPayload?.imageUrl || videoStartPayload?.startImageUrl),
+        hasAudioSlice: Boolean(videoStartPayload?.audioSliceUrl),
+        willSendImage: false,
+        willSendVideo: true,
+        blockReason: "",
       });
       console.info("[SCENARIO VIDEO START REQUEST]", {
         endpoint,
