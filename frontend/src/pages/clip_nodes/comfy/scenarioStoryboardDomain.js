@@ -627,6 +627,29 @@ function normalizeScenarioWorkflowKeyCandidate(candidate) {
   return SCENARIO_LTX_WORKFLOW_MAP[canonical] ? canonical : "";
 }
 
+function normalizeScenarioRawRouteLabelCandidate(value = "") {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) return "";
+  if (["avatar_lipsync", "lip_sync_music", "lip_sync", "ia2v"].includes(normalized)) return "ia2v";
+  if (["first_last", "f_l", "imag-imag-video-bz", "f_l_as"].includes(normalized)) return "first_last";
+  if (["image_video", "image_to_video", "standard_video", "i2v", "i2v_as"].includes(normalized)) return "i2v";
+  const workflow = normalizeScenarioWorkflowKeyCandidate(normalized);
+  if (!workflow) return "";
+  if (workflow === "lip_sync" || workflow === "lip_sync_music") return "ia2v";
+  if (workflow === "f_l") return "first_last";
+  if (workflow === "i2v") return "i2v";
+  return "";
+}
+
+function mapScenarioRawRouteLabelToWorkflowKey(routeLabel = "") {
+  const normalized = normalizeScenarioRawRouteLabelCandidate(routeLabel);
+  if (!normalized) return "";
+  if (normalized === "ia2v") return "lip_sync_music";
+  if (normalized === "first_last") return "f_l";
+  if (normalized === "i2v") return "i2v";
+  return "";
+}
+
 function normalizeDurationFromScene(source = {}, fallback = 0) {
   const explicitDuration = toNumber(source.durationSec ?? source.duration, Number(fallback) || 0);
   const t0 = toNumber(source.t0 ?? source.time_start ?? source.timeStart, 0);
@@ -730,6 +753,8 @@ export function resolveScenarioExplicitModelKey(scene = {}) {
 export function resolveScenarioWorkflowKey(scene = {}) {
   const explicitWorkflow = resolveScenarioExplicitWorkflowKey(scene);
   if (explicitWorkflow) return explicitWorkflow;
+  const rawRouteWorkflow = resolveScenarioWorkflowKeyFromRawRoute(scene);
+  if (rawRouteWorkflow) return rawRouteWorkflow;
   const source = scene && typeof scene === "object" ? scene : {};
   const continuationRequested = Boolean(
     source.continuation
@@ -741,7 +766,7 @@ export function resolveScenarioWorkflowKey(scene = {}) {
   return normalizeScenarioWorkflowKeyCandidate(ltxMode) || SCENARIO_LTX_WORKFLOW_MAP.i2v;
 }
 
-export function resolveScenarioFinalRouteKey(scene = {}) {
+export function resolveScenarioRawRouteLabel(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const renderManifestRow = source.render_manifest_row && typeof source.render_manifest_row === "object"
     ? source.render_manifest_row
@@ -754,44 +779,38 @@ export function resolveScenarioFinalRouteKey(scene = {}) {
     : (renderManifestRow.videoMetadata && typeof renderManifestRow.videoMetadata === "object" ? renderManifestRow.videoMetadata : {});
   const routeCandidates = [
     source.finalRoute,
-    source.sourceRoute,
-    source.source_route,
-    source.route,
     renderManifestRow.route,
-    sceneVideoMetadata.route_type,
-    sceneVideoMetadata.routeType,
+    source.route,
     manifestVideoMetadata.route_type,
     manifestVideoMetadata.routeType,
-    source.resolvedWorkflowKey,
-    source.resolved_workflow_key,
+    sceneVideoMetadata.route_type,
+    sceneVideoMetadata.routeType,
+    source.sourceRoute,
+    source.source_route,
     source.plannedVideoGenerationRoute,
     source.planned_video_generation_route,
     source.videoGenerationRoute,
     source.video_generation_route,
+    source.resolvedWorkflowKey,
+    source.resolved_workflow_key,
     source.ltxMode,
     source.ltx_mode,
   ];
   for (const candidate of routeCandidates) {
-    const normalized = normalizeText(candidate).toLowerCase();
-    if (!normalized) continue;
-    if (["avatar_lipsync", "lip_sync_music", "lip_sync"].includes(normalized)) return "lip_sync_music";
-    if (["first_last", "f_l", "imag-imag-video-bz", "f_l_as"].includes(normalized)) return "f_l";
-    if (["image_video", "image_to_video", "standard_video", "i2v", "i2v_as"].includes(normalized)) return "i2v";
-    const workflow = normalizeScenarioWorkflowKeyCandidate(normalized);
-    if (workflow) return workflow === "lip_sync" ? "lip_sync_music" : workflow;
+    const rawRoute = normalizeScenarioRawRouteLabelCandidate(candidate);
+    if (rawRoute) return rawRoute;
   }
   return "i2v";
 }
 
-function normalizeScenarioRouteToCanonical(value = "") {
-  const normalized = normalizeText(value).toLowerCase();
-  if (!normalized) return "";
-  if (["avatar_lipsync", "lip_sync_music", "lip_sync", "ia2v"].includes(normalized)) return "lip_sync_music";
-  if (["first_last", "f_l", "imag-imag-video-bz", "f_l_as"].includes(normalized)) return "f_l";
-  if (["image_video", "image_to_video", "standard_video", "i2v", "i2v_as"].includes(normalized)) return "i2v";
-  const workflow = normalizeScenarioWorkflowKeyCandidate(normalized);
-  if (!workflow) return "";
-  return workflow === "lip_sync" ? "lip_sync_music" : workflow;
+export function resolveScenarioWorkflowKeyFromRawRoute(scene = {}) {
+  const rawRouteLabel = resolveScenarioRawRouteLabel(scene);
+  return mapScenarioRawRouteLabelToWorkflowKey(rawRouteLabel) || "";
+}
+
+export function resolveScenarioFinalRouteKey(scene = {}) {
+  const rawRouteLabel = resolveScenarioRawRouteLabel(scene);
+  return mapScenarioRawRouteLabelToWorkflowKey(rawRouteLabel) || "i2v";
 }
 
 export function resolveScenarioSceneVideoProfile(scene = {}) {
@@ -806,10 +825,10 @@ export function resolveScenarioSceneVideoProfile(scene = {}) {
     ? renderManifestRow.video_metadata
     : (renderManifestRow.videoMetadata && typeof renderManifestRow.videoMetadata === "object" ? renderManifestRow.videoMetadata : {});
   const candidates = [
-    ["route", source.route],
     ["render_manifest_row.route", renderManifestRow.route],
-    ["video_metadata.route_type", sceneVideoMetadata.route_type ?? sceneVideoMetadata.routeType],
+    ["route", source.route],
     ["render_manifest_row.video_metadata.route_type", manifestVideoMetadata.route_type ?? manifestVideoMetadata.routeType],
+    ["video_metadata.route_type", sceneVideoMetadata.route_type ?? sceneVideoMetadata.routeType],
     ["finalRoute", source.finalRoute],
     ["resolvedWorkflowKey", source.resolvedWorkflowKey ?? source.resolved_workflow_key],
     ["videoGenerationRoute", source.videoGenerationRoute ?? source.video_generation_route],
@@ -818,16 +837,17 @@ export function resolveScenarioSceneVideoProfile(scene = {}) {
     ["ltxMode", source.ltxMode ?? source.ltx_mode],
     ["renderMode", source.renderMode ?? source.render_mode],
   ];
-  let canonicalRoute = "";
+  const rawRouteLabelFallback = resolveScenarioRawRouteLabel(source);
+  let canonicalRoute = mapScenarioRawRouteLabelToWorkflowKey(rawRouteLabelFallback);
   let debugRouteSourceField = "fallback:resolveScenarioFinalRouteKey";
-  let routeRaw = "";
+  let routeRaw = rawRouteLabelFallback;
   for (const [field, value] of candidates) {
-    const normalized = normalizeText(value).toLowerCase();
-    if (!normalized) continue;
-    const mapped = normalizeScenarioRouteToCanonical(normalized);
+    const rawRouteLabel = normalizeScenarioRawRouteLabelCandidate(value);
+    if (!rawRouteLabel) continue;
+    const mapped = mapScenarioRawRouteLabelToWorkflowKey(rawRouteLabel);
     if (!mapped) continue;
     canonicalRoute = mapped;
-    routeRaw = normalized;
+    routeRaw = rawRouteLabel;
     debugRouteSourceField = field;
     break;
   }
@@ -843,7 +863,7 @@ export function resolveScenarioSceneVideoProfile(scene = {}) {
   const isAudioDriven = explicitAudioDriven === undefined || explicitAudioDriven === null
     ? canonicalRoute === "lip_sync_music"
     : Boolean(explicitAudioDriven);
-  const displayRouteLabel = canonicalRoute === "lip_sync_music" ? "ia2v" : canonicalRoute;
+  const displayRouteLabel = routeRaw || rawRouteLabelFallback || (canonicalRoute === "lip_sync_music" ? "ia2v" : (canonicalRoute === "f_l" ? "first_last" : canonicalRoute));
   return {
     canonicalRoute,
     displayRouteLabel,
@@ -1749,16 +1769,22 @@ export function normalizeScenarioStoryboardPackage({
   const inputScenesFromDirectorOutput = Array.isArray(directorOutput?.scenes)
     ? directorOutput.scenes
     : [];
+  const hasFinalStoryboardDataset = inputScenesFromFinalStoryboard.length > 0
+    && finalStoryboardRenderManifestRows.length > 0;
   const shouldUseDirectorSceneFallback = allowDirectorSceneFallback !== false;
-  const inputSceneCandidates = (shouldUseDirectorSceneFallback && inputScenesFromDirectorOutput.length)
-    ? inputScenesFromDirectorOutput
-    : inputScenesFromFinalStoryboard.length
+  const inputSceneCandidates = hasFinalStoryboardDataset
+    ? inputScenesFromFinalStoryboard
+    : (shouldUseDirectorSceneFallback && inputScenesFromDirectorOutput.length)
+      ? inputScenesFromDirectorOutput
+      : inputScenesFromFinalStoryboard.length
       ? inputScenesFromFinalStoryboard
       : inputScenesFromStoryboardOut;
   const inputSceneCount = inputSceneCandidates.length;
-  const canonicalSceneSource = (shouldUseDirectorSceneFallback && inputScenesFromDirectorOutput.length)
-    ? "directorOutput.scenes"
-    : inputScenesFromFinalStoryboard.length
+  const canonicalSceneSource = hasFinalStoryboardDataset
+    ? "storyboardOut.final_storyboard.scenes"
+    : (shouldUseDirectorSceneFallback && inputScenesFromDirectorOutput.length)
+      ? "directorOutput.scenes"
+      : inputScenesFromFinalStoryboard.length
       ? "storyboardOut.final_storyboard.scenes"
       : inputScenesFromStoryboardOut.length
         ? "storyboardOut.scenes"
@@ -1776,7 +1802,10 @@ export function normalizeScenarioStoryboardPackage({
       ...safeScene,
       render_manifest_row: manifestRow,
       renderManifestRow: manifestRow,
-      route: normalizeText(safeScene?.route) || normalizeText(manifestRow?.route) || normalizeText(safeScene?.video_metadata?.route_type) || normalizeText(manifestRow?.video_metadata?.route_type),
+      route: normalizeText(manifestRow?.route)
+        || normalizeText(safeScene?.route)
+        || normalizeText(manifestRow?.video_metadata?.route_type ?? manifestRow?.video_metadata?.routeType)
+        || normalizeText(safeScene?.video_metadata?.route_type ?? safeScene?.video_metadata?.routeType),
       video_metadata: (safeScene?.video_metadata && typeof safeScene.video_metadata === "object")
         ? safeScene.video_metadata
         : (manifestRow?.video_metadata && typeof manifestRow.video_metadata === "object" ? manifestRow.video_metadata : {}),
