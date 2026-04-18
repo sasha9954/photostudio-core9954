@@ -1150,12 +1150,24 @@ function collectScenarioImageRefsByRole({
   appendFrom("targetScene.refsByRole", targetScene?.refsByRole);
   appendFrom("targetScene.context_refs", targetScene?.context_refs);
   appendFrom("targetScene.connected_context_summary", targetScene?.connected_context_summary || targetScene?.connectedContextSummary);
-  appendFrom("scenarioPackage.refs_inventory.ref_character_1.refs", scenarioPackageForImage?.refs_inventory?.ref_character_1?.refs);
-  appendFrom("scenarioPackage.refs_inventory.ref_character_1.value", scenarioPackageForImage?.refs_inventory?.ref_character_1?.value);
-  appendFrom("scenarioPackage.input.connected_context_summary.connectedRefsPresentByRole.character_1", scenarioPackageForImage?.input?.connected_context_summary?.connectedRefsPresentByRole?.character_1);
-  appendFrom("scenarioPackage.input.connected_context_summary.refsByRole.character_1", scenarioPackageForImage?.input?.connected_context_summary?.refsByRole?.character_1);
-  appendFrom("scenarioPackage.final_storyboard.source_package_snapshot.refs_inventory.ref_character_1.refs", scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.refs_inventory?.ref_character_1?.refs);
-  appendFrom("scenarioPackage.final_storyboard.source_package_snapshot.connected_context_summary.connectedRefsPresentByRole.character_1", scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.connectedRefsPresentByRole?.character_1);
+  appendFrom("scenarioPackage.refs_inventory.ref_character_1.refs", {
+    character_1: scenarioPackageForImage?.refs_inventory?.ref_character_1?.refs,
+  });
+  appendFrom("scenarioPackage.refs_inventory.ref_character_1.value", {
+    character_1: scenarioPackageForImage?.refs_inventory?.ref_character_1?.value,
+  });
+  appendFrom("scenarioPackage.input.connected_context_summary.connectedRefsPresentByRole.character_1", {
+    character_1: scenarioPackageForImage?.input?.connected_context_summary?.connectedRefsPresentByRole?.character_1,
+  });
+  appendFrom("scenarioPackage.input.connected_context_summary.refsByRole.character_1", {
+    character_1: scenarioPackageForImage?.input?.connected_context_summary?.refsByRole?.character_1,
+  });
+  appendFrom("scenarioPackage.final_storyboard.source_package_snapshot.refs_inventory.ref_character_1.refs", {
+    character_1: scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.refs_inventory?.ref_character_1?.refs,
+  });
+  appendFrom("scenarioPackage.final_storyboard.source_package_snapshot.connected_context_summary.connectedRefsPresentByRole.character_1", {
+    character_1: scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.connectedRefsPresentByRole?.character_1,
+  });
   appendFrom("targetNode.data", targetNode?.data || {});
   appendFrom("scenarioFlowSourceNode.data", scenarioFlowSourceNode?.data || {});
   appendFrom("scenarioPackageForImage", scenarioPackageForImage || {});
@@ -13387,6 +13399,16 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const refsByRoleEffective = hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {})
         ? mergeScenarioRefsByRole(refsForImageRequest.refsByRole, mergedRefsByRole)
         : mergedRefsByRole;
+      const directCharacter1Refs = [
+        ...toUrlList(scenarioPackageForImage?.refs_inventory?.ref_character_1?.refs),
+        ...toUrlList(scenarioPackageForImage?.refs_inventory?.ref_character_1?.value),
+        ...toUrlList(scenarioPackageForImage?.input?.connected_context_summary?.connectedRefsPresentByRole?.character_1),
+        ...toUrlList(scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.refs_inventory?.ref_character_1?.refs),
+      ];
+      const uniqueDirectCharacter1Refs = [...new Set(directCharacter1Refs.map((value) => String(value || "").trim()).filter(Boolean))];
+      if ((!Array.isArray(refsByRoleEffective?.character_1) || refsByRoleEffective.character_1.length === 0) && uniqueDirectCharacter1Refs.length > 0) {
+        refsByRoleEffective.character_1 = uniqueDirectCharacter1Refs;
+      }
       const connectedInputsEffective = {
         ...(connectedInputsFallback && typeof connectedInputsFallback === "object" ? connectedInputsFallback : {}),
       };
@@ -13409,7 +13431,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         const urls = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].filter(Boolean) : [];
         if (!urls.length) return;
         const existing = Array.isArray(refsUsedByRoleEffective?.[role]) ? refsUsedByRoleEffective[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
-        refsUsedByRoleEffective[role] = existing.length ? existing : urls.map(() => "required");
+        refsUsedByRoleEffective[role] = existing.length ? existing : urls;
       });
       const mustAppearEffective = Array.isArray(refsForImageRequest?.mustAppear)
         ? refsForImageRequest.mustAppear
@@ -13438,9 +13460,11 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || primaryRoleEffective
         || "character_1"
       ).trim();
+      const promptContextText = `${sceneText} ${targetScene?.imagePromptRu || targetScene?.imagePromptEn || targetScene?.imagePrompt || ""} ${targetScene?.videoPromptRu || targetScene?.videoPromptEn || targetScene?.videoPrompt || ""}`.toLowerCase();
+      const sameWomanByReferenceRequested = /\bsame woman\b|\bsame girl\b|\bby reference\b|та\s+же\s+женщин|та\s+же\s+девушк|по\s+референс/i.test(promptContextText);
+      const hasCharacter1Ref = Array.isArray(refsByRoleEffective?.character_1) && refsByRoleEffective.character_1.length > 0;
+      const shouldUseCharacter1 = hasCharacter1Ref || sameWomanByReferenceRequested || primaryRoleEffective === "character_1";
       if (primaryRoleEffective === "character_1" && (!Array.isArray(refsByRoleEffective?.character_1) || refsByRoleEffective.character_1.length === 0)) {
-        const promptContextText = `${sceneText} ${targetScene?.imagePromptRu || targetScene?.imagePromptEn || targetScene?.imagePrompt || ""} ${targetScene?.videoPromptRu || targetScene?.videoPromptEn || targetScene?.videoPrompt || ""}`.toLowerCase();
-        const sameWomanByReferenceRequested = /\bsame woman\b|\bsame girl\b|\bby reference\b|та\s+же\s+женщин|та\s+же\s+девушк|по\s+референс/i.test(promptContextText);
         if (sameWomanByReferenceRequested || primaryRoleEffective === "character_1") {
           console.warn("[SCENARIO IMAGE REF MISSING]", {
             sceneId,
@@ -13566,14 +13590,19 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         prompt_notes: promptNotesEffective,
       };
       if (Array.isArray(refsByRoleEffective?.character_1) && refsByRoleEffective.character_1.length > 0) {
-        const requiredMarkers = refsByRoleEffective.character_1.map(() => "required");
         sceneContractForRequest.refsByRole = {
           ...(sceneContractForRequest.refsByRole || {}),
           character_1: refsByRoleEffective.character_1,
         };
         sceneContractForRequest.refsUsedByRole = {
           ...(sceneContractForRequest.refsUsedByRole || {}),
-          character_1: requiredMarkers,
+          character_1: Array.isArray(sceneContractForRequest?.refsUsedByRole?.character_1)
+            ? sceneContractForRequest.refsUsedByRole.character_1
+            : refsByRoleEffective.character_1,
+        };
+        sceneContractForRequest.refDirectives = {
+          ...(sceneContractForRequest.refDirectives && typeof sceneContractForRequest.refDirectives === "object" ? sceneContractForRequest.refDirectives : {}),
+          character_1: "required",
         };
         refsPayloadForRequest.context_refs = {
           ...(refsPayloadForRequest.context_refs || {}),
@@ -13653,7 +13682,7 @@ Aspect ratio: ${imageFormat}`,
           videoPrompt: videoPromptEffective,
           promptNotes: promptNotesEffective,
         },
-        primaryRole: "character_1",
+        primaryRole: shouldUseCharacter1 ? "character_1" : primaryRoleEffective,
         secondaryRoles: (Array.isArray(scenarioContractPayload?.secondaryRoles) && scenarioContractPayload.secondaryRoles.length)
           ? scenarioContractPayload.secondaryRoles
           : (refsPayloadForRequest?.secondaryRoles || []),
@@ -13671,7 +13700,7 @@ Aspect ratio: ${imageFormat}`,
         connectedInputs: refsPayloadForRequest?.connectedInputs || {},
         context_refs: refsPayloadForRequest?.context_refs || {},
         connected_context_summary: refsPayloadForRequest?.connected_context_summary || {},
-        heroEntityId: "character_1",
+        heroEntityId: shouldUseCharacter1 ? "character_1" : heroEntityIdEffective,
         sceneGoal: sceneGoalEffective,
         sceneNarrativeStep: sceneNarrativeStepEffective,
         promptSource: promptSourceEffective,
@@ -13680,45 +13709,65 @@ Aspect ratio: ${imageFormat}`,
         prompt_notes: promptNotesEffective,
         refs: refsPayloadForRequest,
       };
-      finalRequestBody.sceneActiveRoles = [...new Set([...(Array.isArray(finalRequestBody.sceneActiveRoles) ? finalRequestBody.sceneActiveRoles : []), "character_1"])];
-      finalRequestBody.refsUsed = [...new Set([...(Array.isArray(finalRequestBody.refsUsed) ? finalRequestBody.refsUsed : []), "character_1"])];
-      finalRequestBody.mustAppear = [...new Set([...(Array.isArray(finalRequestBody.mustAppear) ? finalRequestBody.mustAppear : []), "character_1"])];
-      finalRequestBody.refsByRole = {
-        ...(finalRequestBody.refsByRole || {}),
-        character_1: Array.isArray(refsByRoleEffective?.character_1) ? refsByRoleEffective.character_1 : [],
-      };
-      finalRequestBody.sceneContract = {
-        ...(finalRequestBody.sceneContract || {}),
-        refsByRole: {
-          ...((finalRequestBody.sceneContract || {}).refsByRole || {}),
-          character_1: finalRequestBody.refsByRole.character_1,
-        },
-        refsUsedByRole: {
-          ...((finalRequestBody.sceneContract || {}).refsUsedByRole || {}),
-          character_1: (finalRequestBody.refsByRole.character_1 || []).map(() => "required"),
-        },
-      };
+      if (shouldUseCharacter1) {
+        finalRequestBody.sceneActiveRoles = [...new Set([...(Array.isArray(finalRequestBody.sceneActiveRoles) ? finalRequestBody.sceneActiveRoles : []), "character_1"])];
+        finalRequestBody.refsUsed = [...new Set([...(Array.isArray(finalRequestBody.refsUsed) ? finalRequestBody.refsUsed : []), "character_1"])];
+        finalRequestBody.mustAppear = [...new Set([...(Array.isArray(finalRequestBody.mustAppear) ? finalRequestBody.mustAppear : []), "character_1"])];
+      }
+      if (Array.isArray(refsByRoleEffective?.character_1) && refsByRoleEffective.character_1.length > 0) {
+        finalRequestBody.refsByRole = {
+          ...(finalRequestBody.refsByRole || {}),
+          character_1: refsByRoleEffective.character_1,
+        };
+        finalRequestBody.sceneContract = {
+          ...(finalRequestBody.sceneContract || {}),
+          refsByRole: {
+            ...((finalRequestBody.sceneContract || {}).refsByRole || {}),
+            character_1: refsByRoleEffective.character_1,
+          },
+          refsUsedByRole: {
+            ...((finalRequestBody.sceneContract || {}).refsUsedByRole || {}),
+            character_1: Array.isArray((finalRequestBody.sceneContract || {}).refsUsedByRole?.character_1)
+              ? (finalRequestBody.sceneContract || {}).refsUsedByRole.character_1
+              : refsByRoleEffective.character_1,
+          },
+          refDirectives: {
+            ...(((finalRequestBody.sceneContract || {}).refDirectives && typeof (finalRequestBody.sceneContract || {}).refDirectives === "object")
+              ? (finalRequestBody.sceneContract || {}).refDirectives
+              : {}),
+            ...(shouldUseCharacter1 ? { character_1: "required" } : {}),
+          },
+        };
+      }
       finalRequestBody.refs = {
         ...(finalRequestBody.refs || {}),
-        primaryRole: "character_1",
-        heroEntityId: "character_1",
+        primaryRole: shouldUseCharacter1 ? "character_1" : primaryRoleEffective,
+        heroEntityId: shouldUseCharacter1 ? "character_1" : heroEntityIdEffective,
         refsByRole: {
           ...((finalRequestBody.refs || {}).refsByRole || {}),
-          character_1: finalRequestBody.refsByRole.character_1,
+          ...(Array.isArray(finalRequestBody?.refsByRole?.character_1) && finalRequestBody.refsByRole.character_1.length > 0
+            ? { character_1: finalRequestBody.refsByRole.character_1 }
+            : {}),
         },
         context_refs: {
           ...((finalRequestBody.refs || {}).context_refs || {}),
-          character_1: finalRequestBody.refsByRole.character_1,
+          ...(Array.isArray(finalRequestBody?.refsByRole?.character_1) && finalRequestBody.refsByRole.character_1.length > 0
+            ? { character_1: finalRequestBody.refsByRole.character_1 }
+            : {}),
         },
         connectedInputs: {
           ...((finalRequestBody.refs || {}).connectedInputs || {}),
-          character_1: finalRequestBody.refsByRole.character_1,
-          [SCENARIO_IMAGE_ROLE_TO_HANDLE.character_1]: {
-            count: finalRequestBody.refsByRole.character_1.length,
-            refs: finalRequestBody.refsByRole.character_1,
-            value: finalRequestBody.refsByRole.character_1[0] || "",
-            source: "final_request_character_1_ref",
-          },
+          ...(Array.isArray(finalRequestBody?.refsByRole?.character_1) && finalRequestBody.refsByRole.character_1.length > 0
+            ? {
+              character_1: finalRequestBody.refsByRole.character_1,
+              [SCENARIO_IMAGE_ROLE_TO_HANDLE.character_1]: {
+                count: finalRequestBody.refsByRole.character_1.length,
+                refs: finalRequestBody.refsByRole.character_1,
+                value: finalRequestBody.refsByRole.character_1[0] || "",
+                source: "final_request_character_1_ref",
+              },
+            }
+            : {}),
         },
       };
       console.debug("[SCENARIO IMAGE TRACE D finalRequestBody]", finalRequestBody);
