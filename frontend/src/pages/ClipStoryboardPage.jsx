@@ -856,7 +856,7 @@ function extractRefsInventoryLikeByRole(source = null) {
         || source?.context_refs_inventory
         || source?.contextRefsInventory
         || source?.refs
-        || []
+        || source
       )
       : []);
   const isImageLikeUrl = (value) => {
@@ -1281,6 +1281,36 @@ function resolveStoryboardSceneBySegmentId(segmentId = "", ...sources) {
   return null;
 }
 
+const SCENARIO_IMAGE_RULE_ONLY_KEYWORDS = [
+  "RULES STRICT",
+  "DANCE MOTION SAFETY",
+  "Forbidden:",
+  "CAMERA ORBIT SAFETY",
+  "Performance framing guidance",
+];
+
+function isRuleOnlyImagePrompt(prompt = "") {
+  const text = String(prompt || "").trim();
+  if (!text) return false;
+  const upper = text.toUpperCase();
+  const hasRuleKeyword = SCENARIO_IMAGE_RULE_ONLY_KEYWORDS.some((keyword) => upper.includes(String(keyword || "").toUpperCase()));
+  if (!hasRuleKeyword) return false;
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return true;
+  return lines.every((line) => (
+    line.startsWith("-")
+    || line.endsWith(":")
+    || /forbidden|safety|guidance|rules|strict|avoid|must|no /i.test(line)
+  ));
+}
+
+function mergeVisualAndSafetyPrompt(visualPrompt = "", safetyPrompt = "") {
+  const visual = String(visualPrompt || "").trim();
+  const safety = String(safetyPrompt || "").trim();
+  if (visual && safety && visual !== safety) return `${visual}\n\n${safety}`.trim();
+  return visual || safety;
+}
+
 function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, slot = "single" } = {}) {
   const segmentId = String(scene?.sceneId || scene?.scene_id || scene?.segment_id || "").trim();
   const finalStoryboard = scenarioPackage?.final_storyboard && typeof scenarioPackage.final_storyboard === "object"
@@ -1339,6 +1369,27 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     }
     return "";
   };
+  const pickVisualPromptByPriority = () => {
+    const visualCandidates = [
+      pickByAliases(finalStoryboardScene, ["image_prompt", "imagePrompt", "imagePromptEn"]),
+      pickByAliases(finalStoryboardScene, ["video_prompt", "videoPrompt", "videoPromptEn"]),
+      pickByAliases(scenePromptsScene, ["image_prompt", "imagePrompt", "scene_prompt", "scenePrompt", "video_prompt", "videoPrompt"]),
+      pickByAliases(finalVideoPromptScene, ["positive_prompt", "positivePrompt", "frame_prompt", "framePrompt", "video_prompt", "videoPrompt"]),
+      pickByAliases(scene, ["video_prompt", "videoPrompt", "videoPromptEn"]),
+      pickByAliases(scene, ["sceneText", "scene_text", "visualDescription"]),
+    ].map((value) => String(value || "").trim()).filter(Boolean);
+    return visualCandidates[0] || "";
+  };
+  const visualPrompt = pickVisualPromptByPriority();
+  const rawImagePromptCandidate = pickByAliases(finalStoryboardScene, ["image_prompt", "imagePrompt", "scene_prompt", "scenePrompt"])
+    || pickByAliases(scenePromptsScene, ["image_prompt", "imagePrompt", "scene_prompt", "scenePrompt"])
+    || pickByAliases(scene, ["image_prompt", "imagePrompt", "imagePromptEn", "imagePromptRu"])
+    || "";
+  const ruleOnlyPrompt = isRuleOnlyImagePrompt(rawImagePromptCandidate) ? rawImagePromptCandidate : "";
+  const imagePromptResolved = isRuleOnlyImagePrompt(rawImagePromptCandidate)
+    ? mergeVisualAndSafetyPrompt(visualPrompt, rawImagePromptCandidate)
+    : (String(rawImagePromptCandidate || "").trim() || visualPrompt);
+
   for (const source of sources) {
     const prompt = pickByAliases(source.scene, promptAliases);
     const sceneText = pickByAliases(source.scene, sceneTextAliases);
@@ -1346,9 +1397,11 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     if (prompt || sceneText || videoPrompt) {
       return {
         promptSource: source.key,
-        imagePrompt: prompt || videoPrompt,
+        imagePrompt: imagePromptResolved || prompt || videoPrompt,
         videoPrompt: videoPrompt || prompt,
         sceneText: sceneText || String(scene?.sceneText || scene?.visualDescription || "").trim(),
+        visualPrompt,
+        ruleOnlyPrompt,
         finalStoryboardScene,
         scenePromptsScene,
         finalVideoPromptScene,
@@ -1358,9 +1411,11 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
   }
   return {
     promptSource: "scene_fallback",
-    imagePrompt: String(scene?.imagePromptRu || scene?.imagePromptEn || scene?.imagePrompt || "").trim(),
+    imagePrompt: imagePromptResolved || String(scene?.imagePromptRu || scene?.imagePromptEn || scene?.imagePrompt || "").trim(),
     videoPrompt: String(scene?.videoPromptRu || scene?.videoPromptEn || scene?.videoPrompt || "").trim(),
     sceneText: String(scene?.sceneText || scene?.visualDescription || "").trim(),
+    visualPrompt,
+    ruleOnlyPrompt,
     finalStoryboardScene,
     scenePromptsScene,
     finalVideoPromptScene,
@@ -12748,6 +12803,9 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       lockActive: true,
       reason: `slot:${normalizedSlot}`,
     });
+    let imageSendStartedAt = 0;
+    let imageSendPromptSource = "unknown";
+    let imageSendRefsByRoleCounts = {};
     try {
       const scenarioContractPayload = buildScenarioSceneContractPayload(targetScene);
       const scenarioContractPayloadSanitized = {
@@ -13229,21 +13287,23 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         })
       );
       const mergedRefsByRole = mergeScenarioRefsByRole(
-        refsForImageRequest?.refsByRole,
-        refsByRoleForImage,
-        refsFallbackFromContext,
-        contextRefsMergedByRole,
         connectedInputRefsByRole,
         scenarioPackageForImage?.input?.connected_context_summary?.connectedRefsPresentByRole,
         scenarioPackageForImage?.input?.connected_context_summary?.refsByRole,
         scenarioPackageForImage?.input?.connected_context_summary?.refs_by_role,
+        extractRefsInventoryLikeByRole(scenarioPackageForImage?.refs_inventory),
+        extractRefsInventoryLikeByRole(scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.refs_inventory),
         scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.refsByRole,
         scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.refs_by_role,
-        scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.refsByRole,
-        scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.refs_by_role,
         scenarioPackageForImage?.final_storyboard?.render_manifest?.linked_assets,
         scenarioPackageForImage?.final_storyboard?.render_manifest?.refsByRole,
         scenarioPackageForImage?.final_storyboard?.render_manifest?.refs_by_role,
+        refsForImageRequest?.refsByRole,
+        refsByRoleForImage,
+        refsFallbackFromContext,
+        contextRefsMergedByRole,
+        scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.refsByRole,
+        scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.refs_by_role,
         extractRefsInventoryLikeByRole(scenarioPackageForImage?.input?.connected_context_summary),
         extractRefsInventoryLikeByRole(scenarioPackageForImage?.final_storyboard?.source_package_snapshot),
         extractRefsInventoryLikeByRole(scenarioPackageForImage?.final_storyboard?.render_manifest),
@@ -13486,6 +13546,8 @@ Aspect ratio: ${imageFormat}`,
       };
       console.debug("[SCENARIO IMAGE TRACE D finalRequestBody]", finalRequestBody);
       const finalRefsByRoleCounts = summarizeRefsByRole(finalRequestBody?.refs?.refsByRole || {});
+      imageSendPromptSource = String(promptSourceEffective || "unknown").trim() || "unknown";
+      imageSendRefsByRoleCounts = finalRefsByRoleCounts;
       console.debug("[SCENARIO IMAGE TRACE E authoritative body check]", {
         sceneContractIsAuthoritativeRef: finalRequestBody?.sceneContract === sceneContractForRequest,
         sceneContractStructurallyEqual: JSON.stringify(finalRequestBody?.sceneContract || {}) === JSON.stringify(sceneContractForRequest || {}),
@@ -13519,11 +13581,33 @@ Aspect ratio: ${imageFormat}`,
       updateScenarioSceneGenerationRuntime(sceneId, {
         imageGenerationStep: "Передаю референсы…",
       }, { nodeId: targetNodeId });
+      imageSendStartedAt = Date.now();
+      console.debug("[SCENARIO IMAGE SEND START]", {
+        sceneId,
+        route: canonicalRoute || imageStrategy || "",
+        workflowKey: String(targetScene?.resolvedWorkflowKey || targetScene?.resolved_workflow_key || "").trim(),
+        promptSource: imageSendPromptSource,
+        imagePromptLength: String(finalRequestBody?.image_prompt || "").length,
+        videoPromptLength: String(finalRequestBody?.video_prompt || "").length,
+        sceneDeltaLength: String(finalRequestBody?.sceneDelta || "").length,
+        refsByRoleCounts: imageSendRefsByRoleCounts,
+        hasCharacter1Ref: Number(imageSendRefsByRoleCounts?.character_1 || 0) > 0,
+        timeoutMs: IMAGE_GENERATION_TIMEOUT_MS,
+      });
       const out = await withTimeoutGuard(fetchJson(`/api/clip/image`, {
         method: "POST",
         timeoutMs: IMAGE_GENERATION_TIMEOUT_MS,
         body: finalRequestBody,
       }), IMAGE_GENERATION_TIMEOUT_MS, "image_generation_timeout");
+      const imageSendElapsedMs = Math.max(0, Date.now() - imageSendStartedAt);
+      console.debug("[SCENARIO IMAGE SEND DONE]", {
+        sceneId,
+        ok: Boolean(out?.ok),
+        hasImageUrl: Boolean(resolveScenarioImageUrlFromApiResponse(out)),
+        elapsedMs: imageSendElapsedMs,
+        engine: String(out?.engine || "").trim(),
+        modelUsed: String(out?.modelUsed || "").trim(),
+      });
       updateScenarioSceneGenerationRuntime(sceneId, {
         imageGenerationStep: "Gemini собирает кадр…",
       }, { nodeId: targetNodeId });
@@ -13949,13 +14033,24 @@ Aspect ratio: ${imageFormat}`,
       }
     } catch (e) {
       console.error(e);
+      const elapsedMs = imageSendStartedAt ? Math.max(0, Date.now() - imageSendStartedAt) : 0;
+      console.warn("[SCENARIO IMAGE SEND ERROR]", {
+        sceneId,
+        error: String(e?.message || e || "unknown_error"),
+        elapsedMs,
+        refsByRoleCounts: imageSendRefsByRoleCounts,
+        promptSource: imageSendPromptSource,
+      });
       const errorHint = String(e?.hint || e?.payload?.hint || "").trim();
       const errorCode = String(e?.code || e?.payload?.code || "").trim();
       const errorStatus = Number(e?.status ?? e?.payload?.status);
       const baseMessage = String(e?.message || e?.payload?.detail || e?.payload?.error || e || "").trim();
-      const imageErrorMessage = errorHint
+      const isTimeoutError = baseMessage.includes("image_generation_timeout") || baseMessage.includes("Request timeout after");
+      const imageErrorMessage = isTimeoutError
+        ? "Генерация изображения не ответила за 180 секунд. Проверь backend/Gemini logs."
+        : (errorHint
         || [baseMessage, errorCode && !baseMessage.includes(errorCode) ? `(${errorCode})` : ""].filter(Boolean).join(" ")
-        || (Number.isFinite(errorStatus) ? `HTTP ${errorStatus}` : "Image generation failed");
+        || (Number.isFinite(errorStatus) ? `HTTP ${errorStatus}` : "Image generation failed"));
       const runtimeErrorPatch = normalizedSlot === "start"
         ? { startFrameStatus: "error", startFrameError: imageErrorMessage }
         : normalizedSlot === "end"
