@@ -1265,6 +1265,108 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
   return emptyContract;
 }
 
+function resolveStoryboardSceneBySegmentId(segmentId = "", ...sources) {
+  const normalizedSegmentId = String(segmentId || "").trim();
+  if (!normalizedSegmentId) return null;
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    const scenes = Array.isArray(source?.scenes) ? source.scenes : [];
+    const hit = scenes.find((item) => {
+      const sceneId = String(item?.sceneId || item?.scene_id || item?.segment_id || item?.segmentId || "").trim();
+      return sceneId === normalizedSegmentId;
+    });
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, slot = "single" } = {}) {
+  const segmentId = String(scene?.sceneId || scene?.scene_id || scene?.segment_id || "").trim();
+  const finalStoryboard = scenarioPackage?.final_storyboard && typeof scenarioPackage.final_storyboard === "object"
+    ? scenarioPackage.final_storyboard
+    : {};
+  const scenePrompts = scenarioPackage?.scene_prompts && typeof scenarioPackage.scene_prompts === "object"
+    ? scenarioPackage.scene_prompts
+    : {};
+  const finalVideoPrompt = scenarioPackage?.final_video_prompt && typeof scenarioPackage.final_video_prompt === "object"
+    ? scenarioPackage.final_video_prompt
+    : {};
+  const scenePlan = scenarioPackage?.scene_plan && typeof scenarioPackage.scene_plan === "object"
+    ? scenarioPackage.scene_plan
+    : {};
+  const finalStoryboardScene = resolveStoryboardSceneBySegmentId(segmentId, finalStoryboard);
+  const scenePromptsScene = resolveStoryboardSceneBySegmentId(segmentId, scenePrompts);
+  const finalVideoPromptScene = resolveStoryboardSceneBySegmentId(segmentId, finalVideoPrompt);
+  const scenePlanScene = resolveStoryboardSceneBySegmentId(segmentId, scenePlan);
+  const slotKey = String(slot || "single").trim().toLowerCase();
+  const slotPromptAliases = slotKey === "start"
+    ? ["first_frame_prompt", "firstFramePrompt", "startFramePrompt", "start_frame_prompt"]
+    : slotKey === "end"
+      ? ["last_frame_prompt", "lastFramePrompt", "endFramePrompt", "end_frame_prompt"]
+      : [];
+  const promptAliases = [
+    ...slotPromptAliases,
+    "image_prompt",
+    "imagePrompt",
+    "scene_prompt",
+    "scenePrompt",
+    "video_prompt",
+    "videoPrompt",
+  ];
+  const sceneTextAliases = [
+    "scene_text",
+    "sceneText",
+    "visualDescription",
+    "summary",
+    "summaryEn",
+    "summaryRu",
+    "sceneGoal",
+    "sceneGoalEn",
+    "sceneGoalRu",
+  ];
+  const sources = [
+    { key: "final_storyboard", scene: finalStoryboardScene },
+    { key: "scene_prompts", scene: scenePromptsScene },
+    { key: "final_video_prompt", scene: finalVideoPromptScene },
+    { key: "scene_plan", scene: scenePlanScene },
+    { key: "scene_fallback", scene },
+  ];
+  const pickByAliases = (sourceScene = {}, aliases = []) => {
+    for (const alias of aliases) {
+      const value = String(sourceScene?.[alias] || "").trim();
+      if (value) return value;
+    }
+    return "";
+  };
+  for (const source of sources) {
+    const prompt = pickByAliases(source.scene, promptAliases);
+    const sceneText = pickByAliases(source.scene, sceneTextAliases);
+    const videoPrompt = pickByAliases(source.scene, ["video_prompt", "videoPrompt"]);
+    if (prompt || sceneText || videoPrompt) {
+      return {
+        promptSource: source.key,
+        imagePrompt: prompt || videoPrompt,
+        videoPrompt: videoPrompt || prompt,
+        sceneText: sceneText || String(scene?.sceneText || scene?.visualDescription || "").trim(),
+        finalStoryboardScene,
+        scenePromptsScene,
+        finalVideoPromptScene,
+        scenePlanScene,
+      };
+    }
+  }
+  return {
+    promptSource: "scene_fallback",
+    imagePrompt: String(scene?.imagePromptRu || scene?.imagePromptEn || scene?.imagePrompt || "").trim(),
+    videoPrompt: String(scene?.videoPromptRu || scene?.videoPromptEn || scene?.videoPrompt || "").trim(),
+    sceneText: String(scene?.sceneText || scene?.visualDescription || "").trim(),
+    finalStoryboardScene,
+    scenePromptsScene,
+    finalVideoPromptScene,
+    scenePlanScene,
+  };
+}
+
 function buildScenarioTransferLogData(scene = {}, contractPayload = {}) {
   return {
     sceneId: String(scene?.sceneId || contractPayload?.sceneId || ""),
@@ -4935,8 +5037,10 @@ function resolveScenarioVideoSourceUrls(scene, previousScene = null, options = {
   );
   const singleImageAliases = [
     "imageUrl",
+    "sourceImageUrl",
     "generatedImageUrl",
     "image_url",
+    "source_image_url",
     "generated_image_url",
     "previewImageUrl",
     "preview_image_url",
@@ -5015,6 +5119,22 @@ function resolveScenarioVideoSourceUrls(scene, previousScene = null, options = {
       end: endImageAliases.map((field) => `scene.${field}`),
     },
   };
+}
+
+function resolveScenarioImageUrlFromApiResponse(payload = {}) {
+  if (!payload || typeof payload !== "object") return "";
+  const candidates = [
+    payload?.imageUrl,
+    payload?.image_url,
+    payload?.generatedImageUrl,
+    payload?.previewImageUrl,
+    payload?.sourceImageUrl,
+    payload?.result?.imageUrl,
+    payload?.result?.image_url,
+    payload?.output?.imageUrl,
+    payload?.output?.image_url,
+  ];
+  return String(candidates.find((value) => String(value || "").trim()) || "").trim();
 }
 
 function resolveSceneFrameUrls(scene, previousScene = null) {
@@ -12359,7 +12479,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const requestSceneSignature = String(buildScenarioScenePackageSignature(targetScene || {}) || "").trim();
     const requestSceneStableSignature = String(buildScenarioSceneStableSignature(targetScene || {}) || "").trim();
     const shouldTraceSelectedScene = shouldTraceRoleContractScene(sceneId);
-    const sceneText = String(targetScene.sceneText || targetScene.visualDescription || "").trim();
+    let sceneText = String(targetScene.sceneText || targetScene.visualDescription || "").trim();
     const previousScene = targetSceneIndex > 0 ? targetScenes[targetSceneIndex - 1] : null;
     const previousSceneImageUrl = String(
       previousScene?.endImageUrl
@@ -12427,6 +12547,13 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const scenarioPackageForImage = targetNode?.data?.scenarioPackage && typeof targetNode.data.scenarioPackage === "object"
         ? targetNode.data.scenarioPackage
         : {};
+      const promptContext = resolveScenarioImagePromptContext({
+        scene: targetScene,
+        scenarioPackage: scenarioPackageForImage,
+        slot: normalizedSlot,
+      });
+      const finalStoryboardSceneForRequest = promptContext?.finalStoryboardScene || null;
+      sceneText = String(promptContext?.sceneText || sceneText || "").trim();
       const refsByRoleForImage = buildScenarioRefsByRoleForImage({
         scene: targetScene,
         scenarioBrainRefs,
@@ -12906,6 +13033,19 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         refsFallbackFromContext,
         contextRefsMergedByRole,
         connectedInputRefsByRole,
+        scenarioPackageForImage?.input?.connected_context_summary?.connectedRefsPresentByRole,
+        scenarioPackageForImage?.input?.connected_context_summary?.refsByRole,
+        scenarioPackageForImage?.input?.connected_context_summary?.refs_by_role,
+        scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.refsByRole,
+        scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.refs_by_role,
+        scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.refsByRole,
+        scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.refs_by_role,
+        scenarioPackageForImage?.final_storyboard?.render_manifest?.linked_assets,
+        scenarioPackageForImage?.final_storyboard?.render_manifest?.refsByRole,
+        scenarioPackageForImage?.final_storyboard?.render_manifest?.refs_by_role,
+        extractRefsInventoryLikeByRole(scenarioPackageForImage?.input?.connected_context_summary),
+        extractRefsInventoryLikeByRole(scenarioPackageForImage?.final_storyboard?.source_package_snapshot),
+        extractRefsInventoryLikeByRole(scenarioPackageForImage?.final_storyboard?.render_manifest),
       );
       const refsByRoleEffective = hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {})
         ? mergeScenarioRefsByRole(refsForImageRequest.refsByRole, mergedRefsByRole)
@@ -12987,18 +13127,31 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || ""
       ).trim();
       const promptSourceEffective = String(
-        scenarioContractPayload?.promptSource
+        promptContext?.promptSource
+        || scenarioContractPayload?.promptSource
         || refsForImageRequest?.promptSource
         || targetScene?.promptSource
         || "unknown"
       ).trim();
       const imagePromptEffective = String(
+        promptContext?.imagePrompt
+        || targetScene?.image_prompt
+        || targetScene?.scene_prompt
+        || targetScene?.scenePrompt
+        || targetScene?.first_frame_prompt
+        || targetScene?.last_frame_prompt
+        ||
         targetScene?.imagePromptRu
         || targetScene?.imagePromptEn
         || targetScene?.imagePrompt
         || ""
       ).trim();
       const videoPromptEffective = String(
+        promptContext?.videoPrompt
+        || targetScene?.video_prompt
+        || targetScene?.first_frame_prompt
+        || targetScene?.last_frame_prompt
+        ||
         targetScene?.videoPromptRu
         || targetScene?.videoPromptEn
         || targetScene?.videoPrompt
@@ -13077,11 +13230,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const finalRequestBody = {
         ...scenarioContractPayload,
         sceneId,
+        segment_id: sceneId,
+        route: canonicalRoute || imageStrategy || "",
         sceneDelta: `${finalSceneDelta}
 Aspect ratio: ${imageFormat}`,
         sceneText,
         width,
         height,
+        sceneObject: targetScene,
+        finalStoryboardScene: finalStoryboardSceneForRequest || targetScene,
+        renderManifestRow: finalStoryboardSceneForRequest?.render_manifest_row || targetScene?.render_manifest_row || null,
+        render_manifest_row: finalStoryboardSceneForRequest?.render_manifest_row || targetScene?.render_manifest_row || null,
         storyboardRevision: requestStoryboardRevision,
         storyboardSignature: requestStoryboardSignature,
         sceneSignature: requestSceneSignature,
@@ -13160,7 +13319,7 @@ Aspect ratio: ${imageFormat}`,
         body: finalRequestBody,
       });
       const responseSceneId = String(out?.sceneId || "").trim();
-      const generatedImageUrl = String(out?.imageUrl || "").trim();
+      const generatedImageUrl = resolveScenarioImageUrlFromApiResponse(out);
       const resultStatus = String(out?.resultStatus || "").trim();
       const responseEngine = String(out?.engine || "").trim();
       const responseHint = String(out?.hint || "").trim();
@@ -13344,6 +13503,7 @@ Aspect ratio: ${imageFormat}`,
           firstFrameImageUrl: generatedImageUrl,
           startFrameImageUrl: generatedImageUrl,
           startFramePreviewUrl: generatedImageUrl,
+          frameRole: "first",
           suppressInheritedStartPreview: false,
           imageStatus: "",
           imageError: "",
@@ -13395,6 +13555,7 @@ Aspect ratio: ${imageFormat}`,
           lastFrameImageUrl: generatedImageUrl,
           endFrameImageUrl: generatedImageUrl,
           endFramePreviewUrl: generatedImageUrl,
+          frameRole: "last",
           suppressInheritedStartPreview: false,
           imageStatus: "",
           imageError: "",
