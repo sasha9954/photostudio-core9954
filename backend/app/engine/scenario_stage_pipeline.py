@@ -6050,6 +6050,7 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_coverage_seen_segment_ids"] = []
     diagnostics["role_plan_coverage_missing_segment_ids"] = []
     diagnostics["role_plan_coverage_extra_segment_ids"] = []
+    diagnostics["role_plan_primary_mismatch_segments"] = []
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
@@ -6111,6 +6112,7 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_coverage_seen_segment_ids"] = _safe_list(role_diag.get("coverage_seen_segment_ids"))
     diagnostics["role_plan_coverage_missing_segment_ids"] = _safe_list(role_diag.get("coverage_missing_segment_ids"))
     diagnostics["role_plan_coverage_extra_segment_ids"] = _safe_list(role_diag.get("coverage_extra_segment_ids"))
+    diagnostics["role_plan_primary_mismatch_segments"] = _safe_list(role_diag.get("role_plan_primary_mismatch_segments"))
     diagnostics["role_plan_configured_timeout_sec"] = int(
         role_diag.get("configured_timeout_sec") or diagnostics.get("role_plan_configured_timeout_sec") or 0
     )
