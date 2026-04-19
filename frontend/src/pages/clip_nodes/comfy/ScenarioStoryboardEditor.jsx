@@ -1005,14 +1005,31 @@ export default function ScenarioStoryboardEditor({
   };
 
   const imageStatus = resolveBlockStatus({ runtimeStatus: effectiveRuntime?.imageStatus, assetUrl: selectedScene?.imageUrl });
-  const startFrameStatus = resolveBlockStatus({
-    runtimeStatus: effectiveRuntime?.startFrameImageStatus || selectedScene?.startFrameImageStatus || effectiveRuntime?.startFrameStatus || selectedScene?.startFrameStatus,
-    assetUrl: selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl,
-  });
-  const endFrameStatus = resolveBlockStatus({
-    runtimeStatus: effectiveRuntime?.endFrameImageStatus || selectedScene?.endFrameImageStatus || effectiveRuntime?.endFrameStatus || selectedScene?.endFrameStatus,
-    assetUrl: selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
-  });
+  const sanitizeDisplayedFrameStatus = (status, assetUrl = "", startedAt = 0) => {
+    const raw = String(status || "").trim().toLowerCase();
+    if (["generating", "loading", "queued", "running"].includes(raw)) {
+      const startedAtTs = Number(startedAt || 0);
+      const isFreshRuntime = Number.isFinite(startedAtTs) && startedAtTs > 0 && (Date.now() - startedAtTs) <= 10 * 60 * 1000;
+      if (!isFreshRuntime) return "idle";
+    }
+    return resolveBlockStatus({ runtimeStatus: raw, assetUrl });
+  };
+  const startFrameStatus = sanitizeDisplayedFrameStatus(
+    effectiveRuntime?.startFrameImageStatus
+    || selectedScene?.startFrameImageStatus
+    || effectiveRuntime?.startFrameStatus
+    || selectedScene?.startFrameStatus,
+    selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl,
+    effectiveRuntime?.startFrameImageStartedAt || selectedScene?.startFrameImageStartedAt
+  );
+  const endFrameStatus = sanitizeDisplayedFrameStatus(
+    effectiveRuntime?.endFrameImageStatus
+    || selectedScene?.endFrameImageStatus
+    || effectiveRuntime?.endFrameStatus
+    || selectedScene?.endFrameStatus,
+    selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
+    effectiveRuntime?.endFrameImageStartedAt || selectedScene?.endFrameImageStartedAt
+  );
   const imageErrorText = String(selectedScene?.imageError || effectiveRuntime?.imageError || "").trim();
   const imageApiResult = effectiveRuntime?.lastImageApiResult && typeof effectiveRuntime.lastImageApiResult === "object"
     ? effectiveRuntime.lastImageApiResult
@@ -1837,9 +1854,19 @@ export default function ScenarioStoryboardEditor({
                               type="button"
                               onClick={() => {
                                 if (onClearSceneImage) {
+                                  console.info("[SCENARIO FIRST_LAST IMAGE DELETE BUTTON]", {
+                                    nodeId,
+                                    selectedSceneId,
+                                    slot: "start_frame",
+                                  });
                                   onClearSceneImage(nodeId, selectedSceneId, "start_frame", generateMeta);
                                   return;
                                 }
+                                console.info("[SCENARIO FIRST_LAST IMAGE DELETE BUTTON]", {
+                                  nodeId,
+                                  selectedSceneId,
+                                  slot: "start_frame",
+                                });
                                 onUpdateScene?.(nodeId, selectedSceneId, {
                                   startImageUrl: "",
                                   startFrameImageUrl: "",
@@ -1849,6 +1876,7 @@ export default function ScenarioStoryboardEditor({
                                   startFrameImageStatus: "idle",
                                   startFrameError: "",
                                   startFrameImageError: "",
+                                  startFrameImageStartedAt: 0,
                                 });
                               }}
                             >
@@ -1883,9 +1911,19 @@ export default function ScenarioStoryboardEditor({
                               type="button"
                               onClick={() => {
                                 if (onClearSceneImage) {
+                                  console.info("[SCENARIO FIRST_LAST IMAGE DELETE BUTTON]", {
+                                    nodeId,
+                                    selectedSceneId,
+                                    slot: "end_frame",
+                                  });
                                   onClearSceneImage(nodeId, selectedSceneId, "end_frame", generateMeta);
                                   return;
                                 }
+                                console.info("[SCENARIO FIRST_LAST IMAGE DELETE BUTTON]", {
+                                  nodeId,
+                                  selectedSceneId,
+                                  slot: "end_frame",
+                                });
                                 onUpdateScene?.(nodeId, selectedSceneId, {
                                   endImageUrl: "",
                                   endFrameImageUrl: "",
@@ -1895,6 +1933,7 @@ export default function ScenarioStoryboardEditor({
                                   endFrameImageStatus: "idle",
                                   endFrameError: "",
                                   endFrameImageError: "",
+                                  endFrameImageStartedAt: 0,
                                 });
                               }}
                               disabled={!isFirstLastVideoMode}
