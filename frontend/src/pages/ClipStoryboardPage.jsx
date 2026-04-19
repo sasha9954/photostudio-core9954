@@ -2171,12 +2171,38 @@ function normalizeStoryboardGenerationStatus(value) {
   return "not_generated";
 }
 
+const isScenarioImageBusyStatus = (value) =>
+  ["generating", "loading", "queued", "running"].includes(String(value || "").trim().toLowerCase());
+
+function sanitizeStaleScenarioImageRuntime(runtime = {}) {
+  const safe = runtime && typeof runtime === "object" ? { ...runtime } : {};
+  const clearBusy = (statusKey, errorKey) => {
+    if (isScenarioImageBusyStatus(safe[statusKey])) {
+      safe[statusKey] = "idle";
+      if (errorKey) safe[errorKey] = "";
+    }
+  };
+
+  clearBusy("imageStatus", "imageError");
+  clearBusy("startFrameStatus", "startFrameError");
+  clearBusy("startFrameImageStatus", "startFrameImageError");
+  clearBusy("endFrameStatus", "endFrameError");
+  clearBusy("endFrameImageStatus", "endFrameImageError");
+
+  if (isScenarioImageBusyStatus(safe.imageGenerationStep)) {
+    safe.imageGenerationStep = "";
+  }
+
+  return safe;
+}
+
 function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
   const prev = previousMap && typeof previousMap === "object" ? previousMap : {};
   return (Array.isArray(scenes) ? scenes : []).reduce((acc, scene) => {
     const sceneKey = String(scene?.sceneId || scene?.id || "");
     if (!sceneKey) return acc;
-    const prevValue = prev[sceneKey] && typeof prev[sceneKey] === "object" ? prev[sceneKey] : {};
+    const prevValueRaw = prev[sceneKey] && typeof prev[sceneKey] === "object" ? prev[sceneKey] : {};
+    const prevValue = sanitizeStaleScenarioImageRuntime(prevValueRaw);
     acc[sceneKey] = {
       status: normalizeStoryboardGenerationStatus(prevValue.status),
       imageStatus: String(prevValue.imageStatus || ""),
@@ -13299,8 +13325,8 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     setScenarioImageError("");
     updateScenarioSceneGenerationRuntime(sceneId, isTwoFrameScene
       ? (normalizedSlot === "start"
-        ? { startFrameStatus: "generating", startFrameImageStatus: "generating", startFrameError: "", startFrameImageError: "", imageGenerationStep: "Готовлю сцену…" }
-        : { endFrameStatus: "generating", endFrameImageStatus: "generating", endFrameError: "", endFrameImageError: "", imageGenerationStep: "Готовлю сцену…" })
+        ? { startFrameStatus: "generating", startFrameImageStatus: "generating", startFrameError: "", startFrameImageError: "", startFrameImageStartedAt: Date.now(), imageGenerationStep: "Готовлю сцену…" }
+        : { endFrameStatus: "generating", endFrameImageStatus: "generating", endFrameError: "", endFrameImageError: "", endFrameImageStartedAt: Date.now(), imageGenerationStep: "Готовлю сцену…" })
       : {
         imageStatus: "generating",
         imageGenerationStep: "Готовлю сцену…",
@@ -14724,8 +14750,8 @@ Aspect ratio: ${imageFormat}`,
       updateScenarioSceneGenerationRuntime(sceneId, {
         ...(isTwoFrameScene
           ? (normalizedSlot === "start"
-            ? { startFrameImageStatus: "done", startFrameStatus: "done" }
-            : { endFrameImageStatus: "done", endFrameStatus: "done" })
+            ? { startFrameImageStatus: "done", startFrameStatus: "done", startFrameImageStartedAt: 0 }
+            : { endFrameImageStatus: "done", endFrameStatus: "done", endFrameImageStartedAt: 0 })
           : { imageStatus: "done", imageUrl: generatedImageUrl }),
         imageGenerationStep: "",
         lastImageApiResult: imageApiRuntimeResult,
@@ -14841,9 +14867,9 @@ Aspect ratio: ${imageFormat}`,
         || [baseMessage, errorCode && !baseMessage.includes(errorCode) ? `(${errorCode})` : ""].filter(Boolean).join(" ")
         || (Number.isFinite(errorStatus) ? `HTTP ${errorStatus}` : "Image generation failed"));
       const runtimeErrorPatch = normalizedSlot === "start"
-        ? { startFrameStatus: "error", startFrameImageStatus: "error", startFrameError: imageErrorMessage, startFrameImageError: imageErrorMessage }
+        ? { startFrameStatus: "error", startFrameImageStatus: "error", startFrameError: imageErrorMessage, startFrameImageError: imageErrorMessage, startFrameImageStartedAt: 0 }
         : normalizedSlot === "end"
-          ? { endFrameStatus: "error", endFrameImageStatus: "error", endFrameError: imageErrorMessage, endFrameImageError: imageErrorMessage }
+          ? { endFrameStatus: "error", endFrameImageStatus: "error", endFrameError: imageErrorMessage, endFrameImageError: imageErrorMessage, endFrameImageStartedAt: 0 }
           : { imageStatus: "error", imageError: imageErrorMessage, imageGenerationStep: "" };
       updateScenarioSceneGenerationRuntime(sceneId, runtimeErrorPatch, { nodeId: targetNodeId });
       console.debug("[SCENARIO IMAGE BUTTON STATE]", {
@@ -14878,6 +14904,7 @@ Aspect ratio: ${imageFormat}`,
           startFrameImageStatus: "idle",
           startFrameError: "",
           startFrameImageError: "",
+          startFrameImageStartedAt: 0,
           imageGenerationStep: "",
         }, { nodeId: targetNodeId });
       }
@@ -14887,6 +14914,7 @@ Aspect ratio: ${imageFormat}`,
           endFrameImageStatus: "idle",
           endFrameError: "",
           endFrameImageError: "",
+          endFrameImageStartedAt: 0,
           imageGenerationStep: "",
         }, { nodeId: targetNodeId });
       }
@@ -14905,7 +14933,26 @@ Aspect ratio: ${imageFormat}`,
     const targetSceneId = String(sceneId || "").trim();
     const normalizedSlot = normalizeFirstLastSlotAlias(slot);
 
-    if (!targetNodeId || !targetSceneId) return;
+    console.info("[SCENARIO FIRST_LAST IMAGE CLEAR CLICK]", {
+      rawNodeId: nodeId,
+      rawSceneId: sceneId,
+      rawSlot: slot,
+      targetNodeId,
+      targetSceneId,
+      normalizedSlot,
+    });
+
+    if (!targetNodeId || !targetSceneId) {
+      console.info("[SCENARIO FIRST_LAST IMAGE CLEAR CLICK] missing_target", {
+        rawNodeId: nodeId,
+        rawSceneId: sceneId,
+        rawSlot: slot,
+        targetNodeId,
+        targetSceneId,
+        normalizedSlot,
+      });
+      return;
+    }
 
     const targetNode = (nodesRef.current || []).find((node) => node?.id === targetNodeId);
     const scenes = Array.isArray(targetNode?.data?.scenes) ? targetNode.data.scenes : [];
@@ -14916,6 +14963,11 @@ Aspect ratio: ${imageFormat}`,
       transitionType,
       slot: normalizedSlot,
     });
+    if (normalizedSlot === "start") {
+      clearPatch.startFrameImageStartedAt = 0;
+    } else if (normalizedSlot === "end") {
+      clearPatch.endFrameImageStartedAt = 0;
+    }
 
     const runtimePatch = normalizedSlot === "start"
       ? {
@@ -14923,6 +14975,7 @@ Aspect ratio: ${imageFormat}`,
         startFrameImageStatus: "idle",
         startFrameError: "",
         startFrameImageError: "",
+        startFrameImageStartedAt: 0,
         imageGenerationStep: "",
       }
       : normalizedSlot === "end"
@@ -14931,6 +14984,7 @@ Aspect ratio: ${imageFormat}`,
           endFrameImageStatus: "idle",
           endFrameError: "",
           endFrameImageError: "",
+          endFrameImageStartedAt: 0,
           imageGenerationStep: "",
         }
         : {
@@ -14943,6 +14997,9 @@ Aspect ratio: ${imageFormat}`,
     updateScenarioSceneGenerationRuntime(targetSceneId, runtimePatch, { nodeId: targetNodeId });
 
     scenarioImageLocksRef.current.delete(`${targetNodeId}:${targetSceneId}:${normalizedSlot}`);
+    scenarioImageLocksRef.current.delete(`${targetNodeId}:${targetSceneId}:start`);
+    scenarioImageLocksRef.current.delete(`${targetNodeId}:${targetSceneId}:end`);
+    scenarioImageLocksRef.current.delete(`${targetNodeId}:${targetSceneId}:single`);
     scenarioImageLocksRef.current.delete(`${targetNodeId}:${targetSceneId}:start_frame`);
     scenarioImageLocksRef.current.delete(`${targetNodeId}:${targetSceneId}:end_frame`);
 
@@ -22113,7 +22170,13 @@ const hydrate = useCallback((source = "unknown") => {
               }
               return normalizedScene;
             });
-            data.sceneGeneration = data.sceneGeneration && typeof data.sceneGeneration === "object" ? data.sceneGeneration : {};
+            const rawSceneGeneration = data.sceneGeneration && typeof data.sceneGeneration === "object" ? data.sceneGeneration : {};
+            data.sceneGeneration = Object.fromEntries(
+              Object.entries(rawSceneGeneration).map(([sceneId, runtime]) => [
+                sceneId,
+                sanitizeStaleScenarioImageRuntime(runtime),
+              ])
+            );
           }
 
           if (n.type === "introFrame") {
