@@ -223,6 +223,26 @@ const normalizeDirectRouteToWorkflowKey = (value) => {
   return "";
 };
 
+const normalizeScenarioVideoWorkflowAlias = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (["i2v", "image_video"].includes(normalized)) return "i2v";
+  if (["ia2v", "audio_driven", "lip_sync_music", "lip_sync"].includes(normalized)) return "lip_sync_music";
+  if (["first_last", "first+last", "first-last", "f_l", "f+l"].includes(normalized)) return "first_last";
+  return "";
+};
+
+const resolveScenarioUiRoute = (scene = {}) => {
+  const profile = resolveScenarioSceneVideoProfile(scene);
+  return {
+    source: profile?.debugRouteSourceField || "",
+    value: profile?.routeRaw || profile?.canonicalRoute || "",
+    finalRoute: profile?.canonicalRoute || "",
+    displayRouteLabel: profile?.displayRouteLabel || "",
+  };
+};
+
+
 const resolveDirectorModeFromContentType = (value) => {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "music_video" || normalized === "clip" || normalized === "клип") return "clip";
@@ -288,6 +308,9 @@ function buildScenarioImageApiRuntimeResult({
   applyAccepted = false,
   rejectedReason = "",
   slot = "scene",
+  refsDebug = null,
+  modelUsed = "",
+  rawResult = null,
 } = {}) {
   const imageUrlText = String(imageUrl || "").trim();
   return {
@@ -302,6 +325,9 @@ function buildScenarioImageApiRuntimeResult({
     slot: String(slot || "scene").trim().toLowerCase(),
     timestamp: new Date().toISOString(),
     imageUrlPresent: Boolean(imageUrlText),
+    refsDebug: refsDebug && typeof refsDebug === "object" ? refsDebug : undefined,
+    modelUsed: String(modelUsed || "").trim(),
+    rawResult: rawResult && typeof rawResult === "object" ? rawResult : undefined,
   };
 }
 
@@ -14195,6 +14221,9 @@ Aspect ratio: ${imageFormat}`,
         applyAccepted,
         rejectedReason,
         slot: normalizedSlot,
+        refsDebug: out?.refsDebug,
+        modelUsed: out?.modelUsed,
+        rawResult: out,
       });
       const applyCheckLog = {
         requestedSceneId: sceneId,
@@ -14443,6 +14472,7 @@ Aspect ratio: ${imageFormat}`,
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
       updateScenarioSceneGenerationRuntime(sceneId, {
         imageStatus: "done",
+        imageUrl: generatedImageUrl,
         imageGenerationStep: "",
         lastImageApiResult: imageApiRuntimeResult,
         lastAcceptedImageUrl: generatedImageUrl,
@@ -14675,6 +14705,33 @@ Aspect ratio: ${imageFormat}`,
     const startSec = Number(scene.t0 ?? scene.start ?? 0);
     const endSec = Number(scene.t1 ?? scene.end ?? 0);
 
+    const existingAudioSliceUrl = String(scene?.audioSliceUrl || "").trim();
+    const existingStartSec = Number(scene?.audioSliceStartSec ?? scene?.audioSliceT0);
+    const existingEndSec = Number(scene?.audioSliceEndSec ?? scene?.audioSliceT1);
+    const existingSliceSourceAudioUrl = String(scene?.audioSliceSourceAudioUrl || scene?.audioSourceUrl || "").trim();
+    const hasSameSliceRange = Number.isFinite(existingStartSec)
+      && Number.isFinite(existingEndSec)
+      && Math.abs(existingStartSec - startSec) < 0.001
+      && Math.abs(existingEndSec - endSec) < 0.001;
+    if (existingAudioSliceUrl && hasSameSliceRange && existingSliceSourceAudioUrl && existingSliceSourceAudioUrl === scenarioAudioUrl) {
+      console.info("[SCENARIO AUDIO SLICE REUSE]", {
+        sceneId,
+        audioSliceUrl: existingAudioSliceUrl,
+        reason: "same_scene_same_range",
+      });
+      return {
+        audioSliceUrl: existingAudioSliceUrl,
+        sliceUrl: existingAudioSliceUrl,
+        audioSliceDurationSec: normalizeDurationSec(scene?.audioSliceDurationSec ?? scene?.audioSliceActualDurationSec ?? Math.max(0, endSec - startSec)),
+        audioSliceStartSec: Number.isFinite(existingStartSec) ? existingStartSec : startSec,
+        audioSliceEndSec: Number.isFinite(existingEndSec) ? existingEndSec : endSec,
+        audioSliceStatus: String(scene?.audioSliceStatus || "ready").trim() || "ready",
+        audioSliceKind: String(scene?.audioSliceKind || scene?.audio_slice_kind || "none").trim().toLowerCase() || "none",
+        musicVocalLipSyncAllowed: scene?.musicVocalLipSyncAllowed ?? scene?.music_vocal_lipsync_allowed,
+        requiresAudioSensitiveVideo: scene?.requiresAudioSensitiveVideo ?? scene?.requires_audio_sensitive_video,
+      };
+    }
+
     console.log("[StoryboardVideo] audio_loading_on reason=take_audio", { sceneId, startSec, endSec });
     if (idx === scenarioEditor.selected) {
       setScenarioAudioSliceLoading(true);
@@ -14749,6 +14806,7 @@ Aspect ratio: ${imageFormat}`,
           audioSliceKind: resolvedAudioSliceKind || "music_vocal",
           musicVocalLipSyncAllowed: resolvedMusicVocalLipSyncAllowed ?? true,
           requiresAudioSensitiveVideo: resolvedRequiresAudioSensitiveVideo ?? true,
+          audioSliceSourceAudioUrl: scenarioAudioUrl,
           speechSafeAdjusted: out?.speechSafeAdjusted,
           speechSafeShiftMs: out?.speechSafeShiftMs,
           sliceMayCutSpeech: out?.sliceMayCutSpeech,
@@ -14762,9 +14820,9 @@ Aspect ratio: ${imageFormat}`,
         audioSliceStartSec: outStartSec,
         audioSliceEndSec: outEndSec,
         audioSliceStatus: "ready",
-        audioSliceKind: "music_vocal",
-        musicVocalLipSyncAllowed: true,
-        requiresAudioSensitiveVideo: true,
+        audioSliceKind: resolvedAudioSliceKind || "music_vocal",
+        musicVocalLipSyncAllowed: resolvedMusicVocalLipSyncAllowed ?? true,
+        requiresAudioSensitiveVideo: resolvedRequiresAudioSensitiveVideo ?? true,
       };
     } catch (e) {
       console.error(e);
@@ -15085,20 +15143,61 @@ Aspect ratio: ${imageFormat}`,
     const targetEffectiveStartImageUrl = effectiveStartImageUrl;
     const imageStrategy = String(targetScene?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
     const explicitWorkflow = resolveScenarioExplicitWorkflowKey(targetScene);
-    const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
-      explicitWorkflow
-      || targetScene?.resolvedWorkflowKey
-      || resolveScenarioWorkflowKey(targetScene)
+    const renderManifestRowMatched = resolveStoryboardSceneBySegmentId(sceneId, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioFlowSourceNode?.data) || null;
+    const finalStoryboardSceneForRequest = resolveStoryboardSceneBySegmentId(sceneId, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioFlowSourceNode?.data, targetScene) || null;
+    const sceneVideoMetadataPreHydrate = resolveScenarioSceneVideoMetadata(targetScene);
+    const uiRouteResolved = resolveScenarioUiRoute(targetScene);
+    const routeSources = [
+      ["targetScene.resolvedWorkflowKey", targetScene?.resolvedWorkflowKey],
+      ["targetScene.workflowKey", targetScene?.workflowKey],
+      ["targetScene.ltxMode", targetScene?.ltxMode],
+      ["targetScene.route", targetScene?.route],
+      ["targetScene.videoGenerationRoute", targetScene?.videoGenerationRoute],
+      ["targetScene.plannedVideoGenerationRoute", targetScene?.plannedVideoGenerationRoute],
+      ["targetScene.uiRouteValue", targetScene?.uiRouteValue],
+      ["targetScene.finalRoute", targetScene?.finalRoute],
+      ["targetScene.render_manifest_row.route", targetScene?.render_manifest_row?.route],
+      ["targetScene.renderManifestRow.route", targetScene?.renderManifestRow?.route],
+      ["resolveUiRoute(targetScene).finalRoute", uiRouteResolved?.finalRoute],
+      ["sceneVideoMetadata.routeType", sceneVideoMetadataPreHydrate?.routeType],
+      ["finalStoryboardSceneForRequest.route", finalStoryboardSceneForRequest?.route],
+      ["renderManifestRowBySceneId.route", renderManifestRowMatched?.route],
+    ];
+    const resolvedRouteSource = routeSources.find(([, value]) => normalizeScenarioVideoWorkflowAlias(value));
+    const hydratedWorkflowFromRoute = normalizeScenarioVideoWorkflowAlias(resolvedRouteSource?.[1]);
+    const resolvedWorkflowFallback = normalizeScenarioVideoWorkflowAlias(
+      normalizeScenarioWorkflowKeyForProduction(
+        explicitWorkflow
+        || targetScene?.resolvedWorkflowKey
+        || resolveScenarioWorkflowKey(targetScene)
+      )
     );
-    const resolvedWorkflowKeyLower = String(resolvedWorkflowKey || "").trim().toLowerCase();
+    const effectiveWorkflowKey = hydratedWorkflowFromRoute || resolvedWorkflowFallback || "i2v";
+    const sourcesChecked = routeSources.map(([source, value]) => ({
+      source,
+      value: String(value || "").trim(),
+      matched: source === resolvedRouteSource?.[0],
+    }));
+    const rawRoute = String(resolvedRouteSource?.[1] || targetScene?.route || targetScene?.ltxMode || "").trim().toLowerCase();
+    console.info("[SCENARIO VIDEO ROUTE HYDRATE]", {
+      sceneId,
+      before: {
+        resolvedWorkflowKey: String(targetScene?.resolvedWorkflowKey || "").trim(),
+        ltxMode: String(targetScene?.ltxMode || "").trim(),
+        renderMode: String(targetScene?.renderMode || "").trim(),
+        route: String(targetScene?.route || "").trim(),
+      },
+      sourcesChecked,
+      resolvedRoute: String(resolvedRouteSource?.[1] || "").trim(),
+      effectiveWorkflowKey,
+    });
     const ltxModeNormalized = String(targetScene?.ltxMode || targetScene?.ltx_mode || "").trim().toLowerCase();
     const explicitRequiresTwoFrames = targetScene?.requiresTwoFrames ?? targetScene?.needsTwoFrames;
     const requiresTwoFrames = Boolean(
       explicitRequiresTwoFrames
       ?? (
         imageStrategy === "first_last"
-        || resolvedWorkflowKeyLower === "f_l"
-        || resolvedWorkflowKeyLower === "imag-imag-video-bz"
+        || effectiveWorkflowKey === "first_last"
         || ltxModeNormalized === "f_l"
         || ltxModeNormalized === "first_last"
       )
@@ -15113,12 +15212,6 @@ Aspect ratio: ${imageFormat}`,
     ) && !requiresTwoFrames;
     const fallbackContinuationToI2V = requiresContinuation && !requiresTwoFrames;
     const effectiveRequiresContinuation = fallbackContinuationToI2V ? false : requiresContinuation;
-    const effectiveWorkflowKeyRaw = fallbackContinuationToI2V ? "i2v" : resolvedWorkflowKey;
-    const effectiveWorkflowKey = String(effectiveWorkflowKeyRaw || "").trim().toLowerCase() === "image_video"
-      ? "i2v"
-      : (["first_last", "f_l"].includes(String(effectiveWorkflowKeyRaw || "").trim().toLowerCase())
-        ? "first_last"
-        : String(effectiveWorkflowKeyRaw || "").trim().toLowerCase());
     const effectiveContentType = String(
       scenarioFlowSourceNode?.data?.contentType
       || targetScene?.contentType
@@ -15153,14 +15246,6 @@ Aspect ratio: ${imageFormat}`,
     const hasImageForVideo = requiresTwoFrames
       ? !!resolvedFirstFrameUrl && !!resolvedLastFrameUrl
       : (effectiveRequiresContinuation ? !!(resolvedFirstFrameUrl || frameImageUrl) : !!frameImageUrl);
-    const rawRoute = String(
-      targetScene?.sourceRoute
-      || targetScene?.videoGenerationRoute
-      || targetScene?.plannedVideoGenerationRoute
-      || targetScene?.route
-      || targetScene?.ltxMode
-      || ""
-    ).trim().toLowerCase();
     if (canonicalSyncAllowed) {
       updateScenarioScene(sceneId, {
         imageUrl: frameImageUrl,
@@ -15441,7 +15526,7 @@ Aspect ratio: ${imageFormat}`,
         musicVocalLipSyncAllowed,
         audioSliceKind: audioSliceKind || "none",
       });
-      blockScenarioVideoGeneration("audio_slice_not_vocal", "Для lip-sync нет vocal audio slice. Сначала нужен вокальный audio slice.");
+      blockScenarioVideoGeneration("audio_slice_not_vocal", "Для lip-sync нет vocal audio slice. Эта сцена не подходит для lip-sync, выбери i2v или пересобери route.");
       return;
     }
     if (effectiveWorkflowKey === "lip_sync_music") {
@@ -15534,7 +15619,7 @@ Aspect ratio: ${imageFormat}`,
         videoGenerationStep: "Проверяю route и workflow…",
       }, { nodeId: targetNodeId });
     }
-    const strictFirstLastMode = String(effectiveWorkflowKey || "").trim().toLowerCase() === "f_l";
+    const strictFirstLastMode = ["f_l", "first_last"].includes(String(effectiveWorkflowKey || "").trim().toLowerCase());
     const finalVideoPrompt = sceneVideoMetadata.positivePrompt;
     const sceneHumanVisualAnchors = [];
     const sourceImageUrl = requiresTwoFrames
