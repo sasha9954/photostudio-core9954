@@ -141,6 +141,15 @@ def _startup():
         )
     init_db()
 
+    auth_paths = sorted({
+        route.path
+        for route in app.routes
+        if getattr(route, "path", "").startswith("/api/auth")
+    })
+    print("[AUTH ROUTES READY]")
+    for path in auth_paths:
+        print(path)
+
 
 @app.get("/engine/status")
 def engine_status():
