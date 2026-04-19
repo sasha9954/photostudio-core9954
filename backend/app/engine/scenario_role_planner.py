@@ -23,6 +23,7 @@ ROLES_TECHNICAL_LEAKING = "ROLES_TECHNICAL_LEAKING"
 ROLES_CREATIVE_ROUTE = "ROLES_CREATIVE_ROUTE"
 ROLES_CONTINUITY_BREAK = "ROLES_CONTINUITY_BREAK"
 ROLES_DOCTRINE_DUPLICATION = "ROLES_DOCTRINE_DUPLICATION"
+ROLE_PRIMARY_MISMATCH = "ROLE_PRIMARY_MISMATCH"
 
 ALLOWED_PRESENCE_MODES = {"physical", "voiceover", "shadow", "implied"}
 ALLOWED_PRESENCE_WEIGHTS = {"anchor", "primary", "support", "background"}
@@ -39,6 +40,7 @@ _SCENE_CASTING_ALLOWED_KEYS = {
     "presence_mode",
     "presence_weight",
     "performance_focus",
+    "continuity_notes",
 }
 
 
@@ -265,7 +267,7 @@ def _build_roles_prompt(context: dict[str, Any]) -> str:
         "{"
         '"roles_version":"1.1",'
         '"roster":[{"entity_id":"string","role_name":"string","continuity_rules":["string"]}],'
-        '"scene_casting":[{"segment_id":"string","primary_role":"string","secondary_roles":["string"],"presence_mode":"physical|voiceover|shadow|implied","presence_weight":"anchor|primary|support|background","performance_focus":"string"}]'
+        '"scene_casting":[{"segment_id":"string","primary_role":"string","secondary_roles":["string"],"presence_mode":"physical|voiceover|shadow|implied","presence_weight":"anchor|primary|support|background","performance_focus":"string","continuity_notes":"string"}]'
         "}.\n"
         "Every segment_id must have exactly one scene_casting row.\n"
         f"ROLES_CONTEXT:\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
@@ -352,6 +354,7 @@ def _cleanup_roles_payload(raw_payload: dict[str, Any]) -> tuple[dict[str, Any],
                 "presence_mode": row.get("presence_mode"),
                 "presence_weight": row.get("presence_weight"),
                 "performance_focus": row.get("performance_focus"),
+                "continuity_notes": row.get("continuity_notes"),
             }
         )
     return cleaned, sorted(list(dict.fromkeys(dropped_fields)))
@@ -399,9 +402,88 @@ def _normalize_scene_casting(raw_scene_casting: Any) -> list[dict[str, Any]]:
                 "presence_mode": _normalize_text(row.get("presence_mode"), max_len=40).lower(),
                 "presence_weight": _normalize_text(row.get("presence_weight"), max_len=40).lower(),
                 "performance_focus": _normalize_text(row.get("performance_focus"), max_len=220),
+                "continuity_notes": _normalize_text(row.get("continuity_notes"), max_len=220),
             }
         )
     return out
+
+
+def _build_core_subject_map(story_core: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    story_core_v1 = _safe_dict(story_core.get("story_core_v1"))
+    if not story_core_v1 and str(story_core.get("schema_version") or "").startswith("core_v1"):
+        story_core_v1 = story_core
+    beat_map = _safe_dict(story_core_v1.get("beat_map"))
+    beats = [_safe_dict(row) for row in _safe_list(beat_map.get("beats"))]
+    out: dict[str, dict[str, Any]] = {}
+    for beat in beats:
+        segment_id = _normalize_text(beat.get("source_segment_id"), max_len=80)
+        if not segment_id:
+            continue
+        primary_role = _normalize_text(beat.get("beat_primary_subject"), max_len=80)
+        secondary_roles = list(
+            dict.fromkeys(
+                [
+                    _normalize_text(item, max_len=80)
+                    for item in _safe_list(beat.get("beat_secondary_subjects"))
+                    if _normalize_text(item, max_len=80)
+                ]
+            )
+        )
+        out[segment_id] = {"primary_role": primary_role, "secondary_roles": secondary_roles}
+    return out
+
+
+def _ensure_core_entities_in_roster(
+    *,
+    roles_payload: dict[str, Any],
+    core_subject_map: dict[str, dict[str, Any]],
+    allowed_registry: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    roster = _normalize_roster(roles_payload.get("roster"), allowed_registry)
+    roster_by_id = {str(row.get("entity_id") or "").strip(): row for row in roster}
+    for core_row in core_subject_map.values():
+        role_ids = [str(core_row.get("primary_role") or "").strip()] + [
+            str(item or "").strip() for item in _safe_list(core_row.get("secondary_roles"))
+        ]
+        for role_id in role_ids:
+            if not role_id or role_id in roster_by_id:
+                continue
+            allowed_row = _safe_dict(allowed_registry.get(role_id))
+            roster_by_id[role_id] = {
+                "entity_id": role_id,
+                "role_name": _normalize_text(allowed_row.get("role_name") or role_id, max_len=120),
+                "continuity_rules": [],
+            }
+    return {
+        "roles_version": _normalize_text(roles_payload.get("roles_version"), max_len=20) or ROLES_VERSION,
+        "roster": list(roster_by_id.values()),
+        "scene_casting": _safe_list(roles_payload.get("scene_casting")),
+    }
+
+
+def _normalize_scene_casting_from_core(
+    *,
+    scene_casting: list[dict[str, Any]],
+    core_subject_map: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    normalized_rows: list[dict[str, Any]] = []
+    mismatches: list[dict[str, str]] = []
+    for row in scene_casting:
+        clean_row = dict(_safe_dict(row))
+        segment_id = str(clean_row.get("segment_id") or "").strip()
+        core_row = _safe_dict(core_subject_map.get(segment_id))
+        if not segment_id or not core_row:
+            normalized_rows.append(clean_row)
+            continue
+        expected_primary = str(core_row.get("primary_role") or "").strip()
+        got_primary = str(clean_row.get("primary_role") or "").strip()
+        if expected_primary and got_primary and got_primary != expected_primary:
+            mismatches.append({"segment_id": segment_id, "expected": expected_primary, "got": got_primary})
+        if expected_primary:
+            clean_row["primary_role"] = expected_primary
+        clean_row["secondary_roles"] = list(_safe_list(core_row.get("secondary_roles")))
+        normalized_rows.append(clean_row)
+    return normalized_rows, mismatches
 
 
 def _validate_roles_payload(
@@ -510,6 +592,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
 
     segment_rows, expected_segment_ids, segment_error, segment_row_diagnostics = _build_segment_rows(audio_map, story_core)
     allowed_registry = _collect_allowed_entity_registry(package)
+    core_subject_map = _build_core_subject_map(story_core)
 
     diagnostics = {
         "prompt_version": ROLE_PLAN_PROMPT_VERSION,
@@ -542,6 +625,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "timed_out": False,
         "timeout_retry_attempted": False,
         "response_was_empty_after_timeout": False,
+        "role_plan_primary_mismatch_segments": [],
     }
 
     diagnostics.update(segment_row_diagnostics)
@@ -624,7 +708,18 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             parsed = _extract_strict_json_payload(raw_model_text)
             diagnostics["parsed_payload_preview"] = _normalize_text(json.dumps(parsed, ensure_ascii=False), max_len=500)
             sanitized, dropped_fields = _cleanup_roles_payload(parsed)
+            sanitized = _ensure_core_entities_in_roster(
+                roles_payload=sanitized,
+                core_subject_map=core_subject_map,
+                allowed_registry=allowed_registry,
+            )
             diagnostics["dropped_non_canonical_fields"] = dropped_fields[:60]
+            normalized_scene_casting, primary_mismatches = _normalize_scene_casting_from_core(
+                scene_casting=[_safe_dict(row) for row in _safe_list(sanitized.get("scene_casting"))],
+                core_subject_map=core_subject_map,
+            )
+            sanitized["scene_casting"] = normalized_scene_casting
+            diagnostics["role_plan_primary_mismatch_segments"] = primary_mismatches[:40]
             diagnostics["sanitized_payload_preview"] = _normalize_text(json.dumps(sanitized, ensure_ascii=False), max_len=500)
             seen_segment_ids = [
                 str(_safe_dict(row).get("segment_id") or "").strip()
@@ -636,6 +731,15 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             diagnostics["coverage_seen_segment_ids"] = seen_segment_ids
             diagnostics["coverage_missing_segment_ids"] = sorted(list(expected_set - seen_set))
             diagnostics["coverage_extra_segment_ids"] = sorted(list(seen_set - expected_set))
+            if primary_mismatches and attempt < attempts - 1:
+                last_error = ROLE_PRIMARY_MISMATCH
+                diagnostics["error_code"] = ROLE_PRIMARY_MISMATCH
+                prompt = (
+                    f"{prompt}\n\nPREVIOUS_VALIDATION_ERROR={ROLE_PRIMARY_MISMATCH}. "
+                    "Do not change primary_role/secondary_roles from CORE beat_map. "
+                    "Only refine presence_mode, presence_weight, performance_focus, continuity_notes."
+                )
+                continue
             normalized, validation_error = _validate_roles_payload(
                 roles_payload=sanitized,
                 expected_segment_ids=expected_segment_ids,
