@@ -96,28 +96,72 @@ def _has_real_confirmed_hero_image_url(fallback_row: dict[str, Any]) -> bool:
     return False
 
 
-def _sanitize_contract_prompts(*, positive_prompt: str, negative_prompt: str, route: str) -> tuple[str, str]:
+def _strip_clear_vocal_fragments(text: str) -> str:
+    text = str(text or "")
+    text = re.sub(r"(?i)\bCLEAR\s+VOCAL\s+PERFORMANCE\s*[:.]?", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^[\s:.,;]+", "", text).strip()
+    return text
+
+
+def _strip_positive_contract_blocks(text: str) -> str:
+    text = str(text or "")
+    text = re.sub(
+        r"(?i)\bGLOBAL HERO IDENTITY LOCK,\s*BODY CONTINUITY,\s*WARDROBE CONTINUITY\.?",
+        " ",
+        text,
+    )
+    labels = [
+        "GLOBAL HERO IDENTITY LOCK:",
+        "BODY CONTINUITY:",
+        "WARDROBE CONTINUITY:",
+    ]
+    for label in labels:
+        pattern = rf"(?is)\b{re.escape(label)}\s*.*?(?=(GLOBAL HERO IDENTITY LOCK:|BODY CONTINUITY:|WARDROBE CONTINUITY:|Use the confirmed hero look reference|Performer remains|Shot variant:|$))"
+        text = re.sub(pattern, " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _strip_negative_positive_contract_blocks(text: str) -> str:
+    text = str(text or "")
+    text = re.sub(r"(?i)\bGLOBAL HERO IDENTITY CONTRACT\.?", " ", text)
+    labels = [
+        "GLOBAL HERO IDENTITY LOCK:",
+        "BODY CONTINUITY:",
+        "WARDROBE CONTINUITY:",
+    ]
+    for label in labels:
+        pattern = rf"(?is)\b{re.escape(label)}\s*.*?(?=(GLOBAL HERO IDENTITY LOCK:|BODY CONTINUITY:|WARDROBE CONTINUITY:|different woman|changed face|changed body|slimmer body|$))"
+        text = re.sub(pattern, " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" ,.;")
+    return text
+
+
+def _sanitize_contract_prompts(*, positive_prompt: str, negative_prompt: str, route: str) -> tuple[str, str, dict[str, bool]]:
     positive = str(positive_prompt or "").strip()
     negative = str(negative_prompt or "").strip()
+    clear_vocal_fragments_removed = False
+    clear_vocal_canonical_applied = False
+    negative_positive_contract_blocks_removed = False
 
-    positive = re.sub(
-        r"(?i)(?:^|\s)GLOBAL HERO IDENTITY LOCK, BODY CONTINUITY, WARDROBE CONTINUITY\.?",
-        " ",
-        positive,
-    )
-    negative = re.sub(r"(?i)GLOBAL HERO IDENTITY CONTRACT\.?", " ", negative)
+    negative_before = negative
+    negative = _strip_negative_positive_contract_blocks(negative)
+    negative_positive_contract_blocks_removed = negative != negative_before
 
-    if route == "ia2v" and positive:
-        full_block = CLEAR_VOCAL_PERFORMANCE.strip()
-        if full_block.lower() in positive.lower() or "clear vocal performance:" in positive.lower():
-            escaped_full = re.escape(full_block)
-            positive = re.sub(fr"(?i){escaped_full}", " ", positive)
-            positive = re.sub(r"(?i)\bCLEAR VOCAL PERFORMANCE\.?", " ", positive)
-            positive = f"{full_block} {positive}".strip()
+    if route == "ia2v":
+        body = _strip_clear_vocal_fragments(positive)
+        clear_vocal_fragments_removed = body != positive
+        positive = f"{CLEAR_VOCAL_PERFORMANCE} {body}".strip()
+        clear_vocal_canonical_applied = True
 
     positive = re.sub(r"\s+", " ", positive).strip()
     negative = re.sub(r"\s+", " ", negative).strip(" ,")
-    return positive, negative
+    return positive, negative, {
+        "clearVocalCanonicalApplied": clear_vocal_canonical_applied,
+        "clearVocalFragmentsRemoved": clear_vocal_fragments_removed,
+        "negativePositiveContractBlocksRemoved": negative_positive_contract_blocks_removed,
+    }
 
 
 def _rewire_shadow_continuity(previous_seg: dict[str, Any], current_seg: dict[str, Any]) -> None:
@@ -504,7 +548,11 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     has_human_subject = _scene_has_human_subject(fallback_row, route)
     confirmed_look_clause_applied = bool(has_human_subject and scene_seq_index >= 2)
     confirmed_look_used = bool(confirmed_look_clause_applied and _has_real_confirmed_hero_image_url(fallback_row))
+    positive_contract_duplicates_removed = False
     if has_human_subject:
+        positive_before_cleanup = positive_prompt
+        positive_prompt = _strip_positive_contract_blocks(positive_prompt)
+        positive_contract_duplicates_removed = positive_prompt != positive_before_cleanup
         positive_prompt = _append_clause(positive_prompt, GLOBAL_HERO_IDENTITY_LOCK)
         positive_prompt = _append_clause(positive_prompt, BODY_CONTINUITY_LOCK)
         positive_prompt = _append_clause(positive_prompt, WARDROBE_CONTINUITY_LOCK)
@@ -555,7 +603,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         gesture = ""
         location_zone = ""
         mouth_readability = ""
-    positive_prompt, negative_prompt = _sanitize_contract_prompts(
+    positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
         positive_prompt=positive_prompt,
         negative_prompt=negative_prompt,
         route=route,
@@ -572,12 +620,20 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         if not last_frame:
             last_frame = str(fallback_prompt_row.get("last_frame_prompt") or fallback_prompt_row.get("end_image_prompt") or "").strip()
         if has_human_subject:
+            first_frame = _strip_positive_contract_blocks(first_frame)
+            last_frame = _strip_positive_contract_blocks(last_frame)
             for lock_clause in (GLOBAL_HERO_IDENTITY_LOCK, BODY_CONTINUITY_LOCK, WARDROBE_CONTINUITY_LOCK):
                 first_frame = _append_clause(first_frame, lock_clause)
                 last_frame = _append_clause(last_frame, lock_clause)
             if confirmed_look_clause_applied:
                 first_frame = _append_clause(first_frame, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
                 last_frame = _append_clause(last_frame, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
+
+    first_frame_has_identity_lock = "GLOBAL HERO IDENTITY LOCK:" in first_frame if first_frame else False
+    last_frame_has_identity_lock = "GLOBAL HERO IDENTITY LOCK:" in last_frame if last_frame else False
+    negative_contains_positive_identity_block = bool(
+        re.search(r"(?i)\b(GLOBAL HERO IDENTITY LOCK:|BODY CONTINUITY:|WARDROBE CONTINUITY:|GLOBAL HERO IDENTITY CONTRACT\.?)", negative_prompt)
+    )
 
     if not segment_id or not positive_prompt or not negative_prompt:
         raise RuntimeError(f"final_video_prompt_invalid_segment:{segment_id or 'unknown'}")
@@ -654,6 +710,13 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         "wardrobe_lock_applied": bool(has_human_subject),
         "confirmedHeroLookReferenceUsed": bool(confirmed_look_used),
         "confirmedHeroLookReferenceClauseApplied": bool(confirmed_look_clause_applied),
+        "clearVocalCanonicalApplied": bool(contract_debug.get("clearVocalCanonicalApplied")),
+        "clearVocalFragmentsRemoved": bool(contract_debug.get("clearVocalFragmentsRemoved")),
+        "positiveContractDuplicatesRemoved": bool(positive_contract_duplicates_removed),
+        "negativePositiveContractBlocksRemoved": bool(contract_debug.get("negativePositiveContractBlocksRemoved")),
+        "firstFrameHasIdentityLock": bool(first_frame_has_identity_lock),
+        "lastFrameHasIdentityLock": bool(last_frame_has_identity_lock),
+        "negativeContainsPositiveIdentityBlock": bool(negative_contains_positive_identity_block),
         "lip_sync_shot_variant_repeated_with_previous": False,
         "continuity_warning": str(row.get("continuity_warning") or "").strip() or None,
         "continuity_fix_applied": bool(row.get("continuity_fix_applied") or False),
@@ -773,6 +836,13 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
                     "lipSyncShotVariant": str(row.get("lip_sync_shot_variant") or ""),
                     "confirmedHeroLookReferenceUsed": bool(row.get("confirmedHeroLookReferenceUsed")),
                     "confirmedHeroLookReferenceClauseApplied": bool(row.get("confirmedHeroLookReferenceClauseApplied")),
+                    "clearVocalCanonicalApplied": bool(row.get("clearVocalCanonicalApplied")),
+                    "clearVocalFragmentsRemoved": bool(row.get("clearVocalFragmentsRemoved")),
+                    "positiveContractDuplicatesRemoved": bool(row.get("positiveContractDuplicatesRemoved")),
+                    "negativePositiveContractBlocksRemoved": bool(row.get("negativePositiveContractBlocksRemoved")),
+                    "firstFrameHasIdentityLock": bool(row.get("firstFrameHasIdentityLock")),
+                    "lastFrameHasIdentityLock": bool(row.get("lastFrameHasIdentityLock")),
+                    "negativeContainsPositiveIdentityBlock": bool(row.get("negativeContainsPositiveIdentityBlock")),
                     "positivePromptPreview": str(route_payload.get("positive_prompt") or "")[:220],
                     "negativePromptPreview": str(route_payload.get("negative_prompt") or "")[:220],
                 }
