@@ -1079,6 +1079,10 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "- sc_1: intro-observational, more static, more closed, shadow-heavy, restrained framing intent.\\n"
         "- sc_5: breather with internal defiance; quiet but tense pause with readable subtle emotional charge (not dead static).\\n"
         "Honor scene_plan route semantics exactly: first_last must stay strict first_last contract; ia2v must stay audio-driven singing/performance; i2v must stay simple observable action.\\n"
+        "For every scene, consume and apply these scene_plan fields explicitly: speaker_role, spoken_line, lip_sync_allowed, mouth_visible_required, listener_reaction_allowed, reaction_role.\\n"
+        "For ia2v with lip_sync_allowed=true: only speaker_role can have mouth movement, listener/reaction_role stays silent, and never output simultaneous dual-speaker lip movement.\\n"
+        "For ia2v with lip_sync_allowed=false: keep performance/audio-reactive behavior without mouth-sync directives.\\n"
+        "If speaker_role is unknown, do not author lip-sync prompt language.\\n"
         "Always include compact negative_prompt with safety constraints as short tail text.\\n"
         "Never mix negative prompt text into positive video_prompt; keep positive and negative fields separated.\\n"
         "For first_last, return both positive_video_prompt and negative_video_prompt fields (negative_video_prompt is mandatory for first_last).\\n"
@@ -1513,6 +1517,8 @@ def _build_fallback_scene_prompts(
     speaker_role = str(scene_plan_row.get("speaker_role") or "").strip()
     speaker_label = speaker_role if speaker_role and speaker_role != "unknown" else primary_role
     spoken_line = str(scene_plan_row.get("spoken_line") or "").strip()
+    lip_sync_allowed = bool(scene_plan_row.get("lip_sync_allowed"))
+    mouth_visible_required = bool(scene_plan_row.get("mouth_visible_required"))
     listener_reaction_allowed = bool(scene_plan_row.get("listener_reaction_allowed"))
     reaction_role = str(scene_plan_row.get("reaction_role") or "").strip()
     scene_function = str(scene_plan_row.get("scene_function") or "scene beat")
@@ -1538,13 +1544,22 @@ def _build_fallback_scene_prompts(
         photo_prompt = (
             f"Performance portrait of {speaker_label} in {world_anchor}, {scene_function} beat with {emotional}, framed as medium close-up/close-up to keep speaker face and mouth readable while the vocal phrase carries emotion through eyes, shoulders, and hands."
         )
-        video_prompt = (
-            f"The still frame opens into {scene_function} performance intent: {motion_intent}. "
-            f"Only {speaker_label} delivers the spoken phrase{f' ({spoken_line})' if spoken_line else ''}; no simultaneous dual-speaker lip movement. "
-            "Vocal phrasing leads subtle rhythmic sway, a controlled torso pulse, a gentle head turn, and soft hand phrasing while the face stays readable and emotionally alive. "
-            f"{f'{reaction_role} may stay nearby as silent listener reaction. ' if listener_reaction_allowed and reaction_role else ''}"
-            f"Camera motion stays smooth and supportive.{binding_clause} Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
-        )
+        if lip_sync_allowed and speaker_role and speaker_role != "unknown":
+            video_prompt = (
+                f"The still frame opens into {scene_function} performance intent: {motion_intent}. "
+                f"Only {speaker_label} delivers the spoken phrase{f' ({spoken_line})' if spoken_line else ''}; no simultaneous dual-speaker lip movement. "
+                "Vocal phrasing leads subtle rhythmic sway, a controlled torso pulse, a gentle head turn, and soft hand phrasing while the face stays readable and emotionally alive. "
+                f"{f'{reaction_role} may stay nearby as silent listener reaction. ' if listener_reaction_allowed and reaction_role else ''}"
+                f"{'Mouth readability is required for the active speaker. ' if mouth_visible_required else ''}"
+                f"Camera motion stays smooth and supportive.{binding_clause} Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
+            )
+        else:
+            video_prompt = (
+                f"The still frame opens into {scene_function} performance intent: {motion_intent}. "
+                "Performance stays audio-reactive and emotionally readable through gaze, posture, breathing, and upper-body rhythm, without explicit mouth-sync choreography. "
+                f"{f'{reaction_role} may stay nearby as silent listener reaction. ' if listener_reaction_allowed and reaction_role else ''}"
+                f"Camera motion stays smooth and supportive.{binding_clause} Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
+            )
         negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
     elif route == "first_last":
         first_last_mode = str(scene_plan_row.get("first_last_mode") or "").strip().lower()
@@ -2459,6 +2474,12 @@ def _build_prompt_rows(package: dict[str, Any]) -> tuple[list[dict[str, Any]], d
                 "secondary_roles": [str(v).strip() for v in _safe_list(role_row.get("secondary_roles")) if str(v).strip()],
                 "presence_mode": str(role_row.get("presence_mode") or "").strip(),
                 "presence_weight": str(role_row.get("presence_weight") or "").strip(),
+                "speaker_role": str(scene_row.get("speaker_role") or "").strip(),
+                "spoken_line": str(scene_row.get("spoken_line") or "").strip(),
+                "lip_sync_allowed": bool(scene_row.get("lip_sync_allowed")),
+                "mouth_visible_required": bool(scene_row.get("mouth_visible_required")),
+                "listener_reaction_allowed": bool(scene_row.get("listener_reaction_allowed")),
+                "reaction_role": str(scene_row.get("reaction_role") or "").strip(),
                 "emotional_key": str(narrative_row.get("emotional_key") or scene_row.get("emotional_intent") or "").strip(),
                 "beat_purpose": str(narrative_row.get("beat_purpose") or scene_row.get("scene_goal") or "").strip(),
             }
@@ -2662,6 +2683,10 @@ def _build_prompts_v11_prompt(
         "- Do not output engine params, renderer-specific phrasing, quality buzzwords, workflow tags, model tags, camera/fps/lens/seed specs.\n"
         "- Do not reconstruct final video prompt and do not output route-delivery payload.\n"
         "- Translate SCENES signal (scene_goal, narrative_function, subject_motion, camera_intent, pacing, energy_alignment, framing, subject_priority, layout, depth_strategy, audio_visual_sync) into natural descriptive writing rather than technical labels.\n"
+        "- Each segment must consume prompt_rows speaker/lip-sync controls: speaker_role, spoken_line, lip_sync_allowed, mouth_visible_required, listener_reaction_allowed, reaction_role.\n"
+        "- If route == ia2v and lip_sync_allowed is true: mouth-sync only for speaker_role, listener/reaction_role remains silent/background, and never dual-speaker simultaneous lip movement.\n"
+        "- If route == ia2v and lip_sync_allowed is false: keep performance or audio-reactive cues but avoid mouth-sync language.\n"
+        "- If speaker_role is unknown, do not generate lip-sync phrasing.\n"
         "- Never copy technical scene labels verbatim into final prompts.\n"
         "- camera_intent must be translated into natural descriptive prose.\n"
         "- framing/motion hints must be expressed without camera jargon.\n"
