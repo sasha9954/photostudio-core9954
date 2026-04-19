@@ -3724,6 +3724,7 @@ function buildScenarioVideoDeletePatch(scene = {}) {
 function buildScenarioClearImagePatch({ transitionType = "single", slot = "single" } = {}) {
   const normalizedTransition = String(transitionType || "").trim().toLowerCase();
   const normalizedSlot = slot === "start" || slot === "end" ? slot : "single";
+  const isTwoFrameTransition = normalizedTransition === "continuous" || normalizedTransition === "first_last" || normalizedTransition === "f_l";
   const basePatch = {
     imageUrl: "",
     imageStatus: "",
@@ -3757,52 +3758,69 @@ function buildScenarioClearImagePatch({ transitionType = "single", slot = "singl
     if (Object.prototype.hasOwnProperty.call(basePatch, field)) return;
     basePatch[field] = null;
   });
-  if (normalizedTransition !== "continuous") return basePatch;
+  if (!isTwoFrameTransition) return basePatch;
   if (normalizedSlot === "start") {
     return {
-      ...basePatch,
+      ...Object.fromEntries(Object.entries(basePatch).filter(([key]) => !["endImageUrl", "endFrameImageUrl", "endFramePreviewUrl", "lastFrameImageUrl"].includes(key))),
       startImageUrl: "",
       startFrameImageUrl: "",
+      firstFrameImageUrl: "",
       startFramePreviewUrl: "",
       startFrameStatus: "",
+      startFrameImageStatus: "",
       startFrameError: "",
+      startFrameImageError: "",
     };
   }
   if (normalizedSlot === "end") {
     return {
-      ...basePatch,
+      ...Object.fromEntries(Object.entries(basePatch).filter(([key]) => !["startImageUrl", "startFrameImageUrl", "startFramePreviewUrl", "firstFrameImageUrl"].includes(key))),
       endImageUrl: "",
       endFrameImageUrl: "",
+      lastFrameImageUrl: "",
       endFramePreviewUrl: "",
       endFrameStatus: "",
+      endFrameImageStatus: "",
       endFrameError: "",
+      endFrameImageError: "",
     };
   }
   return {
     ...basePatch,
     startImageUrl: "",
     startFrameImageUrl: "",
+    firstFrameImageUrl: "",
     startFramePreviewUrl: "",
     startFrameStatus: "",
+    startFrameImageStatus: "",
     startFrameError: "",
+    startFrameImageError: "",
     endImageUrl: "",
     endFrameImageUrl: "",
+    lastFrameImageUrl: "",
     endFramePreviewUrl: "",
     endFrameStatus: "",
+    endFrameImageStatus: "",
     endFrameError: "",
+    endFrameImageError: "",
   };
 }
 
 function buildScenarioClearRuntimeImagePatch({ transitionType = "single", slot = "single" } = {}) {
   const normalizedTransition = String(transitionType || "").trim().toLowerCase();
   const normalizedSlot = slot === "start" || slot === "end" ? slot : "single";
+  const isTwoFrameTransition = normalizedTransition === "continuous" || normalizedTransition === "first_last" || normalizedTransition === "f_l";
   const basePatch = {
     imageStatus: "",
     imageError: "",
     startFrameStatus: "",
+    startFrameImageStatus: "",
     startFrameError: "",
+    startFrameImageError: "",
     endFrameStatus: "",
+    endFrameImageStatus: "",
     endFrameError: "",
+    endFrameImageError: "",
     lastImageApiResult: null,
     lastRejectedImageUrl: "",
     lastRejectedReason: "",
@@ -3839,7 +3857,7 @@ function buildScenarioClearRuntimeImagePatch({ transitionType = "single", slot =
     videoSourceImageUrl: "",
     videoUrl: "",
   };
-  if (normalizedTransition !== "continuous") {
+  if (!isTwoFrameTransition) {
     return {
       ...basePatch,
       ...clearSharedImageAndVideoFields,
@@ -3857,7 +3875,12 @@ function buildScenarioClearRuntimeImagePatch({ transitionType = "single", slot =
       ...clearSharedImageAndVideoFields,
       startImageUrl: "",
       startFrameImageUrl: "",
+      firstFrameImageUrl: "",
       startFramePreviewUrl: "",
+      startFrameStatus: "",
+      startFrameImageStatus: "",
+      startFrameError: "",
+      startFrameImageError: "",
     };
   }
   if (normalizedSlot === "end") {
@@ -3866,7 +3889,12 @@ function buildScenarioClearRuntimeImagePatch({ transitionType = "single", slot =
       ...clearSharedImageAndVideoFields,
       endImageUrl: "",
       endFrameImageUrl: "",
+      lastFrameImageUrl: "",
       endFramePreviewUrl: "",
+      endFrameStatus: "",
+      endFrameImageStatus: "",
+      endFrameError: "",
+      endFrameImageError: "",
     };
   }
   return {
@@ -3876,6 +3904,8 @@ function buildScenarioClearRuntimeImagePatch({ transitionType = "single", slot =
     endImageUrl: "",
     startFrameImageUrl: "",
     endFrameImageUrl: "",
+    firstFrameImageUrl: "",
+    lastFrameImageUrl: "",
     startFramePreviewUrl: "",
     endFramePreviewUrl: "",
   };
@@ -4739,8 +4769,30 @@ function getScenePrimaryFramePrompt(scene) {
 }
 
 function deriveFirstLastFramePrompts(scene = {}) {
-  const explicitStart = String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || "").trim();
-  const explicitEnd = String(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || "").trim();
+  const explicitStart = String(
+    scene?.route_payload?.first_frame_prompt
+    || scene?.first_frame_prompt
+    || scene?.finalVideoPrompt?.firstFramePrompt
+    || scene?.scene_prompt?.first_frame_prompt
+    || scene?.scene_prompt?.prompt_notes?.start_state
+    || scene?.scene_prompt?.prompt_notes?.transition?.start_state
+    || scene?.startFramePromptRu
+    || scene?.startFramePromptEn
+    || scene?.startFramePrompt
+    || ""
+  ).trim();
+  const explicitEnd = String(
+    scene?.route_payload?.last_frame_prompt
+    || scene?.last_frame_prompt
+    || scene?.finalVideoPrompt?.lastFramePrompt
+    || scene?.scene_prompt?.last_frame_prompt
+    || scene?.scene_prompt?.prompt_notes?.end_state
+    || scene?.scene_prompt?.prompt_notes?.transition?.end_state
+    || scene?.endFramePromptRu
+    || scene?.endFramePromptEn
+    || scene?.endFramePrompt
+    || ""
+  ).trim();
   if (explicitStart && explicitEnd) {
     return { start: explicitStart, end: explicitEnd, derived: false };
   }
@@ -13034,12 +13086,20 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const sceneId = requestSceneId;
     if (!sceneId) throw new Error("scene_id_required");
     const imageLockKey = `${targetNodeId}:${sceneId}:${normalizedSlot}`;
+    const frameKind = normalizedSlot === "end" ? "last" : (normalizedSlot === "start" ? "first" : "single");
+    const frameRole = frameKind === "first" ? "first_frame" : (frameKind === "last" ? "last_frame" : "scene_image");
+    const targetField = frameKind === "first" ? "startImageUrl" : (frameKind === "last" ? "endImageUrl" : "imageUrl");
+    const runtimeSceneState = targetNode?.data?.sceneGeneration?.[sceneId] || {};
     const previousImageRuntimeStatus = String(targetScene?.imageStatus || "").trim().toLowerCase();
     const existingRuntimeStatus = String(
-      targetNode?.data?.sceneGeneration?.[sceneId]?.imageStatus
+      isTwoFrameScene
+        ? (normalizedSlot === "start"
+          ? (runtimeSceneState?.startFrameImageStatus || runtimeSceneState?.startFrameStatus || targetScene?.startFrameImageStatus || targetScene?.startFrameStatus)
+          : (runtimeSceneState?.endFrameImageStatus || runtimeSceneState?.endFrameStatus || targetScene?.endFrameImageStatus || targetScene?.endFrameStatus))
+        : (runtimeSceneState?.imageStatus || "")
       || ""
     ).trim().toLowerCase();
-    if (existingRuntimeStatus === "generating" || scenarioImageLocksRef.current.has(imageLockKey)) {
+    if (["generating", "loading", "running", "queued"].includes(existingRuntimeStatus) || scenarioImageLocksRef.current.has(imageLockKey)) {
       console.debug("[SCENARIO IMAGE BUTTON STATE]", {
         sceneId,
         action: "generate_image",
@@ -13172,12 +13232,16 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         imageStrategy,
         normalizedSlot,
       });
-      setScenarioImageError("Добавьте prompt для генерации кадра");
-      updateScenarioSceneGenerationRuntime(sceneId, {
-        imageStatus: "error",
-        imageGenerationStep: "",
-        imageError: "Добавьте prompt для генерации кадра",
-      }, { nodeId: targetNodeId });
+      if (!isTwoFrameScene) setScenarioImageError("Добавьте prompt для генерации кадра");
+      updateScenarioSceneGenerationRuntime(sceneId, isTwoFrameScene
+        ? (normalizedSlot === "start"
+          ? { startFrameStatus: "error", startFrameImageStatus: "error", startFrameError: "Добавьте prompt для генерации кадра", startFrameImageError: "Добавьте prompt для генерации кадра", imageGenerationStep: "" }
+          : { endFrameStatus: "error", endFrameImageStatus: "error", endFrameError: "Добавьте prompt для генерации кадра", endFrameImageError: "Добавьте prompt для генерации кадра", imageGenerationStep: "" })
+        : {
+          imageStatus: "error",
+          imageGenerationStep: "",
+          imageError: "Добавьте prompt для генерации кадра",
+        }, { nodeId: targetNodeId });
       scenarioImageLocksRef.current.delete(imageLockKey);
       console.debug("[SCENARIO GENERATION UI RESET]", {
         sceneId,
@@ -13222,11 +13286,15 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
 
     setScenarioImageLoading(true);
     setScenarioImageError("");
-    updateScenarioSceneGenerationRuntime(sceneId, {
-      imageStatus: "generating",
-      imageGenerationStep: "Готовлю сцену…",
-      imageError: "",
-    }, { nodeId: targetNodeId });
+    updateScenarioSceneGenerationRuntime(sceneId, isTwoFrameScene
+      ? (normalizedSlot === "start"
+        ? { startFrameStatus: "generating", startFrameImageStatus: "generating", startFrameError: "", startFrameImageError: "", imageGenerationStep: "Готовлю сцену…" }
+        : { endFrameStatus: "generating", endFrameImageStatus: "generating", endFrameError: "", endFrameImageError: "", imageGenerationStep: "Готовлю сцену…" })
+      : {
+        imageStatus: "generating",
+        imageGenerationStep: "Готовлю сцену…",
+        imageError: "",
+      }, { nodeId: targetNodeId });
     console.debug("[SCENARIO IMAGE BUTTON STATE]", {
       sceneId,
       action: "generate_image",
@@ -13954,8 +14022,13 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || targetScene?.promptSource
         || "unknown"
       ).trim();
+      const framePrompt = String(isTwoFrameScene
+        ? ensureFirstLastSlotPrompt(targetScene, normalizedSlot, sceneDeltaRawByStrategy || sceneDelta)
+        : (sceneDeltaRawByStrategy || sceneDelta || "")
+      ).trim();
       let imagePromptEffective = String(
-        promptContext?.imagePrompt
+        (isTwoFrameScene ? framePrompt : "")
+        || promptContext?.imagePrompt
         || targetScene?.image_prompt
         || targetScene?.scene_prompt
         || targetScene?.scenePrompt
@@ -14101,9 +14174,15 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         ...scenarioContractPayload,
         sceneId,
         segment_id: sceneId,
-        route: sceneRouteRaw || canonicalRoute || imageStrategy || "",
+        route: isTwoFrameScene ? "first_last" : (sceneRouteRaw || canonicalRoute || imageStrategy || ""),
         workflowKey: imageWorkflowKey || resolvedWorkflowKey || "",
-        prompt: imagePromptEffective || sceneText || finalSceneDelta || "",
+        resolvedWorkflowKey: isTwoFrameScene ? "first_last" : (resolvedWorkflowKey || imageWorkflowKey || ""),
+        frameKind,
+        frameRole,
+        imagePurpose: frameKind === "first" ? "first_last_start_frame" : (frameKind === "last" ? "first_last_end_frame" : "scene_image"),
+        targetField,
+        prompt: (isTwoFrameScene ? framePrompt : "") || imagePromptEffective || sceneText || finalSceneDelta || "",
+        imagePrompt: (isTwoFrameScene ? framePrompt : "") || imagePromptEffective || sceneText || finalSceneDelta || "",
         scene_text: sceneText,
         sceneDelta: `${finalSceneDelta}
 Aspect ratio: ${imageFormat}`,
@@ -14121,6 +14200,10 @@ Aspect ratio: ${imageFormat}`,
         sceneContract: sceneContractForRequest,
         promptDebug: {
           promptSource: promptSourceEffective,
+          frameKind,
+          frameRole,
+          targetField,
+          framePrompt,
           sceneGoal: sceneGoalEffective,
           sceneNarrativeStep: sceneNarrativeStepEffective,
           sceneText,
@@ -14253,6 +14336,12 @@ Aspect ratio: ${imageFormat}`,
         imageGenerationStep: "Передаю референсы…",
       }, { nodeId: targetNodeId });
       imageSendStartedAt = Date.now();
+      console.info("[SCENARIO FIRST_LAST IMAGE START]", {
+        sceneId,
+        frameKind,
+        hasPrompt: Boolean(framePrompt),
+        promptPreview: String(framePrompt || "").slice(0, 220),
+      });
       console.debug("[SCENARIO IMAGE SEND START]", {
         sceneId,
         route: canonicalRoute || imageStrategy || "",
@@ -14284,6 +14373,11 @@ Aspect ratio: ${imageFormat}`,
       }, { nodeId: targetNodeId });
       const responseSceneId = String(out?.sceneId || "").trim();
       const generatedImageUrl = resolveScenarioImageUrlFromApiResponse(out);
+      console.info("[SCENARIO FIRST_LAST IMAGE DONE]", {
+        sceneId,
+        frameKind,
+        imageUrl: generatedImageUrl,
+      });
       const resultStatus = String(out?.resultStatus || "").trim();
       const responseEngine = String(out?.engine || "").trim();
       const responseHint = String(out?.hint || "").trim();
@@ -14424,9 +14518,9 @@ Aspect ratio: ${imageFormat}`,
       }
       if (!applyAccepted) {
         const runtimeResetPatch = normalizedSlot === "start"
-          ? { startFrameStatus: "idle", startFrameError: "" }
+          ? { startFrameStatus: "idle", startFrameImageStatus: "idle", startFrameError: "", startFrameImageError: "" }
           : normalizedSlot === "end"
-            ? { endFrameStatus: "idle", endFrameError: "" }
+            ? { endFrameStatus: "idle", endFrameImageStatus: "idle", endFrameError: "", endFrameImageError: "" }
             : { imageStatus: "idle", imageError: "" };
         updateScenarioSceneGenerationRuntime(sceneId, {
           ...runtimeResetPatch,
@@ -14493,7 +14587,9 @@ Aspect ratio: ${imageFormat}`,
         }, { nodeId: targetNodeId });
         runtimeImagePatch = {
           startFrameStatus: imageDegraded ? "degraded" : "done",
+          startFrameImageStatus: imageDegraded ? "degraded" : "done",
           startFrameError: imageDegraded ? imageDegradeReason : "",
+          startFrameImageError: imageDegraded ? imageDegradeReason : "",
           imageDegraded,
         };
         console.debug("[SCENARIO FIRST_LAST SLOT APPLY]", {
@@ -14545,7 +14641,9 @@ Aspect ratio: ${imageFormat}`,
         }, { nodeId: targetNodeId });
         runtimeImagePatch = {
           endFrameStatus: imageDegraded ? "degraded" : "done",
+          endFrameImageStatus: imageDegraded ? "degraded" : "done",
           endFrameError: imageDegraded ? imageDegradeReason : "",
+          endFrameImageError: imageDegraded ? imageDegradeReason : "",
           imageDegraded,
         };
         console.debug("[SCENARIO FIRST_LAST SLOT APPLY]", {
@@ -14613,8 +14711,11 @@ Aspect ratio: ${imageFormat}`,
       }
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
       updateScenarioSceneGenerationRuntime(sceneId, {
-        imageStatus: "done",
-        imageUrl: generatedImageUrl,
+        ...(isTwoFrameScene
+          ? (normalizedSlot === "start"
+            ? { startFrameImageStatus: "done", startFrameStatus: "done" }
+            : { endFrameImageStatus: "done", endFrameStatus: "done" })
+          : { imageStatus: "done", imageUrl: generatedImageUrl }),
         imageGenerationStep: "",
         lastImageApiResult: imageApiRuntimeResult,
         lastAcceptedImageUrl: generatedImageUrl,
@@ -14703,11 +14804,13 @@ Aspect ratio: ${imageFormat}`,
           });
         }
       }, 0);
-      if (isTwoFrameScene && requestedSlot === "single") {
-        await handleGenerateScenarioImage("end", { sceneIndex: targetSceneIndex, sceneId });
-      }
     } catch (e) {
       console.error(e);
+      console.warn("[SCENARIO FIRST_LAST IMAGE ERROR]", {
+        sceneId,
+        frameKind,
+        error: String(e?.message || e || ""),
+      });
       const elapsedMs = imageSendStartedAt ? Math.max(0, Date.now() - imageSendStartedAt) : 0;
       console.warn("[SCENARIO IMAGE SEND ERROR]", {
         sceneId,
@@ -14727,9 +14830,9 @@ Aspect ratio: ${imageFormat}`,
         || [baseMessage, errorCode && !baseMessage.includes(errorCode) ? `(${errorCode})` : ""].filter(Boolean).join(" ")
         || (Number.isFinite(errorStatus) ? `HTTP ${errorStatus}` : "Image generation failed"));
       const runtimeErrorPatch = normalizedSlot === "start"
-        ? { startFrameStatus: "error", startFrameError: imageErrorMessage }
+        ? { startFrameStatus: "error", startFrameImageStatus: "error", startFrameError: imageErrorMessage, startFrameImageError: imageErrorMessage }
         : normalizedSlot === "end"
-          ? { endFrameStatus: "error", endFrameError: imageErrorMessage }
+          ? { endFrameStatus: "error", endFrameImageStatus: "error", endFrameError: imageErrorMessage, endFrameImageError: imageErrorMessage }
           : { imageStatus: "error", imageError: imageErrorMessage, imageGenerationStep: "" };
       updateScenarioSceneGenerationRuntime(sceneId, runtimeErrorPatch, { nodeId: targetNodeId });
       console.debug("[SCENARIO IMAGE BUTTON STATE]", {
@@ -14749,9 +14852,20 @@ Aspect ratio: ${imageFormat}`,
           error: imageErrorMessage,
         });
       }
-      setScenarioImageError(imageErrorMessage);
+      if (!isTwoFrameScene) setScenarioImageError(imageErrorMessage);
     } finally {
       setScenarioImageLoading(false);
+      console.info("[SCENARIO FIRST_LAST IMAGE FINALLY]", {
+        sceneId,
+        frameKind,
+      });
+      const finalRuntimeState = ((nodesRef.current || []).find((nodeItem) => nodeItem?.id === targetNodeId)?.data?.sceneGeneration || {})?.[sceneId] || {};
+      if (isTwoFrameScene && normalizedSlot === "start" && String(finalRuntimeState?.startFrameImageStatus || finalRuntimeState?.startFrameStatus || "").trim().toLowerCase() === "generating") {
+        updateScenarioSceneGenerationRuntime(sceneId, { startFrameStatus: "idle", startFrameImageStatus: "idle", startFrameError: "", startFrameImageError: "" }, { nodeId: targetNodeId });
+      }
+      if (isTwoFrameScene && normalizedSlot === "end" && String(finalRuntimeState?.endFrameImageStatus || finalRuntimeState?.endFrameStatus || "").trim().toLowerCase() === "generating") {
+        updateScenarioSceneGenerationRuntime(sceneId, { endFrameStatus: "idle", endFrameImageStatus: "idle", endFrameError: "", endFrameImageError: "" }, { nodeId: targetNodeId });
+      }
       scenarioImageLocksRef.current.delete(imageLockKey);
       console.debug("[SCENARIO GENERATION UI RESET]", {
         sceneId,
@@ -19074,8 +19188,14 @@ onClipSec: (nodeId, value) => {
                   const currentRuntime = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
                   const runtimePatch = {};
                   if (Object.prototype.hasOwnProperty.call(patch, "imageUrl")) runtimePatch.imageStatus = String(patch.imageUrl || "").trim() ? "done" : "";
-                  if (Object.prototype.hasOwnProperty.call(patch, "startImageUrl")) runtimePatch.startFrameStatus = String(patch.startImageUrl || "").trim() ? "done" : "";
-                  if (Object.prototype.hasOwnProperty.call(patch, "endImageUrl")) runtimePatch.endFrameStatus = String(patch.endImageUrl || "").trim() ? "done" : "";
+                  if (Object.prototype.hasOwnProperty.call(patch, "startImageUrl")) {
+                    runtimePatch.startFrameStatus = String(patch.startImageUrl || "").trim() ? "done" : "";
+                    runtimePatch.startFrameImageStatus = String(patch.startImageUrl || "").trim() ? "done" : "";
+                  }
+                  if (Object.prototype.hasOwnProperty.call(patch, "endImageUrl")) {
+                    runtimePatch.endFrameStatus = String(patch.endImageUrl || "").trim() ? "done" : "";
+                    runtimePatch.endFrameImageStatus = String(patch.endImageUrl || "").trim() ? "done" : "";
+                  }
                   if (Object.prototype.hasOwnProperty.call(patch, "videoUrl")) runtimePatch.videoStatus = String(patch.videoUrl || "").trim() ? "done" : "";
                   if (Object.prototype.hasOwnProperty.call(patch, "videoStatus")) runtimePatch.videoStatus = String(patch.videoStatus || "");
                   if (Object.prototype.hasOwnProperty.call(patch, "videoJobId")) runtimePatch.videoJobId = String(patch.videoJobId || "");
@@ -19213,8 +19333,8 @@ onClipSec: (nodeId, value) => {
                   const currentRuntime = currentMap[resolvedSceneId] && typeof currentMap[resolvedSceneId] === "object" ? currentMap[resolvedSceneId] : {};
                   const runtimePatch = {
                     image: { imageStatus: "loading", imageError: "", lastRejectedImageUrl: "", lastRejectedReason: "", lastRejectedAt: "" },
-                    start_frame: { startFrameStatus: "loading", startFrameError: "", lastRejectedImageUrl: "", lastRejectedReason: "", lastRejectedAt: "" },
-                    end_frame: { endFrameStatus: "loading", endFrameError: "", lastRejectedImageUrl: "", lastRejectedReason: "", lastRejectedAt: "" },
+                    start_frame: { startFrameStatus: "loading", startFrameImageStatus: "generating", startFrameError: "", startFrameImageError: "", lastRejectedImageUrl: "", lastRejectedReason: "", lastRejectedAt: "" },
+                    end_frame: { endFrameStatus: "loading", endFrameImageStatus: "generating", endFrameError: "", endFrameImageError: "", lastRejectedImageUrl: "", lastRejectedReason: "", lastRejectedAt: "" },
                     video: { videoStatus: "loading", videoError: "" },
                     scene: { videoStatus: "loading", videoError: "" },
                   };

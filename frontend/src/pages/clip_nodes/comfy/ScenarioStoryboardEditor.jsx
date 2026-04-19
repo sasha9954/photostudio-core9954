@@ -43,8 +43,12 @@ function hydrateSceneWithRuntime(scene = {}, runtime = {}) {
     ...safeScene,
     imageStatus: String(safeRuntime?.imageStatus || safeScene?.imageStatus || "").trim(),
     imageError: String(safeRuntime?.imageError || safeScene?.imageError || "").trim(),
+    startFrameImageStatus: String(safeRuntime?.startFrameImageStatus || safeScene?.startFrameImageStatus || safeRuntime?.startFrameStatus || safeScene?.startFrameStatus || "").trim(),
+    startFrameImageError: String(safeRuntime?.startFrameImageError || safeScene?.startFrameImageError || safeRuntime?.startFrameError || safeScene?.startFrameError || "").trim(),
     startFrameStatus: String(safeRuntime?.startFrameStatus || safeScene?.startFrameStatus || safeRuntime?.imageStatus || safeScene?.imageStatus || "").trim(),
     startFrameError: String(safeRuntime?.startFrameError || safeScene?.startFrameError || safeRuntime?.imageError || safeScene?.imageError || "").trim(),
+    endFrameImageStatus: String(safeRuntime?.endFrameImageStatus || safeScene?.endFrameImageStatus || safeRuntime?.endFrameStatus || safeScene?.endFrameStatus || "").trim(),
+    endFrameImageError: String(safeRuntime?.endFrameImageError || safeScene?.endFrameImageError || safeRuntime?.endFrameError || safeScene?.endFrameError || "").trim(),
     endFrameStatus: String(safeRuntime?.endFrameStatus || safeScene?.endFrameStatus || safeRuntime?.imageStatus || safeScene?.imageStatus || "").trim(),
     endFrameError: String(safeRuntime?.endFrameError || safeScene?.endFrameError || safeRuntime?.imageError || safeScene?.imageError || "").trim(),
     audioSliceStatus: String(safeRuntime?.audioSliceStatus || safeScene?.audioSliceStatus || safeScene?.extractedAudioStatus || "").trim(),
@@ -171,8 +175,30 @@ function resolveScenePreviewSources(scene = {}) {
 }
 
 function deriveFirstLastFramePrompts(scene = {}) {
-  const startExplicit = String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || "").trim();
-  const endExplicit = String(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || "").trim();
+  const startExplicit = String(
+    scene?.route_payload?.first_frame_prompt
+    || scene?.first_frame_prompt
+    || scene?.finalVideoPrompt?.firstFramePrompt
+    || scene?.scene_prompt?.first_frame_prompt
+    || scene?.scene_prompt?.prompt_notes?.start_state
+    || scene?.scene_prompt?.prompt_notes?.transition?.start_state
+    || scene?.startFramePromptRu
+    || scene?.startFramePromptEn
+    || scene?.startFramePrompt
+    || ""
+  ).trim();
+  const endExplicit = String(
+    scene?.route_payload?.last_frame_prompt
+    || scene?.last_frame_prompt
+    || scene?.finalVideoPrompt?.lastFramePrompt
+    || scene?.scene_prompt?.last_frame_prompt
+    || scene?.scene_prompt?.prompt_notes?.end_state
+    || scene?.scene_prompt?.prompt_notes?.transition?.end_state
+    || scene?.endFramePromptRu
+    || scene?.endFramePromptEn
+    || scene?.endFramePrompt
+    || ""
+  ).trim();
   if (startExplicit && endExplicit) {
     return { start: startExplicit, end: endExplicit, derived: false };
   }
@@ -979,11 +1005,11 @@ export default function ScenarioStoryboardEditor({
 
   const imageStatus = resolveBlockStatus({ runtimeStatus: effectiveRuntime?.imageStatus, assetUrl: selectedScene?.imageUrl });
   const startFrameStatus = resolveBlockStatus({
-    runtimeStatus: effectiveRuntime?.startFrameStatus || selectedScene?.startFrameStatus || effectiveRuntime?.imageStatus || selectedScene?.imageStatus,
+    runtimeStatus: effectiveRuntime?.startFrameImageStatus || selectedScene?.startFrameImageStatus || effectiveRuntime?.startFrameStatus || selectedScene?.startFrameStatus,
     assetUrl: selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl,
   });
   const endFrameStatus = resolveBlockStatus({
-    runtimeStatus: effectiveRuntime?.endFrameStatus || selectedScene?.endFrameStatus || effectiveRuntime?.imageStatus || selectedScene?.imageStatus,
+    runtimeStatus: effectiveRuntime?.endFrameImageStatus || selectedScene?.endFrameImageStatus || effectiveRuntime?.endFrameStatus || selectedScene?.endFrameStatus,
     assetUrl: selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
   });
   const imageErrorText = String(selectedScene?.imageError || effectiveRuntime?.imageError || "").trim();
@@ -1004,8 +1030,8 @@ export default function ScenarioStoryboardEditor({
     || String(imageApiResult?.imageUrl || "").trim()
     || String(effectiveRuntime?.lastRejectedImageUrl || "").trim()
   );
-  const startFrameErrorText = String(selectedScene?.startFrameError || effectiveRuntime?.startFrameError || effectiveRuntime?.imageError || "").trim();
-  const endFrameErrorText = String(selectedScene?.endFrameError || effectiveRuntime?.endFrameError || effectiveRuntime?.imageError || "").trim();
+  const startFrameErrorText = String(selectedScene?.startFrameImageError || selectedScene?.startFrameError || effectiveRuntime?.startFrameImageError || effectiveRuntime?.startFrameError || "").trim();
+  const endFrameErrorText = String(selectedScene?.endFrameImageError || selectedScene?.endFrameError || effectiveRuntime?.endFrameImageError || effectiveRuntime?.endFrameError || "").trim();
   const videoStatus = resolveBlockStatus({ runtimeStatus: effectiveRuntime?.videoStatus || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
   const musicStatus = resolveBlockStatus({ runtimeStatus: safeAudioData?.musicStatus, assetUrl: safeAudioData?.musicUrl });
   const isBgAudioSelected = activeSelectionType === "bg_audio";
@@ -1014,8 +1040,8 @@ export default function ScenarioStoryboardEditor({
   const resolvedImagePromptForDisplay = resolveSceneImagePromptForDisplay(selectedScene || {});
   const hasImagePromptPreview = Boolean(resolvedImagePromptForDisplay);
   const derivedFramePrompts = deriveFirstLastFramePrompts(selectedScene || {});
-  const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || derivedFramePrompts.start || "");
-  const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
+  const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || selectedScene?.first_frame_prompt || derivedFramePrompts.start || "");
+  const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || selectedScene?.last_frame_prompt || derivedFramePrompts.end || "");
   const previewSources = resolveScenePreviewSources(selectedScene || {});
   const runtimeFallbackImageUrl = String(
     effectiveRuntime?.lastRejectedImageUrl
@@ -1811,9 +1837,12 @@ export default function ScenarioStoryboardEditor({
                               onClick={() => onUpdateScene?.(nodeId, selectedSceneId, {
                                 startImageUrl: "",
                                 startFrameImageUrl: "",
+                                firstFrameImageUrl: "",
                                 startFramePreviewUrl: "",
                                 startFrameStatus: "idle",
+                                startFrameImageStatus: "idle",
                                 startFrameError: "",
+                                startFrameImageError: "",
                               })}
                             >
                               Удалить
@@ -1848,9 +1877,12 @@ export default function ScenarioStoryboardEditor({
                               onClick={() => onUpdateScene?.(nodeId, selectedSceneId, {
                                 endImageUrl: "",
                                 endFrameImageUrl: "",
+                                lastFrameImageUrl: "",
                                 endFramePreviewUrl: "",
                                 endFrameStatus: "idle",
+                                endFrameImageStatus: "idle",
                                 endFrameError: "",
+                                endFrameImageError: "",
                               })}
                               disabled={!isFirstLastVideoMode}
                             >
