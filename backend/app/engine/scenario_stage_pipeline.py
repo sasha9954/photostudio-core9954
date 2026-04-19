@@ -238,6 +238,25 @@ def _can_reuse_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     return status == "done" and _has_stage_output(package, stage_id)
 
 
+def _is_audio_map_dependency_satisfied(package: dict[str, Any]) -> bool:
+    audio_map = _safe_dict(_safe_dict(package).get("audio_map"))
+    if not _safe_list(audio_map.get("segments")):
+        return False
+    diagnostics = _safe_dict(audio_map.get("diagnostics"))
+    coverage_ok = diagnostics.get("coverage_ok")
+    if isinstance(coverage_ok, str):
+        return coverage_ok.strip().lower() in {"1", "true", "yes", "ok"}
+    return bool(coverage_ok)
+
+
+def _is_stage_dependency_satisfied(package: dict[str, Any], stage_id: str, dependency_stage_id: str) -> bool:
+    if _can_reuse_stage_output(package, dependency_stage_id):
+        return True
+    if stage_id == "story_core" and dependency_stage_id == "audio_map":
+        return _is_audio_map_dependency_satisfied(package)
+    return False
+
+
 def _compact_prompt_payload(value: Any) -> Any:
     if isinstance(value, dict):
         compact: dict[str, Any] = {}
@@ -2178,11 +2197,11 @@ def _build_core_validation_feedback(code: str, errors: list[str]) -> str:
             f"Mismatch details: {details}"
         )[:1400]
     if code == CORE_ROLE_BINDING_CONTRADICTION:
-        details = "; ".join([str(item) for item in errors[:6]])
         return (
-            "CORE_ROLE_BINDING_CONTRADICTION: Role IDs are immutable. Never infer/swap character_1/character_2 from text wording. "
-            "Use connected refs + assigned role mapping as source of truth and regenerate with strict role binding. "
-            f"Detected: {details}"
+            "CORE_ROLE_BINDING_CONTRADICTION: character_1 is explicitly female/девушка. "
+            "Do not describe character_1 as guy/man/male/парень/мужчина. "
+            "character_2 is explicitly male/парень. "
+            "Do not describe character_2 as girl/woman/female/девушка/женщина."
         )[:1400]
     details = "; ".join([str(item) for item in errors[:6]])
     return f"{code}: {details}"[:1400]
@@ -2257,45 +2276,37 @@ def _extract_role_identity_expectations(input_pkg: dict[str, Any], assigned_role
     return expectations
 
 
+def _role_has_opposite_gender_near_role(json_dump: str, role: str, expected_gender: str) -> tuple[bool, str]:
+    opposite_aliases_by_expected = {
+        "female": ("guy", "man", "male", "парень", "мужчина", "the guy", "the man"),
+        "male": ("girl", "woman", "female", "девушка", "женщина", "the girl", "the woman"),
+    }
+    aliases = opposite_aliases_by_expected.get(str(expected_gender or "").strip().lower(), ())
+    if not aliases:
+        return False, ""
+    escaped_role = re.escape(str(role or "").strip().lower())
+    for alias in aliases:
+        escaped_alias = re.escape(str(alias or "").strip().lower())
+        patterns = (
+            rf"{escaped_alias}\s*\({escaped_role}\)",
+            rf"{escaped_alias}[^\.\n]{{0,80}}{escaped_role}",
+            rf"{escaped_role}[^\.\n]{{0,80}}{escaped_alias}",
+        )
+        for pattern in patterns:
+            if re.search(pattern, json_dump):
+                return True, alias
+    return False, ""
+
+
 def _detect_core_role_binding_contradictions(payload: dict[str, Any], role_identity_expectations: dict[str, str]) -> list[str]:
     if not role_identity_expectations:
         return []
-    role_gender_aliases = {
-        "female": ("woman", "girl", "female", "she", "her", "девушка", "женщина"),
-        "male": ("man", "guy", "male", "he", "him", "парень", "мужчина"),
-    }
-    opposite_gender = {"female": "male", "male": "female"}
-    zones: list[tuple[str, str]] = []
-    for key in ("story_summary", "opening_anchor", "ending_callback_rule"):
-        value = str(payload.get(key) or "").strip()
-        if value:
-            zones.append((key, value.lower()))
-    for key in ("global_arc", "identity_doctrine"):
-        value = _safe_dict(payload.get(key))
-        for sub_key, sub_value in value.items():
-            text = str(sub_value or "").strip()
-            if text:
-                zones.append((f"{key}.{sub_key}", text.lower()))
-    for idx, segment in enumerate(_safe_list(payload.get("narrative_segments")), start=1):
-        row = _safe_dict(segment)
-        for key in ("beat_purpose", "emotional_key"):
-            text = str(row.get(key) or "").strip()
-            if text:
-                zones.append((f"narrative_segments[{idx}].{key}", text.lower()))
+    json_dump = json.dumps(payload, ensure_ascii=False).lower()
     contradictions: list[str] = []
     for role, expected_gender in role_identity_expectations.items():
-        opposite = opposite_gender.get(expected_gender, "")
-        if not opposite:
-            continue
-        for zone_name, text in zones:
-            for opposite_alias in role_gender_aliases.get(opposite, ()):
-                left_pattern = rf"\b{re.escape(opposite_alias)}\b[^.\n]{{0,40}}\b{re.escape(role)}\b"
-                right_pattern = rf"\b{re.escape(role)}\b[^.\n]{{0,40}}\b{re.escape(opposite_alias)}\b"
-                if re.search(left_pattern, text) or re.search(right_pattern, text):
-                    contradictions.append(f"{zone_name}:{role}_expected_{expected_gender}_found_{opposite_alias}")
-                    break
-            if contradictions and contradictions[-1].startswith(f"{zone_name}:{role}_"):
-                break
+        has_contradiction, alias = _role_has_opposite_gender_near_role(json_dump, role, expected_gender)
+        if has_contradiction:
+            contradictions.append(f"json_dump:{role}_expected_{expected_gender}_found_{alias}")
     return contradictions[:8]
 
 
@@ -3315,6 +3326,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_raw_response"] = ""
     diagnostics["story_core_normalized_payload"] = {}
     diagnostics["story_core_validation_errors"] = []
+    diagnostics["story_core_role_identity_expectations"] = {}
     diagnostics["story_core_retry_used"] = False
     diagnostics["story_core_retry_feedback"] = ""
     diagnostics["story_core_last_error_code"] = ""
@@ -3403,6 +3415,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         core_segments, core_segments_source = _coerce_core_audio_segments(audio_map)
         user_concept = _extract_story_user_concept(input_pkg)
         role_identity_expectations = _extract_role_identity_expectations(input_pkg, assigned_roles)
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["story_core_role_identity_expectations"] = role_identity_expectations
+        package["diagnostics"] = diagnostics
         validation_feedback = ""
         retry_used = False
         last_error_code = CORE_SCHEMA_INVALID
@@ -6516,7 +6531,7 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
     pkg["updated_at"] = _utc_iso()
 
     deps = STAGE_DEPENDENCIES.get(stage_id, [])
-    missing = [dep for dep in deps if not _can_reuse_stage_output(pkg, dep)]
+    missing = [dep for dep in deps if not _is_stage_dependency_satisfied(pkg, stage_id, dep)]
     if missing:
         if stage_id == "final_video_prompt":
             missing_reasons = [f"missing_{dep}_payload" for dep in missing]
