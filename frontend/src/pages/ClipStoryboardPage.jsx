@@ -9129,6 +9129,10 @@ export default function ClipStoryboardPage() {
   const bindHandlersTraceRef = useRef({ ts: 0, changed: null });
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
 
+  useEffect(() => {
+    console.info("[BUILD MARKER] ClipStoryboardPage storyboard-video-parent-v3 active");
+  }, []);
+
   const buildComfyStoryboardPatch = useCallback(({
     node,
     nodesNow = [],
@@ -23197,7 +23201,16 @@ const hydrate = useCallback((source = "unknown") => {
         scenes={activeScenarioStoryboardNode?.data?.scenes || []}
         sceneGeneration={activeScenarioStoryboardNode?.data?.sceneGeneration || {}}
         audioData={activeScenarioAudioData}
-        scenarioMode={activeScenarioStoryboardNode?.data?.scenarioMode || ""}
+        scenarioMode={
+          activeScenarioStoryboardNode?.data?.contentType
+          || activeScenarioStoryboardNode?.data?.content_type
+          || activeScenarioStoryboardNode?.data?.scenarioPackage?.contentType
+          || activeScenarioStoryboardNode?.data?.debugStoryboardPackage?.contentType
+          || activeScenarioStoryboardNode?.data?.storyboardOut?.contentType
+          || activeScenarioStoryboardNode?.data?.incomingMode
+          || activeScenarioStoryboardNode?.data?.scenarioMode
+          || ""
+        }
         masterAudioUrl={activeScenarioMasterAudioUrl}
         scenarioNodeAudioUrl={activeScenarioStoryboardNode?.data?.audioUrl || ""}
         scenarioNodeMasterAudioUrl={activeScenarioStoryboardNode?.data?.masterAudioUrl || ""}
@@ -23210,8 +23223,14 @@ const hydrate = useCallback((source = "unknown") => {
         onGenerateVideo={(scene, options = {}) => {
           const explicitSceneId = String(options?.sceneId || scene?.sceneId || "").trim();
           const explicitSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : undefined;
+          console.info("[SCENARIO VIDEO PARENT CALLBACK]", {
+            sceneId: explicitSceneId,
+            sceneIndex: explicitSceneIndex,
+            source: options?.source,
+          });
           handleScenarioGenerateVideo({
             ...options,
+            nodeId: options?.nodeId || activeScenarioStoryboardNode?.id || "",
             sceneId: explicitSceneId,
             sceneIndex: explicitSceneIndex,
           });
