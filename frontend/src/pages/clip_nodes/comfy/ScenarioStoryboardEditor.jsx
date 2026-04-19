@@ -273,22 +273,70 @@ function normalizeRole(value = "") {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
 
+function getSceneRuntimeRefsDebug(runtime = {}) {
+  return (
+    runtime?.lastImageApiResult?.refsDebug
+    || runtime?.imageApiResult?.refsDebug
+    || runtime?.lastImageResult?.refsDebug
+    || {}
+  );
+}
+
 function buildStoryboardSceneDisplayModel(scene = {}, runtime = {}) {
   const refsByRole = scene?.refsByRole && typeof scene.refsByRole === "object" ? scene.refsByRole : {};
   const refsUsedByRole = scene?.refsUsedByRole && typeof scene.refsUsedByRole === "object" ? scene.refsUsedByRole : {};
+  const refsDebug = getSceneRuntimeRefsDebug(runtime);
+  const referenceProfilesSummary = refsDebug?.referenceProfilesSummary && typeof refsDebug.referenceProfilesSummary === "object"
+    ? refsDebug.referenceProfilesSummary
+    : {};
+  const roleTypeByRole = refsDebug?.roleTypeByRole && typeof refsDebug.roleTypeByRole === "object" ? refsDebug.roleTypeByRole : {};
+  const incomingRefsByRoleCounts = refsDebug?.incomingRefsByRoleCounts && typeof refsDebug.incomingRefsByRoleCounts === "object"
+    ? refsDebug.incomingRefsByRoleCounts
+    : {};
+  const attachedCountsByRole = refsDebug?.attachedCountsByRole && typeof refsDebug.attachedCountsByRole === "object"
+    ? refsDebug.attachedCountsByRole
+    : {};
+  const refsDebugSceneActiveRoles = Array.isArray(refsDebug?.sceneActiveRoles) ? refsDebug.sceneActiveRoles : [];
+  const refsDebugPrimaryRole = refsDebug?.primaryRole;
+  const refsDebugMustAppear = Array.isArray(refsDebug?.mustAppear) ? refsDebug.mustAppear : [];
   const roles = new Set(
     [
       scene?.primaryRole,
       ...(Array.isArray(scene?.secondaryRoles) ? scene.secondaryRoles : []),
       ...(Array.isArray(scene?.sceneActiveRoles) ? scene.sceneActiveRoles : []),
       ...(Array.isArray(scene?.mustAppear) ? scene.mustAppear : []),
+      refsDebugPrimaryRole,
+      ...refsDebugSceneActiveRoles,
+      ...refsDebugMustAppear,
       ...Object.keys(refsByRole || {}),
       ...Object.keys(refsUsedByRole || {}),
+      ...Object.keys(referenceProfilesSummary || {}),
+      ...Object.keys(incomingRefsByRoleCounts || {}),
+      ...Object.keys(attachedCountsByRole || {}),
     ].map(normalizeRole).filter(Boolean)
   );
   const castOrder = ["character_1", "character_2", "character_3", "animal", "group"];
   const worldOrder = ["location", "props", "style"];
   const actors = castOrder.filter((role) => roles.has(role)).map((role) => ROLE_LABELS[role] || role);
+  const roleRefSummaryText = (role) => {
+    const profile = referenceProfilesSummary?.[role];
+    if (Array.isArray(profile)) return profile.map((item) => String(item || "").trim()).filter(Boolean).join("; ");
+    if (profile && typeof profile === "object") return Object.values(profile).map((item) => String(item || "").trim()).filter(Boolean).join("; ");
+    return String(profile || "").trim();
+  };
+  const character1Incoming = Number(incomingRefsByRoleCounts?.character_1 || 0);
+  const character1Attached = Number(attachedCountsByRole?.character_1 || 0);
+  const character1RefCount = Math.max(character1Incoming, character1Attached, 0);
+  const character1Summary = roleRefSummaryText("character_1");
+  if (character1RefCount > 0 || character1Summary) {
+    const character1RoleType = String(roleTypeByRole?.character_1 || "hero").trim() || "hero";
+    const parts = [`Главная героиня (character_1) · ref: ${character1RefCount > 0 ? character1RefCount : 1}`];
+    parts.push(`type: ${character1RoleType}`);
+    if (character1Summary) parts.push(character1Summary);
+    const character1ActorText = parts.join(" · ");
+    if (!actors.includes(character1ActorText)) actors.unshift(character1ActorText);
+    roles.add("character_1");
+  }
   const contextRoles = worldOrder.filter((role) => roles.has(role) || (Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0) || (Array.isArray(refsUsedByRole?.[role]) && refsUsedByRole[role].length > 0));
   const contextItems = [
     ...contextRoles.map((role) => ROLE_LABELS[role] || role),
@@ -408,6 +456,10 @@ export default function ScenarioStoryboardEditor({
   const [phrasePlaybackError, setPhrasePlaybackError] = useState("");
   const prevStoryboardRevisionRef = useRef("");
   const stopNodeDragEvent = (event) => event.stopPropagation();
+
+  useEffect(() => {
+    console.info("[BUILD MARKER] ScenarioStoryboardEditor video-button-v3 active");
+  }, []);
 
   const safeScenes = Array.isArray(scenes) ? scenes : [];
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
@@ -1799,11 +1851,10 @@ export default function ScenarioStoryboardEditor({
                           className="clipSB_btn"
                           type="button"
                           onClick={() => {
-                            const resolvedWorkflowKey = String(selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "").trim().toLowerCase();
                             console.info("[SCENARIO VIDEO CLICK]", {
                               sceneId: String(selectedScene?.sceneId || selectedSceneId || ""),
-                              route: selectedScene?.route || selectedScene?.videoGenerationRoute || "",
-                              workflowKey: resolvedWorkflowKey || "i2v",
+                              route: selectedScene?.route || selectedScene?.videoGenerationRoute || selectedScene?.plannedVideoGenerationRoute || "",
+                              workflowKey: selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "i2v",
                               imageUrlCandidates: {
                                 imageUrl: selectedScene?.imageUrl || "",
                                 generatedImageUrl: selectedScene?.generatedImageUrl || "",
@@ -1815,7 +1866,7 @@ export default function ScenarioStoryboardEditor({
                               audioSliceUrl: String(selectedScene?.audioSliceUrl || sceneAudioSliceUrl || ""),
                               audioSliceKind: selectedScene?.audioSliceKind || "",
                               musicVocalLipSyncAllowed: selectedScene?.musicVocalLipSyncAllowed,
-                              source: "scenario_storyboard_editor",
+                              source: "scenario_storyboard_editor_v3",
                             });
                             if (typeof onGenerateVideo === "function") {
                               onGenerateVideo(selectedScene, {
@@ -1823,7 +1874,7 @@ export default function ScenarioStoryboardEditor({
                                 nodeId,
                                 sceneId: selectedSceneId,
                                 sceneIndex: safeIndex,
-                                source: "scenario_storyboard_editor",
+                                source: "scenario_storyboard_editor_v3",
                               });
                               return;
                             }

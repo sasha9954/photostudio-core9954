@@ -54,6 +54,32 @@ function resolveScenarioModeBadge(modeValue = "") {
   };
 }
 
+function resolveStoryboardDisplayMode(data = {}) {
+  const candidates = [
+    data?.contentType,
+    data?.content_type,
+    data?.scenarioPackage?.contentType,
+    data?.scenarioPackage?.content_type,
+    data?.scenarioPackage?.mode,
+    data?.debugStoryboardPackage?.contentType,
+    data?.debugStoryboardPackage?.content_type,
+    data?.debugStoryboardPackage?.mode,
+    data?.storyboardOut?.contentType,
+    data?.storyboardOut?.content_type,
+    data?.storyboardOut?.mode,
+    data?.directorOutput?.contentType,
+    data?.directorOutput?.content_type,
+    data?.directorOutput?.mode,
+    data?.incomingMode,
+    data?.scenarioMode,
+  ].map((v) => String(v || "").trim().toLowerCase()).filter(Boolean);
+
+  if (candidates.includes("music_video") || candidates.includes("clip")) return "clip";
+  if (candidates.includes("scenario")) return "scenario";
+  if (candidates.includes("story") || candidates.includes("history")) return "story";
+  return candidates[0] || "";
+}
+
 export default function ScenarioStoryboardNode({ id, data }) {
   const storyboardRevision = String(data?.storyboardRevision || "");
   const scenes = Array.isArray(data?.scenes) ? data.scenes : [];
@@ -95,11 +121,15 @@ export default function ScenarioStoryboardNode({ id, data }) {
     const runtime = generationMap[key] && typeof generationMap[key] === "object" ? generationMap[key] : {};
     return ["generating", "queued", "pending"].includes(String(runtime?.status || runtime?.imageStatus || runtime?.videoStatus || "").trim().toLowerCase());
   });
-  const scenarioModeRaw = data?.incomingMode || data?.scenarioMode || data?.contentType || "";
+  const scenarioModeRaw = resolveStoryboardDisplayMode(data);
   const scenarioFormat = String(data?.incomingFormat || data?.format || "").trim();
   const modeBadge = resolveScenarioModeBadge(scenarioModeRaw);
   // NOTE: preview/static asset 404 is handled separately and should not gate editor availability.
   const status = String(data?.status || "").trim().toLowerCase() || (totalScenes === 0 ? "idle" : (hasGenerationInProgress ? "generating" : "ready"));
+
+  React.useEffect(() => {
+    console.info("[BUILD MARKER] ScenarioStoryboardNode mode-actors-v3 active");
+  }, []);
 
   React.useEffect(() => {
     console.debug("[SCENARIO MODE BADGE]", {
@@ -108,6 +138,18 @@ export default function ScenarioStoryboardNode({ id, data }) {
       displayLabel: modeBadge.displayLabel,
     });
   }, [id, modeBadge.displayLabel, modeBadge.resolvedMode]);
+
+  React.useEffect(() => {
+    console.debug("[SCENARIO MODE BADGE SOURCE]", {
+      nodeId: String(id || ""),
+      incomingMode: data?.incomingMode,
+      scenarioMode: data?.scenarioMode,
+      contentType: data?.contentType,
+      packageContentType: data?.scenarioPackage?.contentType,
+      resolvedMode: modeBadge.resolvedMode,
+      displayLabel: modeBadge.displayLabel,
+    });
+  }, [data?.contentType, data?.incomingMode, data?.scenarioMode, data?.scenarioPackage?.contentType, id, modeBadge.displayLabel, modeBadge.resolvedMode]);
 
   if (CLIP_TRACE_SCENARIO_COUNTERS) {
     console.debug("[SCENARIO STORYBOARD CARD SUMMARY]", {
