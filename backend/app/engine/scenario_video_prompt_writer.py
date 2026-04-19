@@ -26,6 +26,36 @@ _ALLOWED_AUGMENTATION = {"low", "medium", "high"}
 _ALLOWED_TRANSITION_KIND = {"none", "controlled", "bridge", "morph_guarded"}
 _ALLOWED_AUDIO_SYNC = {"none", "beat_sensitive", "phrase_sensitive"}
 _ALLOWED_FRAME_STRATEGY = {"single_init", "start_end"}
+_HUMAN_ROLES = {"character_1", "character_2", "character_3", "group", "hero", "support", "antagonist"}
+_LIP_SYNC_VARIANTS = (
+    "close_up_to_camera",
+    "medium_waist_performance",
+    "side_angle_bar_performance",
+    "mirror_reflection_performance",
+    "walking_toward_camera_performance",
+    "over_shoulder_turn_performance",
+    "seated_or_leaning_performance",
+    "dancefloor_edge_performance",
+)
+
+GLOBAL_HERO_IDENTITY_LOCK = (
+    "GLOBAL HERO IDENTITY LOCK: The same woman must remain the same person in every scene. Preserve exact face identity, age impression, skin tone, hair color, hair length, hairstyle, facial structure, body proportions, height impression, shoulder width, waist/hip ratio, bust/hips balance, arm and leg thickness, posture family, outfit, jewelry, neckline, crop length and overall silhouette."
+)
+BODY_CONTINUITY_LOCK = (
+    "BODY CONTINUITY: Do not make her slimmer, taller, younger, older, more athletic, more model-like, thinner-waisted, longer-legged, narrower-shouldered, or change her body type. Preserve the same body volume and silhouette from the established hero reference and/or the first successfully generated hero image."
+)
+WARDROBE_CONTINUITY_LOCK = (
+    "WARDROBE CONTINUITY: Keep the exact same outfit in every scene. Do not change neckline, collar, straps, sleeves, crop length, fabric coverage, color, material, jewelry or fit. If she wears a cropped top, it must remain the same cropped top with the same neckline and same visible skin coverage. Do not turn it into a high-neck top, turtleneck, closed collar, blouse, jacket, longer shirt, or different garment."
+)
+CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE = (
+    "Use the confirmed hero look reference from scene_01 to preserve the same face, body proportions, silhouette, outfit, neckline, jewelry, hairstyle and production look."
+)
+CLEAR_VOCAL_PERFORMANCE = (
+    "CLEAR VOCAL PERFORMANCE: The same woman is singing and lip-syncing to the provided audio. Her mouth visibly articulates the lyrics in sync with the voice. Face, mouth and lips must stay readable throughout the shot. She performs toward camera or near-camera with expressive eyes and subtle emotional delivery."
+)
+IDENTITY_NEGATIVE_GUARD = (
+    "different woman, different face, changed face, changed body type, slimmer body, thinner waist, longer legs, narrower shoulders, changed bust, changed hips, changed silhouette, different outfit, changed neckline, raised neckline, high-neck top, turtleneck, closed collar, added collar, added sleeves, longer shirt, changed jewelry, missing jewelry, different hairstyle, different hair length, age drift, body proportion drift"
+)
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -34,6 +64,40 @@ def _safe_dict(value: Any) -> dict[str, Any]:
 
 def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _append_clause(base: str, clause: str) -> str:
+    text = str(base or "").strip()
+    part = str(clause or "").strip()
+    if not part:
+        return text
+    if part.lower() in text.lower():
+        return text
+    if not text:
+        return part
+    return f"{text.rstrip('. ')}. {part}"
+
+
+def _scene_has_human_subject(fallback_row: dict[str, Any], route: str) -> bool:
+    role_row = _safe_dict(fallback_row.get("role_row"))
+    prompt_row = _safe_dict(fallback_row.get("prompt_row"))
+    primary_role = str(role_row.get("primary_role") or fallback_row.get("primary_role") or "").strip().lower()
+    active_roles = {str(v).strip().lower() for v in _safe_list(role_row.get("active_roles")) if str(v).strip()}
+    if primary_role in _HUMAN_ROLES:
+        return True
+    if active_roles.intersection(_HUMAN_ROLES):
+        return True
+    if route == "ia2v":
+        return True
+    for value in (
+        prompt_row.get("photo_prompt"),
+        prompt_row.get("video_prompt"),
+        fallback_row.get("scene_id"),
+    ):
+        blob = str(value or "").lower()
+        if any(token in blob for token in ("woman", "girl", "singer", "performer", "heroine", "character")):
+            return True
+    return False
 
 
 def _extract_gemini_text(resp: dict[str, Any]) -> str:
@@ -167,7 +231,7 @@ def _canonical_segments(package: dict[str, Any]) -> list[dict[str, Any]]:
                 ordered_ids.append(segment_id)
 
     rows: list[dict[str, Any]] = []
-    for segment_id in ordered_ids:
+    for idx, segment_id in enumerate(ordered_ids, start=1):
         prompt_row = _safe_dict(prompts_by_id.get(segment_id))
         plan_row = _safe_dict(plan_by_id.get(segment_id))
         role_row = _safe_dict(role_by_id.get(segment_id))
@@ -176,6 +240,7 @@ def _canonical_segments(package: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "segment_id": segment_id,
                 "scene_id": str(prompt_row.get("scene_id") or plan_row.get("scene_id") or segment_id).strip(),
+                "sequence_index": idx,
                 "route": route,
                 "prompt_row": prompt_row,
                 "plan_row": plan_row,
@@ -249,6 +314,25 @@ def _build_model_payload(package: dict[str, Any], segment_rows: list[dict[str, A
                         "requires_last_frame": False,
                     },
                     "audio_behavior_hints": "string",
+                    "lip_sync_shot_variant": "string|null",
+                    "performance_pose": "string|null",
+                    "camera_angle": "string|null",
+                    "gesture": "string|null",
+                    "location_zone": "string|null",
+                    "mouth_readability": "high|medium|low|null",
+                    "why_this_lip_sync_shot_is_different": "string|null",
+                    "starts_from_previous_logic": "string|null",
+                    "ends_with_state": "string|null",
+                    "continuity_with_next": "string|null",
+                    "potential_contradiction": "string|null",
+                    "fix_if_needed": "string|null",
+                    "identity_lock_applied": True,
+                    "body_lock_applied": True,
+                    "wardrobe_lock_applied": True,
+                    "confirmedHeroLookReferenceUsed": False,
+                    "lip_sync_shot_variant_repeated_with_previous": False,
+                    "continuity_warning": "string|null",
+                    "continuity_fix_applied": False,
                     "prompt_source": FINAL_VIDEO_PROMPT_STAGE_VERSION,
                 }
             ],
@@ -295,6 +379,18 @@ def _build_instruction(payload: dict[str, Any]) -> str:
             "Do not add wrappers, markdown, or explanations.",
             "Do not invent extra segments and do not drop any provided segment_id.",
             "Use route semantics exactly: i2v, ia2v, first_last.",
+            "GLOBAL HERO IDENTITY CONTRACT for human/performance scenes is mandatory in route_payload.positive_prompt and route_payload.negative_prompt.",
+            "Use these exact continuity blocks for human/performance scenes: GLOBAL HERO IDENTITY LOCK, BODY CONTINUITY, WARDROBE CONTINUITY.",
+            "ALLOWED VARIATION for same hero: vary only pose, camera angle, shot size, location zone, gesture, emotion, movement and lighting accent.",
+            "If segment order index is 2+, add confirmed look anchor clause: Use the confirmed hero look reference from scene_01...",
+            "Do not replace original character references; confirmed look anchor is additional reinforcement only.",
+            "WHOLE-STORY CONTINUITY: review all segments as one continuous clip and prevent action/state contradictions between adjacent segments.",
+            "For each segment output starts_from_previous_logic, ends_with_state, continuity_with_next, potential_contradiction, fix_if_needed.",
+            "If contradiction exists, repair the later segment before returning final JSON.",
+            "For ia2v/lip-sync route, positive prompt MUST start with CLEAR VOCAL PERFORMANCE block.",
+            "For ia2v/lip-sync route, output lip_sync_shot_variant, performance_pose, camera_angle, gesture, location_zone, mouth_readability, why_this_lip_sync_shot_is_different.",
+            f"For ia2v/lip-sync route, lip_sync_shot_variant must be one of: {', '.join(_LIP_SYNC_VARIANTS)}.",
+            "For adjacent ia2v scenes, do not repeat the same lip_sync_shot_variant.",
             "Use Route Baseline Bank only as reference.",
             "Do not mirror baseline text verbatim unless context requires it.",
             f"Set prompt_source exactly to '{FINAL_VIDEO_PROMPT_STAGE_VERSION}' for each segment.",
@@ -316,7 +412,30 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     fallback_prompt_row = _safe_dict(fallback_row.get("prompt_row"))
     positive_prompt = str(route_payload.get("positive_prompt") or fallback_prompt_row.get("positive_video_prompt") or fallback_prompt_row.get("video_prompt") or "").strip()
     negative_prompt = str(route_payload.get("negative_prompt") or fallback_prompt_row.get("negative_video_prompt") or fallback_prompt_row.get("negative_prompt") or "").strip()
+    scene_seq_index = int(fallback_row.get("sequence_index") or 0)
+    has_human_subject = _scene_has_human_subject(fallback_row, route)
+    confirmed_look_used = bool(has_human_subject and scene_seq_index >= 2)
+    if has_human_subject:
+        positive_prompt = _append_clause(positive_prompt, GLOBAL_HERO_IDENTITY_LOCK)
+        positive_prompt = _append_clause(positive_prompt, BODY_CONTINUITY_LOCK)
+        positive_prompt = _append_clause(positive_prompt, WARDROBE_CONTINUITY_LOCK)
+        if confirmed_look_used:
+            positive_prompt = _append_clause(positive_prompt, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
+        negative_prompt = _append_clause(negative_prompt, IDENTITY_NEGATIVE_GUARD)
+
     if route == "ia2v":
+        lip_sync_shot_variant = str(
+            row.get("lip_sync_shot_variant")
+            or fallback_prompt_row.get("lip_sync_shot_variant")
+            or _LIP_SYNC_VARIANTS[(scene_seq_index - 1) % len(_LIP_SYNC_VARIANTS)]
+        ).strip()
+        if lip_sync_shot_variant not in _LIP_SYNC_VARIANTS:
+            lip_sync_shot_variant = _LIP_SYNC_VARIANTS[(scene_seq_index - 1) % len(_LIP_SYNC_VARIANTS)]
+        performance_pose = str(row.get("performance_pose") or fallback_prompt_row.get("performance_pose") or "").strip()
+        camera_angle = str(row.get("camera_angle") or fallback_prompt_row.get("camera_angle") or "").strip()
+        gesture = str(row.get("gesture") or fallback_prompt_row.get("gesture") or "").strip()
+        location_zone = str(row.get("location_zone") or fallback_prompt_row.get("location_zone") or "").strip()
+        mouth_readability = str(row.get("mouth_readability") or fallback_prompt_row.get("mouth_readability") or "high").strip().lower() or "high"
         plan_row = _safe_dict(fallback_row.get("plan_row"))
         role_row = _safe_dict(fallback_row.get("role_row"))
         semantic_context = " ".join(
@@ -334,6 +453,19 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
             if clause.lower() in positive_prompt.lower():
                 continue
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {clause}".strip() if positive_prompt else clause
+        positive_prompt = _append_clause(
+            positive_prompt,
+            f"Shot variant: {lip_sync_shot_variant}. performance_pose: {performance_pose or 'camera-readable vocal delivery'}. camera_angle: {camera_angle or 'eye-level readable performance view'}. gesture: {gesture or 'controlled subtle hand accent'}. location_zone: {location_zone or 'same venue, different local zone'}. mouth_readability: {mouth_readability}.",
+        )
+        if not positive_prompt.startswith("CLEAR VOCAL PERFORMANCE:"):
+            positive_prompt = f"{CLEAR_VOCAL_PERFORMANCE} {positive_prompt}".strip()
+    else:
+        lip_sync_shot_variant = ""
+        performance_pose = ""
+        camera_angle = ""
+        gesture = ""
+        location_zone = ""
+        mouth_readability = ""
     negative_prompt = clean_negative_prompt_artifacts(negative_prompt)
 
     first_frame_raw = route_payload.get("first_frame_prompt")
@@ -399,6 +531,30 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
             "requires_last_frame": bool(metadata_defaults["requires_last_frame"]),
         },
         "audio_behavior_hints": str(row.get("audio_behavior_hints") or "").strip(),
+        "lip_sync_shot_variant": lip_sync_shot_variant or None,
+        "performance_pose": performance_pose or None,
+        "camera_angle": camera_angle or None,
+        "gesture": gesture or None,
+        "location_zone": location_zone or None,
+        "mouth_readability": mouth_readability or None,
+        "why_this_lip_sync_shot_is_different": str(
+            row.get("why_this_lip_sync_shot_is_different")
+            or fallback_prompt_row.get("why_this_lip_sync_shot_is_different")
+            or ""
+        ).strip()
+        or None,
+        "starts_from_previous_logic": str(row.get("starts_from_previous_logic") or "").strip() or None,
+        "ends_with_state": str(row.get("ends_with_state") or "").strip() or None,
+        "continuity_with_next": str(row.get("continuity_with_next") or "").strip() or None,
+        "potential_contradiction": str(row.get("potential_contradiction") or "").strip() or None,
+        "fix_if_needed": str(row.get("fix_if_needed") or "").strip() or None,
+        "identity_lock_applied": bool(has_human_subject),
+        "body_lock_applied": bool(has_human_subject),
+        "wardrobe_lock_applied": bool(has_human_subject),
+        "confirmedHeroLookReferenceUsed": bool(confirmed_look_used),
+        "lip_sync_shot_variant_repeated_with_previous": False,
+        "continuity_warning": str(row.get("continuity_warning") or "").strip() or None,
+        "continuity_fix_applied": bool(row.get("continuity_fix_applied") or False),
         "prompt_source": FINAL_VIDEO_PROMPT_STAGE_VERSION,
     }
 
@@ -413,9 +569,18 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]]) -> dict[str, 
     }
 
     normalized: list[dict[str, Any]] = []
+    previous_lip_variant = ""
     for fallback_row in segment_rows:
         segment_id = str(fallback_row.get("segment_id") or "").strip()
-        normalized.append(_sanitize_segment(by_segment_id.get(segment_id), fallback_row))
+        seg = _sanitize_segment(by_segment_id.get(segment_id), fallback_row)
+        if str(seg.get("video_metadata", {}).get("route_type") or "") == "ia2v":
+            current_variant = str(seg.get("lip_sync_shot_variant") or "").strip()
+            repeated = bool(current_variant and previous_lip_variant and current_variant == previous_lip_variant)
+            seg["lip_sync_shot_variant_repeated_with_previous"] = repeated
+            if repeated and not seg.get("continuity_warning"):
+                seg["continuity_warning"] = "adjacent_lip_sync_variant_repeated"
+            previous_lip_variant = current_variant or previous_lip_variant
+        normalized.append(seg)
 
     return {
         "delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION,
@@ -489,6 +654,24 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             normalized_payload = {}
 
     ok = bool(normalized_payload and _safe_list(normalized_payload.get("segments")))
+    scene_contract_logs = []
+    if ok:
+        for seg in _safe_list(normalized_payload.get("segments")):
+            row = _safe_dict(seg)
+            route_payload = _safe_dict(row.get("route_payload"))
+            scene_contract_logs.append(
+                {
+                    "sceneId": str(row.get("scene_id") or row.get("segment_id") or ""),
+                    "route": str(_safe_dict(row.get("video_metadata")).get("route_type") or ""),
+                    "hasIdentityLock": bool(row.get("identity_lock_applied")),
+                    "hasBodyLock": bool(row.get("body_lock_applied")),
+                    "hasWardrobeLock": bool(row.get("wardrobe_lock_applied")),
+                    "lipSyncShotVariant": str(row.get("lip_sync_shot_variant") or ""),
+                    "confirmedHeroLookReferenceUsed": bool(row.get("confirmedHeroLookReferenceUsed")),
+                    "positivePromptPreview": str(route_payload.get("positive_prompt") or "")[:220],
+                    "negativePromptPreview": str(route_payload.get("negative_prompt") or "")[:220],
+                }
+            )
     return {
         "ok": ok,
         "final_video_prompt": normalized_payload if ok else {"delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION, "segments": [], "scenes": []},
@@ -505,6 +688,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "final_video_prompt_timed_out": timed_out,
             "final_video_prompt_timeout_retry_attempted": bool(timed_out and attempts > 1),
             "final_video_prompt_response_was_empty_after_timeout": response_was_empty_after_timeout,
+            "final_video_prompt_scene_contract_logs": scene_contract_logs,
         },
         "error": "" if ok else ("final_video_prompt_timeout" if timed_out else (last_error or "final_video_prompt_generation_failed")),
     }
