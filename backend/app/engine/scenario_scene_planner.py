@@ -684,6 +684,10 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "Return one storyboard row per segment_id from audio_map.segments.\\n"
         "Do not invent or remove segments.\\n"
         "Do not mutate cast. Use role_plan.scene_casting/roster as cast source; compiled_contract is legacy fallback only.\\n"
+        "WHOLE-STORY CONTINUITY is mandatory: treat all scenes as one continuous music video progression.\\n"
+        "Do not teleport hero back to prior position after completed movement unless explicit justified match cut.\\n"
+        "Track previous ending position/state, next start position/state, movement direction, location zone, object state, emotional progression, and performance energy progression.\\n"
+        "For ia2v/lip-sync scenes ensure vocal-shot diversity across adjacent scenes while preserving mouth readability.\\n"
         "Do not output prompt language, quality buzzwords, renderer parameters, API/workflow payload, or final video payload.\\n"
         "Do not use raw director text as free authoring source beyond this package context.\\n"
         "Use story_core doctrine as guidance only; do not change doctrine.\\n"
@@ -702,7 +706,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "Output contract:\\n"
         "{\\n"
         '  "scenes_version":"1.1",\\n'
-        '  "storyboard":[{"segment_id":"seg_1","route":"i2v","route_reason":"","scene_goal":"","narrative_function":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":""}]\\n'
+        '  "storyboard":[{"segment_id":"seg_1","route":"i2v","route_reason":"","scene_goal":"","narrative_function":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
         "}\\n\\n"
         f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )

@@ -38,6 +38,18 @@ _LIP_SYNC_NEGATIVE_PROMPT = (
 _FIRST_LAST_NEGATIVE_PROMPT = (
     "camera drift, zoom spikes, chaotic reframing, body-axis jump, step, crouch, bow, torso dip, large arm action, spin, added actors, layout change, temporal instability, identity drift, outfit drift, finger choreography near face, wearable-touch micro choreography"
 )
+_IDENTITY_WARDROBE_NEGATIVE = (
+    "different woman, different face, changed face, changed body type, slimmer body, thinner waist, longer legs, narrower shoulders, changed bust, changed hips, changed silhouette, different outfit, changed neckline, raised neckline, high-neck top, turtleneck, closed collar, added collar, added sleeves, longer shirt, changed jewelry, missing jewelry, different hairstyle, different hair length, age drift, body proportion drift"
+)
+_GLOBAL_HERO_IDENTITY_LOCK = (
+    "GLOBAL HERO IDENTITY LOCK: The same woman must remain the same person in every scene. Preserve exact face identity, age impression, skin tone, hair color, hair length, hairstyle, facial structure, body proportions, height impression, shoulder width, waist/hip ratio, bust/hips balance, arm and leg thickness, posture family, outfit, jewelry, neckline, crop length and overall silhouette."
+)
+_BODY_CONTINUITY_LOCK = (
+    "BODY CONTINUITY: Do not make her slimmer, taller, younger, older, more athletic, more model-like, thinner-waisted, longer-legged, narrower-shouldered, or change her body type. Preserve the same body volume and silhouette from the established hero reference and/or the first successfully generated hero image."
+)
+_WARDROBE_CONTINUITY_LOCK = (
+    "WARDROBE CONTINUITY: Keep the exact same outfit in every scene. Do not change neckline, collar, straps, sleeves, crop length, fabric coverage, color, material, jewelry or fit. If she wears a cropped top, it must remain the same cropped top with the same neckline and same visible skin coverage. Do not turn it into a high-neck top, turtleneck, closed collar, blouse, jacket, longer shirt, or different garment."
+)
 
 _GLOBAL_PROMPT_RULES = [
     "Preserve hero identity, world anchor, style family, and realistic lighting continuity across all scenes.",
@@ -120,6 +132,18 @@ def _safe_dict(value: Any) -> dict[str, Any]:
 
 def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _append_prompt_clause(base: str, clause: str) -> str:
+    text = str(base or "").strip()
+    part = str(clause or "").strip()
+    if not part:
+        return text
+    if part.lower() in text.lower():
+        return text
+    if not text:
+        return part
+    return f"{text.rstrip('. ')}. {part}"
 
 
 def _compact_prompt_payload(value: Any) -> Any:
@@ -1691,6 +1715,9 @@ def _normalize_scene_prompts(
 
         base = _safe_dict(by_id.get(scene_id))
         role_row = _safe_dict(role_lookup.get(scene_id))
+        active_roles = {str(v).strip().lower() for v in _safe_list(role_row.get("active_roles")) if str(v).strip()}
+        primary_role = str(role_row.get("primary_role") or scene.get("primary_role") or "").strip().lower()
+        has_human_scene = bool(primary_role in {"character_1", "character_2", "character_3", "group"} or active_roles.intersection({"character_1", "character_2", "character_3", "group"}))
         scene_contract = _safe_dict(scene_contract_lookup.get(scene_id))
         fallback_row = _build_fallback_scene_prompts(package, scene, role_row, story_core, world_continuity)
         ownership_binding_inventory = _build_ref_binding_inventory(_safe_dict(package.get("refs_inventory")))
@@ -1716,6 +1743,7 @@ def _normalize_scene_prompts(
         presence_clause = _presence_policy_clause(presence_policy)
 
         actual_route = str(base.get("route") or expected_route).strip()
+        has_human_scene = bool(has_human_scene or actual_route == "ia2v")
         row_repaired_from_current_package = False
         if base and _row_looks_unrelated_to_current_package(base, fingerprint):
             used_fallback = True
@@ -1800,6 +1828,13 @@ def _normalize_scene_prompts(
             positive_video_prompt = positive_video_prompt or video_prompt
             negative_video_prompt = negative_video_prompt or str(base.get("negative_prompt") or "").strip() or _GLOBAL_NEGATIVE_PROMPT
             negative_prompt = negative_video_prompt
+        if has_human_scene:
+            for lock_clause in (_GLOBAL_HERO_IDENTITY_LOCK, _BODY_CONTINUITY_LOCK, _WARDROBE_CONTINUITY_LOCK):
+                photo_prompt = _append_prompt_clause(photo_prompt, lock_clause)
+                video_prompt = _append_prompt_clause(video_prompt, lock_clause)
+                positive_video_prompt = _append_prompt_clause(positive_video_prompt or video_prompt, lock_clause)
+            negative_prompt = _append_prompt_clause(negative_prompt, _IDENTITY_WARDROBE_NEGATIVE)
+            negative_video_prompt = _append_prompt_clause(negative_video_prompt or negative_prompt, _IDENTITY_WARDROBE_NEGATIVE)
         if carried_active_scene and "close to body" not in video_prompt.lower():
             video_prompt = (
                 f"{video_prompt} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
@@ -2028,6 +2063,10 @@ def _normalize_scene_prompts(
         if actual_route == "first_last":
             start_image_prompt, start_sanitized = _sanitize_positive_prompt(start_image_prompt, negative_prompt)
             end_image_prompt, end_sanitized = _sanitize_positive_prompt(end_image_prompt, negative_prompt)
+            if has_human_scene:
+                for lock_clause in (_GLOBAL_HERO_IDENTITY_LOCK, _BODY_CONTINUITY_LOCK, _WARDROBE_CONTINUITY_LOCK):
+                    start_image_prompt = _append_prompt_clause(start_image_prompt, lock_clause)
+                    end_image_prompt = _append_prompt_clause(end_image_prompt, lock_clause)
             if start_sanitized:
                 positive_negative_leak_stripped_count += 1
             if end_sanitized:

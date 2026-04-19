@@ -741,6 +741,24 @@ function buildScenarioSceneContractPayload(scene = {}) {
     vocalPresentation: String(scene?.vocalPresentation ?? scene?.vocal_presentation ?? "").trim(),
     lipSyncVoiceCompatibility: String(scene?.lipSyncVoiceCompatibility ?? scene?.lip_sync_voice_compatibility ?? "").trim(),
     lipSyncVoiceCompatibilityReason: String(scene?.lipSyncVoiceCompatibilityReason ?? scene?.lip_sync_voice_compatibility_reason ?? "").trim(),
+    lipSyncShotVariant: String(scene?.lipSyncShotVariant ?? scene?.lip_sync_shot_variant ?? "").trim(),
+    performancePose: String(scene?.performancePose ?? scene?.performance_pose ?? "").trim(),
+    cameraAngle: String(scene?.cameraAngle ?? scene?.camera_angle ?? "").trim(),
+    gesture: String(scene?.gesture ?? "").trim(),
+    locationZone: String(scene?.locationZone ?? scene?.location_zone ?? "").trim(),
+    mouthReadability: String(scene?.mouthReadability ?? scene?.mouth_readability ?? "").trim(),
+    whyThisLipSyncShotIsDifferent: String(scene?.whyThisLipSyncShotIsDifferent ?? scene?.why_this_lip_sync_shot_is_different ?? "").trim(),
+    startsFromPreviousLogic: String(scene?.startsFromPreviousLogic ?? scene?.starts_from_previous_logic ?? "").trim(),
+    endsWithState: String(scene?.endsWithState ?? scene?.ends_with_state ?? "").trim(),
+    continuityWithNext: String(scene?.continuityWithNext ?? scene?.continuity_with_next ?? "").trim(),
+    potentialContradiction: String(scene?.potentialContradiction ?? scene?.potential_contradiction ?? "").trim(),
+    fixIfNeeded: String(scene?.fixIfNeeded ?? scene?.fix_if_needed ?? "").trim(),
+    bodyLockApplied: Boolean(scene?.bodyLockApplied ?? scene?.body_lock_applied),
+    wardrobeLockApplied: Boolean(scene?.wardrobeLockApplied ?? scene?.wardrobe_lock_applied),
+    confirmedHeroLookReferenceUsed: Boolean(scene?.confirmedHeroLookReferenceUsed ?? scene?.confirmed_hero_look_reference_used),
+    lipSyncShotVariantRepeatedWithPrevious: Boolean(scene?.lipSyncShotVariantRepeatedWithPrevious ?? scene?.lip_sync_shot_variant_repeated_with_previous),
+    continuityWarning: String(scene?.continuityWarning ?? scene?.continuity_warning ?? "").trim(),
+    continuityFixApplied: Boolean(scene?.continuityFixApplied ?? scene?.continuity_fix_applied),
     videoReady: Boolean(scene?.videoReady ?? scene?.video_ready ?? false),
     plannedVideoGenerationRoute: String(scene?.plannedVideoGenerationRoute || scene?.planned_video_generation_route || "").trim().toLowerCase(),
     videoGenerationRoute: String(scene?.videoGenerationRoute || scene?.video_generation_route || "").trim().toLowerCase(),
@@ -13408,6 +13426,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const scenarioContractPayloadSanitized = {
         ...scenarioContractPayload,
       };
+      console.info("[SCENARIO PROMPT CONTRACT]", {
+        sceneId,
+        route: String(scenarioContractPayload?.resolvedWorkflowKey || scenarioContractPayload?.videoGenerationRoute || "").trim(),
+        hasIdentityLock: Boolean(scenarioContractPayload?.identityLockApplied),
+        hasBodyLock: Boolean(scenarioContractPayload?.bodyLockApplied),
+        hasWardrobeLock: Boolean(scenarioContractPayload?.wardrobeLockApplied),
+        lipSyncShotVariant: String(scenarioContractPayload?.lipSyncShotVariant || "").trim(),
+        confirmedHeroLookReferenceUsed: Boolean(scenarioContractPayload?.confirmedHeroLookReferenceUsed),
+        positivePromptPreview: String(scenarioContractPayload?.route_payload?.positive_prompt || "").slice(0, 180),
+        negativePromptPreview: String(scenarioContractPayload?.route_payload?.negative_prompt || "").slice(0, 180),
+      });
       const finalStoryboardSceneForRequest = promptContext?.finalStoryboardScene || null;
       sceneText = String(promptContext?.sceneText || sceneText || "").trim();
       const refsByRoleForImageBase = buildScenarioRefsByRoleForImage({
@@ -16406,6 +16435,17 @@ Aspect ratio: ${imageFormat}`,
             : (sceneVideoMetadata.promptSource || "canonical_final_video_prompt_contract"),
         },
       };
+      console.info("[SCENARIO VIDEO PROMPT CONTRACT]", {
+        sceneId,
+        route: String(effectiveWorkflowKey || "").trim(),
+        hasIdentityLock: Boolean(scenarioContractPayloadForPayload?.identityLockApplied),
+        hasBodyLock: Boolean(scenarioContractPayloadForPayload?.bodyLockApplied),
+        hasWardrobeLock: Boolean(scenarioContractPayloadForPayload?.wardrobeLockApplied),
+        lipSyncShotVariant: String(scenarioContractPayloadForPayload?.lipSyncShotVariant || "").trim(),
+        confirmedHeroLookReferenceUsed: Boolean(scenarioContractPayloadForPayload?.confirmedHeroLookReferenceUsed),
+        positivePromptPreview: String(routePayloadForPayload?.positive_prompt || "").slice(0, 220),
+        negativePromptPreview: String(routePayloadForPayload?.negative_prompt || "").slice(0, 180),
+      });
       console.info("[SCENARIO VIDEO PROMPT SOURCE]", {
         sceneId,
         source: "canonical_final_video_prompt_contract",
