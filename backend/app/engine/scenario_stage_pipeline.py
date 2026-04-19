@@ -5439,7 +5439,10 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         return [
             str(item)
             for item in errors
-            if "too short for standalone video segment" in str(item) or "<2.8s without natural tail/reaction evidence" in str(item)
+            if "duration_sec must be >= 3.0" in str(item)
+            or "too short for standalone video segment" in str(item)
+            or "<2.8s without natural tail/reaction evidence" in str(item)
+            or "AUDIO_MAP_INVALID_SHORT_SEGMENT" in str(item)
         ]
 
     def _validation_feedback(code: str, errors: list[str]) -> str:

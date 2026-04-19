@@ -117,6 +117,7 @@ def _build_prompt(
         "{\n"
         '  "audio_map_version": "1.1",\n'
         '  "audio_id": "string",\n'
+        '  "phrase_units": [{"id": "ph_01", "t0": 0.0, "t1": 1.3, "duration_sec": 1.3, "transcript_slice": "string", "text": "string", "intensity": 0.0}],\n'
         '  "segments": [{"segment_id": "string", "t0": 0.0, "t1": 4.2, "duration_sec": 4.2, "transcript_slice": "string", "intensity": 0.0, "is_lip_sync_candidate": false, "rhythmic_anchor": "beat", "first_last_candidate": false, "route_hints": {"i2v_fit": "good", "lip_sync_fit": "ok", "first_last_fit": "too_short"}}],\n'
         '  "no_split_ranges": [{"start": 0.0, "end": 0.0}],\n'
         '  "diagnostics": {"total_segments_duration": 0.0, "coverage_ok": true, "energy_peak_detected": false, "transcript_used": false, "dynamics_used": false, "validation_notes": []}\n'
