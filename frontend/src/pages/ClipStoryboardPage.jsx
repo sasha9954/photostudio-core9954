@@ -6318,7 +6318,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     const normalized = normalizeRefData(sourceNode?.data || {}, "ref_character");
     if (!normalized.refs.length) return null;
     const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
-    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
+    const refMeta = buildRefOwnershipBindingMeta({ ...(sourceNode?.data || {}), kind: "ref_character" });
     return {
       value: normalized.refs[0]?.url || "",
       preview: normalized.refs[0]?.name || `Character 1 • ${normalized.refs.length} refs`,
@@ -6336,7 +6336,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .slice(0, 5);
     if (!refs.length) return null;
     const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
-    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
+    const refMeta = buildRefOwnershipBindingMeta({ ...(sourceNode?.data || {}), kind: "ref_character_2" });
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Character 2 • ${refs.length} refs`,
@@ -6354,7 +6354,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .slice(0, 5);
     if (!refs.length) return null;
     const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
-    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
+    const refMeta = buildRefOwnershipBindingMeta({ ...(sourceNode?.data || {}), kind: "ref_character_3" });
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Character 3 • ${refs.length} refs`,
@@ -6371,7 +6371,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .filter(Boolean)
       .slice(0, 5);
     if (!refs.length) return null;
-    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
+    const refMeta = buildRefOwnershipBindingMeta({ ...(sourceNode?.data || {}), kind: "ref_animal" });
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Animal • ${refs.length} refs`,
@@ -6388,7 +6388,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       .filter(Boolean)
       .slice(0, 5);
     if (!refs.length) return null;
-    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
+    const refMeta = buildRefOwnershipBindingMeta({ ...(sourceNode?.data || {}), kind: "ref_group" });
     return {
       value: refs[0] || "",
       preview: String(sourceNode?.data?.name || "").trim() || `Group • ${refs.length} refs`,
@@ -6402,7 +6402,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
   if (targetHandle === "ref_props" && sourceNode.type === "refNode" && sourceHandle === "ref_items") {
     const normalized = normalizeRefData(sourceNode?.data || {}, "ref_items");
     if (!normalized.refs.length) return null;
-    const refMeta = buildRefOwnershipBindingMeta(sourceNode?.data || {});
+    const refMeta = buildRefOwnershipBindingMeta({ ...(sourceNode?.data || {}), kind: "ref_items" });
     return {
       value: normalized.refs[0]?.url || "",
       preview: normalized.refs[0]?.name || `Props • ${normalized.refs.length} refs`,
@@ -6416,26 +6416,28 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
   if (targetHandle === "ref_location" && sourceNode.type === "refNode" && sourceHandle === "ref_location") {
     const normalized = normalizeRefData(sourceNode?.data || {}, "ref_location");
     if (!normalized.refs.length) return null;
+    const refMeta = buildRefOwnershipBindingMeta({ ...(sourceNode?.data || {}), kind: "ref_location" });
     return {
       value: normalized.refs[0]?.url || "",
       preview: normalized.refs[0]?.name || "Location connected",
       sourceLabel: "Location",
-      refs: normalized.refs.map((item) => item.url),
+      refs: normalized.refs.map((item) => ({ url: item.url, ...refMeta })),
       count: normalized.refs.length,
-      meta: { kind: "ref_location", count: normalized.refs.length },
+      meta: { kind: "ref_location", count: normalized.refs.length, ...refMeta },
     };
   }
 
   if (targetHandle === "ref_style" && sourceNode.type === "refNode" && sourceHandle === "ref_style") {
     const normalized = normalizeRefData(sourceNode?.data || {}, "ref_style");
     if (!normalized.refs.length) return null;
+    const refMeta = buildRefOwnershipBindingMeta({ ...(sourceNode?.data || {}), kind: "ref_style" });
     return {
       value: normalized.refs[0]?.url || "",
       preview: normalized.refs[0]?.name || "Style connected",
       sourceLabel: "Style",
-      refs: normalized.refs.map((item) => item.url),
+      refs: normalized.refs.map((item) => ({ url: item.url, ...refMeta })),
       count: normalized.refs.length,
-      meta: { kind: "ref_style", count: normalized.refs.length },
+      meta: { kind: "ref_style", count: normalized.refs.length, ...refMeta },
     };
   }
 
@@ -6489,6 +6491,9 @@ function buildNarrativeConnectedContextFingerprint(connectedInputs = {}) {
       const roleType = String(value?.meta?.roleType || "").trim().toLowerCase();
       const ownershipRole = normalizeRefOwnershipRole(value?.meta?.ownershipRole || "");
       const bindingType = normalizeRefBindingType(value?.meta?.bindingType || "");
+      const storyRole = normalizeRefStoryRole(value?.meta?.story_role || value?.meta?.storyRole);
+      const identityLabel = normalizeRefIdentityLabel(value?.meta?.identity_label || value?.meta?.identityLabel);
+      const genderHint = normalizeRefGenderHint(value?.meta?.gender_hint || value?.meta?.genderHint);
       return {
         handleId: String(handleId || ""),
         sourceNodeId: String(value?.sourceNodeId || ""),
@@ -6496,6 +6501,9 @@ function buildNarrativeConnectedContextFingerprint(connectedInputs = {}) {
         roleType,
         ownershipRole,
         bindingType,
+        storyRole,
+        identityLabel,
+        genderHint,
         refs,
       };
     })
@@ -6981,6 +6989,68 @@ const CHARACTER_ROLE_TYPE_OPTIONS = [
   { value: "support", label: "Поддержка" },
 ];
 const REF_OWNERSHIP_ROLES = new Set(["auto", "main", "support", "antagonist", "shared", "world"]);
+const REF_BINDING_TYPES = new Set(["auto", "held", "nearby", "worn", "pocketed", "shared", "environment"]);
+const REF_BINDING_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "held", label: "В руках" },
+  { value: "nearby", label: "Рядом" },
+  { value: "worn", label: "На персонаже" },
+  { value: "pocketed", label: "В кармане / сумке" },
+  { value: "shared", label: "Общий предмет" },
+  { value: "environment", label: "Часть мира / окружения" },
+];
+const REF_LINKED_CHARACTER_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "character_1", label: "character_1" },
+  { value: "character_2", label: "character_2" },
+  { value: "character_3", label: "character_3" },
+  { value: "shared", label: "Общий" },
+  { value: "world", label: "Мир" },
+];
+const REF_STORY_ROLE_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "main", label: "Главный персонаж" },
+  { value: "secondary", label: "Второй персонаж" },
+  { value: "support", label: "Поддержка" },
+  { value: "antagonist", label: "Антагонист" },
+  { value: "minor", label: "Эпизодический" },
+  { value: "group", label: "Группа / массовка" },
+];
+const REF_IDENTITY_LABEL_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "девушка", label: "Девушка" },
+  { value: "парень", label: "Парень" },
+  { value: "женщина", label: "Женщина" },
+  { value: "мужчина", label: "Мужчина" },
+  { value: "ребёнок", label: "Ребёнок" },
+  { value: "животное", label: "Животное" },
+  { value: "группа людей", label: "Группа людей" },
+  { value: "другое", label: "Другое" },
+];
+const REF_GENDER_HINT_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "female", label: "Женский" },
+  { value: "male", label: "Мужской" },
+  { value: "not_applicable", label: "Не применимо / неизвестно" },
+];
+const REF_LOCATION_LABEL_OPTIONS = [
+  { value: "location", label: "Локация" },
+  { value: "interior", label: "Интерьер" },
+  { value: "exterior", label: "Экстерьер" },
+  { value: "world", label: "Мир" },
+];
+const REF_STORY_ROLES = new Set(["auto", "main", "secondary", "support", "antagonist", "minor", "group", "style_anchor"]);
+const REF_IDENTITY_LABELS = new Set(["auto", "девушка", "парень", "женщина", "мужчина", "ребёнок", "животное", "группа людей", "другое"]);
+const REF_GENDER_HINTS = new Set(["auto", "female", "male", "not_applicable"]);
+const REF_LINKED_CHARACTER_VALUES = new Set(["auto", "character_1", "character_2", "character_3", "shared", "world"]);
+const REF_LOCATION_LABEL_VALUES = new Set(["location", "interior", "exterior", "world"]);
+const REF_IDENTITY_GENDER_DEFAULT = {
+  "девушка": "female",
+  "женщина": "female",
+  "парень": "male",
+  "мужчина": "male",
+};
+const REF_IDENTITY_GENDER_NON_HUMAN = new Set(["ребёнок", "животное", "группа людей", "другое"]);
 const REF_OWNERSHIP_OPTIONS = [
   { value: "auto", label: "Авто" },
   { value: "main", label: "Главный" },
@@ -6989,8 +7059,7 @@ const REF_OWNERSHIP_OPTIONS = [
   { value: "shared", label: "Общий" },
   { value: "world", label: "Мир" },
 ];
-const REF_BINDING_TYPES = new Set(["carried", "worn", "held", "pocketed", "nearby", "environment"]);
-const REF_BINDING_OPTIONS = [
+const REF_BINDING_OPTIONS_LEGACY = [
   { value: "carried", label: "Носит с собой" },
   { value: "worn", label: "Надето" },
   { value: "held", label: "В руках" },
@@ -7019,16 +7088,63 @@ function normalizeRefOwnershipRole(value) {
 
 function normalizeRefBindingType(value) {
   const clean = String(value || "").trim().toLowerCase();
-  return REF_BINDING_TYPES.has(clean) ? clean : "nearby";
+  if (clean === "carried") return "nearby";
+  return REF_BINDING_TYPES.has(clean) ? clean : "auto";
+}
+
+function normalizeRefStoryRole(value, kind = "") {
+  const clean = String(value || "").trim().toLowerCase();
+  if (kind === "ref_style") return "style_anchor";
+  return REF_STORY_ROLES.has(clean) ? clean : "auto";
+}
+
+function normalizeRefIdentityLabel(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  return REF_IDENTITY_LABELS.has(clean) ? clean : "auto";
+}
+
+function normalizeRefGenderHint(value, kind = "") {
+  if (kind === "ref_location" || kind === "ref_style") return "not_applicable";
+  const clean = String(value || "").trim().toLowerCase();
+  return REF_GENDER_HINTS.has(clean) ? clean : "auto";
+}
+
+function normalizeRefLinkedCharacter(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  return REF_LINKED_CHARACTER_VALUES.has(clean) ? clean : "auto";
+}
+
+function normalizeRefLocationLabel(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  return REF_LOCATION_LABEL_VALUES.has(clean) ? clean : "location";
+}
+
+function resolveGenderHintDefaultFromIdentity(identityLabel = "") {
+  const normalized = normalizeRefIdentityLabel(identityLabel);
+  if (REF_IDENTITY_GENDER_DEFAULT[normalized]) return REF_IDENTITY_GENDER_DEFAULT[normalized];
+  if (REF_IDENTITY_GENDER_NON_HUMAN.has(normalized)) return "not_applicable";
+  return "auto";
 }
 
 function buildRefOwnershipBindingMeta(data = {}) {
   const ownershipRole = normalizeRefOwnershipRole(data?.ownershipRole);
   const bindingType = normalizeRefBindingType(data?.bindingType);
+  const kind = String(data?.kind || "").trim().toLowerCase();
+  const storyRole = normalizeRefStoryRole(data?.storyRole || data?.story_role, kind);
+  const identityLabel = kind === "ref_location"
+    ? normalizeRefLocationLabel(data?.locationLabel || data?.location_label || data?.identityLabel || data?.identity_label)
+    : normalizeRefIdentityLabel(data?.identityLabel || data?.identity_label);
+  const genderHint = normalizeRefGenderHint(data?.genderHint || data?.gender_hint, kind);
+  const linkedCharacter = normalizeRefLinkedCharacter(data?.linkedCharacter || data?.linked_character);
   return {
     ownershipRole,
     bindingType,
     ownershipRoleMapped: REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE[ownershipRole] || "auto",
+    story_role: storyRole,
+    identity_label: identityLabel,
+    location_label: kind === "ref_location" ? identityLabel : "",
+    gender_hint: genderHint,
+    linked_character: linkedCharacter,
   };
 }
 
@@ -7065,8 +7181,15 @@ function normalizeRefNodeData(data = {}, kindHint = "") {
   return {
     ...normalized,
     roleType: kind === "ref_character" ? normalizeCharacterRoleType(normalized?.roleType) : "",
-    ownershipRole: (kind === "ref_location" || kind === "ref_style") ? "" : normalizeRefOwnershipRole(normalized?.ownershipRole),
-    bindingType: (kind === "ref_location" || kind === "ref_style") ? "" : normalizeRefBindingType(normalized?.bindingType),
+    ownershipRole: normalizeRefOwnershipRole(normalized?.ownershipRole),
+    bindingType: kind === "ref_style" ? "auto" : normalizeRefBindingType(normalized?.bindingType),
+    storyRole: normalizeRefStoryRole(normalized?.storyRole || normalized?.story_role, kind),
+    identityLabel: kind === "ref_location"
+      ? normalizeRefLocationLabel(normalized?.locationLabel || normalized?.location_label || normalized?.identityLabel || normalized?.identity_label)
+      : normalizeRefIdentityLabel(normalized?.identityLabel || normalized?.identity_label),
+    locationLabel: normalizeRefLocationLabel(normalized?.locationLabel || normalized?.location_label || normalized?.identityLabel || normalized?.identity_label),
+    genderHint: normalizeRefGenderHint(normalized?.genderHint || normalized?.gender_hint, kind),
+    linkedCharacter: normalizeRefLinkedCharacter(normalized?.linkedCharacter || normalized?.linked_character),
     refStatus,
     refShortLabel,
     refDetailsOpen: !!normalized?.refDetailsOpen,
@@ -7105,6 +7228,10 @@ function normalizeComfyRefNodeData(nodeType = "", data = {}, kindHint = "") {
     roleType: (nodeType === "refCharacter2" || nodeType === "refCharacter3") ? normalizeCharacterRoleType(data?.roleType) : "",
     ownershipRole: normalizeRefOwnershipRole(data?.ownershipRole),
     bindingType: normalizeRefBindingType(data?.bindingType),
+    storyRole: normalizeRefStoryRole(data?.storyRole || data?.story_role),
+    identityLabel: normalizeRefIdentityLabel(data?.identityLabel || data?.identity_label),
+    genderHint: normalizeRefGenderHint(data?.genderHint || data?.gender_hint),
+    linkedCharacter: normalizeRefLinkedCharacter(data?.linkedCharacter || data?.linked_character),
     refStatus: deriveRefNodeStatus({ ...(data || {}), refs }),
     refShortLabel: String(data?.refShortLabel || "").trim(),
     refDetailsOpen: !!data?.refDetailsOpen,
@@ -8575,9 +8702,13 @@ function RefNode({ id, data }) {
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
   const showRoleSelector = kind === "ref_character";
   const roleType = normalizeCharacterRoleType(data?.roleType);
-  const showOwnershipBindingSelectors = kind !== "ref_location" && kind !== "ref_style";
-  const ownershipRole = normalizeRefOwnershipRole(data?.ownershipRole);
+  const storyRole = normalizeRefStoryRole(data?.storyRole || data?.story_role, kind);
+  const identityLabel = kind === "ref_location"
+    ? normalizeRefLocationLabel(data?.locationLabel || data?.location_label || data?.identityLabel || data?.identity_label)
+    : normalizeRefIdentityLabel(data?.identityLabel || data?.identity_label);
+  const genderHint = normalizeRefGenderHint(data?.genderHint || data?.gender_hint, kind);
   const bindingType = normalizeRefBindingType(data?.bindingType);
+  const linkedCharacter = normalizeRefLinkedCharacter(data?.linkedCharacter || data?.linked_character);
   const onOpenLightbox = data?.onOpenLightbox;
   const onRemoveImage = data?.onRemoveImage;
   const openLightbox = useCallback((url) => onOpenLightbox?.(url), [onOpenLightbox]);
@@ -8658,21 +8789,67 @@ function RefNode({ id, data }) {
             </select>
           </div>
         ) : null}
-        {showOwnershipBindingSelectors ? (
+        {kind === "ref_character" ? (
           <>
             <div style={{ marginBottom: 10 }}>
-              <div className="clipSB_small" style={{ marginBottom: 4 }}>Принадлежит:</div>
+              <div className="clipSB_small" style={{ marginBottom: 4 }}>Сюжетная роль:</div>
               <select
                 className="clipSB_select"
-                value={ownershipRole}
-                onChange={(event) => data?.onField?.(id, "ownershipRole", normalizeRefOwnershipRole(event?.target?.value))}
+                value={storyRole}
+                onChange={(event) => data?.onField?.(id, "storyRole", normalizeRefStoryRole(event?.target?.value, kind))}
                 disabled={refStatus === "loading"}
               >
-                {REF_OWNERSHIP_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                {REF_STORY_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
             <div style={{ marginBottom: 10 }}>
-              <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип связи:</div>
+              <div className="clipSB_small" style={{ marginBottom: 4 }}>Кто это:</div>
+              <select
+                className="clipSB_select"
+                value={identityLabel}
+                onChange={(event) => {
+                  const nextIdentity = normalizeRefIdentityLabel(event?.target?.value);
+                  data?.onField?.(id, "identityLabel", nextIdentity);
+                  const inferredGender = resolveGenderHintDefaultFromIdentity(nextIdentity);
+                  if (genderHint === "auto" || genderHint === "not_applicable") {
+                    data?.onField?.(id, "genderHint", normalizeRefGenderHint(inferredGender, kind));
+                  }
+                }}
+                disabled={refStatus === "loading"}
+              >
+                {REF_IDENTITY_LABEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div className="clipSB_small" style={{ marginBottom: 4 }}>Гендер:</div>
+              <select
+                className="clipSB_select"
+                value={genderHint}
+                onChange={(event) => data?.onField?.(id, "genderHint", normalizeRefGenderHint(event?.target?.value, kind))}
+                disabled={refStatus === "loading"}
+              >
+                {REF_GENDER_HINT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+          </>
+        ) : null}
+        {kind === "ref_location" ? (
+          <div style={{ marginBottom: 10 }}>
+            <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип рефа:</div>
+            <select
+              className="clipSB_select"
+              value={identityLabel}
+              onChange={(event) => data?.onField?.(id, "locationLabel", normalizeRefLocationLabel(event?.target?.value))}
+              disabled={refStatus === "loading"}
+            >
+              {REF_LOCATION_LABEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </div>
+        ) : null}
+        {kind === "ref_items" ? (
+          <>
+            <div style={{ marginBottom: 10 }}>
+              <div className="clipSB_small" style={{ marginBottom: 4 }}>Связь с персонажем:</div>
               <select
                 className="clipSB_select"
                 value={bindingType}
@@ -8680,6 +8857,17 @@ function RefNode({ id, data }) {
                 disabled={refStatus === "loading"}
               >
                 {REF_BINDING_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div className="clipSB_small" style={{ marginBottom: 4 }}>Связан с:</div>
+              <select
+                className="clipSB_select"
+                value={linkedCharacter}
+                onChange={(event) => data?.onField?.(id, "linkedCharacter", normalizeRefLinkedCharacter(event?.target?.value))}
+                disabled={refStatus === "loading"}
+              >
+                {REF_LINKED_CHARACTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
           </>
@@ -21485,6 +21673,8 @@ onClipSec: (nodeId, value) => {
                   refsByRole: freshDerived.refsByRole,
                   ownershipRoleByRole: freshDerived.ownershipRoleByRole || {},
                   bindingTypeByRole: freshDerived.bindingTypeByRole || {},
+                  role_identity_mapping: freshDerived.roleIdentityMapping || {},
+                  character_identity_by_role: freshDerived.roleIdentityMapping || {},
                   storyControlMode: freshDerived.storyControlMode,
                   storyMissionSummary: freshDerived.storyMissionSummary,
                   audioStoryMode: freshDerived.audioStoryMode,

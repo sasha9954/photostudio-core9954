@@ -21,6 +21,9 @@ const STORY_ENHANCEMENT_MARKERS = ["усили", "усилить", "enhance", "i
 const CLIP_TRACE_COMFY_REFS = false;
 const REF_OWNERSHIP_ROLES = new Set(["auto", "main", "support", "antagonist", "shared", "world"]);
 const REF_BINDING_TYPES = new Set(["carried", "worn", "held", "pocketed", "nearby", "environment"]);
+const REF_STORY_ROLES = new Set(["auto", "main", "secondary", "support", "antagonist", "minor", "group", "style_anchor"]);
+const REF_IDENTITY_LABELS = new Set(["auto", "девушка", "парень", "женщина", "мужчина", "ребёнок", "животное", "группа людей", "другое"]);
+const REF_GENDER_HINTS = new Set(["auto", "female", "male", "not_applicable"]);
 const REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE = {
   auto: "auto",
   main: "character_1",
@@ -38,6 +41,21 @@ function normalizeRefOwnershipRole(value) {
 function normalizeRefBindingType(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return REF_BINDING_TYPES.has(normalized) ? normalized : "nearby";
+}
+
+function normalizeRefStoryRole(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return REF_STORY_ROLES.has(normalized) ? normalized : "auto";
+}
+
+function normalizeRefIdentityLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return REF_IDENTITY_LABELS.has(normalized) ? normalized : "auto";
+}
+
+function normalizeRefGenderHint(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return REF_GENDER_HINTS.has(normalized) ? normalized : "auto";
 }
 
 const MODE_RULES = {
@@ -777,11 +795,17 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     const roleType = String(sourceNode?.data?.roleType || "").trim().toLowerCase();
     const ownershipRole = normalizeRefOwnershipRole(sourceNode?.data?.ownershipRole);
     const bindingType = normalizeRefBindingType(sourceNode?.data?.bindingType);
+    const storyRole = normalizeRefStoryRole(sourceNode?.data?.storyRole || sourceNode?.data?.story_role);
+    const identityLabel = normalizeRefIdentityLabel(sourceNode?.data?.identityLabel || sourceNode?.data?.identity_label);
+    const genderHint = normalizeRefGenderHint(sourceNode?.data?.genderHint || sourceNode?.data?.gender_hint);
     const withOwnershipBinding = (items = []) => items.map((item) => ({
       ...item,
       ownershipRole,
       ownershipRoleMapped: REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE[ownershipRole] || "auto",
       bindingType,
+      story_role: storyRole,
+      identity_label: identityLabel,
+      gender_hint: genderHint,
     }));
     const withRoleType = (items = []) => {
       if (!(cfg?.role === "character_1" || cfg?.role === "character_2" || cfg?.role === "character_3")) return items;
@@ -875,6 +899,18 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   );
   const bindingTypeByRole = Object.fromEntries(
     Object.entries(refNodesByRole).map(([role, node]) => [role, normalizeRefBindingType(node?.data?.bindingType)])
+  );
+  const roleIdentityMapping = Object.fromEntries(
+    Object.entries(refNodesByRole)
+      .filter(([role]) => role === "character_1" || role === "character_2" || role === "character_3")
+      .map(([role, node]) => [
+        role,
+        {
+          story_role: normalizeRefStoryRole(node?.data?.storyRole || node?.data?.story_role),
+          identity_label: normalizeRefIdentityLabel(node?.data?.identityLabel || node?.data?.identity_label),
+          gender_hint: normalizeRefGenderHint(node?.data?.genderHint || node?.data?.gender_hint),
+        },
+      ])
   );
 
   const audioNode = pickConnectedNode("audio");
@@ -971,6 +1007,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     refsByRole,
     ownershipRoleByRole,
     bindingTypeByRole,
+    roleIdentityMapping,
     storyControlMode,
     narrativeRoles,
     narrativeSource,

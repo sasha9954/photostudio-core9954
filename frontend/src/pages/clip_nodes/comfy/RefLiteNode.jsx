@@ -16,22 +16,90 @@ const ROLE_TYPE_OPTIONS = [
   { value: "antagonist", label: "Антагонист" },
   { value: "support", label: "Поддержка" },
 ];
-const OWNERSHIP_ROLE_OPTIONS = [
+const STORY_ROLE_OPTIONS = [
   { value: "auto", label: "Авто" },
-  { value: "main", label: "Главный" },
+  { value: "main", label: "Главный персонаж" },
+  { value: "secondary", label: "Второй персонаж" },
   { value: "support", label: "Поддержка" },
   { value: "antagonist", label: "Антагонист" },
+  { value: "minor", label: "Эпизодический" },
+  { value: "group", label: "Группа / массовка" },
+];
+const IDENTITY_LABEL_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "девушка", label: "Девушка" },
+  { value: "парень", label: "Парень" },
+  { value: "женщина", label: "Женщина" },
+  { value: "мужчина", label: "Мужчина" },
+  { value: "ребёнок", label: "Ребёнок" },
+  { value: "животное", label: "Животное" },
+  { value: "группа людей", label: "Группа людей" },
+  { value: "другое", label: "Другое" },
+];
+const GENDER_HINT_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "female", label: "Женский" },
+  { value: "male", label: "Мужской" },
+  { value: "not_applicable", label: "Не применимо / неизвестно" },
+];
+const BINDING_TYPE_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "held", label: "В руках" },
+  { value: "nearby", label: "Рядом" },
+  { value: "worn", label: "На персонаже" },
+  { value: "pocketed", label: "В кармане / сумке" },
+  { value: "shared", label: "Общий предмет" },
+  { value: "environment", label: "Часть мира / окружения" },
+];
+const LINKED_CHARACTER_OPTIONS = [
+  { value: "auto", label: "Авто" },
+  { value: "character_1", label: "character_1" },
+  { value: "character_2", label: "character_2" },
+  { value: "character_3", label: "character_3" },
   { value: "shared", label: "Общий" },
   { value: "world", label: "Мир" },
 ];
-const BINDING_TYPE_OPTIONS = [
-  { value: "carried", label: "Носит с собой" },
-  { value: "worn", label: "Надето" },
-  { value: "held", label: "В руках" },
-  { value: "pocketed", label: "В кармане" },
-  { value: "nearby", label: "Рядом" },
-  { value: "environment", label: "Часть окружения" },
-];
+
+const IDENTITY_GENDER_DEFAULT = {
+  "девушка": "female",
+  "женщина": "female",
+  "парень": "male",
+  "мужчина": "male",
+};
+const NON_HUMAN_IDENTITY = new Set(["ребёнок", "животное", "группа людей", "другое"]);
+
+function normalizeStoryRole(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["auto", "main", "secondary", "support", "antagonist", "minor", "group"].includes(normalized) ? normalized : "auto";
+}
+
+function normalizeIdentityLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["auto", "девушка", "парень", "женщина", "мужчина", "ребёнок", "животное", "группа людей", "другое"].includes(normalized) ? normalized : "auto";
+}
+
+function normalizeGenderHint(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["auto", "female", "male", "not_applicable"].includes(normalized) ? normalized : "auto";
+}
+
+function normalizeBindingType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "carried") return "nearby";
+  return ["auto", "held", "nearby", "worn", "pocketed", "shared", "environment"].includes(normalized) ? normalized : "auto";
+}
+
+function normalizeLinkedCharacter(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["auto", "character_1", "character_2", "character_3", "shared", "world"].includes(normalized) ? normalized : "auto";
+}
+
+function resolveGenderHintDefault(identityLabel = "") {
+  const normalized = normalizeIdentityLabel(identityLabel);
+  if (IDENTITY_GENDER_DEFAULT[normalized]) return IDENTITY_GENDER_DEFAULT[normalized];
+  if (NON_HUMAN_IDENTITY.has(normalized)) return "not_applicable";
+  return "auto";
+}
 
 function getRefThumbCandidateSignature(item) {
   return buildRefImageCandidates(item).join("|");
@@ -134,8 +202,11 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
   const roleType = String(data?.roleType || "auto").trim().toLowerCase() || "auto";
-  const ownershipRole = String(data?.ownershipRole || "auto").trim().toLowerCase() || "auto";
-  const bindingType = String(data?.bindingType || "nearby").trim().toLowerCase() || "nearby";
+  const storyRole = normalizeStoryRole(data?.storyRole || data?.story_role);
+  const identityLabel = normalizeIdentityLabel(data?.identityLabel || data?.identity_label);
+  const genderHint = normalizeGenderHint(data?.genderHint || data?.gender_hint);
+  const bindingType = normalizeBindingType(data?.bindingType || data?.binding_type);
+  const linkedCharacter = normalizeLinkedCharacter(data?.linkedCharacter || data?.linked_character);
   const onOpenLightbox = data?.onOpenLightbox;
 
   const openPicker = () => { if (canAddMore) inputRef.current?.click(); };
@@ -159,38 +230,79 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
         </div>
       ) : null}
       {showRoleSelector ? (
-        <div style={{ marginBottom: 10 }}>
-          <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип роли:</div>
-          <select
-            className="clipSB_select"
-            value={roleType}
-            onChange={(event) => data?.onField?.(id, "roleType", String(event?.target?.value || "auto").trim().toLowerCase() || "auto")}
-            disabled={refStatus === "loading"}
-          >
-            {ROLE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </div>
+        <>
+          <div style={{ marginBottom: 10 }}>
+            <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип роли:</div>
+            <select
+              className="clipSB_select"
+              value={roleType}
+              onChange={(event) => data?.onField?.(id, "roleType", String(event?.target?.value || "auto").trim().toLowerCase() || "auto")}
+              disabled={refStatus === "loading"}
+            >
+              {ROLE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div className="clipSB_small" style={{ marginBottom: 4 }}>Сюжетная роль:</div>
+            <select
+              className="clipSB_select"
+              value={storyRole}
+              onChange={(event) => data?.onField?.(id, "storyRole", normalizeStoryRole(event?.target?.value))}
+              disabled={refStatus === "loading"}
+            >
+              {STORY_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div className="clipSB_small" style={{ marginBottom: 4 }}>Кто это:</div>
+            <select
+              className="clipSB_select"
+              value={identityLabel}
+              onChange={(event) => {
+                const nextIdentity = normalizeIdentityLabel(event?.target?.value);
+                data?.onField?.(id, "identityLabel", nextIdentity);
+                if (genderHint === "auto" || genderHint === "not_applicable") {
+                  data?.onField?.(id, "genderHint", resolveGenderHintDefault(nextIdentity));
+                }
+              }}
+              disabled={refStatus === "loading"}
+            >
+              {IDENTITY_LABEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div className="clipSB_small" style={{ marginBottom: 4 }}>Гендер:</div>
+            <select
+              className="clipSB_select"
+              value={genderHint}
+              onChange={(event) => data?.onField?.(id, "genderHint", normalizeGenderHint(event?.target?.value))}
+              disabled={refStatus === "loading"}
+            >
+              {GENDER_HINT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </div>
+        </>
       ) : null}
       <div style={{ marginBottom: 10 }}>
-        <div className="clipSB_small" style={{ marginBottom: 4 }}>Принадлежит:</div>
-        <select
-          className="clipSB_select"
-          value={ownershipRole}
-          onChange={(event) => data?.onField?.(id, "ownershipRole", String(event?.target?.value || "auto").trim().toLowerCase() || "auto")}
-          disabled={refStatus === "loading"}
-        >
-          {OWNERSHIP_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
-      </div>
-      <div style={{ marginBottom: 10 }}>
-        <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип связи:</div>
+        <div className="clipSB_small" style={{ marginBottom: 4 }}>Связь с персонажем:</div>
         <select
           className="clipSB_select"
           value={bindingType}
-          onChange={(event) => data?.onField?.(id, "bindingType", String(event?.target?.value || "nearby").trim().toLowerCase() || "nearby")}
+          onChange={(event) => data?.onField?.(id, "bindingType", normalizeBindingType(event?.target?.value))}
           disabled={refStatus === "loading"}
         >
           {BINDING_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <div className="clipSB_small" style={{ marginBottom: 4 }}>Связан с:</div>
+        <select
+          className="clipSB_select"
+          value={linkedCharacter}
+          onChange={(event) => data?.onField?.(id, "linkedCharacter", normalizeLinkedCharacter(event?.target?.value))}
+          disabled={refStatus === "loading"}
+        >
+          {LINKED_CHARACTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
       </div>
       <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => {
