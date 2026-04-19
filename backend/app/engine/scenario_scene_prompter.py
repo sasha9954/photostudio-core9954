@@ -2776,6 +2776,120 @@ def _coerce_prompts_v11_payload(raw: Any, prompt_rows: list[dict[str, Any]]) -> 
     return normalized, sorted(dropped_fields)
 
 
+def _build_prompts_v11_segment_fallback(segment_row: dict[str, Any], story_core: dict[str, Any]) -> dict[str, str]:
+    route = str(segment_row.get("route") or "i2v").strip().lower() or "i2v"
+    world_anchor = _trim_sentence(_build_world_lock_summary(story_core) or "the same grounded world", max_len=180)
+    role_label = _trim_sentence(str(segment_row.get("primary_role") or "the main subject"), max_len=80)
+    scene_goal = _trim_sentence(str(segment_row.get("scene_goal") or segment_row.get("beat_purpose") or "story beat"), max_len=140)
+    narrative_function = _trim_sentence(str(segment_row.get("narrative_function") or "narrative progression"), max_len=120)
+    emotion = _trim_sentence(str(segment_row.get("emotional_key") or "controlled emotional expression"), max_len=120)
+    framing = _trim_sentence(str(segment_row.get("framing") or "readable cinematic framing"), max_len=120)
+    subject_motion = _trim_sentence(str(segment_row.get("subject_motion") or "single clear body motion"), max_len=140)
+    camera_intent = _trim_sentence(str(segment_row.get("camera_intent") or "stable camera behavior"), max_len=140)
+    transcript_slice = _trim_sentence(str(segment_row.get("transcript_slice") or ""), max_len=150)
+    transcript_clause = f" Lyric/moment anchor: {transcript_slice}." if transcript_slice else ""
+    photo_prompt = (
+        f"Route-aware still frame of {role_label} in {world_anchor}, {scene_goal}, {framing}, "
+        f"emotion={emotion}, keep identity/body/wardrobe/world continuity and avoid cast/world drift.{transcript_clause}"
+    ).strip()[:900]
+    video_prompt = (
+        f"Route-aware motion/camera prompt for {route}: {role_label} performs {subject_motion} for {narrative_function}; "
+        f"camera={camera_intent}; pacing follows scene intent while preserving the same world/identity/wardrobe continuity.{transcript_clause}"
+    ).strip()[:900]
+    negative_prompt = (
+        "identity drift, face swap, body proportion drift, wardrobe changes, world-family drift, "
+        "new cast invention, style jump, unreadable motion, camera-tech tags, prompt leakage"
+    )
+
+    fallback = {
+        "photo_prompt": photo_prompt,
+        "video_prompt": video_prompt,
+        "negative_prompt": negative_prompt,
+    }
+    if route == "first_last":
+        fallback["first_frame_prompt"] = (
+            f"Start frame in {world_anchor}: {role_label} at the beginning of one controlled transition for {scene_goal}, "
+            f"same identity/outfit/lighting/framing family."
+        )[:900]
+        fallback["last_frame_prompt"] = (
+            f"End frame in the same {world_anchor}: {role_label} after the same single transition for {scene_goal}, "
+            f"same identity/outfit/lighting/framing family, one clear state delta only."
+        )[:900]
+    return fallback
+
+
+def _repair_prompts_v11_required_fields(
+    prompts_v11: dict[str, Any],
+    prompt_rows: list[dict[str, Any]],
+    story_core: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    repaired = dict(prompts_v11)
+    expected_by_segment = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in prompt_rows
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    segments_out: list[dict[str, Any]] = []
+    empty_scene_ids: list[str] = []
+    rebuilt_scene_ids: list[str] = []
+    valid_scene_ids: list[str] = []
+
+    for raw_segment in _safe_list(prompts_v11.get("segments")):
+        seg = dict(_safe_dict(raw_segment))
+        segment_id = str(seg.get("segment_id") or "").strip()
+        prompt_row = _safe_dict(expected_by_segment.get(segment_id))
+        route = str(seg.get("route") or prompt_row.get("route") or "i2v").strip().lower() or "i2v"
+        seg["route"] = route
+        fallback = _build_prompts_v11_segment_fallback({**prompt_row, "route": route}, story_core)
+
+        photo_prompt = str(seg.get("photo_prompt") or "").strip()
+        video_prompt = str(seg.get("video_prompt") or "").strip()
+        negative_prompt = str(seg.get("negative_prompt") or "").strip()
+        first_frame_prompt = str(seg.get("first_frame_prompt") or "").strip()
+        last_frame_prompt = str(seg.get("last_frame_prompt") or "").strip()
+
+        had_empty_required = (not photo_prompt) or (not video_prompt) or (not negative_prompt)
+        if route == "first_last":
+            had_empty_required = had_empty_required or (not first_frame_prompt) or (not last_frame_prompt)
+
+        if had_empty_required:
+            if not photo_prompt:
+                seg["photo_prompt"] = str(fallback.get("photo_prompt") or "")
+            if not video_prompt:
+                seg["video_prompt"] = str(fallback.get("video_prompt") or "")
+            if not negative_prompt:
+                seg["negative_prompt"] = str(fallback.get("negative_prompt") or "")
+            if route == "first_last":
+                if not first_frame_prompt:
+                    seg["first_frame_prompt"] = str(fallback.get("first_frame_prompt") or "")
+                if not last_frame_prompt:
+                    seg["last_frame_prompt"] = str(fallback.get("last_frame_prompt") or "")
+            rebuilt_scene_ids.append(segment_id)
+
+        final_photo = str(seg.get("photo_prompt") or "").strip()
+        final_video = str(seg.get("video_prompt") or "").strip()
+        final_negative = str(seg.get("negative_prompt") or "").strip()
+        final_first = str(seg.get("first_frame_prompt") or "").strip()
+        final_last = str(seg.get("last_frame_prompt") or "").strip()
+        is_valid = bool(final_photo and final_video and final_negative)
+        if route == "first_last":
+            is_valid = bool(is_valid and final_first and final_last)
+        if is_valid:
+            valid_scene_ids.append(segment_id)
+        else:
+            empty_scene_ids.append(segment_id)
+        segments_out.append(seg)
+
+    repaired["segments"] = segments_out
+    return repaired, {
+        "scene_prompts_empty_count": len(empty_scene_ids),
+        "scene_prompts_empty_scene_ids": empty_scene_ids,
+        "scene_prompts_rebuilt_count": len(rebuilt_scene_ids),
+        "scene_prompts_rebuilt_scene_ids": rebuilt_scene_ids,
+        "scene_prompts_valid_count": len(valid_scene_ids),
+    }
+
+
 def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[str, Any]]) -> dict[str, Any]:
     # Deterministic compatibility bridge only (derived from canonical v1.1; no creative authorship).
     by_segment = {str(_safe_dict(row).get("segment_id") or ""): _safe_dict(row) for row in _safe_list(prompts_v11.get("segments"))}
@@ -2893,7 +3007,11 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
             return "PROMPTS_SCHEMA_INVALID", f"invalid_route:{segment_id}", {}
         if actual_route != route:
             return "PROMPTS_SCHEMA_INVALID", f"route_mismatch:{segment_id}", {}
-        if not str(row.get("photo_prompt") or "").strip() or not str(row.get("video_prompt") or "").strip():
+        if (
+            not str(row.get("photo_prompt") or "").strip()
+            or not str(row.get("video_prompt") or "").strip()
+            or not str(row.get("negative_prompt") or "").strip()
+        ):
             return "PROMPTS_SCHEMA_INVALID", f"missing_prompt_fields:{segment_id}", {}
 
         blob = " ".join(
@@ -2991,6 +3109,12 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_timed_out": False,
         "scene_prompts_timeout_retry_attempted": False,
         "scene_prompts_response_was_empty_after_timeout": False,
+        "scene_prompts_empty_count": 0,
+        "scene_prompts_empty_scene_ids": [],
+        "scene_prompts_rebuilt_count": 0,
+        "scene_prompts_rebuilt_scene_ids": [],
+        "scene_prompts_valid_count": 0,
+        "scene_prompts_legacy_bridge_used": False,
         "active_video_model_capability_profile": active_model_id,
         "active_route_capability_mode": route_capability_mode,
         "prompt_capability_guard_applied": prompt_capability_guard_applied,
@@ -3055,8 +3179,13 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
 
     raw_payload, de_technicalization_diag = _sanitize_prompts_v11_wording(raw_payload)
     diagnostics.update(de_technicalization_diag)
+    raw_payload, required_fields_diag = _repair_prompts_v11_required_fields(raw_payload, prompt_rows, story_core)
+    diagnostics.update(required_fields_diag)
 
     error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
+    if int(diagnostics.get("scene_prompts_empty_count") or 0) > 0:
+        error_code = "PROMPTS_SCHEMA_INVALID"
+        validation_error = "scene_prompts_empty_required_fields"
     diagnostics["scene_prompts_error_code"] = error_code
     diagnostics["scene_prompts_validation_error"] = validation_error
     diagnostics.update(validation_diag)
@@ -3093,6 +3222,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
     diagnostics["scene_prompts_legacy_bridge_generated"] = bool(_safe_list(legacy_bridge.get("scenes")))
     diagnostics["scene_prompts_legacy_bridge_present"] = bool(legacy_bridge)
     diagnostics["scene_prompts_uses_legacy_bridge"] = bool(_legacy_bridge_requested(package))
+    diagnostics["scene_prompts_legacy_bridge_used"] = bool(_legacy_bridge_requested(package))
     scene_prompts = {
         "prompts_version": str(raw_payload.get("prompts_version") or ""),
         "global_style_anchor": str(raw_payload.get("global_style_anchor") or global_style_anchor),
@@ -3118,7 +3248,11 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
     final_error = (
         "scene_prompts_timeout"
         if diagnostics.get("scene_prompts_timed_out")
-        else error or (error_code.lower() if error_code else "") or ("scene_prompts_empty" if not has_segments else "")
+        else (
+            "scene_prompts_empty_required_fields"
+            if int(diagnostics.get("scene_prompts_empty_count") or 0) > 0
+            else error or (error_code.lower() if error_code else "") or ("scene_prompts_empty" if not has_segments else "")
+        )
     )
     return {
         "ok": ok,
