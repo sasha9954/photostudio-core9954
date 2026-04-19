@@ -1226,10 +1226,14 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ?? source.last_frame_prompt
     ?? source.lastFramePrompt
   );
+  const canonicalPromptSource = sourcePromptSource || "gemini_final_video_prompt_v11";
+  const videoNegativePrompt = resolveScenarioNegativePrompt(source);
+  const canonicalNegativeForScene = canonicalFinalNegativePrompt || videoNegativePrompt || "";
+  const canonicalPositiveForScene = canonicalFinalPositivePrompt || "";
   const normalizedFinalRoutePayload = {
     ...sourceRoutePayload,
-    positive_prompt: canonicalFinalPositivePrompt,
-    negative_prompt: canonicalFinalNegativePrompt,
+    positive_prompt: canonicalPositiveForScene,
+    negative_prompt: canonicalNegativeForScene,
     first_frame_prompt: canonicalFirstFramePrompt || null,
     last_frame_prompt: canonicalLastFramePrompt || null,
   };
@@ -1285,7 +1289,6 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ru: source.videoPromptRu ?? source.video_prompt_ru ?? source.videoPrompt ?? source.video_prompt,
     en: source.videoPromptEn ?? source.video_prompt_en ?? source.videoPrompt ?? source.video_prompt,
   });
-  const videoNegativePrompt = resolveScenarioNegativePrompt(source);
   const cameraDual = normalizeDualField({
     ru: source.cameraRu ?? source.camera_ru ?? source.cameraIdea ?? source.camera,
     en: source.cameraEn ?? source.camera_en ?? source.cameraIdea ?? source.camera,
@@ -1370,14 +1373,18 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     imagePromptEn: imageDual.en,
     videoPromptRu: videoDual.ru,
     videoPromptEn: videoDual.en,
-    route_payload: normalizedFinalRoutePayload,
+    route_payload: {
+      ...normalizedFinalRoutePayload,
+      positive_prompt: canonicalPositiveForScene,
+      negative_prompt: canonicalNegativeForScene,
+    },
     routePayload: normalizedFinalRoutePayload,
     finalVideoPrompt: {
-      positivePrompt: canonicalFinalPositivePrompt,
-      negativePrompt: canonicalFinalNegativePrompt,
+      positivePrompt: canonicalPositiveForScene,
+      negativePrompt: canonicalNegativeForScene,
       firstFramePrompt: canonicalFirstFramePrompt,
       lastFramePrompt: canonicalLastFramePrompt,
-      promptSource: sourcePromptSource || "gemini_final_video_prompt_v11",
+      promptSource: canonicalPromptSource,
     },
     video_metadata: sourceVideoMetadata,
     videoMetadata: sourceVideoMetadata,
@@ -1385,18 +1392,17 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     engineHints: sourceEngineHints,
     prompt_source: sourcePromptSource,
     promptSource: sourcePromptSource,
-    video_prompt: canonicalFinalPositivePrompt,
-    negative_video_prompt: canonicalFinalNegativePrompt,
+    video_prompt: canonicalPositiveForScene,
+    negative_video_prompt: canonicalNegativeForScene,
     first_frame_prompt: canonicalFirstFramePrompt,
     last_frame_prompt: canonicalLastFramePrompt,
-    ltx_positive: canonicalFinalPositivePrompt,
-    ltx_negative: canonicalFinalNegativePrompt,
-    videoNegativePrompt: videoNegativePrompt || undefined,
-    video_negative_prompt: videoNegativePrompt || undefined,
-    negativeVideoPrompt: videoNegativePrompt || undefined,
-    negative_video_prompt: videoNegativePrompt || undefined,
-    negativePrompt: videoNegativePrompt || undefined,
-    negative_prompt: videoNegativePrompt || undefined,
+    ltx_positive: canonicalPositiveForScene,
+    ltx_negative: canonicalNegativeForScene,
+    videoNegativePrompt: canonicalNegativeForScene || undefined,
+    video_negative_prompt: canonicalNegativeForScene || undefined,
+    negativeVideoPrompt: canonicalNegativeForScene || undefined,
+    negativePrompt: canonicalNegativeForScene || undefined,
+    negative_prompt: canonicalNegativeForScene || undefined,
     cameraRu: cameraDual.ru,
     cameraEn: cameraDual.en,
     emotionRu: emotionDual.ru,
@@ -1698,14 +1704,40 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   normalizedScene.endFramePromptRu = sanitizeVisiblePromptText(normalizedScene.endFramePromptRu || distinctPrompts.endFramePrompt);
   normalizedScene.endFramePromptEn = sanitizeVisiblePromptText(normalizedScene.endFramePromptEn || normalizedScene.endFramePromptRu);
   const videoProfile = resolveScenarioSceneVideoProfile(normalizedScene);
-  normalizedScene.route = videoProfile.canonicalRoute;
-  normalizedScene.resolvedWorkflowKey = videoProfile.resolvedWorkflowKey || videoProfile.canonicalRoute || normalizedScene.resolvedWorkflowKey;
+  const finalWorkflow = videoProfile.canonicalRoute || normalizedScene.resolvedWorkflowKey || "i2v";
+  normalizedScene.route = finalWorkflow;
+  normalizedScene.resolvedWorkflowKey = finalWorkflow;
+  normalizedScene.videoGenerationRoute = finalWorkflow;
+  normalizedScene.plannedVideoGenerationRoute = finalWorkflow;
+
+  if (finalWorkflow === "lip_sync_music") {
+    normalizedScene.renderMode = "lip_sync_music";
+    normalizedScene.ltxMode = "lip_sync";
+    normalizedScene.lipSync = true;
+    normalizedScene.requiresAudioSensitiveVideo = true;
+  }
+
+  if (finalWorkflow === "i2v") {
+    normalizedScene.renderMode = "standard_video";
+    normalizedScene.ltxMode = "i2v";
+    normalizedScene.lipSync = false;
+    normalizedScene.requiresAudioSensitiveVideo = false;
+  }
+
+  if (finalWorkflow === "f_l" || finalWorkflow === "first_last") {
+    normalizedScene.renderMode = "first_last";
+    normalizedScene.ltxMode = "f_l";
+    normalizedScene.lipSync = false;
+    normalizedScene.requiresAudioSensitiveVideo = false;
+    normalizedScene.requiresTwoFrames = true;
+  }
+
   normalizedScene.ltxMode = normalizedScene.ltxMode || videoProfile.ltxMode;
   normalizedScene.renderMode = normalizedScene.renderMode || videoProfile.renderMode;
-  normalizedScene.requiresTwoFrames = Boolean(videoProfile.requiresTwoFrames);
+  normalizedScene.requiresTwoFrames = Boolean(videoProfile.requiresTwoFrames || normalizedScene.requiresTwoFrames);
   normalizedScene.isAudioDriven = Boolean(videoProfile.isAudioDriven);
-  normalizedScene.plannedVideoGenerationRoute = normalizedScene.plannedVideoGenerationRoute || videoProfile.plannedVideoGenerationRoute || videoProfile.canonicalRoute;
-  normalizedScene.videoGenerationRoute = normalizedScene.videoGenerationRoute || videoProfile.videoGenerationRoute || videoProfile.canonicalRoute;
+  normalizedScene.plannedVideoGenerationRoute = normalizedScene.plannedVideoGenerationRoute || videoProfile.plannedVideoGenerationRoute || finalWorkflow;
+  normalizedScene.videoGenerationRoute = normalizedScene.videoGenerationRoute || videoProfile.videoGenerationRoute || finalWorkflow;
   normalizedScene.imageStrategy = normalizedScene.imageStrategy || videoProfile.imageStrategy;
   const transitionTypeBefore = String(normalizedScene.transitionType || videoProfile.transitionType || "").trim().toLowerCase();
   normalizedScene.transitionType = resolveScenarioTransitionTypeByRoute(normalizedScene, videoProfile);
