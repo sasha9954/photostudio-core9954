@@ -254,16 +254,11 @@ function buildLipSyncVideoPromptForLtx(basePrompt) {
     "Do not turn away from camera during vocal phrases.",
   ].join(" ");
 
-  if (/singing|lip-sync|lip syncing|lip-syncing|mouth visibly articulates/i.test(base)) {
-    return `${lipSyncLead} ${base}`.trim();
-  }
-
   return `${lipSyncLead} ${base}`.trim();
 }
 
 function buildLipSyncNegativePromptForLtx(baseNegative) {
-  const base = String(baseNegative || "").trim();
-  const lipNeg = [
+  return [
     "closed mouth",
     "silent face",
     "not singing",
@@ -277,10 +272,8 @@ function buildLipSyncNegativePromptForLtx(baseNegative) {
     "extreme motion blur",
     "distorted mouth",
     "distorted face",
-    "extra people blocking performer",
+    "extra people blocking performer"
   ].join(", ");
-
-  return base ? `${lipNeg}, ${base}` : lipNeg;
 }
 
 
