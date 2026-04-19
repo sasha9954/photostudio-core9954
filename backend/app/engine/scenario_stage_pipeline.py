@@ -6018,6 +6018,12 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_timed_out"] = False
     diagnostics["scene_prompts_timeout_retry_attempted"] = False
     diagnostics["scene_prompts_response_was_empty_after_timeout"] = False
+    diagnostics["scene_prompts_empty_count"] = 0
+    diagnostics["scene_prompts_empty_scene_ids"] = []
+    diagnostics["scene_prompts_rebuilt_count"] = 0
+    diagnostics["scene_prompts_rebuilt_scene_ids"] = []
+    diagnostics["scene_prompts_valid_count"] = 0
+    diagnostics["scene_prompts_legacy_bridge_used"] = False
     diagnostics["prompt_capability_guard_applied"] = False
     diagnostics["scene_prompts_validation_error"] = ""
     diagnostics["validation_error"] = ""
