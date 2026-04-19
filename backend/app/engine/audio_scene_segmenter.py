@@ -91,6 +91,7 @@ def _build_prompt(
     audio_id: str,
     transcript_text: str,
     dynamics_summary: dict[str, Any],
+    role_identity_mapping: dict[str, Any],
     validation_feedback: str = "",
 ) -> str:
     evidence = {
@@ -98,6 +99,7 @@ def _build_prompt(
         "duration_sec": round(float(duration_sec or 0.0), 3),
         "transcript_excerpt": str(transcript_text or "")[:3000],
         "dynamics_summary": dynamics_summary,
+        "role_identity_mapping": role_identity_mapping,
     }
     feedback_block = ""
     if validation_feedback:
@@ -117,6 +119,10 @@ def _build_prompt(
         "{\n"
         '  "audio_map_version": "1.1",\n'
         '  "audio_id": "string",\n'
+        '  "vocal_profile": {"vocal_gender": "female|male|mixed|unknown", "vocal_owner_role": "character_1|character_2|character_3|unknown", "confidence": 0.0, "reason": "short explanation"},\n'
+        '  "vocal_gender": "female|male|mixed|unknown",\n'
+        '  "vocal_owner_role": "character_1|character_2|character_3|unknown",\n'
+        '  "vocal_owner_confidence": 0.0,\n'
         '  "phrase_units": [{"id": "ph_01", "t0": 0.0, "t1": 1.3, "duration_sec": 1.3, "transcript_slice": "string", "text": "string", "intensity": 0.0}],\n'
         '  "segments": [{"segment_id": "string", "t0": 0.0, "t1": 4.2, "duration_sec": 4.2, "transcript_slice": "string", "intensity": 0.0, "is_lip_sync_candidate": false, "rhythmic_anchor": "beat", "first_last_candidate": false, "route_hints": {"i2v_fit": "good", "lip_sync_fit": "ok", "first_last_fit": "too_short"}}],\n'
         '  "no_split_ranges": [{"start": 0.0, "end": 0.0}],\n'
@@ -168,6 +174,17 @@ def _build_prompt(
         "- Prefer fewer stronger scenes over many tiny fragments, but avoid overlong i2v scenes without reason.\n"
         "- transcript_slice must be literal transcript evidence snippets, never placeholders.\n"
         "- no_split_ranges must not conflict with segment boundaries.\n"
+        "VOICE OWNERSHIP (strict, non-creative):\n"
+        "- Determine voice ownership from audible voice only; do NOT infer story intent.\n"
+        "- Use role_identity_mapping only for deterministic role lookup by gender_hint/identity_label.\n"
+        "- If single clear female voice: vocal_gender=female.\n"
+        "- If single clear male voice: vocal_gender=male.\n"
+        "- If mixed voices/dialogue/multiple vocalists/unclear: vocal_gender=mixed or unknown; vocal_owner_role=unknown.\n"
+        "- For vocal_gender=female|male: assign vocal_owner_role only if exactly one role has matching gender hint.\n"
+        "- If multiple roles share that gender or evidence is weak: vocal_owner_role=unknown.\n"
+        "- Set confidence in [0,1], lower when mixed/unknown/ambiguous.\n"
+        "- Keep top-level vocal_gender/vocal_owner_role/vocal_owner_confidence aligned with vocal_profile.\n"
+        "- reason must be short factual audio evidence explanation.\n"
         "Before returning JSON, validate each segment with video-ready logic: avoid standalone <2.5s; avoid standalone <2.8s unless natural tail/reaction and near-usable compact i2v; first_last_candidate only if duration_sec >= 4.0; no mid-word cuts; full coverage with no gaps/overlaps.\n"
         "If any candidate segment violates these rules, regenerate natural merges (do not mechanically pad).\n"
         f"{feedback_block}"
@@ -184,6 +201,7 @@ def build_gemini_audio_segmentation(
     audio_id: str,
     transcript_text: str,
     dynamics_summary: dict[str, Any] | None = None,
+    role_identity_mapping: dict[str, Any] | None = None,
     validation_feedback: str = "",
 ) -> dict[str, Any]:
     transport_meta: dict[str, Any] = {
@@ -217,6 +235,7 @@ def build_gemini_audio_segmentation(
         audio_id=audio_id,
         transcript_text=transcript_text,
         dynamics_summary=dynamics_summary or {},
+        role_identity_mapping=role_identity_mapping or {},
         validation_feedback=validation_feedback,
     )
 

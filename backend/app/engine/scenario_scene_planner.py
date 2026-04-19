@@ -220,10 +220,10 @@ def _extract_role_identity_gender_map(input_pkg: dict[str, Any]) -> dict[str, st
 
 
 def _resolve_vocal_gender(audio_map: dict[str, Any], input_pkg: dict[str, Any]) -> str:
+    _ = input_pkg
     candidate_sources: list[dict[str, Any]] = [
+        _safe_dict(audio_map.get("vocal_profile")),
         audio_map,
-        _safe_dict(input_pkg.get("audio_meta")),
-        _safe_dict(input_pkg.get("connected_context_summary")),
     ]
     for source in candidate_sources:
         for key in ("vocal_gender", "vocalGender"):
