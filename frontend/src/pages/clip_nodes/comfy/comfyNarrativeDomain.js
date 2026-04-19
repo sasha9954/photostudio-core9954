@@ -944,9 +944,24 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     Object.entries(contextRefs)
       .filter(([role]) => ["character_1", "character_2", "character_3"].includes(role))
       .map(([role, value]) => [role, {
-        story_role: normalizeText(value?.meta?.story_role).toLowerCase() || "auto",
-        identity_label: normalizeText(value?.meta?.identity_label).toLowerCase() || "auto",
-        gender_hint: normalizeText(value?.meta?.gender_hint).toLowerCase() || "auto",
+        story_role: normalizeText(
+          value?.story_role
+          || value?.storyRole
+          || value?.meta?.story_role
+          || value?.meta?.storyRole
+        ).toLowerCase() || "auto",
+        identity_label: normalizeText(
+          value?.identity_label
+          || value?.identityLabel
+          || value?.meta?.identity_label
+          || value?.meta?.identityLabel
+        ).toLowerCase() || "auto",
+        gender_hint: normalizeText(
+          value?.gender_hint
+          || value?.genderHint
+          || value?.meta?.gender_hint
+          || value?.meta?.genderHint
+        ).toLowerCase() || "auto",
       }])
   );
   connectedContextSummary.role_identity_mapping = roleIdentityMapping;
