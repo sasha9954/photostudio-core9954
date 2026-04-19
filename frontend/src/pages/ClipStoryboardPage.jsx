@@ -3274,9 +3274,6 @@ const SCENARIO_RUNTIME_AUDIO_CLEAR_FIELDS = [
 const SCENARIO_RUNTIME_VIDEO_CLEAR_FIELDS = Array.from(new Set([
   ...SCENARIO_VIDEO_DELETE_FIELDS,
   "videoSourceImageUrl",
-  "resolvedWorkflowKey",
-  "renderMode",
-  "ltxMode",
 ]));
 
 function buildScenarioSceneRuntimeCleanupPatch(scene = {}, { domains = ["image", "video", "audio"] } = {}) {
@@ -15607,6 +15604,14 @@ Aspect ratio: ${imageFormat}`,
           resolvedAudioSliceUrl: attachedAudioSliceUrl,
           continuingToVideoStart: Boolean(attachedAudioSliceUrl),
         });
+        if (attachedAudioSliceUrl) {
+          console.info("[SCENARIO VIDEO CONTINUE AFTER AUDIO SLICE]", {
+            sceneId,
+            hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
+            audioSliceKind: effectiveAudioSliceKind,
+            musicVocalLipSyncAllowed: effectiveMusicVocalLipSyncAllowed,
+          });
+        }
       } catch (error) {
         traceScenarioVideo("[SCENARIO VIDEO TRACE ERROR] auto_slice_failed", {
           sceneId,
@@ -15770,6 +15775,19 @@ Aspect ratio: ${imageFormat}`,
       ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
       : "";
     const sceneVideoMetadata = resolveScenarioSceneVideoMetadata(targetScene);
+    console.info("[SCENARIO VIDEO FINAL PROMPT CHECK]", {
+      sceneId,
+      workflowKey: effectiveWorkflowKey,
+      promptSource: targetScene?.prompt_source || targetScene?.promptSource || "",
+      hasRoutePayloadPositive: Boolean(targetScene?.route_payload?.positive_prompt),
+      hasRoutePayloadNegative: Boolean(targetScene?.route_payload?.negative_prompt),
+      hasFinalVideoPromptPositive: Boolean(targetScene?.finalVideoPrompt?.positivePrompt),
+      hasFinalVideoPromptNegative: Boolean(targetScene?.finalVideoPrompt?.negativePrompt),
+      hasTopLevelVideoPrompt: Boolean(targetScene?.video_prompt || targetScene?.videoPrompt),
+      hasTopLevelNegativeVideoPrompt: Boolean(targetScene?.negative_video_prompt || targetScene?.negativeVideoPrompt),
+      resolvedPositiveLength: sceneVideoMetadata?.positivePrompt?.length || 0,
+      resolvedNegativeLength: sceneVideoMetadata?.negativePrompt?.length || 0,
+    });
     const canonicalFinalPromptMissing = !sceneVideoMetadata.positivePrompt || !sceneVideoMetadata.negativePrompt;
     if (canonicalFinalPromptMissing) {
       console.warn("[SCENARIO VIDEO BLOCKED FINAL PROMPT MISSING]", {
@@ -18499,6 +18517,26 @@ onClipSec: (nodeId, value) => {
               sourceUsed: phraseMatch.sourceUsed,
             });
             return nextScene;
+          });
+          console.info("[SCENARIO FINAL MERGE INTO STORYBOARD]", {
+            sourceStageId,
+            sceneCount: scenes.length,
+            mergedCount: scenes.filter((s) => Boolean(
+              s?.route_payload?.positive_prompt
+              || s?.finalVideoPrompt?.positivePrompt
+              || s?.video_prompt
+            )).length,
+            sample: scenes.slice(0, 2).map((s) => ({
+              sceneId: s.sceneId,
+              route: s.route,
+              resolvedWorkflowKey: s.resolvedWorkflowKey,
+              promptSource: s.prompt_source || s.promptSource || "",
+              hasRoutePayloadPositive: Boolean(s?.route_payload?.positive_prompt),
+              hasRoutePayloadNegative: Boolean(s?.route_payload?.negative_prompt),
+              hasFinalVideoPrompt: Boolean(s?.finalVideoPrompt?.positivePrompt),
+              positiveLength: String(s?.route_payload?.positive_prompt || s?.finalVideoPrompt?.positivePrompt || s?.video_prompt || "").length,
+              negativeLength: String(s?.route_payload?.negative_prompt || s?.finalVideoPrompt?.negativePrompt || s?.negative_video_prompt || "").length,
+            })),
           });
           const uiStateUpdated = storyboardRunChanged || scenes.length !== previousScenes.length;
           const routeDiffs = scenes.map((sceneItem, idx) => {
