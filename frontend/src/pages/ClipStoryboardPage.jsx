@@ -16115,6 +16115,7 @@ Aspect ratio: ${imageFormat}`,
         branch: "before_payload_build",
       });
       const videoStartPayload = {
+        ...scenarioContractPayloadSanitized,
         sceneId,
         imageUrl: normalizedScenarioVideoSourceUrls.imageUrl,
         startImageUrl: normalizedScenarioVideoSourceUrls.startImageUrl,
@@ -16170,9 +16171,9 @@ Aspect ratio: ${imageFormat}`,
         ),
         provider: effectiveVideoProvider,
         sceneRenderProvider: effectiveVideoProvider,
-        ...scenarioContractPayloadSanitized,
         videoNegativePrompt: payloadNegativePrompt,
         video_negative_prompt: payloadNegativePrompt,
+        sceneContract: scenarioContractPayloadForPayload,
         promptDebug: {
           routeAwareStrictModeApplied: strictFirstLastMode,
           resolvedStrictPositivePromptPreview: String(sceneVideoMetadata.positivePrompt || "").slice(0, 280),
@@ -16186,8 +16187,16 @@ Aspect ratio: ${imageFormat}`,
           payloadTransitionActionPromptPreview: String(transitionActionPrompt || "").slice(0, 280),
           payloadVideoNegativePromptPreview: String(payloadNegativePrompt || "").slice(0, 280),
         },
-        sceneContract: scenarioContractPayloadForPayload,
       };
+      console.info("[SCENARIO VIDEO PAYLOAD FINAL CHECK]", {
+        sceneId,
+        workflowKey: effectiveWorkflowKey,
+        videoPromptStartsWithClearVocal: String(videoStartPayload.videoPrompt || "").startsWith("CLEAR VOCAL PERFORMANCE"),
+        routePayloadPositiveStartsWithClearVocal: String(videoStartPayload.route_payload?.positive_prompt || "").startsWith("CLEAR VOCAL PERFORMANCE"),
+        sceneContractRoutePayloadStartsWithClearVocal: String(videoStartPayload.sceneContract?.route_payload?.positive_prompt || "").startsWith("CLEAR VOCAL PERFORMANCE"),
+        payloadVideoPromptPreview: String(videoStartPayload.videoPrompt || "").slice(0, 220),
+        payloadRoutePayloadPreview: String(videoStartPayload.route_payload?.positive_prompt || "").slice(0, 220),
+      });
       console.info("[SCENARIO VIDEO PAYLOAD PROMPTS]", {
         sceneId,
         workflowKey: effectiveWorkflowKey,
