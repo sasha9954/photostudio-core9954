@@ -3296,6 +3296,8 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     }
     grounding_level = "strict" if prop_contracts else "standard"
     diagnostics = _safe_dict(package.get("diagnostics"))
+    previous_story_core_payload = deepcopy(_safe_dict(package.get("story_core")))
+    package["story_core_stale"] = False
     diagnostics["story_core_mode"] = story_core_mode
     diagnostics["story_core_used_model"] = "gemini-3.1-pro-preview"
     diagnostics["story_core_character_ref_attached"] = False
@@ -3336,6 +3338,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_timeout_retry_attempted"] = False
     diagnostics["story_core_response_was_empty_after_timeout"] = False
     diagnostics["story_core_hard_fail"] = False
+    diagnostics["story_core_failed_payload_rejected"] = False
+    diagnostics["story_core_previous_payload_was_cleared"] = False
+    diagnostics["story_core_previous_stale_payload"] = {}
     diagnostics["story_core_id_mismatch_kind"] = ""
     diagnostics["story_core_audio_canonical_source"] = "audio_map.segments[]"
     diagnostics["story_core_legacy_fields_non_canonical"] = ["scene_slots", "phrase_units", "scene_candidate_windows"]
@@ -3514,6 +3519,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     story_core["story_core_v1"] = story_core_v1
                     package["story_core"] = story_core
                     package["story_core_v1"] = story_core_v1
+                    package["story_core_stale"] = False
                     diagnostics = _safe_dict(package.get("diagnostics"))
                     diagnostics["story_core_used_fallback"] = False
                     diagnostics["story_core_retry_used"] = retry_used
@@ -3547,19 +3553,37 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.exception("[scenario_stage_pipeline] story_core failed")
         diagnostics = _safe_dict(package.get("diagnostics"))
+        last_error_code = str(diagnostics.get("story_core_last_error_code") or "").strip()
+        if not last_error_code:
+            raw_error = str(exc or "").strip()
+            if ":" in raw_error:
+                last_error_code = raw_error.split(":", 1)[0].strip()
+            else:
+                last_error_code = raw_error
         if is_timeout_error(exc):
             diagnostics["story_core_timed_out"] = True
             diagnostics["story_core_last_error_code"] = "story_core_timeout"
             diagnostics["story_core_response_was_empty_after_timeout"] = not bool(
                 str(diagnostics.get("story_core_raw_response") or "").strip()
             )
+            last_error_code = "story_core_timeout"
+        diagnostics["story_core_last_error_code"] = last_error_code
+        diagnostics["story_core_failed_payload_rejected"] = True
+        had_previous_payload = bool(previous_story_core_payload)
+        diagnostics["story_core_previous_payload_was_cleared"] = had_previous_payload
+        if had_previous_payload:
+            diagnostics["story_core_previous_stale_payload"] = previous_story_core_payload
+        package["story_core"] = {}
+        package["story_core_v1"] = {}
+        package["story_core_stale"] = True
         diagnostics["story_core_used_fallback"] = False
         diagnostics["story_core_hard_fail"] = True
         warnings = _safe_list(diagnostics.get("warnings"))
         warnings.append({"stage_id": "story_core", "message": f"hard_fail:{exc}"})
         diagnostics["warnings"] = warnings[-80:]
         package["diagnostics"] = diagnostics
-        raise RuntimeError(f"story_core_hard_fail:{exc}") from exc
+        hard_fail_error_code = last_error_code or "story_core_hard_fail"
+        raise RuntimeError(hard_fail_error_code) from exc
 
 
 def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
