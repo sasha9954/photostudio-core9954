@@ -542,6 +542,7 @@ export default function ScenarioStoryboardEditor({
   onClose,
   onUpdateScene,
   onGenerateScene,
+  onClearSceneImage,
   onGenerateVideo,
   onUpdateMusic,
   onGenerateMusic,
@@ -1834,16 +1835,22 @@ export default function ScenarioStoryboardEditor({
                             <button
                               className="clipSB_btn clipSB_btnSecondary"
                               type="button"
-                              onClick={() => onUpdateScene?.(nodeId, selectedSceneId, {
-                                startImageUrl: "",
-                                startFrameImageUrl: "",
-                                firstFrameImageUrl: "",
-                                startFramePreviewUrl: "",
-                                startFrameStatus: "idle",
-                                startFrameImageStatus: "idle",
-                                startFrameError: "",
-                                startFrameImageError: "",
-                              })}
+                              onClick={() => {
+                                if (onClearSceneImage) {
+                                  onClearSceneImage(nodeId, selectedSceneId, "start_frame", generateMeta);
+                                  return;
+                                }
+                                onUpdateScene?.(nodeId, selectedSceneId, {
+                                  startImageUrl: "",
+                                  startFrameImageUrl: "",
+                                  firstFrameImageUrl: "",
+                                  startFramePreviewUrl: "",
+                                  startFrameStatus: "idle",
+                                  startFrameImageStatus: "idle",
+                                  startFrameError: "",
+                                  startFrameImageError: "",
+                                });
+                              }}
                             >
                               Удалить
                             </button>
@@ -1874,16 +1881,22 @@ export default function ScenarioStoryboardEditor({
                             <button
                               className="clipSB_btn clipSB_btnSecondary"
                               type="button"
-                              onClick={() => onUpdateScene?.(nodeId, selectedSceneId, {
-                                endImageUrl: "",
-                                endFrameImageUrl: "",
-                                lastFrameImageUrl: "",
-                                endFramePreviewUrl: "",
-                                endFrameStatus: "idle",
-                                endFrameImageStatus: "idle",
-                                endFrameError: "",
-                                endFrameImageError: "",
-                              })}
+                              onClick={() => {
+                                if (onClearSceneImage) {
+                                  onClearSceneImage(nodeId, selectedSceneId, "end_frame", generateMeta);
+                                  return;
+                                }
+                                onUpdateScene?.(nodeId, selectedSceneId, {
+                                  endImageUrl: "",
+                                  endFrameImageUrl: "",
+                                  lastFrameImageUrl: "",
+                                  endFramePreviewUrl: "",
+                                  endFrameStatus: "idle",
+                                  endFrameImageStatus: "idle",
+                                  endFrameError: "",
+                                  endFrameImageError: "",
+                                });
+                              }}
                               disabled={!isFirstLastVideoMode}
                             >
                               Удалить
