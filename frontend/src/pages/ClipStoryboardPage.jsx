@@ -1769,7 +1769,9 @@ function resolveScenarioImageWorldAnchorMeta(scene = {}, scenarioPackage = {}) {
     return text && locationSignal.test(text);
   }) || candidates.find((item) => String(item?.value || "").trim());
   const selectedText = String(selected?.value || "").trim();
-  const hasNightclubWorld = /(nightclub|club|bar|dancefloor|corridor)/i.test(selectedText);
+  const hasExplicitNightclubSignal = /(nightclub|night club|club|bar|dancefloor)/i.test(selectedText);
+  const hasClubCorridorSignal = /corridor/i.test(selectedText) && /(nightclub|night club|club|bar|dancefloor)/i.test(selectedText);
+  const hasNightclubWorld = hasExplicitNightclubSignal || hasClubCorridorSignal;
   if (hasNightclubWorld) {
     return {
       anchor: SCENARIO_IMAGE_WORLD_ANCHOR_NIGHTCLUB,
@@ -1800,7 +1802,7 @@ function resolveScenarioImageWorldAnchorMeta(scene = {}, scenarioPackage = {}) {
 }
 
 function resolveScenarioImageNegativeEnvironment(scene = {}, worldAnchor = "") {
-  if (/nightclub|club|bar|dancefloor|corridor/i.test(worldAnchor)) {
+  if (/(nightclub|night club|club|bar|dancefloor)/i.test(worldAnchor)) {
     return "bedroom, apartment, home interior, living room, daylight window, white room, sofa, bed, plant by window, office, outdoor daylight, domestic space";
   }
   return "random unrelated location, inconsistent environment, wrong setting, background not matching scene";
@@ -1899,7 +1901,9 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     if (item.source === "scene.route_payload.positive_prompt" && imageOrPhotoExists) return false;
     return true;
   });
-  const selectedCandidate = filteredCandidates[0] || { source: "none", value: "" };
+  const nonRuleCandidates = filteredCandidates.filter((item) => !isRuleOnlyImagePrompt(item?.value));
+  const ruleOnlyCandidates = filteredCandidates.filter((item) => isRuleOnlyImagePrompt(item?.value));
+  const selectedCandidate = nonRuleCandidates[0] || ruleOnlyCandidates[0] || { source: "none", value: "" };
   const rawSelectedPrompt = String(selectedCandidate?.value || "").trim();
   const usedDanceMotionSafetyOnly = isRuleOnlyImagePrompt(rawSelectedPrompt);
   const imagePromptResolved = usedDanceMotionSafetyOnly ? rawSelectedPrompt : appendWorldAnchor(rawSelectedPrompt);
@@ -1918,7 +1922,7 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     negativePrompt,
     negativeEnvironment,
     usedDanceMotionSafetyOnly,
-    hasNightclubWorldAnchor: /nightclub|club|bar|dancefloor|corridor/i.test(worldAnchor),
+    hasNightclubWorldAnchor: /(nightclub|night club|club|bar|dancefloor)/i.test(worldAnchor),
     worldAnchorSource: String(worldAnchorMeta?.source || "").trim(),
     worldAnchorPreview: worldAnchor,
     hasWorldAnchor: Boolean(worldAnchorMeta?.hasWorldAnchor),
@@ -13325,15 +13329,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       return "";
     };
     const sceneDeltaRawByStrategy = String(getSceneFramePromptByStrategy(targetScene, normalizedSlot) || "").trim();
+    const sceneDeltaRawByStrategyWasRuleOnly = isRuleOnlyImagePrompt(sceneDeltaRawByStrategy);
+    const sceneDeltaRawByStrategySafe = sceneDeltaRawByStrategyWasRuleOnly ? "" : sceneDeltaRawByStrategy;
+
     const sceneDeltaRaw = readFirstNonEmpty(
-      sceneDeltaRawByStrategy,
       promptContext?.imagePrompt,
-      targetScene?.image_prompt,
       targetScene?.scene_prompt?.photo_prompt,
       targetScene?.photo_prompt,
-      targetScene?.scene_prompt,
+      targetScene?.image_prompt,
       targetScene?.imagePromptEn,
       targetScene?.imagePromptRu,
+      sceneDeltaRawByStrategySafe,
       targetScene?.sceneText,
       targetScene?.visualDescription,
     );
@@ -13393,8 +13399,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         slot: normalizedSlot,
         route: sceneRouteRaw || "unknown",
         sceneDeltaRawPresent: Boolean(sceneDeltaRawByStrategy),
+        sceneDeltaRawByStrategyPreview: String(sceneDeltaRawByStrategy).slice(0, 160),
+        sceneDeltaRawByStrategyWasRuleOnly,
+        sceneDeltaRawByStrategySafeUsed: Boolean(sceneDeltaRawByStrategySafe),
         promptContextSource,
+        selectedImagePromptPreview: String(promptContext?.imagePrompt || "").slice(0, 220),
         promptContextImagePromptPresent: Boolean(String(promptContext?.imagePrompt || "").trim()),
+        usedDanceMotionSafetyOnly,
+        worldAnchorSource,
+        worldAnchorPreview: String(worldAnchorPreview || "").slice(0, 220),
+        hasWorldAnchor,
+        isHardcodedFallback,
         finalSceneDeltaPresent: false,
         blockReason: promptBlockReason,
       });
@@ -13476,8 +13491,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       slot: normalizedSlot,
       route: sceneRouteRaw || "unknown",
       sceneDeltaRawPresent: Boolean(sceneDeltaRawByStrategy),
+      sceneDeltaRawByStrategyPreview: String(sceneDeltaRawByStrategy).slice(0, 160),
+      sceneDeltaRawByStrategyWasRuleOnly,
+      sceneDeltaRawByStrategySafeUsed: Boolean(sceneDeltaRawByStrategySafe),
       promptContextSource,
+      selectedImagePromptPreview: String(promptContext?.imagePrompt || "").slice(0, 220),
       promptContextImagePromptPresent: Boolean(String(promptContext?.imagePrompt || "").trim()),
+      usedDanceMotionSafetyOnly,
+      worldAnchorSource,
+      worldAnchorPreview: String(worldAnchorPreview || "").slice(0, 220),
+      hasWorldAnchor,
+      isHardcodedFallback,
       finalSceneDeltaPresent: Boolean(finalSceneDelta),
       blockReason: promptBlockReason || "none",
     });
