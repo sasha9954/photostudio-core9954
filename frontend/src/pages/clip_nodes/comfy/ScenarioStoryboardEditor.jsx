@@ -289,7 +289,6 @@ function buildStoryboardSceneDisplayModel(scene = {}, runtime = {}) {
   const referenceProfilesSummary = refsDebug?.referenceProfilesSummary && typeof refsDebug.referenceProfilesSummary === "object"
     ? refsDebug.referenceProfilesSummary
     : {};
-  const roleTypeByRole = refsDebug?.roleTypeByRole && typeof refsDebug.roleTypeByRole === "object" ? refsDebug.roleTypeByRole : {};
   const incomingRefsByRoleCounts = refsDebug?.incomingRefsByRoleCounts && typeof refsDebug.incomingRefsByRoleCounts === "object"
     ? refsDebug.incomingRefsByRoleCounts
     : {};
@@ -299,6 +298,14 @@ function buildStoryboardSceneDisplayModel(scene = {}, runtime = {}) {
   const refsDebugSceneActiveRoles = Array.isArray(refsDebug?.sceneActiveRoles) ? refsDebug.sceneActiveRoles : [];
   const refsDebugPrimaryRole = refsDebug?.primaryRole;
   const refsDebugMustAppear = Array.isArray(refsDebug?.mustAppear) ? refsDebug.mustAppear : [];
+  const rolesFromRefsDebugCounts = Object.keys({
+    ...incomingRefsByRoleCounts,
+    ...attachedCountsByRole,
+  }).filter((role) => (
+    Number(incomingRefsByRoleCounts?.[role] || 0) > 0
+    || Number(attachedCountsByRole?.[role] || 0) > 0
+    || Boolean(referenceProfilesSummary?.[role])
+  ));
   const roles = new Set(
     [
       scene?.primaryRole,
@@ -311,8 +318,7 @@ function buildStoryboardSceneDisplayModel(scene = {}, runtime = {}) {
       ...Object.keys(refsByRole || {}),
       ...Object.keys(refsUsedByRole || {}),
       ...Object.keys(referenceProfilesSummary || {}),
-      ...Object.keys(incomingRefsByRoleCounts || {}),
-      ...Object.keys(attachedCountsByRole || {}),
+      ...rolesFromRefsDebugCounts,
     ].map(normalizeRole).filter(Boolean)
   );
   const castOrder = ["character_1", "character_2", "character_3", "animal", "group"];
@@ -320,18 +326,18 @@ function buildStoryboardSceneDisplayModel(scene = {}, runtime = {}) {
   const actors = castOrder.filter((role) => roles.has(role)).map((role) => ROLE_LABELS[role] || role);
   const roleRefSummaryText = (role) => {
     const profile = referenceProfilesSummary?.[role];
-    if (Array.isArray(profile)) return profile.map((item) => String(item || "").trim()).filter(Boolean).join("; ");
-    if (profile && typeof profile === "object") return Object.values(profile).map((item) => String(item || "").trim()).filter(Boolean).join("; ");
-    return String(profile || "").trim();
+    if (!profile) return "";
+    if (Array.isArray(profile?.invariants)) {
+      return profile.invariants.map(String).filter(Boolean).slice(0, 4).join("; ");
+    }
+    return String(profile?.summary || profile?.description || "").trim();
   };
   const character1Incoming = Number(incomingRefsByRoleCounts?.character_1 || 0);
   const character1Attached = Number(attachedCountsByRole?.character_1 || 0);
   const character1RefCount = Math.max(character1Incoming, character1Attached, 0);
   const character1Summary = roleRefSummaryText("character_1");
   if (character1RefCount > 0 || character1Summary) {
-    const character1RoleType = String(roleTypeByRole?.character_1 || "hero").trim() || "hero";
     const parts = [`Главная героиня (character_1) · ref: ${character1RefCount > 0 ? character1RefCount : 1}`];
-    parts.push(`type: ${character1RoleType}`);
     if (character1Summary) parts.push(character1Summary);
     const character1ActorText = parts.join(" · ");
     if (!actors.includes(character1ActorText)) actors.unshift(character1ActorText);
