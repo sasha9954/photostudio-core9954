@@ -54,6 +54,7 @@ CORE_TIMING_DRIFT = "CORE_TIMING_DRIFT"
 CORE_ROLE_SPAWNING = "CORE_ROLE_SPAWNING"
 CORE_TECHNICAL_SPAWNING = "CORE_TECHNICAL_SPAWNING"
 CORE_IDENTITY_CONFLICT = "CORE_IDENTITY_CONFLICT"
+CORE_ROLE_BINDING_CONTRADICTION = "CORE_ROLE_BINDING_CONTRADICTION"
 
 
 def _resolve_stage_gemini_api_key(
@@ -1055,6 +1056,37 @@ def _slot_story_function(slot: dict[str, Any], index: int, total: int) -> str:
     return "build_progression"
 
 
+def _is_domestic_argument_duet(text_bundle: dict[str, str], active_subjects: list[str]) -> bool:
+    normalized = " ".join(
+        [
+            str(text_bundle.get("story_text") or ""),
+            str(text_bundle.get("text") or ""),
+            str(text_bundle.get("note") or ""),
+            str(text_bundle.get("director_note") or ""),
+        ]
+    ).lower()
+    domestic_tokens = ("argument", "fight", "quarrel", "ссора", "скандал", "конфликт", "бытов")
+    has_duet = "character_1" in active_subjects and "character_2" in active_subjects
+    return has_duet and any(token in normalized for token in domestic_tokens)
+
+
+def _domestic_argument_story_function(index: int, total: int) -> str:
+    arc = [
+        "setup",
+        "accusation",
+        "reaction",
+        "escalation",
+        "breaking_point",
+        "counterattack",
+        "exhaustion",
+        "unresolved_silence",
+    ]
+    if total <= 1:
+        return arc[0]
+    pointer = int(round((index / max(1, total - 1)) * (len(arc) - 1)))
+    return arc[max(0, min(len(arc) - 1, pointer))]
+
+
 def _extract_forbidden_drift(note_text: str) -> list[str]:
     text = str(note_text or "").strip().lower()
     if not text:
@@ -1223,6 +1255,10 @@ def _build_story_core_v11(
     if not secondary_subjects and continuity_objects:
         mapped_subject = _canonical_subject_id(continuity_objects[0].get("ownership_role"))
         secondary_subjects = [mapped_subject] if mapped_subject and mapped_subject != primary_subject else []
+    active_subjects = list(dict.fromkeys([primary_subject, *secondary_subjects]))
+    domestic_argument_duet = _is_domestic_argument_duet(text_bundle, active_subjects)
+    if domestic_argument_duet:
+        secondary_subjects = list(dict.fromkeys(["character_2", *secondary_subjects]))
 
     opening_anchor = _first_text(parsed_story_core.get("opening_anchor"), fallback_story_core.get("opening_anchor"), text_bundle.get("story_text"), text_bundle.get("text"))[:220]
     ending_callback_rule = _first_text(parsed_story_core.get("ending_callback_rule"), fallback_story_core.get("ending_callback_rule"))
@@ -1254,7 +1290,7 @@ def _build_story_core_v11(
                 "vocal_ratio": 0.7 if bool(segment.get("is_lip_sync_candidate")) else 0.3,
             }
         }
-        fn = _slot_story_function(slot, idx, total_slots)
+        fn = _domestic_argument_story_function(idx, total_slots) if domestic_argument_duet else _slot_story_function(slot, idx, total_slots)
         phrase_key = re.sub(r"\s+", " ", phrase.lower()).strip()
         energy = _to_float(_safe_dict(slot.get("audio_features")).get("energy_score"), 0.5)
         vocal = _to_float(_safe_dict(slot.get("audio_features")).get("vocal_ratio"), 0.4)
@@ -1266,7 +1302,10 @@ def _build_story_core_v11(
         )
         continuity_pressure = "high" if object_presence_required else "medium"
         primary_shift_allowed = bool(re.search(r"\b(we|they|together|crowd|everyone)\b", phrase_key)) and fn in {"transition_turn", "climax_pressure"}
-        beat_primary_subject = primary_subject if not (primary_shift_allowed and secondary_subjects) else secondary_subjects[0]
+        if domestic_argument_duet:
+            beat_primary_subject = "character_1" if idx % 2 == 0 else "character_2"
+        else:
+            beat_primary_subject = primary_subject if not (primary_shift_allowed and secondary_subjects) else secondary_subjects[0]
 
         if not current_group:
             current_group = [slot_id]
@@ -1282,7 +1321,10 @@ def _build_story_core_v11(
             current_function = fn
             repeated_count = 0
 
-        beat_secondary = secondary_subjects[:2] if idx % 2 == 0 else secondary_subjects[1:3] or secondary_subjects[:1]
+        if domestic_argument_duet:
+            beat_secondary = ["character_2"] if beat_primary_subject == "character_1" else ["character_1"]
+        else:
+            beat_secondary = secondary_subjects[:2] if idx % 2 == 0 else secondary_subjects[1:3] or secondary_subjects[:1]
         beats.append(
             {
                 "beat_id": f"beat_{idx + 1}",
@@ -1293,7 +1335,11 @@ def _build_story_core_v11(
                 "beat_secondary_subjects": beat_secondary,
                 "semantic_density": semantic_density,
                 "narrative_load": narrative_load,
-                "subject_presence_requirement": "primary_subject_visible_unless_explicit_handoff",
+                "subject_presence_requirement": (
+                    "both_conflict_participants_visible_or_implied_nearby"
+                    if domestic_argument_duet
+                    else "primary_subject_visible_unless_explicit_handoff"
+                ),
                 "continuity_visibility_requirement": "object_anchor_required" if object_presence_required else "world_anchor_or_subject_callback",
                 "beat_focus_hint": phrase[:180] or fn,
                 "source_segment_id": slot_id,
@@ -1445,6 +1491,14 @@ def _build_story_core_v11(
             "transition_turn": "pivot",
             "climax_pressure": "climax",
             "afterimage_release": "afterglow",
+            "setup": "setup",
+            "accusation": "build",
+            "reaction": "pivot",
+            "escalation": "climax",
+            "breaking_point": "climax",
+            "counterattack": "release",
+            "exhaustion": "release",
+            "unresolved_silence": "afterglow",
         }
         narrative_segments = [
             {
@@ -1475,6 +1529,11 @@ def _build_story_core_v11(
             ],
             "emotional_voice_rules": ["keep_voice_consistent_with_global_arc", "avoid_unmotivated_tonal_inversion"],
             "subject_transition_rules": ["subject_handoff_allowed_only_on_transition_turn_or_explicit_phrase_signal", "secondary_subject_cannot_dominate_without_story_reason"],
+            "duet_presence_rule": (
+                "for_two_character_argument_keep_character_1_and_character_2_present_as_conflict_participants"
+                if domestic_argument_duet
+                else "not_applicable"
+            ),
             "object_transition_rules": ["ownership_or_binding_change_must_be_explicit_in_transition_events", "persistent_objects_should_reappear_within_two_beats"],
             "transition_events": transition_events[:16],
         },
@@ -1678,6 +1737,9 @@ def _build_story_core_rules() -> dict[str, Any]:
             "refs_are_cast_and_objects": True,
             "refs_are_world_anchors": True,
             "props_can_drive_dramaturgy": True,
+            "role_ids_are_immutable": True,
+            "forbid_character_role_id_swapping": True,
+            "use_connected_refs_and_assigned_roles_as_truth": True,
             "forbid_rewriting_face_identity": True,
             "forbid_rewriting_key_prop_identity": True,
         },
@@ -2115,8 +2177,98 @@ def _build_core_validation_feedback(code: str, errors: list[str]) -> str:
             "Do not convert seg_01 -> seg_0. Preserve zero padding exactly. "
             f"Mismatch details: {details}"
         )[:1400]
+    if code == CORE_ROLE_BINDING_CONTRADICTION:
+        details = "; ".join([str(item) for item in errors[:6]])
+        return (
+            "CORE_ROLE_BINDING_CONTRADICTION: Role IDs are immutable. Never infer/swap character_1/character_2 from text wording. "
+            "Use connected refs + assigned role mapping as source of truth and regenerate with strict role binding. "
+            f"Detected: {details}"
+        )[:1400]
     details = "; ".join([str(item) for item in errors[:6]])
     return f"{code}: {details}"[:1400]
+
+
+def _normalize_gender_hint(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    female_tokens = (
+        "female", "woman", "girl", "girlfriend", "wife", "lady", "she", "her",
+        "девушка", "женщина", "жена", "она", "жен", "feminine",
+    )
+    male_tokens = (
+        "male", "man", "guy", "boy", "boyfriend", "husband", "he", "him",
+        "парень", "мужчина", "муж", "он", "masculine",
+    )
+    if any(t in token for t in female_tokens):
+        return "female"
+    if any(t in token for t in male_tokens):
+        return "male"
+    return ""
+
+
+def _extract_role_identity_expectations(input_pkg: dict[str, Any], assigned_roles: dict[str, Any]) -> dict[str, str]:
+    expectations: dict[str, str] = {}
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    candidate_sources: list[Any] = [
+        assigned_roles,
+        _safe_dict(input_pkg.get("roleTypeByRole")),
+        _safe_dict(connected_summary.get("roleTypeByRole")),
+        _safe_dict(connected_summary.get("assignedRoles")),
+        _safe_dict(connected_summary.get("roleMapping")),
+        _safe_dict(connected_summary.get("role_identity_mapping")),
+    ]
+    for source in candidate_sources:
+        row = _safe_dict(source)
+        for role in ("character_1", "character_2", "character_3"):
+            if role in expectations:
+                continue
+            hint = _normalize_gender_hint(row.get(role))
+            if hint:
+                expectations[role] = hint
+    return expectations
+
+
+def _detect_core_role_binding_contradictions(payload: dict[str, Any], role_identity_expectations: dict[str, str]) -> list[str]:
+    if not role_identity_expectations:
+        return []
+    role_gender_aliases = {
+        "female": ("woman", "girl", "female", "she", "her", "девушка", "женщина"),
+        "male": ("man", "guy", "male", "he", "him", "парень", "мужчина"),
+    }
+    opposite_gender = {"female": "male", "male": "female"}
+    zones: list[tuple[str, str]] = []
+    for key in ("story_summary", "opening_anchor", "ending_callback_rule"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            zones.append((key, value.lower()))
+    for key in ("global_arc", "identity_doctrine"):
+        value = _safe_dict(payload.get(key))
+        for sub_key, sub_value in value.items():
+            text = str(sub_value or "").strip()
+            if text:
+                zones.append((f"{key}.{sub_key}", text.lower()))
+    for idx, segment in enumerate(_safe_list(payload.get("narrative_segments")), start=1):
+        row = _safe_dict(segment)
+        for key in ("beat_purpose", "emotional_key"):
+            text = str(row.get(key) or "").strip()
+            if text:
+                zones.append((f"narrative_segments[{idx}].{key}", text.lower()))
+    contradictions: list[str] = []
+    for role, expected_gender in role_identity_expectations.items():
+        opposite = opposite_gender.get(expected_gender, "")
+        if not opposite:
+            continue
+        for zone_name, text in zones:
+            for opposite_alias in role_gender_aliases.get(opposite, ()):
+                left_pattern = rf"\b{re.escape(opposite_alias)}\b[^.\n]{{0,40}}\b{re.escape(role)}\b"
+                right_pattern = rf"\b{re.escape(role)}\b[^.\n]{{0,40}}\b{re.escape(opposite_alias)}\b"
+                if re.search(left_pattern, text) or re.search(right_pattern, text):
+                    contradictions.append(f"{zone_name}:{role}_expected_{expected_gender}_found_{opposite_alias}")
+                    break
+            if contradictions and contradictions[-1].startswith(f"{zone_name}:{role}_"):
+                break
+    return contradictions[:8]
 
 
 def _validate_story_core_v11_payload(
@@ -2124,6 +2276,7 @@ def _validate_story_core_v11_payload(
     payload: dict[str, Any],
     audio_segments: list[dict[str, Any]],
     user_concept: str,
+    role_identity_expectations: dict[str, str] | None = None,
     debug_capture: dict[str, Any] | None = None,
 ) -> tuple[bool, str, list[str]]:
     def _zone_text(value: Any) -> str:
@@ -2308,6 +2461,9 @@ def _validate_story_core_v11_payload(
             return False, CORE_IDENTITY_CONFLICT, ["concept_forbids_neon_but_core_introduced_neon"]
         if any(token in concept for token in ("no club", "не клуб", "not club")) and "club" in json_dump:
             return False, CORE_IDENTITY_CONFLICT, ["concept_forbids_club_but_core_introduced_club"]
+    contradictions = _detect_core_role_binding_contradictions(payload, role_identity_expectations or {})
+    if contradictions:
+        return False, CORE_ROLE_BINDING_CONTRADICTION, contradictions
 
     return True, "", []
 
@@ -2406,6 +2562,11 @@ def _build_story_core_prompt(
         "Do not convert to zero-based IDs or alter zero padding (seg_01 must remain seg_01; seg_0 is invalid).\n"
         "narrative_segments[] must preserve exact segment_id values and exact order from audio_map.segments[].\n"
         "Any new/generated/reformatted segment_id is invalid.\n"
+        "HARD CONTRACT: Role IDs are immutable.\n"
+        "Never infer, rename, or swap character_1/character_2/character_3 from wording semantics.\n"
+        "Use connected refs, assigned roles, and user-provided role mapping as source of truth for every field.\n"
+        "If mapping says character_1 is female and character_2 is male, preserve this exactly in story_summary, identity_doctrine, narrative_segments, and any role mentions.\n"
+        "Never output contradictions like 'The guy (character_1)' when role mapping marks character_1 as female.\n"
         "CORE scope = doctrine + narrative meaning per segment.\n"
         "Forbidden at CORE: roles planning, scene rows, choreography, camera, motion, framing, route assignment, prompt writing, renderer/delivery fields.\n"
         "Do not output t0/t1 or timing edits; never merge/delete/reorder segments.\n"
@@ -3213,6 +3374,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         core_segments, core_segments_source = _coerce_core_audio_segments(audio_map)
         user_concept = _extract_story_user_concept(input_pkg)
+        role_identity_expectations = _extract_role_identity_expectations(input_pkg, assigned_roles)
         validation_feedback = ""
         retry_used = False
         last_error_code = CORE_SCHEMA_INVALID
@@ -3261,6 +3423,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     payload=normalized_core,
                     audio_segments=core_segments,
                     user_concept=user_concept,
+                    role_identity_expectations=role_identity_expectations,
                     debug_capture=technical_spawn_debug,
                 )
                 diagnostics["story_core_validation_errors"] = validation_errors
