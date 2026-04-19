@@ -5436,16 +5436,41 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_stage_branch"] = "gemini_strict_v11"
 
     def _collect_short_segments(errors: list[str]) -> list[str]:
-        return [str(item) for item in errors if "duration_sec must be >= 3.0" in str(item)]
+        return [
+            str(item)
+            for item in errors
+            if "too short for standalone video segment" in str(item) or "<2.8s without natural tail/reaction evidence" in str(item)
+        ]
 
     def _validation_feedback(code: str, errors: list[str]) -> str:
         short_segments = _collect_short_segments(errors)
         if short_segments:
-            short_summary = "; ".join(short_segments[:6])
+            parsed: list[str] = []
+            for msg in short_segments[:6]:
+                match = re.search(r"segment\[(\d+)\].*?:\s*([0-9]+(?:\.[0-9]+)?)\s*$", msg)
+                if not match:
+                    continue
+                seg_num = int(match.group(1)) + 1
+                seg_id = f"seg_{seg_num:02d}"
+                parsed.append(f"{seg_id} duration={float(match.group(2)):.3f}")
+            short_summary = "; ".join(parsed) if parsed else "; ".join(short_segments[:6])
             return (
-                "Your previous audio_map violated the video-ready segmentation contract. "
-                "The following segments were shorter than 3.0 seconds: "
-                f"{short_summary}. Return a corrected audio_map where short phrase_units are merged into valid video-ready segments."
+                "Your previous audio_map violated video-ready segmentation. "
+                f"These segments are too short as standalone video windows: {short_summary}. "
+                "Do not pad or cut mid-word. Merge short phrase_units with adjacent phrase/pause/reaction into natural compact video windows. "
+                "Keep i2v windows compact when possible. first_last_candidate requires >=4.0 sec."
+            )[:1500]
+        if code == "AUDIO_MAP_INVALID_FIRST_LAST_DURATION":
+            detail = "; ".join([str(item) for item in errors[:6]])
+            return (
+                "Your previous audio_map violated first_last duration rules. "
+                f"{detail}. first_last_candidate may be true only when duration_sec >= 4.0."
+            )[:1500]
+        if code == "AUDIO_MAP_INVALID_TIMELINE":
+            detail = "; ".join([str(item) for item in errors[:6]])
+            return (
+                "Your previous audio_map violated timeline consistency (coverage/order/overlap/gap). "
+                f"{detail}. Return contiguous full-coverage segments with no overlaps or gaps."
             )[:1500]
         detail = "; ".join([str(item) for item in errors[:6]])
         prefix = "Hard boundary violation. " if code == "AUDIO_PLOT_LEAKAGE" else ""
