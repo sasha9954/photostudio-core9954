@@ -265,7 +265,7 @@ function buildLipSyncVideoPromptForLtx(basePrompt) {
 }
 
 function buildLipSyncNegativePromptForLtx(baseNegative) {
-  return [
+  const lipSyncNeg = [
     "closed mouth",
     "silent face",
     "not singing",
@@ -281,6 +281,60 @@ function buildLipSyncNegativePromptForLtx(baseNegative) {
     "distorted face",
     "extra people blocking performer"
   ].join(", ");
+  const base = String(baseNegative || "").trim();
+  return base ? `${lipSyncNeg}, ${base}` : lipSyncNeg;
+}
+
+function buildWardrobeLockPromptForHumanScene(basePrompt) {
+  const base = String(basePrompt || "").trim();
+  const lock = [
+    "WARDROBE LOCK:",
+    "Keep the exact same outfit from the source image/reference.",
+    "Do not change neckline, collar, straps, sleeves, crop length, fabric coverage, color, material, jewelry, or fit.",
+    "If the character wears a cropped top, it must remain the same cropped top with the same neckline and same visible skin coverage.",
+    "Do not turn it into a high-neck top, turtleneck, shirt, blouse, jacket, closed collar, or longer garment."
+  ].join(" ");
+  return `${lock} ${base}`.trim();
+}
+
+function buildWardrobeLockNegativePrompt(baseNegative) {
+  const base = String(baseNegative || "").trim();
+  const lockNeg = [
+    "changed outfit",
+    "changed neckline",
+    "raised neckline",
+    "high-neck top",
+    "turtleneck",
+    "closed collar",
+    "added collar",
+    "added sleeves",
+    "longer shirt",
+    "different top",
+    "fabric covering neck",
+    "altered crop top",
+    "missing jewelry",
+    "changed jewelry"
+  ].join(", ");
+  return base ? `${lockNeg}, ${base}` : lockNeg;
+}
+
+function shouldApplyWardrobeLockForScene(scene = {}) {
+  const normalizeRoleList = (value) => {
+    const list = Array.isArray(value) ? value : [];
+    return [...new Set(list.map((role) => normalizeScenarioRoleName(role)).filter(Boolean))];
+  };
+  const hasHumanRoleSignal = [
+    normalizeScenarioRoleName(scene?.primaryRole),
+    ...normalizeRoleList(scene?.secondaryRoles),
+    ...normalizeRoleList(scene?.sceneActiveRoles),
+    ...normalizeRoleList(scene?.mustAppear),
+    ...normalizeRoleList(scene?.refsUsed),
+    ...normalizeRoleList(Object.keys(scene?.refsByRole || {})),
+    ...normalizeRoleList(Object.keys(scene?.refsUsedByRole || {})),
+  ].some((role) => ["character_1", "character_2", "character_3"].includes(role));
+  const performerText = `${String(scene?.performerPresentation || scene?.performer_presentation || "")} ${String(scene?.sceneGoal || scene?.sceneGoalRu || scene?.sceneGoalEn || "")} ${String(scene?.sceneText || "")}`.toLowerCase();
+  const hasPerformerSignal = /\bperformer\b|\bperson\b|\bhuman\b|\bwoman\b|\bgirl\b|\bman\b|\bboy\b|персонаж|человек|девушк|женщин|мужчин/.test(performerText);
+  return hasHumanRoleSignal || hasPerformerSignal;
 }
 
 
@@ -14065,10 +14119,14 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || targetScene?.promptSource
         || "unknown"
       ).trim();
-      const framePrompt = String(isTwoFrameScene
+      const wardrobeLockForImagePayload = shouldApplyWardrobeLockForScene(targetScene);
+      const framePromptRaw = String(isTwoFrameScene
         ? ensureFirstLastSlotPrompt(targetScene, normalizedSlot, sceneDeltaRawByStrategy || sceneDelta)
         : (sceneDeltaRawByStrategy || sceneDelta || "")
       ).trim();
+      const framePrompt = (isTwoFrameScene && wardrobeLockForImagePayload)
+        ? buildWardrobeLockPromptForHumanScene(framePromptRaw)
+        : framePromptRaw;
       let imagePromptEffective = String(
         (isTwoFrameScene ? framePrompt : "")
         || promptContext?.imagePrompt
@@ -14083,6 +14141,9 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || targetScene?.imagePrompt
         || ""
       ).trim();
+      if (!isTwoFrameScene && wardrobeLockForImagePayload) {
+        imagePromptEffective = buildWardrobeLockPromptForHumanScene(imagePromptEffective);
+      }
       if (!hasCharacter1Ref && character1ProfileFallbackText) {
         imagePromptEffective = `${imagePromptEffective}\n\nREFERENCE PROFILE FALLBACK: ${character1ProfileFallbackText}`.trim();
       }
@@ -16147,12 +16208,13 @@ Aspect ratio: ${imageFormat}`,
     const strictFirstLastMode = ["f_l", "first_last"].includes(String(effectiveWorkflowKey || "").trim().toLowerCase());
     const finalVideoPrompt = sceneVideoMetadata.positivePrompt;
     const lipSyncPromptRoute = effectiveWorkflowKey === "lip_sync_music" || Boolean(effectiveLipSync);
-    const finalVideoPromptForPayload = lipSyncPromptRoute
+    const baseNegativePrompt = sceneVideoMetadata.negativePrompt || resolveScenarioSceneNegativePrompt(targetScene);
+    let finalVideoPromptForPayload = lipSyncPromptRoute
       ? buildLipSyncVideoPromptForLtx(sceneVideoMetadata.positivePrompt)
       : finalVideoPrompt;
-    const payloadNegativePrompt = lipSyncPromptRoute
-      ? buildLipSyncNegativePromptForLtx(sceneVideoMetadata.negativePrompt || resolveScenarioSceneNegativePrompt(targetScene))
-      : (sceneVideoMetadata.negativePrompt || resolveScenarioSceneNegativePrompt(targetScene));
+    let payloadNegativePrompt = lipSyncPromptRoute
+      ? buildLipSyncNegativePromptForLtx(baseNegativePrompt)
+      : baseNegativePrompt;
     const sceneHumanVisualAnchors = [];
     const sourceImageUrl = requiresTwoFrames
       ? (resolvedFirstFrameUrl || "")
@@ -16173,6 +16235,18 @@ Aspect ratio: ${imageFormat}`,
       audioSliceUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.audioSliceUrl),
       continuationSourceAssetUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.continuationSourceAssetUrl),
     };
+    const wardrobeLockForVideoPayload = shouldApplyWardrobeLockForScene(targetScene)
+      && Boolean(normalizedScenarioVideoSourceUrls.imageUrl || normalizedScenarioVideoSourceUrls.startImageUrl);
+    if (wardrobeLockForVideoPayload) {
+      const wardrobePositiveBase = buildWardrobeLockPromptForHumanScene(sceneVideoMetadata.positivePrompt);
+      finalVideoPromptForPayload = lipSyncPromptRoute
+        ? buildLipSyncVideoPromptForLtx(wardrobePositiveBase)
+        : wardrobePositiveBase;
+      const wardrobeNegativeBase = buildWardrobeLockNegativePrompt(baseNegativePrompt);
+      payloadNegativePrompt = lipSyncPromptRoute
+        ? buildLipSyncNegativePromptForLtx(wardrobeNegativeBase)
+        : wardrobeNegativeBase;
+    }
     const safeContinuationSourceSceneId = continuationEnabled ? continuationSourceSceneId : "";
     const safeContinuationSourceAssetUrl = continuationEnabled ? normalizedScenarioVideoSourceUrls.continuationSourceAssetUrl : "";
     const safeContinuationSourceAssetType = continuationEnabled ? continuationSourceAssetType : "";
