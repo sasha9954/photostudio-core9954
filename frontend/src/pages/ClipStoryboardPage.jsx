@@ -2217,8 +2217,14 @@ function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
       lastApiImageUrlPresent: prevValue.lastApiImageUrlPresent === true,
       startFrameStatus: String(prevValue.startFrameStatus || ""),
       startFrameError: String(prevValue.startFrameError || ""),
+      startFrameImageStatus: String(prevValue.startFrameImageStatus || ""),
+      startFrameImageError: String(prevValue.startFrameImageError || ""),
+      startFrameImageStartedAt: Number(prevValue.startFrameImageStartedAt || 0),
       endFrameStatus: String(prevValue.endFrameStatus || ""),
       endFrameError: String(prevValue.endFrameError || ""),
+      endFrameImageStatus: String(prevValue.endFrameImageStatus || ""),
+      endFrameImageError: String(prevValue.endFrameImageError || ""),
+      endFrameImageStartedAt: Number(prevValue.endFrameImageStartedAt || 0),
       videoStatus: String(prevValue.videoStatus || ""),
       videoError: String(prevValue.videoError || ""),
       videoJobId: String(prevValue.videoJobId || ""),
@@ -14957,7 +14963,28 @@ Aspect ratio: ${imageFormat}`,
     const targetNode = (nodesRef.current || []).find((node) => node?.id === targetNodeId);
     const scenes = Array.isArray(targetNode?.data?.scenes) ? targetNode.data.scenes : [];
     const scene = scenes.find((s) => String(s?.sceneId || s?.scene_id || "") === targetSceneId) || {};
-    const transitionType = resolveSceneTransitionType(scene);
+    const videoProfile = resolveScenarioSceneVideoProfile(scene || {});
+    const sceneWorkflowRaw = String(
+      scene?.resolvedWorkflowKey
+      || scene?.resolved_workflow_key
+      || scene?.videoGenerationRoute
+      || scene?.video_generation_route
+      || scene?.plannedVideoGenerationRoute
+      || scene?.planned_video_generation_route
+      || scene?.route
+      || scene?.ltxMode
+      || scene?.ltx_mode
+      || ""
+    ).trim().toLowerCase();
+
+    const isFirstLastScene = Boolean(
+      videoProfile?.requiresTwoFrames
+      || String(videoProfile?.canonicalRoute || "").trim().toLowerCase() === "f_l"
+      || String(scene?.imageStrategy || "").trim().toLowerCase() === "first_last"
+      || ["first_last", "first-last", "f_l", "f+l"].includes(sceneWorkflowRaw)
+    );
+
+    const transitionType = isFirstLastScene ? "first_last" : resolveSceneTransitionType(scene);
 
     const clearPatch = buildScenarioClearImagePatch({
       transitionType,
@@ -15009,6 +15036,8 @@ Aspect ratio: ${imageFormat}`,
     console.info("[SCENARIO FIRST_LAST IMAGE CLEAR]", {
       sceneId: targetSceneId,
       slot: normalizedSlot,
+      isFirstLastScene,
+      transitionType,
       clearedRuntime: runtimePatch,
     });
   }, [
