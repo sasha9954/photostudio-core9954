@@ -1742,35 +1742,69 @@ const SCENARIO_IMAGE_RULE_ONLY_KEYWORDS = [
   "CAMERA ORBIT SAFETY",
   "Performance framing guidance",
 ];
-const SCENARIO_IMAGE_WORLD_ANCHOR = [
-  "realistic dimly lit nightclub interior",
-  "dark club corridor / bar / dancefloor edge according to scene",
-  "soft haze",
-  "deep shadows",
-  "reflective glass/mirrors when relevant",
-  "grounded realistic nightclub world",
-  "no random domestic room",
-].join(", ");
-const SCENARIO_IMAGE_NEGATIVE_DOMESTIC = [
-  "bedroom",
-  "apartment",
-  "home interior",
-  "living room",
-  "daylight window",
-  "white room",
-  "sofa",
-  "bed",
-  "plant by window",
-  "office",
-  "outdoor daylight",
-  "domestic space",
-  "different outfit",
-  "changed body type",
-  "slimmer body",
-  "changed neckline",
-  "high-neck top",
-  "changed jewelry",
-].join(", ");
+const SCENARIO_IMAGE_WORLD_ANCHOR_NEUTRAL_FALLBACK = "grounded realistic environment matching the current scene description, coherent lighting, no random unrelated location";
+const SCENARIO_IMAGE_WORLD_ANCHOR_NIGHTCLUB = "realistic nightclub world, dimly lit corridor, bar / dancefloor edge, soft haze, deep shadows, reflective glass/mirrors";
+
+function resolveScenarioImageWorldAnchor(scene = {}, scenarioPackage = {}) {
+  const normalized = resolveScenarioImageWorldAnchorMeta(scene, scenarioPackage);
+  return normalized.anchor;
+}
+
+function resolveScenarioImageWorldAnchorMeta(scene = {}, scenarioPackage = {}) {
+  const candidates = [
+    { source: "scene.scene_prompt.photo_prompt", value: scene?.scene_prompt?.photo_prompt },
+    { source: "scene.photo_prompt", value: scene?.photo_prompt },
+    { source: "scene.route_payload.positive_prompt", value: scene?.route_payload?.positive_prompt },
+    { source: "scene.imagePromptEn", value: scene?.imagePromptEn },
+    { source: "scene.imagePromptRu", value: scene?.imagePromptRu },
+    { source: "scenarioPackage.story_core.world_lock.rule", value: scenarioPackage?.story_core?.world_lock?.rule },
+    { source: "scenarioPackage.story_core.identity_doctrine.world_doctrine", value: scenarioPackage?.story_core?.identity_doctrine?.world_doctrine },
+    { source: "scenarioPackage.story_core.story_core_v1.world_definition.environment_anchor", value: scenarioPackage?.story_core?.story_core_v1?.world_definition?.environment_anchor },
+    { source: "scenarioPackage.input.director_note", value: scenarioPackage?.input?.director_note },
+    { source: "scenarioPackage.input.text", value: scenarioPackage?.input?.text },
+  ];
+  const locationSignal = /(nightclub|club|bar|dancefloor|corridor|forest|jungle|city|street|room|apartment|interior|exterior|office|warehouse|desert|mountain|beach|ocean|sea|amazon|iran|tehran|village|temple|studio|cafe|restaurant|hospital|school|station|airport|home|house)/i;
+  const selected = candidates.find((item) => {
+    const text = String(item?.value || "").trim();
+    return text && locationSignal.test(text);
+  }) || candidates.find((item) => String(item?.value || "").trim());
+  const selectedText = String(selected?.value || "").trim();
+  const hasNightclubWorld = /(nightclub|club|bar|dancefloor|corridor)/i.test(selectedText);
+  if (hasNightclubWorld) {
+    return {
+      anchor: SCENARIO_IMAGE_WORLD_ANCHOR_NIGHTCLUB,
+      source: selected?.source || "detected.nightclub",
+      hasWorldAnchor: true,
+      isHardcodedFallback: false,
+    };
+  }
+  if (!selectedText) {
+    return {
+      anchor: SCENARIO_IMAGE_WORLD_ANCHOR_NEUTRAL_FALLBACK,
+      source: "fallback.neutral_environment",
+      hasWorldAnchor: false,
+      isHardcodedFallback: true,
+    };
+  }
+  const compactAnchor = selectedText
+    .replace(/\s+/g, " ")
+    .replace(/[.!?]\s*$/g, "")
+    .slice(0, 280)
+    .trim();
+  return {
+    anchor: compactAnchor || SCENARIO_IMAGE_WORLD_ANCHOR_NEUTRAL_FALLBACK,
+    source: selected?.source || "candidate.unknown",
+    hasWorldAnchor: Boolean(compactAnchor),
+    isHardcodedFallback: !compactAnchor,
+  };
+}
+
+function resolveScenarioImageNegativeEnvironment(scene = {}, worldAnchor = "") {
+  if (/nightclub|club|bar|dancefloor|corridor/i.test(worldAnchor)) {
+    return "bedroom, apartment, home interior, living room, daylight window, white room, sofa, bed, plant by window, office, outdoor daylight, domestic space";
+  }
+  return "random unrelated location, inconsistent environment, wrong setting, background not matching scene";
+}
 
 function isRuleOnlyImagePrompt(prompt = "") {
   const text = String(prompt || "").trim();
@@ -1797,11 +1831,20 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     }
     return "";
   };
+  const worldAnchorMeta = resolveScenarioImageWorldAnchorMeta(scene, scenarioPackage);
+  const worldAnchor = String(resolveScenarioImageWorldAnchor(scene, scenarioPackage) || "").trim();
   const appendWorldAnchor = (prompt = "") => {
     const text = String(prompt || "").trim();
     if (!text) return "";
-    const hasAnchor = text.toLowerCase().includes("nightclub");
-    return hasAnchor ? text : `${text}\n\nWORLD ANCHOR: ${SCENARIO_IMAGE_WORLD_ANCHOR}`.trim();
+    const normalized = text.toLowerCase();
+    const hasAnchor = worldAnchor && (
+      normalized.includes(worldAnchor.toLowerCase())
+      || normalized.includes("world anchor:")
+      || normalized.includes("environment anchor:")
+      || normalized.includes("location:")
+      || normalized.includes("setting:")
+    );
+    return hasAnchor || !worldAnchor ? text : `${text}\n\nWORLD ANCHOR: ${worldAnchor}`.trim();
   };
   const sceneSummaryFallback = readFirstNonEmpty(
     scene?.sceneText,
@@ -1860,7 +1903,8 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
   const rawSelectedPrompt = String(selectedCandidate?.value || "").trim();
   const usedDanceMotionSafetyOnly = isRuleOnlyImagePrompt(rawSelectedPrompt);
   const imagePromptResolved = usedDanceMotionSafetyOnly ? rawSelectedPrompt : appendWorldAnchor(rawSelectedPrompt);
-  const negativePrompt = [resolveScenarioSceneNegativePrompt(scene), SCENARIO_IMAGE_NEGATIVE_DOMESTIC]
+  const negativeEnvironment = resolveScenarioImageNegativeEnvironment(scene, worldAnchor);
+  const negativePrompt = [resolveScenarioSceneNegativePrompt(scene), negativeEnvironment]
     .map((item) => String(item || "").trim())
     .filter(Boolean)
     .join(", ");
@@ -1872,8 +1916,13 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     visualPrompt: rawSelectedPrompt,
     ruleOnlyPrompt: usedDanceMotionSafetyOnly ? rawSelectedPrompt : "",
     negativePrompt,
+    negativeEnvironment,
     usedDanceMotionSafetyOnly,
-    hasNightclubWorldAnchor: imagePromptResolved.toLowerCase().includes("nightclub"),
+    hasNightclubWorldAnchor: /nightclub|club|bar|dancefloor|corridor/i.test(worldAnchor),
+    worldAnchorSource: String(worldAnchorMeta?.source || "").trim(),
+    worldAnchorPreview: worldAnchor,
+    hasWorldAnchor: Boolean(worldAnchorMeta?.hasWorldAnchor),
+    isHardcodedFallback: Boolean(worldAnchorMeta?.isHardcodedFallback),
     finalStoryboardScene: null,
     scenePromptsScene: null,
     finalVideoPromptScene: null,
@@ -13302,6 +13351,11 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const promptContextSource = String(promptContext?.promptSource || "").trim() || "unknown";
     const usedDanceMotionSafetyOnly = Boolean(promptContext?.usedDanceMotionSafetyOnly);
     const hasNightclubWorldAnchor = Boolean(promptContext?.hasNightclubWorldAnchor);
+    const worldAnchorSource = String(promptContext?.worldAnchorSource || "").trim() || "unknown";
+    const worldAnchorPreview = String(promptContext?.worldAnchorPreview || "").trim();
+    const negativeEnvironmentPreview = String(promptContext?.negativeEnvironment || "").trim();
+    const hasWorldAnchor = Boolean(promptContext?.hasWorldAnchor);
+    const isHardcodedFallback = Boolean(promptContext?.isHardcodedFallback);
     const promptSourceEffectivePrecheck = String(
       promptContextSource !== "unknown"
         ? promptContextSource
@@ -13385,6 +13439,11 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         promptSource: promptContextSource,
         imagePromptPreview: String(sceneDelta || "").slice(0, 220),
         negativePromptPreview: String(promptContext?.negativePrompt || "").slice(0, 220),
+        worldAnchorSource,
+        worldAnchorPreview: worldAnchorPreview.slice(0, 220),
+        negativeEnvironmentPreview: negativeEnvironmentPreview.slice(0, 220),
+        hasWorldAnchor,
+        isHardcodedFallback,
         usedDanceMotionSafetyOnly: true,
         hasNightclubWorldAnchor,
       });
@@ -14538,6 +14597,11 @@ Aspect ratio: ${imageFormat}`,
         promptSource: imageSendPromptSource,
         imagePromptPreview: String(finalRequestBody?.imagePrompt || finalRequestBody?.prompt || "").slice(0, 220),
         negativePromptPreview: String(imageNegativePromptEffective || "").slice(0, 220),
+        worldAnchorSource,
+        worldAnchorPreview: worldAnchorPreview.slice(0, 220),
+        negativeEnvironmentPreview: negativeEnvironmentPreview.slice(0, 220),
+        hasWorldAnchor,
+        isHardcodedFallback,
         usedDanceMotionSafetyOnly,
         hasNightclubWorldAnchor: String(finalRequestBody?.imagePrompt || finalRequestBody?.prompt || "").toLowerCase().includes("nightclub"),
       });
