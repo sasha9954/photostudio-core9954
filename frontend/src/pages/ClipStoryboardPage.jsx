@@ -1895,7 +1895,10 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
       isImageOrPhotoPrompt: true,
     },
   ];
-  const imageOrPhotoExists = candidatePool.some((item) => item.isImageOrPhotoPrompt && String(item?.value || "").trim());
+  const imageOrPhotoExists = candidatePool.some((item) => {
+    const value = String(item?.value || "").trim();
+    return item.isImageOrPhotoPrompt && value && !isRuleOnlyImagePrompt(value);
+  });
   const filteredCandidates = candidatePool.filter((item) => {
     if (!String(item?.value || "").trim()) return false;
     if (item.source === "scene.route_payload.positive_prompt" && imageOrPhotoExists) return false;
@@ -1922,6 +1925,7 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     negativePrompt,
     negativeEnvironment,
     usedDanceMotionSafetyOnly,
+    imageOrPhotoExists,
     hasNightclubWorldAnchor: /(nightclub|night club|club|bar|dancefloor)/i.test(worldAnchor),
     worldAnchorSource: String(worldAnchorMeta?.source || "").trim(),
     worldAnchorPreview: worldAnchor,
@@ -13362,6 +13366,8 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const negativeEnvironmentPreview = String(promptContext?.negativeEnvironment || "").trim();
     const hasWorldAnchor = Boolean(promptContext?.hasWorldAnchor);
     const isHardcodedFallback = Boolean(promptContext?.isHardcodedFallback);
+    const routePayloadAvailable = Boolean(String(targetScene?.route_payload?.positive_prompt || "").trim());
+    const routePayloadWasAllowedAsFallback = !Boolean(promptContext?.imageOrPhotoExists) && routePayloadAvailable;
     const promptSourceEffectivePrecheck = String(
       promptContextSource !== "unknown"
         ? promptContextSource
@@ -13403,6 +13409,9 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         sceneDeltaRawByStrategyWasRuleOnly,
         sceneDeltaRawByStrategySafeUsed: Boolean(sceneDeltaRawByStrategySafe),
         promptContextSource,
+        imageOrPhotoExists: Boolean(promptContext?.imageOrPhotoExists),
+        routePayloadAvailable,
+        routePayloadWasAllowedAsFallback,
         selectedImagePromptPreview: String(promptContext?.imagePrompt || "").slice(0, 220),
         promptContextImagePromptPresent: Boolean(String(promptContext?.imagePrompt || "").trim()),
         usedDanceMotionSafetyOnly,
@@ -13495,6 +13504,9 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       sceneDeltaRawByStrategyWasRuleOnly,
       sceneDeltaRawByStrategySafeUsed: Boolean(sceneDeltaRawByStrategySafe),
       promptContextSource,
+      imageOrPhotoExists: Boolean(promptContext?.imageOrPhotoExists),
+      routePayloadAvailable,
+      routePayloadWasAllowedAsFallback,
       selectedImagePromptPreview: String(promptContext?.imagePrompt || "").slice(0, 220),
       promptContextImagePromptPresent: Boolean(String(promptContext?.imagePrompt || "").trim()),
       usedDanceMotionSafetyOnly,
