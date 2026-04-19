@@ -12207,7 +12207,34 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
   }, [comfySafeIndex, comfySelectedScene, updateComfyScene]);
 
   const handleComfyGenerateVideo = useCallback(async () => {
-    if (!comfySelectedScene?.imageUrl) return;
+    const comfyPreflightWorkflow = normalizeDirectRouteToWorkflowKey(
+      comfySelectedScene?.resolvedWorkflowKey
+      || comfySelectedScene?.resolved_workflow_key
+      || comfySelectedScene?.videoGenerationRoute
+      || comfySelectedScene?.video_generation_route
+      || comfySelectedScene?.plannedVideoGenerationRoute
+      || comfySelectedScene?.planned_video_generation_route
+      || comfySelectedScene?.route
+      || comfySelectedScene?.ltxMode
+      || comfySelectedScene?.ltx_mode
+    ) || "i2v";
+    const comfyPreflightImageUrl = String(comfySelectedScene?.imageUrl || "").trim();
+    const comfyPreflightStartUrl = String(comfySelectedScene?.startImageUrl || comfySelectedScene?.startFrameImageUrl || "").trim();
+    const comfyPreflightEndUrl = String(comfySelectedScene?.endImageUrl || comfySelectedScene?.endFrameImageUrl || "").trim();
+    const comfyPreflightHasSource =
+      comfyPreflightWorkflow === "f_l"
+        ? Boolean(comfyPreflightStartUrl && comfyPreflightEndUrl)
+        : Boolean(comfyPreflightImageUrl || comfyPreflightStartUrl);
+    if (!comfyPreflightHasSource) {
+      updateComfyScene(comfySafeIndex, {
+        videoPanelOpen: true,
+        videoStatus: "error",
+        videoError: comfyPreflightWorkflow === "f_l"
+          ? "Для first_last нужны startImageUrl и endImageUrl."
+          : "Для i2v/ia2v нужен imageUrl/source кадр.",
+      });
+      return;
+    }
     const sceneId = String(comfySelectedScene?.sceneId || "").trim();
     if (sceneId) {
       updateComfySceneById(sceneId, { videoPanelOpen: true, videoStatus: 'queued', videoError: '' });
@@ -12473,7 +12500,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       }
       updateComfyScene(comfySafeIndex, { videoStatus: 'error', videoError: String(e?.message || e), videoPanelOpen: true });
     }
-  }, [buildComfyVideoJobMeta, clearActiveComfyVideoJob, comfyHasActiveVideoJobForScene, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfySceneById]);
+  }, [buildComfyVideoJobMeta, clearActiveComfyVideoJob, comfyHasActiveVideoJobForScene, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfyScene, updateComfySceneById]);
 
   const handleComfyDeleteVideo = useCallback(() => {
     const selectedSceneId = String(comfySelectedScene?.sceneId || '').trim();
@@ -12508,6 +12535,27 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const startSec = Number(comfySelectedScene?.startSec ?? comfySelectedScene?.start ?? comfySelectedScene?.t0 ?? 0);
     const endSec = Number(comfySelectedScene?.endSec ?? comfySelectedScene?.end ?? comfySelectedScene?.t1 ?? startSec);
     const expectedDuration = Math.max(0, endSec - startSec);
+    const comfyAudioWorkflowKey = normalizeDirectRouteToWorkflowKey(
+      comfySelectedScene?.resolvedWorkflowKey
+      || comfySelectedScene?.resolved_workflow_key
+      || comfySelectedScene?.videoGenerationRoute
+      || comfySelectedScene?.video_generation_route
+      || comfySelectedScene?.plannedVideoGenerationRoute
+      || comfySelectedScene?.planned_video_generation_route
+      || comfySelectedScene?.route
+      || comfySelectedScene?.ltxMode
+      || comfySelectedScene?.ltx_mode
+    );
+    const comfyAudioIsLipSync = comfyAudioWorkflowKey === "lip_sync_music";
+    const comfyAudioRenderMode = comfyAudioIsLipSync
+      ? "lip_sync_music"
+      : String(comfySelectedScene?.renderMode || comfySelectedScene?.render_mode || "");
+    const comfyAudioLtxMode = comfyAudioIsLipSync
+      ? "lip_sync"
+      : String(comfySelectedScene?.ltxMode || comfySelectedScene?.ltx_mode || "");
+    const comfyAudioResolvedWorkflowKey = comfyAudioIsLipSync
+      ? "lip_sync_music"
+      : String(comfyAudioWorkflowKey || "");
 
     setComfyAudioSliceLoading(true);
     updateComfyScene(comfySafeIndex, {
@@ -12531,11 +12579,11 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           endSec,
           audioUrl: globalAudioUrlRaw,
           audioStoryMode: String(comfyNode?.data?.plannerMeta?.audioStoryMode || comfyNode?.data?.audioStoryMode || ""),
-          lipSync: Boolean(comfySelectedScene?.lipSync ?? comfySelectedScene?.lip_sync),
-          renderMode: String(comfySelectedScene?.renderMode || comfySelectedScene?.render_mode || ""),
-          ltxMode: String(comfySelectedScene?.ltxMode || comfySelectedScene?.ltx_mode || ""),
-          resolvedWorkflowKey: String(comfySelectedScene?.resolvedWorkflowKey || comfySelectedScene?.resolved_workflow_key || ""),
-          requiresAudioSensitiveVideo: Boolean(comfySelectedScene?.requiresAudioSensitiveVideo ?? comfySelectedScene?.requires_audio_sensitive_video),
+          lipSync: comfyAudioIsLipSync || Boolean(comfySelectedScene?.lipSync ?? comfySelectedScene?.lip_sync),
+          renderMode: comfyAudioRenderMode,
+          ltxMode: comfyAudioLtxMode,
+          resolvedWorkflowKey: comfyAudioResolvedWorkflowKey,
+          requiresAudioSensitiveVideo: comfyAudioIsLipSync || Boolean(comfySelectedScene?.requiresAudioSensitiveVideo ?? comfySelectedScene?.requires_audio_sensitive_video),
         },
       });
       if (!out?.ok || !out?.audioSliceUrl) throw new Error(out?.hint || out?.code || "audio_slice_failed");
@@ -12568,7 +12616,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     } finally {
       setComfyAudioSliceLoading(false);
     }
-  }, [comfySafeIndex, comfySelectedScene, globalAudioUrlRaw, updateComfyScene]);
+  }, [comfyNode?.data?.audioStoryMode, comfyNode?.data?.plannerMeta?.audioStoryMode, comfySafeIndex, comfySelectedScene, globalAudioUrlRaw, updateComfyScene]);
 
   const handleComfySliceLoadedMetadata = useCallback((event) => {
     if (!comfySelectedScene) return;
@@ -14750,6 +14798,39 @@ Aspect ratio: ${imageFormat}`,
     }, { actionName: "take_audio", preserveSourceFieldsInVideoActions: true });
 
     try {
+      const audioSliceVideoProfile = resolveScenarioSceneVideoProfile(scene || {});
+      const audioSliceWorkflowKey =
+        normalizeScenarioVideoWorkflowAlias(
+          audioSliceVideoProfile?.canonicalRoute
+          || audioSliceVideoProfile?.routeResolved
+          || scene?.resolvedWorkflowKey
+          || scene?.resolved_workflow_key
+          || scene?.videoGenerationRoute
+          || scene?.video_generation_route
+          || scene?.plannedVideoGenerationRoute
+          || scene?.planned_video_generation_route
+          || scene?.route
+          || scene?.ltxMode
+          || scene?.ltx_mode
+          || resolveScenarioWorkflowKey(scene || {})
+        )
+        || normalizeScenarioWorkflowKeyForProduction(
+          scene?.resolvedWorkflowKey
+          || scene?.resolved_workflow_key
+          || resolveScenarioWorkflowKey(scene || {})
+        );
+      const audioSliceIsLipSync =
+        audioSliceWorkflowKey === "lip_sync_music"
+        || audioSliceWorkflowKey === "lip_sync";
+      const renderMode = String(scene?.renderMode || scene?.render_mode || (audioSliceIsLipSync ? "lip_sync_music" : ""));
+      const ltxMode = String(scene?.ltxMode || scene?.ltx_mode || (audioSliceIsLipSync ? "lip_sync" : audioSliceWorkflowKey));
+      console.debug("[SCENARIO AUDIO SLICE REQUEST ROUTE]", {
+        sceneId,
+        audioSliceWorkflowKey,
+        audioSliceIsLipSync,
+        renderMode,
+        ltxMode,
+      });
       console.debug("[SCENARIO AUDIO SLICE REQUEST]", {
         endpoint: "/api/clip/audio/slice",
         sceneId,
@@ -14765,12 +14846,12 @@ Aspect ratio: ${imageFormat}`,
           startSec,
           endSec,
           audioUrl: scenarioAudioUrl,
-          audioStoryMode: String(scenarioSelected?.audioStoryMode || ""),
-          lipSync: Boolean(scene?.lipSync ?? scene?.lip_sync),
-          renderMode: String(scene?.renderMode || scene?.render_mode || ""),
-          ltxMode: String(scene?.ltxMode || scene?.ltx_mode || ""),
-          resolvedWorkflowKey: String(scene?.resolvedWorkflowKey || scene?.resolved_workflow_key || ""),
-          requiresAudioSensitiveVideo: Boolean(scene?.requiresAudioSensitiveVideo ?? scene?.requires_audio_sensitive_video),
+          audioStoryMode: String(scene?.audioStoryMode || scene?.audio_story_mode || scenarioSelected?.audioStoryMode || ""),
+          lipSync: audioSliceIsLipSync || Boolean(scene?.lipSync ?? scene?.lip_sync),
+          renderMode,
+          ltxMode,
+          resolvedWorkflowKey: audioSliceWorkflowKey,
+          requiresAudioSensitiveVideo: audioSliceIsLipSync || Boolean(scene?.requiresAudioSensitiveVideo ?? scene?.requires_audio_sensitive_video),
         },
       });
       const resolvedSliceUrl = String(out?.audioSliceUrl || out?.sliceUrl || "").trim();
