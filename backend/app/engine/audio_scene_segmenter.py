@@ -13,7 +13,7 @@ from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
 
-GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_map_v1_2_phrase_safe"
+GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_map_v1_3_video_ready"
 GEMINI_SEGMENTATION_MODEL = "gemini-3.1-pro-preview"
 _MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
 
@@ -117,16 +117,33 @@ def _build_prompt(
         "{\n"
         '  "audio_map_version": "1.1",\n'
         '  "audio_id": "string",\n'
-        '  "segments": [{"segment_id": "string", "t0": 0.0, "t1": 1.0, "transcript_slice": "string", "intensity": 0.0, "is_lip_sync_candidate": false, "rhythmic_anchor": "beat"}],\n'
+        '  "segments": [{"segment_id": "string", "t0": 0.0, "t1": 4.2, "duration_sec": 4.2, "transcript_slice": "string", "intensity": 0.0, "is_lip_sync_candidate": false, "rhythmic_anchor": "beat", "first_last_candidate": false}],\n'
         '  "no_split_ranges": [{"start": 0.0, "end": 0.0}],\n'
         '  "diagnostics": {"total_segments_duration": 0.0, "coverage_ok": true, "energy_peak_detected": false, "transcript_used": false, "dynamics_used": false, "validation_notes": []}\n'
         "}\n"
+        "VIDEO-READY SEGMENTATION CANON:\n"
+        "You are creating audio_map for video generation, not only phrase transcription.\n"
+        "Separate two concepts:\n"
+        "1) phrase_units: short vocal/dialogue/music phrases and reactions in audio evidence.\n"
+        "2) segments: final video-ready generation windows.\n"
+        "phrase_units may be short (0.5-2.5s), but segments must be renderable video windows.\n"
         "Rules:\n"
         "- segment_id format is strict: seg_01, seg_02, ... seg_99 (prefix seg_ + exactly two digits).\n"
         "- Never emit seg_001, seg_0, segment_1, or any alternative ID format.\n"
+        "- Every segment must include: t0, t1, duration_sec.\n"
+        "- duration_sec must equal (t1 - t0) using natural sub-second precision.\n"
+        "- Do not create standalone segments shorter than 3.0 seconds.\n"
+        "- Target segment duration is 3.5-5.5 seconds when possible.\n"
+        "- Hard maximum segment duration is 7.0 seconds.\n"
+        "- If a phrase_unit is shorter than 2.5 seconds, merge it with the next phrase_unit.\n"
+        "- If a short phrase_unit is at the end, merge it with the previous phrase_unit.\n"
+        "- Prefer fewer stronger video scenes over many tiny fragments.\n"
+        "- Preserve emotional meaning and original phrase order after merges.\n"
         "- segments must be ordered and contiguous without overlaps/gaps outside tiny tolerance.\n"
+        "- Full audio coverage is required from 0.0 to full track duration: no gaps, no overlaps.\n"
         "- Never round boundaries to whole seconds just because they look neat.\n"
         "- Use natural sub-second precision; do not bias toward integer timestamps.\n"
+        "- Never cut mid-word.\n"
         "- Do not cut a sung phrase before it is acoustically complete.\n"
         "- Respect final consonants, vocal tail, breath release, and reverb decay before ending a phrase segment.\n"
         "- A ~0.5s early vocal cut is considered bad segmentation and must be avoided.\n"
@@ -135,8 +152,12 @@ def _build_prompt(
         "- Do not split inside a continuing sung phrase.\n"
         "- 0 <= intensity <= 1.\n"
         "- rhythmic_anchor must be one of: beat, drop, transition, none.\n"
+        "- Route timing canon: i2v min 3.0s; lip_sync min 3.0s (ideal 3.0-5.0s); first_last min 4.0s (ideal 4.5-5.5s).\n"
+        "- first_last_candidate may be true only when duration_sec >= 4.0.\n"
         "- transcript_slice must be literal transcript evidence snippets, never placeholders.\n"
         "- no_split_ranges must not conflict with segment boundaries.\n"
+        "Before returning JSON, validate each segment: duration_sec >= 3.0, first_last_candidate only if duration_sec >= 4.0, full coverage with no gaps/overlaps.\n"
+        "If any candidate segment violates these rules, merge it before returning.\n"
         f"{feedback_block}"
         f"EVIDENCE:\n{json.dumps(evidence, ensure_ascii=False)}"
     )
