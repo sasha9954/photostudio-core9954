@@ -713,7 +713,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "Output contract:\\n"
         "{\\n"
         '  "scenes_version":"1.1",\\n'
-        '  "storyboard":[{"segment_id":"seg_1","route":"i2v","route_reason":"","scene_goal":"","narrative_function":"","speaker_role":"unknown","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
+        '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","scene_goal":"","narrative_function":"","speaker_role":"unknown","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
         "}\\n\\n"
         f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )
@@ -1272,6 +1272,7 @@ def _normalize_scene_plan(
     illegal_route_count = 0
     cast_mutation_count = 0
     speaker_role_invalid_count = 0
+    ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow = False
     lip_sync_rejected_reasons: dict[str, list[str]] = {}
     speaker_role_by_segment: dict[str, str] = {}
     lip_sync_decision_by_segment: dict[str, str] = {}
@@ -1383,9 +1384,11 @@ def _normalize_scene_plan(
             row_rejected_reasons.append("lip_sync_with_unknown_speaker")
         if lip_sync_allowed and not spoken_line:
             row_rejected_reasons.append("lip_sync_without_spoken_line")
-        if route == "ia2v" and speaker_role == UNKNOWN_SPEAKER_ROLE:
+        if route == "ia2v" and lip_sync_allowed and speaker_role == UNKNOWN_SPEAKER_ROLE:
             speaker_role_invalid_count += 1
-            row_rejected_reasons.append("route_ia2v_requires_speaker_role")
+            row_rejected_reasons.append("route_ia2v_lipsync_requires_speaker_role")
+            row_rejected_reasons.append("ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow")
+            ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow = True
         if route == "first_last" and lip_sync_allowed:
             row_rejected_reasons.append("first_last_disallows_lip_sync")
         if mouth_visible_required and speaker_role not in active_roles:
@@ -1405,7 +1408,12 @@ def _normalize_scene_plan(
 
         if row_rejected_reasons:
             lip_sync_allowed = False
-            if route == "ia2v":
+            if route == "ia2v" and (
+                "reaction_role_not_in_present_cast" in row_rejected_reasons
+                or "reaction_role_equals_speaker_role" in row_rejected_reasons
+            ):
+                route = "i2v"
+            elif route == "ia2v" and "route_ia2v_lipsync_requires_speaker_role" not in row_rejected_reasons:
                 route = "i2v"
             lip_sync_priority = "none"
             mouth_visible_required = False
@@ -1539,6 +1547,7 @@ def _normalize_scene_plan(
         "lip_sync_rejected_reasons": lip_sync_rejected_reasons,
         "lip_sync_selected_count": lip_sync_selected_count,
         "consecutive_lip_sync_count": max_consecutive_lip_sync_count,
+        "ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow": ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow,
         "target_route_mix": _target_route_budget(len(normalized_storyboard)),
         "actual_route_mix": route_counts,
         "route_spacing": {
@@ -1638,6 +1647,16 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
             "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
             "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
+            "speaker_role_by_segment": _safe_dict(normalization_diag.get("speaker_role_by_segment")),
+            "lip_sync_decision_by_segment": _safe_dict(normalization_diag.get("lip_sync_decision_by_segment")),
+            "lip_sync_rejected_reasons": _safe_dict(normalization_diag.get("lip_sync_rejected_reasons")),
+            "lip_sync_selected_count": int(normalization_diag.get("lip_sync_selected_count") or 0),
+            "consecutive_lip_sync_count": int(normalization_diag.get("consecutive_lip_sync_count") or 0),
+            "ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow": bool(
+                normalization_diag.get(
+                    "ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow"
+                )
+            ),
         }
         if include_debug_raw:
             payload["scene_plan_debug"] = {
