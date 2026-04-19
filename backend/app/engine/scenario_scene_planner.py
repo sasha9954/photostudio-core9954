@@ -30,6 +30,8 @@ ALLOWED_FRAMING = {"close_up", "medium", "wide", "detail", "silhouette", "overhe
 ALLOWED_SUBJECT_PRIORITY = {"hero", "ensemble", "object", "environment"}
 ALLOWED_LAYOUT = {"centered", "rule_of_thirds", "off_balance", "symmetrical"}
 ALLOWED_DEPTH_STRATEGY = {"flat", "layered", "deep"}
+ALLOWED_LIP_SYNC_PRIORITY = {"none", "low", "medium", "high"}
+UNKNOWN_SPEAKER_ROLE = "unknown"
 SCENES_FORBIDDEN_LEAK_TOKENS = {
     "8k",
     "cinematic quality",
@@ -402,6 +404,7 @@ def _build_scene_segment_rows(
                 "transcript_slice": str(segment.get("transcript_slice") or segment.get("text") or "").strip(),
                 "rhythmic_anchor": str(segment.get("rhythmic_anchor") or "").strip(),
                 "intensity": str(segment.get("intensity") or "").strip(),
+                "is_lip_sync_candidate": bool(segment.get("is_lip_sync_candidate")),
                 "arc_role": str(core.get("arc_role") or "").strip(),
                 "beat_purpose": str(core.get("beat_purpose") or "").strip(),
                 "emotional_key": str(core.get("emotional_key") or "").strip(),
@@ -688,6 +691,10 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "Do not teleport hero back to prior position after completed movement unless explicit justified match cut.\\n"
         "Track previous ending position/state, next start position/state, movement direction, location zone, object state, emotional progression, and performance energy progression.\\n"
         "For ia2v/lip-sync scenes ensure vocal-shot diversity across adjacent scenes while preserving mouth readability.\\n"
+        "speaker_role is independent from primary_role: primary_role is visual focus; speaker_role is who actually speaks this segment.\\n"
+        "audio_map.segments[].is_lip_sync_candidate is permission only, not obligation.\\n"
+        "If who speaks is unclear or overlapping voices: set speaker_role=unknown and lip_sync_allowed=false.\\n"
+        "For two-active conflict scenes keep lip-sync sparse: strong lines only, no more than 2 consecutive lip-sync scenes.\\n"
         "Do not output prompt language, quality buzzwords, renderer parameters, API/workflow payload, or final video payload.\\n"
         "Do not use raw director text as free authoring source beyond this package context.\\n"
         "Use story_core doctrine as guidance only; do not change doctrine.\\n"
@@ -706,7 +713,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "Output contract:\\n"
         "{\\n"
         '  "scenes_version":"1.1",\\n'
-        '  "storyboard":[{"segment_id":"seg_1","route":"i2v","route_reason":"","scene_goal":"","narrative_function":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
+        '  "storyboard":[{"segment_id":"seg_1","route":"i2v","route_reason":"","scene_goal":"","narrative_function":"","speaker_role":"unknown","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
         "}\\n\\n"
         f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )
@@ -1227,6 +1234,7 @@ def _normalize_scene_plan(
     *,
     scene_segment_rows: list[dict[str, Any]],
     role_lookup: dict[str, dict[str, Any]],
+    creative_config: dict[str, Any],
     include_debug_raw: bool = False,
 ) -> tuple[dict[str, Any], bool, str, int, dict[str, Any], str]:
     raw_storyboard = [_safe_dict(row) for row in _safe_list(raw_plan.get("storyboard"))]
@@ -1263,6 +1271,14 @@ def _normalize_scene_plan(
     enum_invalid_count = 0
     illegal_route_count = 0
     cast_mutation_count = 0
+    speaker_role_invalid_count = 0
+    lip_sync_rejected_reasons: dict[str, list[str]] = {}
+    speaker_role_by_segment: dict[str, str] = {}
+    lip_sync_decision_by_segment: dict[str, str] = {}
+    consecutive_lip_sync_count = 0
+    max_consecutive_lip_sync_count = 0
+    lip_sync_selected_count = 0
+    max_consecutive_allowed = int(creative_config.get("max_consecutive_lipsync") or 2)
 
     for idx, source_row in enumerate(scene_segment_rows):
         segment_id = str(source_row.get("segment_id") or "").strip()
@@ -1333,6 +1349,86 @@ def _normalize_scene_plan(
             validation_error = validation_error or "timing_drift"
             error_code = error_code or "SCENES_TIMING_DRIFT"
 
+        role_row = _safe_dict(role_lookup.get(segment_id))
+        active_roles = [
+            str(v).strip()
+            for v in (
+                role_row.get("active_roles")
+                or [
+                    role_row.get("primary_role"),
+                    *_safe_list(role_row.get("secondary_roles")),
+                ]
+            )
+            if str(v).strip()
+        ]
+        speaker_role = str(raw_row.get("speaker_role") or UNKNOWN_SPEAKER_ROLE).strip() or UNKNOWN_SPEAKER_ROLE
+        spoken_line = str(raw_row.get("spoken_line") or "").strip()
+        lip_sync_allowed = bool(raw_row.get("lip_sync_allowed"))
+        lip_sync_priority = str(raw_row.get("lip_sync_priority") or "none").strip().lower() or "none"
+        mouth_visible_required = bool(raw_row.get("mouth_visible_required"))
+        listener_reaction_allowed = bool(raw_row.get("listener_reaction_allowed"))
+        reaction_role = str(raw_row.get("reaction_role") or "").strip()
+        speaker_confidence = _clamp_ratio(raw_row.get("speaker_confidence"), 0.0)
+        is_lip_sync_candidate = bool(source_row.get("is_lip_sync_candidate"))
+
+        row_rejected_reasons: list[str] = []
+        if speaker_role != UNKNOWN_SPEAKER_ROLE and speaker_role not in active_roles:
+            speaker_role_invalid_count += 1
+            row_rejected_reasons.append("speaker_role_not_in_present_cast")
+        if lip_sync_priority not in ALLOWED_LIP_SYNC_PRIORITY:
+            enum_invalid_count += 1
+            row_rejected_reasons.append("lip_sync_priority_invalid")
+        if lip_sync_allowed and speaker_role == UNKNOWN_SPEAKER_ROLE:
+            speaker_role_invalid_count += 1
+            row_rejected_reasons.append("lip_sync_with_unknown_speaker")
+        if lip_sync_allowed and not spoken_line:
+            row_rejected_reasons.append("lip_sync_without_spoken_line")
+        if route == "ia2v" and speaker_role == UNKNOWN_SPEAKER_ROLE:
+            speaker_role_invalid_count += 1
+            row_rejected_reasons.append("route_ia2v_requires_speaker_role")
+        if route == "first_last" and lip_sync_allowed:
+            row_rejected_reasons.append("first_last_disallows_lip_sync")
+        if mouth_visible_required and speaker_role not in active_roles:
+            row_rejected_reasons.append("mouth_visible_requires_visible_speaker")
+        if lip_sync_allowed and not is_lip_sync_candidate:
+            row_rejected_reasons.append("audio_map_permission_missing")
+        if lip_sync_allowed and float(source_row.get("duration_sec") or 0.0) < 2.8:
+            row_rejected_reasons.append("duration_too_short_for_lipsync")
+        if lip_sync_allowed and float(source_row.get("duration_sec") or 0.0) > 5.2:
+            row_rejected_reasons.append("duration_too_long_for_lipsync")
+        if lip_sync_allowed and not mouth_visible_required:
+            row_rejected_reasons.append("mouth_visible_required_for_lipsync")
+        if reaction_role and reaction_role not in active_roles:
+            row_rejected_reasons.append("reaction_role_not_in_present_cast")
+        if route == "ia2v" and listener_reaction_allowed and reaction_role == speaker_role and reaction_role:
+            row_rejected_reasons.append("reaction_role_equals_speaker_role")
+
+        if row_rejected_reasons:
+            lip_sync_allowed = False
+            if route == "ia2v":
+                route = "i2v"
+            lip_sync_priority = "none"
+            mouth_visible_required = False
+            if speaker_role not in active_roles:
+                speaker_role = UNKNOWN_SPEAKER_ROLE
+            if speaker_role == UNKNOWN_SPEAKER_ROLE:
+                speaker_confidence = 0.0
+            validation_error = validation_error or "speaker_role_invalid"
+            error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
+
+        if lip_sync_allowed:
+            consecutive_lip_sync_count += 1
+            max_consecutive_lip_sync_count = max(max_consecutive_lip_sync_count, consecutive_lip_sync_count)
+            lip_sync_selected_count += 1
+            lip_sync_decision_by_segment[segment_id] = "selected"
+        else:
+            consecutive_lip_sync_count = 0
+            lip_sync_decision_by_segment[segment_id] = "rejected" if row_rejected_reasons else "not_selected"
+
+        if row_rejected_reasons:
+            lip_sync_rejected_reasons[segment_id] = row_rejected_reasons
+        speaker_role_by_segment[segment_id] = speaker_role
+
         normalized_storyboard.append(
             {
                 "segment_id": segment_id,
@@ -1353,8 +1449,26 @@ def _normalize_scene_plan(
                     "depth_strategy": depth_strategy,
                 },
                 "audio_visual_sync": str(raw_row.get("audio_visual_sync") or "").strip(),
+                "speaker_role": speaker_role,
+                "spoken_line": spoken_line,
+                "lip_sync_allowed": lip_sync_allowed,
+                "lip_sync_priority": lip_sync_priority,
+                "mouth_visible_required": mouth_visible_required,
+                "listener_reaction_allowed": listener_reaction_allowed,
+                "reaction_role": reaction_role,
+                "speaker_confidence": round(float(speaker_confidence), 3),
             }
         )
+
+    if max_consecutive_lip_sync_count > max_consecutive_allowed:
+        validation_error = validation_error or "speaker_role_invalid"
+        error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
+
+    route_mix_mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
+    total_segments = len(scene_segment_rows)
+    if route_mix_mode == "auto" and total_segments == 8 and lip_sync_selected_count > 3:
+        validation_error = validation_error or "speaker_role_invalid"
+        error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
     route_counts = {route_name: sum(1 for row in normalized_storyboard if row.get("route") == route_name) for route_name in ("i2v", "ia2v", "first_last")}
 
@@ -1373,6 +1487,14 @@ def _normalize_scene_plan(
                 "scene_function": str(row.get("narrative_function") or ""),
                 "emotional_intent": str(row.get("scene_goal") or ""),
                 "motion_intent": str(motion.get("subject_motion") or ""),
+                "speaker_role": str(row.get("speaker_role") or UNKNOWN_SPEAKER_ROLE),
+                "spoken_line": str(row.get("spoken_line") or ""),
+                "lip_sync_allowed": bool(row.get("lip_sync_allowed")),
+                "lip_sync_priority": str(row.get("lip_sync_priority") or "none"),
+                "mouth_visible_required": bool(row.get("mouth_visible_required")),
+                "listener_reaction_allowed": bool(row.get("listener_reaction_allowed")),
+                "reaction_role": str(row.get("reaction_role") or ""),
+                "speaker_confidence": _clamp_ratio(row.get("speaker_confidence"), 0.0),
                 "deprecated_bridge": True,
             }
         )
@@ -1411,6 +1533,12 @@ def _normalize_scene_plan(
         "enum_invalid_count": enum_invalid_count,
         "illegal_route_count": illegal_route_count,
         "cast_mutation_count": cast_mutation_count,
+        "speaker_role_invalid_count": speaker_role_invalid_count,
+        "speaker_role_by_segment": speaker_role_by_segment,
+        "lip_sync_decision_by_segment": lip_sync_decision_by_segment,
+        "lip_sync_rejected_reasons": lip_sync_rejected_reasons,
+        "lip_sync_selected_count": lip_sync_selected_count,
+        "consecutive_lip_sync_count": max_consecutive_lip_sync_count,
         "target_route_mix": _target_route_budget(len(normalized_storyboard)),
         "actual_route_mix": route_counts,
         "route_spacing": {
@@ -1433,6 +1561,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
     compiled_contract = _safe_dict(aux.get("compiled_contract"))
     world_summary_used = bool(aux.get("world_summary_used"))
     include_debug_raw = _scene_plan_debug_enabled(package)
+    creative_config = _normalize_creative_config(_safe_dict(package.get("input")).get("creative_config"))
     model_id = str(_safe_dict(context.get("video_capability_canon")).get("model_id") or DEFAULT_VIDEO_MODEL_ID)
     capability_diag = build_capability_diagnostics_summary(
         model_id=model_id,
@@ -1535,6 +1664,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             {},
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
+            creative_config=creative_config,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = error_code or "SCENES_SCHEMA_INVALID"
@@ -1563,6 +1693,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             {},
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
+            creative_config=creative_config,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = "SCENES_CORE_SOURCE_MISSING"
@@ -1591,6 +1722,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             {},
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
+            creative_config=creative_config,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = "SCENES_ROLE_SOURCE_MISSING"
@@ -1634,6 +1766,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             parsed,
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
+            creative_config=creative_config,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = error_code
@@ -1669,6 +1802,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             {},
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
+            creative_config=creative_config,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = "scene_plan_timeout" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID")
