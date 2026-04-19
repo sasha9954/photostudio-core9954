@@ -32,6 +32,10 @@ ALLOWED_LAYOUT = {"centered", "rule_of_thirds", "off_balance", "symmetrical"}
 ALLOWED_DEPTH_STRATEGY = {"flat", "layered", "deep"}
 ALLOWED_LIP_SYNC_PRIORITY = {"none", "low", "medium", "high"}
 UNKNOWN_SPEAKER_ROLE = "unknown"
+UNKNOWN_VOCAL_GENDER = "unknown"
+UNKNOWN_VOCAL_OWNER_ROLE = "unknown"
+ALLOWED_VOCAL_GENDERS = {"female", "male", "mixed", "unknown"}
+_ROLE_KEYS = ("character_1", "character_2", "character_3")
 SCENES_FORBIDDEN_LEAK_TOKENS = {
     "8k",
     "cinematic quality",
@@ -159,6 +163,88 @@ def _clamp_ratio(value: Any, default: float) -> float:
         return min(1.0, max(0.0, float(value)))
     except Exception:
         return float(default)
+
+
+def _normalize_gender_hint(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    female_tokens = (
+        "female", "woman", "girl", "girlfriend", "wife", "lady", "she", "her",
+        "девушка", "женщина", "жена", "она", "жен", "feminine",
+    )
+    male_tokens = (
+        "male", "man", "guy", "boy", "boyfriend", "husband", "he", "him",
+        "парень", "мужчина", "муж", "он", "masculine",
+    )
+    if any(t in token for t in female_tokens):
+        return "female"
+    if any(t in token for t in male_tokens):
+        return "male"
+    return ""
+
+
+def _normalize_identity_label_hint(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    female_tokens = ("девушка", "женщина", "girl", "woman", "female", "lady", "feminine")
+    male_tokens = ("парень", "мужчина", "guy", "man", "male", "masculine")
+    if any(t in token for t in female_tokens):
+        return "female"
+    if any(t in token for t in male_tokens):
+        return "male"
+    return ""
+
+
+def _extract_role_identity_gender_map(input_pkg: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    nested_identity_sources: list[dict[str, Any]] = [
+        _safe_dict(input_pkg.get("role_identity_mapping")),
+        _safe_dict(input_pkg.get("character_identity_by_role")),
+        _safe_dict(connected_summary.get("role_identity_mapping")),
+        _safe_dict(connected_summary.get("character_identity_by_role")),
+    ]
+    for source in nested_identity_sources:
+        for role in _ROLE_KEYS:
+            if role in out:
+                continue
+            identity_row = _safe_dict(source.get(role))
+            hint = _normalize_gender_hint(identity_row.get("gender_hint"))
+            if not hint:
+                hint = _normalize_identity_label_hint(identity_row.get("identity_label"))
+            if hint:
+                out[role] = hint
+    return out
+
+
+def _resolve_vocal_gender(audio_map: dict[str, Any], input_pkg: dict[str, Any]) -> str:
+    candidate_sources: list[dict[str, Any]] = [
+        audio_map,
+        _safe_dict(input_pkg.get("audio_meta")),
+        _safe_dict(input_pkg.get("connected_context_summary")),
+    ]
+    for source in candidate_sources:
+        for key in ("vocal_gender", "vocalGender"):
+            raw = str(source.get(key) or "").strip().lower()
+            if raw in ALLOWED_VOCAL_GENDERS:
+                return raw
+            normalized = _normalize_gender_hint(raw)
+            if normalized in {"female", "male"}:
+                return normalized
+            if raw in {"duet", "multiple", "multi", "both"}:
+                return "mixed"
+    return UNKNOWN_VOCAL_GENDER
+
+
+def _resolve_vocal_owner_role(vocal_gender: str, role_gender_map: dict[str, str]) -> str:
+    if vocal_gender not in {"female", "male"}:
+        return UNKNOWN_VOCAL_OWNER_ROLE
+    matching_roles = [role for role in _ROLE_KEYS if role_gender_map.get(role) == vocal_gender]
+    if len(matching_roles) == 1:
+        return matching_roles[0]
+    return UNKNOWN_VOCAL_OWNER_ROLE
 
 
 def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
@@ -511,6 +597,9 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     ownership_binding_inventory = _build_ref_binding_inventory(refs_inventory)
     scene_windows = _build_scene_windows(audio_map)
     scene_segment_rows, missing_core_source_segments = _build_scene_segment_rows(audio_map, story_core, role_plan)
+    role_identity_gender_map = _extract_role_identity_gender_map(input_pkg)
+    vocal_gender = _resolve_vocal_gender(audio_map, input_pkg)
+    vocal_owner_role = _resolve_vocal_owner_role(vocal_gender, role_identity_gender_map)
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     story_guidance = story_guidance_route_mix_doctrine(story_core.get("story_guidance"))
     world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
@@ -545,6 +634,8 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "scene_windows": scene_windows,
             "cut_policy": _safe_dict(audio_map.get("cut_policy")),
             "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
+            "vocal_gender": vocal_gender,
+            "vocal_owner_role": vocal_owner_role,
         },
         "role_plan": {
             "roles_version": str(role_plan.get("roles_version") or ""),
@@ -601,6 +692,9 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         # Bridge markers: scene_candidate_windows/compiled_contract are deprecated transition inputs.
         "uses_legacy_scene_candidate_windows_bridge": bool(scene_windows),
         "uses_legacy_compiled_contract_bridge": bool(compiled_contract),
+        "vocal_gender": vocal_gender,
+        "vocal_owner_role": vocal_owner_role,
+        "role_identity_gender_map": role_identity_gender_map,
     }
     return context, aux
 
@@ -693,6 +787,9 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "For ia2v/lip-sync scenes ensure vocal-shot diversity across adjacent scenes while preserving mouth readability.\\n"
         "speaker_role is independent from primary_role: primary_role is visual focus; speaker_role is who actually speaks this segment.\\n"
         "audio_map.segments[].is_lip_sync_candidate is permission only, not obligation.\\n"
+        "Use audio_map.vocal_gender and audio_map.vocal_owner_role as strict voice ownership guard for lip-sync.\\n"
+        "If lip_sync_allowed=true then speaker_role must be known and must equal audio_map.vocal_owner_role.\\n"
+        "If vocal owner is unknown/mixed/uncertain then set speaker_role=unknown and lip_sync_allowed=false for safety.\\n"
         "If who speaks is unclear or overlapping voices: set speaker_role=unknown and lip_sync_allowed=false.\\n"
         "For two-active conflict scenes keep lip-sync sparse: strong lines only, no more than 2 consecutive lip-sync scenes.\\n"
         "Do not output prompt language, quality buzzwords, renderer parameters, API/workflow payload, or final video payload.\\n"
@@ -1235,6 +1332,8 @@ def _normalize_scene_plan(
     scene_segment_rows: list[dict[str, Any]],
     role_lookup: dict[str, dict[str, Any]],
     creative_config: dict[str, Any],
+    vocal_gender: str = UNKNOWN_VOCAL_GENDER,
+    vocal_owner_role: str = UNKNOWN_VOCAL_OWNER_ROLE,
     include_debug_raw: bool = False,
 ) -> tuple[dict[str, Any], bool, str, int, dict[str, Any], str]:
     raw_storyboard = [_safe_dict(row) for row in _safe_list(raw_plan.get("storyboard"))]
@@ -1274,6 +1373,7 @@ def _normalize_scene_plan(
     speaker_role_invalid_count = 0
     ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow = False
     lip_sync_rejected_reasons: dict[str, list[str]] = {}
+    lip_sync_voice_role_mismatch_segments: list[str] = []
     speaker_role_by_segment: dict[str, str] = {}
     lip_sync_decision_by_segment: dict[str, str] = {}
     consecutive_lip_sync_count = 0
@@ -1401,6 +1501,9 @@ def _normalize_scene_plan(
             row_rejected_reasons.append("duration_too_long_for_lipsync")
         if lip_sync_allowed and not mouth_visible_required:
             row_rejected_reasons.append("mouth_visible_required_for_lipsync")
+        if lip_sync_allowed and (vocal_owner_role == UNKNOWN_VOCAL_OWNER_ROLE or speaker_role != vocal_owner_role):
+            row_rejected_reasons.append("SCENE_LIPSYNC_VOICE_ROLE_MISMATCH")
+            lip_sync_voice_role_mismatch_segments.append(segment_id)
         if reaction_role and reaction_role not in active_roles:
             row_rejected_reasons.append("reaction_role_not_in_present_cast")
         if route == "ia2v" and listener_reaction_allowed and reaction_role == speaker_role and reaction_role:
@@ -1422,7 +1525,10 @@ def _normalize_scene_plan(
             if speaker_role == UNKNOWN_SPEAKER_ROLE:
                 speaker_confidence = 0.0
             validation_error = validation_error or "speaker_role_invalid"
-            error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
+            if "SCENE_LIPSYNC_VOICE_ROLE_MISMATCH" in row_rejected_reasons:
+                error_code = error_code or "SCENE_LIPSYNC_VOICE_ROLE_MISMATCH"
+            else:
+                error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
         if lip_sync_allowed:
             consecutive_lip_sync_count += 1
@@ -1542,7 +1648,10 @@ def _normalize_scene_plan(
         "illegal_route_count": illegal_route_count,
         "cast_mutation_count": cast_mutation_count,
         "speaker_role_invalid_count": speaker_role_invalid_count,
+        "vocal_gender": vocal_gender if vocal_gender in ALLOWED_VOCAL_GENDERS else UNKNOWN_VOCAL_GENDER,
+        "vocal_owner_role": vocal_owner_role if vocal_owner_role in {*_ROLE_KEYS, UNKNOWN_VOCAL_OWNER_ROLE} else UNKNOWN_VOCAL_OWNER_ROLE,
         "speaker_role_by_segment": speaker_role_by_segment,
+        "lip_sync_voice_role_mismatch_segments": lip_sync_voice_role_mismatch_segments,
         "lip_sync_decision_by_segment": lip_sync_decision_by_segment,
         "lip_sync_rejected_reasons": lip_sync_rejected_reasons,
         "lip_sync_selected_count": lip_sync_selected_count,
@@ -1571,6 +1680,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
     world_summary_used = bool(aux.get("world_summary_used"))
     include_debug_raw = _scene_plan_debug_enabled(package)
     creative_config = _normalize_creative_config(_safe_dict(package.get("input")).get("creative_config"))
+    vocal_gender = str(aux.get("vocal_gender") or UNKNOWN_VOCAL_GENDER).strip().lower() or UNKNOWN_VOCAL_GENDER
+    vocal_owner_role = str(aux.get("vocal_owner_role") or UNKNOWN_VOCAL_OWNER_ROLE).strip() or UNKNOWN_VOCAL_OWNER_ROLE
     model_id = str(_safe_dict(context.get("video_capability_canon")).get("model_id") or DEFAULT_VIDEO_MODEL_ID)
     capability_diag = build_capability_diagnostics_summary(
         model_id=model_id,
@@ -1647,7 +1758,10 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
             "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
             "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
+            "vocal_gender": str(normalization_diag.get("vocal_gender") or vocal_gender or UNKNOWN_VOCAL_GENDER),
+            "vocal_owner_role": str(normalization_diag.get("vocal_owner_role") or vocal_owner_role or UNKNOWN_VOCAL_OWNER_ROLE),
             "speaker_role_by_segment": _safe_dict(normalization_diag.get("speaker_role_by_segment")),
+            "lip_sync_voice_role_mismatch_segments": _safe_list(normalization_diag.get("lip_sync_voice_role_mismatch_segments")),
             "lip_sync_decision_by_segment": _safe_dict(normalization_diag.get("lip_sync_decision_by_segment")),
             "lip_sync_rejected_reasons": _safe_dict(normalization_diag.get("lip_sync_rejected_reasons")),
             "lip_sync_selected_count": int(normalization_diag.get("lip_sync_selected_count") or 0),
@@ -1684,6 +1798,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            vocal_gender=vocal_gender,
+            vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = error_code or "SCENES_SCHEMA_INVALID"
@@ -1713,6 +1829,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            vocal_gender=vocal_gender,
+            vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = "SCENES_CORE_SOURCE_MISSING"
@@ -1742,6 +1860,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            vocal_gender=vocal_gender,
+            vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = "SCENES_ROLE_SOURCE_MISSING"
@@ -1786,6 +1906,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            vocal_gender=vocal_gender,
+            vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = error_code
@@ -1822,6 +1944,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            vocal_gender=vocal_gender,
+            vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
         )
         diagnostics["error_code"] = "scene_plan_timeout" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID")
