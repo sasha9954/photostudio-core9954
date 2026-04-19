@@ -123,6 +123,8 @@ def _has_natural_tail_hint(transcript_slice: str) -> bool:
 def _has_compact_i2v_evidence(seg: AudioSegmentV11) -> bool:
     if seg.first_last_candidate:
         return False
+    if float(seg.duration_sec or 0.0) < 2.7:
+        return False
     route_hints = seg.route_hints or {}
     i2v_fit = str(route_hints.get("i2v_fit") or "").strip().lower()
     lip_sync_fit = str(route_hints.get("lip_sync_fit") or "").strip().lower()
