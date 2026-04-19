@@ -535,7 +535,19 @@ function buildReferencePayload(input, fallbackLabel) {
   };
   const normalizeBindingType = (value) => {
     const normalized = normalizeText(value).toLowerCase();
-    return ["carried", "worn", "held", "pocketed", "nearby", "environment"].includes(normalized) ? normalized : "nearby";
+    return ["auto", "held", "nearby", "worn", "pocketed", "shared", "environment"].includes(normalized) ? normalized : "auto";
+  };
+  const normalizeStoryRole = (value) => {
+    const normalized = normalizeText(value).toLowerCase();
+    return ["auto", "main", "secondary", "support", "antagonist", "minor", "group", "style_anchor"].includes(normalized) ? normalized : "auto";
+  };
+  const normalizeIdentityLabel = (value) => {
+    const normalized = normalizeText(value).toLowerCase();
+    return ["auto", "девушка", "парень", "женщина", "мужчина", "ребёнок", "животное", "группа людей", "другое"].includes(normalized) ? normalized : "auto";
+  };
+  const normalizeGenderHint = (value) => {
+    const normalized = normalizeText(value).toLowerCase();
+    return ["auto", "female", "male", "not_applicable"].includes(normalized) ? normalized : "auto";
   };
   const ownershipRoleToPipelineRole = (value) => {
     if (value === "main") return "character_1";
@@ -557,7 +569,10 @@ function buildReferencePayload(input, fallbackLabel) {
         const roleType = normalizeText(item?.roleType).toLowerCase();
         const ownershipRole = normalizeOwnershipRole(item?.ownershipRole || item?.ownership_role);
         const bindingType = normalizeBindingType(item?.bindingType || item?.binding_type);
-        return { url, roleType, ownershipRole, bindingType };
+        const storyRole = normalizeStoryRole(item?.story_role || item?.storyRole);
+        const identityLabel = normalizeIdentityLabel(item?.identity_label || item?.identityLabel);
+        const genderHint = normalizeGenderHint(item?.gender_hint || item?.genderHint);
+        return { url, roleType, ownershipRole, bindingType, storyRole, identityLabel, genderHint };
       })
       .filter(Boolean)
     : [];
@@ -565,6 +580,30 @@ function buildReferencePayload(input, fallbackLabel) {
   const roleType = normalizeText(input?.roleType || normalizedRefs.find((item) => !!item.roleType)?.roleType).toLowerCase();
   const ownershipRole = normalizeOwnershipRole(input?.ownershipRole || input?.ownership_role || input?.meta?.ownershipRole || normalizedRefs.find((item) => !!item.ownershipRole)?.ownershipRole);
   const bindingType = normalizeBindingType(input?.bindingType || input?.binding_type || input?.meta?.bindingType || normalizedRefs.find((item) => !!item.bindingType)?.bindingType);
+  const kind = normalizeText(input?.meta?.kind).toLowerCase();
+  const storyRole = normalizeStoryRole(
+    input?.story_role
+    || input?.storyRole
+    || input?.meta?.story_role
+    || normalizedRefs.find((item) => !!item.storyRole)?.storyRole
+    || (kind === "ref_style" ? "style_anchor" : "auto")
+  );
+  const identityLabel = normalizeIdentityLabel(
+    input?.identity_label
+    || input?.identityLabel
+    || input?.meta?.identity_label
+    || input?.meta?.location_label
+    || normalizedRefs.find((item) => !!item.identityLabel)?.identityLabel
+  );
+  const genderHint = normalizeGenderHint(
+    input?.gender_hint
+    || input?.genderHint
+    || input?.meta?.gender_hint
+    || normalizedRefs.find((item) => !!item.genderHint)?.genderHint
+    || ((kind === "ref_location" || kind === "ref_style") ? "not_applicable" : "auto")
+  );
+  const linkedCharacter = normalizeText(input?.linkedCharacter || input?.linked_character || input?.meta?.linkedCharacter || input?.meta?.linked_character).toLowerCase();
+  const locationLabel = normalizeText(input?.location_label || input?.locationLabel || input?.meta?.location_label || input?.meta?.identity_label).toLowerCase();
   const value = normalizeText(input.value) || normalizeText(refs[0]) || "";
   if (!value && !refs.length && !normalizeText(input.preview)) return null;
   const meta = input?.meta && typeof input.meta === "object" ? { ...input.meta } : {};
@@ -572,6 +611,11 @@ function buildReferencePayload(input, fallbackLabel) {
   meta.ownershipRole = ownershipRole;
   meta.ownershipRoleMapped = ownershipRoleToPipelineRole(ownershipRole);
   meta.bindingType = bindingType;
+  meta.story_role = storyRole;
+  meta.identity_label = identityLabel;
+  meta.gender_hint = genderHint;
+  if (linkedCharacter) meta.linked_character = linkedCharacter;
+  if (locationLabel) meta.location_label = locationLabel;
   return {
     label: fallbackLabel,
     source_label: normalizeText(input.sourceLabel) || fallbackLabel,
@@ -896,6 +940,17 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       .map(([role, value]) => [role, normalizeText(value?.meta?.bindingType).toLowerCase()])
       .filter(([, bindingType]) => !!bindingType)
   );
+  const roleIdentityMapping = Object.fromEntries(
+    Object.entries(contextRefs)
+      .filter(([role]) => ["character_1", "character_2", "character_3"].includes(role))
+      .map(([role, value]) => [role, {
+        story_role: normalizeText(value?.meta?.story_role).toLowerCase() || "auto",
+        identity_label: normalizeText(value?.meta?.identity_label).toLowerCase() || "auto",
+        gender_hint: normalizeText(value?.meta?.gender_hint).toLowerCase() || "auto",
+      }])
+  );
+  connectedContextSummary.role_identity_mapping = roleIdentityMapping;
+  connectedContextSummary.character_identity_by_role = roleIdentityMapping;
 
   const format = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
     ? String(state.format).trim()
@@ -957,6 +1012,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     },
     creative_config: creativeConfig,
     connected_context_summary: connectedContextSummary,
+    role_identity_mapping: roleIdentityMapping,
+    character_identity_by_role: roleIdentityMapping,
     metadata: {
       director_mode: directorMode,
       sourcePreview: normalizeText(resolvedSource.preview) || sourceValue,
@@ -968,6 +1025,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       roleTypeByRole,
       ownershipRoleByRole,
       bindingTypeByRole,
+      role_identity_mapping: roleIdentityMapping,
+      character_identity_by_role: roleIdentityMapping,
       audio: {
         durationSec: audioContext.audioDurationSec,
         mimeType: audioContext.mimeType,
