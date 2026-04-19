@@ -16027,6 +16027,26 @@ Aspect ratio: ${imageFormat}`,
         continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
         continuationSourceAssetType: safeContinuationSourceAssetType,
       };
+      const routePayloadForPayload = {
+        ...(sceneVideoMetadata.routePayload || {}),
+        positive_prompt: finalVideoPromptForPayload,
+        positivePrompt: finalVideoPromptForPayload,
+        negative_prompt: payloadNegativePrompt,
+        negativePrompt: payloadNegativePrompt,
+      };
+      const scenarioContractPayloadForPayload = {
+        ...scenarioContractPayloadSanitized,
+        route_payload: routePayloadForPayload,
+        routePayload: routePayloadForPayload,
+        finalVideoPrompt: {
+          ...(scenarioContractPayloadSanitized?.finalVideoPrompt || {}),
+          positivePrompt: finalVideoPromptForPayload,
+          negativePrompt: payloadNegativePrompt,
+          promptSource: lipSyncPromptRoute
+            ? "lip_sync_payload_patch"
+            : (sceneVideoMetadata.promptSource || "canonical_final_video_prompt_contract"),
+        },
+      };
       console.info("[SCENARIO VIDEO PROMPT SOURCE]", {
         sceneId,
         source: "canonical_final_video_prompt_contract",
@@ -16105,8 +16125,8 @@ Aspect ratio: ${imageFormat}`,
         videoPrompt: finalVideoPromptForPayload,
         prompt: finalVideoPromptForPayload,
         positivePrompt: finalVideoPromptForPayload,
-        routePayload: sceneVideoMetadata.routePayload,
-        route_payload: sceneVideoMetadata.routePayload,
+        routePayload: routePayloadForPayload,
+        route_payload: routePayloadForPayload,
         engineHints: sceneVideoMetadata.engineHints,
         engine_hints: sceneVideoMetadata.engineHints,
         videoMetadata: sceneVideoMetadata.videoMetadata,
@@ -16161,10 +16181,12 @@ Aspect ratio: ${imageFormat}`,
           globalConsistencySuppressedForFirstLast: strictFirstLastMode,
           effectivePromptSource: "canonical_final_video_prompt_contract",
           payloadVideoPromptPreview: String(finalVideoPromptForPayload || "").slice(0, 280),
+          payloadRoutePayloadPositivePreview: String(routePayloadForPayload.positive_prompt || "").slice(0, 280),
+          payloadRoutePayloadNegativePreview: String(routePayloadForPayload.negative_prompt || "").slice(0, 280),
           payloadTransitionActionPromptPreview: String(transitionActionPrompt || "").slice(0, 280),
           payloadVideoNegativePromptPreview: String(payloadNegativePrompt || "").slice(0, 280),
         },
-        sceneContract: scenarioContractPayloadSanitized,
+        sceneContract: scenarioContractPayloadForPayload,
       };
       console.info("[SCENARIO VIDEO PAYLOAD PROMPTS]", {
         sceneId,
@@ -16241,6 +16263,15 @@ Aspect ratio: ${imageFormat}`,
         sceneId,
         endpoint,
         timeoutMs: VIDEO_START_TIMEOUT_MS,
+      });
+      console.info("[SCENARIO VIDEO CANONICAL PAYLOAD PATCH]", {
+        sceneId,
+        workflowKey: effectiveWorkflowKey,
+        lipSyncPromptRoute,
+        videoPromptStartsWithClearVocal: String(finalVideoPromptForPayload || "").startsWith("CLEAR VOCAL PERFORMANCE"),
+        routePayloadPositiveStartsWithClearVocal: String(routePayloadForPayload.positive_prompt || "").startsWith("CLEAR VOCAL PERFORMANCE"),
+        routePayloadPositiveLength: String(routePayloadForPayload.positive_prompt || "").length,
+        routePayloadNegativeLength: String(routePayloadForPayload.negative_prompt || "").length,
       });
       if (lipSyncRoute) {
         console.info("[SCENARIO LIP SYNC START]", {
