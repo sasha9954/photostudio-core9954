@@ -7148,6 +7148,34 @@ function buildRefOwnershipBindingMeta(data = {}) {
   };
 }
 
+function normalizeRefFieldValue(key, value, kind = "") {
+  switch (key) {
+    case "roleType":
+      return normalizeCharacterRoleType(value);
+    case "ownershipRole":
+      return normalizeRefOwnershipRole(value);
+    case "bindingType":
+      return normalizeRefBindingType(value);
+    case "storyRole":
+    case "story_role":
+      return normalizeRefStoryRole(value, kind);
+    case "identityLabel":
+    case "identity_label":
+      return kind === "ref_location" ? normalizeRefLocationLabel(value) : normalizeRefIdentityLabel(value);
+    case "locationLabel":
+    case "location_label":
+      return normalizeRefLocationLabel(value);
+    case "genderHint":
+    case "gender_hint":
+      return normalizeRefGenderHint(value, kind);
+    case "linkedCharacter":
+    case "linked_character":
+      return normalizeRefLinkedCharacter(value);
+    default:
+      return value;
+  }
+}
+
 function resolveRefRoleForNode(node = {}) {
   if (!node || typeof node !== "object") return "";
   if (node.type === "refNode") {
@@ -18747,13 +18775,7 @@ onClipSec: (nodeId, value) => {
                   ...x,
                   data: {
                     ...x.data,
-                    [key]: key === "roleType"
-                      ? normalizeCharacterRoleType(value)
-                      : key === "ownershipRole"
-                        ? normalizeRefOwnershipRole(value)
-                        : key === "bindingType"
-                          ? normalizeRefBindingType(value)
-                          : value,
+                    [key]: normalizeRefFieldValue(key, value, String(x?.data?.kind || "")),
                   },
                 }
                 : x))),
@@ -21023,6 +21045,7 @@ onClipSec: (nodeId, value) => {
                   contentType: normalizedRequestPayload?.director_controls?.contentType,
                   requestSource: normalizedRequestPayload?.metadata?.requestSource,
                 });
+                console.log("[SCENARIO PAYLOAD role_identity_mapping]", normalizedRequestPayload?.role_identity_mapping || {});
                 console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
                   phase: "before_fetch",
                   source: "narrative:onGenerateScenario",
@@ -22234,13 +22257,7 @@ onClipSec: (nodeId, value) => {
                   ...x,
                   data: {
                     ...x.data,
-                    [key]: key === "roleType"
-                      ? normalizeCharacterRoleType(value)
-                      : key === "ownershipRole"
-                        ? normalizeRefOwnershipRole(value)
-                        : key === "bindingType"
-                          ? normalizeRefBindingType(value)
-                          : value,
+                    [key]: normalizeRefFieldValue(key, value, String(x?.data?.kind || "")),
                   },
                 }
                 : x))),
