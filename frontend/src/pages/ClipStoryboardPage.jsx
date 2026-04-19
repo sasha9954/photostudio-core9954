@@ -261,6 +261,10 @@ function buildLipSyncVideoPromptForLtx(basePrompt) {
     "Do not turn away from camera during vocal phrases.",
   ].join(" ");
 
+  if (/^CLEAR VOCAL PERFORMANCE:/i.test(base)) {
+    return base;
+  }
+
   return `${lipSyncLead} ${base}`.trim();
 }
 
