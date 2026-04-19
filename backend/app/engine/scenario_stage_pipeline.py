@@ -2351,37 +2351,73 @@ def _extract_role_identity_expectations(input_pkg: dict[str, Any], assigned_role
     return expectations
 
 
-def _role_has_opposite_gender_near_role(json_dump: str, role: str, expected_gender: str) -> tuple[bool, str]:
+def _alias_pattern(alias: str) -> str:
+    return rf"(?<![A-Za-zА-Яа-яЁё]){re.escape(str(alias or '').strip().lower())}(?![A-Za-zА-Яа-яЁё])"
+
+
+def _role_has_opposite_gender_near_role(json_dump: str, role: str, expected_gender: str) -> tuple[bool, dict[str, str]]:
     opposite_aliases_by_expected = {
         "female": ("guy", "man", "male", "парень", "мужчина", "the guy", "the man"),
         "male": ("girl", "woman", "female", "девушка", "женщина", "the girl", "the woman"),
     }
-    aliases = opposite_aliases_by_expected.get(str(expected_gender or "").strip().lower(), ())
-    if not aliases:
-        return False, ""
-    escaped_role = re.escape(str(role or "").strip().lower())
-    for alias in aliases:
-        escaped_alias = re.escape(str(alias or "").strip().lower())
-        patterns = (
-            rf"{escaped_alias}\s*\({escaped_role}\)",
-            rf"{escaped_alias}[^\.\n]{{0,80}}{escaped_role}",
-            rf"{escaped_role}[^\.\n]{{0,80}}{escaped_alias}",
+    aliases = tuple(
+        sorted(
+            opposite_aliases_by_expected.get(str(expected_gender or "").strip().lower(), ()),
+            key=lambda value: len(str(value or "").strip()),
+            reverse=True,
         )
-        for pattern in patterns:
-            if re.search(pattern, json_dump):
-                return True, alias
-    return False, ""
+    )
+    if not aliases:
+        return False, {}
+    escaped_role = re.escape(str(role or "").strip().lower())
+    role_pattern = rf"(?<![a-z0-9_]){escaped_role}(?![a-z0-9_])"
+    for alias in aliases:
+        alias_pattern = _alias_pattern(str(alias or ""))
+        patterns = (
+            ("alias_with_role_parentheses", rf"{alias_pattern}\s*\(\s*{role_pattern}\s*\)"),
+            ("role_with_alias_after_separator", rf"{role_pattern}\s*(?:is|=|:|-|—|–)\s*(?:an?\s+|the\s+)?{alias_pattern}"),
+        )
+        for pattern_name, pattern in patterns:
+            hit = re.search(pattern, json_dump)
+            if hit:
+                excerpt_start = max(0, hit.start() - 48)
+                excerpt_end = min(len(json_dump), hit.end() + 48)
+                return True, {
+                    "alias": str(alias),
+                    "pattern": str(pattern_name),
+                    "excerpt": json_dump[excerpt_start:excerpt_end],
+                }
+    return False, {}
 
 
-def _detect_core_role_binding_contradictions(payload: dict[str, Any], role_identity_expectations: dict[str, str]) -> list[str]:
+def _detect_core_role_binding_contradictions(
+    payload: dict[str, Any],
+    role_identity_expectations: dict[str, str],
+    debug_capture: dict[str, Any] | None = None,
+) -> list[str]:
     if not role_identity_expectations:
+        if debug_capture is not None:
+            debug_capture["story_core_role_binding_contradiction_matches"] = []
         return []
     json_dump = json.dumps(payload, ensure_ascii=False).lower()
     contradictions: list[str] = []
+    contradiction_matches: list[dict[str, str]] = []
     for role, expected_gender in role_identity_expectations.items():
-        has_contradiction, alias = _role_has_opposite_gender_near_role(json_dump, role, expected_gender)
+        has_contradiction, match_meta = _role_has_opposite_gender_near_role(json_dump, role, expected_gender)
         if has_contradiction:
+            alias = str(match_meta.get("alias") or "")
             contradictions.append(f"json_dump:{role}_expected_{expected_gender}_found_{alias}")
+            contradiction_matches.append(
+                {
+                    "role": str(role),
+                    "expected": str(expected_gender),
+                    "alias": alias,
+                    "pattern": str(match_meta.get("pattern") or ""),
+                    "excerpt": str(match_meta.get("excerpt") or ""),
+                }
+            )
+    if debug_capture is not None:
+        debug_capture["story_core_role_binding_contradiction_matches"] = contradiction_matches[:8]
     return contradictions[:8]
 
 
@@ -2393,6 +2429,13 @@ def _validate_story_core_v11_payload(
     role_identity_expectations: dict[str, str] | None = None,
     debug_capture: dict[str, Any] | None = None,
 ) -> tuple[bool, str, list[str]]:
+    # Role binding quick checks:
+    # Should PASS:
+    # - "the guy (character_2) while the girl (character_1)"
+    # - "character_1 is the woman; character_2 is the man"
+    # Should FAIL:
+    # - "the guy (character_1)"
+    # - "character_2 is the girl"
     def _zone_text(value: Any) -> str:
         if isinstance(value, str):
             return value
@@ -2575,7 +2618,11 @@ def _validate_story_core_v11_payload(
             return False, CORE_IDENTITY_CONFLICT, ["concept_forbids_neon_but_core_introduced_neon"]
         if any(token in concept for token in ("no club", "не клуб", "not club")) and "club" in json_dump:
             return False, CORE_IDENTITY_CONFLICT, ["concept_forbids_club_but_core_introduced_club"]
-    contradictions = _detect_core_role_binding_contradictions(payload, role_identity_expectations or {})
+    contradictions = _detect_core_role_binding_contradictions(
+        payload,
+        role_identity_expectations or {},
+        debug_capture=debug_capture,
+    )
     if contradictions:
         return False, CORE_ROLE_BINDING_CONTRADICTION, contradictions
 
@@ -3424,6 +3471,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_technical_spawn_match_pattern"] = ""
     diagnostics["story_core_technical_spawn_match_excerpt"] = ""
     diagnostics["story_core_technical_spawn_match_zone"] = ""
+    diagnostics["story_core_role_binding_contradiction_matches"] = []
     diagnostics["active_video_model_capability_profile"] = model_id
     diagnostics["active_route_capability_mode"] = "story_core_planning_bounds"
     diagnostics["story_core_capability_guard_applied"] = True
@@ -3557,6 +3605,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["story_core_technical_spawn_match_pattern"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_pattern") or "")
                 diagnostics["story_core_technical_spawn_match_excerpt"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_excerpt") or "")
                 diagnostics["story_core_technical_spawn_match_zone"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_zone") or "")
+                diagnostics["story_core_role_binding_contradiction_matches"] = _safe_list(
+                    technical_spawn_debug.get("story_core_role_binding_contradiction_matches")
+                )
                 if not ok and error_code == CORE_ID_MISMATCH:
                     for validation_error in validation_errors:
                         if str(validation_error).startswith("id_mismatch_kind:"):
