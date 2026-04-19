@@ -16,6 +16,8 @@ ERROR_AUDIO_PLOT_LEAKAGE = "AUDIO_PLOT_LEAKAGE"
 ERROR_AUDIO_NO_SPLIT_CONFLICT = "AUDIO_NO_SPLIT_CONFLICT"
 ERROR_AUDIO_SCHEMA_INVALID = "AUDIO_SCHEMA_INVALID"
 ERROR_AUDIO_MAP_INVALID_SHORT_SEGMENT = "AUDIO_MAP_INVALID_SHORT_SEGMENT"
+ERROR_AUDIO_MAP_INVALID_FIRST_LAST_DURATION = "AUDIO_MAP_INVALID_FIRST_LAST_DURATION"
+ERROR_AUDIO_MAP_INVALID_TIMELINE = "AUDIO_MAP_INVALID_TIMELINE"
 
 
 class AudioSegmentV11(BaseModel):
@@ -28,6 +30,7 @@ class AudioSegmentV11(BaseModel):
     is_lip_sync_candidate: bool
     rhythmic_anchor: Literal["beat", "drop", "transition", "none"]
     first_last_candidate: bool = False
+    route_hints: dict[str, Literal["good", "ok", "too_short", "too_long"]] | None = None
 
 
 class NoSplitRangeV11(BaseModel):
@@ -98,6 +101,14 @@ def _plot_leakage_hits(value: str) -> list[str]:
     return hits
 
 
+def _has_natural_tail_hint(transcript_slice: str) -> bool:
+    text = str(transcript_slice or "").strip().lower()
+    if not text:
+        return False
+    tail_tokens = ("...", "—", "-", ",", ".", "!", "?", "breath", "pause", "sigh", "hmm", "mm")
+    return any(token in text for token in tail_tokens)
+
+
 def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float) -> AudioMapValidationResult:
     errors: list[str] = []
     normalized: dict[str, Any] = {}
@@ -127,8 +138,10 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
             errors.append(_fmt(idx, "negative timestamps are forbidden"))
         if seg.t0 >= seg.t1:
             errors.append(_fmt(idx, "t0 must be strictly less than t1"))
-        if seg.duration_sec < 3.0:
-            errors.append(_fmt(idx, f"duration_sec must be >= 3.0; got {seg.duration_sec:.3f}"))
+        if seg.duration_sec < 2.5:
+            errors.append(_fmt(idx, f"duration_sec too short for standalone video segment (<2.5s): {seg.duration_sec:.3f}"))
+        elif seg.duration_sec < 2.8 and not _has_natural_tail_hint(seg.transcript_slice):
+            errors.append(_fmt(idx, f"duration_sec <2.8s without natural tail/reaction evidence: {seg.duration_sec:.3f}"))
         if seg.first_last_candidate and seg.duration_sec < 4.0:
             errors.append(_fmt(idx, f"first_last_candidate requires duration_sec >= 4.0; got {seg.duration_sec:.3f}"))
         expected_duration = max(0.0, seg.t1 - seg.t0)
@@ -141,33 +154,36 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
         if prev_t1 is not None:
             if seg.t0 + overlap_tolerance < prev_t1:
                 overlap_sum_sec += max(0.0, prev_t1 - seg.t0)
-                return AudioMapValidationResult(False, ERROR_AUDIO_OVERLAP, "segment overlap detected", [_fmt(idx, f"overlap with prev ending at {prev_t1:.3f}")], normalized)
+                return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_TIMELINE, "segment overlap detected", [_fmt(idx, f"overlap with prev ending at {prev_t1:.3f}")], normalized)
             gap = seg.t0 - prev_t1
             if gap > 0.0:
                 gap_sum_sec += gap
             if gap > gap_tolerance:
-                return AudioMapValidationResult(False, ERROR_AUDIO_GAP, "segment gap exceeds tolerance", [_fmt(idx, f"gap={gap:.3f}s")], normalized)
+                return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_TIMELINE, "segment gap exceeds tolerance", [_fmt(idx, f"gap={gap:.3f}s")], normalized)
         prev_t1 = seg.t1
 
     t0s = [row.t0 for row in segments]
     if any(t0s[i] > t0s[i + 1] + overlap_tolerance for i in range(len(t0s) - 1)):
-        return AudioMapValidationResult(False, ERROR_AUDIO_TIMING, "segments must be sorted by t0", ["segments not sorted"], normalized)
+        return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_TIMELINE, "segments must be sorted by t0", ["segments not sorted"], normalized)
 
     if errors:
-        has_short_segment_error = any("duration_sec must be >= 3.0" in msg for msg in errors)
+        has_short_segment_error = any("too short for standalone video segment" in msg or "<2.8s without natural tail/reaction evidence" in msg for msg in errors)
+        has_first_last_error = any("first_last_candidate requires duration_sec >= 4.0" in msg for msg in errors)
         if has_short_segment_error:
             return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_SHORT_SEGMENT, "video-ready short segment violation", errors, normalized)
-        return AudioMapValidationResult(False, ERROR_AUDIO_TIMING, "segment timing/fields invalid", errors, normalized)
+        if has_first_last_error:
+            return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_FIRST_LAST_DURATION, "first_last duration violation", errors, normalized)
+        return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_TIMELINE, "segment timing/fields invalid", errors, normalized)
 
     first_t0 = segments[0].t0
     if first_t0 > boundary_tolerance:
-        return AudioMapValidationResult(False, ERROR_AUDIO_GAP, "start coverage gap exceeds tolerance", [f"first_t0={first_t0:.3f}"], normalized)
+        return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_TIMELINE, "start coverage gap exceeds tolerance", [f"first_t0={first_t0:.3f}"], normalized)
 
     last_t1 = segments[-1].t1
     if duration > 0.0 and (duration - last_t1) > boundary_tolerance:
-        return AudioMapValidationResult(False, ERROR_AUDIO_GAP, "end coverage gap exceeds tolerance", [f"last_t1={last_t1:.3f}, duration={duration:.3f}"], normalized)
+        return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_TIMELINE, "end coverage gap exceeds tolerance", [f"last_t1={last_t1:.3f}, duration={duration:.3f}"], normalized)
     if duration > 0.0 and last_t1 > duration + boundary_tolerance:
-        return AudioMapValidationResult(False, ERROR_AUDIO_TIMING, "segment exceeds audio duration", [f"last_t1={last_t1:.3f}, duration={duration:.3f}"], normalized)
+        return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_TIMELINE, "segment exceeds audio duration", [f"last_t1={last_t1:.3f}, duration={duration:.3f}"], normalized)
 
     for idx, row in enumerate(model.no_split_ranges):
         if row.start < 0.0 or row.end < 0.0 or row.start >= row.end:
