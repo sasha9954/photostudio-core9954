@@ -285,6 +285,12 @@ function getSceneRuntimeRefsDebug(runtime = {}) {
 function buildStoryboardSceneDisplayModel(scene = {}, runtime = {}) {
   const refsByRole = scene?.refsByRole && typeof scene.refsByRole === "object" ? scene.refsByRole : {};
   const refsUsedByRole = scene?.refsUsedByRole && typeof scene.refsUsedByRole === "object" ? scene.refsUsedByRole : {};
+  const rolesFromRefsByRole = Object.keys(refsByRole || {}).filter((role) => (
+    Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0
+  ));
+  const rolesFromRefsUsedByRole = Object.keys(refsUsedByRole || {}).filter((role) => (
+    Array.isArray(refsUsedByRole?.[role]) && refsUsedByRole[role].length > 0
+  ));
   const refsDebug = getSceneRuntimeRefsDebug(runtime);
   const referenceProfilesSummary = refsDebug?.referenceProfilesSummary && typeof refsDebug.referenceProfilesSummary === "object"
     ? refsDebug.referenceProfilesSummary
@@ -315,8 +321,8 @@ function buildStoryboardSceneDisplayModel(scene = {}, runtime = {}) {
       refsDebugPrimaryRole,
       ...refsDebugSceneActiveRoles,
       ...refsDebugMustAppear,
-      ...Object.keys(refsByRole || {}),
-      ...Object.keys(refsUsedByRole || {}),
+      ...rolesFromRefsByRole,
+      ...rolesFromRefsUsedByRole,
       ...Object.keys(referenceProfilesSummary || {}),
       ...rolesFromRefsDebugCounts,
     ].map(normalizeRole).filter(Boolean)
@@ -337,6 +343,9 @@ function buildStoryboardSceneDisplayModel(scene = {}, runtime = {}) {
   const character1RefCount = Math.max(character1Incoming, character1Attached, 0);
   const character1Summary = roleRefSummaryText("character_1");
   if (character1RefCount > 0 || character1Summary) {
+    const defaultCharacter1Label = ROLE_LABELS.character_1 || "character_1";
+    const defaultCharacter1Idx = actors.indexOf(defaultCharacter1Label);
+    if (defaultCharacter1Idx >= 0) actors.splice(defaultCharacter1Idx, 1);
     const parts = [`Главная героиня (character_1) · ref: ${character1RefCount > 0 ? character1RefCount : 1}`];
     if (character1Summary) parts.push(character1Summary);
     const character1ActorText = parts.join(" · ");
