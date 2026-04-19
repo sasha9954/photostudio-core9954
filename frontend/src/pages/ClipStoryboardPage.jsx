@@ -242,6 +242,47 @@ const resolveScenarioUiRoute = (scene = {}) => {
   };
 };
 
+function buildLipSyncVideoPromptForLtx(basePrompt) {
+  const base = String(basePrompt || "").trim();
+  const lipSyncLead = [
+    "CLEAR VOCAL PERFORMANCE:",
+    "The same woman is singing and lip-syncing to the provided audio.",
+    "Her mouth visibly articulates the lyrics in sync with the voice.",
+    "Face, mouth and lips must stay readable throughout the shot.",
+    "She performs toward camera or near-camera with expressive eyes and subtle emotional delivery.",
+    "Keep the body mostly stable: gentle sway, small head movement, subtle shoulder rhythm, near-chest hand gestures only.",
+    "Do not turn away from camera during vocal phrases.",
+  ].join(" ");
+
+  if (/singing|lip-sync|lip syncing|lip-syncing|mouth visibly articulates/i.test(base)) {
+    return `${lipSyncLead} ${base}`.trim();
+  }
+
+  return `${lipSyncLead} ${base}`.trim();
+}
+
+function buildLipSyncNegativePromptForLtx(baseNegative) {
+  const base = String(baseNegative || "").trim();
+  const lipNeg = [
+    "closed mouth",
+    "silent face",
+    "not singing",
+    "no lip movement",
+    "mouth not synchronized",
+    "unreadable lips",
+    "face turned away",
+    "profile-only face",
+    "hands covering mouth",
+    "hair covering mouth",
+    "extreme motion blur",
+    "distorted mouth",
+    "distorted face",
+    "extra people blocking performer",
+  ].join(", ");
+
+  return base ? `${lipNeg}, ${base}` : lipNeg;
+}
+
 
 const resolveDirectorModeFromContentType = (value) => {
   const normalized = String(value || "").trim().toLowerCase();
@@ -15437,6 +15478,15 @@ Aspect ratio: ${imageFormat}`,
       debugSourceFieldsUsed,
     });
     if (!hasImageForVideo) {
+      if (requiresTwoFrames && (!resolvedFirstFrameUrl || !resolvedLastFrameUrl)) {
+        console.warn("[SCENARIO FIRST_LAST FRAME PAIR MISSING]", {
+          sceneId,
+          hasStartImageUrl: Boolean(resolvedFirstFrameUrl),
+          hasEndImageUrl: Boolean(resolvedLastFrameUrl),
+          startFramePrompt: targetScene?.first_frame_prompt || targetScene?.route_payload?.first_frame_prompt || "",
+          lastFramePrompt: targetScene?.last_frame_prompt || targetScene?.route_payload?.last_frame_prompt || "",
+        });
+      }
       const runtimeFallbackRejectedOrUnaccepted = !canonicalImageAliasPresent
         && !runtimeGeneratedImageUrl
         && Boolean(targetSceneRuntime?.lastImageApiResult?.imageUrl)
@@ -15474,7 +15524,7 @@ Aspect ratio: ${imageFormat}`,
       blockScenarioVideoGeneration(
         validateReason,
         firstLastBlock
-          ? "Для first_last нужны первый и последний кадр."
+          ? "Для first-last сначала нужно создать первый и последний кадр."
           : "Для этой сцены не хватает source-кадров для video flow (см. [SCENARIO VIDEO REQUEST SUMMARY])."
       );
     }
@@ -15818,6 +15868,13 @@ Aspect ratio: ${imageFormat}`,
     }
     const strictFirstLastMode = ["f_l", "first_last"].includes(String(effectiveWorkflowKey || "").trim().toLowerCase());
     const finalVideoPrompt = sceneVideoMetadata.positivePrompt;
+    const lipSyncPromptRoute = effectiveWorkflowKey === "lip_sync_music" || Boolean(effectiveLipSync);
+    const finalVideoPromptForPayload = lipSyncPromptRoute
+      ? buildLipSyncVideoPromptForLtx(sceneVideoMetadata.positivePrompt)
+      : finalVideoPrompt;
+    const payloadNegativePrompt = lipSyncPromptRoute
+      ? buildLipSyncNegativePromptForLtx(sceneVideoMetadata.negativePrompt || resolveScenarioSceneNegativePrompt(targetScene))
+      : (sceneVideoMetadata.negativePrompt || resolveScenarioSceneNegativePrompt(targetScene));
     const sceneHumanVisualAnchors = [];
     const sourceImageUrl = requiresTwoFrames
       ? (resolvedFirstFrameUrl || "")
@@ -15977,12 +16034,11 @@ Aspect ratio: ${imageFormat}`,
         continuationSourceAssetUrl: safeContinuationSourceAssetUrl,
         continuationSourceAssetType: safeContinuationSourceAssetType,
       };
-      const payloadNegativePrompt = sceneVideoMetadata.negativePrompt || resolveScenarioSceneNegativePrompt(targetScene);
       console.info("[SCENARIO VIDEO PROMPT SOURCE]", {
         sceneId,
         source: "canonical_final_video_prompt_contract",
         route: String(effectiveWorkflowKey || ""),
-        finalVideoPromptPreview: String(finalVideoPrompt || "").slice(0, 280),
+        finalVideoPromptPreview: String(finalVideoPromptForPayload || "").slice(0, 280),
         finalNegativePreview: String(payloadNegativePrompt || "").slice(0, 220),
       });
       console.info("[SCENARIO NEGATIVE PROMPT TRACE]", {
@@ -16017,7 +16073,7 @@ Aspect ratio: ${imageFormat}`,
           lipSync: Boolean(effectiveLipSync),
           hasGlobalVisualLock: hasScenarioContractValue(targetScene?.globalVisualLock),
           hasGlobalCameraProfile: hasScenarioContractValue(targetScene?.globalCameraProfile),
-          finalVideoPromptLength: finalVideoPrompt.length,
+          finalVideoPromptLength: finalVideoPromptForPayload.length,
         });
       }
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
@@ -16053,7 +16109,9 @@ Aspect ratio: ${imageFormat}`,
         audioSliceUrl: normalizedScenarioVideoSourceUrls.audioSliceUrl,
         external_audio_used: shouldAttachAudioSlice,
         external_audio_reason: shouldAttachAudioSlice ? "lip_sync_scene" : "not_attached",
-        videoPrompt: finalVideoPrompt,
+        videoPrompt: finalVideoPromptForPayload,
+        prompt: finalVideoPromptForPayload,
+        positivePrompt: finalVideoPromptForPayload,
         routePayload: sceneVideoMetadata.routePayload,
         route_payload: sceneVideoMetadata.routePayload,
         engineHints: sceneVideoMetadata.engineHints,
@@ -16109,12 +16167,21 @@ Aspect ratio: ${imageFormat}`,
           humanAnchorsSuppressedForFirstLast: strictFirstLastMode,
           globalConsistencySuppressedForFirstLast: strictFirstLastMode,
           effectivePromptSource: "canonical_final_video_prompt_contract",
-          payloadVideoPromptPreview: String(finalVideoPrompt || "").slice(0, 280),
+          payloadVideoPromptPreview: String(finalVideoPromptForPayload || "").slice(0, 280),
           payloadTransitionActionPromptPreview: String(transitionActionPrompt || "").slice(0, 280),
           payloadVideoNegativePromptPreview: String(payloadNegativePrompt || "").slice(0, 280),
         },
         sceneContract: scenarioContractPayloadSanitized,
       };
+      console.info("[SCENARIO VIDEO PAYLOAD PROMPTS]", {
+        sceneId,
+        workflowKey: effectiveWorkflowKey,
+        lipSyncRoute: effectiveWorkflowKey === "lip_sync_music" || Boolean(effectiveLipSync),
+        videoPromptLength: finalVideoPromptForPayload.length,
+        negativePromptLength: payloadNegativePrompt.length,
+        videoPromptPreview: finalVideoPromptForPayload.slice(0, 500),
+        negativePromptPreview: payloadNegativePrompt.slice(0, 300),
+      });
       console.info("[SCENARIO VIDEO OVERGENERATE PLAN]", {
         sceneId,
         route: effectiveWorkflowKey,
@@ -16157,7 +16224,7 @@ Aspect ratio: ${imageFormat}`,
       console.debug("[SCENARIO VIDEO START PAYLOAD]", {
         endpoint,
         sceneId,
-        effectiveVideoPromptLength: finalVideoPrompt.length,
+        effectiveVideoPromptLength: finalVideoPromptForPayload.length,
         renderMode: String(effectiveRenderMode || ""),
         resolvedWorkflowKey: effectiveWorkflowKey,
         firstFrameUrl: resolvedFirstFrameUrl,
@@ -16169,7 +16236,7 @@ Aspect ratio: ${imageFormat}`,
         endpoint,
         method: "POST",
         sceneId,
-        effectiveVideoPromptLength: finalVideoPrompt.length,
+        effectiveVideoPromptLength: finalVideoPromptForPayload.length,
       });
       console.info("[SCENARIO VIDEO FLOW]", {
         stage: "before_fetch_start",
@@ -16284,7 +16351,7 @@ Aspect ratio: ${imageFormat}`,
         sceneId,
         status: String(out?.status || ""),
         response: out,
-        effectiveVideoPromptLength: finalVideoPrompt.length,
+        effectiveVideoPromptLength: finalVideoPromptForPayload.length,
       });
       console.info("[VIDEO START RESPONSE]", {
         scope: "scenario",
