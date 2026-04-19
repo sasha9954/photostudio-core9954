@@ -10,12 +10,6 @@ const REF_STATUS_LABELS = {
   error: "ошибка",
 };
 
-const ROLE_TYPE_OPTIONS = [
-  { value: "auto", label: "Авто" },
-  { value: "hero", label: "Главный" },
-  { value: "antagonist", label: "Антагонист" },
-  { value: "support", label: "Поддержка" },
-];
 const STORY_ROLE_OPTIONS = [
   { value: "auto", label: "Авто" },
   { value: "main", label: "Главный персонаж" },
@@ -201,7 +195,6 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const detailsOpen = !!data?.refDetailsOpen;
   const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
-  const roleType = String(data?.roleType || "auto").trim().toLowerCase() || "auto";
   const storyRole = normalizeStoryRole(data?.storyRole || data?.story_role);
   const identityLabel = normalizeIdentityLabel(data?.identityLabel || data?.identity_label);
   const genderHint = normalizeGenderHint(data?.genderHint || data?.gender_hint);
@@ -231,17 +224,6 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
       ) : null}
       {showRoleSelector ? (
         <>
-          <div style={{ marginBottom: 10 }}>
-            <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип роли:</div>
-            <select
-              className="clipSB_select"
-              value={roleType}
-              onChange={(event) => data?.onField?.(id, "roleType", String(event?.target?.value || "auto").trim().toLowerCase() || "auto")}
-              disabled={refStatus === "loading"}
-            >
-              {ROLE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </div>
           <div style={{ marginBottom: 10 }}>
             <div className="clipSB_small" style={{ marginBottom: 4 }}>Сюжетная роль:</div>
             <select

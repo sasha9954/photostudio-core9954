@@ -2207,16 +2207,44 @@ def _normalize_gender_hint(value: Any) -> str:
     return ""
 
 
+def _normalize_identity_label_hint(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    female_tokens = ("девушка", "женщина", "girl", "woman", "female", "lady", "feminine")
+    male_tokens = ("парень", "мужчина", "guy", "man", "male", "masculine")
+    if any(t in token for t in female_tokens):
+        return "female"
+    if any(t in token for t in male_tokens):
+        return "male"
+    return ""
+
+
 def _extract_role_identity_expectations(input_pkg: dict[str, Any], assigned_roles: dict[str, Any]) -> dict[str, str]:
     expectations: dict[str, str] = {}
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    nested_identity_sources: list[dict[str, Any]] = [
+        _safe_dict(input_pkg.get("role_identity_mapping")),
+        _safe_dict(input_pkg.get("character_identity_by_role")),
+        _safe_dict(connected_summary.get("role_identity_mapping")),
+        _safe_dict(connected_summary.get("character_identity_by_role")),
+    ]
+    for source in nested_identity_sources:
+        for role in ("character_1", "character_2", "character_3"):
+            if role in expectations:
+                continue
+            identity_row = _safe_dict(source.get(role))
+            hint = _normalize_gender_hint(identity_row.get("gender_hint"))
+            if not hint:
+                hint = _normalize_identity_label_hint(identity_row.get("identity_label"))
+            if hint:
+                expectations[role] = hint
     candidate_sources: list[Any] = [
         assigned_roles,
         _safe_dict(input_pkg.get("roleTypeByRole")),
         _safe_dict(connected_summary.get("roleTypeByRole")),
         _safe_dict(connected_summary.get("assignedRoles")),
         _safe_dict(connected_summary.get("roleMapping")),
-        _safe_dict(connected_summary.get("role_identity_mapping")),
     ]
     for source in candidate_sources:
         row = _safe_dict(source)
