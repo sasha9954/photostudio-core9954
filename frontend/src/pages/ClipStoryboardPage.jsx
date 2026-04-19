@@ -12277,6 +12277,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || comfySceneSnapshot?.video_generation_route
         || comfySceneSnapshot?.plannedVideoGenerationRoute
         || comfySceneSnapshot?.planned_video_generation_route
+        || comfySceneSnapshot?.route
+        || comfySceneSnapshot?.ltxMode
+        || comfySceneSnapshot?.ltx_mode
+        || comfyPreflightWorkflow
       ) || "i2v";
       const comfyTimeframe = resolveSceneTimeframe(comfySceneSnapshot, { preferGenerationDuration: true });
       const comfyLipSync = comfyRouteWorkflow === "lip_sync_music";
@@ -12308,6 +12312,14 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         hasAudioSlice: Boolean(comfyLipSync && comfySendAudioToGenerator && normalizedVideoSourceUrls.audioSliceUrl),
         hasStartImage: Boolean(normalizedVideoSourceUrls.startImageUrl),
         hasEndImage: Boolean(normalizedVideoSourceUrls.endImageUrl),
+      });
+      console.debug("[COMFY VIDEO ROUTE RESOLVED]", {
+        sceneId,
+        comfyRouteWorkflow,
+        hasImageUrl: Boolean(normalizedVideoSourceUrls.imageUrl),
+        hasStartImageUrl: Boolean(normalizedVideoSourceUrls.startImageUrl),
+        hasEndImageUrl: Boolean(normalizedVideoSourceUrls.endImageUrl),
+        hasAudioSliceUrl: Boolean(normalizedVideoSourceUrls.audioSliceUrl),
       });
       const out = await fetchJson('/api/clip/video/start', {
         method: 'POST',
@@ -14752,16 +14764,64 @@ Aspect ratio: ${imageFormat}`,
     if (!sceneId) throw new Error("scene_id_required");
     const startSec = Number(scene.t0 ?? scene.start ?? 0);
     const endSec = Number(scene.t1 ?? scene.end ?? 0);
+    const audioSliceVideoProfile = resolveScenarioSceneVideoProfile(scene || {});
+    const audioSliceWorkflowKey =
+      normalizeScenarioVideoWorkflowAlias(
+        audioSliceVideoProfile?.canonicalRoute
+        || audioSliceVideoProfile?.routeResolved
+        || scene?.resolvedWorkflowKey
+        || scene?.resolved_workflow_key
+        || scene?.videoGenerationRoute
+        || scene?.video_generation_route
+        || scene?.plannedVideoGenerationRoute
+        || scene?.planned_video_generation_route
+        || scene?.route
+        || scene?.ltxMode
+        || scene?.ltx_mode
+        || resolveScenarioWorkflowKey(scene || {})
+      )
+      || normalizeScenarioWorkflowKeyForProduction(
+        scene?.resolvedWorkflowKey
+        || scene?.resolved_workflow_key
+        || resolveScenarioWorkflowKey(scene || {})
+      );
+    const audioSliceIsLipSync =
+      audioSliceWorkflowKey === "lip_sync_music"
+      || audioSliceWorkflowKey === "lip_sync";
 
     const existingAudioSliceUrl = String(scene?.audioSliceUrl || "").trim();
     const existingStartSec = Number(scene?.audioSliceStartSec ?? scene?.audioSliceT0);
     const existingEndSec = Number(scene?.audioSliceEndSec ?? scene?.audioSliceT1);
     const existingSliceSourceAudioUrl = String(scene?.audioSliceSourceAudioUrl || scene?.audioSourceUrl || "").trim();
+    const existingAudioSliceKind = String(scene?.audioSliceKind || scene?.audio_slice_kind || "none").trim().toLowerCase() || "none";
+    const existingMusicVocalLipSyncAllowed = scene?.musicVocalLipSyncAllowed ?? scene?.music_vocal_lipsync_allowed;
+    const existingSliceMatchesWorkflow =
+      !audioSliceIsLipSync
+      || (
+        existingAudioSliceKind === "music_vocal"
+        && existingMusicVocalLipSyncAllowed !== false
+      );
     const hasSameSliceRange = Number.isFinite(existingStartSec)
       && Number.isFinite(existingEndSec)
       && Math.abs(existingStartSec - startSec) < 0.001
       && Math.abs(existingEndSec - endSec) < 0.001;
-    if (existingAudioSliceUrl && hasSameSliceRange && existingSliceSourceAudioUrl && existingSliceSourceAudioUrl === scenarioAudioUrl) {
+    if (
+      audioSliceIsLipSync
+      && existingAudioSliceUrl
+      && hasSameSliceRange
+      && existingSliceSourceAudioUrl
+      && existingSliceSourceAudioUrl === scenarioAudioUrl
+      && !existingSliceMatchesWorkflow
+    ) {
+      console.warn("[SCENARIO AUDIO SLICE REUSE SKIPPED]", {
+        sceneId,
+        audioSliceWorkflowKey,
+        existingAudioSliceKind,
+        existingMusicVocalLipSyncAllowed,
+        reason: "stale_slice_not_matching_lipsync_workflow",
+      });
+    }
+    if (existingAudioSliceUrl && hasSameSliceRange && existingSliceSourceAudioUrl && existingSliceSourceAudioUrl === scenarioAudioUrl && existingSliceMatchesWorkflow) {
       console.info("[SCENARIO AUDIO SLICE REUSE]", {
         sceneId,
         audioSliceUrl: existingAudioSliceUrl,
@@ -14798,30 +14858,6 @@ Aspect ratio: ${imageFormat}`,
     }, { actionName: "take_audio", preserveSourceFieldsInVideoActions: true });
 
     try {
-      const audioSliceVideoProfile = resolveScenarioSceneVideoProfile(scene || {});
-      const audioSliceWorkflowKey =
-        normalizeScenarioVideoWorkflowAlias(
-          audioSliceVideoProfile?.canonicalRoute
-          || audioSliceVideoProfile?.routeResolved
-          || scene?.resolvedWorkflowKey
-          || scene?.resolved_workflow_key
-          || scene?.videoGenerationRoute
-          || scene?.video_generation_route
-          || scene?.plannedVideoGenerationRoute
-          || scene?.planned_video_generation_route
-          || scene?.route
-          || scene?.ltxMode
-          || scene?.ltx_mode
-          || resolveScenarioWorkflowKey(scene || {})
-        )
-        || normalizeScenarioWorkflowKeyForProduction(
-          scene?.resolvedWorkflowKey
-          || scene?.resolved_workflow_key
-          || resolveScenarioWorkflowKey(scene || {})
-        );
-      const audioSliceIsLipSync =
-        audioSliceWorkflowKey === "lip_sync_music"
-        || audioSliceWorkflowKey === "lip_sync";
       const renderMode = String(scene?.renderMode || scene?.render_mode || (audioSliceIsLipSync ? "lip_sync_music" : ""));
       const ltxMode = String(scene?.ltxMode || scene?.ltx_mode || (audioSliceIsLipSync ? "lip_sync" : audioSliceWorkflowKey));
       console.debug("[SCENARIO AUDIO SLICE REQUEST ROUTE]", {
