@@ -1184,6 +1184,55 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
 
 export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = null) {
   const source = scene && typeof scene === "object" ? scene : {};
+  const sourceRoutePayload = source.route_payload && typeof source.route_payload === "object"
+    ? source.route_payload
+    : (source.routePayload && typeof source.routePayload === "object" ? source.routePayload : {});
+  const sourceVideoMetadata = source.video_metadata && typeof source.video_metadata === "object"
+    ? source.video_metadata
+    : (source.videoMetadata && typeof source.videoMetadata === "object" ? source.videoMetadata : {});
+  const sourceEngineHints = source.engine_hints && typeof source.engine_hints === "object"
+    ? source.engine_hints
+    : (source.engineHints && typeof source.engineHints === "object" ? source.engineHints : {});
+  const sourcePromptSource = normalizeText(source.prompt_source ?? source.promptSource);
+  const canonicalFinalPositivePrompt = normalizeText(
+    sourceRoutePayload.positive_prompt
+    ?? sourceRoutePayload.positivePrompt
+    ?? source.finalVideoPrompt?.positivePrompt
+    ?? source.final_video_prompt?.positive_prompt
+    ?? source.video_prompt
+    ?? source.videoPrompt
+    ?? source.ltx_positive
+    ?? source.ltxPositive
+  );
+  const canonicalFinalNegativePrompt = normalizeText(
+    sourceRoutePayload.negative_prompt
+    ?? sourceRoutePayload.negativePrompt
+    ?? source.finalVideoPrompt?.negativePrompt
+    ?? source.final_video_prompt?.negative_prompt
+    ?? source.negative_video_prompt
+    ?? source.negativeVideoPrompt
+    ?? source.ltx_negative
+    ?? source.ltxNegative
+  );
+  const canonicalFirstFramePrompt = normalizeText(
+    sourceRoutePayload.first_frame_prompt
+    ?? sourceRoutePayload.firstFramePrompt
+    ?? source.first_frame_prompt
+    ?? source.firstFramePrompt
+  );
+  const canonicalLastFramePrompt = normalizeText(
+    sourceRoutePayload.last_frame_prompt
+    ?? sourceRoutePayload.lastFramePrompt
+    ?? source.last_frame_prompt
+    ?? source.lastFramePrompt
+  );
+  const normalizedFinalRoutePayload = {
+    ...sourceRoutePayload,
+    positive_prompt: canonicalFinalPositivePrompt,
+    negative_prompt: canonicalFinalNegativePrompt,
+    first_frame_prompt: canonicalFirstFramePrompt || null,
+    last_frame_prompt: canonicalLastFramePrompt || null,
+  };
   const normalizedSceneIndexRaw = Number(source.sceneIndex ?? source.scene_index ?? source.index);
   const normalizedSceneIndex = Number.isFinite(normalizedSceneIndexRaw) && normalizedSceneIndexRaw > 0
     ? Math.floor(normalizedSceneIndexRaw)
@@ -1321,6 +1370,27 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     imagePromptEn: imageDual.en,
     videoPromptRu: videoDual.ru,
     videoPromptEn: videoDual.en,
+    route_payload: normalizedFinalRoutePayload,
+    routePayload: normalizedFinalRoutePayload,
+    finalVideoPrompt: {
+      positivePrompt: canonicalFinalPositivePrompt,
+      negativePrompt: canonicalFinalNegativePrompt,
+      firstFramePrompt: canonicalFirstFramePrompt,
+      lastFramePrompt: canonicalLastFramePrompt,
+      promptSource: sourcePromptSource || "gemini_final_video_prompt_v11",
+    },
+    video_metadata: sourceVideoMetadata,
+    videoMetadata: sourceVideoMetadata,
+    engine_hints: sourceEngineHints,
+    engineHints: sourceEngineHints,
+    prompt_source: sourcePromptSource,
+    promptSource: sourcePromptSource,
+    video_prompt: canonicalFinalPositivePrompt,
+    negative_video_prompt: canonicalFinalNegativePrompt,
+    first_frame_prompt: canonicalFirstFramePrompt,
+    last_frame_prompt: canonicalLastFramePrompt,
+    ltx_positive: canonicalFinalPositivePrompt,
+    ltx_negative: canonicalFinalNegativePrompt,
     videoNegativePrompt: videoNegativePrompt || undefined,
     video_negative_prompt: videoNegativePrompt || undefined,
     negativeVideoPrompt: videoNegativePrompt || undefined,
