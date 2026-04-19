@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
@@ -56,6 +57,92 @@ CLEAR_VOCAL_PERFORMANCE = (
 IDENTITY_NEGATIVE_GUARD = (
     "different woman, different face, changed face, changed body type, slimmer body, thinner waist, longer legs, narrower shoulders, changed bust, changed hips, changed silhouette, different outfit, changed neckline, raised neckline, high-neck top, turtleneck, closed collar, added collar, added sleeves, longer shirt, changed jewelry, missing jewelry, different hairstyle, different hair length, age drift, body proportion drift"
 )
+
+
+_CONFIRMED_HERO_URL_KEYS = (
+    "confirmed_hero_image_url",
+    "confirmedHeroImageUrl",
+    "confirmed_look_image_url",
+    "confirmedLookImageUrl",
+    "hero_reference_url",
+    "heroReferenceUrl",
+)
+
+
+def _has_url_token(value: Any) -> bool:
+    if isinstance(value, str):
+        token = value.strip().lower()
+        return token.startswith(("http://", "https://"))
+    if isinstance(value, dict):
+        return any(_has_url_token(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_url_token(v) for v in value)
+    return False
+
+
+def _has_real_confirmed_hero_image_url(fallback_row: dict[str, Any]) -> bool:
+    prompt_row = _safe_dict(fallback_row.get("prompt_row"))
+    plan_row = _safe_dict(fallback_row.get("plan_row"))
+    role_row = _safe_dict(fallback_row.get("role_row"))
+    for src in (fallback_row, prompt_row, plan_row, role_row):
+        for key in _CONFIRMED_HERO_URL_KEYS:
+            if _has_url_token(_safe_dict(src).get(key)):
+                return True
+    for src in (prompt_row, plan_row):
+        for key in ("source_image_refs", "image_refs"):
+            refs = _safe_list(_safe_dict(src).get(key))
+            if any(_has_url_token(v) for v in refs):
+                return True
+    return False
+
+
+def _sanitize_contract_prompts(*, positive_prompt: str, negative_prompt: str, route: str) -> tuple[str, str]:
+    positive = str(positive_prompt or "").strip()
+    negative = str(negative_prompt or "").strip()
+
+    positive = re.sub(
+        r"(?i)(?:^|\s)GLOBAL HERO IDENTITY LOCK, BODY CONTINUITY, WARDROBE CONTINUITY\.?",
+        " ",
+        positive,
+    )
+    negative = re.sub(r"(?i)GLOBAL HERO IDENTITY CONTRACT\.?", " ", negative)
+
+    if route == "ia2v" and positive:
+        full_block = CLEAR_VOCAL_PERFORMANCE.strip()
+        if full_block.lower() in positive.lower() or "clear vocal performance:" in positive.lower():
+            escaped_full = re.escape(full_block)
+            positive = re.sub(fr"(?i){escaped_full}", " ", positive)
+            positive = re.sub(r"(?i)\bCLEAR VOCAL PERFORMANCE\.?", " ", positive)
+            positive = f"{full_block} {positive}".strip()
+
+    positive = re.sub(r"\s+", " ", positive).strip()
+    negative = re.sub(r"\s+", " ", negative).strip(" ,")
+    return positive, negative
+
+
+def _rewire_shadow_continuity(previous_seg: dict[str, Any], current_seg: dict[str, Any]) -> None:
+    prev_end = str(previous_seg.get("ends_with_state") or "").lower()
+    if not any(token in prev_end for token in ("deeper shadows", "shadow pocket", "corridor exit", "reflective darkness")):
+        return
+
+    route_payload = _safe_dict(current_seg.get("route_payload"))
+    starts_logic = str(current_seg.get("starts_from_previous_logic") or "")
+    bridge_start = "Continues from the prior move into deeper shadows, beginning in a shadow pocket near the corridor exit."
+    if "bar threshold" in starts_logic.lower():
+        starts_logic = re.sub(r"(?i)bar threshold", "shadow pocket near corridor exit", starts_logic)
+    current_seg["starts_from_previous_logic"] = _append_clause(starts_logic, bridge_start)
+
+    positive_prompt = str(route_payload.get("positive_prompt") or "")
+    if "bar threshold" in positive_prompt.lower():
+        route_payload["positive_prompt"] = re.sub(r"(?i)bar threshold", "shadow pocket near corridor exit", positive_prompt)
+
+    first_frame = str(route_payload.get("first_frame_prompt") or "")
+    if first_frame:
+        if "bar threshold" in first_frame.lower():
+            first_frame = re.sub(r"(?i)bar threshold", "shadow pocket near corridor exit", first_frame)
+        route_payload["first_frame_prompt"] = _append_clause(first_frame, bridge_start)
+
+    current_seg["route_payload"] = route_payload
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -330,6 +417,7 @@ def _build_model_payload(package: dict[str, Any], segment_rows: list[dict[str, A
                     "body_lock_applied": True,
                     "wardrobe_lock_applied": True,
                     "confirmedHeroLookReferenceUsed": False,
+                    "confirmedHeroLookReferenceClauseApplied": False,
                     "lip_sync_shot_variant_repeated_with_previous": False,
                     "continuity_warning": "string|null",
                     "continuity_fix_applied": False,
@@ -379,7 +467,7 @@ def _build_instruction(payload: dict[str, Any]) -> str:
             "Do not add wrappers, markdown, or explanations.",
             "Do not invent extra segments and do not drop any provided segment_id.",
             "Use route semantics exactly: i2v, ia2v, first_last.",
-            "GLOBAL HERO IDENTITY CONTRACT for human/performance scenes is mandatory in route_payload.positive_prompt and route_payload.negative_prompt.",
+            "GLOBAL HERO IDENTITY CONTRACT for human/performance scenes must be enforced; keep lock clauses in positive and only real negative tokens in negative.",
             "Use these exact continuity blocks for human/performance scenes: GLOBAL HERO IDENTITY LOCK, BODY CONTINUITY, WARDROBE CONTINUITY.",
             "ALLOWED VARIATION for same hero: vary only pose, camera angle, shot size, location zone, gesture, emotion, movement and lighting accent.",
             "If segment order index is 2+, add confirmed look anchor clause: Use the confirmed hero look reference from scene_01...",
@@ -414,12 +502,13 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     negative_prompt = str(route_payload.get("negative_prompt") or fallback_prompt_row.get("negative_video_prompt") or fallback_prompt_row.get("negative_prompt") or "").strip()
     scene_seq_index = int(fallback_row.get("sequence_index") or 0)
     has_human_subject = _scene_has_human_subject(fallback_row, route)
-    confirmed_look_used = bool(has_human_subject and scene_seq_index >= 2)
+    confirmed_look_clause_applied = bool(has_human_subject and scene_seq_index >= 2)
+    confirmed_look_used = bool(confirmed_look_clause_applied and _has_real_confirmed_hero_image_url(fallback_row))
     if has_human_subject:
         positive_prompt = _append_clause(positive_prompt, GLOBAL_HERO_IDENTITY_LOCK)
         positive_prompt = _append_clause(positive_prompt, BODY_CONTINUITY_LOCK)
         positive_prompt = _append_clause(positive_prompt, WARDROBE_CONTINUITY_LOCK)
-        if confirmed_look_used:
+        if confirmed_look_clause_applied:
             positive_prompt = _append_clause(positive_prompt, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
         negative_prompt = _append_clause(negative_prompt, IDENTITY_NEGATIVE_GUARD)
 
@@ -466,6 +555,11 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         gesture = ""
         location_zone = ""
         mouth_readability = ""
+    positive_prompt, negative_prompt = _sanitize_contract_prompts(
+        positive_prompt=positive_prompt,
+        negative_prompt=negative_prompt,
+        route=route,
+    )
     negative_prompt = clean_negative_prompt_artifacts(negative_prompt)
 
     first_frame_raw = route_payload.get("first_frame_prompt")
@@ -477,6 +571,13 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
             first_frame = str(fallback_prompt_row.get("first_frame_prompt") or fallback_prompt_row.get("start_image_prompt") or "").strip()
         if not last_frame:
             last_frame = str(fallback_prompt_row.get("last_frame_prompt") or fallback_prompt_row.get("end_image_prompt") or "").strip()
+        if has_human_subject:
+            for lock_clause in (GLOBAL_HERO_IDENTITY_LOCK, BODY_CONTINUITY_LOCK, WARDROBE_CONTINUITY_LOCK):
+                first_frame = _append_clause(first_frame, lock_clause)
+                last_frame = _append_clause(last_frame, lock_clause)
+            if confirmed_look_clause_applied:
+                first_frame = _append_clause(first_frame, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
+                last_frame = _append_clause(last_frame, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
 
     if not segment_id or not positive_prompt or not negative_prompt:
         raise RuntimeError(f"final_video_prompt_invalid_segment:{segment_id or 'unknown'}")
@@ -552,6 +653,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         "body_lock_applied": bool(has_human_subject),
         "wardrobe_lock_applied": bool(has_human_subject),
         "confirmedHeroLookReferenceUsed": bool(confirmed_look_used),
+        "confirmedHeroLookReferenceClauseApplied": bool(confirmed_look_clause_applied),
         "lip_sync_shot_variant_repeated_with_previous": False,
         "continuity_warning": str(row.get("continuity_warning") or "").strip() or None,
         "continuity_fix_applied": bool(row.get("continuity_fix_applied") or False),
@@ -573,6 +675,8 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]]) -> dict[str, 
     for fallback_row in segment_rows:
         segment_id = str(fallback_row.get("segment_id") or "").strip()
         seg = _sanitize_segment(by_segment_id.get(segment_id), fallback_row)
+        if normalized:
+            _rewire_shadow_continuity(normalized[-1], seg)
         if str(seg.get("video_metadata", {}).get("route_type") or "") == "ia2v":
             current_variant = str(seg.get("lip_sync_shot_variant") or "").strip()
             repeated = bool(current_variant and previous_lip_variant and current_variant == previous_lip_variant)
@@ -668,6 +772,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
                     "hasWardrobeLock": bool(row.get("wardrobe_lock_applied")),
                     "lipSyncShotVariant": str(row.get("lip_sync_shot_variant") or ""),
                     "confirmedHeroLookReferenceUsed": bool(row.get("confirmedHeroLookReferenceUsed")),
+                    "confirmedHeroLookReferenceClauseApplied": bool(row.get("confirmedHeroLookReferenceClauseApplied")),
                     "positivePromptPreview": str(route_payload.get("positive_prompt") or "")[:220],
                     "negativePromptPreview": str(route_payload.get("negative_prompt") or "")[:220],
                 }
