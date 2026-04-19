@@ -431,14 +431,65 @@ function resolveScenarioSceneVideoMetadata(scene = {}) {
     ?? renderManifestMetadata?.routeType
     ?? ""
   ).trim();
+  const promptSource = String(scene?.prompt_source ?? scene?.promptSource ?? "").trim();
+  const isGeminiFinalVideoPrompt = promptSource === "gemini_final_video_prompt_v11"
+    || promptSource.includes("final_video_prompt");
+  const rendererFamily = String(
+    metadata?.renderer_family
+    ?? metadata?.rendererFamily
+    ?? renderManifestMetadata?.renderer_family
+    ?? renderManifestMetadata?.rendererFamily
+    ?? ""
+  ).trim().toLowerCase();
+  const hasVideoRouteOrLtxHints = Boolean(routeType) || rendererFamily === "ltx";
+  const canUseTopLevelFinalAliases = isGeminiFinalVideoPrompt || hasVideoRouteOrLtxHints;
+  const resolvedPositivePrompt = String(
+    routePayload?.positive_prompt
+    ?? routePayload?.positivePrompt
+    ?? scene?.finalVideoPrompt?.positivePrompt
+    ?? scene?.final_video_prompt?.positive_prompt
+    ?? (canUseTopLevelFinalAliases ? (scene?.video_prompt ?? scene?.videoPrompt) : "")
+    ?? scene?.ltx_positive
+    ?? scene?.ltxPositive
+    ?? ""
+  ).trim();
+  const resolvedNegativePrompt = String(
+    routePayload?.negative_prompt
+    ?? routePayload?.negativePrompt
+    ?? scene?.finalVideoPrompt?.negativePrompt
+    ?? scene?.final_video_prompt?.negative_prompt
+    ?? (canUseTopLevelFinalAliases ? (scene?.negative_video_prompt ?? scene?.negativeVideoPrompt) : "")
+    ?? scene?.ltx_negative
+    ?? scene?.ltxNegative
+    ?? ""
+  ).trim();
+  const resolvedFirstFramePrompt = String(
+    routePayload?.first_frame_prompt
+    ?? routePayload?.firstFramePrompt
+    ?? (canUseTopLevelFinalAliases ? (scene?.first_frame_prompt ?? scene?.firstFramePrompt) : "")
+    ?? ""
+  ).trim();
+  const resolvedLastFramePrompt = String(
+    routePayload?.last_frame_prompt
+    ?? routePayload?.lastFramePrompt
+    ?? (canUseTopLevelFinalAliases ? (scene?.last_frame_prompt ?? scene?.lastFramePrompt) : "")
+    ?? ""
+  ).trim();
+  const normalizedRoutePayload = {
+    ...routePayload,
+    positive_prompt: resolvedPositivePrompt,
+    negative_prompt: resolvedNegativePrompt,
+    first_frame_prompt: resolvedFirstFramePrompt || null,
+    last_frame_prompt: resolvedLastFramePrompt || null,
+  };
   return {
-    positivePrompt: String(routePayload?.positive_prompt ?? routePayload?.positivePrompt ?? "").trim(),
-    negativePrompt: String(routePayload?.negative_prompt ?? routePayload?.negativePrompt ?? "").trim(),
-    firstFramePrompt: String(routePayload?.first_frame_prompt ?? routePayload?.firstFramePrompt ?? "").trim(),
-    lastFramePrompt: String(routePayload?.last_frame_prompt ?? routePayload?.lastFramePrompt ?? "").trim(),
+    positivePrompt: resolvedPositivePrompt,
+    negativePrompt: resolvedNegativePrompt,
+    firstFramePrompt: resolvedFirstFramePrompt,
+    lastFramePrompt: resolvedLastFramePrompt,
     routeType,
-    promptSource: String(scene?.prompt_source ?? scene?.promptSource ?? "").trim(),
-    routePayload,
+    promptSource,
+    routePayload: normalizedRoutePayload,
     engineHints,
     videoMetadata: metadata,
     raw: {
@@ -446,7 +497,7 @@ function resolveScenarioSceneVideoMetadata(scene = {}) {
       engine_hints: engineHints,
       video_metadata: metadata,
       audio_behavior_hints: String(scene?.audio_behavior_hints ?? scene?.audioBehaviorHints ?? "").trim(),
-      prompt_source: String(scene?.prompt_source ?? scene?.promptSource ?? "").trim(),
+      prompt_source: promptSource,
     },
   };
 }
@@ -15721,6 +15772,17 @@ Aspect ratio: ${imageFormat}`,
     const sceneVideoMetadata = resolveScenarioSceneVideoMetadata(targetScene);
     const canonicalFinalPromptMissing = !sceneVideoMetadata.positivePrompt || !sceneVideoMetadata.negativePrompt;
     if (canonicalFinalPromptMissing) {
+      console.warn("[SCENARIO VIDEO BLOCKED FINAL PROMPT MISSING]", {
+        sceneId,
+        workflowKey: effectiveWorkflowKey,
+        promptSource: targetScene?.prompt_source || targetScene?.promptSource || "",
+        hasRoutePayload: Boolean(targetScene?.route_payload || targetScene?.routePayload),
+        routePayloadKeys: Object.keys(targetScene?.route_payload || targetScene?.routePayload || {}),
+        hasTopLevelVideoPrompt: Boolean(targetScene?.video_prompt || targetScene?.videoPrompt),
+        hasTopLevelNegativeVideoPrompt: Boolean(targetScene?.negative_video_prompt || targetScene?.negativeVideoPrompt),
+        hasVideoMetadata: Boolean(targetScene?.video_metadata || targetScene?.videoMetadata),
+        videoMetadata: targetScene?.video_metadata || targetScene?.videoMetadata || null,
+      });
       const errorCode = "final_video_prompt_missing";
       blockScenarioVideoGeneration(errorCode, "Отсутствует canonical FINAL VIDEO PROMPT. Выполните стадию FINAL VIDEO PROMPT и повторите.");
       return;
@@ -15875,16 +15937,12 @@ Aspect ratio: ${imageFormat}`,
       const endpoint = "/api/clip/video/start";
       console.info("[SCENARIO VIDEO SEND START]", {
         sceneId,
-        rawRoute,
         workflowKey: effectiveWorkflowKey,
-        hasSourceImage: Boolean(frameImageUrl),
-        hasStartImage: Boolean(resolvedFirstFrameUrl),
-        hasEndImage: Boolean(resolvedLastFrameUrl),
-        hasAudioSlice: Boolean(attachedAudioSliceUrl),
-        audioSliceKind: audioSliceKind || "none",
-        musicVocalLipSyncAllowed,
-        willSendVideo: true,
-        blockReason: "",
+        promptSource: sceneVideoMetadata.promptSource,
+        positiveLength: sceneVideoMetadata.positivePrompt.length,
+        negativeLength: sceneVideoMetadata.negativePrompt.length,
+        hasRoutePayloadPositive: Boolean(sceneVideoMetadata.routePayload?.positive_prompt),
+        hasRoutePayloadNegative: Boolean(sceneVideoMetadata.routePayload?.negative_prompt),
       });
       console.debug("[SCENARIO VIDEO SEND ROUTE]", {
         route: endpoint,
