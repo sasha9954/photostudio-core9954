@@ -5362,6 +5362,9 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_segmentation_retry_feedback"] = ""
     diagnostics["audio_map_segmentation_last_error_code"] = ""
     diagnostics["audio_map_segmentation_last_errors"] = []
+    diagnostics["audio_map_video_ready_validation"] = False
+    diagnostics["audio_map_short_segments_found"] = []
+    diagnostics["audio_map_validation_error"] = ""
     diagnostics["audio_segmentation_source_mode"] = "none"
     diagnostics["audio_segmentation_local_path_found"] = False
     diagnostics["audio_segmentation_inline_attempted"] = False
@@ -5432,7 +5435,18 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 raw_analysis = {}
     diagnostics["audio_map_stage_branch"] = "gemini_strict_v11"
 
+    def _collect_short_segments(errors: list[str]) -> list[str]:
+        return [str(item) for item in errors if "duration_sec must be >= 3.0" in str(item)]
+
     def _validation_feedback(code: str, errors: list[str]) -> str:
+        short_segments = _collect_short_segments(errors)
+        if short_segments:
+            short_summary = "; ".join(short_segments[:6])
+            return (
+                "Your previous audio_map violated the video-ready segmentation contract. "
+                "The following segments were shorter than 3.0 seconds: "
+                f"{short_summary}. Return a corrected audio_map where short phrase_units are merged into valid video-ready segments."
+            )[:1500]
         detail = "; ".join([str(item) for item in errors[:6]])
         prefix = "Hard boundary violation. " if code == "AUDIO_PLOT_LEAKAGE" else ""
         return f"{prefix}{code}: {detail}"[:1500]
@@ -5481,6 +5495,9 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["audio_map_segmentation_validation_errors"] = strict_result.errors
                 diagnostics["audio_map_segmentation_last_error_code"] = strict_result.error_code if not strict_result.ok else ""
                 diagnostics["audio_map_segmentation_last_errors"] = strict_result.errors if not strict_result.ok else []
+                diagnostics["audio_map_short_segments_found"] = _collect_short_segments(strict_result.errors if not strict_result.ok else [])
+                diagnostics["audio_map_video_ready_validation"] = bool(strict_result.ok)
+                diagnostics["audio_map_validation_error"] = strict_result.error_code if not strict_result.ok else ""
                 if strict_result.ok:
                     normalized_diag = _safe_dict(strict_result.normalized.get("diagnostics")) if isinstance(strict_result.normalized, dict) else {}
                     diagnostics["audio_map_gap_sum_sec"] = _to_float(normalized_diag.get("gap_sum_sec"), 0.0)
@@ -5499,6 +5516,8 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
             break
 
         if not strict_result or not strict_result.ok:
+            if last_error_code == "AUDIO_MAP_INVALID_SHORT_SEGMENT":
+                diagnostics["audio_map_validation_error"] = "AUDIO_MAP_INVALID_SHORT_SEGMENT"
             raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
 
         audio_map = _build_legacy_compat_audio_payload_from_segments_v11(

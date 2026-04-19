@@ -15,16 +15,19 @@ ERROR_AUDIO_TIMING = "AUDIO_TIMING_VIOLATION"
 ERROR_AUDIO_PLOT_LEAKAGE = "AUDIO_PLOT_LEAKAGE"
 ERROR_AUDIO_NO_SPLIT_CONFLICT = "AUDIO_NO_SPLIT_CONFLICT"
 ERROR_AUDIO_SCHEMA_INVALID = "AUDIO_SCHEMA_INVALID"
+ERROR_AUDIO_MAP_INVALID_SHORT_SEGMENT = "AUDIO_MAP_INVALID_SHORT_SEGMENT"
 
 
 class AudioSegmentV11(BaseModel):
     segment_id: str
     t0: float
     t1: float
+    duration_sec: float
     transcript_slice: str
     intensity: float = Field(ge=0.0, le=1.0)
     is_lip_sync_candidate: bool
     rhythmic_anchor: Literal["beat", "drop", "transition", "none"]
+    first_last_candidate: bool = False
 
 
 class NoSplitRangeV11(BaseModel):
@@ -124,6 +127,15 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
             errors.append(_fmt(idx, "negative timestamps are forbidden"))
         if seg.t0 >= seg.t1:
             errors.append(_fmt(idx, "t0 must be strictly less than t1"))
+        if seg.duration_sec < 3.0:
+            errors.append(_fmt(idx, f"duration_sec must be >= 3.0; got {seg.duration_sec:.3f}"))
+        if seg.first_last_candidate and seg.duration_sec < 4.0:
+            errors.append(_fmt(idx, f"first_last_candidate requires duration_sec >= 4.0; got {seg.duration_sec:.3f}"))
+        expected_duration = max(0.0, seg.t1 - seg.t0)
+        if abs(expected_duration - seg.duration_sec) > 0.12:
+            errors.append(
+                _fmt(idx, f"duration_sec mismatch; expected {expected_duration:.3f} from t1-t0, got {seg.duration_sec:.3f}")
+            )
         if _is_placeholder_text(seg.transcript_slice):
             errors.append(_fmt(idx, "transcript_slice placeholder/empty is forbidden"))
         if prev_t1 is not None:
@@ -142,6 +154,9 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
         return AudioMapValidationResult(False, ERROR_AUDIO_TIMING, "segments must be sorted by t0", ["segments not sorted"], normalized)
 
     if errors:
+        has_short_segment_error = any("duration_sec must be >= 3.0" in msg for msg in errors)
+        if has_short_segment_error:
+            return AudioMapValidationResult(False, ERROR_AUDIO_MAP_INVALID_SHORT_SEGMENT, "video-ready short segment violation", errors, normalized)
         return AudioMapValidationResult(False, ERROR_AUDIO_TIMING, "segment timing/fields invalid", errors, normalized)
 
     first_t0 = segments[0].t0
