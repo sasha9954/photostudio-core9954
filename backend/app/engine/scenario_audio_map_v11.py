@@ -33,6 +33,16 @@ class AudioSegmentV11(BaseModel):
     route_hints: dict[str, Literal["good", "ok", "too_short", "too_long"]] | None = None
 
 
+class PhraseUnitV11(BaseModel):
+    id: str | None = None
+    t0: float
+    t1: float
+    duration_sec: float | None = None
+    text: str | None = None
+    transcript_slice: str | None = None
+    intensity: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class NoSplitRangeV11(BaseModel):
     start: float
     end: float
@@ -51,6 +61,7 @@ class AudioMapV11(BaseModel):
     audio_map_version: Literal["1.1"]
     audio_id: str
     segments: list[AudioSegmentV11]
+    phrase_units: list[PhraseUnitV11] = Field(default_factory=list)
     no_split_ranges: list[NoSplitRangeV11] = Field(default_factory=list)
     diagnostics: AudioDiagnosticsV11
 
@@ -109,6 +120,15 @@ def _has_natural_tail_hint(transcript_slice: str) -> bool:
     return any(token in text for token in tail_tokens)
 
 
+def _has_compact_i2v_evidence(seg: AudioSegmentV11) -> bool:
+    if seg.first_last_candidate:
+        return False
+    route_hints = seg.route_hints or {}
+    i2v_fit = str(route_hints.get("i2v_fit") or "").strip().lower()
+    lip_sync_fit = str(route_hints.get("lip_sync_fit") or "").strip().lower()
+    return i2v_fit in {"good", "ok"} and lip_sync_fit in {"", "too_short", "ok"}
+
+
 def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float) -> AudioMapValidationResult:
     errors: list[str] = []
     normalized: dict[str, Any] = {}
@@ -140,7 +160,7 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
             errors.append(_fmt(idx, "t0 must be strictly less than t1"))
         if seg.duration_sec < 2.5:
             errors.append(_fmt(idx, f"duration_sec too short for standalone video segment (<2.5s): {seg.duration_sec:.3f}"))
-        elif seg.duration_sec < 2.8 and not _has_natural_tail_hint(seg.transcript_slice):
+        elif seg.duration_sec < 2.8 and not (_has_natural_tail_hint(seg.transcript_slice) or _has_compact_i2v_evidence(seg)):
             errors.append(_fmt(idx, f"duration_sec <2.8s without natural tail/reaction evidence: {seg.duration_sec:.3f}"))
         if seg.first_last_candidate and seg.duration_sec < 4.0:
             errors.append(_fmt(idx, f"first_last_candidate requires duration_sec >= 4.0; got {seg.duration_sec:.3f}"))
