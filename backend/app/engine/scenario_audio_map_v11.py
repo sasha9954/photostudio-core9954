@@ -7,6 +7,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 RHYTHMIC_ANCHORS = ("beat", "drop", "transition", "none")
+VOCAL_GENDERS = ("female", "male", "mixed", "unknown")
+VOCAL_OWNER_ROLES = ("character_1", "character_2", "character_3", "unknown")
 
 ERROR_AUDIO_EMPTY_MAP = "AUDIO_EMPTY_MAP"
 ERROR_AUDIO_GAP = "AUDIO_GAP_ERROR"
@@ -57,9 +59,20 @@ class AudioDiagnosticsV11(BaseModel):
     validation_notes: list[str] = Field(default_factory=list)
 
 
+class VocalProfileV11(BaseModel):
+    vocal_gender: Literal["female", "male", "mixed", "unknown"] = "unknown"
+    vocal_owner_role: Literal["character_1", "character_2", "character_3", "unknown"] = "unknown"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str = ""
+
+
 class AudioMapV11(BaseModel):
     audio_map_version: Literal["1.1"]
     audio_id: str
+    vocal_profile: VocalProfileV11 = Field(default_factory=VocalProfileV11)
+    vocal_gender: Literal["female", "male", "mixed", "unknown"] = "unknown"
+    vocal_owner_role: Literal["character_1", "character_2", "character_3", "unknown"] = "unknown"
+    vocal_owner_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     segments: list[AudioSegmentV11]
     phrase_units: list[PhraseUnitV11] = Field(default_factory=list)
     no_split_ranges: list[NoSplitRangeV11] = Field(default_factory=list)
@@ -140,6 +153,30 @@ def validate_audio_map_v11(payload: dict[str, Any], *, audio_duration_sec: float
         return AudioMapValidationResult(False, ERROR_AUDIO_SCHEMA_INVALID, "schema validation failed", [str(exc)], normalized)
 
     normalized = model.model_dump(mode="python")
+    if isinstance(normalized, dict):
+        vocal_profile = normalized.setdefault("vocal_profile", {}) if isinstance(normalized.get("vocal_profile"), dict) else {}
+        profile_gender = str(vocal_profile.get("vocal_gender") or "").strip().lower()
+        profile_owner = str(vocal_profile.get("vocal_owner_role") or "").strip()
+        profile_confidence = float(vocal_profile.get("confidence") or 0.0)
+        normalized["vocal_gender"] = (
+            str(normalized.get("vocal_gender") or "").strip().lower()
+            if str(normalized.get("vocal_gender") or "").strip().lower() in VOCAL_GENDERS
+            else (profile_gender if profile_gender in VOCAL_GENDERS else "unknown")
+        )
+        normalized["vocal_owner_role"] = (
+            str(normalized.get("vocal_owner_role") or "").strip()
+            if str(normalized.get("vocal_owner_role") or "").strip() in VOCAL_OWNER_ROLES
+            else (profile_owner if profile_owner in VOCAL_OWNER_ROLES else "unknown")
+        )
+        try:
+            top_conf = float(normalized.get("vocal_owner_confidence") or 0.0)
+        except Exception:
+            top_conf = 0.0
+        normalized["vocal_owner_confidence"] = max(0.0, min(1.0, top_conf if top_conf > 0.0 else profile_confidence))
+        vocal_profile["vocal_gender"] = normalized["vocal_gender"]
+        vocal_profile["vocal_owner_role"] = normalized["vocal_owner_role"]
+        vocal_profile["confidence"] = normalized["vocal_owner_confidence"]
+        vocal_profile["reason"] = str(vocal_profile.get("reason") or "")
     segments = model.segments
     duration = max(0.0, float(audio_duration_sec or 0.0))
     gap_tolerance = 0.12

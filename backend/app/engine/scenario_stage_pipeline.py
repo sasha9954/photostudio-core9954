@@ -2351,6 +2351,35 @@ def _extract_role_identity_expectations(input_pkg: dict[str, Any], assigned_role
     return expectations
 
 
+def _extract_role_identity_mapping_payload(input_pkg: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    sources: list[dict[str, Any]] = [
+        _safe_dict(input_pkg.get("role_identity_mapping")),
+        _safe_dict(connected_summary.get("role_identity_mapping")),
+    ]
+    out: dict[str, dict[str, Any]] = {}
+    for source in sources:
+        for role in ("character_1", "character_2", "character_3"):
+            if role in out:
+                continue
+            row = _safe_dict(source.get(role))
+            if not row:
+                continue
+            out[role] = {
+                "identity_label": str(row.get("identity_label") or "").strip(),
+                "gender_hint": str(row.get("gender_hint") or "").strip(),
+            }
+    return out
+
+
+def _resolve_vocal_owner_role_by_gender(vocal_gender: str, role_gender_map: dict[str, str]) -> str:
+    token = str(vocal_gender or "").strip().lower()
+    if token not in {"female", "male"}:
+        return "unknown"
+    matches = [role for role in ("character_1", "character_2", "character_3") if role_gender_map.get(role) == token]
+    return matches[0] if len(matches) == 1 else "unknown"
+
+
 def _alias_pattern(alias: str) -> str:
     return rf"(?<![A-Za-zА-Яа-яЁё]){re.escape(str(alias or '').strip().lower())}(?![A-Za-zА-Яа-яЁё])"
 
@@ -5673,6 +5702,10 @@ def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any]
     return {
         "audio_map_version": "1.1",
         "audio_id": str(payload.get("audio_id") or ""),
+        "vocal_profile": _safe_dict(payload.get("vocal_profile")),
+        "vocal_gender": str(payload.get("vocal_gender") or "unknown").strip().lower() or "unknown",
+        "vocal_owner_role": str(payload.get("vocal_owner_role") or "unknown").strip() or "unknown",
+        "vocal_owner_confidence": _to_float(payload.get("vocal_owner_confidence"), 0.0),
         "duration_sec": round(duration_sec, 3),
         "analysis_mode": analysis_mode,
         "diagnostics": _safe_dict(payload.get("diagnostics")),
@@ -5749,6 +5782,10 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_grid_like_segmentation"] = False
     diagnostics["audio_map_music_signal_mode"] = "none"
     diagnostics["audio_map_dynamics_available"] = False
+    diagnostics["audio_map_vocal_gender"] = "unknown"
+    diagnostics["audio_map_vocal_owner_role"] = "unknown"
+    diagnostics["audio_map_vocal_owner_confidence"] = 0.0
+    diagnostics["audio_map_voice_reason"] = ""
     diagnostics["transcript_available"] = False
     diagnostics["word_timestamp_count"] = 0
     diagnostics["phrase_unit_count"] = 0
@@ -5763,6 +5800,8 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("AUDIO_TIMING_VIOLATION:audio_duration_missing_or_invalid")
 
     transcript_text = _extract_audio_transcript_text(input_pkg)
+    role_identity_mapping_payload = _extract_role_identity_mapping_payload(input_pkg)
+    role_identity_expectations = _extract_role_identity_expectations(input_pkg, _safe_dict(input_pkg.get("assigned_roles")))
     raw_analysis: dict[str, Any] = {}
     analysis_path = ""
     cleanup_path: str | None = None
@@ -5850,6 +5889,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 audio_id=str(input_pkg.get("job_id") or input_pkg.get("id") or "audio_source"),
                 transcript_text=transcript_text,
                 dynamics_summary=_safe_dict(raw_analysis.get("summary")),
+                role_identity_mapping=role_identity_mapping_payload,
                 validation_feedback=validation_feedback,
             )
             diagnostics["audio_map_segmentation_prompt_version"] = str(gemini_result.get("prompt_version") or "")
@@ -5923,6 +5963,25 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_map["story_core_mode"] = story_core_mode
     audio_map["story_core_arc_ref"] = str(story_core.get("global_arc") or "")
     audio_map["audio_dramaturgy"] = _build_audio_dramaturgy_summary(audio_map, input_pkg, content_type)
+    vocal_profile = _safe_dict(audio_map.get("vocal_profile"))
+    vocal_gender = str(vocal_profile.get("vocal_gender") or audio_map.get("vocal_gender") or "unknown").strip().lower()
+    if vocal_gender not in {"female", "male", "mixed", "unknown"}:
+        vocal_gender = "unknown"
+    resolved_vocal_owner_role = _resolve_vocal_owner_role_by_gender(vocal_gender, role_identity_expectations)
+    gemini_vocal_owner_role = str(vocal_profile.get("vocal_owner_role") or audio_map.get("vocal_owner_role") or "unknown").strip() or "unknown"
+    vocal_owner_reason = str(vocal_profile.get("reason") or "").strip()
+    vocal_owner_confidence = _to_float(vocal_profile.get("confidence"), _to_float(audio_map.get("vocal_owner_confidence"), 0.0))
+    if resolved_vocal_owner_role == "unknown":
+        vocal_owner_confidence = min(vocal_owner_confidence, 0.49)
+    audio_map["vocal_profile"] = {
+        "vocal_gender": vocal_gender,
+        "vocal_owner_role": gemini_vocal_owner_role if gemini_vocal_owner_role in {"character_1", "character_2", "character_3", "unknown"} else "unknown",
+        "confidence": round(max(0.0, min(1.0, vocal_owner_confidence)), 3),
+        "reason": vocal_owner_reason,
+    }
+    audio_map["vocal_gender"] = vocal_gender
+    audio_map["vocal_owner_role"] = resolved_vocal_owner_role
+    audio_map["vocal_owner_confidence"] = round(max(0.0, min(1.0, vocal_owner_confidence)), 3)
     audio_map.setdefault(
         "transcript_available",
         bool(transcript_text and str(audio_map.get("analysis_mode") or "") in {"transcript_alignment_v2", "approximate_phrase_grouping_v1"}),
@@ -6008,6 +6067,10 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_dynamics_available"] = dynamics_available
     diagnostics["audio_map_dramaturgy_source"] = str(_safe_dict(audio_map.get("audio_dramaturgy")).get("dramaturgy_source") or "")
     diagnostics["audio_map_textual_directive_present"] = bool(_safe_dict(audio_map.get("audio_dramaturgy")).get("textual_directive_present"))
+    diagnostics["audio_map_vocal_gender"] = str(audio_map.get("vocal_gender") or "unknown")
+    diagnostics["audio_map_vocal_owner_role"] = str(audio_map.get("vocal_owner_role") or "unknown")
+    diagnostics["audio_map_vocal_owner_confidence"] = _to_float(audio_map.get("vocal_owner_confidence"), 0.0)
+    diagnostics["audio_map_voice_reason"] = str(_safe_dict(audio_map.get("vocal_profile")).get("reason") or "")
     package["diagnostics"] = diagnostics
     package["audio_map"] = audio_map
     _append_diag_event(package, "audio_map generated", stage_id="audio_map")
@@ -6210,6 +6273,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_lipsync_streak_guard_relaxed"] = False
     diagnostics["scene_plan_route_budget_validation_mode"] = "mixed"
     diagnostics["scene_plan_lipsync_streak_warning"] = ""
+    diagnostics["scenes_vocal_owner_role_used"] = "unknown"
     diagnostics["validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
@@ -6345,6 +6409,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_lipsync_streak_guard_relaxed"] = bool(route_budget_meta.get("lipsync_streak_guard_relaxed"))
     diagnostics["scene_plan_route_budget_validation_mode"] = str(route_budget_meta.get("route_budget_validation_mode") or "mixed")
     diagnostics["scene_plan_lipsync_streak_warning"] = str(route_budget_meta.get("lipsync_streak_warning") or "")
+    diagnostics["scenes_vocal_owner_role_used"] = str(scene_diag.get("vocal_owner_role") or "unknown")
     if not route_budget_ok:
         diagnostics["scene_plan_validation_error"] = route_budget_feedback or diagnostics["scene_plan_validation_error"]
         diagnostics["scene_plan_error_code"] = diagnostics["scene_plan_error_code"] or "SCENES_ROUTE_INCOMPATIBILITY"
