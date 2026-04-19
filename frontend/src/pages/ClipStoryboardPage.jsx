@@ -223,6 +223,13 @@ const normalizeDirectRouteToWorkflowKey = (value) => {
   return "";
 };
 
+function normalizeFirstLastSlotAlias(slot) {
+  const raw = String(slot || "").trim().toLowerCase();
+  if (["start", "first", "first_frame", "start_frame", "opening", "opening_frame"].includes(raw)) return "start";
+  if (["end", "last", "last_frame", "end_frame", "closing", "closing_frame"].includes(raw)) return "end";
+  return "single";
+}
+
 const normalizeScenarioVideoWorkflowAlias = (value) => {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return "";
@@ -13046,11 +13053,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const canonicalRoute = String(videoProfile?.canonicalRoute || "").trim().toLowerCase();
     const imageStrategy = String(targetScene?.imageStrategy || videoProfile?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
     const requestedSlotRaw = String(slot || "single").trim().toLowerCase();
-    const requestedSlot = (requestedSlotRaw === "start" || requestedSlotRaw === "first")
-      ? "start"
-      : (requestedSlotRaw === "end" || requestedSlotRaw === "last")
-        ? "end"
-        : "single";
+    const requestedSlot = normalizeFirstLastSlotAlias(requestedSlotRaw);
     const isTwoFrameScene = Boolean(
       videoProfile?.requiresTwoFrames
       || canonicalRoute === "f_l"
@@ -13086,10 +13089,18 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const sceneId = requestSceneId;
     if (!sceneId) throw new Error("scene_id_required");
     const imageLockKey = `${targetNodeId}:${sceneId}:${normalizedSlot}`;
+    const runtimeSceneState = targetNode?.data?.sceneGeneration?.[sceneId] || {};
     const frameKind = normalizedSlot === "end" ? "last" : (normalizedSlot === "start" ? "first" : "single");
+    console.info("[SCENARIO FIRST_LAST IMAGE CLICK]", {
+      sceneId,
+      requestedSlotRaw,
+      normalizedSlot,
+      frameKind,
+      currentStartStatus: runtimeSceneState?.startFrameImageStatus || runtimeSceneState?.startFrameStatus || "",
+      currentEndStatus: runtimeSceneState?.endFrameImageStatus || runtimeSceneState?.endFrameStatus || "",
+    });
     const frameRole = frameKind === "first" ? "first_frame" : (frameKind === "last" ? "last_frame" : "scene_image");
     const targetField = frameKind === "first" ? "startImageUrl" : (frameKind === "last" ? "endImageUrl" : "imageUrl");
-    const runtimeSceneState = targetNode?.data?.sceneGeneration?.[sceneId] || {};
     const previousImageRuntimeStatus = String(targetScene?.imageStatus || "").trim().toLowerCase();
     const existingRuntimeStatus = String(
       isTwoFrameScene
@@ -14860,11 +14871,24 @@ Aspect ratio: ${imageFormat}`,
         frameKind,
       });
       const finalRuntimeState = ((nodesRef.current || []).find((nodeItem) => nodeItem?.id === targetNodeId)?.data?.sceneGeneration || {})?.[sceneId] || {};
-      if (isTwoFrameScene && normalizedSlot === "start" && String(finalRuntimeState?.startFrameImageStatus || finalRuntimeState?.startFrameStatus || "").trim().toLowerCase() === "generating") {
-        updateScenarioSceneGenerationRuntime(sceneId, { startFrameStatus: "idle", startFrameImageStatus: "idle", startFrameError: "", startFrameImageError: "" }, { nodeId: targetNodeId });
+      const isBusyStatus = (value) => ["generating", "loading", "queued", "running"].includes(String(value || "").trim().toLowerCase());
+      if (isTwoFrameScene && normalizedSlot === "start" && isBusyStatus(finalRuntimeState?.startFrameImageStatus || finalRuntimeState?.startFrameStatus)) {
+        updateScenarioSceneGenerationRuntime(sceneId, {
+          startFrameStatus: "idle",
+          startFrameImageStatus: "idle",
+          startFrameError: "",
+          startFrameImageError: "",
+          imageGenerationStep: "",
+        }, { nodeId: targetNodeId });
       }
-      if (isTwoFrameScene && normalizedSlot === "end" && String(finalRuntimeState?.endFrameImageStatus || finalRuntimeState?.endFrameStatus || "").trim().toLowerCase() === "generating") {
-        updateScenarioSceneGenerationRuntime(sceneId, { endFrameStatus: "idle", endFrameImageStatus: "idle", endFrameError: "", endFrameImageError: "" }, { nodeId: targetNodeId });
+      if (isTwoFrameScene && normalizedSlot === "end" && isBusyStatus(finalRuntimeState?.endFrameImageStatus || finalRuntimeState?.endFrameStatus)) {
+        updateScenarioSceneGenerationRuntime(sceneId, {
+          endFrameStatus: "idle",
+          endFrameImageStatus: "idle",
+          endFrameError: "",
+          endFrameImageError: "",
+          imageGenerationStep: "",
+        }, { nodeId: targetNodeId });
       }
       scenarioImageLocksRef.current.delete(imageLockKey);
       console.debug("[SCENARIO GENERATION UI RESET]", {
@@ -14875,6 +14899,67 @@ Aspect ratio: ${imageFormat}`,
       });
     }
   }, [activeScenarioStoryboardNode?.id, clearActiveVideoJob, notify, resolveScenarioLiveBinding, resolveScenarioSceneIndex, resolveScenarioStoryboardTargetNode, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, scenarioSelected?.sceneId, scenarioBrainRefs, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
+
+  const handleClearScenarioSceneImageSlot = useCallback((nodeId, sceneId, slot = "single") => {
+    const targetNodeId = String(nodeId || scenarioEditor?.nodeId || activeScenarioStoryboardNode?.id || "").trim();
+    const targetSceneId = String(sceneId || "").trim();
+    const normalizedSlot = normalizeFirstLastSlotAlias(slot);
+
+    if (!targetNodeId || !targetSceneId) return;
+
+    const targetNode = (nodesRef.current || []).find((node) => node?.id === targetNodeId);
+    const scenes = Array.isArray(targetNode?.data?.scenes) ? targetNode.data.scenes : [];
+    const scene = scenes.find((s) => String(s?.sceneId || s?.scene_id || "") === targetSceneId) || {};
+    const transitionType = resolveSceneTransitionType(scene);
+
+    const clearPatch = buildScenarioClearImagePatch({
+      transitionType,
+      slot: normalizedSlot,
+    });
+
+    const runtimePatch = normalizedSlot === "start"
+      ? {
+        startFrameStatus: "idle",
+        startFrameImageStatus: "idle",
+        startFrameError: "",
+        startFrameImageError: "",
+        imageGenerationStep: "",
+      }
+      : normalizedSlot === "end"
+        ? {
+          endFrameStatus: "idle",
+          endFrameImageStatus: "idle",
+          endFrameError: "",
+          endFrameImageError: "",
+          imageGenerationStep: "",
+        }
+        : {
+          imageStatus: "idle",
+          imageError: "",
+          imageGenerationStep: "",
+        };
+
+    updateScenarioScene(targetSceneId, clearPatch, { nodeId: targetNodeId });
+    updateScenarioSceneGenerationRuntime(targetSceneId, runtimePatch, { nodeId: targetNodeId });
+
+    scenarioImageLocksRef.current.delete(`${targetNodeId}:${targetSceneId}:${normalizedSlot}`);
+    scenarioImageLocksRef.current.delete(`${targetNodeId}:${targetSceneId}:start_frame`);
+    scenarioImageLocksRef.current.delete(`${targetNodeId}:${targetSceneId}:end_frame`);
+
+    setScenarioImageLoading(false);
+    setScenarioImageError("");
+
+    console.info("[SCENARIO FIRST_LAST IMAGE CLEAR]", {
+      sceneId: targetSceneId,
+      slot: normalizedSlot,
+      clearedRuntime: runtimePatch,
+    });
+  }, [
+    activeScenarioStoryboardNode?.id,
+    scenarioEditor?.nodeId,
+    updateScenarioScene,
+    updateScenarioSceneGenerationRuntime,
+  ]);
 
   const handleClearScenarioImage = useCallback((slot = "single") => {
     setScenarioImageError("");
@@ -23739,6 +23824,7 @@ const hydrate = useCallback((source = "unknown") => {
         onClose={() => setIsScenarioStoryboardOpen(false)}
         onUpdateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneUpdate}
         onGenerateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneGenerate}
+        onClearSceneImage={handleClearScenarioSceneImageSlot}
         onGenerateVideo={(scene, options = {}) => {
           const explicitSceneId = String(options?.sceneId || scene?.sceneId || "").trim();
           const explicitSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : undefined;
