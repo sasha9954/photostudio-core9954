@@ -23211,6 +23211,7 @@ const hydrate = useCallback((source = "unknown") => {
           || activeScenarioStoryboardNode?.data?.scenarioMode
           || ""
         }
+        scenarioNodeData={activeScenarioStoryboardNode?.data || {}}
         masterAudioUrl={activeScenarioMasterAudioUrl}
         scenarioNodeAudioUrl={activeScenarioStoryboardNode?.data?.audioUrl || ""}
         scenarioNodeMasterAudioUrl={activeScenarioStoryboardNode?.data?.masterAudioUrl || ""}
@@ -23226,6 +23227,7 @@ const hydrate = useCallback((source = "unknown") => {
           console.info("[SCENARIO VIDEO PARENT CALLBACK]", {
             sceneId: explicitSceneId,
             sceneIndex: explicitSceneIndex,
+            nodeId: activeScenarioStoryboardNode?.id || "",
             source: options?.source,
           });
           handleScenarioGenerateVideo({

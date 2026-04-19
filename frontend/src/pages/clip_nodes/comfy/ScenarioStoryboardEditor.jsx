@@ -406,6 +406,72 @@ function resolveScenarioModeBadge(modeValue = "") {
   };
 }
 
+function resolveStoryboardEditorDisplayMode({
+  scenarioMode,
+  scenarioNodeData,
+  scenes,
+} = {}) {
+  const safeScenes = Array.isArray(scenes) ? scenes : [];
+  const candidates = [
+    scenarioNodeData?.contentType,
+    scenarioNodeData?.content_type,
+    scenarioNodeData?.mode,
+    scenarioNodeData?.directorMode,
+    scenarioNodeData?.director_mode,
+    scenarioNodeData?.scenarioPackage?.contentType,
+    scenarioNodeData?.scenarioPackage?.content_type,
+    scenarioNodeData?.scenarioPackage?.mode,
+    scenarioNodeData?.scenarioPackage?.director_mode,
+    scenarioNodeData?.scenarioPackage?.story_core_v1?.director_mode,
+    scenarioNodeData?.debugStoryboardPackage?.contentType,
+    scenarioNodeData?.debugStoryboardPackage?.content_type,
+    scenarioNodeData?.debugStoryboardPackage?.mode,
+    scenarioNodeData?.debugStoryboardPackage?.director_mode,
+    scenarioNodeData?.debugStoryboardPackage?.story_core_v1?.director_mode,
+    scenarioNodeData?.storyboardOut?.contentType,
+    scenarioNodeData?.storyboardOut?.content_type,
+    scenarioNodeData?.storyboardOut?.mode,
+    scenarioNodeData?.storyboardOut?.director_mode,
+    scenarioNodeData?.storyboardOut?.story_core_v1?.director_mode,
+    scenarioNodeData?.directorOutput?.contentType,
+    scenarioNodeData?.directorOutput?.content_type,
+    scenarioNodeData?.directorOutput?.mode,
+    scenarioNodeData?.directorOutput?.director_mode,
+    scenarioMode,
+    scenarioNodeData?.incomingMode,
+    scenarioNodeData?.scenarioMode,
+    safeScenes?.[0]?.contentType,
+    safeScenes?.[0]?.content_type,
+  ].map((v) => String(v || "").trim().toLowerCase()).filter(Boolean);
+
+  if (candidates.includes("music_video") || candidates.includes("clip")) return "clip";
+  if (candidates.includes("scenario")) return "scenario";
+  if (candidates.includes("story") || candidates.includes("history")) return "story";
+  return candidates[0] || "";
+}
+
+function resolveSceneRuntimeForEditor(scene, runtime, scenarioNodeData = {}) {
+  const sceneId = String(scene?.sceneId || scene?.scene_id || "").trim();
+  const nodeRuntime = scenarioNodeData?.sceneGeneration?.[sceneId] || {};
+  const nodeScenes = Array.isArray(scenarioNodeData?.scenes) ? scenarioNodeData.scenes : [];
+  const nodeScene = nodeScenes.find((candidate, idx) => {
+    const candidateSceneId = String(candidate?.sceneId || candidate?.scene_id || `S${idx + 1}`).trim();
+    return candidateSceneId && candidateSceneId === sceneId;
+  }) || {};
+  return {
+    ...(runtime || {}),
+    ...(nodeRuntime || {}),
+    lastImageApiResult:
+      runtime?.lastImageApiResult
+      || nodeRuntime?.lastImageApiResult
+      || nodeScene?.lastImageApiResult
+      || (nodeScene?.refsDebug ? { refsDebug: nodeScene.refsDebug } : null)
+      || scene?.lastImageApiResult
+      || (scene?.refsDebug ? { refsDebug: scene.refsDebug } : null)
+      || null,
+  };
+}
+
 function buildScenarioSceneDownloadName(sceneId = "") {
   const rawSceneId = String(sceneId || "").trim();
   const safeSceneId = rawSceneId ? rawSceneId.replace(/[^\w-]+/g, "-") : "image";
@@ -441,6 +507,7 @@ export default function ScenarioStoryboardEditor({
   sceneGeneration,
   audioData,
   scenarioMode,
+  scenarioNodeData = {},
   masterAudioUrl: masterAudioUrlProp,
   scenarioNodeAudioUrl = "",
   scenarioNodeMasterAudioUrl = "",
@@ -693,9 +760,13 @@ export default function ScenarioStoryboardEditor({
   const selectedDisplayTime = resolveSceneDisplayTime(selectedScene);
   const selectedSceneId = String(selectedScene?.sceneId || "").trim();
   const selectedRuntime = safeGeneration[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object" ? safeGeneration[selectedSceneId] : {};
+  const effectiveRuntime = useMemo(
+    () => resolveSceneRuntimeForEditor(selectedScene, selectedRuntime, scenarioNodeData),
+    [scenarioNodeData, selectedRuntime, selectedScene]
+  );
   const selectedSceneDisplayModel = useMemo(
-    () => buildStoryboardSceneDisplayModel(selectedScene || {}, selectedRuntime || {}),
-    [selectedRuntime, selectedScene]
+    () => buildStoryboardSceneDisplayModel(selectedScene || {}, effectiveRuntime || {}),
+    [effectiveRuntime, selectedScene]
   );
   const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || normalizedScenes[idx]?.sceneId || "").trim();
   const selectedPhraseIndex = phrasesForUi.findIndex((phrase, idx) => resolvePhraseSceneId(phrase, idx) === selectedSceneId);
@@ -906,36 +977,36 @@ export default function ScenarioStoryboardEditor({
     }
   };
 
-  const imageStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.imageStatus, assetUrl: selectedScene?.imageUrl });
+  const imageStatus = resolveBlockStatus({ runtimeStatus: effectiveRuntime?.imageStatus, assetUrl: selectedScene?.imageUrl });
   const startFrameStatus = resolveBlockStatus({
-    runtimeStatus: selectedRuntime?.startFrameStatus || selectedScene?.startFrameStatus || selectedRuntime?.imageStatus || selectedScene?.imageStatus,
+    runtimeStatus: effectiveRuntime?.startFrameStatus || selectedScene?.startFrameStatus || effectiveRuntime?.imageStatus || selectedScene?.imageStatus,
     assetUrl: selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl,
   });
   const endFrameStatus = resolveBlockStatus({
-    runtimeStatus: selectedRuntime?.endFrameStatus || selectedScene?.endFrameStatus || selectedRuntime?.imageStatus || selectedScene?.imageStatus,
+    runtimeStatus: effectiveRuntime?.endFrameStatus || selectedScene?.endFrameStatus || effectiveRuntime?.imageStatus || selectedScene?.imageStatus,
     assetUrl: selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl,
   });
-  const imageErrorText = String(selectedScene?.imageError || selectedRuntime?.imageError || "").trim();
-  const imageApiResult = selectedRuntime?.lastImageApiResult && typeof selectedRuntime.lastImageApiResult === "object"
-    ? selectedRuntime.lastImageApiResult
+  const imageErrorText = String(selectedScene?.imageError || effectiveRuntime?.imageError || "").trim();
+  const imageApiResult = effectiveRuntime?.lastImageApiResult && typeof effectiveRuntime.lastImageApiResult === "object"
+    ? effectiveRuntime.lastImageApiResult
     : {};
-  const imageDebugEngine = String(imageApiResult?.engine || selectedRuntime?.lastApiEngine || selectedScene?.imageEngine || "").trim();
+  const imageDebugEngine = String(imageApiResult?.engine || effectiveRuntime?.lastApiEngine || selectedScene?.imageEngine || "").trim();
   const imageDebugDegradeReason = String(
     selectedScene?.imageDegradeReason
     || imageApiResult?.degradeReason
-    || selectedRuntime?.lastApiDegradeReason
+    || effectiveRuntime?.lastApiDegradeReason
     || ""
   ).trim();
-  const imageDebugHint = String(selectedScene?.imageHint || imageApiResult?.hint || selectedRuntime?.lastApiHint || "").trim();
-  const imageDebugApplyRejectedReason = String(imageApiResult?.rejectedReason || selectedRuntime?.lastRejectedReason || "").trim();
+  const imageDebugHint = String(selectedScene?.imageHint || imageApiResult?.hint || effectiveRuntime?.lastApiHint || "").trim();
+  const imageDebugApplyRejectedReason = String(imageApiResult?.rejectedReason || effectiveRuntime?.lastRejectedReason || "").trim();
   const imageDebugUrlPresent = Boolean(
     String(selectedScene?.imageUrl || "").trim()
     || String(imageApiResult?.imageUrl || "").trim()
-    || String(selectedRuntime?.lastRejectedImageUrl || "").trim()
+    || String(effectiveRuntime?.lastRejectedImageUrl || "").trim()
   );
-  const startFrameErrorText = String(selectedScene?.startFrameError || selectedRuntime?.startFrameError || selectedRuntime?.imageError || "").trim();
-  const endFrameErrorText = String(selectedScene?.endFrameError || selectedRuntime?.endFrameError || selectedRuntime?.imageError || "").trim();
-  const videoStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.videoStatus || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
+  const startFrameErrorText = String(selectedScene?.startFrameError || effectiveRuntime?.startFrameError || effectiveRuntime?.imageError || "").trim();
+  const endFrameErrorText = String(selectedScene?.endFrameError || effectiveRuntime?.endFrameError || effectiveRuntime?.imageError || "").trim();
+  const videoStatus = resolveBlockStatus({ runtimeStatus: effectiveRuntime?.videoStatus || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
   const musicStatus = resolveBlockStatus({ runtimeStatus: safeAudioData?.musicStatus, assetUrl: safeAudioData?.musicUrl });
   const isBgAudioSelected = activeSelectionType === "bg_audio";
   const sceneNeedsTwoFrames = isFirstLastScene(selectedScene);
@@ -947,7 +1018,7 @@ export default function ScenarioStoryboardEditor({
   const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
   const previewSources = resolveScenePreviewSources(selectedScene || {});
   const runtimeFallbackImageUrl = String(
-    selectedRuntime?.lastRejectedImageUrl
+    effectiveRuntime?.lastRejectedImageUrl
     || imageApiResult?.imageUrl
     || ""
   ).trim();
@@ -993,7 +1064,11 @@ export default function ScenarioStoryboardEditor({
   const globalMusicPrompt = String(musicPromptSourceText).trim();
   const hasBgMusicPrompt = Boolean(globalMusicPrompt);
   const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
-  const modeBadge = useMemo(() => resolveScenarioModeBadge(scenarioMode), [scenarioMode]);
+  const editorResolvedMode = useMemo(
+    () => resolveStoryboardEditorDisplayMode({ scenarioMode, scenarioNodeData, scenes: safeScenes }),
+    [scenarioMode, scenarioNodeData, safeScenes]
+  );
+  const modeBadge = useMemo(() => resolveScenarioModeBadge(editorResolvedMode), [editorResolvedMode]);
 
   useEffect(() => {
     if (!open) return;
@@ -1003,6 +1078,19 @@ export default function ScenarioStoryboardEditor({
       displayLabel: modeBadge.displayLabel,
     });
   }, [modeBadge.displayLabel, modeBadge.resolvedMode, nodeId, open]);
+  useEffect(() => {
+    if (!open) return;
+    console.info("[SCENARIO EDITOR MODE SOURCE]", {
+      scenarioMode,
+      nodeContentType: scenarioNodeData?.contentType,
+      nodeIncomingMode: scenarioNodeData?.incomingMode,
+      nodeScenarioMode: scenarioNodeData?.scenarioMode,
+      packageContentType: scenarioNodeData?.scenarioPackage?.contentType,
+      storyboardOutContentType: scenarioNodeData?.storyboardOut?.contentType,
+      resolvedMode: editorResolvedMode,
+      displayLabel: modeBadge.displayLabel,
+    });
+  }, [editorResolvedMode, modeBadge.displayLabel, open, scenarioMode, scenarioNodeData]);
 
   useEffect(() => {
     if (!CLIP_TRACE_SCENARIO_EDITOR_DEBUG) return;
@@ -1154,12 +1242,12 @@ export default function ScenarioStoryboardEditor({
   const formatRawForCopy = () => JSON.stringify({
     scenes: normalizedScenes,
     selectedSceneId,
-    selectedSceneRuntime: selectedRuntime,
+    selectedSceneRuntime: effectiveRuntime,
     audioData: safeAudioData,
   }, null, 2);
   const scenarioRawJson = useMemo(() => (
     activeTab === "debug" ? formatRawForCopy() : ""
-  ), [activeTab, normalizedScenes, safeAudioData, selectedRuntime, selectedSceneId]);
+  ), [activeTab, effectiveRuntime, normalizedScenes, safeAudioData, selectedSceneId]);
 
   const handleCopyRawJson = async () => {
     const didCopy = await copyTextToClipboard(formatRawForCopy());
@@ -1239,6 +1327,26 @@ export default function ScenarioStoryboardEditor({
       );
     }
     if (activeTab === "actors") {
+      const refsDebug = getSceneRuntimeRefsDebug(effectiveRuntime || {});
+      const incomingRefsByRoleCounts = refsDebug?.incomingRefsByRoleCounts && typeof refsDebug.incomingRefsByRoleCounts === "object"
+        ? refsDebug.incomingRefsByRoleCounts
+        : {};
+      const attachedCountsByRole = refsDebug?.attachedCountsByRole && typeof refsDebug.attachedCountsByRole === "object"
+        ? refsDebug.attachedCountsByRole
+        : {};
+      const referenceProfilesSummary = refsDebug?.referenceProfilesSummary && typeof refsDebug.referenceProfilesSummary === "object"
+        ? refsDebug.referenceProfilesSummary
+        : {};
+      console.info("[SCENARIO ACTORS DEBUG]", {
+        sceneId: selectedSceneId,
+        hasRuntime: Object.keys(effectiveRuntime || {}).length > 0,
+        hasLastImageApiResult: Boolean(effectiveRuntime?.lastImageApiResult),
+        hasRefsDebug: Object.keys(refsDebug || {}).length > 0,
+        incomingRefsByRoleCounts,
+        attachedCountsByRole,
+        referenceProfileRoles: Object.keys(referenceProfilesSummary || {}),
+        actors: selectedSceneDisplayModel.actors,
+      });
       return (
         <div className="clipSB_scenarioEditorTabBody">
           {selectedSceneDisplayModel.actors.length ? selectedSceneDisplayModel.actors.map((actor, idx) => (
@@ -1657,7 +1765,7 @@ export default function ScenarioStoryboardEditor({
                           <div className="clipSB_hint" style={{ marginTop: 8, opacity: 0.85 }}>
                             <div><strong>Scenario image debug:</strong></div>
                             <div>engine: {imageDebugEngine || "unknown"}</div>
-                            <div>resultStatus: {String(imageApiResult?.resultStatus || selectedRuntime?.lastApiResultStatus || "unknown")}</div>
+                            <div>resultStatus: {String(imageApiResult?.resultStatus || effectiveRuntime?.lastApiResultStatus || "unknown")}</div>
                             <div>applyAccepted: {imageApiResult?.applyAccepted === true ? "yes" : imageApiResult?.applyAccepted === false ? "no" : "unknown"}</div>
                             <div>degradeReason: {imageDebugDegradeReason || "none"}</div>
                             <div>hint: {imageDebugHint || "none"}</div>
@@ -1861,7 +1969,17 @@ export default function ScenarioStoryboardEditor({
                         {sceneLipSync ? <div className="clipSB_hint clipSB_sceneVideoAudioHint">{sceneAudioSliceUrl ? "Этот audioSlice будет отправлен в video generation." : "Для lipSync audioSlice подготовится автоматически перед генерацией видео."}</div> : null}
                         {sceneAudioSliceUrl ? <audio controls className="clipSB_audioPlayer" src={sceneAudioSliceUrl} /> : null}
                       </div>
-                      <div className="clipSB_scenarioEditorBtnRow">
+                      <div
+                        className="clipSB_scenarioEditorBtnRow"
+                        onPointerDownCapture={() => {
+                          console.info("[SCENARIO VIDEO BUTTON POINTER DOWN]", {
+                            sceneId: String(selectedScene?.sceneId || selectedSceneId || ""),
+                            videoStatus,
+                            hasOnGenerateVideo: typeof onGenerateVideo === "function",
+                            hasOnGenerateScene: typeof onGenerateScene === "function",
+                          });
+                        }}
+                      >
                         <button
                           className="clipSB_btn"
                           type="button"
@@ -1870,18 +1988,8 @@ export default function ScenarioStoryboardEditor({
                               sceneId: String(selectedScene?.sceneId || selectedSceneId || ""),
                               route: selectedScene?.route || selectedScene?.videoGenerationRoute || selectedScene?.plannedVideoGenerationRoute || "",
                               workflowKey: selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "i2v",
-                              imageUrlCandidates: {
-                                imageUrl: selectedScene?.imageUrl || "",
-                                generatedImageUrl: selectedScene?.generatedImageUrl || "",
-                                resultImageUrl: selectedScene?.resultImageUrl || "",
-                                finalImageUrl: selectedScene?.finalImageUrl || "",
-                                startImageUrl: selectedScene?.startImageUrl || "",
-                                endImageUrl: selectedScene?.endImageUrl || "",
-                              },
-                              audioSliceUrl: String(selectedScene?.audioSliceUrl || sceneAudioSliceUrl || ""),
-                              audioSliceKind: selectedScene?.audioSliceKind || "",
-                              musicVocalLipSyncAllowed: selectedScene?.musicVocalLipSyncAllowed,
-                              source: "scenario_storyboard_editor_v3",
+                              disabledByStatus: videoStatus === "loading",
+                              source: "scenario_storyboard_editor_v4",
                             });
                             if (typeof onGenerateVideo === "function") {
                               onGenerateVideo(selectedScene, {
@@ -1889,7 +1997,7 @@ export default function ScenarioStoryboardEditor({
                                 nodeId,
                                 sceneId: selectedSceneId,
                                 sceneIndex: safeIndex,
-                                source: "scenario_storyboard_editor_v3",
+                                source: "scenario_storyboard_editor_v4",
                               });
                               return;
                             }
