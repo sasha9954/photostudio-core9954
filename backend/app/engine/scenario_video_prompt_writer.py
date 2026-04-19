@@ -98,6 +98,8 @@ def _has_real_confirmed_hero_image_url(fallback_row: dict[str, Any]) -> bool:
 
 def _strip_clear_vocal_fragments(text: str) -> str:
     text = str(text or "")
+    canonical = re.escape(CLEAR_VOCAL_PERFORMANCE.strip())
+    text = re.sub(canonical, " ", text, flags=re.IGNORECASE)
     text = re.sub(r"(?i)\bCLEAR\s+VOCAL\s+PERFORMANCE\s*[:.]?", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"^[\s:.,;]+", "", text).strip()
