@@ -8700,8 +8700,6 @@ function RefNode({ id, data }) {
   const detailsOpen = !!data?.refDetailsOpen;
   const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
-  const showRoleSelector = kind === "ref_character";
-  const roleType = normalizeCharacterRoleType(data?.roleType);
   const storyRole = normalizeRefStoryRole(data?.storyRole || data?.story_role, kind);
   const identityLabel = kind === "ref_location"
     ? normalizeRefLocationLabel(data?.locationLabel || data?.location_label || data?.identityLabel || data?.identity_label)
@@ -8774,19 +8772,6 @@ function RefNode({ id, data }) {
         {canToggleDetails && detailsOpen ? (
           <div className="clipSB_refDetailsBox">
             {detailsLines.map((line, idx) => <div key={`${id}-details-${idx}`} className="clipSB_refDetailsLine">{line}</div>)}
-          </div>
-        ) : null}
-        {showRoleSelector ? (
-          <div style={{ marginBottom: 10 }}>
-            <div className="clipSB_small" style={{ marginBottom: 4 }}>Тип роли:</div>
-            <select
-              className="clipSB_select"
-              value={roleType}
-              onChange={(event) => data?.onField?.(id, "roleType", normalizeCharacterRoleType(event?.target?.value))}
-              disabled={refStatus === "loading"}
-            >
-              {CHARACTER_ROLE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
           </div>
         ) : null}
         {kind === "ref_character" ? (
