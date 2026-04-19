@@ -1089,6 +1089,37 @@ def _is_domestic_argument_duet(text_bundle: dict[str, str], active_subjects: lis
     return has_duet and any(token in normalized for token in domestic_tokens)
 
 
+def _has_two_active_participant_interaction(text_bundle: dict[str, str], active_subjects: list[str]) -> bool:
+    if "character_1" not in active_subjects or "character_2" not in active_subjects:
+        return False
+    normalized = " ".join(
+        [
+            str(text_bundle.get("story_text") or ""),
+            str(text_bundle.get("text") or ""),
+            str(text_bundle.get("note") or ""),
+            str(text_bundle.get("director_note") or ""),
+        ]
+    ).lower()
+    interaction_tokens = (
+        "two-character",
+        "two character",
+        "argument",
+        "domestic dispute",
+        "dialogue conflict",
+        "conversation",
+        "confrontation",
+        "duet",
+        "couple interaction",
+        "direct interaction",
+        "ссора",
+        "скандал",
+        "конфликт",
+        "диалог",
+        "противостояние",
+    )
+    return any(token in normalized for token in interaction_tokens)
+
+
 def _domestic_argument_story_function(index: int, total: int) -> str:
     arc = [
         "setup",
@@ -1278,6 +1309,7 @@ def _build_story_core_v11(
     domestic_argument_duet = _is_domestic_argument_duet(text_bundle, active_subjects)
     if domestic_argument_duet:
         secondary_subjects = list(dict.fromkeys(["character_2", *secondary_subjects]))
+    active_subjects = list(dict.fromkeys([primary_subject, *secondary_subjects]))
 
     opening_anchor = _first_text(parsed_story_core.get("opening_anchor"), fallback_story_core.get("opening_anchor"), text_bundle.get("story_text"), text_bundle.get("text"))[:220]
     ending_callback_rule = _first_text(parsed_story_core.get("ending_callback_rule"), fallback_story_core.get("ending_callback_rule"))
@@ -1491,6 +1523,51 @@ def _build_story_core_v11(
     dangling_tail = bool(beats and "afterimage" not in str(beats[-1].get("story_function") or "") and "release" not in str(beats[-1].get("story_function") or ""))
     callback_missing = bool(opening_anchor and ending_callback_rule and not beats)
     continuity_object_dropout = bool(continuity_objects and not continuity_matrix["subject_to_objects"])
+    beat_presence_requirements = {str(item.get("subject_presence_requirement") or "") for item in beats}
+    duet_presence_rule = (
+        "for_two_character_argument_keep_character_1_and_character_2_present_as_conflict_participants"
+        if domestic_argument_duet
+        else "not_applicable"
+    )
+    has_interaction_duet_signal = _has_two_active_participant_interaction(text_bundle, active_subjects)
+    has_conflict_visibility_signal = "both_conflict_participants_visible_or_implied_nearby" in beat_presence_requirements
+    support_presence_tokens = ("secondary", "support", "background", "memory", "offscreen", "off-screen", "voice")
+    support_signal_text = " ".join(
+        [
+            str(text_bundle.get("story_text") or ""),
+            str(text_bundle.get("text") or ""),
+            str(text_bundle.get("note") or ""),
+            str(text_bundle.get("director_note") or ""),
+            str(secondary_subject_labels.get("character_2") or ""),
+            " ".join(str(v) for v in _safe_list(connected_summary.get("support_roles"))),
+        ]
+    ).lower()
+    character_2_support_optional = (
+        "character_2" in secondary_subjects
+        and not (has_interaction_duet_signal or has_conflict_visibility_signal or domestic_argument_duet)
+        and any(token in support_signal_text for token in support_presence_tokens)
+    )
+    if has_interaction_duet_signal or has_conflict_visibility_signal or duet_presence_rule != "not_applicable":
+        visibility_mode = "two_active_participants"
+        must_be_visible = ["character_1", "character_2"]
+        may_be_offscreen: list[str] = []
+        contract_presence_requirement = "both_active_participants_visible_or_implied_nearby"
+    elif len(active_subjects) >= 3:
+        visibility_mode = "ensemble"
+        must_be_visible = list(dict.fromkeys([primary_subject, *active_subjects[1:3]]))
+        may_be_offscreen = [subject for subject in active_subjects[3:6] if subject not in must_be_visible]
+        contract_presence_requirement = "multi_subject_visibility_prioritized_by_beat_context"
+    elif character_2_support_optional:
+        visibility_mode = "support_optional"
+        must_be_visible = [primary_subject]
+        may_be_offscreen = ["character_2"]
+        contract_presence_requirement = "primary_subject_visible_support_subject_optional"
+    else:
+        visibility_mode = "single_protagonist"
+        must_be_visible = [primary_subject]
+        may_be_offscreen = ["character_2"] if "character_2" in secondary_subjects else secondary_subjects[:3]
+        contract_presence_requirement = "primary_subject_visible_unless_explicit_handoff"
+
     parsed_narrative_segments = [row for row in _safe_list(parsed_story_core.get("narrative_segments")) if isinstance(row, dict)]
     if parsed_narrative_segments:
         narrative_segments = [
@@ -1548,11 +1625,7 @@ def _build_story_core_v11(
             ],
             "emotional_voice_rules": ["keep_voice_consistent_with_global_arc", "avoid_unmotivated_tonal_inversion"],
             "subject_transition_rules": ["subject_handoff_allowed_only_on_transition_turn_or_explicit_phrase_signal", "secondary_subject_cannot_dominate_without_story_reason"],
-            "duet_presence_rule": (
-                "for_two_character_argument_keep_character_1_and_character_2_present_as_conflict_participants"
-                if domestic_argument_duet
-                else "not_applicable"
-            ),
+            "duet_presence_rule": duet_presence_rule,
             "object_transition_rules": ["ownership_or_binding_change_must_be_explicit_in_transition_events", "persistent_objects_should_reappear_within_two_beats"],
             "transition_events": transition_events[:16],
         },
@@ -1617,8 +1690,10 @@ def _build_story_core_v11(
             "input_channels": ["world_definition", "narrative_backbone", "semantic_arc", "beat_map"],
             "must_remain_same": ["primary_subject_identity", "world_family", "core_continuity_objects", "slot_timing"],
             "may_vary": ["lighting", "framing", "performance_intensity", "semantic_emphasis_per_beat"],
-            "must_be_visible": [primary_subject, *[str(item.get("label") or "") for item in continuity_objects[:2] if str(item.get("label") or "").strip()]],
-            "may_be_offscreen": secondary_subjects[:3],
+            "visibility_mode": visibility_mode,
+            "subject_presence_requirement": contract_presence_requirement,
+            "must_be_visible": must_be_visible,
+            "may_be_offscreen": may_be_offscreen,
             "continuity_priority": ["subject_identity", "object_binding", "world_anchor"],
             "world_prompt_constraints": world_definition.get("world_continuity_rules", []),
             "identity_prompt_constraints": _safe_list(parsed_story_core.get("identity_lock")) or [_first_text(_safe_dict(parsed_story_core.get("identity_lock")).get("rule"), _safe_dict(fallback_story_core.get("identity_lock")).get("rule"))],
