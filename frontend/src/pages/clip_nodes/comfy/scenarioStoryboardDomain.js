@@ -320,6 +320,60 @@ function hasAnyKeyword(value = "", keywords = []) {
   return keywords.some((keyword) => text.includes(String(keyword || "").toLowerCase()));
 }
 
+export const SCENARIO_IMAGE_NIGHTCLUB_WORLD_ANCHOR = [
+  "realistic dimly lit nightclub interior",
+  "dark club corridor / bar / dancefloor edge according to scene",
+  "soft haze",
+  "deep shadows",
+  "reflective glass/mirrors when relevant",
+  "grounded realistic nightclub world",
+  "no random domestic room",
+].join(", ");
+
+export const SCENARIO_IMAGE_NEGATIVE_DOMESTIC_GUARD = [
+  "bedroom",
+  "apartment",
+  "home interior",
+  "living room",
+  "daylight window",
+  "white room",
+  "sofa",
+  "bed",
+  "plant by window",
+  "office",
+  "outdoor daylight",
+  "domestic space",
+  "different outfit",
+  "changed body type",
+  "slimmer body",
+  "changed neckline",
+  "high-neck top",
+  "changed jewelry",
+].join(", ");
+
+export function isScenarioMotionSafetyOnlyPrompt(prompt = "") {
+  const text = normalizePromptForCompare(prompt);
+  if (!text) return false;
+  const hasMotionSafetyMarkers = hasAnyKeyword(text, [
+    "dance motion safety",
+    "camera orbit safety",
+    "rules strict",
+    "performance framing guidance",
+  ]);
+  if (!hasMotionSafetyMarkers) return false;
+  const hasSceneVisualMarkers = hasAnyKeyword(text, [
+    "nightclub",
+    "club",
+    "corridor",
+    "bar",
+    "dancefloor",
+    "portrait",
+    "close up",
+    "wide shot",
+  ]);
+  return !hasSceneVisualMarkers;
+}
+
 const META_BANNED_PHRASES = [
   "baseline composition",
   "pre-change state",
