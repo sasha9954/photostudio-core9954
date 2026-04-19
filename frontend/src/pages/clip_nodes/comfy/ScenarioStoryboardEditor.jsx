@@ -237,25 +237,15 @@ function resolveSceneImagePromptForDisplay(scene = {}) {
     }
     return "";
   };
-
-  const finalVideoSegmentPrompt = readFirstNonEmpty([
-    scene?.finalVideoPromptSegmentPrompt,
-    scene?.final_video_prompt_segment_prompt,
-    scene?.finalVideoSegmentPrompt,
-    scene?.final_video_segment_prompt,
-    scene?.segmentPrompt,
-    scene?.segment_prompt,
-    scene?.finalVideoPrompt?.segmentPrompt,
-    scene?.final_video_prompt?.segment_prompt,
-  ]);
-
   return readFirstNonEmpty([
-    scene?.image_prompt,
-    scene?.scene_prompt,
-    finalVideoSegmentPrompt,
     scene?.imagePromptEn,
-    scene?.videoPrompt,
     scene?.imagePromptRu,
+    scene?.scene_prompt?.photo_prompt,
+    scene?.photo_prompt,
+    scene?.route_payload?.positive_prompt,
+    scene?.sceneText,
+    scene?.sceneGoal,
+    scene?.summary,
   ]);
 }
 
