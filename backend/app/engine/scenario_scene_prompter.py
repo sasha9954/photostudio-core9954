@@ -1510,6 +1510,11 @@ def _build_fallback_scene_prompts(
         route = "i2v"
 
     primary_role = _build_human_subject_label(role_row, story_core, scene_plan_row)
+    speaker_role = str(scene_plan_row.get("speaker_role") or "").strip()
+    speaker_label = speaker_role if speaker_role and speaker_role != "unknown" else primary_role
+    spoken_line = str(scene_plan_row.get("spoken_line") or "").strip()
+    listener_reaction_allowed = bool(scene_plan_row.get("listener_reaction_allowed"))
+    reaction_role = str(scene_plan_row.get("reaction_role") or "").strip()
     scene_function = str(scene_plan_row.get("scene_function") or "scene beat")
     emotional = str(scene_plan_row.get("emotional_intent") or "grounded emotion")
     motion_intent = str(scene_plan_row.get("motion_intent") or "subtle motion")
@@ -1531,11 +1536,13 @@ def _build_fallback_scene_prompts(
 
     if route == "ia2v":
         photo_prompt = (
-            f"Performance portrait of {primary_role} in {world_anchor}, {scene_function} beat with {emotional}, framed to keep face and mouth readable while the vocal phrase carries emotion through eyes, shoulders, and hands."
+            f"Performance portrait of {speaker_label} in {world_anchor}, {scene_function} beat with {emotional}, framed as medium close-up/close-up to keep speaker face and mouth readable while the vocal phrase carries emotion through eyes, shoulders, and hands."
         )
         video_prompt = (
             f"The still frame opens into {scene_function} performance intent: {motion_intent}. "
+            f"Only {speaker_label} delivers the spoken phrase{f' ({spoken_line})' if spoken_line else ''}; no simultaneous dual-speaker lip movement. "
             "Vocal phrasing leads subtle rhythmic sway, a controlled torso pulse, a gentle head turn, and soft hand phrasing while the face stays readable and emotionally alive. "
+            f"{f'{reaction_role} may stay nearby as silent listener reaction. ' if listener_reaction_allowed and reaction_role else ''}"
             f"Camera motion stays smooth and supportive.{binding_clause} Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
         )
         negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
