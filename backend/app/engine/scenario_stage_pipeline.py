@@ -3822,6 +3822,63 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     render_manifest: list[dict[str, Any]] = []
     compat_scenes: list[dict[str, Any]] = []
     project_audio_url = str(input_pkg.get("audio_url") or "").strip()
+    final_refs_roles = ("character_1", "character_2", "character_3", "location", "style", "props")
+
+    def _collect_final_refs_by_role() -> dict[str, list[str]]:
+        normalized: dict[str, list[str]] = {}
+        selected_refs = _safe_dict(input_pkg.get("selected_refs"))
+        connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+        refs_contract = _safe_dict(package.get("refs_contract"))
+        if not refs_contract:
+            refs_contract = _safe_dict(_safe_dict(package.get("story_core")).get("refs_contract"))
+        refs_contract_connected_summary = _safe_dict(refs_contract.get("connected_refs_summary"))
+        refs_inventory = _safe_dict(package.get("refs_inventory"))
+
+        def _append(role: str, candidate: str) -> None:
+            clean_role = str(role or "").strip()
+            clean_url = str(candidate or "").strip()
+            if not clean_role or not clean_url:
+                return
+            bucket = normalized.setdefault(clean_role, [])
+            if clean_url not in bucket:
+                bucket.append(clean_url)
+
+        def _append_from_map(raw_map: Any) -> None:
+            role_map = _safe_dict(raw_map)
+            for raw_role, raw_values in role_map.items():
+                role = str(raw_role or "").strip()
+                if not role:
+                    continue
+                for value in _safe_list(raw_values):
+                    _append(role, str(value or ""))
+
+        _append_from_map(input_pkg.get("refs_by_role"))
+        _append_from_map(input_pkg.get("refsByRole"))
+        _append_from_map(connected_summary.get("connectedRefsPresentByRole"))
+        _append_from_map(connected_summary.get("refsPresentByRole"))
+        _append_from_map(connected_summary.get("connected_refs_present_by_role"))
+        _append_from_map(connected_summary.get("refs_present_by_role"))
+        _append_from_map(refs_contract_connected_summary.get("connectedRefsPresentByRole"))
+        _append_from_map(refs_contract_connected_summary.get("refsPresentByRole"))
+        _append_from_map(refs_contract_connected_summary.get("connected_refs_present_by_role"))
+        _append_from_map(refs_contract_connected_summary.get("refs_present_by_role"))
+
+        for role in final_refs_roles:
+            selected_value = selected_refs.get(role)
+            if isinstance(selected_value, list):
+                for value in _safe_list(selected_value):
+                    _append(role, str(value or ""))
+            else:
+                _append(role, str(selected_value or ""))
+            for value in _extract_ref_urls(refs_inventory.get(_role_to_ref_key(role))):
+                _append(role, value)
+
+        return normalized
+
+    final_refs_by_role = _collect_final_refs_by_role()
+    final_refs_summary_by_role = {role: len(final_refs_by_role.get(role) or []) for role in final_refs_roles}
+    final_missing_character_ref_segments: list[str] = []
+    final_segments_with_source_image_refs = 0
 
     def _resolve_route_for_finalize_row(segment_row: dict[str, Any], plan_row_data: dict[str, Any], metadata_row: dict[str, Any]) -> str:
         route_candidates = [
@@ -3853,26 +3910,38 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         prompts_row_data: dict[str, Any],
         role_row_data: dict[str, Any],
     ) -> dict[str, Any]:
-        refs_by_role = _safe_dict(input_pkg.get("refs_by_role"))
-        selected_refs = _safe_dict(input_pkg.get("selected_refs"))
-        connected_refs_by_role = _safe_dict(_safe_dict(input_pkg.get("connected_context_summary")).get("refsByRole"))
-        role_keys = [str(role_row_data.get("primary_role") or "").strip()]
-        role_keys.extend(str(item).strip() for item in _safe_list(role_row_data.get("secondary_roles")) if str(item).strip())
-        role_keys = [role for role in role_keys if role]
+        role_keys: list[str] = []
+        role_keys.extend(
+            str(value).strip()
+            for value in [
+                role_row_data.get("primary_role"),
+                role_row_data.get("visual_focus_role"),
+                role_row_data.get("vocal_owner_role"),
+                segment_row.get("primary_role"),
+                segment_row.get("visual_focus_role"),
+                plan_row_data.get("primary_role"),
+                plan_row_data.get("visual_focus_role"),
+                prompts_row_data.get("primary_role"),
+                prompts_row_data.get("visual_focus_role"),
+            ]
+            if str(value or "").strip()
+        )
+        for role_list in (
+            role_row_data.get("secondary_roles"),
+            role_row_data.get("active_roles"),
+            segment_row.get("active_roles"),
+            segment_row.get("scene_roles"),
+            plan_row_data.get("active_roles"),
+            plan_row_data.get("scene_roles"),
+            prompts_row_data.get("active_roles"),
+            prompts_row_data.get("scene_roles"),
+        ):
+            role_keys.extend(str(item).strip() for item in _safe_list(role_list) if str(item).strip())
+        role_keys = list(dict.fromkeys([role for role in role_keys if role]))
         character_refs: dict[str, list[str]] = {}
-        for role in role_keys:
-            values = []
-            values.extend(str(item).strip() for item in _safe_list(refs_by_role.get(role)) if str(item).strip())
-            values.extend(str(item).strip() for item in _safe_list(connected_refs_by_role.get(role)) if str(item).strip())
-            deduped = []
-            seen: set[str] = set()
-            for item in values:
-                if item in seen:
-                    continue
-                seen.add(item)
-                deduped.append(item)
-            if deduped:
-                character_refs[role] = deduped
+        for role in ("character_1", "character_2", "character_3"):
+            if role in role_keys and (final_refs_by_role.get(role) or []):
+                character_refs[role] = list(final_refs_by_role.get(role) or [])
 
         source_image_refs_candidates = [
             segment_row.get("source_image_refs"),
@@ -3880,7 +3949,6 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             prompts_row_data.get("source_image_refs"),
             plan_row_data.get("image_refs"),
             prompts_row_data.get("image_refs"),
-            selected_refs.get("props"),
         ]
         source_image_refs: list[str] = []
         for candidate in source_image_refs_candidates:
@@ -3889,11 +3957,16 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 if value and value not in source_image_refs:
                     source_image_refs.append(value)
 
-        refs_payload = _safe_dict(segment_row.get("refs"))
+        for role in role_keys:
+            for value in _safe_list(final_refs_by_role.get(role)):
+                url = str(value or "").strip()
+                if url and url not in source_image_refs:
+                    source_image_refs.append(url)
+
         return {
             "audio_url": project_audio_url or None,
             "character_refs": character_refs,
-            "refs": refs_payload if refs_payload else {},
+            "refs": deepcopy(final_refs_by_role),
             "source_image_refs": source_image_refs,
             "start_frame_asset": segment_row.get("start_frame_asset"),
             "end_frame_asset": segment_row.get("end_frame_asset"),
@@ -3911,6 +3984,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         video_metadata = _safe_dict(segment.get("video_metadata"))
         route = _resolve_route_for_finalize_row(segment, plan_row, video_metadata)
         linked_assets = _build_linked_assets(segment, plan_row, prompts_row, role_casting_row)
+        if _safe_list(linked_assets.get("source_image_refs")):
+            final_segments_with_source_image_refs += 1
 
         t0 = _to_float(plan_row.get("t0"), 0.0)
         t1 = _to_float(plan_row.get("t1"), t0)
@@ -3940,6 +4015,15 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "prompt_source": str(segment.get("prompt_source") or "").strip(),
         }
         render_manifest.append(manifest_row)
+        primary_role_for_warning = str(
+            role_casting_row.get("primary_role")
+            or segment.get("primary_role")
+            or plan_row.get("primary_role")
+            or prompts_row.get("primary_role")
+            or ""
+        ).strip()
+        if primary_role_for_warning == "character_1" and not _safe_list(_safe_dict(linked_assets.get("character_refs")).get("character_1")):
+            final_missing_character_ref_segments.append(segment_id)
 
         compat_scenes.append(
             {
@@ -4001,6 +4085,11 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "scene_prompts": scene_prompts,
             "final_video_prompt": final_video_prompt,
         },
+        "meta": {
+            "final_video_prompt_linked_refs_by_role": final_refs_summary_by_role,
+            "final_video_prompt_segments_with_source_image_refs": final_segments_with_source_image_refs,
+            "final_video_prompt_missing_character_ref_segments": final_missing_character_ref_segments,
+        },
     }
     final_storyboard = _attach_downstream_mode_metadata(final_storyboard, package)
     package["final_storyboard"] = final_storyboard
@@ -4011,6 +4100,9 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_used_final_video_prompt_segments"] = bool(final_segments)
     diagnostics["finalize_integrity_hash"] = integrity_hash
     diagnostics["finalize_creative_rewrite_applied"] = False
+    diagnostics["final_video_prompt_linked_refs_by_role"] = final_refs_summary_by_role
+    diagnostics["final_video_prompt_segments_with_source_image_refs"] = final_segments_with_source_image_refs
+    diagnostics["final_video_prompt_missing_character_ref_segments"] = final_missing_character_ref_segments
     package["diagnostics"] = diagnostics
     _append_diag_event(package, f"final_storyboard built manifest={len(render_manifest)}", stage_id="finalize")
     return package
