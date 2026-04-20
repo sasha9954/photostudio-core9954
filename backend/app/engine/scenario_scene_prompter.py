@@ -147,6 +147,26 @@ def _append_prompt_clause(base: str, clause: str) -> str:
     return f"{text.rstrip('. ')}. {part}"
 
 
+def _text_mentions_role(text: str, role: str) -> bool:
+    body = str(text or "").strip().lower()
+    token = str(role or "").strip().lower()
+    if not body or not token:
+        return False
+    return bool(re.search(rf"\b{re.escape(token)}\b", body))
+
+
+def _shared_space_enforcement_clause(must_be_visible_roles: list[str]) -> str:
+    roles = [str(role).strip() for role in must_be_visible_roles if str(role).strip()]
+    if not roles:
+        return "All required visible characters remain present in the same shared scene space."
+    role_list = ", ".join(roles)
+    return (
+        f"Required visible cast in the same shared scene space: {role_list}. "
+        "Visual focus may dominate, but every required role remains visibly present in-frame "
+        "(background, edge, partial profile, shoulder, silhouette, reflection, or nearby presence)."
+    )
+
+
 def _coerce_speaker_confidence(value: Any) -> Any:
     if isinstance(value, bool):
         return int(value)
@@ -919,6 +939,22 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
             "identity_lock_summary": _build_identity_lock_summary(story_core),
             "world_lock_summary": _build_world_lock_summary(story_core),
             "style_lock_summary": _build_style_lock_summary(story_core),
+            "prompt_interface_contract": {
+                "visibility_mode": str(_safe_dict(story_core.get("prompt_interface_contract")).get("visibility_mode") or ""),
+                "subject_presence_requirement": str(
+                    _safe_dict(story_core.get("prompt_interface_contract")).get("subject_presence_requirement") or ""
+                ),
+                "must_be_visible": [
+                    str(v).strip()
+                    for v in _safe_list(_safe_dict(story_core.get("prompt_interface_contract")).get("must_be_visible"))
+                    if str(v).strip()
+                ],
+                "may_be_offscreen": [
+                    str(v).strip()
+                    for v in _safe_list(_safe_dict(story_core.get("prompt_interface_contract")).get("may_be_offscreen"))
+                    if str(v).strip()
+                ],
+            },
         },
         "audio_map": {
             "scene_windows": scene_windows,
@@ -1098,9 +1134,17 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "- sc_5: breather with internal defiance; quiet but tense pause with readable subtle emotional charge (not dead static).\\n"
         "Honor scene_plan route semantics exactly: first_last must stay strict first_last contract; ia2v must stay audio-driven singing/performance; i2v must stay simple observable action.\\n"
         "For every scene, consume and apply these scene_plan fields explicitly: speaker_role, spoken_line, lip_sync_allowed, mouth_visible_required, listener_reaction_allowed, reaction_role.\\n"
+        "Read story_core.prompt_interface_contract as source-of-truth for subject visibility: visibility_mode, must_be_visible, may_be_offscreen, subject_presence_requirement.\\n"
+        "When story_core.prompt_interface_contract.must_be_visible contains multiple cast roles, every photo_prompt must place those roles in the same shared physical space defined by world_lock/user input.\\n"
+        "The visual_focus_role may dominate the frame, but every must_be_visible role must remain visibly present in the same scene unless explicitly listed in may_be_offscreen.\\n"
+        "Do not collapse such scenes into a single-person portrait; keep non-focus required roles visible as background/edge of frame/partial profile/shoulder/silhouette/reflection/nearby presence.\\n"
+        "If a role is in must_be_visible and not in may_be_offscreen, do not describe that role as offscreen.\\n"
         "For ia2v with lip_sync_allowed=true: only speaker_role can have mouth movement, listener/reaction_role stays silent, and never output simultaneous dual-speaker lip movement.\\n"
+        "For ia2v/lipsync scenes with multiple must_be_visible roles: keep speaker_role/vocal_owner_role as the readable mouth-sync face, and keep other must_be_visible roles visibly present but silent/reaction/background in the same shared scene space.\\n"
         "For ia2v with lip_sync_allowed=false: keep performance/audio-reactive behavior without mouth-sync directives.\\n"
+        "For i2v reaction scenes: visual_focus_role can be primary while speaker_role differs, but other must_be_visible roles still remain visible in the same shared scene space.\\n"
         "If speaker_role is unknown, do not author lip-sync prompt language.\\n"
+        "For first_last scenes, start_image_prompt and end_image_prompt must also satisfy must_be_visible in the same shared scene space; visual state delta may prioritize visual_focus_role but other must_be_visible roles remain visible.\\n"
         "Always include compact negative_prompt with safety constraints as short tail text.\\n"
         "Never mix negative prompt text into positive video_prompt; keep positive and negative fields separated.\\n"
         "For first_last, return both positive_video_prompt and negative_video_prompt fields (negative_video_prompt is mandatory for first_last).\\n"
@@ -1741,6 +1785,20 @@ def _normalize_scene_prompts(
     i2v_unknown_family_fallback_count = 0
     i2v_template_override_applied = False
     i2v_prompt_family_counts = {family: 0 for family in sorted(I2V_MOTION_FAMILIES)}
+    prompt_interface_contract = _safe_dict(story_core.get("prompt_interface_contract"))
+    must_be_visible_roles = [
+        str(role).strip()
+        for role in _safe_list(prompt_interface_contract.get("must_be_visible"))
+        if str(role).strip()
+    ]
+    may_be_offscreen_roles = {
+        str(role).strip()
+        for role in _safe_list(prompt_interface_contract.get("may_be_offscreen"))
+        if str(role).strip()
+    }
+    enforce_shared_space_rule = len(must_be_visible_roles) >= 2
+    shared_space_missing_segments: list[str] = []
+    offscreen_violation_segments: list[str] = []
     fingerprint = _build_package_anchor_fingerprint(package, story_core, world_continuity)
 
     for scene_raw in scene_rows:
@@ -2181,6 +2239,41 @@ def _normalize_scene_prompts(
             photo_prompt = _append_compact_clauses(photo_prompt, still_clauses)
             video_prompt = _append_compact_clauses(video_prompt, motion_clauses)
             positive_video_prompt = _append_compact_clauses((positive_video_prompt or video_prompt), motion_clauses)
+        if enforce_shared_space_rule:
+            missing_roles = [role for role in must_be_visible_roles if not _text_mentions_role(photo_prompt, role)]
+            if missing_roles:
+                shared_space_missing_segments.append(scene_id)
+                validation_errors.append(f"must_be_visible_photo_prompt_missing:{scene_id}")
+                used_fallback = True
+                photo_prompt = _append_prompt_clause(photo_prompt, _shared_space_enforcement_clause(must_be_visible_roles))
+            offscreen_violations = [
+                role
+                for role in must_be_visible_roles
+                if role not in may_be_offscreen_roles
+                and bool(re.search(rf"\b{re.escape(role)}\b.{0,40}\b(offscreen|off-screen|not visible|outside frame)\b", photo_prompt.lower()))
+            ]
+            if offscreen_violations:
+                offscreen_violation_segments.append(scene_id)
+                validation_errors.append(f"must_be_visible_offscreen_violation:{scene_id}")
+            if actual_route == "first_last":
+                start_missing = [role for role in must_be_visible_roles if not _text_mentions_role(start_image_prompt, role)]
+                end_missing = [role for role in must_be_visible_roles if not _text_mentions_role(end_image_prompt, role)]
+                if start_missing:
+                    shared_space_missing_segments.append(f"{scene_id}:start")
+                    validation_errors.append(f"must_be_visible_start_image_missing:{scene_id}")
+                    used_fallback = True
+                    start_image_prompt = _append_prompt_clause(
+                        start_image_prompt,
+                        _shared_space_enforcement_clause(must_be_visible_roles),
+                    )
+                if end_missing:
+                    shared_space_missing_segments.append(f"{scene_id}:end")
+                    validation_errors.append(f"must_be_visible_end_image_missing:{scene_id}")
+                    used_fallback = True
+                    end_image_prompt = _append_prompt_clause(
+                        end_image_prompt,
+                        _shared_space_enforcement_clause(must_be_visible_roles),
+                    )
 
         scene_out = {
             "scene_id": scene_id,
@@ -2248,6 +2341,10 @@ def _normalize_scene_prompts(
         "i2v_unknown_family_fallback_count": i2v_unknown_family_fallback_count,
         "i2v_prompt_family_counts": i2v_prompt_family_counts,
         "i2v_template_override_applied": i2v_template_override_applied,
+        "scene_prompts_shared_space_rule_applied": enforce_shared_space_rule,
+        "scene_prompts_must_be_visible_roles": must_be_visible_roles,
+        "scene_prompts_shared_space_missing_segments": list(dict.fromkeys(shared_space_missing_segments)),
+        "scene_prompts_offscreen_violation_segments": list(dict.fromkeys(offscreen_violation_segments)),
         "stage_source": "current_package",
     }
     return (
