@@ -270,12 +270,6 @@ def _can_run_scene_prompts_from_existing_scene_plan(package: dict[str, Any]) -> 
     required_upstream = ("input_package", "audio_map", "story_core", "role_plan")
     if not all(_has_stage_output(pkg, stage) for stage in required_upstream):
         return False
-    diagnostics = _safe_dict(pkg.get("diagnostics"))
-    previous_signature = str(diagnostics.get("scene_prompts_upstream_signature") or "").strip()
-    if previous_signature:
-        current_signature = _scene_prompts_upstream_signature(pkg)
-        if previous_signature != current_signature:
-            return False
     return True
 
 
