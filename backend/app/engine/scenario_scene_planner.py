@@ -1530,6 +1530,23 @@ def _normalize_scene_plan(
         reaction_role = str(raw_row.get("reaction_role") or "").strip()
         speaker_confidence = _clamp_ratio(raw_row.get("speaker_confidence"), 0.0)
         is_lip_sync_candidate = bool(source_row.get("is_lip_sync_candidate"))
+        transcript_slice = str(source_row.get("transcript_slice") or "").strip()
+        row_vocal_owner_role = str(raw_row.get("vocal_owner_role") or vocal_owner_role or UNKNOWN_VOCAL_OWNER_ROLE).strip() or UNKNOWN_VOCAL_OWNER_ROLE
+
+        has_audio_speech_evidence = bool(spoken_line or transcript_slice or is_lip_sync_candidate)
+        if (
+            route == "ia2v"
+            and speaker_role == UNKNOWN_SPEAKER_ROLE
+            and len(active_roles) == 1
+            and has_audio_speech_evidence
+        ):
+            fallback_single_role = active_roles[0]
+            speaker_role = fallback_single_role
+            row_vocal_owner_role = fallback_single_role
+            speaker_confidence = max(0.75, speaker_confidence)
+            lip_sync_allowed = True
+            lip_sync_priority = lip_sync_priority if lip_sync_priority in {"high", "medium"} else "high"
+            mouth_visible_required = True
 
         row_rejected_reasons: list[str] = []
         if speaker_role != UNKNOWN_SPEAKER_ROLE and speaker_role not in active_roles:
@@ -1541,7 +1558,7 @@ def _normalize_scene_plan(
         if lip_sync_allowed and speaker_role == UNKNOWN_SPEAKER_ROLE:
             speaker_role_invalid_count += 1
             row_rejected_reasons.append("lip_sync_with_unknown_speaker")
-        if lip_sync_allowed and not spoken_line:
+        if lip_sync_allowed and not (spoken_line or transcript_slice):
             row_rejected_reasons.append("lip_sync_without_spoken_line")
         if route == "ia2v" and lip_sync_allowed and speaker_role == UNKNOWN_SPEAKER_ROLE:
             speaker_role_invalid_count += 1
@@ -1560,7 +1577,7 @@ def _normalize_scene_plan(
             row_rejected_reasons.append("duration_too_long_for_lipsync")
         if lip_sync_allowed and not mouth_visible_required:
             row_rejected_reasons.append("mouth_visible_required_for_lipsync")
-        if lip_sync_allowed and (vocal_owner_role == UNKNOWN_VOCAL_OWNER_ROLE or speaker_role != vocal_owner_role):
+        if lip_sync_allowed and (row_vocal_owner_role == UNKNOWN_VOCAL_OWNER_ROLE or speaker_role != row_vocal_owner_role):
             row_rejected_reasons.append("SCENE_LIPSYNC_VOICE_ROLE_MISMATCH")
             lip_sync_voice_role_mismatch_segments.append(segment_id)
         if reaction_role and reaction_role not in active_roles:
@@ -1648,6 +1665,7 @@ def _normalize_scene_plan(
                 },
                 "audio_visual_sync": str(raw_row.get("audio_visual_sync") or "").strip(),
                 "speaker_role": speaker_role,
+                "vocal_owner_role": row_vocal_owner_role,
                 "spoken_line": spoken_line,
                 "lip_sync_allowed": lip_sync_allowed,
                 "lip_sync_priority": lip_sync_priority,
@@ -1688,6 +1706,7 @@ def _normalize_scene_plan(
                 "primary_role": str(row.get("primary_role") or ""),
                 "visual_focus_role": str(row.get("visual_focus_role") or ""),
                 "speaker_role": str(row.get("speaker_role") or UNKNOWN_SPEAKER_ROLE),
+                "vocal_owner_role": str(row.get("vocal_owner_role") or UNKNOWN_VOCAL_OWNER_ROLE),
                 "spoken_line": str(row.get("spoken_line") or ""),
                 "lip_sync_allowed": bool(row.get("lip_sync_allowed")),
                 "lip_sync_priority": str(row.get("lip_sync_priority") or "none"),
