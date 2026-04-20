@@ -1563,6 +1563,24 @@ def _apply_scene_prompts_enforcement_result(
             result["error"] = ""
 
     result_diag = _safe_dict(result.get("diagnostics"))
+    if not normalized_validation_error:
+        diag_validation_error = str(result_diag.get("scene_prompts_validation_error") or "").strip().lower()
+        diag_error_code = str(result_diag.get("scene_prompts_error_code") or "").strip().upper()
+        diag_error = str(result_diag.get("scene_prompts_error") or "").strip().lower()
+
+        if previous_validation_error.startswith("identity_drift:") or diag_validation_error.startswith("identity_drift:"):
+            result_diag["scene_prompts_validation_error"] = ""
+            result_diag["validation_error"] = ""
+
+        if previous_error_code == "PROMPTS_IDENTITY_DRIFT" or diag_error_code == "PROMPTS_IDENTITY_DRIFT":
+            result_diag["scene_prompts_error_code"] = ""
+
+        if previous_error in {"prompts_identity_drift", "scene_prompts_validation_failed"} or diag_error in {
+            "prompts_identity_drift",
+            "scene_prompts_validation_failed",
+        }:
+            result_diag["scene_prompts_error"] = ""
+
     result_diag.update(normalized_diag)
     result["diagnostics"] = result_diag
     return result
