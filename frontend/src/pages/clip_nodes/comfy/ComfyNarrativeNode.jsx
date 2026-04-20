@@ -62,15 +62,21 @@ export default function ComfyNarrativeNode({ id, data }) {
   const routeTargetsPerBlock = data?.routeTargetsPerBlock && typeof data.routeTargetsPerBlock === "object"
     ? data.routeTargetsPerBlock
     : { i2v: 4, ia2v: 2, first_last: 2 };
-  const selectedPreset = ROUTE_STRATEGY_PRESETS.find((x) => x.key === data?.routeStrategyPreset) || ROUTE_STRATEGY_PRESETS[0];
+  const selectedPreset =
+    ROUTE_STRATEGY_PRESETS.find((x) => x.key === data?.routeStrategyPreset)
+    || ROUTE_STRATEGY_PRESETS[0];
+  const customI2v = Number(routeTargetsPerBlock?.i2v || 0);
+  const customIa2v = Number(routeTargetsPerBlock?.ia2v || 0);
+  const customFirstLast = Number(routeTargetsPerBlock?.first_last || 0);
+  const customTotal = customI2v + customIa2v + customFirstLast;
   const baseSceneCount = Number(data?.baseSceneCount || 8) || 8;
-  const routeTotal = Number(routeTargetsPerBlock?.i2v || 0) + Number(routeTargetsPerBlock?.ia2v || 0) + Number(routeTargetsPerBlock?.first_last || 0);
-  const hasRouteTotalWarning = safeRouteStrategyMode === "custom_counts" && routeTotal !== baseSceneCount;
+  const hasRouteTotalWarning = safeRouteStrategyMode === "custom_counts" && customTotal !== baseSceneCount;
   const selectedStrategySummary = safeRouteStrategyMode === "auto"
     ? {
       title: "Выбрано: Авто",
       lines: [
         "Gemini сам выбирает i2v / ia2v / первый-последний кадр по аудио, вокалу и драматургии.",
+        "Базовая авто-логика сохраняет безопасный баланс и не навязывает ручные targets.",
       ],
     }
     : safeRouteStrategyMode === "preset"
@@ -80,13 +86,17 @@ export default function ComfyNarrativeNode({ id, data }) {
           selectedPreset.description,
           "Для 9+ сцен: лишние сцены добавляются как i2v.",
           "Для длинных клипов: стратегия повторяется блоками примерно по 30 секунд.",
+          "Targets мягкие: если нет вокала, ia2v не ставится насильно и безопасно заменяется на i2v.",
         ],
       }
       : {
         title: "Выбрано: Ручной режим",
         lines: [
-          `На 8 сцен: ${Number(routeTargetsPerBlock?.i2v ?? 0)} i2v / ${Number(routeTargetsPerBlock?.ia2v ?? 0)} ia2v / ${Number(routeTargetsPerBlock?.first_last ?? 0)} первый-последний`,
-          `Итого: ${routeTotal} / 8 сцен`,
+          `На 8 сцен: ${customI2v} i2v / ${customIa2v} ia2v / ${customFirstLast} первый-последний`,
+          `Итого: ${customTotal} / 8 сцен`,
+          "Для 9+ сцен: лишние сцены добавляются как i2v.",
+          "Для длинных клипов: ручной расклад повторяется блоками примерно по 30 секунд.",
+          "Targets мягкие: если нет вокала, ia2v не ставится насильно и безопасно заменяется на i2v.",
           ...(hasRouteTotalWarning
             ? ["Сумма отличается от 8. Лишние или недостающие сцены будут мягко скорректированы, безопасный маршрут по умолчанию — i2v."]
             : []),
@@ -272,16 +282,21 @@ export default function ComfyNarrativeNode({ id, data }) {
                       type="button"
                       className={`clipSB_btn ${safeRouteStrategyMode === item.key ? "clipSB_btnPrimary clipSB_routeStrategyBtn--active" : "clipSB_btnSecondary"}`.trim()}
                       onClick={() => {
+                        if (item.key === "auto") {
+                          data?.onFieldChange?.(id, { routeStrategyMode: "auto" });
+                          return;
+                        }
                         if (item.key === "preset") {
+                          const preset = selectedPreset || ROUTE_STRATEGY_PRESETS[0];
                           data?.onFieldChange?.(id, {
                             routeStrategyMode: "preset",
-                            routeStrategyPreset: "balanced_50_25_25",
-                            routeTargetsPerBlock: { i2v: 4, ia2v: 2, first_last: 2 },
-                            maxConsecutiveIa2v: 2,
+                            routeStrategyPreset: preset.key,
+                            routeTargetsPerBlock: preset.targets,
+                            maxConsecutiveIa2v: preset.maxConsecutiveIa2v,
                           });
                           return;
                         }
-                        data?.onFieldChange?.(id, { routeStrategyMode: item.key });
+                        data?.onFieldChange?.(id, { routeStrategyMode: "custom_counts" });
                       }}
                     >
                       {item.label}
@@ -297,23 +312,26 @@ export default function ComfyNarrativeNode({ id, data }) {
                   <div className="clipSB_narrativeField clipSB_narrativeField--compact">
                     <div className="clipSB_brainLabel clipSB_brainLabel--compact">Русские пресеты</div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 }}>
-                      {ROUTE_STRATEGY_PRESETS.map((preset) => (
-                        <button
-                          key={preset.key}
-                          type="button"
-                          className={`clipSB_btn ${(safeRouteStrategyMode === "preset" && selectedPreset.key === preset.key) ? "clipSB_btnPrimary clipSB_routeStrategyBtn--active clipSB_routeStrategyPresetBtn--active" : "clipSB_btnSecondary clipSB_routeStrategyPresetBtn"}`.trim()}
-                          title={preset.description}
-                          onClick={() => data?.onFieldChange?.(id, {
-                            routeStrategyMode: "preset",
-                            routeStrategyPreset: preset.key,
-                            routeTargetsPerBlock: preset.targets,
-                            maxConsecutiveIa2v: preset.maxConsecutiveIa2v,
-                          })}
-                        >
-                          <div>{(safeRouteStrategyMode === "preset" && selectedPreset.key === preset.key) ? `✓ ${preset.label}` : preset.label}</div>
-                          <small>{preset.description}</small>
-                        </button>
-                      ))}
+                      {ROUTE_STRATEGY_PRESETS.map((preset) => {
+                        const presetActive = safeRouteStrategyMode === "preset" && data?.routeStrategyPreset === preset.key;
+                        return (
+                          <button
+                            key={preset.key}
+                            type="button"
+                            className={`clipSB_btn clipSB_routeStrategyPresetBtn ${presetActive ? "clipSB_btnPrimary clipSB_routeStrategyPresetBtn--active" : "clipSB_btnSecondary"}`.trim()}
+                            title={preset.description}
+                            onClick={() => data?.onFieldChange?.(id, {
+                              routeStrategyMode: "preset",
+                              routeStrategyPreset: preset.key,
+                              routeTargetsPerBlock: preset.targets,
+                              maxConsecutiveIa2v: preset.maxConsecutiveIa2v,
+                            })}
+                          >
+                            <div>{presetActive ? "✓ " : ""}{preset.label}</div>
+                            <small>{preset.description}</small>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 ) : null}
@@ -338,7 +356,6 @@ export default function ComfyNarrativeNode({ id, data }) {
                       <div className="clipSB_brainLabel clipSB_brainLabel--compact">максимум ia2v подряд</div>
                       <input className="clipSB_input" type="number" min="1" max="8" value={Number(data?.maxConsecutiveIa2v ?? 2)} onChange={(e) => data?.onFieldChange?.(id, { maxConsecutiveIa2v: Number(e.target.value || 2) })} />
                     </label>
-                    {hasRouteTotalWarning ? <div className="clipSB_narrativeEmptyHint" role="alert">Сумма отличается от 8. Лишние или недостающие сцены будут мягко скорректированы, безопасный маршрут по умолчанию — i2v.</div> : null}
                   </>
                 ) : null}
 
