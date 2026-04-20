@@ -747,14 +747,17 @@ def _apply_visual_ref_identity_lock_to_story_core(
     story_core: dict[str, Any],
     story_core_v1: dict[str, Any],
     role: str,
+    *,
+    apply_hero_anchor_lock: bool = True,
 ) -> None:
     rule = _visual_ref_identity_rule(role)
-    identity_doctrine = _safe_dict(story_core.get("identity_doctrine"))
-    existing_hero_anchor = str(identity_doctrine.get("hero_anchor") or "").strip()
-    hero_anchor_suffix = _append_visual_ref_auxiliary_note(existing_hero_anchor, role)
-    identity_doctrine["hero_anchor"] = f"{rule} {hero_anchor_suffix}".strip() if hero_anchor_suffix else rule
-    story_core["identity_doctrine"] = identity_doctrine
-    story_core["identity_lock"] = {"rule": rule}
+    if apply_hero_anchor_lock:
+        identity_doctrine = _safe_dict(story_core.get("identity_doctrine"))
+        existing_hero_anchor = str(identity_doctrine.get("hero_anchor") or "").strip()
+        hero_anchor_suffix = _append_visual_ref_auxiliary_note(existing_hero_anchor, role)
+        identity_doctrine["hero_anchor"] = f"{rule} {hero_anchor_suffix}".strip() if hero_anchor_suffix else rule
+        story_core["identity_doctrine"] = identity_doctrine
+        story_core["identity_lock"] = {"rule": rule}
 
     prompt_contract = _safe_dict(story_core_v1.get("prompt_interface_contract"))
     constraints = [str(item or "").strip() for item in _safe_list(prompt_contract.get("identity_prompt_constraints")) if str(item or "").strip()]
@@ -772,7 +775,12 @@ def _apply_visual_ref_identity_lock_to_role_plan(role_plan: dict[str, Any], role
     for row in _safe_list(role_plan.get("roster")):
         if not isinstance(row, dict):
             continue
-        row_role = _canonical_subject_id(row.get("role")) or _canonical_subject_id(row.get("id")) or _canonical_subject_id(row.get("character_id"))
+        row_role = (
+            _canonical_subject_id(row.get("entity_id"))
+            or _canonical_subject_id(row.get("role"))
+            or _canonical_subject_id(row.get("id"))
+            or _canonical_subject_id(row.get("character_id"))
+        )
         if row_role != role:
             continue
         row["identity_reference_rule"] = rule_with_aux
@@ -4547,8 +4555,14 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                         refs_inventory,
                     )
                     for role in ("character_1", "character_2", "character_3"):
-                        if visual_ref_applied.get(role):
-                            _apply_visual_ref_identity_lock_to_story_core(story_core, story_core_v1, role)
+                        if not visual_ref_applied.get(role):
+                            continue
+                        _apply_visual_ref_identity_lock_to_story_core(
+                            story_core,
+                            story_core_v1,
+                            role,
+                            apply_hero_anchor_lock=role == "character_1",
+                        )
                     story_core["story_core_v1"] = story_core_v1
                     package["story_core"] = story_core
                     package["story_core_v1"] = story_core_v1
