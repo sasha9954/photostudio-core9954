@@ -1538,6 +1538,36 @@ def _enforce_scene_prompts_identity_and_presence(
     return normalized, validation_error, diagnostics
 
 
+def _apply_scene_prompts_enforcement_result(
+    result: dict[str, Any],
+    normalized_scene_prompts: dict[str, Any],
+    normalized_validation_error: str,
+    normalized_diag: dict[str, Any],
+) -> dict[str, Any]:
+    previous_validation_error = str(result.get("validation_error") or "").strip().lower()
+    previous_error_code = str(result.get("error_code") or "").strip().upper()
+    previous_error = str(result.get("error") or "").strip().lower()
+
+    result["scene_prompts"] = normalized_scene_prompts
+
+    if normalized_validation_error:
+        result["validation_error"] = normalized_validation_error
+        if not str(result.get("error_code") or "").strip():
+            result["error_code"] = "PROMPTS_IDENTITY_DRIFT"
+    else:
+        if previous_validation_error.startswith("identity_drift:"):
+            result["validation_error"] = ""
+        if previous_error_code == "PROMPTS_IDENTITY_DRIFT":
+            result["error_code"] = ""
+        if previous_error in {"prompts_identity_drift", "scene_prompts_validation_failed"}:
+            result["error"] = ""
+
+    result_diag = _safe_dict(result.get("diagnostics"))
+    result_diag.update(normalized_diag)
+    result["diagnostics"] = result_diag
+    return result
+
+
 def _build_scene_prompts_retry_feedback(validation_error: str, error_code: str) -> str:
     base = (
         f"Previous output invalid: validation_error={validation_error}; "
@@ -7830,14 +7860,12 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         package,
         _safe_dict(result.get("scene_prompts")),
     )
-    result["scene_prompts"] = normalized_scene_prompts
-    if normalized_validation_error:
-        result["validation_error"] = normalized_validation_error
-        if not str(result.get("error_code") or "").strip():
-            result["error_code"] = "PROMPTS_IDENTITY_DRIFT"
-    result_diag = _safe_dict(result.get("diagnostics"))
-    result_diag.update(normalized_diag)
-    result["diagnostics"] = result_diag
+    result = _apply_scene_prompts_enforcement_result(
+        result,
+        normalized_scene_prompts,
+        normalized_validation_error,
+        normalized_diag,
+    )
     initial_validation_error = str(result.get("validation_error") or "").strip()
     if initial_validation_error:
         initial_diag = _safe_dict(result.get("diagnostics"))
@@ -7857,14 +7885,12 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
             package,
             _safe_dict(result.get("scene_prompts")),
         )
-        result["scene_prompts"] = normalized_scene_prompts
-        if normalized_validation_error:
-            result["validation_error"] = normalized_validation_error
-            if not str(result.get("error_code") or "").strip():
-                result["error_code"] = "PROMPTS_IDENTITY_DRIFT"
-        result_diag = _safe_dict(result.get("diagnostics"))
-        result_diag.update(normalized_diag)
-        result["diagnostics"] = result_diag
+        result = _apply_scene_prompts_enforcement_result(
+            result,
+            normalized_scene_prompts,
+            normalized_validation_error,
+            normalized_diag,
+        )
         if str(result.get("validation_error") or "").strip():
             result["ok"] = False
             result["error"] = str(result.get("error") or result.get("validation_error") or "scene_prompts_validation_failed")
