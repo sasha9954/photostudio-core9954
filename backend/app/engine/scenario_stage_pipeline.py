@@ -1298,7 +1298,10 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
             "Only ia2v scenes may include speaker_role, and it must be character_1. "
             "For i2v scenes, leave speaker_role as unknown/empty according to schema."
         ),
-        "technical_vocabulary_forbidden": list(_SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS),
+        "technical_vocabulary_forbidden": (
+            "Do not output internal/backend/debug terminology. "
+            "Use only cinematic storyboard language."
+        ),
     }
     input_pkg["scene_safe_identity_constraints"] = _scene_plan_safe_identity_constraints(scene_pkg)
     scene_pkg["input"] = input_pkg
