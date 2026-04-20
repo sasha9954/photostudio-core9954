@@ -1374,7 +1374,10 @@ def _normalize_scene_plan(
     ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow = False
     lip_sync_rejected_reasons: dict[str, list[str]] = {}
     lip_sync_voice_role_mismatch_segments: list[str] = []
+    primary_role_by_segment: dict[str, str] = {}
+    visual_focus_role_by_segment: dict[str, str] = {}
     speaker_role_by_segment: dict[str, str] = {}
+    reaction_role_by_segment: dict[str, str] = {}
     lip_sync_decision_by_segment: dict[str, str] = {}
     consecutive_lip_sync_count = 0
     max_consecutive_lip_sync_count = 0
@@ -1462,6 +1465,9 @@ def _normalize_scene_plan(
             )
             if str(v).strip()
         ]
+        role_primary = str(role_row.get("primary_role") or "").strip()
+        primary_role = role_primary if role_primary in active_roles else (active_roles[0] if active_roles else "")
+        visual_focus_role = primary_role
         speaker_role = str(raw_row.get("speaker_role") or UNKNOWN_SPEAKER_ROLE).strip() or UNKNOWN_SPEAKER_ROLE
         spoken_line = str(raw_row.get("spoken_line") or "").strip()
         lip_sync_allowed = bool(raw_row.get("lip_sync_allowed"))
@@ -1509,6 +1515,21 @@ def _normalize_scene_plan(
         if route == "ia2v" and listener_reaction_allowed and reaction_role == speaker_role and reaction_role:
             row_rejected_reasons.append("reaction_role_equals_speaker_role")
 
+        if route == "ia2v":
+            if speaker_role in active_roles and speaker_role != UNKNOWN_SPEAKER_ROLE:
+                visual_focus_role = speaker_role
+            elif primary_role:
+                visual_focus_role = primary_role
+        elif route == "first_last":
+            lip_sync_allowed = False
+            if primary_role:
+                visual_focus_role = primary_role
+        elif primary_role:
+            visual_focus_role = primary_role
+
+        if route == "i2v" and visual_focus_role and visual_focus_role != speaker_role:
+            reaction_role = visual_focus_role
+
         if row_rejected_reasons:
             lip_sync_allowed = False
             if route == "ia2v" and (
@@ -1530,6 +1551,11 @@ def _normalize_scene_plan(
             else:
                 error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
+        if not reaction_role:
+            reaction_role = ""
+        elif reaction_role not in active_roles:
+            reaction_role = ""
+
         if lip_sync_allowed:
             consecutive_lip_sync_count += 1
             max_consecutive_lip_sync_count = max(max_consecutive_lip_sync_count, consecutive_lip_sync_count)
@@ -1541,11 +1567,16 @@ def _normalize_scene_plan(
 
         if row_rejected_reasons:
             lip_sync_rejected_reasons[segment_id] = row_rejected_reasons
+        primary_role_by_segment[segment_id] = primary_role
+        visual_focus_role_by_segment[segment_id] = visual_focus_role
         speaker_role_by_segment[segment_id] = speaker_role
+        reaction_role_by_segment[segment_id] = reaction_role
 
         normalized_storyboard.append(
             {
                 "segment_id": segment_id,
+                "primary_role": primary_role,
+                "visual_focus_role": visual_focus_role,
                 "route": route,
                 "route_reason": str(raw_row.get("route_reason") or "").strip(),
                 "scene_goal": str(raw_row.get("scene_goal") or "").strip(),
@@ -1601,6 +1632,8 @@ def _normalize_scene_plan(
                 "scene_function": str(row.get("narrative_function") or ""),
                 "emotional_intent": str(row.get("scene_goal") or ""),
                 "motion_intent": str(motion.get("subject_motion") or ""),
+                "primary_role": str(row.get("primary_role") or ""),
+                "visual_focus_role": str(row.get("visual_focus_role") or ""),
                 "speaker_role": str(row.get("speaker_role") or UNKNOWN_SPEAKER_ROLE),
                 "spoken_line": str(row.get("spoken_line") or ""),
                 "lip_sync_allowed": bool(row.get("lip_sync_allowed")),
@@ -1650,7 +1683,10 @@ def _normalize_scene_plan(
         "speaker_role_invalid_count": speaker_role_invalid_count,
         "vocal_gender": vocal_gender if vocal_gender in ALLOWED_VOCAL_GENDERS else UNKNOWN_VOCAL_GENDER,
         "vocal_owner_role": vocal_owner_role if vocal_owner_role in {*_ROLE_KEYS, UNKNOWN_VOCAL_OWNER_ROLE} else UNKNOWN_VOCAL_OWNER_ROLE,
+        "primary_role_by_segment": primary_role_by_segment,
+        "visual_focus_role_by_segment": visual_focus_role_by_segment,
         "speaker_role_by_segment": speaker_role_by_segment,
+        "reaction_role_by_segment": reaction_role_by_segment,
         "lip_sync_voice_role_mismatch_segments": lip_sync_voice_role_mismatch_segments,
         "lip_sync_decision_by_segment": lip_sync_decision_by_segment,
         "lip_sync_rejected_reasons": lip_sync_rejected_reasons,
@@ -1760,7 +1796,10 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
             "vocal_gender": str(normalization_diag.get("vocal_gender") or vocal_gender or UNKNOWN_VOCAL_GENDER),
             "vocal_owner_role": str(normalization_diag.get("vocal_owner_role") or vocal_owner_role or UNKNOWN_VOCAL_OWNER_ROLE),
+            "primary_role_by_segment": _safe_dict(normalization_diag.get("primary_role_by_segment")),
+            "visual_focus_role_by_segment": _safe_dict(normalization_diag.get("visual_focus_role_by_segment")),
             "speaker_role_by_segment": _safe_dict(normalization_diag.get("speaker_role_by_segment")),
+            "reaction_role_by_segment": _safe_dict(normalization_diag.get("reaction_role_by_segment")),
             "lip_sync_voice_role_mismatch_segments": _safe_list(normalization_diag.get("lip_sync_voice_role_mismatch_segments")),
             "lip_sync_decision_by_segment": _safe_dict(normalization_diag.get("lip_sync_decision_by_segment")),
             "lip_sync_rejected_reasons": _safe_dict(normalization_diag.get("lip_sync_rejected_reasons")),
