@@ -2450,12 +2450,108 @@ def _detect_core_role_binding_contradictions(
     return contradictions[:8]
 
 
+def _collect_present_cast_roles(input_present_cast_roles: Any) -> set[str]:
+    allowed = {"character_1", "character_2"}
+    for row in _safe_list(input_present_cast_roles):
+        token = str(row or "").strip().lower()
+        if token.startswith("character_"):
+            allowed.add(token)
+    return allowed
+
+
+def _detect_core_role_spawning_matches(
+    payload: dict[str, Any],
+    *,
+    present_cast_roles: set[str],
+    role_identity_expectations: dict[str, str],
+) -> list[dict[str, str]]:
+    forbidden_role_stage_fields = {"roster", "scene_casting", "role_plan", "assigned_cast", "cast_assignment"}
+    role_id_pattern = re.compile(r"\bcharacter_(\d+)\b", flags=re.IGNORECASE)
+    allowed_role_mentions = {
+        "character_1",
+        "character_2",
+        "beat_primary_subject",
+        "beat_secondary_subjects",
+        "must_be_visible",
+        "may_be_offscreen",
+        "vocal_owner_role",
+        "identity_doctrine",
+        "narrative_backbone",
+        "prompt_interface_contract",
+    }
+    if "character_3" in present_cast_roles:
+        allowed_role_mentions.add("character_3")
+    matches: list[dict[str, str]] = []
+
+    def _append_match(path: str, reason: str, excerpt: str) -> None:
+        if len(matches) >= 12:
+            return
+        matches.append({"path": path, "reason": reason, "excerpt": excerpt[:240]})
+
+    def _walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                key_str = str(key or "")
+                key_l = key_str.strip().lower()
+                child_path = f"{path}.{key_str}" if path else key_str
+                if key_l in forbidden_role_stage_fields:
+                    _append_match(
+                        child_path,
+                        "forbidden_role_stage_field",
+                        f"{key_str}: {str(value)[:180]}",
+                    )
+                _walk(value, child_path)
+            return
+        if isinstance(node, list):
+            for idx, row in enumerate(node):
+                _walk(row, f"{path}[{idx}]")
+            return
+        if isinstance(node, str):
+            text = str(node)
+            text_l = text.lower()
+            for field in forbidden_role_stage_fields:
+                if re.search(rf"\b{re.escape(field)}\b", text_l):
+                    _append_match(path, "forbidden_role_stage_field_mention", text)
+                    break
+            for hit in role_id_pattern.finditer(text_l):
+                role_id = f"character_{hit.group(1)}".lower()
+                if role_id in allowed_role_mentions:
+                    continue
+                if role_id in {"character_1", "character_2"}:
+                    continue
+                if role_id in present_cast_roles:
+                    continue
+                start = max(0, hit.start() - 48)
+                end = min(len(text), hit.end() + 48)
+                _append_match(path, "new_or_unconnected_role_id", text[start:end])
+
+    _walk(payload, "$")
+    contradiction_matches: list[dict[str, str]] = []
+    json_dump = json.dumps(payload, ensure_ascii=False).lower()
+    for role, expected_gender in role_identity_expectations.items():
+        has_contradiction, match_meta = _role_has_opposite_gender_near_role(
+            json_dump,
+            role,
+            expected_gender,
+        )
+        if has_contradiction:
+            contradiction_matches.append(
+                {
+                    "path": "$",
+                    "reason": f"identity_gender_conflict:{role}:expected_{expected_gender}",
+                    "excerpt": str(match_meta.get("excerpt") or ""),
+                }
+            )
+    return [*matches, *contradiction_matches][:12]
+
+
 def _validate_story_core_v11_payload(
     *,
     payload: dict[str, Any],
     audio_segments: list[dict[str, Any]],
     user_concept: str,
     role_identity_expectations: dict[str, str] | None = None,
+    present_cast_roles: set[str] | None = None,
     debug_capture: dict[str, Any] | None = None,
 ) -> tuple[bool, str, list[str]]:
     # Role binding quick checks:
@@ -2559,7 +2655,6 @@ def _validate_story_core_v11_payload(
         r"\bsegment[_\s-]*id[^a-z0-9]{0,8}(seg[_\s-]*\d+)[^\n]{0,40}\buses?\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
         r"\broute\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
     )
-    role_tokens = ("cast", "roles", "role_plan", "character_1:", "character_2:", "character_3:")
     drift_keys = {"t0", "t1", "scene_slots", "scene_candidate_windows", "phrase_units"}
     json_dump = json.dumps(payload, ensure_ascii=False).lower()
     if any(token in json_dump for token in drift_keys):
@@ -2638,8 +2733,16 @@ def _validate_story_core_v11_payload(
     if any(re.search(pattern, json_dump) for pattern in direct_route_assignment_patterns):
         return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_direct_route_assignment"]
 
-    if any(token in json_dump for token in role_tokens):
-        return False, CORE_ROLE_SPAWNING, ["core_payload_contains_role_or_cast_assignment"]
+    spawning_matches = _detect_core_role_spawning_matches(
+        payload,
+        present_cast_roles=present_cast_roles or {"character_1", "character_2"},
+        role_identity_expectations=role_identity_expectations or {},
+    )
+    if debug_capture is not None:
+        debug_capture["story_core_role_spawning_matches"] = spawning_matches[:12]
+    if spawning_matches:
+        reasons = [str(row.get("reason") or "role_spawning_detected") for row in spawning_matches[:8]]
+        return False, CORE_ROLE_SPAWNING, reasons or ["role_spawning_detected"]
 
     concept = str(user_concept or "").strip().lower()
     if concept:
@@ -3619,11 +3722,15 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 )
                 diagnostics["story_core_normalized_payload"] = normalized_core
                 technical_spawn_debug: dict[str, Any] = {}
+                present_cast_roles = _collect_present_cast_roles(
+                    _safe_dict(input_pkg.get("connected_context_summary")).get("presentCastRoles")
+                )
                 ok, error_code, validation_errors = _validate_story_core_v11_payload(
                     payload=normalized_core,
                     audio_segments=core_segments,
                     user_concept=user_concept,
                     role_identity_expectations=role_identity_expectations,
+                    present_cast_roles=present_cast_roles,
                     debug_capture=technical_spawn_debug,
                 )
                 diagnostics["story_core_validation_errors"] = validation_errors
@@ -3636,6 +3743,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["story_core_technical_spawn_match_zone"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_zone") or "")
                 diagnostics["story_core_role_binding_contradiction_matches"] = _safe_list(
                     technical_spawn_debug.get("story_core_role_binding_contradiction_matches")
+                )
+                diagnostics["story_core_role_spawning_matches"] = _safe_list(
+                    technical_spawn_debug.get("story_core_role_spawning_matches")
                 )
                 if not ok and error_code == CORE_ID_MISMATCH:
                     for validation_error in validation_errors:
