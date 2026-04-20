@@ -7480,6 +7480,8 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_empty"] = False
     diagnostics["role_plan_snapshot_restored"] = False
     diagnostics["role_plan_failure_reason"] = ""
+    diagnostics["role_plan_candidate_failed_but_snapshot_restored"] = False
+    diagnostics["role_plan_last_failed_candidate_error"] = ""
     diagnostics["role_plan_configured_timeout_sec"] = get_scenario_stage_timeout("role_plan")
     diagnostics["role_plan_timeout_stage_policy_name"] = scenario_timeout_policy_name("role_plan")
     diagnostics["role_plan_timed_out"] = False
@@ -7592,18 +7594,11 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     if stage_success:
         diagnostics["role_plan_snapshot_restored"] = False
         diagnostics["role_plan_failure_reason"] = ""
+        diagnostics["role_plan_candidate_failed_but_snapshot_restored"] = False
+        diagnostics["role_plan_last_failed_candidate_error"] = ""
         package["diagnostics"] = diagnostics
         _append_diag_event(package, "role_plan generated", stage_id="role_plan")
         return package
-
-    if previous_role_plan_valid:
-        package["role_plan"] = _attach_downstream_mode_metadata(previous_role_plan, package)
-        diagnostics["role_plan_snapshot_restored"] = True
-        _append_diag_event(package, "role_plan invalid: restored previous snapshot", stage_id="role_plan")
-    else:
-        package["role_plan"] = _attach_downstream_mode_metadata({}, package)
-        diagnostics["role_plan_snapshot_restored"] = False
-        _append_diag_event(package, "role_plan invalid: no previous snapshot", stage_id="role_plan")
 
     failure_reason = (
         str(diagnostics.get("role_plan_validation_error") or "")
@@ -7611,6 +7606,33 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         or str(diagnostics.get("role_plan_error") or "")
         or "role_plan_invalid_empty_or_uncovered"
     )
+
+    if previous_role_plan_valid:
+        package["role_plan"] = _attach_downstream_mode_metadata(previous_role_plan, package)
+        diagnostics["role_plan_snapshot_restored"] = True
+        diagnostics["role_plan_candidate_failed_but_snapshot_restored"] = True
+        diagnostics["role_plan_last_failed_candidate_error"] = str(failure_reason)
+        diagnostics["role_plan_failure_reason"] = str(failure_reason)
+        diagnostics["validation_error"] = ""
+        diagnostics["role_plan_validation_error"] = ""
+        diagnostics["role_plan_error"] = ""
+        diagnostics["role_plan_error_code"] = ""
+        diagnostics["role_plan_empty"] = False
+        package["diagnostics"] = diagnostics
+        _append_diag_event(package, "role_plan invalid: restored previous snapshot", stage_id="role_plan")
+        _append_diag_event(
+            package,
+            "role_plan candidate failed but previous valid snapshot restored",
+            stage_id="role_plan",
+        )
+        return package
+    else:
+        package["role_plan"] = _attach_downstream_mode_metadata({}, package)
+        diagnostics["role_plan_snapshot_restored"] = False
+        diagnostics["role_plan_candidate_failed_but_snapshot_restored"] = False
+        diagnostics["role_plan_last_failed_candidate_error"] = str(failure_reason)
+        _append_diag_event(package, "role_plan invalid: no previous snapshot", stage_id="role_plan")
+
     diagnostics["role_plan_failure_reason"] = failure_reason
     diagnostics["role_plan_empty"] = True
     package["diagnostics"] = diagnostics
