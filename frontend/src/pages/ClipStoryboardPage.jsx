@@ -1628,7 +1628,14 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
     }
     return environmentOnlyContract;
   }
-  const hasExplicitContract = Boolean(primaryRole || secondaryRoles.length || sceneActiveRoles.length || mustAppear.length);
+  const hasExplicitContract = Boolean(
+    primaryRole
+    || visualFocusRole
+    || secondaryRoles.length
+    || sceneActiveRoles.length
+    || mustAppear.length
+    || mustVisibleOnscreen.length
+  );
   const explicitActiveRoles = normalizeRoleList([
     visualFocusRole || primaryRole,
     ...secondaryRoles,
