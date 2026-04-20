@@ -913,13 +913,44 @@ def _route_budget_target_for_plan(total_scenes: int, creative_config: dict[str, 
         return {"i2v": 0, "ia2v": 0, "first_last": 0}, False
     if not _route_strategy_active(creative_config):
         return _target_route_budget(total_scenes), False
+    base_scene_count = max(1, int(creative_config.get("base_scene_count") or 8))
     targets = _safe_dict(creative_config.get("route_targets_per_block"))
-    budget = {
+    target_budget = {
         "i2v": max(0, int(targets.get("i2v") or 0)),
         "ia2v": max(0, int(targets.get("ia2v") or 0)),
         "first_last": max(0, int(targets.get("first_last") or 0)),
     }
-    is_hard_short_clip_target = sum(budget.values()) == total_scenes
+    full_blocks = total_scenes // base_scene_count
+    remainder = total_scenes % base_scene_count
+    budget = {route: count * full_blocks for route, count in target_budget.items()}
+
+    if remainder > 0:
+        partial = dict(target_budget)
+        reduction_order = ("first_last", "i2v", "ia2v")
+        while sum(partial.values()) > remainder:
+            reduced = False
+            for route in reduction_order:
+                if partial[route] > 0 and sum(partial.values()) > remainder:
+                    partial[route] -= 1
+                    reduced = True
+            if not reduced:
+                break
+        if (
+            total_scenes > base_scene_count
+            and str(creative_config.get("extra_scene_policy") or "add_i2v").strip().lower() == "add_i2v"
+            and partial["i2v"] == 0
+            and sum(partial.values()) > 0
+        ):
+            if partial["ia2v"] > 0:
+                partial["ia2v"] -= 1
+                partial["i2v"] += 1
+            elif partial["first_last"] > 0:
+                partial["first_last"] -= 1
+                partial["i2v"] += 1
+        for route in ("i2v", "ia2v", "first_last"):
+            budget[route] += partial[route]
+
+    is_hard_short_clip_target = _route_strategy_active(creative_config) and sum(budget.values()) == total_scenes
     return budget, is_hard_short_clip_target
 
 
