@@ -1163,6 +1163,122 @@ def _compute_route_budget_for_total(total_scenes: int, creative_config: dict[str
     return {"i2v": i2v, "ia2v": ia2v, "first_last": first_last}
 
 
+_SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS = [
+    "identity_source",
+    "identity_rule",
+    "identity_reference_rule",
+    "connected_visual_reference",
+    "canonical source of truth",
+    "connected character_1 image reference",
+    "image reference",
+    "refs",
+    "payload",
+    "diagnostics",
+    "route strategy",
+    "visual_ref_identity_lock",
+]
+
+
+def _scene_plan_safe_identity_constraints(package: dict[str, Any]) -> dict[str, Any]:
+    _ = package
+    return {
+        "character_1": {
+            "role": "main",
+            "scene_safe_rule": (
+                "Keep character_1 visually consistent with the provided character reference in every scene. "
+                "Do not change her face, age impression, body proportions, hairstyle, clothing, silhouette, or overall look."
+            ),
+            "forbidden_output_terms": list(_SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS),
+        },
+        "character_2": {
+            "role": "secondary_unreferenced",
+            "scene_safe_rule": (
+                "The boyfriend is an unreferenced secondary person. Show him only partially, from behind, in silhouette, "
+                "as a shoulder/arm/back near the door. Do not make him the main subject."
+            ),
+        },
+    }
+
+
+def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
+    scene_pkg = deepcopy(_safe_dict(package))
+    input_pkg = _safe_dict(scene_pkg.get("input"))
+    role_plan = _safe_dict(scene_pkg.get("role_plan"))
+
+    for key in (
+        "connected_visual_reference",
+        "identity_source",
+        "identity_rule",
+        "identity_reference_rule",
+        "visual_ref_identity_lock_applied",
+        "visual_ref_identity_lock_source",
+        "diagnostics",
+        "refs_inventory",
+        "connectedRefsPresentByRole",
+        "refsPresentByRole",
+    ):
+        input_pkg.pop(key, None)
+
+    for key in ("diagnostics", "refs_inventory", "connectedRefsPresentByRole", "refsPresentByRole"):
+        scene_pkg.pop(key, None)
+
+    for row_raw in _safe_list(role_plan.get("scene_casting")):
+        row = _safe_dict(row_raw)
+        for key in (
+            "identity_source",
+            "identity_rule",
+            "identity_reference_rule",
+            "connected_visual_reference",
+            "visual_ref_identity_lock_applied",
+            "visual_ref_identity_lock_source",
+        ):
+            row.pop(key, None)
+
+    role_plan["scene_safe_identity_constraints"] = _scene_plan_safe_identity_constraints(scene_pkg)
+    role_plan["scene_prompt_rules"] = {
+        "speaker_role_rule": (
+            "Only ia2v scenes may include speaker_role, and it must be character_1. "
+            "For i2v scenes, leave speaker_role as unknown/empty according to schema."
+        ),
+        "technical_vocabulary_forbidden": list(_SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS),
+    }
+    input_pkg["scene_safe_identity_constraints"] = _scene_plan_safe_identity_constraints(scene_pkg)
+    scene_pkg["input"] = input_pkg
+    scene_pkg["role_plan"] = role_plan
+    return scene_pkg
+
+
+def _scene_plan_rows_for_validation(scene_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    scene_rows = [row for row in _safe_list(scene_plan.get("scenes")) if isinstance(row, dict)]
+    if scene_rows:
+        return scene_rows
+    return [row for row in _safe_list(scene_plan.get("storyboard")) if isinstance(row, dict)]
+
+
+def _build_scene_plan_retry_feedback(validation_error: str, error_code: str, scene_diag: dict[str, Any]) -> str:
+    base = (
+        f"Previous output invalid: validation_error={validation_error}; "
+        f"error_code={error_code or 'SCENES_SCHEMA_INVALID'}"
+    )
+    ve = validation_error.strip().lower()
+    leak_trigger = str(_safe_dict(scene_diag).get("scene_plan_technical_leak_token") or "").strip()
+    if ve == "technical_leaking" or leak_trigger:
+        return (
+            base
+            + "\nYour previous response included internal technical terms. Rewrite the scene_plan using only "
+            "cinematic/storyboard language. Do not output or mention: identity_source, identity_rule, "
+            "identity_reference_rule, connected_visual_reference, canonical source of truth, image reference, refs, "
+            "payload, diagnostics, route strategy, visual_ref_identity_lock."
+        )
+    if ve == "speaker_role_invalid":
+        return (
+            base
+            + "\nSpeaker-role rule is strict: only ia2v scenes may include speaker_role and it must be character_1. "
+            "For i2v scenes set speaker_role to unknown/empty as required by schema; do not use character_2, props, or locations as speaker_role."
+        )
+    return base
+
+
 def _is_all_lipsync_override_mode(
     *,
     total_scenes: int,
@@ -1191,7 +1307,7 @@ def _validate_scene_plan_route_budget(
 ) -> tuple[bool, str, dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
-    scene_rows = [row for row in _safe_list(scene_plan.get("scenes")) if isinstance(row, dict)]
+    scene_rows = _scene_plan_rows_for_validation(scene_plan)
     route_counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
     longest_lipsync_streak = 0
     current_lipsync_streak = 0
@@ -1207,6 +1323,8 @@ def _validate_scene_plan_route_budget(
 
     target_budget = _compute_route_budget_for_total(len(scene_rows), creative_config)
     mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
+    preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    strict_no_first_last_50_50_0 = preset_name == "no_first_last_50_50_0"
     all_lipsync_override = _is_all_lipsync_override_mode(
         total_scenes=len(scene_rows),
         creative_config=creative_config,
@@ -1214,7 +1332,7 @@ def _validate_scene_plan_route_budget(
     )
     validation_mode = "all_lipsync_override" if all_lipsync_override else "mixed"
     max_consecutive = int(creative_config.get("max_consecutive_lipsync") or 2)
-    tolerance = 1 if len(scene_rows) >= 6 else 0
+    tolerance = 0 if strict_no_first_last_50_50_0 else (1 if len(scene_rows) >= 6 else 0)
     streak_guard_relaxed = all_lipsync_override
     lipsync_streak_warning = "all_lipsync_override_active" if streak_guard_relaxed else ""
     errors: list[str] = []
@@ -1225,7 +1343,8 @@ def _validate_scene_plan_route_budget(
             )
     if longest_lipsync_streak > max_consecutive and not streak_guard_relaxed:
         errors.append(f"too many consecutive lipsync scenes: streak={longest_lipsync_streak} max={max_consecutive}")
-    if mode == "auto" and route_counts.get("first_last", 0) <= 0 and len(scene_rows) >= 4:
+    target_first_last = int(target_budget.get("first_last") or 0)
+    if mode == "auto" and target_first_last > 0 and route_counts.get("first_last", 0) <= 0 and len(scene_rows) >= 4:
         errors.append("first_last share missing for visual variety")
     if mode == "custom" and len(scene_rows) > 0 and sum(route_counts.values()) <= 0:
         errors.append("route distribution invalid: no supported routes found")
@@ -1240,6 +1359,14 @@ def _validate_scene_plan_route_budget(
         )
     )
     feedback = f"{feedback_prefix}; " + "; ".join(errors) if errors else ""
+    if strict_no_first_last_50_50_0 and errors:
+        feedback = (
+            "route distribution must match preset no_first_last_50_50_0 exactly: "
+            f"total={len(scene_rows)}, i2v={int(target_budget.get('i2v') or 0)}, "
+            f"ia2v={int(target_budget.get('ia2v') or 0)}, first_last={target_first_last}; "
+            "ia2v only on vocal windows with character_1 mouth/face visibility; "
+            "i2v for non-speaking action/environment beats; no first_last scenes."
+        )
     details = {
         "target_route_mix": target_budget,
         "actual_route_mix": route_counts,
@@ -1251,6 +1378,8 @@ def _validate_scene_plan_route_budget(
         "lipsync_streak_guard_relaxed": streak_guard_relaxed,
         "lipsync_streak_warning": lipsync_streak_warning,
         "creative_config": creative_config,
+        "route_strategy_preset": preset_name,
+        "strict_preset_enforced": strict_no_first_last_50_50_0,
     }
     return (len(errors) == 0), feedback, details
 
@@ -7189,19 +7318,24 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     package["diagnostics"] = diagnostics
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="scene_plan")
     hard_fail_error = ""
+    scene_plan_prompt_package = _build_scene_plan_prompt_package(package)
 
     result = build_gemini_scene_plan(
         api_key=gemini_api_key,
-        package=package,
+        package=scene_plan_prompt_package,
     )
     initial_validation_error = str(result.get("validation_error") or "").strip()
     if initial_validation_error:
         validation_error_code = str(result.get("error_code") or "").strip()
-        validation_feedback = f"Previous output invalid: validation_error={initial_validation_error}; error_code={validation_error_code or 'SCENES_SCHEMA_INVALID'}"
+        validation_feedback = _build_scene_plan_retry_feedback(
+            initial_validation_error,
+            validation_error_code,
+            _safe_dict(result.get("diagnostics")),
+        )
         _append_diag_event(package, f"scene_plan validation failed, retrying once: {validation_feedback}", stage_id="scene_plan")
         retry_result = build_gemini_scene_plan(
             api_key=gemini_api_key,
-            package=package,
+            package=scene_plan_prompt_package,
             validation_feedback=validation_feedback,
         )
         result = retry_result
@@ -7226,7 +7360,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             _append_diag_event(package, f"scene_plan route budget validation failed, retrying once: {route_budget_feedback}", stage_id="scene_plan")
             retry_result = build_gemini_scene_plan(
                 api_key=gemini_api_key,
-                package=package,
+                package=scene_plan_prompt_package,
                 validation_feedback=route_budget_feedback,
             )
             retry_scene_plan = _safe_dict(retry_result.get("scene_plan"))
