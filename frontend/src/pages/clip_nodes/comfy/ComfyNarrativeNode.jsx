@@ -19,11 +19,13 @@ const OUTPUT_HANDLES = [
   { id: "storyboard_out", labelRu: "Storyboard" },
   { id: "preview_out", labelRu: "Preview" },
 ];
-const ROUTE_MIX_PRESETS = [
-  { key: "balanced", label: "Balanced", routeMixMode: "custom", lipsyncRatio: 0.25, firstLastRatio: 0.25, maxConsecutiveLipsync: 2 },
-  { key: "performance", label: "Performance Heavy", routeMixMode: "custom", lipsyncRatio: 0.5, firstLastRatio: 0.15, maxConsecutiveLipsync: 2 },
-  { key: "visual", label: "Visual Heavy", routeMixMode: "custom", lipsyncRatio: 0.1, firstLastRatio: 0.35, maxConsecutiveLipsync: 1 },
-  { key: "all_lipsync", label: "All Lipsync", routeMixMode: "custom", lipsyncRatio: 1.0, firstLastRatio: 0.0, maxConsecutiveLipsync: 6 },
+const ROUTE_STRATEGY_PRESETS = [
+  { key: "balanced_50_25_25", label: "Баланс 50/25/25", description: "на 8 сцен: 4 i2v / 2 ia2v / 2 первый-последний", targets: { i2v: 4, ia2v: 2, first_last: 2 }, maxConsecutiveIa2v: 2 },
+  { key: "performance_35_50_15", label: "Больше пения 35/50/15", description: "на 8 сцен: 3 i2v / 4 ia2v / 1 первый-последний", targets: { i2v: 3, ia2v: 4, first_last: 1 }, maxConsecutiveIa2v: 3 },
+  { key: "visual_65_10_25", label: "Больше кино 65/10/25", description: "на 8 сцен: 5 i2v / 1 ia2v / 2 первый-последний", targets: { i2v: 5, ia2v: 1, first_last: 2 }, maxConsecutiveIa2v: 1 },
+  { key: "no_first_last_50_50_0", label: "Без первый/последний 50/50/0", description: "на 8 сцен: 4 i2v / 4 ia2v / 0 первый-последний", targets: { i2v: 4, ia2v: 4, first_last: 0 }, maxConsecutiveIa2v: 3 },
+  { key: "all_lipsync_0_100_0", label: "Живое пение 0/100/0", description: "на 8 сцен: до 8 ia2v, но безвокальные/инструментальные окна автоматически идут в i2v", targets: { i2v: 0, ia2v: 8, first_last: 0 }, maxConsecutiveIa2v: 8 },
+  { key: "story_safe_70_20_10", label: "История безопасно 70/20/10", description: "на 8 сцен: 6 i2v / 1-2 ia2v / 0-1 первый-последний", targets: { i2v: 6, ia2v: 1, first_last: 1 }, maxConsecutiveIa2v: 2 },
 ];
 
 export default function ComfyNarrativeNode({ id, data }) {
@@ -50,6 +52,19 @@ export default function ComfyNarrativeNode({ id, data }) {
     }
   }, [data?.contentType, data?.onFieldChange, id, safeContentType]);
 
+
+  const clipModeByContentType = safeContentType === "music_video";
+  const clipModeByDirectorMode = String(data?.directorMode || data?.director_mode || "").trim().toLowerCase() === "clip";
+  const clipModeByMode = String(data?.mode || "").trim().toLowerCase() === "clip";
+  const isClipMode = clipModeByContentType || clipModeByDirectorMode || clipModeByMode;
+  const routeStrategyMode = String(data?.routeStrategyMode || "auto").trim().toLowerCase();
+  const safeRouteStrategyMode = ["auto", "preset", "custom_counts"].includes(routeStrategyMode) ? routeStrategyMode : "auto";
+  const routeTargetsPerBlock = data?.routeTargetsPerBlock && typeof data.routeTargetsPerBlock === "object"
+    ? data.routeTargetsPerBlock
+    : { i2v: 4, ia2v: 2, first_last: 2 };
+  const baseSceneCount = Number(data?.baseSceneCount || 8) || 8;
+  const routeTotal = Number(routeTargetsPerBlock?.i2v || 0) + Number(routeTargetsPerBlock?.ia2v || 0) + Number(routeTargetsPerBlock?.first_last || 0);
+  const hasRouteTotalWarning = safeRouteStrategyMode === "custom_counts" && routeTotal !== baseSceneCount;
   const sourceInput = hasConnectedSource ? (
     <div className="clipSB_narrativeSourceStatus isConnected">
       <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
@@ -216,74 +231,87 @@ export default function ComfyNarrativeNode({ id, data }) {
               </select>
             </label>
 
-            <section className="clipSB_narrativeSection">
-              <div className="clipSB_brainLabel">Route mix policy</div>
-              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
-                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Route mix mode</div>
-                <select
-                  className="clipSB_select clipSB_narrativeSelect"
-                  value={data?.routeMixMode || "auto"}
-                  onChange={(e) => data?.onFieldChange?.(id, { routeMixMode: e.target.value })}
-                >
-                  <option value="auto">Auto</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </label>
-              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
-                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Lipsync ratio: {Number(data?.lipsyncRatio ?? 0.25).toFixed(2)}</div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={Number(data?.lipsyncRatio ?? 0.25)}
-                  onChange={(e) => data?.onFieldChange?.(id, { lipsyncRatio: Number(e.target.value) })}
-                />
-              </label>
-              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
-                <div className="clipSB_brainLabel clipSB_brainLabel--compact">First/Last ratio: {Number(data?.firstLastRatio ?? 0.25).toFixed(2)}</div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={Number(data?.firstLastRatio ?? 0.25)}
-                  onChange={(e) => data?.onFieldChange?.(id, { firstLastRatio: Number(e.target.value) })}
-                />
-              </label>
-              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
-                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Max consecutive lipsync</div>
-                <input
-                  className="clipSB_input"
-                  type="number"
-                  min="1"
-                  max="6"
-                  step="1"
-                  value={Number(data?.maxConsecutiveLipsync ?? 2)}
-                  onChange={(e) => data?.onFieldChange?.(id, { maxConsecutiveLipsync: Number(e.target.value || 2) })}
-                />
-              </label>
-              <div className="clipSB_narrativeField clipSB_narrativeField--compact">
-                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Quick presets</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 }}>
-                  {ROUTE_MIX_PRESETS.map((preset) => (
+            {isClipMode ? (
+              <section className="clipSB_narrativeSection">
+                <div className="clipSB_brainLabel">СТРАТЕГИЯ СЦЕН</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 }}>
+                  {[
+                    { key: "auto", label: "Авто" },
+                    { key: "preset", label: "Пресет" },
+                    { key: "custom_counts", label: "Ручной" },
+                  ].map((item) => (
                     <button
-                      key={preset.key}
+                      key={item.key}
                       type="button"
-                      className="clipSB_btn clipSB_btnSecondary"
-                      onClick={() => data?.onFieldChange?.(id, {
-                        routeMixMode: preset.routeMixMode,
-                        lipsyncRatio: preset.lipsyncRatio,
-                        firstLastRatio: preset.firstLastRatio,
-                        maxConsecutiveLipsync: preset.maxConsecutiveLipsync,
-                      })}
+                      className={`clipSB_btn ${safeRouteStrategyMode === item.key ? "clipSB_btnPrimary" : "clipSB_btnSecondary"}`.trim()}
+                      onClick={() => data?.onFieldChange?.(id, { routeStrategyMode: item.key })}
                     >
-                      {preset.label}
+                      {item.label}
                     </button>
                   ))}
                 </div>
-              </div>
-            </section>
+
+                {safeRouteStrategyMode === "auto" ? (
+                  <div className="clipSB_narrativeEmptyHint">Gemini сам выбирает i2v / ia2v / первый-последний кадр по аудио, вокалу и драматургии.</div>
+                ) : null}
+
+                {safeRouteStrategyMode === "preset" ? (
+                  <div className="clipSB_narrativeField clipSB_narrativeField--compact">
+                    <div className="clipSB_brainLabel clipSB_brainLabel--compact">Русские пресеты</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 }}>
+                      {ROUTE_STRATEGY_PRESETS.map((preset) => (
+                        <button
+                          key={preset.key}
+                          type="button"
+                          className={`clipSB_btn ${data?.routeStrategyPreset === preset.key ? "clipSB_btnPrimary" : "clipSB_btnSecondary"}`.trim()}
+                          title={preset.description}
+                          onClick={() => data?.onFieldChange?.(id, {
+                            routeStrategyMode: "preset",
+                            routeStrategyPreset: preset.key,
+                            routeTargetsPerBlock: preset.targets,
+                            maxConsecutiveIa2v: preset.maxConsecutiveIa2v,
+                          })}
+                        >
+                          <div>{preset.label}</div>
+                          <small>{preset.description}</small>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {safeRouteStrategyMode === "custom_counts" ? (
+                  <>
+                    <div className="clipSB_narrativeEmptyHint">Расчёт на 8 сцен / до 30 сек.</div>
+                    <div className="clipSB_narrativeEmptyHint">Для длинных клипов стратегия применяется блоками примерно по 30 секунд.</div>
+                    <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                      <div className="clipSB_brainLabel clipSB_brainLabel--compact">i2v сцен</div>
+                      <input className="clipSB_input" type="number" min="0" value={Number(routeTargetsPerBlock?.i2v ?? 0)} onChange={(e) => data?.onFieldChange?.(id, { routeTargetsPerBlock: { ...routeTargetsPerBlock, i2v: Number(e.target.value || 0) } })} />
+                    </label>
+                    <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                      <div className="clipSB_brainLabel clipSB_brainLabel--compact">ia2v / lip-sync сцен</div>
+                      <input className="clipSB_input" type="number" min="0" value={Number(routeTargetsPerBlock?.ia2v ?? 0)} onChange={(e) => data?.onFieldChange?.(id, { routeTargetsPerBlock: { ...routeTargetsPerBlock, ia2v: Number(e.target.value || 0) } })} />
+                    </label>
+                    <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                      <div className="clipSB_brainLabel clipSB_brainLabel--compact">первый-последний кадр сцен</div>
+                      <input className="clipSB_input" type="number" min="0" value={Number(routeTargetsPerBlock?.first_last ?? 0)} onChange={(e) => data?.onFieldChange?.(id, { routeTargetsPerBlock: { ...routeTargetsPerBlock, first_last: Number(e.target.value || 0) } })} />
+                    </label>
+                    <label className="clipSB_narrativeField clipSB_narrativeField--compact">
+                      <div className="clipSB_brainLabel clipSB_brainLabel--compact">максимум ia2v подряд</div>
+                      <input className="clipSB_input" type="number" min="1" max="8" value={Number(data?.maxConsecutiveIa2v ?? 2)} onChange={(e) => data?.onFieldChange?.(id, { maxConsecutiveIa2v: Number(e.target.value || 2) })} />
+                    </label>
+                    {hasRouteTotalWarning ? <div className="clipSB_narrativeEmptyHint" role="alert">Сумма отличается от 8. Лишние или недостающие сцены будут мягко скорректированы, безопасный маршрут по умолчанию — i2v.</div> : null}
+                  </>
+                ) : null}
+              </section>
+            ) : (
+              <section className="clipSB_narrativeSection">
+                <div className="clipSB_brainLabel">ПАРАМЕТРЫ ИСТОРИИ</div>
+                <div className="clipSB_narrativeEmptyHint">темп: Авто</div>
+                <div className="clipSB_narrativeEmptyHint">плотность сцен: Авто</div>
+                <div className="clipSB_narrativeEmptyHint">эмоциональная интенсивность: Авто</div>
+              </section>
+            )}
 
             {errorMessage ? <div className="clipSB_narrativeEmptyHint" role="alert" style={{ marginTop: 8 }}>{errorMessage}</div> : null}
           </section>
