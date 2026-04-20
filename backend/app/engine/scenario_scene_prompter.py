@@ -2746,6 +2746,7 @@ def _build_prompts_v11_prompt(
     role_plan = _safe_dict(package.get("role_plan"))
     audio_map = _safe_dict(package.get("audio_map"))
     scene_plan = _safe_dict(package.get("scene_plan"))
+    prompt_interface_contract = _resolve_prompt_interface_contract(story_core)
     connected_context_summary = _safe_dict(input_pkg.get("connected_context_summary")) or _safe_dict(
         package.get("connected_context_summary")
     )
@@ -2779,6 +2780,20 @@ def _build_prompts_v11_prompt(
         "scene_plan": {
             "scenes_version": str(scene_plan.get("scenes_version") or ""),
             "storyboard": _scene_plan_storyboard(scene_plan),
+        },
+        "prompt_interface_contract": {
+            "visibility_mode": str(prompt_interface_contract.get("visibility_mode") or ""),
+            "subject_presence_requirement": str(prompt_interface_contract.get("subject_presence_requirement") or ""),
+            "must_be_visible": [
+                str(v).strip()
+                for v in _safe_list(prompt_interface_contract.get("must_be_visible"))
+                if str(v).strip()
+            ],
+            "may_be_offscreen": [
+                str(v).strip()
+                for v in _safe_list(prompt_interface_contract.get("may_be_offscreen"))
+                if str(v).strip()
+            ],
         },
         "connected_context_summary": connected_context_summary,
         "refs_inventory_keys": list(refs_inventory.keys())[:40],
@@ -2826,6 +2841,11 @@ def _build_prompts_v11_prompt(
         "- Make photo_prompt and video_prompt stable/specific across segments (same woman identity and wardrobe continuity), while changing micro-performance and local action intent by segment.\n"
         "- Prefer explicit role-grounded wording over generic labels: e.g. \"character_1, the woman from reference\" and \"character_2, the man from reference\" when those cast references exist.\n"
         "- Keep prompts within the same world family defined by story_core/world_lock and user input. Use local_zone_hint only as deterministic local pocket guidance. Do not invent a new venue or cast.\n"
+        "- Read prompt_interface_contract as source-of-truth for visibility constraints: visibility_mode, must_be_visible, may_be_offscreen, subject_presence_requirement.\n"
+        "- If prompt_interface_contract.must_be_visible contains multiple cast roles, every photo_prompt must include all required visible roles in the same shared physical space defined by world_lock/user input.\n"
+        "- visual_focus_role may dominate the frame, but every must_be_visible role remains visibly present unless listed in may_be_offscreen.\n"
+        "- For route == first_last, first_frame_prompt and last_frame_prompt must satisfy the same shared-space visibility rule.\n"
+        "- Never explicitly describe a must_be_visible role as offscreen/not visible/outside frame unless that role is listed in may_be_offscreen.\n"
         "- Lighting/atmosphere should evolve per beat within one light family with pocket-level differences in density and contrast; avoid flat repeated prose.\n"
         "- Express segment-to-segment emotional curve with compact beat language (anticipation -> peak -> release -> lingering afterglow) while preserving continuity.\n"
         "- Use descriptive framing language (intimate/nearer/opener/layered/deeper) allowed; avoid camera-tech jargon.\n"
@@ -3077,6 +3097,100 @@ def _repair_prompts_v11_required_fields(
         "scene_prompts_rebuilt_scene_ids": rebuilt_scene_ids,
         "scene_prompts_valid_count": len(valid_scene_ids),
     }
+
+
+def _apply_prompts_v11_shared_space_post_repair(
+    prompts_v11: dict[str, Any],
+    story_core: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    patched = dict(prompts_v11)
+    prompt_interface_contract = _resolve_prompt_interface_contract(story_core)
+    must_be_visible_roles = [
+        str(role).strip()
+        for role in _safe_list(prompt_interface_contract.get("must_be_visible"))
+        if str(role).strip()
+    ]
+    may_be_offscreen_roles = {
+        str(role).strip()
+        for role in _safe_list(prompt_interface_contract.get("may_be_offscreen"))
+        if str(role).strip()
+    }
+    enforce_shared_space_rule = len(must_be_visible_roles) >= 2
+    shared_space_missing_segments: list[str] = []
+    offscreen_violation_segments: list[str] = []
+    validation_errors: list[str] = []
+    segments_out: list[dict[str, Any]] = []
+    enforcement_clause = _shared_space_enforcement_clause(must_be_visible_roles)
+    offscreen_pattern = r"\b(offscreen|off-screen|not visible|outside frame)\b"
+
+    for raw_segment in _safe_list(prompts_v11.get("segments")):
+        segment = dict(_safe_dict(raw_segment))
+        if not enforce_shared_space_rule:
+            segments_out.append(segment)
+            continue
+
+        segment_id = str(segment.get("segment_id") or "").strip()
+        route = str(segment.get("route") or "i2v").strip().lower() or "i2v"
+        photo_prompt = str(segment.get("photo_prompt") or "").strip()
+        first_frame_prompt = str(segment.get("first_frame_prompt") or "").strip()
+        last_frame_prompt = str(segment.get("last_frame_prompt") or "").strip()
+
+        missing_roles = [role for role in must_be_visible_roles if not _text_mentions_role(photo_prompt, role)]
+        if missing_roles:
+            shared_space_missing_segments.append(segment_id)
+            segment["photo_prompt"] = _append_prompt_clause(photo_prompt, enforcement_clause)
+            photo_prompt = str(segment.get("photo_prompt") or "").strip()
+
+        offscreen_violations = [
+            role
+            for role in must_be_visible_roles
+            if role not in may_be_offscreen_roles
+            and bool(re.search(rf"\b{re.escape(role)}\b.{0,40}{offscreen_pattern}", photo_prompt.lower()))
+        ]
+        if offscreen_violations:
+            offscreen_violation_segments.append(segment_id)
+            validation_errors.append(f"must_be_visible_offscreen_violation:{segment_id}")
+
+        if route == "first_last":
+            missing_first = [role for role in must_be_visible_roles if not _text_mentions_role(first_frame_prompt, role)]
+            missing_last = [role for role in must_be_visible_roles if not _text_mentions_role(last_frame_prompt, role)]
+            if missing_first:
+                shared_space_missing_segments.append(f"{segment_id}:first")
+                segment["first_frame_prompt"] = _append_prompt_clause(first_frame_prompt, enforcement_clause)
+                first_frame_prompt = str(segment.get("first_frame_prompt") or "").strip()
+            if missing_last:
+                shared_space_missing_segments.append(f"{segment_id}:last")
+                segment["last_frame_prompt"] = _append_prompt_clause(last_frame_prompt, enforcement_clause)
+                last_frame_prompt = str(segment.get("last_frame_prompt") or "").strip()
+
+            first_offscreen_violations = [
+                role
+                for role in must_be_visible_roles
+                if role not in may_be_offscreen_roles
+                and bool(re.search(rf"\b{re.escape(role)}\b.{0,40}{offscreen_pattern}", first_frame_prompt.lower()))
+            ]
+            last_offscreen_violations = [
+                role
+                for role in must_be_visible_roles
+                if role not in may_be_offscreen_roles
+                and bool(re.search(rf"\b{re.escape(role)}\b.{0,40}{offscreen_pattern}", last_frame_prompt.lower()))
+            ]
+            if first_offscreen_violations:
+                offscreen_violation_segments.append(f"{segment_id}:first")
+                validation_errors.append(f"must_be_visible_offscreen_violation:{segment_id}:first")
+            if last_offscreen_violations:
+                offscreen_violation_segments.append(f"{segment_id}:last")
+                validation_errors.append(f"must_be_visible_offscreen_violation:{segment_id}:last")
+
+        segments_out.append(segment)
+
+    patched["segments"] = segments_out
+    return patched, {
+        "scene_prompts_shared_space_rule_applied": enforce_shared_space_rule,
+        "scene_prompts_must_be_visible_roles": must_be_visible_roles,
+        "scene_prompts_shared_space_missing_segments": list(dict.fromkeys([seg for seg in shared_space_missing_segments if seg])),
+        "scene_prompts_offscreen_violation_segments": list(dict.fromkeys([seg for seg in offscreen_violation_segments if seg])),
+    }, validation_errors
 
 
 def _apply_storyboard_stage_metadata_passthrough(
@@ -3399,6 +3513,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_lipsync_metadata_present_count": 0,
         "scene_prompts_missing_role_metadata_segments": [],
         "scene_prompts_ia2v_audio_driven_count": 0,
+        "scene_prompts_shared_space_rule_applied": False,
+        "scene_prompts_must_be_visible_roles": [],
+        "scene_prompts_shared_space_missing_segments": [],
+        "scene_prompts_offscreen_violation_segments": [],
         "scene_prompts_legacy_bridge_used": False,
         "active_video_model_capability_profile": active_model_id,
         "active_route_capability_mode": route_capability_mode,
@@ -3467,10 +3585,15 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
     diagnostics.update(de_technicalization_diag)
     raw_payload, required_fields_diag = _repair_prompts_v11_required_fields(raw_payload, prompt_rows, story_core)
     diagnostics.update(required_fields_diag)
+    raw_payload, shared_space_diag, shared_space_validation_errors = _apply_prompts_v11_shared_space_post_repair(raw_payload, story_core)
+    diagnostics.update(shared_space_diag)
     raw_payload, passthrough_diag = _apply_storyboard_stage_metadata_passthrough(raw_payload, prompt_rows)
     diagnostics.update(passthrough_diag)
 
     error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
+    if shared_space_validation_errors:
+        error_code = "PROMPTS_SCHEMA_INVALID"
+        validation_error = ";".join(dict.fromkeys(shared_space_validation_errors))
     if int(diagnostics.get("scene_prompts_empty_count") or 0) > 0:
         error_code = "PROMPTS_SCHEMA_INVALID"
         validation_error = "scene_prompts_empty_required_fields"
