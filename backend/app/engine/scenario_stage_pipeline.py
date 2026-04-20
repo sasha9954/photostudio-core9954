@@ -1588,6 +1588,16 @@ _SCENE_PROMPTS_DETECH_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bpayload\b", re.IGNORECASE), "unwanted text"),
 )
 
+_SCENE_PROMPTS_GENERAL_SAFE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\btechnical\b", re.IGNORECASE), "artificial"),
+    (re.compile(r"\bmetadata\b", re.IGNORECASE), "unwanted text"),
+    (re.compile(r"\bdebug\b", re.IGNORECASE), "unwanted text"),
+    (re.compile(r"\bpayload\b", re.IGNORECASE), "unwanted text"),
+    (re.compile(r"\bjargon\b", re.IGNORECASE), "unnatural wording"),
+    (re.compile(r"\blabels?\b", re.IGNORECASE), "on-screen text"),
+    (re.compile(r"\broute\b", re.IGNORECASE), "path"),
+)
+
 _SCENE_PROMPTS_TECHNICAL_FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("peak-threshold pocket", re.compile(r"\bpeak[\-\s]?threshold pocket\b", re.IGNORECASE)),
     ("threshold pocket", re.compile(r"\bthreshold pocket\b", re.IGNORECASE)),
@@ -1602,6 +1612,17 @@ _SCENE_PROMPTS_TECHNICAL_FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], 
     ("labels", re.compile(r"\blabels?\b", re.IGNORECASE)),
 )
 
+_SCENE_PROMPTS_STRUCTURAL_STRING_SKIP_KEYS: set[str] = {
+    "segment_id",
+    "scene_id",
+    "route",
+    "route_type",
+    "ltx_mode",
+    "speaker_role",
+    "primary_role",
+    "visual_focus_role",
+}
+
 
 def _sanitize_scene_prompts_text_value(text: str, *, is_negative_prompt: bool = False) -> tuple[str, bool]:
     value = " ".join(str(text or "").strip().split())
@@ -1609,6 +1630,8 @@ def _sanitize_scene_prompts_text_value(text: str, *, is_negative_prompt: bool = 
         return "", False
     original = value
     for pattern, replacement in _SCENE_PROMPTS_DETECH_REPLACEMENTS:
+        value = pattern.sub(replacement, value)
+    for pattern, replacement in _SCENE_PROMPTS_GENERAL_SAFE_REPLACEMENTS:
         value = pattern.sub(replacement, value)
     if is_negative_prompt:
         for _, pattern in _SCENE_PROMPTS_TECHNICAL_FORBIDDEN_PATTERNS:
@@ -1673,6 +1696,9 @@ def _sanitize_scene_prompts_segment_strings(
         out: dict[str, Any] = {}
         for key, item in value.items():
             key_str = str(key)
+            if key_str in _SCENE_PROMPTS_STRUCTURAL_STRING_SKIP_KEYS:
+                out[key] = item
+                continue
             rewritten, changed = _sanitize_scene_prompts_segment_strings(item, path=path + (key_str,), field_counts=counts)
             changed_any = changed_any or changed
             out[key] = rewritten
@@ -1774,10 +1800,24 @@ def _postprocess_scene_prompts_technical_tagging(result: dict[str, Any]) -> dict
     else:
         existing_validation_error = str(result.get("validation_error") or "").strip().lower()
         existing_error_code = str(result.get("error_code") or "").strip().upper()
+        existing_error = str(result.get("error") or "").strip().lower()
         if existing_validation_error.startswith("technical_tagging:"):
             result["validation_error"] = ""
         if existing_error_code == "PROMPTS_TECHNICAL_TAGGING":
             result["error_code"] = ""
+        if existing_error in {"prompts_technical_tagging", "scene_prompts_validation_failed"}:
+            result["error"] = ""
+
+        diag_validation_error = str(diagnostics.get("scene_prompts_validation_error") or "").strip().lower()
+        diag_error_code = str(diagnostics.get("scene_prompts_error_code") or "").strip().upper()
+        diag_error = str(diagnostics.get("scene_prompts_error") or "").strip().lower()
+        if diag_validation_error.startswith("technical_tagging:"):
+            diagnostics["scene_prompts_validation_error"] = ""
+            diagnostics["validation_error"] = ""
+        if diag_error_code == "PROMPTS_TECHNICAL_TAGGING":
+            diagnostics["scene_prompts_error_code"] = ""
+        if diag_error in {"prompts_technical_tagging", "scene_prompts_validation_failed"}:
+            diagnostics["scene_prompts_error"] = ""
 
     result["scene_prompts"] = prompts
     result["diagnostics"] = diagnostics
