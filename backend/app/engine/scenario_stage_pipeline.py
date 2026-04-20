@@ -1340,6 +1340,219 @@ def _build_scene_plan_retry_feedback(validation_error: str, error_code: str, sce
     return base
 
 
+def _scene_prompt_rows_for_validation(scene_prompts: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [row for row in _safe_list(scene_prompts.get("segments")) if isinstance(row, dict)]
+    if rows:
+        return rows
+    return [row for row in _safe_list(scene_prompts.get("scenes")) if isinstance(row, dict)]
+
+
+def _scene_prompt_identity_anchor(role: str, role_plan: dict[str, Any], scene_row: dict[str, Any], package: dict[str, Any]) -> str:
+    _ = role_plan, scene_row
+    clean_role = _canonical_subject_id(role)
+    if not clean_role:
+        return ""
+    input_pkg = _safe_dict(package.get("input"))
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
+    has_ref, _ = _has_connected_visual_ref(package, input_pkg, refs_inventory, clean_role)
+    if not has_ref:
+        return ""
+    if clean_role == "character_1":
+        return (
+            "Show the same woman as the provided character_1 reference. "
+            "Preserve the same face, age impression, body proportions, hairstyle, clothing, silhouette, and overall look in this scene."
+        )
+    return (
+        f"Show the same person as the provided {clean_role} reference. "
+        "Preserve the same face, age impression, body proportions, hairstyle, clothing, silhouette, and overall look in this scene."
+    )
+
+
+def _secondary_presence_mode_hints(scene_row: dict[str, Any], role_plan: dict[str, Any], package: dict[str, Any]) -> list[str]:
+    _ = scene_row, role_plan
+    input_pkg = _safe_dict(package.get("input"))
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
+    has_ref, _ = _has_connected_visual_ref(package, input_pkg, refs_inventory, "character_2")
+    if has_ref:
+        return []
+    return [
+        "partial_silhouette",
+        "blurred_presence",
+        "memory_haze_insert",
+        "fantasy_impression",
+        "reflection_fragment",
+        "object_association_presence",
+    ]
+
+
+def _scene_prompt_has_explicit_reference_anchor(text: Any, role: str) -> bool:
+    body = str(text or "").strip().lower()
+    clean_role = _canonical_subject_id(role)
+    if not body or not clean_role:
+        return False
+    role_reference_tokens = (
+        f"provided {clean_role} reference",
+        f"{clean_role} reference",
+        "provided reference",
+    )
+    continuity_tokens = ("same woman", "same person", "keep the same", "same character")
+    if not any(token in body for token in role_reference_tokens):
+        return False
+    return any(token in body for token in continuity_tokens)
+
+
+def _prepend_clause_once(base: Any, clause: str) -> str:
+    text = str(base or "").strip()
+    addition = str(clause or "").strip()
+    if not addition:
+        return text
+    if addition.lower() in text.lower():
+        return text
+    if not text:
+        return addition
+    return f"{addition} {text}".strip()
+
+
+def _scene_roles_for_segment(
+    segment_id: str,
+    prompt_row: dict[str, Any],
+    scene_plan_rows: dict[str, dict[str, Any]],
+    role_plan_rows: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    scene_row = _safe_dict(scene_plan_rows.get(segment_id))
+    role_row = _safe_dict(role_plan_rows.get(segment_id))
+    primary_role = (
+        _canonical_subject_id(prompt_row.get("primary_role"))
+        or _canonical_subject_id(scene_row.get("primary_role"))
+        or _canonical_subject_id(role_row.get("primary_role"))
+    )
+    visual_focus_role = (
+        _canonical_subject_id(prompt_row.get("visual_focus_role"))
+        or _canonical_subject_id(scene_row.get("visual_focus_role"))
+        or _canonical_subject_id(role_row.get("visual_focus_role"))
+    )
+    speaker_role = (
+        _canonical_subject_id(prompt_row.get("speaker_role"))
+        or _canonical_subject_id(scene_row.get("speaker_role"))
+        or _canonical_subject_id(role_row.get("speaker_role"))
+    )
+    active_roles = [
+        _canonical_subject_id(value)
+        for value in (
+            _safe_list(prompt_row.get("active_roles"))
+            + _safe_list(scene_row.get("active_roles"))
+            + _safe_list(role_row.get("active_roles"))
+        )
+    ]
+    secondary_roles = [
+        _canonical_subject_id(value)
+        for value in (
+            _safe_list(prompt_row.get("secondary_roles"))
+            + _safe_list(scene_row.get("secondary_roles"))
+            + _safe_list(role_row.get("secondary_roles"))
+        )
+    ]
+    present_roles = {role for role in [primary_role, visual_focus_role, speaker_role, *active_roles, *secondary_roles] if role}
+    return {
+        "scene_row": scene_row,
+        "role_row": role_row,
+        "primary_role": primary_role,
+        "visual_focus_role": visual_focus_role,
+        "speaker_role": speaker_role,
+        "present_roles": present_roles,
+    }
+
+
+def _enforce_scene_prompts_identity_and_presence(
+    package: dict[str, Any],
+    scene_prompts: dict[str, Any],
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    normalized = deepcopy(_safe_dict(scene_prompts))
+    scene_plan = _safe_dict(package.get("scene_plan"))
+    role_plan = _safe_dict(package.get("role_plan"))
+    scene_plan_rows = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _scene_plan_rows_for_validation(scene_plan)
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    }
+    role_plan_rows = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(role_plan.get("scene_casting"))
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    }
+
+    identity_enforced_count = 0
+    secondary_hints_applied_count = 0
+    identity_drift_segment = ""
+    for row in _scene_prompt_rows_for_validation(normalized):
+        segment_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
+        if not segment_id:
+            continue
+        role_state = _scene_roles_for_segment(segment_id, row, scene_plan_rows, role_plan_rows)
+        scene_row = _safe_dict(role_state.get("scene_row"))
+        role_row = _safe_dict(role_state.get("role_row"))
+        present_roles = set(role_state.get("present_roles") or set())
+        character_1_involved = (
+            role_state.get("primary_role") == "character_1"
+            or role_state.get("visual_focus_role") == "character_1"
+            or role_state.get("speaker_role") == "character_1"
+            or "character_1" in present_roles
+        )
+        if character_1_involved:
+            anchor = _scene_prompt_identity_anchor("character_1", role_row, scene_row, package)
+            if anchor:
+                row["photo_prompt"] = _prepend_clause_once(row.get("photo_prompt"), anchor)
+                row["video_prompt"] = _prepend_clause_once(row.get("video_prompt"), anchor)
+                identity_enforced_count += 1
+            photo_has_anchor = _scene_prompt_has_explicit_reference_anchor(row.get("photo_prompt"), "character_1")
+            video_has_anchor = _scene_prompt_has_explicit_reference_anchor(row.get("video_prompt"), "character_1")
+            if not photo_has_anchor and not video_has_anchor:
+                identity_drift_segment = segment_id
+                break
+
+        character_2_involved = "character_2" in present_roles
+        presence_modes = _secondary_presence_mode_hints(scene_row, role_row, package) if character_2_involved else []
+        if presence_modes:
+            safety_clause = (
+                "If character_2 appears, keep him as an unreferenced secondary presence only: partial silhouette, "
+                "back, shoulder, shadow, or soft blur near the doorway. Avoid a clear frontal face. "
+                "Optional styles when creatively useful: blurred presence, reflection fragment, or object association presence."
+            )
+            row["photo_prompt"] = _prepend_clause_once(row.get("photo_prompt"), safety_clause)
+            row["video_prompt"] = _prepend_clause_once(row.get("video_prompt"), safety_clause)
+            secondary_hints_applied_count += 1
+
+    validation_error = f"identity_drift:{identity_drift_segment}" if identity_drift_segment else ""
+    diagnostics = {
+        "scene_prompts_identity_anchor_enforced_count": identity_enforced_count,
+        "scene_prompts_secondary_presence_hints_applied_count": secondary_hints_applied_count,
+        "scene_prompts_secondary_presence_modes_supported": [
+            "partial_silhouette",
+            "blurred_presence",
+            "memory_haze_insert",
+            "fantasy_impression",
+            "reflection_fragment",
+            "object_association_presence",
+        ],
+    }
+    return normalized, validation_error, diagnostics
+
+
+def _build_scene_prompts_retry_feedback(validation_error: str, error_code: str) -> str:
+    base = (
+        f"Previous output invalid: validation_error={validation_error}; "
+        f"error_code={error_code or 'PROMPTS_SCHEMA_INVALID'}"
+    )
+    if validation_error.strip().lower().startswith("identity_drift:"):
+        return (
+            "Your previous prompts weakened the character identity anchor. Rewrite all affected segments so that every "
+            "prompt for character_1 explicitly states that it is the same woman as the provided character_1 reference, "
+            "preserving the same face, age impression, body proportions, hairstyle, clothing, and silhouette. "
+            "Use cinematic language only."
+        )
+    return base
+
+
 def _is_all_lipsync_override_mode(
     *,
     total_scenes: int,
@@ -7613,6 +7826,18 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         api_key=gemini_api_key,
         package=package,
     )
+    normalized_scene_prompts, normalized_validation_error, normalized_diag = _enforce_scene_prompts_identity_and_presence(
+        package,
+        _safe_dict(result.get("scene_prompts")),
+    )
+    result["scene_prompts"] = normalized_scene_prompts
+    if normalized_validation_error:
+        result["validation_error"] = normalized_validation_error
+        if not str(result.get("error_code") or "").strip():
+            result["error_code"] = "PROMPTS_IDENTITY_DRIFT"
+    result_diag = _safe_dict(result.get("diagnostics"))
+    result_diag.update(normalized_diag)
+    result["diagnostics"] = result_diag
     initial_validation_error = str(result.get("validation_error") or "").strip()
     if initial_validation_error:
         initial_diag = _safe_dict(result.get("diagnostics"))
@@ -7620,10 +7845,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
             initial_diag["scene_prompts_timeout_retry_attempted"] = True
             result["diagnostics"] = initial_diag
         validation_error_code = str(result.get("error_code") or _safe_dict(result.get("diagnostics")).get("scene_prompts_error_code") or "").strip()
-        validation_feedback = (
-            f"Previous output invalid: validation_error={initial_validation_error}; "
-            f"error_code={validation_error_code or 'PROMPTS_SCHEMA_INVALID'}"
-        )
+        validation_feedback = _build_scene_prompts_retry_feedback(initial_validation_error, validation_error_code)
         _append_diag_event(package, f"scene_prompts validation failed, retrying once: {validation_feedback}", stage_id="scene_prompts")
         retry_result = build_gemini_scene_prompts(
             api_key=gemini_api_key,
@@ -7631,6 +7853,18 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
             validation_feedback=validation_feedback,
         )
         result = retry_result
+        normalized_scene_prompts, normalized_validation_error, normalized_diag = _enforce_scene_prompts_identity_and_presence(
+            package,
+            _safe_dict(result.get("scene_prompts")),
+        )
+        result["scene_prompts"] = normalized_scene_prompts
+        if normalized_validation_error:
+            result["validation_error"] = normalized_validation_error
+            if not str(result.get("error_code") or "").strip():
+                result["error_code"] = "PROMPTS_IDENTITY_DRIFT"
+        result_diag = _safe_dict(result.get("diagnostics"))
+        result_diag.update(normalized_diag)
+        result["diagnostics"] = result_diag
         if str(result.get("validation_error") or "").strip():
             result["ok"] = False
             result["error"] = str(result.get("error") or result.get("validation_error") or "scene_prompts_validation_failed")
@@ -7701,7 +7935,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
     diagnostics["scene_prompts_transition_required_count"] = int(prompts_diag.get("scene_prompts_transition_required_count") or 0)
     diagnostics["scene_prompts_transition_present_count"] = int(prompts_diag.get("scene_prompts_transition_present_count") or 0)
-    diagnostics["scene_prompts_error_code"] = str(prompts_diag.get("scene_prompts_error_code") or "")
+    diagnostics["scene_prompts_error_code"] = str(prompts_diag.get("scene_prompts_error_code") or result.get("error_code") or "")
     diagnostics["scene_prompts_raw_model_response_preview"] = str(prompts_diag.get("scene_prompts_raw_model_response_preview") or "")
     diagnostics["scene_prompts_parsed_payload_preview"] = str(prompts_diag.get("scene_prompts_parsed_payload_preview") or "")
     diagnostics["scene_prompts_sanitized_payload_preview"] = str(prompts_diag.get("scene_prompts_sanitized_payload_preview") or "")
