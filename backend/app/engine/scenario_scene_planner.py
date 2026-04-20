@@ -785,6 +785,11 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "Do not teleport hero back to prior position after completed movement unless explicit justified match cut.\\n"
         "Track previous ending position/state, next start position/state, movement direction, location zone, object state, emotional progression, and performance energy progression.\\n"
         "For ia2v/lip-sync scenes ensure vocal-shot diversity across adjacent scenes while preserving mouth readability.\\n"
+        "first_last scenes must not be adjacent.\\n"
+        "Do not place first_last on consecutive segments.\\n"
+        "If two neighboring segments both look suitable for first_last, choose only one of them.\\n"
+        "The other neighboring segment should usually become i2v reaction / observational / emotional beat.\\n"
+        "For domestic argument / dialogue scenes, first_last works best for emotional state change, not for every strong phrase.\\n"
         "speaker_role is independent from primary_role: primary_role is visual focus; speaker_role is who actually speaks this segment.\\n"
         "audio_map.segments[].is_lip_sync_candidate is permission only, not obligation.\\n"
         "Use audio_map.vocal_gender and audio_map.vocal_owner_role as strict voice ownership guard for lip-sync.\\n"
@@ -887,6 +892,20 @@ def _has_adjacent_route(scenes: list[dict[str, Any]], route_name: str) -> bool:
         if str(_safe_dict(scenes[idx - 1]).get("route") or "") == route and str(_safe_dict(scenes[idx]).get("route") or "") == route:
             return True
     return False
+
+
+def _adjacent_route_pairs(scenes: list[dict[str, Any]], route_name: str) -> list[list[str]]:
+    route = str(route_name or "")
+    pairs: list[list[str]] = []
+    for idx in range(1, len(scenes)):
+        left = _safe_dict(scenes[idx - 1])
+        right = _safe_dict(scenes[idx])
+        if str(left.get("route") or "") != route or str(right.get("route") or "") != route:
+            continue
+        left_id = str(left.get("segment_id") or left.get("scene_id") or "").strip()
+        right_id = str(right.get("segment_id") or right.get("scene_id") or "").strip()
+        pairs.append([left_id, right_id])
+    return pairs
 
 
 def _route_scores(scene: dict[str, Any], idx: int, total: int, *, scenes: list[dict[str, Any]] | None = None) -> dict[str, int]:
@@ -1667,6 +1686,10 @@ def _normalize_scene_plan(
         "deprecated_bridge": True,
     }
 
+    has_adjacent_ia2v = _has_adjacent_route(legacy_scenes, "ia2v")
+    has_adjacent_first_last = _has_adjacent_route(legacy_scenes, "first_last")
+    adjacent_first_last_pairs = _adjacent_route_pairs(legacy_scenes, "first_last")
+
     normalization_diag: dict[str, Any] = {
         "window_count_source": len(scene_segment_rows),
         "window_count_model": len(raw_storyboard),
@@ -1696,9 +1719,10 @@ def _normalize_scene_plan(
         "target_route_mix": _target_route_budget(len(normalized_storyboard)),
         "actual_route_mix": route_counts,
         "route_spacing": {
-            "has_adjacent_ia2v": _has_adjacent_route(legacy_scenes, "ia2v"),
-            "has_adjacent_first_last": _has_adjacent_route(legacy_scenes, "first_last"),
-            "warning": "",
+            "has_adjacent_ia2v": has_adjacent_ia2v,
+            "has_adjacent_first_last": has_adjacent_first_last,
+            "adjacent_first_last_pairs": adjacent_first_last_pairs,
+            "warning": "adjacent_first_last_not_allowed" if has_adjacent_first_last else "",
         },
     }
     if include_debug_raw:
@@ -1794,6 +1818,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
             "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
             "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
+            "adjacent_first_last_pairs": _safe_list(spacing.get("adjacent_first_last_pairs")),
+            "scene_plan_route_spacing_retry_used": bool(normalization_diag.get("scene_plan_route_spacing_retry_used")),
             "vocal_gender": str(normalization_diag.get("vocal_gender") or vocal_gender or UNKNOWN_VOCAL_GENDER),
             "vocal_owner_role": str(normalization_diag.get("vocal_owner_role") or vocal_owner_role or UNKNOWN_VOCAL_OWNER_ROLE),
             "primary_role_by_segment": _safe_dict(normalization_diag.get("primary_role_by_segment")),
@@ -1926,21 +1952,28 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
 
     prompt = _build_prompt(context, validation_feedback=validation_feedback)
     configured_timeout = get_scenario_stage_timeout("scene_plan")
-    try:
+    route_spacing_feedback_template = (
+        "Your previous scene_plan placed first_last on adjacent segments: {left_seg} and {right_seg}. "
+        "This is not allowed. Keep only one first_last in that pair. Convert the other one to "
+        "i2v reaction / emotional observation while preserving primary_role, visual_focus_role, "
+        "speaker_role, and vocal_owner_role."
+    )
+    retry_used = False
+
+    def _run_generation(prompt_text: str) -> tuple[dict[str, Any], bool, str, int, dict[str, Any], str]:
         response = post_generate_content(
             api_key=str(api_key or "").strip(),
             model=SCENE_PLAN_MODEL,
             body={
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
             },
             timeout=configured_timeout,
         )
         if isinstance(response, dict) and response.get("__http_error__"):
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
-
         parsed = _extract_json_obj(_extract_gemini_text(response))
-        scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _normalize_scene_plan(
+        return _normalize_scene_plan(
             parsed,
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
@@ -1949,6 +1982,41 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
         )
+
+    try:
+        scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _run_generation(prompt)
+        spacing_diag = _safe_dict(normalization_diag.get("route_spacing"))
+        has_adjacent_first_last = bool(spacing_diag.get("has_adjacent_first_last"))
+        if (
+            str(creative_config.get("route_mix_mode") or "auto").strip().lower() == "auto"
+            and has_adjacent_first_last
+        ):
+            retry_used = True
+            pairs = _safe_list(spacing_diag.get("adjacent_first_last_pairs"))
+            left_seg = "seg_06"
+            right_seg = "seg_07"
+            if pairs and isinstance(pairs[0], list) and len(pairs[0]) >= 2:
+                left_seg = str(pairs[0][0] or left_seg)
+                right_seg = str(pairs[0][1] or right_seg)
+            route_spacing_feedback = route_spacing_feedback_template.format(left_seg=left_seg, right_seg=right_seg)
+            retry_prompt = _build_prompt(context, validation_feedback=route_spacing_feedback)
+            scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _run_generation(retry_prompt)
+            spacing_diag = _safe_dict(normalization_diag.get("route_spacing"))
+            if bool(spacing_diag.get("has_adjacent_first_last")):
+                validation_error = "adjacent_first_last"
+                error_code = "SCENES_ROUTE_SPACING_INVALID"
+                spacing_diag["warning"] = "adjacent_first_last_not_allowed"
+            else:
+                spacing_diag["warning"] = ""
+
+        normalization_diag["scene_plan_route_spacing_retry_used"] = retry_used
+        if (
+            str(creative_config.get("route_mix_mode") or "auto").strip().lower() == "auto"
+            and bool(_safe_dict(normalization_diag.get("route_spacing")).get("has_adjacent_first_last"))
+        ):
+            validation_error = "adjacent_first_last"
+            error_code = "SCENES_ROUTE_SPACING_INVALID"
+            _safe_dict(normalization_diag.get("route_spacing"))["warning"] = "adjacent_first_last_not_allowed"
         diagnostics["error_code"] = error_code
         diagnostics.update(
             _collect_scene_plan_diagnostics(
