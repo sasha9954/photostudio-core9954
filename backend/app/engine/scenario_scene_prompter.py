@@ -909,6 +909,16 @@ def _build_first_last_prompt_pair(
     return start_image_prompt[:650], end_image_prompt[:700], positive_video_prompt[:850], negative_video_prompt
 
 
+
+
+def _resolve_prompt_interface_contract(story_core: dict[str, Any]) -> dict[str, Any]:
+    core = _safe_dict(story_core)
+    root_contract = _safe_dict(core.get("prompt_interface_contract"))
+    if root_contract:
+        return root_contract
+    return _safe_dict(_safe_dict(core.get("story_core_v1")).get("prompt_interface_contract"))
+
+
 def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
@@ -917,6 +927,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
     compiled_contract = _safe_dict(role_plan.get("compiled_contract"))
     scene_plan = _safe_dict(package.get("scene_plan"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
+    prompt_interface_contract = _resolve_prompt_interface_contract(story_core)
 
     scene_windows = _build_scene_windows(audio_map)
     role_lookup = _build_scene_role_lookup(role_plan)
@@ -940,18 +951,16 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
             "world_lock_summary": _build_world_lock_summary(story_core),
             "style_lock_summary": _build_style_lock_summary(story_core),
             "prompt_interface_contract": {
-                "visibility_mode": str(_safe_dict(story_core.get("prompt_interface_contract")).get("visibility_mode") or ""),
-                "subject_presence_requirement": str(
-                    _safe_dict(story_core.get("prompt_interface_contract")).get("subject_presence_requirement") or ""
-                ),
+                "visibility_mode": str(prompt_interface_contract.get("visibility_mode") or ""),
+                "subject_presence_requirement": str(prompt_interface_contract.get("subject_presence_requirement") or ""),
                 "must_be_visible": [
                     str(v).strip()
-                    for v in _safe_list(_safe_dict(story_core.get("prompt_interface_contract")).get("must_be_visible"))
+                    for v in _safe_list(prompt_interface_contract.get("must_be_visible"))
                     if str(v).strip()
                 ],
                 "may_be_offscreen": [
                     str(v).strip()
-                    for v in _safe_list(_safe_dict(story_core.get("prompt_interface_contract")).get("may_be_offscreen"))
+                    for v in _safe_list(prompt_interface_contract.get("may_be_offscreen"))
                     if str(v).strip()
                 ],
             },
@@ -1785,7 +1794,7 @@ def _normalize_scene_prompts(
     i2v_unknown_family_fallback_count = 0
     i2v_template_override_applied = False
     i2v_prompt_family_counts = {family: 0 for family in sorted(I2V_MOTION_FAMILIES)}
-    prompt_interface_contract = _safe_dict(story_core.get("prompt_interface_contract"))
+    prompt_interface_contract = _resolve_prompt_interface_contract(story_core)
     must_be_visible_roles = [
         str(role).strip()
         for role in _safe_list(prompt_interface_contract.get("must_be_visible"))
@@ -2243,7 +2252,6 @@ def _normalize_scene_prompts(
             missing_roles = [role for role in must_be_visible_roles if not _text_mentions_role(photo_prompt, role)]
             if missing_roles:
                 shared_space_missing_segments.append(scene_id)
-                validation_errors.append(f"must_be_visible_photo_prompt_missing:{scene_id}")
                 used_fallback = True
                 photo_prompt = _append_prompt_clause(photo_prompt, _shared_space_enforcement_clause(must_be_visible_roles))
             offscreen_violations = [
@@ -2260,7 +2268,6 @@ def _normalize_scene_prompts(
                 end_missing = [role for role in must_be_visible_roles if not _text_mentions_role(end_image_prompt, role)]
                 if start_missing:
                     shared_space_missing_segments.append(f"{scene_id}:start")
-                    validation_errors.append(f"must_be_visible_start_image_missing:{scene_id}")
                     used_fallback = True
                     start_image_prompt = _append_prompt_clause(
                         start_image_prompt,
@@ -2268,7 +2275,6 @@ def _normalize_scene_prompts(
                     )
                 if end_missing:
                     shared_space_missing_segments.append(f"{scene_id}:end")
-                    validation_errors.append(f"must_be_visible_end_image_missing:{scene_id}")
                     used_fallback = True
                     end_image_prompt = _append_prompt_clause(
                         end_image_prompt,
