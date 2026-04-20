@@ -69,6 +69,24 @@ _CONFIRMED_HERO_URL_KEYS = (
 )
 
 
+def _resolve_segment_route(row: dict[str, Any], fallback_row: dict[str, Any]) -> str:
+    video_metadata = _safe_dict(row.get("video_metadata"))
+    route_payload = _safe_dict(row.get("route_payload"))
+    prompt_row = _safe_dict(fallback_row.get("prompt_row"))
+    plan_row = _safe_dict(fallback_row.get("plan_row"))
+    route = _normalize_route(
+        video_metadata.get("route_type")
+        or row.get("route")
+        or route_payload.get("route")
+        or fallback_row.get("route")
+        or prompt_row.get("route")
+        or plan_row.get("route")
+    )
+    if route not in _ALLOWED_ROUTES:
+        raise RuntimeError("FINAL_VIDEO_PROMPT_ROUTE_MISSING")
+    return route
+
+
 def _has_url_token(value: Any) -> bool:
     if isinstance(value, str):
         token = value.strip().lower()
@@ -540,7 +558,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     row = _safe_dict(raw_row)
     segment_id = str(row.get("segment_id") or fallback_row.get("segment_id") or "").strip()
     scene_id = str(row.get("scene_id") or fallback_row.get("scene_id") or segment_id).strip()
-    route = _normalize_route(_safe_dict(row.get("video_metadata")).get("route_type") or fallback_row.get("route"))
+    route = _resolve_segment_route(row, fallback_row)
 
     route_payload = _safe_dict(row.get("route_payload"))
     fallback_prompt_row = _safe_dict(fallback_row.get("prompt_row"))
@@ -640,7 +658,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     if not segment_id or not positive_prompt or not negative_prompt:
         raise RuntimeError(f"final_video_prompt_invalid_segment:{segment_id or 'unknown'}")
     if route == "first_last" and (not first_frame or not last_frame):
-        raise RuntimeError(f"final_video_prompt_missing_first_last_frames:{segment_id}")
+        raise RuntimeError("FINAL_VIDEO_PROMPT_FIRST_LAST_INCOMPLETE")
+    if route == "ia2v" and not positive_prompt:
+        raise RuntimeError("FINAL_VIDEO_PROMPT_IA2V_INCOMPLETE")
 
     engine_hints = _safe_dict(row.get("engine_hints"))
     engine_defaults = _engine_hints_defaults(route)
@@ -666,16 +686,50 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     renderer_family = str(video_metadata.get("renderer_family") or metadata_defaults["renderer_family"]).strip().lower()
     if renderer_family not in {"ltx", "generic"}:
         renderer_family = metadata_defaults["renderer_family"]
+    plan_row = _safe_dict(fallback_row.get("plan_row"))
+    role_row = _safe_dict(fallback_row.get("role_row"))
+    speaker_role = str(
+        row.get("speaker_role")
+        or fallback_prompt_row.get("speaker_role")
+        or plan_row.get("speaker_role")
+        or role_row.get("speaker_role")
+        or ""
+    ).strip()
+    vocal_owner_role = str(
+        row.get("vocal_owner_role")
+        or fallback_prompt_row.get("vocal_owner_role")
+        or plan_row.get("vocal_owner_role")
+        or ""
+    ).strip()
+    lip_sync_allowed = bool(
+        row.get("lip_sync_allowed")
+        if "lip_sync_allowed" in row
+        else (
+            fallback_prompt_row.get("lip_sync_allowed")
+            if "lip_sync_allowed" in fallback_prompt_row
+            else plan_row.get("lip_sync_allowed")
+        )
+    )
+    requires_audio = route == "ia2v"
+    alias_audio_sync_mode = "lip_sync" if route == "ia2v" and lip_sync_allowed else "none"
+    alias_frame_strategy = "first_last" if route == "first_last" else "single_image"
 
     return {
         "segment_id": segment_id,
         "scene_id": scene_id,
+        "route": route,
         "route_payload": {
+            "route": route,
             "positive_prompt": positive_prompt,
             "negative_prompt": negative_prompt,
             "first_frame_prompt": first_frame if first_frame else None,
             "last_frame_prompt": last_frame if last_frame else None,
         },
+        "requires_first_frame": route == "first_last",
+        "requires_last_frame": route == "first_last",
+        "requires_audio": requires_audio,
+        "audio_sync_mode": alias_audio_sync_mode,
+        "frame_strategy": alias_frame_strategy,
         "engine_hints": {
             "motion_strength": motion_strength,
             "augmentation_level": augmentation_level,
@@ -690,6 +744,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
             "requires_last_frame": bool(metadata_defaults["requires_last_frame"]),
         },
         "audio_behavior_hints": str(row.get("audio_behavior_hints") or "").strip(),
+        "speaker_role": speaker_role or None,
+        "vocal_owner_role": vocal_owner_role or None,
         "lip_sync_shot_variant": lip_sync_shot_variant or None,
         "performance_pose": performance_pose or None,
         "camera_angle": camera_angle or None,
@@ -755,6 +811,32 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]]) -> dict[str, 
         "delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION,
         "segments": normalized,
         "scenes": [dict(row) for row in normalized],
+    }
+
+
+def _build_route_diagnostics(segments: list[dict[str, Any]]) -> dict[str, Any]:
+    route_by_segment: dict[str, str] = {}
+    missing_route_segments: list[str] = []
+    first_last_ready_segments: list[str] = []
+    ia2v_ready_segments: list[str] = []
+    for seg in segments:
+        row = _safe_dict(seg)
+        segment_id = str(row.get("segment_id") or "").strip()
+        route = str(row.get("route") or "").strip()
+        route_by_segment[segment_id] = route
+        if route not in _ALLOWED_ROUTES:
+            missing_route_segments.append(segment_id)
+        route_payload = _safe_dict(row.get("route_payload"))
+        if route == "first_last" and str(route_payload.get("first_frame_prompt") or "").strip() and str(route_payload.get("last_frame_prompt") or "").strip():
+            first_last_ready_segments.append(segment_id)
+        if route == "ia2v" and str(route_payload.get("positive_prompt") or "").strip():
+            ia2v_ready_segments.append(segment_id)
+    return {
+        "final_video_prompt_route_alias_applied": True,
+        "final_video_prompt_route_by_segment": route_by_segment,
+        "final_video_prompt_missing_route_segments": missing_route_segments,
+        "final_video_prompt_first_last_ready_segments": first_last_ready_segments,
+        "final_video_prompt_ia2v_ready_segments": ia2v_ready_segments,
     }
 
 
@@ -824,7 +906,15 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
 
     ok = bool(normalized_payload and _safe_list(normalized_payload.get("segments")))
     scene_contract_logs = []
+    route_diagnostics: dict[str, Any] = {
+        "final_video_prompt_route_alias_applied": True,
+        "final_video_prompt_route_by_segment": {},
+        "final_video_prompt_missing_route_segments": [],
+        "final_video_prompt_first_last_ready_segments": [],
+        "final_video_prompt_ia2v_ready_segments": [],
+    }
     if ok:
+        route_diagnostics = _build_route_diagnostics(_safe_list(normalized_payload.get("segments")))
         for seg in _safe_list(normalized_payload.get("segments")):
             row = _safe_dict(seg)
             route_payload = _safe_dict(row.get("route_payload"))
@@ -866,6 +956,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "final_video_prompt_timeout_retry_attempted": bool(timed_out and attempts > 1),
             "final_video_prompt_response_was_empty_after_timeout": response_was_empty_after_timeout,
             "final_video_prompt_scene_contract_logs": scene_contract_logs,
+            **route_diagnostics,
         },
         "error": "" if ok else ("final_video_prompt_timeout" if timed_out else (last_error or "final_video_prompt_generation_failed")),
     }
