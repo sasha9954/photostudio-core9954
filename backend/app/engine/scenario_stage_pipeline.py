@@ -481,9 +481,11 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         "first_last": max(0, int(route_targets_raw.get("first_last") or route_targets_raw.get("firstLast") or 0)),
     }
     explicit_route_targets = bool(route_targets_raw)
-    if route_strategy_present and route_strategy_mode == "auto" and sum(route_targets_per_block.values()) <= 0:
-        route_targets_per_block = {"i2v": 4, "ia2v": 2, "first_last": 2}
+    has_route_targets = sum(route_targets_per_block.values()) > 0
+    use_route_targets = bool(route_strategy_present and route_strategy_mode != "auto" and has_route_targets)
     if not route_strategy_present:
+        route_targets_per_block = {}
+    elif route_strategy_mode == "auto":
         route_targets_per_block = {}
     route_mix_mode = str(row.get("route_mix_mode") or row.get("routeMixMode") or ("auto" if route_strategy_mode == "auto" else "custom")).strip().lower() or "auto"
     if route_mix_mode not in {"auto", "custom"}:
@@ -494,23 +496,23 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
     legacy_default_first_last = 0.25
     lipsync_ratio = _clamp_ratio(
         row.get("lipsync_ratio"),
-        route_targets_per_block.get("ia2v", 0) / base_scene_count if route_strategy_present else legacy_default_ia2v,
+        route_targets_per_block.get("ia2v", 0) / base_scene_count if use_route_targets else legacy_default_ia2v,
     )
     first_last_ratio = _clamp_ratio(
         row.get("first_last_ratio"),
-        route_targets_per_block.get("first_last", 0) / base_scene_count if route_strategy_present else legacy_default_first_last,
+        route_targets_per_block.get("first_last", 0) / base_scene_count if use_route_targets else legacy_default_first_last,
     )
     i2v_ratio = _clamp_ratio(
         row.get("i2v_ratio"),
-        route_targets_per_block.get("i2v", 0) / base_scene_count if route_strategy_present else legacy_default_i2v,
+        route_targets_per_block.get("i2v", 0) / base_scene_count if use_route_targets else legacy_default_i2v,
     )
-    if route_strategy_present and sum(route_targets_per_block.values()) > 0:
+    if use_route_targets:
         lipsync_ratio = round(route_targets_per_block["ia2v"] / base_scene_count, 3)
         first_last_ratio = round(route_targets_per_block["first_last"] / base_scene_count, 3)
         i2v_ratio = round(route_targets_per_block["i2v"] / base_scene_count, 3)
     explicit_mode = any(key in row for key in ("route_strategy_mode", "routeStrategyMode"))
     explicit_preset = bool(route_strategy_preset) and any(key in row for key in ("route_strategy_preset", "routeStrategyPreset"))
-    route_strategy_active = bool(route_strategy_present and (route_strategy_mode != "auto" or explicit_preset or explicit_route_targets))
+    route_strategy_active = bool(route_strategy_present and route_strategy_mode != "auto")
 
     preferred_routes = [str(item).strip().lower() for item in _safe_list(row.get("preferred_routes")) if str(item).strip()]
     preferred_routes = [route for route in preferred_routes if route in {"i2v", "ia2v", "first_last"}] or ["i2v", "ia2v", "first_last"]
@@ -534,7 +536,7 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         "base_scene_count": base_scene_count,
         "extra_scene_policy": str(row.get("extra_scene_policy") or row.get("extraScenePolicy") or "add_i2v").strip() or "add_i2v",
         "route_targets_per_block": route_targets_per_block,
-        "route_strategy_normalized_targets": dict(route_targets_per_block),
+        "route_strategy_normalized_targets": dict(route_targets_per_block) if route_strategy_mode != "auto" else {},
         "max_consecutive_ia2v": max_consecutive_ia2v,
         "targets_are_soft": bool(row.get("targets_are_soft") if row.get("targets_are_soft") is not None else (row.get("targetsAreSoft") if row.get("targetsAreSoft") is not None else True)),
         "instrumental_policy": str(row.get("instrumental_policy") or row.get("instrumentalPolicy") or "use_i2v_for_non_vocal_or_instrumental_gaps").strip() or "use_i2v_for_non_vocal_or_instrumental_gaps",
@@ -648,7 +650,8 @@ def _compute_route_budget_for_total(total_scenes: int, creative_config: dict[str
         if creative_config.get("has_new_route_strategy") is not None
         else creative_config.get("route_strategy_present")
     )
-    if has_targets and has_new_route_strategy:
+    route_strategy_mode = str(creative_config.get("route_strategy_mode") or "auto").strip().lower() or "auto"
+    if has_targets and has_new_route_strategy and route_strategy_mode != "auto":
         def _budget_for_count(count: int) -> dict[str, int]:
             if count <= 0:
                 return {"i2v": 0, "ia2v": 0, "first_last": 0}
