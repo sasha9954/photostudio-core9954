@@ -11957,6 +11957,10 @@ const scenarioImageOverlayVisible = scenarioSceneImageBusy;
       || hint.includes("job_id_not_found_or_expired");
   }, []);
 
+  const resolveVideoStartJobId = useCallback((response) => {
+    return String(response?.jobId || response?.job_id || response?.id || "").trim();
+  }, []);
+
   const findComfySceneIndexById = useCallback((sceneId = "") => {
     const normalizedSceneId = String(sceneId || "").trim();
     if (!normalizedSceneId) return -1;
@@ -12879,40 +12883,35 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           provider: 'comfy_remote',
         },
       });
+      const normalizedStartJobId = resolveVideoStartJobId(out);
       console.info("[VIDEO START RESPONSE]", {
         scope: "comfy",
         sceneId,
         ok: !!out?.ok,
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
         providerJobId: String(out?.providerJobId || ""),
       });
       console.info("[CLIP VIDEO START RESPONSE]", {
         ok: !!out?.ok,
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
         provider: String(out?.provider || "comfy_remote"),
         mode: String(out?.mode || ""),
         sceneId,
         status: String(out?.status || ""),
         raw: out,
       });
-      if (!out?.jobId) {
-        console.warn("[CLIP WARN] video start returned without jobId", {
+      if (!out?.ok || !normalizedStartJobId) {
+        console.warn("[CLIP WARN] video start did not return runnable job", {
           sceneId,
           provider: "comfy_remote",
           raw: out,
         });
+        throw new Error(String(out?.error || out?.message || out?.hint || out?.code || "video_start_failed"));
       }
 
-      if (out?.jobId) {
-        if (!out?.ok) {
-          console.warn("[CLIP WARN] start response has jobId but ok=false, forcing polling start", {
-            sceneId,
-            jobId: String(out?.jobId || ""),
-            raw: out,
-          });
-        }
+      if (normalizedStartJobId) {
         const startedMeta = buildComfyVideoJobMeta({
-          jobId: String(out.jobId),
+          jobId: normalizedStartJobId,
           providerJobId: String(out.providerJobId || ''),
           provider: String(out?.provider || "comfy_remote"),
           sceneId,
@@ -12984,11 +12983,11 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           console.info("[CLIP TRACE] state update", {
             source: "handleComfyGenerateVideo:updateComfyScene:queued",
             sceneId,
-            jobId: String(out.jobId || ""),
+            jobId: normalizedStartJobId,
           });
           console.info("[CLIP TRACE] about to start comfy polling", {
             sceneId,
-            jobId: String(out.jobId || ""),
+            jobId: normalizedStartJobId,
             out,
           });
         }
@@ -13039,7 +13038,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       }
       updateComfyScene(comfySafeIndex, { videoStatus: 'error', videoError: String(e?.message || e), videoPanelOpen: true });
     }
-  }, [buildComfyVideoJobMeta, clearActiveComfyVideoJob, comfyHasActiveVideoJobForScene, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfyScene, updateComfySceneById]);
+  }, [buildComfyVideoJobMeta, clearActiveComfyVideoJob, comfyHasActiveVideoJobForScene, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, findComfySceneIndexById, persistActiveComfyVideoJob, resolveVideoStartJobId, startComfyVideoPolling, updateComfyScene, updateComfySceneById]);
 
   const handleComfyDeleteVideo = useCallback(() => {
     const selectedSceneId = String(comfySelectedScene?.sceneId || '').trim();
@@ -16884,8 +16883,48 @@ Aspect ratio: ${imageFormat}`,
         videoStatus: String(targetScene?.videoStatus || ""),
         branch: "before_payload_build",
       });
+      const roleFieldsFromScene = {
+        primaryRole: String(
+          targetScene?.visual_focus_role
+          || targetScene?.visualFocusRole
+          || targetScene?.primaryRole
+          || scenarioContractPayloadForPayload?.visual_focus_role
+          || scenarioContractPayloadForPayload?.primaryRole
+          || ""
+        ).trim(),
+        speaker_role: String(
+          targetScene?.speaker_role
+          || targetScene?.speakerRole
+          || scenarioContractPayloadForPayload?.speaker_role
+          || scenarioContractPayloadForPayload?.vocal_owner_role
+          || ""
+        ).trim(),
+        vocal_owner_role: String(
+          targetScene?.vocal_owner_role
+          || targetScene?.vocalOwnerRole
+          || scenarioContractPayloadForPayload?.vocal_owner_role
+          || scenarioContractPayloadForPayload?.speaker_role
+          || ""
+        ).trim(),
+        sceneActiveRoles: Array.isArray(targetScene?.sceneActiveRoles)
+          ? targetScene.sceneActiveRoles
+          : (Array.isArray(scenarioContractPayloadForPayload?.sceneActiveRoles) ? scenarioContractPayloadForPayload.sceneActiveRoles : []),
+        mustAppear: Array.isArray(targetScene?.mustAppear)
+          ? targetScene.mustAppear
+          : (Array.isArray(scenarioContractPayloadForPayload?.mustAppear) ? scenarioContractPayloadForPayload.mustAppear : []),
+        supportEntityIds: Array.isArray(targetScene?.supportEntityIds)
+          ? targetScene.supportEntityIds
+          : (Array.isArray(scenarioContractPayloadForPayload?.supportEntityIds) ? scenarioContractPayloadForPayload.supportEntityIds : []),
+        heroEntityId: String(targetScene?.heroEntityId || scenarioContractPayloadForPayload?.heroEntityId || "").trim(),
+      };
+      if (lipSyncRoute) {
+        roleFieldsFromScene.speaker_role = roleFieldsFromScene.speaker_role || "character_1";
+        roleFieldsFromScene.vocal_owner_role = roleFieldsFromScene.vocal_owner_role || "character_1";
+        roleFieldsFromScene.heroEntityId = roleFieldsFromScene.heroEntityId || "character_1";
+      }
       const videoStartPayload = {
         ...scenarioContractPayloadSanitized,
+        ...roleFieldsFromScene,
         sceneId,
         imageUrl: normalizedScenarioVideoSourceUrls.imageUrl,
         startImageUrl: normalizedScenarioVideoSourceUrls.startImageUrl,
@@ -17078,12 +17117,13 @@ Aspect ratio: ${imageFormat}`,
         timeoutMs: VIDEO_START_TIMEOUT_MS,
         body: videoStartPayload,
       });
+      const normalizedStartJobId = resolveVideoStartJobId(out);
       console.info("[SCENARIO VIDEO SEND DONE]", {
         sceneId,
         rawRoute,
         workflowKey: effectiveWorkflowKey,
         ok: Boolean(out?.ok),
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
         status: String(out?.status || ""),
         code: String(out?.code || ""),
       });
@@ -17091,7 +17131,7 @@ Aspect ratio: ${imageFormat}`,
         endpoint,
         sceneId,
         ok: Boolean(out?.ok),
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
         status: String(out?.status || ""),
         code: String(out?.code || ""),
         hint: String(out?.hint || ""),
@@ -17111,7 +17151,7 @@ Aspect ratio: ${imageFormat}`,
         console.info("[SCENARIO LIP SYNC START RESPONSE]", {
           sceneId,
           ok: Boolean(out?.ok),
-          jobId: String(out?.jobId || ""),
+          jobId: normalizedStartJobId,
           code: String(out?.code || ""),
           hint: String(out?.hint || ""),
         });
@@ -17121,7 +17161,7 @@ Aspect ratio: ${imageFormat}`,
         sceneId,
         endpoint,
         ok: Boolean(out?.ok),
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
         status: String(out?.status || ""),
         code: String(out?.code || ""),
       });
@@ -17130,12 +17170,12 @@ Aspect ratio: ${imageFormat}`,
         sceneId,
         endpoint,
         ok: Boolean(out?.ok),
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
       });
       console.info("[SCENARIO VIDEO JOB]", {
         stage: "start_response",
         sceneId,
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
         ok: Boolean(out?.ok),
         status: String(out?.status || ""),
         code: String(out?.code || ""),
@@ -17147,7 +17187,7 @@ Aspect ratio: ${imageFormat}`,
         route: endpoint,
         workflow: effectiveWorkflowKey,
         mode: String(effectiveRenderMode || ""),
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
       });
       console.info("[SCENARIO VIDEO START RESULT]", {
         endpoint,
@@ -17160,61 +17200,42 @@ Aspect ratio: ${imageFormat}`,
         scope: "scenario",
         sceneId,
         ok: !!out?.ok,
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
         providerJobId: String(out?.providerJobId || ""),
       });
       console.info("[CLIP VIDEO START RESPONSE]", {
         ok: !!out?.ok,
-        jobId: String(out?.jobId || ""),
+        jobId: normalizedStartJobId,
         provider: String(out?.provider || effectiveVideoProvider),
         mode: String(out?.mode || effectiveRenderMode),
         sceneId,
         status: String(out?.status || ""),
         raw: out,
       });
-      if (!out?.jobId) {
-        console.warn("[CLIP WARN] video start returned without jobId", {
+      if (!out?.ok || !normalizedStartJobId) {
+        console.warn("[CLIP WARN] video start did not return runnable job", {
           sceneId,
           provider: effectiveVideoProvider,
           raw: out,
         });
-        logScenarioDirectGenerateBlock({
-          route: "/api/clip/video",
-          url: `${API_BASE}/api/clip/video`,
-          reason: "legacy_fallback_disabled_missing_job_id_from_video_start",
-          sceneId,
-        });
-        throw new Error(
-          String(out?.hint || out?.code || "video_start_missing_job_id")
-          + " (legacy direct generate fallback disabled)"
-        );
+        throw new Error(String(out?.error || out?.message || out?.hint || out?.code || "video_start_failed"));
       }
 
-      if (out?.jobId) {
-        if (!out?.ok) {
-          console.warn("[SCENARIO VIDEO JOB]", {
-            stage: "start_response_has_job_but_not_ok",
-            sceneId,
-            jobId: String(out?.jobId || ""),
-            code: String(out?.code || ""),
-            hint: String(out?.hint || ""),
-            message: String(out?.error || out?.message || ""),
-          });
-        }
+      if (normalizedStartJobId) {
         console.info("[SCENARIO VIDEO JOB]", {
           stage: "queued",
           sceneId,
-          jobId: String(out.jobId || ""),
+          jobId: normalizedStartJobId,
           providerJobId: String(out.providerJobId || ""),
           workflowKey: String(effectiveWorkflowKey || ""),
         });
         console.info("[CLIP TRACE] state update", {
           source: "handleScenarioGenerateVideo:updateScenarioScene:queued",
           sceneId,
-          jobId: String(out.jobId || ""),
+          jobId: normalizedStartJobId,
         });
         const startedMeta = {
-          jobId: String(out.jobId),
+          jobId: normalizedStartJobId,
           providerJobId: String(out.providerJobId || ""),
           provider: String(out?.provider || effectiveVideoProvider),
           sceneId,
@@ -17379,7 +17400,7 @@ Aspect ratio: ${imageFormat}`,
         clearedLoading: true,
       });
     }
-  }, [clearActiveVideoJob, handleScenarioEditorExtractSceneAudio, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioSelected?.sceneId, startScenarioVideoPolling, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
+  }, [clearActiveVideoJob, handleScenarioEditorExtractSceneAudio, resolveScenarioSceneIndex, resolveVideoStartJobId, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioSelected?.sceneId, startScenarioVideoPolling, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");

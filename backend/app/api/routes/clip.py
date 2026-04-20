@@ -532,6 +532,8 @@ CLIP_ASSEMBLE_JOBS_LOCK = threading.Lock()
 
 CLIP_VIDEO_JOBS: dict[str, dict] = {}
 CLIP_VIDEO_JOBS_LOCK = threading.Lock()
+CLIP_VIDEO_JOBS_REGISTRY_STARTED_AT = time.time()
+CLIP_VIDEO_JOBS_REGISTRY_GENERATION_ID = uuid4().hex
 
 
 def _kie_headers() -> dict:
@@ -15146,6 +15148,7 @@ def clip_video_start(payload: ClipVideoIn):
             "updatedAt": time.time(),
             "completedAt": None,
         }
+        job_stored = bool(CLIP_VIDEO_JOBS.get(job_id))
 
     print(
         "[CLIP VIDEO JOB] "
@@ -15157,7 +15160,19 @@ def clip_video_start(payload: ClipVideoIn):
         f"worker_start sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint}"
     )
     threading.Thread(target=_run_clip_video_job, args=(job_id, payload), daemon=True).start()
-    return {"ok": True, "jobId": job_id, "sceneId": scene_id, "status": "queued"}
+    return {
+        "ok": True,
+        "jobId": job_id,
+        "job_id": job_id,
+        "id": job_id,
+        "sceneId": scene_id,
+        "status": "queued",
+        "providerJobId": None,
+        "comfyPromptId": None,
+        "resolvedWorkflowKey": resolved_workflow_hint,
+        "statusEndpoint": f"/api/clip/video/status/{job_id}",
+        "jobStored": bool(job_stored),
+    }
 
 
 @router.get("/clip/video/status/{job_id}")
@@ -15166,8 +15181,19 @@ def clip_video_status(job_id: str):
     with CLIP_VIDEO_JOBS_LOCK:
         job = CLIP_VIDEO_JOBS.get(safe_job_id)
         if not job:
+            known_job_ids_preview = list(CLIP_VIDEO_JOBS.keys())[:5]
             print(f"[CLIP VIDEO JOB STATUS] read jobId={safe_job_id} status=not_found hasVideoUrl=False")
-            return {"ok": False, "status": "not_found", "code": "VIDEO_JOB_NOT_FOUND", "hint": "job_id_not_found_or_expired"}
+            return {
+                "ok": False,
+                "status": "not_found",
+                "code": "VIDEO_JOB_NOT_FOUND",
+                "hint": "job_id_not_found_or_expired",
+                "requestedJobId": safe_job_id,
+                "knownJobCount": len(CLIP_VIDEO_JOBS),
+                "knownJobIdsPreview": known_job_ids_preview,
+                "backendStartedAt": CLIP_VIDEO_JOBS_REGISTRY_STARTED_AT,
+                "registryGenerationId": CLIP_VIDEO_JOBS_REGISTRY_GENERATION_ID,
+            }
         print(
             "[CLIP VIDEO JOB STATUS] "
             f"read jobId={safe_job_id} status={job.get('status')} hasVideoUrl={bool(str(job.get('videoUrl') or '').strip())}"
