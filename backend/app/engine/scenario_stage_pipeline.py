@@ -1222,8 +1222,9 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
     for key in ("diagnostics", "refs_inventory", "connectedRefsPresentByRole", "refsPresentByRole"):
         scene_pkg.pop(key, None)
 
+    clean_scene_casting: list[dict[str, Any]] = []
     for row_raw in _safe_list(role_plan.get("scene_casting")):
-        row = _safe_dict(row_raw)
+        row = deepcopy(_safe_dict(row_raw))
         for key in (
             "identity_source",
             "identity_rule",
@@ -1233,6 +1234,63 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
             "visual_ref_identity_lock_source",
         ):
             row.pop(key, None)
+        clean_scene_casting.append(row)
+    role_plan["scene_casting"] = clean_scene_casting
+
+    def _sanitize_scene_plan_roster_value(value: Any) -> Any:
+        if isinstance(value, str):
+            sanitized = value
+            for token in (
+                "canonical source of truth",
+                "connected character_1 image reference",
+                "connected character_2 image reference",
+                "connected character_3 image reference",
+                "image reference",
+                "refs",
+                "visual_ref_identity_lock",
+                "identity_source",
+                "identity_rule",
+                "identity_reference_rule",
+                "connected_visual_reference",
+            ):
+                sanitized = re.sub(re.escape(token), "", sanitized, flags=re.IGNORECASE)
+            return re.sub(r"\s+", " ", sanitized).strip(" ,.;:-")
+        if isinstance(value, list):
+            sanitized_list = [_sanitize_scene_plan_roster_value(item) for item in value]
+            return [item for item in sanitized_list if item not in ("", None, [], {})]
+        return value
+
+    clean_roster: list[dict[str, Any]] = []
+    for row_raw in _safe_list(role_plan.get("roster")):
+        row = deepcopy(_safe_dict(row_raw))
+        row.pop("identity_reference_rule", None)
+        for key in ("continuity_rule", "identity_lock", "appearance", "description", "role_notes"):
+            if key in row:
+                row[key] = _sanitize_scene_plan_roster_value(row.get(key))
+        clean_roster.append(row)
+    role_plan["roster"] = clean_roster
+
+    connected_summary = deepcopy(_safe_dict(input_pkg.get("connected_context_summary")))
+    for key in (
+        "refsPresentByRole",
+        "connectedRefsPresentByRole",
+        "role_identity_mapping",
+        "character_identity_by_role",
+    ):
+        connected_summary.pop(key, None)
+    safe_connected_summary: dict[str, Any] = {}
+    for key in (
+        "characterCount",
+        "presentCastRoles",
+        "activeSourceMode",
+        "hasActiveSource",
+        "hasLocation",
+        "hasProps",
+        "hasStyle",
+    ):
+        if key in connected_summary:
+            safe_connected_summary[key] = connected_summary.get(key)
+    input_pkg["connected_context_summary"] = safe_connected_summary
 
     role_plan["scene_safe_identity_constraints"] = _scene_plan_safe_identity_constraints(scene_pkg)
     role_plan["scene_prompt_rules"] = {
