@@ -2733,15 +2733,40 @@ def _build_prompts_v11_prompt(
     )
 
 
-def _coerce_prompts_v11_payload(raw: Any, prompt_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
+def _coerce_prompts_v11_payload(raw: Any, prompt_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str], dict[str, Any]]:
     prompt_route_by_segment = {
         str(_safe_dict(row).get("segment_id") or "").strip(): str(_safe_dict(row).get("route") or "i2v").strip() or "i2v"
         for row in prompt_rows
     }
     dropped_fields: set[str] = set()
-    data = _safe_dict(raw)
+    list_diag = {
+        "scene_prompts_top_level_list_unwrapped": False,
+        "scene_prompts_top_level_list_kind": "",
+        "scene_prompts_top_level_list_length": 0,
+    }
+    source = raw
+    if isinstance(raw, list):
+        list_diag["scene_prompts_top_level_list_length"] = len(raw)
+        if len(raw) == 1:
+            first = _safe_dict(raw[0])
+            first_keys = set(first.keys())
+            if {"prompts_version", "global_style_anchor", "segments"}.issubset(first_keys):
+                source = first
+                list_diag["scene_prompts_top_level_list_unwrapped"] = True
+                list_diag["scene_prompts_top_level_list_kind"] = "single_payload_object"
+        if source is raw:
+            segment_like = [
+                _safe_dict(item)
+                for item in raw
+                if isinstance(item, dict) and str(_safe_dict(item).get("segment_id") or _safe_dict(item).get("scene_id") or "").strip()
+            ]
+            if segment_like and len(segment_like) == len(raw):
+                source = {"prompts_version": "1.1", "segments": raw}
+                list_diag["scene_prompts_top_level_list_unwrapped"] = True
+                list_diag["scene_prompts_top_level_list_kind"] = "segments_array"
+    data = _safe_dict(source)
     if not data:
-        return {}, []
+        return {}, [], list_diag
 
     candidates = [data]
     for key in ("result", "data", "output", "payload", "scene_prompts"):
@@ -2834,7 +2859,7 @@ def _coerce_prompts_v11_payload(raw: Any, prompt_rows: list[dict[str, Any]]) -> 
 
     if not normalized["prompts_version"]:
         normalized["prompts_version"] = "1.1"
-    return normalized, sorted(dropped_fields)
+    return normalized, sorted(dropped_fields), list_diag
 
 
 def _build_prompts_v11_segment_fallback(segment_row: dict[str, Any], story_core: dict[str, Any]) -> dict[str, str]:
@@ -3248,6 +3273,9 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_sanitized_payload_preview": "",
         "scene_prompts_normalized_scene_prompts_preview": "",
         "scene_prompts_dropped_non_canonical_fields": [],
+        "scene_prompts_top_level_list_unwrapped": False,
+        "scene_prompts_top_level_list_kind": "",
+        "scene_prompts_top_level_list_length": 0,
         "scene_prompts_expected_segment_ids": [str(_safe_dict(row).get("segment_id") or "") for row in prompt_rows],
         "scene_prompts_seen_segment_ids": [],
         "scene_prompts_missing_segment_ids": [],
@@ -3314,9 +3342,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         sanitized_text = _strip_json_code_fences(raw_text)
         parsed_payload = _extract_json_obj(sanitized_text)
         diagnostics["scene_prompts_parsed_payload_preview"] = _preview_payload(parsed_payload)
-        raw_payload, dropped_fields = _coerce_prompts_v11_payload(parsed_payload, prompt_rows)
+        raw_payload, dropped_fields, top_level_list_diag = _coerce_prompts_v11_payload(parsed_payload, prompt_rows)
         diagnostics["scene_prompts_sanitized_payload_preview"] = _preview_payload(raw_payload)
         diagnostics["scene_prompts_dropped_non_canonical_fields"] = dropped_fields
+        diagnostics.update(top_level_list_diag)
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
         timeout_error = is_timeout_error(error)
