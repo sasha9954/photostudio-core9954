@@ -355,6 +355,68 @@ def _collect_final_video_prompt_dependency_gate_state(
     return missing_reasons, payload_ok_by_stage, status_by_stage, false_positive_prevented
 
 
+def _restore_payload_valid_upstream_statuses_for_stage(
+    pkg: dict[str, Any],
+    stage_id: str,
+    deps: list[str],
+    payload_ok_by_stage: dict[str, bool],
+) -> dict[str, Any]:
+    package = deepcopy(_safe_dict(pkg))
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    restored_stages: list[str] = []
+    restore_reason = "payload_validity_gate_accepted_reused_outputs"
+    diagnostics["final_video_prompt_reused_upstream_statuses_restored"] = False
+    diagnostics["final_video_prompt_reused_upstream_statuses_restored_stages"] = []
+    diagnostics["final_video_prompt_reused_upstream_status_restore_reason"] = restore_reason
+    if stage_id != "final_video_prompt":
+        package["diagnostics"] = diagnostics
+        return package
+
+    statuses = _safe_dict(package.get("stage_statuses"))
+    allowed_deps = {
+        "input_package",
+        "audio_map",
+        "story_core",
+        "role_plan",
+        "scene_plan",
+        "scene_prompts",
+    }
+    for dep_stage in deps:
+        if dep_stage not in allowed_deps:
+            continue
+        if not bool(payload_ok_by_stage.get(dep_stage)):
+            continue
+        stage_state = _safe_dict(statuses.get(dep_stage))
+        dep_status = str(stage_state.get("status") or "").strip().lower()
+        if dep_status not in {"stale", "error"}:
+            continue
+        stage_state["status"] = "done"
+        stage_state["error"] = ""
+        stage_state["restored_at"] = _utc_iso()
+        for key in (
+            "invalidated",
+            "invalid",
+            "dirty",
+            "stale",
+            "staleReason",
+            "stale_reason",
+            "reason",
+            "statusReason",
+            "invalidateReason",
+            "invalidatedReason",
+        ):
+            stage_state.pop(key, None)
+        statuses[dep_stage] = stage_state
+        restored_stages.append(dep_stage)
+
+    package["stage_statuses"] = statuses
+    diagnostics["final_video_prompt_reused_upstream_statuses_restored"] = bool(restored_stages)
+    diagnostics["final_video_prompt_reused_upstream_statuses_restored_stages"] = restored_stages
+    diagnostics["final_video_prompt_reused_upstream_status_restore_reason"] = restore_reason
+    package["diagnostics"] = diagnostics
+    return package
+
+
 def _is_stage_dependency_satisfied(package: dict[str, Any], stage_id: str, dependency_stage_id: str) -> bool:
     if stage_id == "final_video_prompt":
         return _final_video_prompt_dependency_payload_ok(package, dependency_stage_id)
@@ -3328,6 +3390,13 @@ def _clear_stage_diagnostics(diagnostics: dict[str, Any], stage_id: str) -> dict
 def invalidate_downstream_stages(package: dict[str, Any], from_stage_id: str, reason: str = "") -> dict[str, Any]:
     pkg = deepcopy(_safe_dict(package))
     downstream = MANUAL_RESET_DOWNSTREAM.get(from_stage_id, [])
+    if from_stage_id in STAGE_IDS:
+        origin_idx = STAGE_IDS.index(from_stage_id)
+        downstream = [
+            stage_id
+            for stage_id in downstream
+            if stage_id in STAGE_IDS and STAGE_IDS.index(stage_id) > origin_idx and stage_id != from_stage_id
+        ]
     statuses = _safe_dict(pkg.get("stage_statuses"))
     diagnostics = _safe_dict(pkg.get("diagnostics"))
     preserved_snapshot_stages = {"final_video_prompt", "finalize"}
@@ -7250,6 +7319,8 @@ def run_manual_stage(
         pkg["diagnostics"] = diagnostics
         pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
         pkg = run_stage(stage_id, pkg, payload)
+        if str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(stage_id)).get("status") or "").strip().lower() == "done":
+            pkg = _restore_payload_valid_upstream_statuses_for_stage(pkg, stage_id, deps, payload_ok_by_stage)
         executed_stage_ids.append(stage_id)
         return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     if stage_id == "finalize":
