@@ -2471,15 +2471,18 @@ def _build_prompt_rows(package: dict[str, Any]) -> tuple[list[dict[str, Any]], d
                 "intensity": str(audio_row.get("intensity") or "").strip(),
                 "rhythmic_anchor": str(audio_row.get("rhythmic_anchor") or "").strip(),
                 "primary_role": str(role_row.get("primary_role") or "").strip(),
+                "visual_focus_role": str(scene_row.get("visual_focus_role") or "").strip(),
                 "secondary_roles": [str(v).strip() for v in _safe_list(role_row.get("secondary_roles")) if str(v).strip()],
                 "presence_mode": str(role_row.get("presence_mode") or "").strip(),
                 "presence_weight": str(role_row.get("presence_weight") or "").strip(),
                 "speaker_role": str(scene_row.get("speaker_role") or "").strip(),
                 "spoken_line": str(scene_row.get("spoken_line") or "").strip(),
                 "lip_sync_allowed": bool(scene_row.get("lip_sync_allowed")),
+                "lip_sync_priority": str(scene_row.get("lip_sync_priority") or "").strip(),
                 "mouth_visible_required": bool(scene_row.get("mouth_visible_required")),
                 "listener_reaction_allowed": bool(scene_row.get("listener_reaction_allowed")),
                 "reaction_role": str(scene_row.get("reaction_role") or "").strip(),
+                "speaker_confidence": str(scene_row.get("speaker_confidence") or "").strip(),
                 "emotional_key": str(narrative_row.get("emotional_key") or scene_row.get("emotional_intent") or "").strip(),
                 "beat_purpose": str(narrative_row.get("beat_purpose") or scene_row.get("scene_goal") or "").strip(),
             }
@@ -2499,6 +2502,14 @@ def _de_technicalize_text(text: str) -> tuple[str, bool]:
     changed = False
     out = clean
     for pattern, replacement in _DETECH_REPLACEMENTS:
+        updated = pattern.sub(replacement, out)
+        if updated != out:
+            changed = True
+            out = updated
+    for pattern, replacement in (
+        (re.compile(r"\bA an\b"), "An"),
+        (re.compile(r"\bA a\b"), "A"),
+    ):
         updated = pattern.sub(replacement, out)
         if updated != out:
             changed = True
@@ -2692,6 +2703,7 @@ def _build_prompts_v11_prompt(
         "- framing/motion hints must be expressed without camera jargon.\n"
         "- Forbidden literal leakage examples in final prompt text: stable framing, push-in, pull-back, lateral tracking, dolly, zoom, camera move, tracking shot, medium shot, close-up, wide shot.\n"
         "- Make photo_prompt and video_prompt stable/specific across segments (same woman identity and wardrobe continuity), while changing micro-performance and local action intent by segment.\n"
+        "- Prefer explicit role-grounded wording over generic labels: e.g. \"character_1, the woman from reference\" and \"character_2, the man from reference\" when those cast references exist.\n"
         "- Keep prompts within the same club-family world while differentiating local visual pockets (entrance shadow, reflective glass, bar threshold, face-light pivot, dance-floor edge anticipation, performance threshold, shadow retreat, afterglow observation).\n"
         "- Use prompt_rows.local_zone_hint as deterministic local pocket guidance and keep progression coherent; do not invent a new venue or cast.\n"
         "- Lighting/atmosphere should evolve per beat within one light family with pocket-level differences in density and contrast; avoid flat repeated prose.\n"
@@ -2922,6 +2934,72 @@ def _repair_prompts_v11_required_fields(
     }
 
 
+def _apply_storyboard_stage_metadata_passthrough(
+    prompts_v11: dict[str, Any],
+    prompt_rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    patched = dict(prompts_v11)
+    storyboard_by_segment = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in prompt_rows
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    role_fields = ("primary_role", "visual_focus_role", "speaker_role", "reaction_role")
+    lipsync_fields = (
+        "lip_sync_allowed",
+        "lip_sync_priority",
+        "mouth_visible_required",
+        "listener_reaction_allowed",
+        "spoken_line",
+        "speaker_confidence",
+    )
+
+    segments_out: list[dict[str, Any]] = []
+    role_present_count = 0
+    lipsync_present_count = 0
+    missing_role_segments: list[str] = []
+    ia2v_audio_driven_count = 0
+    for raw_segment in _safe_list(prompts_v11.get("segments")):
+        segment = dict(_safe_dict(raw_segment))
+        segment_id = str(segment.get("segment_id") or "").strip()
+        storyboard_row = _safe_dict(storyboard_by_segment.get(segment_id))
+        route = str(segment.get("route") or storyboard_row.get("route") or "i2v").strip().lower() or "i2v"
+        segment["route"] = route
+
+        segment["primary_role"] = str(storyboard_row.get("primary_role") or "").strip()
+        segment["visual_focus_role"] = str(storyboard_row.get("visual_focus_role") or "").strip()
+        segment["speaker_role"] = str(storyboard_row.get("speaker_role") or "").strip()
+        segment["reaction_role"] = str(storyboard_row.get("reaction_role") or "").strip()
+        segment["spoken_line"] = str(storyboard_row.get("spoken_line") or "").strip()
+        segment["lip_sync_priority"] = str(storyboard_row.get("lip_sync_priority") or "").strip()
+        segment["speaker_confidence"] = str(storyboard_row.get("speaker_confidence") or "").strip()
+        segment["lip_sync_allowed"] = bool(storyboard_row.get("lip_sync_allowed"))
+        segment["mouth_visible_required"] = bool(storyboard_row.get("mouth_visible_required"))
+        segment["listener_reaction_allowed"] = bool(storyboard_row.get("listener_reaction_allowed"))
+
+        role_complete = all(str(segment.get(field) or "").strip() for field in role_fields)
+        lipsync_complete = all(field in segment for field in lipsync_fields)
+        if role_complete:
+            role_present_count += 1
+        else:
+            missing_role_segments.append(segment_id)
+        if lipsync_complete:
+            lipsync_present_count += 1
+
+        if route == "ia2v" and bool(segment.get("lip_sync_allowed")):
+            ia2v_audio_driven_count += 1
+
+        segments_out.append(segment)
+
+    patched["segments"] = segments_out
+    return patched, {
+        "scene_prompts_role_metadata_present_count": role_present_count,
+        "scene_prompts_lipsync_metadata_present_count": lipsync_present_count,
+        "scene_prompts_missing_role_metadata_segments": [seg for seg in missing_role_segments if seg],
+        "scene_prompts_ia2v_audio_driven_count": ia2v_audio_driven_count,
+    }
+
+
 def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[str, Any]]) -> dict[str, Any]:
     # Deterministic compatibility bridge only (derived from canonical v1.1; no creative authorship).
     by_segment = {str(_safe_dict(row).get("segment_id") or ""): _safe_dict(row) for row in _safe_list(prompts_v11.get("segments"))}
@@ -2945,6 +3023,22 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
                 "photo_prompt": photo_prompt,
                 "video_prompt": video_prompt,
                 "negative_prompt": negative_prompt,
+                "primary_role": str(seg.get("primary_role") or row.get("primary_role") or "").strip(),
+                "visual_focus_role": str(seg.get("visual_focus_role") or row.get("visual_focus_role") or "").strip(),
+                "speaker_role": str(seg.get("speaker_role") or row.get("speaker_role") or "").strip(),
+                "reaction_role": str(seg.get("reaction_role") or row.get("reaction_role") or "").strip(),
+                "lip_sync_allowed": bool(seg.get("lip_sync_allowed") if "lip_sync_allowed" in seg else row.get("lip_sync_allowed")),
+                "lip_sync_priority": str(seg.get("lip_sync_priority") or row.get("lip_sync_priority") or "").strip(),
+                "mouth_visible_required": bool(
+                    seg.get("mouth_visible_required") if "mouth_visible_required" in seg else row.get("mouth_visible_required")
+                ),
+                "listener_reaction_allowed": bool(
+                    seg.get("listener_reaction_allowed")
+                    if "listener_reaction_allowed" in seg
+                    else row.get("listener_reaction_allowed")
+                ),
+                "spoken_line": str(seg.get("spoken_line") or row.get("spoken_line") or "").strip(),
+                "speaker_confidence": str(seg.get("speaker_confidence") or row.get("speaker_confidence") or "").strip(),
                 "positive_video_prompt": video_prompt,
                 "negative_video_prompt": negative_prompt,
                 "start_image_prompt": start_prompt if route == "first_last" else "",
@@ -3146,6 +3240,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_rebuilt_count": 0,
         "scene_prompts_rebuilt_scene_ids": [],
         "scene_prompts_valid_count": 0,
+        "scene_prompts_role_metadata_present_count": 0,
+        "scene_prompts_lipsync_metadata_present_count": 0,
+        "scene_prompts_missing_role_metadata_segments": [],
+        "scene_prompts_ia2v_audio_driven_count": 0,
         "scene_prompts_legacy_bridge_used": False,
         "active_video_model_capability_profile": active_model_id,
         "active_route_capability_mode": route_capability_mode,
@@ -3213,6 +3311,8 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
     diagnostics.update(de_technicalization_diag)
     raw_payload, required_fields_diag = _repair_prompts_v11_required_fields(raw_payload, prompt_rows, story_core)
     diagnostics.update(required_fields_diag)
+    raw_payload, passthrough_diag = _apply_storyboard_stage_metadata_passthrough(raw_payload, prompt_rows)
+    diagnostics.update(passthrough_diag)
 
     error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
     if int(diagnostics.get("scene_prompts_empty_count") or 0) > 0:
