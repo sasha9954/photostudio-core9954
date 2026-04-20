@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any
 
@@ -144,6 +145,23 @@ def _append_prompt_clause(base: str, clause: str) -> str:
     if not text:
         return part
     return f"{text.rstrip('. ')}. {part}"
+
+
+def _coerce_speaker_confidence(value: Any) -> Any:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return value if isinstance(value, int) or math.isfinite(value) else None
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = float(text)
+    except ValueError:
+        return text
+    if not math.isfinite(parsed):
+        return None
+    return int(parsed) if parsed.is_integer() else parsed
 
 
 def _compact_prompt_payload(value: Any) -> Any:
@@ -2306,25 +2324,25 @@ _WORLD_DRIFT_TOKENS = (
 )
 
 _LOCAL_ZONE_FALLBACK_SEQUENCE = (
-    "entrance shadow pocket",
-    "reflective glass pocket",
-    "bar threshold pocket",
+    "entry transition pocket",
+    "reflective transition pocket",
+    "threshold transition pocket",
     "face-light pivot pocket",
-    "dance-floor edge anticipation pocket",
-    "performance-dominant threshold pocket",
-    "shadow retreat release pocket",
-    "afterglow lingering observation pocket",
+    "anticipation edge pocket",
+    "peak-threshold pocket",
+    "retreat release pocket",
+    "lingering observation pocket",
 )
 
 _LOCAL_ZONE_HINT_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("entrance shadow pocket", ("entrance", "arrival", "approach", "door", "intro", "shadow", "hide", "conceal")),
-    ("reflective glass pocket", ("reflect", "reflection", "mirror", "glass", "window", "chrome", "gloss", "shimmer")),
-    ("bar threshold pocket", ("bar", "counter", "stool", "pour", "drink", "bottle", "neat")),
+    ("entry transition pocket", ("entrance", "arrival", "approach", "door", "intro", "shadow", "hide", "conceal")),
+    ("reflective transition pocket", ("reflect", "reflection", "mirror", "glass", "window", "chrome", "gloss", "shimmer")),
+    ("threshold transition pocket", ("threshold", "border", "edge", "crossing", "handoff", "pivot")),
     ("face-light pivot pocket", ("face", "portrait", "close", "intimate", "pivot", "turn", "gaze", "eye contact")),
-    ("dance-floor edge anticipation pocket", ("dance", "floor", "edge", "anticipation", "build", "pre-drop", "rise")),
-    ("performance-dominant threshold pocket", ("performance", "dominant", "climax", "peak", "front", "center")),
-    ("shadow retreat release pocket", ("retreat", "withdraw", "cooldown", "recover", "exhale", "release", "backstep")),
-    ("afterglow lingering observation pocket", ("afterglow", "linger", "observ", "settle", "ending", "outro", "resolve", "calm")),
+    ("anticipation edge pocket", ("anticipation", "build", "rise", "suspense", "edge")),
+    ("peak-threshold pocket", ("performance", "dominant", "climax", "peak", "front", "center")),
+    ("retreat release pocket", ("retreat", "withdraw", "cooldown", "recover", "exhale", "release", "backstep")),
+    ("lingering observation pocket", ("afterglow", "linger", "observ", "settle", "ending", "outro", "resolve", "calm")),
 )
 
 _CAMERA_TECH_LEAK_REGEXES: tuple[re.Pattern[str], ...] = (
@@ -2482,7 +2500,7 @@ def _build_prompt_rows(package: dict[str, Any]) -> tuple[list[dict[str, Any]], d
                 "mouth_visible_required": bool(scene_row.get("mouth_visible_required")),
                 "listener_reaction_allowed": bool(scene_row.get("listener_reaction_allowed")),
                 "reaction_role": str(scene_row.get("reaction_role") or "").strip(),
-                "speaker_confidence": str(scene_row.get("speaker_confidence") or "").strip(),
+                "speaker_confidence": _coerce_speaker_confidence(scene_row.get("speaker_confidence")),
                 "emotional_key": str(narrative_row.get("emotional_key") or scene_row.get("emotional_intent") or "").strip(),
                 "beat_purpose": str(narrative_row.get("beat_purpose") or scene_row.get("scene_goal") or "").strip(),
             }
@@ -2704,8 +2722,7 @@ def _build_prompts_v11_prompt(
         "- Forbidden literal leakage examples in final prompt text: stable framing, push-in, pull-back, lateral tracking, dolly, zoom, camera move, tracking shot, medium shot, close-up, wide shot.\n"
         "- Make photo_prompt and video_prompt stable/specific across segments (same woman identity and wardrobe continuity), while changing micro-performance and local action intent by segment.\n"
         "- Prefer explicit role-grounded wording over generic labels: e.g. \"character_1, the woman from reference\" and \"character_2, the man from reference\" when those cast references exist.\n"
-        "- Keep prompts within the same club-family world while differentiating local visual pockets (entrance shadow, reflective glass, bar threshold, face-light pivot, dance-floor edge anticipation, performance threshold, shadow retreat, afterglow observation).\n"
-        "- Use prompt_rows.local_zone_hint as deterministic local pocket guidance and keep progression coherent; do not invent a new venue or cast.\n"
+        "- Keep prompts within the same world family defined by story_core/world_lock and user input. Use local_zone_hint only as deterministic local pocket guidance. Do not invent a new venue or cast.\n"
         "- Lighting/atmosphere should evolve per beat within one light family with pocket-level differences in density and contrast; avoid flat repeated prose.\n"
         "- Express segment-to-segment emotional curve with compact beat language (anticipation -> peak -> release -> lingering afterglow) while preserving continuity.\n"
         "- Use descriptive framing language (intimate/nearer/opener/layered/deeper) allowed; avoid camera-tech jargon.\n"
@@ -2944,7 +2961,7 @@ def _apply_storyboard_stage_metadata_passthrough(
         for row in prompt_rows
         if str(_safe_dict(row).get("segment_id") or "").strip()
     }
-    role_fields = ("primary_role", "visual_focus_role", "speaker_role", "reaction_role")
+    role_fields = ("primary_role", "visual_focus_role", "speaker_role")
     lipsync_fields = (
         "lip_sync_allowed",
         "lip_sync_priority",
@@ -2972,12 +2989,17 @@ def _apply_storyboard_stage_metadata_passthrough(
         segment["reaction_role"] = str(storyboard_row.get("reaction_role") or "").strip()
         segment["spoken_line"] = str(storyboard_row.get("spoken_line") or "").strip()
         segment["lip_sync_priority"] = str(storyboard_row.get("lip_sync_priority") or "").strip()
-        segment["speaker_confidence"] = str(storyboard_row.get("speaker_confidence") or "").strip()
+        segment["speaker_confidence"] = _coerce_speaker_confidence(storyboard_row.get("speaker_confidence"))
         segment["lip_sync_allowed"] = bool(storyboard_row.get("lip_sync_allowed"))
         segment["mouth_visible_required"] = bool(storyboard_row.get("mouth_visible_required"))
         segment["listener_reaction_allowed"] = bool(storyboard_row.get("listener_reaction_allowed"))
 
         role_complete = all(str(segment.get(field) or "").strip() for field in role_fields)
+        reaction_required = bool(segment.get("listener_reaction_allowed")) or (
+            str(segment.get("visual_focus_role") or "").strip() != str(segment.get("speaker_role") or "").strip()
+        )
+        if reaction_required and not str(segment.get("reaction_role") or "").strip():
+            role_complete = False
         lipsync_complete = all(field in segment for field in lipsync_fields)
         if role_complete:
             role_present_count += 1
@@ -3038,7 +3060,9 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
                     else row.get("listener_reaction_allowed")
                 ),
                 "spoken_line": str(seg.get("spoken_line") or row.get("spoken_line") or "").strip(),
-                "speaker_confidence": str(seg.get("speaker_confidence") or row.get("speaker_confidence") or "").strip(),
+                "speaker_confidence": _coerce_speaker_confidence(
+                    seg.get("speaker_confidence") if "speaker_confidence" in seg else row.get("speaker_confidence")
+                ),
                 "positive_video_prompt": video_prompt,
                 "negative_video_prompt": negative_prompt,
                 "start_image_prompt": start_prompt if route == "first_last" else "",
