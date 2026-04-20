@@ -992,33 +992,43 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     : "9:16";
   const routeStrategyModeRaw = String(state?.routeStrategyMode || "auto").trim().toLowerCase();
   const routeStrategyMode = ["auto", "preset", "custom_counts"].includes(routeStrategyModeRaw) ? routeStrategyModeRaw : "auto";
+  const isAutoRouteStrategy = routeStrategyMode === "auto";
+  const isPresetRouteStrategy = routeStrategyMode === "preset";
   const routeStrategyPreset = String(state?.routeStrategyPreset || "balanced_50_25_25").trim();
   const baseSceneCount = Math.max(1, Number(state?.baseSceneCount || 8) || 8);
   const routeBlockDurationSec = Math.max(10, Number(state?.routeBlockDurationSec || 30) || 30);
   const presetTargets = ROUTE_STRATEGY_PRESET_MAP[routeStrategyPreset] || ROUTE_STRATEGY_PRESET_MAP.balanced_50_25_25;
   const sourceTargets = state?.routeTargetsPerBlock && typeof state.routeTargetsPerBlock === "object" ? state.routeTargetsPerBlock : {};
-  const routeTargetsPerBlock = routeStrategyMode === "preset"
+  const routeTargetsPerBlock = isPresetRouteStrategy
     ? { i2v: presetTargets.i2v, ia2v: presetTargets.ia2v, first_last: presetTargets.first_last }
     : {
       i2v: Math.max(0, Number(sourceTargets?.i2v ?? presetTargets.i2v) || 0),
       ia2v: Math.max(0, Number(sourceTargets?.ia2v ?? presetTargets.ia2v) || 0),
       first_last: Math.max(0, Number(sourceTargets?.first_last ?? presetTargets.first_last) || 0),
     };
-  const autoTargets = { i2v: 4, ia2v: 2, first_last: 2 };
-  const effectiveTargets = routeStrategyMode === "auto" ? autoTargets : routeTargetsPerBlock;
-  const i2vRatio = Math.max(0, Math.min(1, Number((effectiveTargets.i2v / baseSceneCount).toFixed(3))));
-  const lipsyncRatio = Math.max(0, Math.min(1, Number((effectiveTargets.ia2v / baseSceneCount).toFixed(3))));
-  const firstLastRatio = Math.max(0, Math.min(1, Number((effectiveTargets.first_last / baseSceneCount).toFixed(3))));
+  const payloadRouteStrategyPreset = isPresetRouteStrategy ? routeStrategyPreset : "";
+  const payloadRouteTargets = isAutoRouteStrategy ? {} : routeTargetsPerBlock;
+  const i2vRatio = isAutoRouteStrategy
+    ? 0.5
+    : Math.max(0, Math.min(1, Number((routeTargetsPerBlock.i2v / baseSceneCount).toFixed(3))));
+  const lipsyncRatio = isAutoRouteStrategy
+    ? 0.25
+    : Math.max(0, Math.min(1, Number((routeTargetsPerBlock.ia2v / baseSceneCount).toFixed(3))));
+  const firstLastRatio = isAutoRouteStrategy
+    ? 0.25
+    : Math.max(0, Math.min(1, Number((routeTargetsPerBlock.first_last / baseSceneCount).toFixed(3))));
   const maxConsecutiveIa2v = Math.max(1, Math.min(8, Number(state?.maxConsecutiveIa2v ?? presetTargets.maxConsecutiveIa2v ?? 2) || 2));
-  const maxConsecutiveLipsync = Math.max(1, Math.min(8, Number(state?.maxConsecutiveLipsync ?? maxConsecutiveIa2v ?? 2) || 2));
-  const routeMixMode = routeStrategyMode === "auto" ? "auto" : "custom";
+  const maxConsecutiveLipsync = isAutoRouteStrategy
+    ? 2
+    : Math.max(1, Math.min(8, Number(state?.maxConsecutiveLipsync ?? maxConsecutiveIa2v ?? 2) || 2));
+  const routeMixMode = isAutoRouteStrategy ? "auto" : "custom";
   const creativeConfig = {
     route_strategy_mode: routeStrategyMode,
-    route_strategy_preset: routeStrategyPreset,
+    route_strategy_preset: payloadRouteStrategyPreset,
     route_block_duration_sec: routeBlockDurationSec,
     base_scene_count: baseSceneCount,
     extra_scene_policy: String(state?.extraScenePolicy || "add_i2v") || "add_i2v",
-    route_targets_per_block: effectiveTargets,
+    route_targets_per_block: payloadRouteTargets,
     max_consecutive_ia2v: maxConsecutiveIa2v,
     max_consecutive_lipsync: maxConsecutiveLipsync,
     targets_are_soft: state?.targetsAreSoft !== false,
