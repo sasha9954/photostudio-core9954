@@ -861,9 +861,9 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "speaker_role is independent from primary_role: primary_role is visual focus; speaker_role is who actually speaks this segment.\\n"
         "audio_map.segments[].is_lip_sync_candidate is permission only, not obligation.\\n"
         "Use audio_map.vocal_gender and audio_map.vocal_owner_role as strict voice ownership guard for lip-sync.\\n"
-        "If lip_sync_allowed=true then speaker_role must be known and must equal audio_map.vocal_owner_role.\\n"
-        "If vocal owner is unknown/mixed/uncertain then set speaker_role=unknown and lip_sync_allowed=false for safety.\\n"
-        "If who speaks is unclear or overlapping voices: set speaker_role=unknown and lip_sync_allowed=false.\\n"
+        "If lip_sync_allowed=true then speaker_role must equal audio_map.vocal_owner_role.\\n"
+        "For i2v scenes, set speaker_role to an empty string. Do not use 'unknown'.\\n"
+        "For ia2v scenes, speaker_role must be character_1.\\n"
         "For two-active conflict scenes keep lip-sync sparse: strong lines only, no more than 2 consecutive lip-sync scenes.\\n"
         "Do not output prompt language, quality buzzwords, renderer parameters, API/workflow payload, or final video payload.\\n"
         "Do not use raw director text as free authoring source beyond this package context.\\n"
@@ -895,7 +895,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "Output contract:\\n"
         "{\\n"
         '  "scenes_version":"1.1",\\n'
-        '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","speaker_role":"unknown","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
+        '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","speaker_role":"","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
         "}\\n\\n"
         f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )
@@ -1689,7 +1689,7 @@ def _normalize_scene_plan(
         role_primary = str(role_row.get("primary_role") or "").strip()
         primary_role = role_primary if role_primary in active_roles else (active_roles[0] if active_roles else "")
         visual_focus_role = primary_role
-        speaker_role = str(raw_row.get("speaker_role") or UNKNOWN_SPEAKER_ROLE).strip() or UNKNOWN_SPEAKER_ROLE
+        speaker_role = str(raw_row.get("speaker_role") or "").strip()
         spoken_line = str(raw_row.get("spoken_line") or "").strip()
         lip_sync_allowed = bool(raw_row.get("lip_sync_allowed"))
         lip_sync_priority = str(raw_row.get("lip_sync_priority") or "none").strip().lower() or "none"
@@ -1701,34 +1701,30 @@ def _normalize_scene_plan(
         transcript_slice = str(source_row.get("transcript_slice") or "").strip()
         row_vocal_owner_role = str(raw_row.get("vocal_owner_role") or vocal_owner_role or UNKNOWN_VOCAL_OWNER_ROLE).strip() or UNKNOWN_VOCAL_OWNER_ROLE
 
-        has_audio_speech_evidence = bool(spoken_line or transcript_slice or is_lip_sync_candidate)
-        if (
-            route == "ia2v"
-            and speaker_role == UNKNOWN_SPEAKER_ROLE
-            and len(active_roles) == 1
-            and has_audio_speech_evidence
-        ):
-            fallback_single_role = active_roles[0]
-            speaker_role = fallback_single_role
-            row_vocal_owner_role = fallback_single_role
-            speaker_confidence = max(0.75, speaker_confidence)
-            lip_sync_allowed = True
-            lip_sync_priority = lip_sync_priority if lip_sync_priority in {"high", "medium"} else "high"
+        if route == "ia2v":
+            speaker_role = "character_1"
             mouth_visible_required = True
+            if transcript_slice and not spoken_line:
+                spoken_line = transcript_slice
+        else:
+            speaker_role = ""
+            lip_sync_allowed = False
+            lip_sync_priority = "none"
+            mouth_visible_required = False
 
         row_rejected_reasons: list[str] = []
-        if speaker_role != UNKNOWN_SPEAKER_ROLE and speaker_role not in active_roles:
+        if speaker_role and speaker_role not in active_roles:
             speaker_role_invalid_count += 1
             row_rejected_reasons.append("speaker_role_not_in_present_cast")
         if lip_sync_priority not in ALLOWED_LIP_SYNC_PRIORITY:
             enum_invalid_count += 1
             row_rejected_reasons.append("lip_sync_priority_invalid")
-        if lip_sync_allowed and speaker_role == UNKNOWN_SPEAKER_ROLE:
+        if lip_sync_allowed and not speaker_role:
             speaker_role_invalid_count += 1
             row_rejected_reasons.append("lip_sync_with_unknown_speaker")
         if lip_sync_allowed and not (spoken_line or transcript_slice):
             row_rejected_reasons.append("lip_sync_without_spoken_line")
-        if route == "ia2v" and lip_sync_allowed and speaker_role == UNKNOWN_SPEAKER_ROLE:
+        if route == "ia2v" and lip_sync_allowed and not speaker_role:
             speaker_role_invalid_count += 1
             row_rejected_reasons.append("route_ia2v_lipsync_requires_speaker_role")
             row_rejected_reasons.append("ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow")
@@ -1754,7 +1750,7 @@ def _normalize_scene_plan(
             row_rejected_reasons.append("reaction_role_equals_speaker_role")
 
         if route == "ia2v":
-            if speaker_role in active_roles and speaker_role != UNKNOWN_SPEAKER_ROLE:
+            if speaker_role in active_roles and speaker_role:
                 visual_focus_role = speaker_role
             elif primary_role:
                 visual_focus_role = primary_role
@@ -1779,20 +1775,28 @@ def _normalize_scene_plan(
                 route = "i2v"
             lip_sync_priority = "none"
             mouth_visible_required = False
-            if speaker_role not in active_roles:
-                speaker_role = UNKNOWN_SPEAKER_ROLE
-            if speaker_role == UNKNOWN_SPEAKER_ROLE:
-                speaker_confidence = 0.0
-            validation_error = validation_error or "speaker_role_invalid"
-            if "SCENE_LIPSYNC_VOICE_ROLE_MISMATCH" in row_rejected_reasons:
-                error_code = error_code or "SCENE_LIPSYNC_VOICE_ROLE_MISMATCH"
+            if route == "ia2v":
+                speaker_role = "character_1"
             else:
+                speaker_role = ""
+            if not speaker_role:
+                speaker_confidence = 0.0
+            if route == "ia2v" and speaker_role != "character_1":
+                validation_error = validation_error or "speaker_role_invalid"
                 error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
         if not reaction_role:
             reaction_role = ""
         elif reaction_role not in active_roles:
             reaction_role = ""
+
+        if route == "ia2v":
+            speaker_role = "character_1"
+            mouth_visible_required = True
+            if transcript_slice and not spoken_line:
+                spoken_line = transcript_slice
+        else:
+            speaker_role = ""
 
         if lip_sync_allowed:
             consecutive_lip_sync_count += 1
@@ -1881,7 +1885,7 @@ def _normalize_scene_plan(
                 "motion_intent": str(motion.get("subject_motion") or ""),
                 "primary_role": str(row.get("primary_role") or ""),
                 "visual_focus_role": str(row.get("visual_focus_role") or ""),
-                "speaker_role": str(row.get("speaker_role") or UNKNOWN_SPEAKER_ROLE),
+                "speaker_role": str(row.get("speaker_role") or ""),
                 "vocal_owner_role": str(row.get("vocal_owner_role") or UNKNOWN_VOCAL_OWNER_ROLE),
                 "spoken_line": str(row.get("spoken_line") or ""),
                 "lip_sync_allowed": bool(row.get("lip_sync_allowed")),

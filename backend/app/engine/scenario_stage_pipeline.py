@@ -238,6 +238,47 @@ def _can_reuse_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     return status == "done" and _has_stage_output(package, stage_id)
 
 
+def _stage_is_marked_stale_or_invalid(package: dict[str, Any], stage_id: str) -> bool:
+    stage_state = _safe_dict(_safe_dict(package).get("stage_statuses")).get(stage_id)
+    row = _safe_dict(stage_state)
+    status = str(row.get("status") or "").strip().lower()
+    if status == "stale":
+        return True
+    for key in (
+        "invalidated",
+        "invalid",
+        "dirty",
+        "stale",
+        "staleReason",
+        "stale_reason",
+        "invalidateReason",
+        "invalidatedReason",
+    ):
+        value = row.get(key)
+        if isinstance(value, bool) and value:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
+def _can_run_scene_prompts_from_existing_scene_plan(package: dict[str, Any]) -> bool:
+    pkg = _safe_dict(package)
+    scene_plan_ready = _can_reuse_stage_output(pkg, "scene_plan")
+    if not scene_plan_ready or _stage_is_marked_stale_or_invalid(pkg, "scene_plan"):
+        return False
+    required_upstream = ("input_package", "audio_map", "story_core", "role_plan")
+    if not all(_has_stage_output(pkg, stage) for stage in required_upstream):
+        return False
+    diagnostics = _safe_dict(pkg.get("diagnostics"))
+    previous_signature = str(diagnostics.get("scene_prompts_upstream_signature") or "").strip()
+    if previous_signature:
+        current_signature = _scene_prompts_upstream_signature(pkg)
+        if previous_signature != current_signature:
+            return False
+    return True
+
+
 def _is_audio_map_dependency_satisfied(package: dict[str, Any]) -> bool:
     audio_map = _safe_dict(_safe_dict(package).get("audio_map"))
     if not _safe_list(audio_map.get("segments")):
@@ -1296,7 +1337,8 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
     role_plan["scene_prompt_rules"] = {
         "speaker_role_rule": (
             "Only ia2v scenes may include speaker_role, and it must be character_1. "
-            "For i2v scenes, leave speaker_role as unknown/empty according to schema."
+            "For i2v scenes, set speaker_role to an empty string. "
+            "Do not use 'unknown'. For ia2v scenes, speaker_role must be character_1."
         ),
         "technical_vocabulary_forbidden": (
             "Do not output internal/backend/debug terminology. "
@@ -1334,8 +1376,9 @@ def _build_scene_plan_retry_feedback(validation_error: str, error_code: str, sce
     if ve == "speaker_role_invalid":
         return (
             base
-            + "\nSpeaker-role rule is strict: only ia2v scenes may include speaker_role and it must be character_1. "
-            "For i2v scenes set speaker_role to unknown/empty as required by schema; do not use character_2, props, or locations as speaker_role."
+            + "\nFor i2v scenes, speaker_role must be an empty string. "
+            "For ia2v scenes, speaker_role must be character_1. "
+            "Do not use unknown/none/location/props/character_2 as speaker_role."
         )
     return base
 
@@ -7581,6 +7624,8 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
+    previous_scene_plan = _safe_dict(package.get("scene_plan"))
+    previous_scene_plan_valid = _has_valid_scene_plan_payload(previous_scene_plan)
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_plan_backend"] = "gemini"
     diagnostics["scene_plan_prompt_version"] = SCENE_PLAN_PROMPT_VERSION
@@ -7629,6 +7674,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
+    diagnostics["scene_plan_snapshot_restored"] = False
+    diagnostics["scene_plan_failure_reason"] = ""
     diagnostics["scene_plan_configured_timeout_sec"] = get_scenario_stage_timeout("scene_plan")
     diagnostics["scene_plan_timeout_stage_policy_name"] = scenario_timeout_policy_name("scene_plan")
     diagnostics["scene_plan_timed_out"] = False
@@ -7779,11 +7826,27 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_plan_invalid")
     package["diagnostics"] = diagnostics
     if hard_fail_error:
-        package["scene_plan"] = {"storyboard": [], "scenes": []}
+        if previous_scene_plan_valid:
+            package["scene_plan"] = _attach_downstream_mode_metadata(previous_scene_plan, package)
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            diagnostics["scene_plan_snapshot_restored"] = True
+            diagnostics["scene_plan_failure_reason"] = str(hard_fail_error)
+            package["diagnostics"] = diagnostics
+            _append_diag_event(package, "scene_plan invalid: restored previous snapshot", stage_id="scene_plan")
+        else:
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            diagnostics["scene_plan_snapshot_restored"] = False
+            diagnostics["scene_plan_failure_reason"] = str(hard_fail_error)
+            package["diagnostics"] = diagnostics
+            _append_diag_event(package, "scene_plan invalid: no previous snapshot", stage_id="scene_plan")
         _append_diag_event(package, f"scene_plan hard fail after retry: {hard_fail_error}", stage_id="scene_plan")
         raise RuntimeError(hard_fail_error)
 
     package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_plan_snapshot_restored"] = False
+    diagnostics["scene_plan_failure_reason"] = ""
+    package["diagnostics"] = diagnostics
 
     if scene_plan and _safe_list(scene_plan.get("storyboard")):
         _append_diag_event(package, "scene_plan generated", stage_id="scene_plan")
@@ -8282,7 +8345,10 @@ def run_manual_stage(
         executed_stage_ids.append(stage_id)
         return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
-    reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
+    if stage_id == "scene_prompts" and _can_run_scene_prompts_from_existing_scene_plan(pkg):
+        reusable_upstream = list(dep_sequence)
+    else:
+        reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
     missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
     continuation_mode = "reuse_existing_package" if not missing_upstream else "recompute_missing_upstream"
     if missing_upstream:
