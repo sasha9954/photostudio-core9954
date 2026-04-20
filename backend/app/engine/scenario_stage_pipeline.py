@@ -684,6 +684,138 @@ def _role_to_ref_key(role: str) -> str:
     return clean if clean.startswith("ref_") else f"ref_{clean}"
 
 
+def _visual_ref_identity_rule(role: str) -> str:
+    clean_role = str(role or "").strip() or "character_1"
+    return (
+        f"{clean_role} identity must be taken from the connected {clean_role} image reference as the canonical source of truth. "
+        "Preserve the same face, age impression, body proportions, hairstyle, clothing, silhouette, and overall visual identity "
+        "from the reference across all scenes. Text descriptions of clothing, age, body, or face are auxiliary only and must not "
+        "override the visual reference."
+    )
+
+
+def _has_connected_visual_ref(
+    package: dict[str, Any],
+    input_pkg: dict[str, Any],
+    refs_inventory: dict[str, Any],
+    role: str,
+) -> tuple[bool, str]:
+    clean_role = str(role or "").strip()
+    if not clean_role:
+        return False, ""
+
+    def _map_has_non_empty_ref_url(raw_map: Any, source_prefix: str) -> tuple[bool, str]:
+        role_map = _safe_dict(raw_map)
+        values = _safe_list(role_map.get(clean_role))
+        if any(bool(str(value or "").strip()) for value in values):
+            return True, f"{source_prefix}.{clean_role}"
+        return False, ""
+
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    checks: list[tuple[bool, str]] = [
+        _map_has_non_empty_ref_url(connected_summary.get("refsPresentByRole"), "input.connected_context_summary.refsPresentByRole"),
+        _map_has_non_empty_ref_url(
+            connected_summary.get("connectedRefsPresentByRole"),
+            "input.connected_context_summary.connectedRefsPresentByRole",
+        ),
+        _map_has_non_empty_ref_url(input_pkg.get("refs_by_role"), "input.refs_by_role"),
+        _map_has_non_empty_ref_url(input_pkg.get("refsByRole"), "input.refsByRole"),
+    ]
+    for has_ref, source in checks:
+        if has_ref:
+            return True, source
+
+    ref_key = _role_to_ref_key(clean_role)
+    inventory_row = _safe_dict(refs_inventory.get(ref_key))
+    if _safe_list(inventory_row.get("refs")):
+        return True, f"refs_inventory.{ref_key}.refs"
+    if str(inventory_row.get("value") or "").strip():
+        return True, f"refs_inventory.{ref_key}.value"
+    return False, ""
+
+
+def _append_visual_ref_auxiliary_note(existing_text: str, role: str) -> str:
+    clean_text = str(existing_text or "").strip()
+    if not clean_text:
+        return ""
+    if "as seen in the reference" in clean_text.lower():
+        return clean_text
+    return f"{clean_text} (auxiliary only, as seen in the reference)"
+
+
+def _apply_visual_ref_identity_lock_to_story_core(
+    story_core: dict[str, Any],
+    story_core_v1: dict[str, Any],
+    role: str,
+) -> None:
+    rule = _visual_ref_identity_rule(role)
+    identity_doctrine = _safe_dict(story_core.get("identity_doctrine"))
+    existing_hero_anchor = str(identity_doctrine.get("hero_anchor") or "").strip()
+    hero_anchor_suffix = _append_visual_ref_auxiliary_note(existing_hero_anchor, role)
+    identity_doctrine["hero_anchor"] = f"{rule} {hero_anchor_suffix}".strip() if hero_anchor_suffix else rule
+    story_core["identity_doctrine"] = identity_doctrine
+    story_core["identity_lock"] = {"rule": rule}
+
+    prompt_contract = _safe_dict(story_core_v1.get("prompt_interface_contract"))
+    constraints = [str(item or "").strip() for item in _safe_list(prompt_contract.get("identity_prompt_constraints")) if str(item or "").strip()]
+    filtered_constraints = [item for item in constraints if item.lower() != rule.lower()]
+    prompt_contract["identity_prompt_constraints"] = [rule, *filtered_constraints]
+    story_core_v1["prompt_interface_contract"] = prompt_contract
+
+
+def _apply_visual_ref_identity_lock_to_role_plan(role_plan: dict[str, Any], role: str) -> None:
+    rule = _visual_ref_identity_rule(role)
+    normalized_aux_rule = "visual reference is canonical; text appearance is auxiliary"
+    must_match_ref = f"must match connected {role} reference exactly"
+    rule_with_aux = f"{rule} {normalized_aux_rule}. {must_match_ref}."
+
+    for row in _safe_list(role_plan.get("roster")):
+        if not isinstance(row, dict):
+            continue
+        row_role = _canonical_subject_id(row.get("role")) or _canonical_subject_id(row.get("id")) or _canonical_subject_id(row.get("character_id"))
+        if row_role != role:
+            continue
+        row["identity_reference_rule"] = rule_with_aux
+        for key in ("continuity_rule", "identity_lock", "appearance", "description", "role_notes"):
+            value = row.get(key)
+            if isinstance(value, str):
+                row[key] = f"{value.strip()} {normalized_aux_rule}; {must_match_ref}.".strip()
+            elif isinstance(value, list):
+                cleaned = [str(item or "").strip() for item in value if str(item or "").strip()]
+                row[key] = [*cleaned, f"{normalized_aux_rule}; {must_match_ref}"]
+
+    for row in _safe_list(role_plan.get("scene_casting")):
+        if not isinstance(row, dict):
+            continue
+        primary_role = _canonical_subject_id(row.get("primary_role"))
+        active_roles = [_canonical_subject_id(item) for item in _safe_list(row.get("active_roles"))]
+        visual_focus_role = _canonical_subject_id(row.get("visual_focus_role"))
+        role_is_present = role in {primary_role, visual_focus_role} or role in [item for item in active_roles if item]
+        if not role_is_present:
+            continue
+        row["identity_source"] = "connected_visual_reference"
+        row["identity_rule"] = rule
+        notes = _safe_list(row.get("notes"))
+        note_line = f"{normalized_aux_rule}; {must_match_ref}"
+        if note_line not in notes:
+            row["notes"] = [*notes, note_line]
+
+
+def _collect_visual_ref_identity_diagnostics(
+    package: dict[str, Any],
+    input_pkg: dict[str, Any],
+    refs_inventory: dict[str, Any],
+) -> tuple[dict[str, bool], dict[str, str]]:
+    applied: dict[str, bool] = {}
+    source: dict[str, str] = {}
+    for role in ("character_1", "character_2", "character_3"):
+        has_ref, ref_source = _has_connected_visual_ref(package, input_pkg, refs_inventory, role)
+        applied[role] = has_ref
+        if has_ref:
+            source[role] = ref_source
+    return applied, source
+
+
 def _build_refs_by_role_fallback(
     refs_inventory: dict[str, Any],
     active_roles: list[Any],
@@ -4409,6 +4541,14 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                         parsed_story_core=story_core,
                         fallback_story_core=fallback,
                     )
+                    visual_ref_applied, visual_ref_source = _collect_visual_ref_identity_diagnostics(
+                        package,
+                        input_pkg,
+                        refs_inventory,
+                    )
+                    for role in ("character_1", "character_2", "character_3"):
+                        if visual_ref_applied.get(role):
+                            _apply_visual_ref_identity_lock_to_story_core(story_core, story_core_v1, role)
                     story_core["story_core_v1"] = story_core_v1
                     package["story_core"] = story_core
                     package["story_core_v1"] = story_core_v1
@@ -4424,6 +4564,8 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     diagnostics["story_core_route_mix_doctrine_ratios"] = _safe_dict(
                         _safe_dict(normalized_core.get("route_mix_doctrine_for_scenes")).get("short_clip_default_target_ratios")
                     )
+                    diagnostics["visual_ref_identity_lock_applied"] = visual_ref_applied
+                    diagnostics["visual_ref_identity_lock_source"] = visual_ref_source
                     package["diagnostics"] = diagnostics
                     _append_diag_event(package, "story_core generated", stage_id="story_core")
                     return package
@@ -6876,6 +7018,11 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         package=package,
     )
     role_plan = _safe_dict(result.get("role_plan"))
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
+    visual_ref_applied, visual_ref_source = _collect_visual_ref_identity_diagnostics(package, input_pkg, refs_inventory)
+    for role in ("character_1", "character_2", "character_3"):
+        if visual_ref_applied.get(role):
+            _apply_visual_ref_identity_lock_to_role_plan(role_plan, role)
     package["role_plan"] = _attach_downstream_mode_metadata(role_plan, package)
 
     role_diag = _safe_dict(result.get("diagnostics"))
@@ -6926,6 +7073,8 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["role_plan_skipped"] = False
     diagnostics["role_plan_skip_reason"] = ""
     diagnostics["role_plan_empty"] = not _has_valid_role_plan_payload(role_plan)
+    diagnostics["visual_ref_identity_lock_applied"] = visual_ref_applied
+    diagnostics["visual_ref_identity_lock_source"] = visual_ref_source
     package["diagnostics"] = diagnostics
 
     role_plan_valid = _has_valid_role_plan_payload(role_plan)
