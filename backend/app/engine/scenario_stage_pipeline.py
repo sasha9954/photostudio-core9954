@@ -1575,6 +1575,215 @@ def _enforce_scene_prompts_identity_and_presence(
     return normalized, validation_error, diagnostics
 
 
+_SCENE_PROMPTS_DETECH_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bpeak[\-\s]?threshold pocket\b", re.IGNORECASE), "quiet kitchen aftermath"),
+    (re.compile(r"\bthreshold pocket\b", re.IGNORECASE), "doorway area"),
+    (re.compile(r"\bpeak[\-\s]?threshold\b", re.IGNORECASE), "emotional turning point"),
+    (re.compile(r"\broute pocket\b", re.IGNORECASE), "scene moment"),
+    (re.compile(r"\btechnical labels?\b", re.IGNORECASE), "on-screen text or UI marks"),
+    (re.compile(r"\bcamera jargon\b", re.IGNORECASE), "unnatural camera instructions"),
+    (re.compile(r"\btechnical jargon\b", re.IGNORECASE), "unnatural wording"),
+    (re.compile(r"\bmetadata\b", re.IGNORECASE), "unwanted text"),
+    (re.compile(r"\bdebug\b", re.IGNORECASE), "unwanted text"),
+    (re.compile(r"\bpayload\b", re.IGNORECASE), "unwanted text"),
+)
+
+_SCENE_PROMPTS_TECHNICAL_FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("peak-threshold pocket", re.compile(r"\bpeak[\-\s]?threshold pocket\b", re.IGNORECASE)),
+    ("threshold pocket", re.compile(r"\bthreshold pocket\b", re.IGNORECASE)),
+    ("peak threshold", re.compile(r"\bpeak[\-\s]?threshold\b", re.IGNORECASE)),
+    ("route pocket", re.compile(r"\broute pocket\b", re.IGNORECASE)),
+    ("technical", re.compile(r"\btechnical\b", re.IGNORECASE)),
+    ("metadata", re.compile(r"\bmetadata\b", re.IGNORECASE)),
+    ("debug", re.compile(r"\bdebug\b", re.IGNORECASE)),
+    ("payload", re.compile(r"\bpayload\b", re.IGNORECASE)),
+    ("route", re.compile(r"\broute\b", re.IGNORECASE)),
+    ("jargon", re.compile(r"\bjargon\b", re.IGNORECASE)),
+    ("labels", re.compile(r"\blabels?\b", re.IGNORECASE)),
+)
+
+
+def _sanitize_scene_prompts_text_value(text: str, *, is_negative_prompt: bool = False) -> tuple[str, bool]:
+    value = " ".join(str(text or "").strip().split())
+    if not value:
+        return "", False
+    original = value
+    for pattern, replacement in _SCENE_PROMPTS_DETECH_REPLACEMENTS:
+        value = pattern.sub(replacement, value)
+    if is_negative_prompt:
+        for _, pattern in _SCENE_PROMPTS_TECHNICAL_FORBIDDEN_PATTERNS:
+            value = pattern.sub("", value)
+        safe_items = ["on-screen text", "UI elements", "watermarks", "artificial overlays", "unnatural wording"]
+        existing_items = [item.strip(" ,;") for item in re.split(r"[,;]", value) if item.strip(" ,;")]
+        merged: list[str] = []
+        for token in [*existing_items, *safe_items]:
+            low = token.lower()
+            if low not in {m.lower() for m in merged}:
+                merged.append(token)
+        value = ", ".join(merged)
+        value = re.sub(r"\s{2,}", " ", value).strip(" ,;")
+        if not value:
+            value = "on-screen text, UI elements, watermarks, artificial overlays"
+    value = re.sub(r"\s{2,}", " ", value).strip(" ,;")
+    return value, value != original
+
+
+def _scene_prompts_diag_field_for_path(path: tuple[str, ...]) -> str:
+    if path == ("photo_prompt",):
+        return "photo_prompt"
+    if path == ("video_prompt",):
+        return "video_prompt"
+    if path in {("negative_prompt",), ("negative_video_prompt",)}:
+        return "negative_prompt"
+    if path == ("prompt_notes", "world_anchor"):
+        return "prompt_notes.world_anchor"
+    if path == ("prompt_notes", "emotion"):
+        return "prompt_notes.emotion"
+    if len(path) >= 3 and path[0] == "prompt_notes" and path[1] == "notes":
+        return "prompt_notes.notes[]"
+    return "nested_strings"
+
+
+def _sanitize_scene_prompts_segment_strings(
+    value: Any,
+    *,
+    path: tuple[str, ...] = (),
+    field_counts: dict[str, int] | None = None,
+) -> tuple[Any, bool]:
+    counts = field_counts if field_counts is not None else {}
+    changed_any = False
+    if isinstance(value, str):
+        key = path[-1] if path else ""
+        rewritten, changed = _sanitize_scene_prompts_text_value(
+            value,
+            is_negative_prompt=key in {"negative_prompt", "negative_video_prompt"},
+        )
+        if changed:
+            diag_field = _scene_prompts_diag_field_for_path(path)
+            counts[diag_field] = int(counts.get(diag_field) or 0) + 1
+        return rewritten, changed
+    if isinstance(value, list):
+        out: list[Any] = []
+        for idx, item in enumerate(value):
+            rewritten, changed = _sanitize_scene_prompts_segment_strings(item, path=path + (str(idx),), field_counts=counts)
+            changed_any = changed_any or changed
+            out.append(rewritten)
+        return out, changed_any
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            key_str = str(key)
+            rewritten, changed = _sanitize_scene_prompts_segment_strings(item, path=path + (key_str,), field_counts=counts)
+            changed_any = changed_any or changed
+            out[key] = rewritten
+        return out, changed_any
+    return value, False
+
+
+def _scan_scene_prompt_segment_for_technical_tagging(segment: dict[str, Any]) -> tuple[str, str]:
+    def _scan(node: Any, current_path: tuple[str, ...]) -> tuple[str, str]:
+        if isinstance(node, str):
+            for token, pattern in _SCENE_PROMPTS_TECHNICAL_FORBIDDEN_PATTERNS:
+                if pattern.search(node):
+                    return token, ".".join(current_path)
+            return "", ""
+        if isinstance(node, list):
+            for idx, item in enumerate(node):
+                token, field = _scan(item, current_path + (str(idx),))
+                if token:
+                    return token, field
+            return "", ""
+        if isinstance(node, dict):
+            for key, item in node.items():
+                token, field = _scan(item, current_path + (str(key),))
+                if token:
+                    return token, field
+            return "", ""
+        return "", ""
+
+    return _scan(segment, ())
+
+
+def _postprocess_scene_prompts_technical_tagging(result: dict[str, Any]) -> dict[str, Any]:
+    prompts = deepcopy(_safe_dict(result.get("scene_prompts")))
+    diagnostics = _safe_dict(result.get("diagnostics"))
+    segments = _safe_list(prompts.get("segments"))
+    changed_segments: list[str] = []
+    field_counts: dict[str, int] = {
+        "photo_prompt": 0,
+        "video_prompt": 0,
+        "negative_prompt": 0,
+        "prompt_notes.world_anchor": 0,
+        "prompt_notes.emotion": 0,
+        "prompt_notes.notes[]": 0,
+        "nested_strings": 0,
+    }
+
+    sanitized_segments: list[dict[str, Any]] = []
+    for segment in segments:
+        raw_segment = _safe_dict(segment)
+        rewritten_segment, changed = _sanitize_scene_prompts_segment_strings(raw_segment, field_counts=field_counts)
+        segment_out = _safe_dict(rewritten_segment)
+        if changed:
+            changed_segments.append(str(segment_out.get("segment_id") or segment_out.get("scene_id") or "").strip())
+        sanitized_segments.append(segment_out)
+    prompts["segments"] = sanitized_segments
+
+    token = ""
+    field = ""
+    tagged_segment_id = ""
+    for idx, segment in enumerate(sanitized_segments):
+        seg_id = str(_safe_dict(segment).get("segment_id") or _safe_dict(segment).get("scene_id") or f"seg_{idx + 1}").strip()
+        token, field = _scan_scene_prompt_segment_for_technical_tagging(_safe_dict(segment))
+        if token:
+            tagged_segment_id = seg_id
+            break
+
+    if token and tagged_segment_id:
+        repaired_segments: list[dict[str, Any]] = []
+        for segment in sanitized_segments:
+            seg = _safe_dict(segment)
+            seg_id = str(seg.get("segment_id") or seg.get("scene_id") or "").strip()
+            if seg_id != tagged_segment_id:
+                repaired_segments.append(seg)
+                continue
+            repaired_segment, _ = _sanitize_scene_prompts_segment_strings(seg, field_counts=field_counts)
+            repaired_segments.append(_safe_dict(repaired_segment))
+        prompts["segments"] = repaired_segments
+        token = ""
+        field = ""
+        tagged_segment_id = ""
+        for idx, segment in enumerate(repaired_segments):
+            seg_id = str(_safe_dict(segment).get("segment_id") or _safe_dict(segment).get("scene_id") or f"seg_{idx + 1}").strip()
+            token, field = _scan_scene_prompt_segment_for_technical_tagging(_safe_dict(segment))
+            if token:
+                tagged_segment_id = seg_id
+                break
+
+    non_zero_counts = {k: v for k, v in field_counts.items() if v > 0}
+    diagnostics["scene_prompts_de_technicalization_applied"] = bool(changed_segments)
+    diagnostics["scene_prompts_de_technicalized_segment_ids"] = [seg for seg in changed_segments if seg]
+    diagnostics["scene_prompts_de_technicalized_field_counts"] = non_zero_counts
+    diagnostics["scene_prompts_technical_tagging_token"] = token
+    diagnostics["scene_prompts_technical_tagging_field"] = field
+    diagnostics["scene_prompts_technical_tagging_segment"] = tagged_segment_id
+
+    if token and tagged_segment_id:
+        result["validation_error"] = f"technical_tagging:{tagged_segment_id}"
+        result["error_code"] = "PROMPTS_TECHNICAL_TAGGING"
+    else:
+        existing_validation_error = str(result.get("validation_error") or "").strip().lower()
+        existing_error_code = str(result.get("error_code") or "").strip().upper()
+        if existing_validation_error.startswith("technical_tagging:"):
+            result["validation_error"] = ""
+        if existing_error_code == "PROMPTS_TECHNICAL_TAGGING":
+            result["error_code"] = ""
+
+    result["scene_prompts"] = prompts
+    result["diagnostics"] = diagnostics
+    return result
+
+
 def _apply_scene_prompts_enforcement_result(
     result: dict[str, Any],
     normalized_scene_prompts: dict[str, Any],
@@ -7981,6 +8190,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         normalized_validation_error,
         normalized_diag,
     )
+    result = _postprocess_scene_prompts_technical_tagging(result)
     initial_validation_error = str(result.get("validation_error") or "").strip()
     if initial_validation_error:
         initial_diag = _safe_dict(result.get("diagnostics"))
@@ -8006,6 +8216,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
             normalized_validation_error,
             normalized_diag,
         )
+        result = _postprocess_scene_prompts_technical_tagging(result)
         if str(result.get("validation_error") or "").strip():
             result["ok"] = False
             result["error"] = str(result.get("error") or result.get("validation_error") or "scene_prompts_validation_failed")
