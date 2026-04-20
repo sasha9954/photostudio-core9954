@@ -284,6 +284,52 @@ def _final_video_prompt_dependency_payload_ok(package: dict[str, Any], dependenc
     return _can_reuse_stage_output(pkg, dependency_stage_id)
 
 
+def _finalize_dependency_payload_ok(package: dict[str, Any], dependency_stage_id: str) -> bool:
+    pkg = _safe_dict(package)
+    diagnostics = _safe_dict(pkg.get("diagnostics"))
+    if dependency_stage_id == "input_package":
+        return bool(_safe_dict(pkg.get("input")))
+    if dependency_stage_id == "audio_map":
+        return _is_audio_map_dependency_satisfied(pkg)
+    if dependency_stage_id == "story_core":
+        story_core = _safe_dict(pkg.get("story_core"))
+        segments = _safe_list(story_core.get("narrative_segments")) or _safe_list(
+            _safe_dict(story_core.get("story_core_v1")).get("narrative_segments")
+        )
+        return bool(story_core) and len(segments) > 0
+    if dependency_stage_id == "role_plan":
+        role_plan = _safe_dict(pkg.get("role_plan"))
+        roster = _safe_list(role_plan.get("roster"))
+        scene_casting = _safe_list(role_plan.get("scene_casting"))
+        coverage_ok = diagnostics.get("role_plan_segment_coverage_ok")
+        return bool(role_plan) and bool(roster) and (bool(scene_casting) or bool(coverage_ok))
+    if dependency_stage_id == "scene_plan":
+        scene_plan = _safe_dict(pkg.get("scene_plan"))
+        storyboard = _safe_list(scene_plan.get("storyboard"))
+        scenes = _safe_list(scene_plan.get("scenes"))
+        segments = _safe_list(scene_plan.get("segments"))
+        coverage_ok = diagnostics.get("scene_plan_segment_coverage_ok")
+        has_rows = bool(storyboard or scenes or segments)
+        if isinstance(coverage_ok, bool):
+            return bool(scene_plan) and has_rows and coverage_ok
+        return bool(scene_plan) and has_rows
+    if dependency_stage_id == "scene_prompts":
+        scene_prompts = _safe_dict(pkg.get("scene_prompts"))
+        scenes = _safe_list(scene_prompts.get("scenes"))
+        segments = _safe_list(scene_prompts.get("segments"))
+        prompts_version = str(scene_prompts.get("prompts_version") or "").strip()
+        count = len(segments) or len(scenes)
+        return bool(scene_prompts) and count > 0 and bool(prompts_version)
+    if dependency_stage_id == "final_video_prompt":
+        final_video_prompt = _safe_dict(pkg.get("final_video_prompt"))
+        scenes = _safe_list(final_video_prompt.get("scenes"))
+        segments = _safe_list(final_video_prompt.get("segments"))
+        delivery_version = str(final_video_prompt.get("delivery_version") or "").strip()
+        count = len(segments) or len(scenes)
+        return bool(final_video_prompt) and count > 0 and bool(delivery_version)
+    return _can_reuse_stage_output(pkg, dependency_stage_id)
+
+
 def _final_video_prompt_dependency_reason(package: dict[str, Any], dependency_stage_id: str) -> str:
     pkg = _safe_dict(package)
     diagnostics = _safe_dict(pkg.get("diagnostics"))
@@ -333,6 +379,66 @@ def _final_video_prompt_dependency_reason(package: dict[str, Any], dependency_st
     return f"missing_{dependency_stage_id}_payload"
 
 
+def _finalize_dependency_reason(package: dict[str, Any], dependency_stage_id: str) -> str:
+    pkg = _safe_dict(package)
+    diagnostics = _safe_dict(pkg.get("diagnostics"))
+    if dependency_stage_id == "input_package":
+        return "" if bool(_safe_dict(pkg.get("input"))) else "missing_input_package_payload"
+    if dependency_stage_id == "audio_map":
+        return "" if _is_audio_map_dependency_satisfied(pkg) else "missing_audio_map_payload"
+    if dependency_stage_id == "story_core":
+        story_core = _safe_dict(pkg.get("story_core"))
+        if not story_core:
+            return "missing_story_core_payload"
+        segments = _safe_list(story_core.get("narrative_segments")) or _safe_list(
+            _safe_dict(story_core.get("story_core_v1")).get("narrative_segments")
+        )
+        return "" if segments else "empty_story_core_segments"
+    if dependency_stage_id == "role_plan":
+        role_plan = _safe_dict(pkg.get("role_plan"))
+        if not role_plan:
+            return "missing_role_plan_payload"
+        if not _safe_list(role_plan.get("roster")):
+            return "missing_role_plan_payload"
+        has_scene_casting = bool(_safe_list(role_plan.get("scene_casting")))
+        has_coverage = bool(diagnostics.get("role_plan_segment_coverage_ok"))
+        return "" if (has_scene_casting or has_coverage) else "empty_role_plan_scene_casting"
+    if dependency_stage_id == "scene_plan":
+        scene_plan = _safe_dict(pkg.get("scene_plan"))
+        if not scene_plan:
+            return "missing_scene_plan_payload"
+        rows = (
+            _safe_list(scene_plan.get("storyboard"))
+            or _safe_list(scene_plan.get("scenes"))
+            or _safe_list(scene_plan.get("segments"))
+        )
+        if not rows:
+            return "empty_scene_plan_storyboard"
+        coverage_ok = diagnostics.get("scene_plan_segment_coverage_ok")
+        if isinstance(coverage_ok, bool) and not coverage_ok:
+            return "empty_scene_plan_storyboard"
+        return ""
+    if dependency_stage_id == "scene_prompts":
+        scene_prompts = _safe_dict(pkg.get("scene_prompts"))
+        if not scene_prompts:
+            return "missing_scene_prompts_payload"
+        scenes = _safe_list(scene_prompts.get("scenes")) or _safe_list(scene_prompts.get("segments"))
+        if not scenes:
+            return "empty_scene_prompts_scenes"
+        prompts_version = str(scene_prompts.get("prompts_version") or "").strip()
+        return "" if prompts_version else "missing_scene_prompts_prompts_version"
+    if dependency_stage_id == "final_video_prompt":
+        final_video_prompt = _safe_dict(pkg.get("final_video_prompt"))
+        if not final_video_prompt:
+            return "missing_final_video_prompt_payload"
+        segments = _safe_list(final_video_prompt.get("segments")) or _safe_list(final_video_prompt.get("scenes"))
+        if not segments:
+            return "empty_final_video_prompt_segments"
+        delivery_version = str(final_video_prompt.get("delivery_version") or "").strip()
+        return "" if delivery_version else "missing_final_video_prompt_delivery_version"
+    return f"missing_{dependency_stage_id}_payload"
+
+
 def _collect_final_video_prompt_dependency_gate_state(
     package: dict[str, Any], dependencies: list[str]
 ) -> tuple[list[str], dict[str, bool], dict[str, str], bool]:
@@ -355,6 +461,28 @@ def _collect_final_video_prompt_dependency_gate_state(
     return missing_reasons, payload_ok_by_stage, status_by_stage, false_positive_prevented
 
 
+def _collect_finalize_dependency_gate_state(
+    package: dict[str, Any], dependencies: list[str]
+) -> tuple[list[str], dict[str, bool], dict[str, str], bool]:
+    pkg = _safe_dict(package)
+    statuses = _safe_dict(pkg.get("stage_statuses"))
+    payload_ok_by_stage: dict[str, bool] = {}
+    status_by_stage: dict[str, str] = {}
+    missing_reasons: list[str] = []
+    false_positive_prevented = False
+    for dep_stage in dependencies:
+        payload_ok = _finalize_dependency_payload_ok(pkg, dep_stage)
+        payload_ok_by_stage[dep_stage] = payload_ok
+        dep_status = str(_safe_dict(statuses.get(dep_stage)).get("status") or "").strip().lower()
+        status_by_stage[dep_stage] = dep_status
+        if dep_status == "stale" and payload_ok:
+            false_positive_prevented = True
+        if not payload_ok:
+            reason = _finalize_dependency_reason(pkg, dep_stage)
+            missing_reasons.append(reason or f"missing_{dep_stage}_payload")
+    return missing_reasons, payload_ok_by_stage, status_by_stage, false_positive_prevented
+
+
 def _restore_payload_valid_upstream_statuses_for_stage(
     pkg: dict[str, Any],
     stage_id: str,
@@ -368,19 +496,18 @@ def _restore_payload_valid_upstream_statuses_for_stage(
     diagnostics["final_video_prompt_reused_upstream_statuses_restored"] = False
     diagnostics["final_video_prompt_reused_upstream_statuses_restored_stages"] = []
     diagnostics["final_video_prompt_reused_upstream_status_restore_reason"] = restore_reason
-    if stage_id != "final_video_prompt":
+    diagnostics["finalize_reused_upstream_statuses_restored"] = False
+    diagnostics["finalize_reused_upstream_statuses_restored_stages"] = []
+    diagnostics["finalize_reused_upstream_status_restore_reason"] = restore_reason
+    if stage_id not in {"final_video_prompt", "finalize"}:
         package["diagnostics"] = diagnostics
         return package
 
     statuses = _safe_dict(package.get("stage_statuses"))
     allowed_deps = {
-        "input_package",
-        "audio_map",
-        "story_core",
-        "role_plan",
-        "scene_plan",
-        "scene_prompts",
-    }
+        "final_video_prompt": {"input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts"},
+        "finalize": {"story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt"},
+    }.get(stage_id, set())
     for dep_stage in deps:
         if dep_stage not in allowed_deps:
             continue
@@ -410,9 +537,14 @@ def _restore_payload_valid_upstream_statuses_for_stage(
         restored_stages.append(dep_stage)
 
     package["stage_statuses"] = statuses
-    diagnostics["final_video_prompt_reused_upstream_statuses_restored"] = bool(restored_stages)
-    diagnostics["final_video_prompt_reused_upstream_statuses_restored_stages"] = restored_stages
-    diagnostics["final_video_prompt_reused_upstream_status_restore_reason"] = restore_reason
+    if stage_id == "final_video_prompt":
+        diagnostics["final_video_prompt_reused_upstream_statuses_restored"] = bool(restored_stages)
+        diagnostics["final_video_prompt_reused_upstream_statuses_restored_stages"] = restored_stages
+        diagnostics["final_video_prompt_reused_upstream_status_restore_reason"] = restore_reason
+    if stage_id == "finalize":
+        diagnostics["finalize_reused_upstream_statuses_restored"] = bool(restored_stages)
+        diagnostics["finalize_reused_upstream_statuses_restored_stages"] = restored_stages
+        diagnostics["finalize_reused_upstream_status_restore_reason"] = restore_reason
     package["diagnostics"] = diagnostics
     return package
 
@@ -420,6 +552,8 @@ def _restore_payload_valid_upstream_statuses_for_stage(
 def _is_stage_dependency_satisfied(package: dict[str, Any], stage_id: str, dependency_stage_id: str) -> bool:
     if stage_id == "final_video_prompt":
         return _final_video_prompt_dependency_payload_ok(package, dependency_stage_id)
+    if stage_id == "finalize":
+        return _finalize_dependency_payload_ok(package, dependency_stage_id)
     if _can_reuse_stage_output(package, dependency_stage_id):
         return True
     if stage_id == "story_core" and dependency_stage_id == "audio_map":
@@ -7230,14 +7364,32 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         diagnostics["final_video_prompt_dependency_payload_ok_by_stage"] = payload_ok_by_stage
         diagnostics["final_video_prompt_dependency_gate_false_positive_prevented"] = bool(false_positive_prevented)
         pkg["diagnostics"] = diagnostics
+    if stage_id == "finalize":
+        (
+            _,
+            payload_ok_by_stage,
+            status_by_stage,
+            false_positive_prevented,
+        ) = _collect_finalize_dependency_gate_state(pkg, deps)
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics["finalize_dependency_gate_mode"] = "payload_validity"
+        diagnostics["finalize_dependency_status_by_stage"] = status_by_stage
+        diagnostics["finalize_dependency_payload_ok_by_stage"] = payload_ok_by_stage
+        diagnostics["finalize_dependency_gate_false_positive_prevented"] = bool(false_positive_prevented)
+        pkg["diagnostics"] = diagnostics
     missing = [dep for dep in deps if not _is_stage_dependency_satisfied(pkg, stage_id, dep)]
     if missing:
         if stage_id == "final_video_prompt":
             missing_reasons, _, _, _ = _collect_final_video_prompt_dependency_gate_state(pkg, deps)
             error_code = f"final_video_prompt_incomplete_dependencies:{','.join(missing_reasons)}"
+        elif stage_id == "finalize":
+            missing_reasons, _, _, _ = _collect_finalize_dependency_gate_state(pkg, deps)
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
+            diagnostics["finalize_missing_upstream_reasons"] = missing_reasons
+            pkg["diagnostics"] = diagnostics
+            error_code = f"finalize_incomplete_dependencies:{','.join(missing_reasons)}"
         else:
-            error_code = "missing_upstream_stage" if stage_id == "finalize" else "missing_dependencies"
-            error_code = f"{error_code}:{','.join(missing)}"
+            error_code = f"missing_dependencies:{','.join(missing)}"
         _set_stage_status(pkg, stage_id, "error", error=error_code)
         _safe_dict(pkg.get("diagnostics")).setdefault("errors", []).append(f"{stage_id}: {error_code} {missing}")
         return pkg
@@ -7326,8 +7478,41 @@ def run_manual_stage(
     if stage_id == "finalize":
         # Guardrail: pressing FINAL must not retrigger upstream creative Gemini stages.
         # Finalize can run only from already prepared normalized outputs.
-        pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
+        deps = STAGE_DEPENDENCIES.get(stage_id, [])
+        incoming_payload_summary = build_stage_payload_health_summary(pkg)
+        missing_reasons, payload_ok_by_stage, status_by_stage, false_positive_prevented = _collect_finalize_dependency_gate_state(
+            pkg, deps
+        )
+        reusable_upstream = [dep_stage for dep_stage in deps if payload_ok_by_stage.get(dep_stage)]
+        missing_upstream = [dep_stage for dep_stage in deps if not payload_ok_by_stage.get(dep_stage)]
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics["continuation_mode"] = "manual_finalize_assembler_only"
+        diagnostics["finalize_incoming_payload_summary"] = incoming_payload_summary
+        diagnostics["finalize_dependency_gate_mode"] = "payload_validity"
+        diagnostics["finalize_dependency_status_by_stage"] = status_by_stage
+        diagnostics["finalize_dependency_payload_ok_by_stage"] = payload_ok_by_stage
+        diagnostics["finalize_dependency_gate_false_positive_prevented"] = bool(false_positive_prevented)
+        diagnostics["upstream_package_complete"] = not bool(missing_upstream)
+        diagnostics["reused_upstream_stages"] = reusable_upstream
+        diagnostics["regenerated_stages"] = [stage_id]
+        diagnostics["finalize_missing_upstream_reasons"] = missing_reasons
+        if missing_upstream:
+            diagnostics["finalize_missing_upstream"] = missing_upstream
+            diagnostics["finalize_missing_upstream_payload_summary"] = incoming_payload_summary
+            pkg["diagnostics"] = diagnostics
+            error_code = f"finalize_incomplete_dependencies:{','.join(missing_reasons)}"
+            _set_stage_status(pkg, stage_id, "error", error=error_code)
+            _append_diag_event(
+                pkg,
+                f"manual finalize dependency gate failed summary={incoming_payload_summary}",
+                stage_id=stage_id,
+            )
+            _append_diag_event(pkg, error_code, stage_id=stage_id)
+            return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
+        pkg["diagnostics"] = diagnostics
         pkg = run_stage(stage_id, pkg, payload)
+        if str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(stage_id)).get("status") or "").strip().lower() == "done":
+            pkg = _restore_payload_valid_upstream_statuses_for_stage(pkg, stage_id, deps, payload_ok_by_stage)
         executed_stage_ids.append(stage_id)
         return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
