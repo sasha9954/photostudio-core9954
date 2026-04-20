@@ -62,9 +62,36 @@ export default function ComfyNarrativeNode({ id, data }) {
   const routeTargetsPerBlock = data?.routeTargetsPerBlock && typeof data.routeTargetsPerBlock === "object"
     ? data.routeTargetsPerBlock
     : { i2v: 4, ia2v: 2, first_last: 2 };
+  const selectedPreset = ROUTE_STRATEGY_PRESETS.find((x) => x.key === data?.routeStrategyPreset) || ROUTE_STRATEGY_PRESETS[0];
   const baseSceneCount = Number(data?.baseSceneCount || 8) || 8;
   const routeTotal = Number(routeTargetsPerBlock?.i2v || 0) + Number(routeTargetsPerBlock?.ia2v || 0) + Number(routeTargetsPerBlock?.first_last || 0);
   const hasRouteTotalWarning = safeRouteStrategyMode === "custom_counts" && routeTotal !== baseSceneCount;
+  const selectedStrategySummary = safeRouteStrategyMode === "auto"
+    ? {
+      title: "Выбрано: Авто",
+      lines: [
+        "Gemini сам выбирает i2v / ia2v / первый-последний кадр по аудио, вокалу и драматургии.",
+      ],
+    }
+    : safeRouteStrategyMode === "preset"
+      ? {
+        title: `Выбрано: ${selectedPreset.label}`,
+        lines: [
+          selectedPreset.description,
+          "Для 9+ сцен: лишние сцены добавляются как i2v.",
+          "Для длинных клипов: стратегия повторяется блоками примерно по 30 секунд.",
+        ],
+      }
+      : {
+        title: "Выбрано: Ручной режим",
+        lines: [
+          `На 8 сцен: ${Number(routeTargetsPerBlock?.i2v ?? 0)} i2v / ${Number(routeTargetsPerBlock?.ia2v ?? 0)} ia2v / ${Number(routeTargetsPerBlock?.first_last ?? 0)} первый-последний`,
+          `Итого: ${routeTotal} / 8 сцен`,
+          ...(hasRouteTotalWarning
+            ? ["Сумма отличается от 8. Лишние или недостающие сцены будут мягко скорректированы, безопасный маршрут по умолчанию — i2v."]
+            : []),
+        ],
+      };
   const sourceInput = hasConnectedSource ? (
     <div className="clipSB_narrativeSourceStatus isConnected">
       <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
@@ -243,8 +270,19 @@ export default function ComfyNarrativeNode({ id, data }) {
                     <button
                       key={item.key}
                       type="button"
-                      className={`clipSB_btn ${safeRouteStrategyMode === item.key ? "clipSB_btnPrimary" : "clipSB_btnSecondary"}`.trim()}
-                      onClick={() => data?.onFieldChange?.(id, { routeStrategyMode: item.key })}
+                      className={`clipSB_btn ${safeRouteStrategyMode === item.key ? "clipSB_btnPrimary clipSB_routeStrategyBtn--active" : "clipSB_btnSecondary"}`.trim()}
+                      onClick={() => {
+                        if (item.key === "preset") {
+                          data?.onFieldChange?.(id, {
+                            routeStrategyMode: "preset",
+                            routeStrategyPreset: "balanced_50_25_25",
+                            routeTargetsPerBlock: { i2v: 4, ia2v: 2, first_last: 2 },
+                            maxConsecutiveIa2v: 2,
+                          });
+                          return;
+                        }
+                        data?.onFieldChange?.(id, { routeStrategyMode: item.key });
+                      }}
                     >
                       {item.label}
                     </button>
@@ -263,7 +301,7 @@ export default function ComfyNarrativeNode({ id, data }) {
                         <button
                           key={preset.key}
                           type="button"
-                          className={`clipSB_btn ${data?.routeStrategyPreset === preset.key ? "clipSB_btnPrimary" : "clipSB_btnSecondary"}`.trim()}
+                          className={`clipSB_btn ${(safeRouteStrategyMode === "preset" && selectedPreset.key === preset.key) ? "clipSB_btnPrimary clipSB_routeStrategyBtn--active clipSB_routeStrategyPresetBtn--active" : "clipSB_btnSecondary clipSB_routeStrategyPresetBtn"}`.trim()}
                           title={preset.description}
                           onClick={() => data?.onFieldChange?.(id, {
                             routeStrategyMode: "preset",
@@ -272,7 +310,7 @@ export default function ComfyNarrativeNode({ id, data }) {
                             maxConsecutiveIa2v: preset.maxConsecutiveIa2v,
                           })}
                         >
-                          <div>{preset.label}</div>
+                          <div>{(safeRouteStrategyMode === "preset" && selectedPreset.key === preset.key) ? `✓ ${preset.label}` : preset.label}</div>
                           <small>{preset.description}</small>
                         </button>
                       ))}
@@ -303,6 +341,13 @@ export default function ComfyNarrativeNode({ id, data }) {
                     {hasRouteTotalWarning ? <div className="clipSB_narrativeEmptyHint" role="alert">Сумма отличается от 8. Лишние или недостающие сцены будут мягко скорректированы, безопасный маршрут по умолчанию — i2v.</div> : null}
                   </>
                 ) : null}
+
+                <div className="clipSB_routeStrategySummary" role="status" aria-live="polite">
+                  <div className="clipSB_routeStrategySummaryTitle">{selectedStrategySummary.title}</div>
+                  {selectedStrategySummary.lines.map((line) => (
+                    <div key={line} className="clipSB_routeStrategySummaryLine">{line}</div>
+                  ))}
+                </div>
               </section>
             ) : (
               <section className="clipSB_narrativeSection">
