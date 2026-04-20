@@ -655,6 +655,8 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     vocal_gender = _resolve_vocal_gender(audio_map, input_pkg)
     vocal_owner_role = _resolve_vocal_owner_role(vocal_gender, role_identity_gender_map)
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(len(scene_segment_rows), creative_config)
+    route_strategy_active = _route_strategy_active(creative_config)
     story_guidance = story_guidance_route_mix_doctrine(story_core.get("story_guidance"))
     world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
     model_id = _resolve_active_video_model_id(package)
@@ -710,6 +712,18 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "target_route_mix_for_8_scenes": {"i2v": 4, "ia2v": 2, "first_last": 2},
             "target_route_mix_is_soft_heuristic_only": True,
             "creative_config": creative_config,
+            "route_budget_contract": {
+                "target_total_scenes": len(scene_segment_rows),
+                "target_counts": route_budget_target,
+                "first_last_forbidden": int(route_budget_target.get("first_last") or 0) == 0,
+                "ia2v_requires_vocal_or_speech_window": True,
+                "targets_are_hard_for_short_clip": bool(hard_short_clip_target),
+                "gemini_must_choose_segment_assignment": True,
+                "backend_must_not_choose_dramaturgy": True,
+                "route_strategy_active": route_strategy_active,
+                "route_strategy_mode": str(creative_config.get("route_strategy_mode") or "auto"),
+                "route_strategy_preset": str(creative_config.get("route_strategy_preset") or ""),
+            },
             "ia2v_definition": "emotion-first performance shot; readable face/mouth; smooth camera; restrained motion",
             "i2v_definition": "baseline clip route for observation, transit, environment and connective montage scenes",
             "first_last_definition": "explicit state transition A->B for reveal/turn/payoff/release/callback scenes",
@@ -865,14 +879,48 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "- subject_priority: hero|ensemble|object|environment\\n"
         "- layout: centered|rule_of_thirds|off_balance|symmetrical\\n"
         "- depth_strategy: flat|layered|deep\\n"
+        "USER ROUTE STRATEGY IS A HARD CREATIVE CONSTRAINT.\\n"
+        "If route_budget_contract.targets_are_hard_for_short_clip=true, you MUST satisfy target_counts exactly.\\n"
+        "This is not a suggestion; this is the required dramaturgical structure for this scene plan.\\n"
+        "You must choose WHICH segment_id receives WHICH route using audio_map + story_core + role_plan dramaturgy.\\n"
+        "Do not let backend assign dramaturgy; backend only validates budget compliance.\\n"
+        "For ia2v: prefer strong vocal/speech windows, performance moments, emotional peaks, hooks; "
+        "set speaker_role when possible; lip_sync_allowed=true only with valid vocal/speaker evidence; "
+        "mouth_visible_required=true for real lip-sync scenes.\\n"
+        "For i2v: prefer movement/transit/atmosphere/world continuity/cutaway/wide visual breathing room; "
+        "do not require mouth-visible lip-sync.\\n"
+        "For first_last: use only when route_budget_contract.target_counts.first_last > 0; "
+        "if first_last target is 0 then first_last is forbidden.\\n"
         f"{feedback_block}"
         "Output contract:\\n"
         "{\\n"
         '  "scenes_version":"1.1",\\n'
-        '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","scene_goal":"","narrative_function":"","speaker_role":"unknown","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
+        '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","speaker_role":"unknown","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
         "}\\n\\n"
         f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )
+
+
+def _route_strategy_active(creative_config: dict[str, Any]) -> bool:
+    mode = str(creative_config.get("route_strategy_mode") or "auto").strip().lower()
+    targets = _safe_dict(creative_config.get("route_targets_per_block"))
+    total_target = sum(max(0, int(targets.get(k) or 0)) for k in ("i2v", "ia2v", "first_last"))
+    return mode in {"preset", "custom_counts"} and total_target > 0
+
+
+def _route_budget_target_for_plan(total_scenes: int, creative_config: dict[str, Any]) -> tuple[dict[str, int], bool]:
+    if total_scenes <= 0:
+        return {"i2v": 0, "ia2v": 0, "first_last": 0}, False
+    if not _route_strategy_active(creative_config):
+        return _target_route_budget(total_scenes), False
+    targets = _safe_dict(creative_config.get("route_targets_per_block"))
+    budget = {
+        "i2v": max(0, int(targets.get("i2v") or 0)),
+        "ia2v": max(0, int(targets.get("ia2v") or 0)),
+        "first_last": max(0, int(targets.get("first_last") or 0)),
+    }
+    is_hard_short_clip_target = sum(budget.values()) == total_scenes
+    return budget, is_hard_short_clip_target
 
 
 def _target_route_budget(total_scenes: int) -> dict[str, int]:
@@ -1503,6 +1551,7 @@ def _normalize_scene_plan(
     ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow = False
     lip_sync_rejected_reasons: dict[str, list[str]] = {}
     lip_sync_voice_role_mismatch_segments: list[str] = []
+    route_selection_reasons_by_segment: dict[str, str] = {}
     primary_role_by_segment: dict[str, str] = {}
     visual_focus_role_by_segment: dict[str, str] = {}
     speaker_role_by_segment: dict[str, str] = {}
@@ -1737,6 +1786,7 @@ def _normalize_scene_plan(
                 "visual_focus_role": visual_focus_role,
                 "route": route,
                 "route_reason": str(raw_row.get("route_reason") or "").strip(),
+                "route_selection_reason": str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip(),
                 "scene_goal": str(raw_row.get("scene_goal") or "").strip(),
                 "narrative_function": str(raw_row.get("narrative_function") or "").strip(),
                 "visual_motion": {
@@ -1763,6 +1813,7 @@ def _normalize_scene_plan(
                 "speaker_confidence": round(float(speaker_confidence), 3),
             }
         )
+        route_selection_reasons_by_segment[segment_id] = str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip()
 
     if max_consecutive_lip_sync_count > max_consecutive_allowed:
         validation_error = validation_error or "speaker_role_invalid"
@@ -1775,6 +1826,11 @@ def _normalize_scene_plan(
         error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
     route_counts = {route_name: sum(1 for row in normalized_storyboard if row.get("route") == route_name) for route_name in ("i2v", "ia2v", "first_last")}
+    route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(len(normalized_storyboard), creative_config)
+    route_budget_mismatch = bool(hard_short_clip_target and route_counts != route_budget_target)
+    if route_budget_mismatch:
+        validation_error = validation_error or "route_budget_mismatch"
+        error_code = error_code or "SCENES_ROUTE_BUDGET_MISMATCH"
 
     legacy_scenes: list[dict[str, Any]] = []
     for row, source_row in zip(normalized_storyboard, scene_segment_rows, strict=False):
@@ -1788,6 +1844,7 @@ def _normalize_scene_plan(
                 "duration_sec": _round3(source_row.get("duration_sec")),
                 "route": str(row.get("route") or ""),
                 "route_reason": str(row.get("route_reason") or ""),
+                "route_selection_reason": str(row.get("route_selection_reason") or row.get("route_reason") or ""),
                 "scene_function": str(row.get("narrative_function") or ""),
                 "emotional_intent": str(row.get("scene_goal") or ""),
                 "motion_intent": str(motion.get("subject_motion") or ""),
@@ -1861,11 +1918,23 @@ def _normalize_scene_plan(
         "lip_sync_voice_role_mismatch_segments": lip_sync_voice_role_mismatch_segments,
         "lip_sync_decision_by_segment": lip_sync_decision_by_segment,
         "lip_sync_rejected_reasons": lip_sync_rejected_reasons,
+        "scene_plan_route_selection_reasons_by_segment": route_selection_reasons_by_segment,
         "lip_sync_selected_count": lip_sync_selected_count,
         "consecutive_lip_sync_count": max_consecutive_lip_sync_count,
         "ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow": ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow,
-        "target_route_mix": _target_route_budget(len(normalized_storyboard)),
+        "target_route_mix": route_budget_target,
         "actual_route_mix": route_counts,
+        "scene_plan_route_strategy_active": _route_strategy_active(creative_config),
+        "scene_plan_route_strategy_preset": str(creative_config.get("route_strategy_preset") or ""),
+        "scene_plan_route_targets_per_block": _safe_dict(creative_config.get("route_targets_per_block")),
+        "scene_plan_route_budget_target": route_budget_target,
+        "scene_plan_route_budget_actual": route_counts,
+        "scene_plan_route_budget_mismatch": route_budget_mismatch,
+        "scene_plan_route_budget_retry_used": False,
+        "scene_plan_route_budget_retry_suppressed": bool(route_budget_mismatch),
+        "scene_plan_route_budget_mismatch_reason": "gemini_did_not_respect_user_route_strategy" if route_budget_mismatch else "",
+        "scene_plan_user_route_strategy_was_sent": bool(_route_strategy_active(creative_config)),
+        "scene_plan_user_route_strategy_hard_constraint": bool(hard_short_clip_target),
         "route_spacing": {
             "has_adjacent_ia2v": has_adjacent_ia2v,
             "has_adjacent_first_last": has_adjacent_first_last,
@@ -1991,6 +2060,18 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "scene_plan_technical_leak_fields": _safe_list(normalization_diag.get("scene_plan_technical_leak_fields")),
             "scene_plan_technical_leak_tokens": _safe_list(normalization_diag.get("scene_plan_technical_leak_tokens")),
             "scene_plan_technical_leak_cleaned_locally": bool(normalization_diag.get("scene_plan_technical_leak_cleaned_locally")),
+            "scene_plan_route_strategy_active": bool(normalization_diag.get("scene_plan_route_strategy_active")),
+            "scene_plan_route_strategy_preset": str(normalization_diag.get("scene_plan_route_strategy_preset") or ""),
+            "scene_plan_route_targets_per_block": _safe_dict(normalization_diag.get("scene_plan_route_targets_per_block")),
+            "scene_plan_route_budget_target": _safe_dict(normalization_diag.get("scene_plan_route_budget_target")),
+            "scene_plan_route_budget_actual": _safe_dict(normalization_diag.get("scene_plan_route_budget_actual")),
+            "scene_plan_route_budget_mismatch": bool(normalization_diag.get("scene_plan_route_budget_mismatch")),
+            "scene_plan_route_budget_retry_used": bool(normalization_diag.get("scene_plan_route_budget_retry_used")),
+            "scene_plan_route_budget_retry_suppressed": bool(normalization_diag.get("scene_plan_route_budget_retry_suppressed")),
+            "scene_plan_route_budget_mismatch_reason": str(normalization_diag.get("scene_plan_route_budget_mismatch_reason") or ""),
+            "scene_plan_user_route_strategy_was_sent": bool(normalization_diag.get("scene_plan_user_route_strategy_was_sent")),
+            "scene_plan_user_route_strategy_hard_constraint": bool(normalization_diag.get("scene_plan_user_route_strategy_hard_constraint")),
+            "scene_plan_route_selection_reasons_by_segment": _safe_dict(normalization_diag.get("scene_plan_route_selection_reasons_by_segment")),
         }
         if include_debug_raw:
             payload["scene_plan_debug"] = {
@@ -2107,13 +2188,6 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
 
     prompt = _build_prompt(context, validation_feedback=validation_feedback)
     configured_timeout = get_scenario_stage_timeout("scene_plan")
-    route_spacing_feedback_template = (
-        "Your previous scene_plan placed first_last on adjacent segments: {left_seg} and {right_seg}. "
-        "This is not allowed. Keep only one first_last in that pair. Convert the other one to "
-        "i2v reaction / emotional observation while preserving primary_role, visual_focus_role, "
-        "speaker_role, and vocal_owner_role."
-    )
-    retry_used = False
 
     def _run_generation(prompt_text: str) -> tuple[dict[str, Any], bool, str, int, dict[str, Any], str]:
         response = post_generate_content(
@@ -2140,37 +2214,14 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
 
     try:
         scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _run_generation(prompt)
+        normalization_diag["scene_plan_route_spacing_retry_used"] = False
         spacing_diag = _safe_dict(normalization_diag.get("route_spacing"))
-        has_adjacent_first_last = bool(spacing_diag.get("has_adjacent_first_last"))
-        if (
-            str(creative_config.get("route_mix_mode") or "auto").strip().lower() == "auto"
-            and has_adjacent_first_last
-        ):
-            retry_used = True
-            pairs = _safe_list(spacing_diag.get("adjacent_first_last_pairs"))
-            left_seg = "seg_06"
-            right_seg = "seg_07"
-            if pairs and isinstance(pairs[0], list) and len(pairs[0]) >= 2:
-                left_seg = str(pairs[0][0] or left_seg)
-                right_seg = str(pairs[0][1] or right_seg)
-            route_spacing_feedback = route_spacing_feedback_template.format(left_seg=left_seg, right_seg=right_seg)
-            retry_prompt = _build_prompt(context, validation_feedback=route_spacing_feedback)
-            scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _run_generation(retry_prompt)
-            spacing_diag = _safe_dict(normalization_diag.get("route_spacing"))
-            if bool(spacing_diag.get("has_adjacent_first_last")):
-                validation_error = "adjacent_first_last"
-                error_code = "SCENES_ROUTE_SPACING_INVALID"
-                spacing_diag["warning"] = "adjacent_first_last_not_allowed"
-            else:
-                spacing_diag["warning"] = ""
-
-        normalization_diag["scene_plan_route_spacing_retry_used"] = retry_used
         if (
             str(creative_config.get("route_mix_mode") or "auto").strip().lower() == "auto"
             and bool(_safe_dict(normalization_diag.get("route_spacing")).get("has_adjacent_first_last"))
         ):
-            validation_error = "adjacent_first_last"
-            error_code = "SCENES_ROUTE_SPACING_INVALID"
+            validation_error = validation_error or "adjacent_first_last"
+            error_code = error_code or "SCENES_ROUTE_SPACING_INVALID"
             _safe_dict(normalization_diag.get("route_spacing"))["warning"] = "adjacent_first_last_not_allowed"
         diagnostics["error_code"] = error_code
         diagnostics.update(
