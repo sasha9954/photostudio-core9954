@@ -7670,6 +7670,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_empty"] = False
     diagnostics["scene_plan_snapshot_restored"] = False
     diagnostics["scene_plan_failure_reason"] = ""
+    diagnostics["scene_plan_candidate_failed_but_snapshot_restored"] = False
+    diagnostics["scene_plan_last_failed_candidate_error"] = ""
     diagnostics["scene_plan_configured_timeout_sec"] = get_scenario_stage_timeout("scene_plan")
     diagnostics["scene_plan_timeout_stage_policy_name"] = scenario_timeout_policy_name("scene_plan")
     diagnostics["scene_plan_timed_out"] = False
@@ -7825,12 +7827,26 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             diagnostics = _safe_dict(package.get("diagnostics"))
             diagnostics["scene_plan_snapshot_restored"] = True
             diagnostics["scene_plan_failure_reason"] = str(hard_fail_error)
+            diagnostics["scene_plan_candidate_failed_but_snapshot_restored"] = True
+            diagnostics["scene_plan_last_failed_candidate_error"] = str(hard_fail_error)
+            diagnostics["validation_error"] = ""
+            diagnostics["scene_plan_validation_error"] = ""
+            diagnostics["scene_plan_error"] = ""
+            diagnostics["scene_plan_error_code"] = ""
             package["diagnostics"] = diagnostics
             _append_diag_event(package, "scene_plan invalid: restored previous snapshot", stage_id="scene_plan")
+            _append_diag_event(
+                package,
+                "scene_plan candidate failed but previous valid snapshot restored",
+                stage_id="scene_plan",
+            )
+            return package
         else:
             diagnostics = _safe_dict(package.get("diagnostics"))
             diagnostics["scene_plan_snapshot_restored"] = False
             diagnostics["scene_plan_failure_reason"] = str(hard_fail_error)
+            diagnostics["scene_plan_candidate_failed_but_snapshot_restored"] = False
+            diagnostics["scene_plan_last_failed_candidate_error"] = str(hard_fail_error)
             package["diagnostics"] = diagnostics
             _append_diag_event(package, "scene_plan invalid: no previous snapshot", stage_id="scene_plan")
         _append_diag_event(package, f"scene_plan hard fail after retry: {hard_fail_error}", stage_id="scene_plan")
@@ -7840,6 +7856,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_plan_snapshot_restored"] = False
     diagnostics["scene_plan_failure_reason"] = ""
+    diagnostics["scene_plan_candidate_failed_but_snapshot_restored"] = False
+    diagnostics["scene_plan_last_failed_candidate_error"] = ""
     package["diagnostics"] = diagnostics
 
     if scene_plan and _safe_list(scene_plan.get("storyboard")):
