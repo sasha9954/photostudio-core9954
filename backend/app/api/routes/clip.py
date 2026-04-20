@@ -1878,6 +1878,36 @@ def _extract_scene_index_from_scene_id(scene_id: Any) -> int | None:
     return parsed
 
 
+def _extract_contract_visibility_roles(contract: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    src = contract if isinstance(contract, dict) else {}
+    prompt_interface = src.get("prompt_interface_contract") if isinstance(src.get("prompt_interface_contract"), dict) else (
+        src.get("promptInterfaceContract") if isinstance(src.get("promptInterfaceContract"), dict) else {}
+    )
+    must_be_visible = [
+        str(role or "").strip()
+        for role in (
+            prompt_interface.get("must_be_visible")
+            or prompt_interface.get("mustBeVisible")
+            or src.get("must_be_visible")
+            or src.get("mustBeVisible")
+            or []
+        )
+        if str(role or "").strip() in COMFY_REF_ROLES
+    ]
+    may_be_offscreen = [
+        str(role or "").strip()
+        for role in (
+            prompt_interface.get("may_be_offscreen")
+            or prompt_interface.get("mayBeOffscreen")
+            or src.get("may_be_offscreen")
+            or src.get("mayBeOffscreen")
+            or []
+        )
+        if str(role or "").strip() in COMFY_REF_ROLES
+    ]
+    return list(dict.fromkeys(must_be_visible)), list(dict.fromkeys(may_be_offscreen))
+
+
 def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = None) -> dict[str, Any]:
     payload_map = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else {}
     payload_map = payload_map if isinstance(payload_map, dict) else {}
@@ -1930,6 +1960,14 @@ def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = Non
         "sceneIndex",
         "scene_index",
         "index",
+        "visual_focus_role",
+        "visualFocusRole",
+        "prompt_interface_contract",
+        "promptInterfaceContract",
+        "must_be_visible",
+        "mustBeVisible",
+        "may_be_offscreen",
+        "mayBeOffscreen",
     ]
     for key in passthrough_keys:
         if key not in contract and payload_map.get(key) is not None:
@@ -10211,7 +10249,6 @@ def _extract_refs_by_role_from_generic_source(
         "item": "props",
         "objects": "props",
         "object": "props",
-        "character": "character_1",
         "world": "location",
     }
     out: dict[str, list[str]] = {role: [] for role in COMFY_REF_ROLES}
@@ -10742,7 +10779,6 @@ def _build_scene_framing_and_concert_staging_block(
         str(contract.get("ltx_mode") or ""),
     ]).lower()
     is_lip_sync_scene = "lip_sync" in route_hint or bool(contract.get("lipSync"))
-    is_concert_scene = _is_concert_world_scene(scene_delta, scene_text, location_anchor, environment_anchor)
     lines = ["SCENE FRAMING + STAGING POLICY (STRICT):"]
     if is_lip_sync_scene:
         lines.extend([
@@ -10759,16 +10795,13 @@ def _build_scene_framing_and_concert_staging_block(
             "- allow wide/full-body framing only when spatial storytelling explicitly requires it",
             "- same venue continuity must be kept while camera zone and staging should progress",
         ])
-    if is_concert_scene:
-        lines.extend([
-            "CONCERT VENUE PHYSICAL PLACEMENT (HARD):",
-            "- if a character is visible, ground them on a physically valid support plane inside the venue",
-            "- never place character on top of audience heads",
-            "- never float character above crowd without structural support",
-            "- never composite performer into impossible crowd geometry",
-            "- prefer connected sub-zones for scene-to-scene progression: front barricade, side aisle, crowd walkway gap, raised viewing platform, side catwalk, rail zone, stage-side edge, backstage side entry, merch/bar alley, elevated deck",
-            "- keep same venue identity while moving between recognizable connected zones",
-        ])
+    lines.extend([
+        "PHYSICAL PLACEMENT:",
+        "- place all visible required characters on a believable support plane inside the world defined by story_core/world_lock/user input",
+        "- preserve same world family",
+        "- no impossible floating/composite geometry",
+        "- do not invent a venue type not present in world_lock/user input",
+    ])
     if _is_environment_only_establishing_scene(contract=contract, scene_delta=scene_delta, scene_text=scene_text):
         lines.extend([
             "ENVIRONMENT-ONLY ESTABLISHING MODE:",
@@ -12655,6 +12688,12 @@ def clip_image(payload: ClipImageIn):
         *(scene_contract.get("mustAppear") or []),
         *(raw_scene_contract.get("mustAppear") or [] if isinstance(raw_scene_contract, dict) else []),
     ]
+    contract_must_visible_roles, contract_may_offscreen_roles = _extract_contract_visibility_roles(raw_scene_contract)
+    must_appear_candidates.extend([
+        role
+        for role in contract_must_visible_roles
+        if role not in contract_may_offscreen_roles
+    ])
     must_appear_roles = [
         str(role or "").strip()
         for role in must_appear_candidates
@@ -12673,10 +12712,27 @@ def clip_image(payload: ClipImageIn):
     if "location" in must_appear_roles and "location" not in must_not_appear_roles and "location" not in scene_active_roles:
         scene_active_roles.append("location")
 
+    visual_focus_role = str(
+        raw_scene_contract.get("visual_focus_role")
+        or raw_scene_contract.get("visualFocusRole")
+        or scene_contract.get("visual_focus_role")
+        or scene_contract.get("visualFocusRole")
+        or ""
+    ).strip()
+    if visual_focus_role in scene_active_roles:
+        hero_entity_id = visual_focus_role
+
     scene_contract["heroEntityId"] = hero_entity_id
+    cast_support_from_must = [
+        role for role in must_appear_roles
+        if role in COMFY_CAST_ROLES and role != hero_entity_id and role not in must_not_appear_roles
+    ]
+    support_entity_ids = list(dict.fromkeys([*support_entity_ids, *cast_support_from_must]))
     scene_contract["supportEntityIds"] = support_entity_ids
     scene_contract["mustAppear"] = must_appear_roles
-    scene_contract["mustAppearCastRoles"] = must_appear_roles
+    scene_contract["mustAppearCastRoles"] = [
+        role for role in must_appear_roles if role in COMFY_CAST_ROLES
+    ]
     route_hint_lower = str(route_hint or scene_contract.get("sourceRoute") or "").strip().lower()
     has_character_1_ref = bool(comfy_refs_by_role.get("character_1"))
     character_1_is_active = "character_1" in scene_active_roles or "character_1" in must_appear_roles

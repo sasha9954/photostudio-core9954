@@ -856,7 +856,6 @@ function normalizeScenarioRoleName(value = "") {
     character2: "character_2",
     char_3: "character_3",
     character3: "character_3",
-    character: "character_1",
     world: "location",
     ref_props: "props",
     ref_items: "props",
@@ -1584,6 +1583,7 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
     return [...new Set(list.map((role) => normalizeScenarioRoleName(role)).filter(Boolean))];
   };
   const primaryRole = normalizeScenarioRoleName(scene?.primaryRole || "");
+  const visualFocusRole = normalizeScenarioRoleName(scene?.visual_focus_role || scene?.visualFocusRole || "");
   const secondaryRoles = normalizeRoleList(scene?.secondaryRoles);
   const sceneActiveRoles = normalizeRoleList(scene?.sceneActiveRoles);
   const refsUsed = Array.isArray(scene?.refsUsed)
@@ -1596,6 +1596,12 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
   const semanticTwoPersonSignal = ["gaze", "shared glance", "look into eyes", "eye contact", "whisper", "hold hand", "embrace", "hug", "looks at", "looking at", "див", "смотр", "взгляд", "шепч", "обнима", "держ"]
     .some((marker) => `${String(scene?.summaryEn || "")} ${String(scene?.summaryRu || "")} ${String(scene?.videoPromptEn || "")} ${String(scene?.videoPromptRu || "")} ${String(scene?.imagePromptEn || "")} ${String(scene?.imagePromptRu || "")}`.toLowerCase().includes(marker));
   const mustAppear = normalizeRoleList(scene?.mustAppear);
+  const promptInterfaceContract = scene?.prompt_interface_contract && typeof scene.prompt_interface_contract === "object"
+    ? scene.prompt_interface_contract
+    : (scene?.promptInterfaceContract && typeof scene.promptInterfaceContract === "object" ? scene.promptInterfaceContract : {});
+  const mustVisibleRoles = normalizeRoleList(promptInterfaceContract?.must_be_visible || promptInterfaceContract?.mustBeVisible);
+  const mayBeOffscreenRoles = normalizeRoleList(promptInterfaceContract?.may_be_offscreen || promptInterfaceContract?.mayBeOffscreen);
+  const mustVisibleOnscreen = mustVisibleRoles.filter((role) => !mayBeOffscreenRoles.includes(role));
   const groupNarrativelyRequired = isGroupNarrativelyRequiredByScene(scene);
   const hasActiveHumanRoles = [...sceneActiveRoles, ...mustAppear].some((role) => ["character_1", "character_2", "character_3", "group"].includes(role));
   const isEnvironmentOnlyScene = sceneRoleDynamics === "environment" && actorsRoleSignals.length === 0 && !hasActiveHumanRoles;
@@ -1605,6 +1611,7 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
     || actorsRoleSignals.length >= 2
     || refsUsedByRoleKeys.includes("character_2")
     || mustAppear.includes("character_2")
+    || mustVisibleOnscreen.includes("character_2")
   );
   if (isEnvironmentOnlyScene) {
     const environmentOnlyContract = {
@@ -1623,14 +1630,15 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
   }
   const hasExplicitContract = Boolean(primaryRole || secondaryRoles.length || sceneActiveRoles.length || mustAppear.length);
   const explicitActiveRoles = normalizeRoleList([
-    primaryRole,
+    visualFocusRole || primaryRole,
     ...secondaryRoles,
     ...sceneActiveRoles,
     ...refsUsed,
     ...mustAppear,
+    ...mustVisibleOnscreen,
     ...refsUsedByRoleKeys,
   ]);
-  const healedPrimary = primaryRole || explicitActiveRoles[0] || roleWithRefs[0] || "";
+  const healedPrimary = visualFocusRole || primaryRole || explicitActiveRoles[0] || roleWithRefs[0] || "";
   const healedActive = shouldForceTwoPerson
     ? normalizeRoleList([...explicitActiveRoles, "character_1", "character_2"])
     : explicitActiveRoles;
@@ -1639,6 +1647,7 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
   const healedSecondary = healedActiveWithoutGroup.filter((role) => role !== healedPrimarySafe);
   const healedMustAppear = normalizeRoleList([
     ...mustAppear,
+    ...mustVisibleOnscreen,
     ...(shouldForceTwoPerson ? ["character_1", "character_2"] : healedActiveWithoutGroup),
   ]).filter((role) => healedActiveWithoutGroup.includes(role));
   const healedRefsUsed = normalizeRoleList([...refsUsed, ...healedActiveWithoutGroup]).filter((role) => groupNarrativelyRequired || role !== "group");
@@ -7484,7 +7493,7 @@ function buildComfySceneRefsPayload({
   const normalizedHeroEntityId = String(heroEntityId || "").trim() || normalizedPrimaryRole;
 
   return normalizeClipImageRefsPayload({
-    character: pickUrls(["character_1", "character_2", "character_3", "animal", "group"]),
+    character: pickUrls(["character_1"]),
     location: pickUrls(["location"]),
     style: pickUrls(["style"]),
     props: pickUrls(["props"]),
