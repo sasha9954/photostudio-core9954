@@ -20834,7 +20834,23 @@ onClipSec: (nodeId, value) => {
                       ...(x.data || {}),
                       connectedInputs: narrativeConnectedInputs,
                     });
-                    return { ...x, data: { ...x.data, ...nextPatch } };
+                    const routeStrategyKeys = new Set([
+                      "routeStrategyMode", "routeStrategyPreset", "routeTargetsPerBlock", "routeBlockDurationSec", "baseSceneCount",
+                      "extraScenePolicy", "targetsAreSoft", "instrumentalPolicy", "vocalPolicy", "longVocalSplitPolicy",
+                      "maxConsecutiveIa2v", "maxConsecutiveLipsync", "routeMixMode", "lipsyncRatio", "firstLastRatio",
+                    ]);
+                    const routeStrategyChanged = Object.keys(nextPatch).some((key) => routeStrategyKeys.has(String(key)));
+                    return {
+                      ...x,
+                      data: {
+                        ...x.data,
+                        ...nextPatch,
+                        ...(routeStrategyChanged ? {
+                          markStaleFrom: "story_core",
+                          staleReason: "route_strategy_changed",
+                        } : {}),
+                      },
+                    };
                   });
                   return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "narrative:field-change" });
                 });

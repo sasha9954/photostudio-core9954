@@ -813,6 +813,15 @@ export function summarizeNarrativeConnectedContext(state = {}) {
   };
 }
 
+const ROUTE_STRATEGY_PRESET_MAP = {
+  balanced_50_25_25: { i2v: 4, ia2v: 2, first_last: 2, maxConsecutiveIa2v: 2 },
+  performance_35_50_15: { i2v: 3, ia2v: 4, first_last: 1, maxConsecutiveIa2v: 3 },
+  visual_65_10_25: { i2v: 5, ia2v: 1, first_last: 2, maxConsecutiveIa2v: 1 },
+  no_first_last_50_50_0: { i2v: 4, ia2v: 4, first_last: 0, maxConsecutiveIa2v: 3 },
+  all_lipsync_0_100_0: { i2v: 0, ia2v: 8, first_last: 0, maxConsecutiveIa2v: 8 },
+  story_safe_70_20_10: { i2v: 6, ia2v: 1, first_last: 1, maxConsecutiveIa2v: 2 },
+};
+
 export function getDefaultNarrativeNodeData() {
   return {
     sourceOrigin: "disconnected",
@@ -824,6 +833,17 @@ export function getDefaultNarrativeNodeData() {
     lipsyncRatio: 0.25,
     firstLastRatio: 0.25,
     maxConsecutiveLipsync: 2,
+    routeStrategyMode: "auto",
+    routeStrategyPreset: "balanced_50_25_25",
+    routeTargetsPerBlock: { i2v: 4, ia2v: 2, first_last: 2 },
+    routeBlockDurationSec: 30,
+    baseSceneCount: 8,
+    extraScenePolicy: "add_i2v",
+    targetsAreSoft: true,
+    instrumentalPolicy: "use_i2v_for_non_vocal_or_instrumental_gaps",
+    vocalPolicy: "ia2v_only_on_vocal_windows",
+    longVocalSplitPolicy: "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec",
+    maxConsecutiveIa2v: 2,
     directorNote: "",
     connectedInputs: {
       audio_in: null,
@@ -970,18 +990,51 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   const format = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
     ? String(state.format).trim()
     : "9:16";
-  const routeMixMode = String(state?.routeMixMode || "auto").trim().toLowerCase() === "custom" ? "custom" : "auto";
-  const lipsyncRatio = Math.max(0, Math.min(1, Number(state?.lipsyncRatio ?? 0.25) || 0));
-  const firstLastRatio = Math.max(0, Math.min(1, Number(state?.firstLastRatio ?? 0.25) || 0));
-  const maxConsecutiveLipsync = Math.max(1, Math.min(6, Number(state?.maxConsecutiveLipsync ?? 2) || 2));
+  const routeStrategyModeRaw = String(state?.routeStrategyMode || "auto").trim().toLowerCase();
+  const routeStrategyMode = ["auto", "preset", "custom_counts"].includes(routeStrategyModeRaw) ? routeStrategyModeRaw : "auto";
+  const routeStrategyPreset = String(state?.routeStrategyPreset || "balanced_50_25_25").trim();
+  const baseSceneCount = Math.max(1, Number(state?.baseSceneCount || 8) || 8);
+  const routeBlockDurationSec = Math.max(10, Number(state?.routeBlockDurationSec || 30) || 30);
+  const presetTargets = ROUTE_STRATEGY_PRESET_MAP[routeStrategyPreset] || ROUTE_STRATEGY_PRESET_MAP.balanced_50_25_25;
+  const sourceTargets = state?.routeTargetsPerBlock && typeof state.routeTargetsPerBlock === "object" ? state.routeTargetsPerBlock : {};
+  const routeTargetsPerBlock = routeStrategyMode === "preset"
+    ? { i2v: presetTargets.i2v, ia2v: presetTargets.ia2v, first_last: presetTargets.first_last }
+    : {
+      i2v: Math.max(0, Number(sourceTargets?.i2v ?? presetTargets.i2v) || 0),
+      ia2v: Math.max(0, Number(sourceTargets?.ia2v ?? presetTargets.ia2v) || 0),
+      first_last: Math.max(0, Number(sourceTargets?.first_last ?? presetTargets.first_last) || 0),
+    };
+  const autoTargets = { i2v: 4, ia2v: 2, first_last: 2 };
+  const effectiveTargets = routeStrategyMode === "auto" ? autoTargets : routeTargetsPerBlock;
+  const i2vRatio = Math.max(0, Math.min(1, Number((effectiveTargets.i2v / baseSceneCount).toFixed(3))));
+  const lipsyncRatio = Math.max(0, Math.min(1, Number((effectiveTargets.ia2v / baseSceneCount).toFixed(3))));
+  const firstLastRatio = Math.max(0, Math.min(1, Number((effectiveTargets.first_last / baseSceneCount).toFixed(3))));
+  const maxConsecutiveIa2v = Math.max(1, Math.min(8, Number(state?.maxConsecutiveIa2v ?? presetTargets.maxConsecutiveIa2v ?? 2) || 2));
+  const maxConsecutiveLipsync = Math.max(1, Math.min(8, Number(state?.maxConsecutiveLipsync ?? maxConsecutiveIa2v ?? 2) || 2));
+  const routeMixMode = routeStrategyMode === "auto" ? "auto" : "custom";
   const creativeConfig = {
-    route_mix_mode: routeMixMode,
-    lipsync_ratio: Number(lipsyncRatio.toFixed(3)),
-    first_last_ratio: Number(firstLastRatio.toFixed(3)),
-    preferred_routes: ["i2v", "first_last"],
+    route_strategy_mode: routeStrategyMode,
+    route_strategy_preset: routeStrategyPreset,
+    route_block_duration_sec: routeBlockDurationSec,
+    base_scene_count: baseSceneCount,
+    extra_scene_policy: String(state?.extraScenePolicy || "add_i2v") || "add_i2v",
+    route_targets_per_block: effectiveTargets,
+    max_consecutive_ia2v: maxConsecutiveIa2v,
     max_consecutive_lipsync: maxConsecutiveLipsync,
+    targets_are_soft: state?.targetsAreSoft !== false,
+    instrumental_policy: String(state?.instrumentalPolicy || "use_i2v_for_non_vocal_or_instrumental_gaps") || "use_i2v_for_non_vocal_or_instrumental_gaps",
+    vocal_policy: String(state?.vocalPolicy || "ia2v_only_on_vocal_windows") || "ia2v_only_on_vocal_windows",
+    long_vocal_split_policy: String(state?.longVocalSplitPolicy || "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec") || "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec",
+    route_mix_mode: routeMixMode,
+    lipsync_ratio: lipsyncRatio,
+    first_last_ratio: firstLastRatio,
+    i2v_ratio: i2vRatio,
+    preferred_routes: ["i2v", "ia2v", "first_last"],
   };
 
+
+  const markStaleFrom = String(state?.markStaleFrom || "").trim();
+  const staleReason = String(state?.staleReason || "").trim();
   const payload = {
     mode: isMusicVideo ? "clip_pipeline" : "oneshot",
     director_mode: directorMode,
@@ -1061,6 +1114,9 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     payload.metadata.fixtureDebugToggle = "frontend_query_or_localstorage";
     console.warn("[ScenarioDirector] DEBUG FIXTURE MODE enabled (forceLocalDeterministicFixture=true)");
   }
+
+  if (markStaleFrom) payload.markStaleFrom = markStaleFrom;
+  if (staleReason) payload.staleReason = staleReason;
 
   if (audioContext.hasAudioSource) {
     console.debug("[ScenarioDirector] audio payload context", {

@@ -249,24 +249,58 @@ def _resolve_vocal_owner_role(vocal_gender: str, role_gender_map: dict[str, str]
 
 def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
     row = _safe_dict(raw_config)
-    route_mix_mode = str(row.get("route_mix_mode") or row.get("routeMixMode") or "auto").strip().lower() or "auto"
+    route_strategy_mode = str(row.get("route_strategy_mode") or row.get("routeStrategyMode") or "auto").strip().lower() or "auto"
+    if route_strategy_mode not in {"auto", "preset", "custom_counts"}:
+        route_strategy_mode = "auto"
+    route_strategy_preset = str(row.get("route_strategy_preset") or row.get("routeStrategyPreset") or "").strip()
+    base_scene_count = max(1, int(row.get("base_scene_count") or row.get("baseSceneCount") or 8))
+    route_targets_raw = _safe_dict(row.get("route_targets_per_block") or row.get("routeTargetsPerBlock"))
+    route_targets_per_block = {
+        "i2v": max(0, int(route_targets_raw.get("i2v") or 0)),
+        "ia2v": max(0, int(route_targets_raw.get("ia2v") or 0)),
+        "first_last": max(0, int(route_targets_raw.get("first_last") or route_targets_raw.get("firstLast") or 0)),
+    }
+    if route_strategy_mode == "auto" and sum(route_targets_per_block.values()) <= 0:
+        route_targets_per_block = {"i2v": 4, "ia2v": 2, "first_last": 2}
+    route_mix_mode = str(row.get("route_mix_mode") or row.get("routeMixMode") or ("auto" if route_strategy_mode == "auto" else "custom")).strip().lower() or "auto"
     if route_mix_mode not in {"auto", "custom"}:
         route_mix_mode = "auto"
-    lipsync_ratio = _clamp_ratio(row.get("lipsync_ratio"), 0.25)
-    first_last_ratio = _clamp_ratio(row.get("first_last_ratio"), 0.25)
-    i2v_ratio = max(0.0, 1.0 - lipsync_ratio - first_last_ratio)
+
+    lipsync_ratio = _clamp_ratio(row.get("lipsync_ratio"), route_targets_per_block["ia2v"] / base_scene_count)
+    first_last_ratio = _clamp_ratio(row.get("first_last_ratio"), route_targets_per_block["first_last"] / base_scene_count)
+    i2v_ratio = _clamp_ratio(row.get("i2v_ratio"), route_targets_per_block["i2v"] / base_scene_count)
+    if sum(route_targets_per_block.values()) > 0:
+        lipsync_ratio = round(route_targets_per_block["ia2v"] / base_scene_count, 3)
+        first_last_ratio = round(route_targets_per_block["first_last"] / base_scene_count, 3)
+        i2v_ratio = round(route_targets_per_block["i2v"] / base_scene_count, 3)
+
+    preferred_routes = [str(item).strip().lower() for item in _safe_list(row.get("preferred_routes")) if str(item).strip()]
+    preferred_routes = [route for route in preferred_routes if route in {"i2v", "ia2v", "first_last"}] or ["i2v", "ia2v", "first_last"]
+
     try:
-        max_consecutive_lipsync = int(row.get("max_consecutive_lipsync"))
+        max_consecutive_ia2v = int(row.get("max_consecutive_ia2v") or row.get("maxConsecutiveIa2v") or row.get("max_consecutive_lipsync") or 2)
     except Exception:
-        max_consecutive_lipsync = 2
-    max_consecutive_lipsync = max(1, min(6, max_consecutive_lipsync))
+        max_consecutive_ia2v = 2
+    max_consecutive_ia2v = max(1, min(8, max_consecutive_ia2v))
+
     return {
+        "route_strategy_mode": route_strategy_mode,
+        "route_strategy_preset": route_strategy_preset,
+        "route_block_duration_sec": int(row.get("route_block_duration_sec") or row.get("routeBlockDurationSec") or 30),
+        "base_scene_count": base_scene_count,
+        "extra_scene_policy": str(row.get("extra_scene_policy") or row.get("extraScenePolicy") or "add_i2v").strip() or "add_i2v",
+        "route_targets_per_block": route_targets_per_block,
+        "max_consecutive_ia2v": max_consecutive_ia2v,
+        "targets_are_soft": bool(row.get("targets_are_soft") if row.get("targets_are_soft") is not None else (row.get("targetsAreSoft") if row.get("targetsAreSoft") is not None else True)),
+        "instrumental_policy": str(row.get("instrumental_policy") or row.get("instrumentalPolicy") or "use_i2v_for_non_vocal_or_instrumental_gaps").strip() or "use_i2v_for_non_vocal_or_instrumental_gaps",
+        "vocal_policy": str(row.get("vocal_policy") or row.get("vocalPolicy") or "ia2v_only_on_vocal_windows").strip() or "ia2v_only_on_vocal_windows",
+        "long_vocal_split_policy": str(row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy") or "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec").strip() or "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec",
         "route_mix_mode": route_mix_mode,
         "lipsync_ratio": round(lipsync_ratio, 3),
         "first_last_ratio": round(first_last_ratio, 3),
         "i2v_ratio": round(i2v_ratio, 3),
-        "max_consecutive_lipsync": max_consecutive_lipsync,
-        "preferred_routes": [str(item).strip().lower() for item in _safe_list(row.get("preferred_routes")) if str(item).strip()],
+        "preferred_routes": preferred_routes,
+        "max_consecutive_lipsync": max_consecutive_ia2v,
     }
 
 
