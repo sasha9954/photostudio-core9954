@@ -209,6 +209,30 @@ def _has_valid_scene_prompts_payload(output: Any) -> bool:
     return prompts_version == "1.1" and bool(segments)
 
 
+def _scene_prompts_result_has_no_blocking_errors(result: dict[str, Any]) -> bool:
+    diagnostics = _safe_dict(result.get("diagnostics"))
+    prompts = _safe_dict(result.get("scene_prompts"))
+    segments = _safe_list(prompts.get("segments")) or _safe_list(prompts.get("scenes"))
+    missing_photo_count = int(diagnostics.get("scene_prompts_missing_photo_count") or diagnostics.get("missing_photo_count") or 0)
+    missing_video_count = int(diagnostics.get("scene_prompts_missing_video_count") or diagnostics.get("missing_video_count") or 0)
+    response_empty_after_timeout = bool(
+        diagnostics.get("scene_prompts_response_was_empty_after_timeout") or diagnostics.get("response_was_empty_after_timeout")
+    )
+    return (
+        bool(segments)
+        and not str(result.get("validation_error") or "").strip()
+        and not str(result.get("error_code") or "").strip()
+        and not str(result.get("error") or "").strip()
+        and not str(diagnostics.get("scene_prompts_validation_error") or "").strip()
+        and not str(diagnostics.get("scene_prompts_error_code") or "").strip()
+        and not str(diagnostics.get("scene_prompts_error") or "").strip()
+        and not str(diagnostics.get("scene_prompts_technical_tagging_token") or "").strip()
+        and missing_photo_count == 0
+        and missing_video_count == 0
+        and not response_empty_after_timeout
+    )
+
+
 def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     safe_pkg = _safe_dict(package)
     output = safe_pkg.get(_stage_output_field(stage_id))
@@ -1821,6 +1845,9 @@ def _postprocess_scene_prompts_technical_tagging(result: dict[str, Any]) -> dict
 
     result["scene_prompts"] = prompts
     result["diagnostics"] = diagnostics
+    if (not token) and (not tagged_segment_id) and _scene_prompts_result_has_no_blocking_errors(result):
+        result["ok"] = True
+        result["error"] = ""
     return result
 
 
@@ -8372,6 +8399,10 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["validation_error"] = str(diagnostics.get("scene_prompts_validation_error") or "")
     diagnostics["scene_prompts_error"] = str(result.get("error") or "")
     diagnostics["scene_prompts_empty"] = not bool(scene_prompts and _safe_list(scene_prompts.get("segments")))
+    if _scene_prompts_result_has_no_blocking_errors(result):
+        result["ok"] = True
+        result["error"] = ""
+        diagnostics["scene_prompts_error"] = ""
     if not hard_fail_error:
         result_has_validation_error = bool(str(result.get("validation_error") or "").strip())
         result_has_segments = bool(_safe_list(scene_prompts.get("segments")))
