@@ -51,6 +51,26 @@ SCENES_FORBIDDEN_LEAK_TOKENS = {
     "ltx",
     "renderer_family",
 }
+SCENES_FREE_TEXT_LEAK_FIELD_PATHS = (
+    ("route_reason",),
+    ("scene_goal",),
+    ("audio_visual_sync",),
+    ("visual_motion", "subject_motion"),
+    ("visual_motion", "camera_intent"),
+)
+SCENES_FREE_TEXT_CLEANUP_TOKENS = {
+    *SCENES_FORBIDDEN_LEAK_TOKENS,
+    "route",
+    "i2v",
+    "ia2v",
+    "first_last",
+    "lip-sync",
+    "lip_sync",
+    "json",
+    "schema",
+    "provider",
+}
+
 FIRST_LAST_MODES = {
     "push_in_emotional",
     "pull_back_release",
@@ -1379,6 +1399,56 @@ def _infer_watchability_role(scene: dict[str, Any], idx: int, total: int) -> str
 
 
 
+def _collect_free_text_technical_leaks(raw_row: dict[str, Any]) -> list[dict[str, str]]:
+    leaks: list[dict[str, str]] = []
+    for field_path in SCENES_FREE_TEXT_LEAK_FIELD_PATHS:
+        value: Any = raw_row
+        for key in field_path:
+            if not isinstance(value, dict):
+                value = ""
+                break
+            value = value.get(key)
+        text = str(value or "").strip()
+        if not text:
+            continue
+        lower = text.lower()
+        for token in sorted(SCENES_FREE_TEXT_CLEANUP_TOKENS, key=len, reverse=True):
+            idx = lower.find(token)
+            if idx < 0:
+                continue
+            excerpt = text[max(0, idx - 24): min(len(text), idx + len(token) + 24)]
+            leaks.append({
+                "field": ".".join(field_path),
+                "token": token,
+                "excerpt": excerpt,
+            })
+    return leaks
+
+
+def _sanitize_free_text_technical_leaks(raw_row: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    cleaned = json.loads(json.dumps(raw_row, ensure_ascii=False))
+    changed = False
+    for field_path in SCENES_FREE_TEXT_LEAK_FIELD_PATHS:
+        parent: Any = cleaned
+        for key in field_path[:-1]:
+            if not isinstance(parent, dict):
+                parent = None
+                break
+            parent = parent.get(key)
+        leaf = field_path[-1]
+        if not isinstance(parent, dict):
+            continue
+        current = str(parent.get(leaf) or "")
+        updated = current
+        for token in sorted(SCENES_FREE_TEXT_CLEANUP_TOKENS, key=len, reverse=True):
+            updated = updated.replace(token, " ").replace(token.upper(), " ").replace(token.title(), " ")
+        updated = " ".join(updated.split()).strip(" ,.;:-")
+        if updated != current:
+            parent[leaf] = updated
+            changed = True
+    return cleaned, changed
+
+
 def _normalize_scene_plan(
     raw_plan: dict[str, Any],
     *,
@@ -1420,6 +1490,12 @@ def _normalize_scene_plan(
 
     prompt_leaks_detected = 0
     technical_leaks_detected = 0
+    scene_plan_technical_leak_field = ""
+    scene_plan_technical_leak_token = ""
+    scene_plan_technical_leak_excerpt = ""
+    scene_plan_technical_leak_fields: set[str] = set()
+    scene_plan_technical_leak_tokens: set[str] = set()
+    scene_plan_technical_leak_cleaned_locally = False
     enum_invalid_count = 0
     illegal_route_count = 0
     cast_mutation_count = 0
@@ -1477,21 +1553,33 @@ def _normalize_scene_plan(
             ]
         ).lower()
         has_prompt_leak = any(token in content_blob for token in {"8k", "cinematic quality", "highly detailed", "masterpiece", "positive_prompt", "negative_prompt"})
-        has_technical_leak = any(token in content_blob for token in {"fps", "lens", "seed", "sampler", "workflow", "ltx", "renderer_family"})
         if has_prompt_leak:
             prompt_leaks_detected += 1
             validation_error = validation_error or "prompt_leaking"
             error_code = error_code or "SCENES_PROMPT_LEAKING"
-        if has_technical_leak:
-            technical_leaks_detected += 1
-            validation_error = validation_error or "technical_leaking"
-            error_code = error_code or "SCENES_TECHNICAL_LEAKING"
 
-        row_str = json.dumps(raw_row, ensure_ascii=False).lower()
-        if any(token in row_str for token in SCENES_FORBIDDEN_LEAK_TOKENS):
-            technical_leaks_detected += 1
-            validation_error = validation_error or "technical_leaking"
-            error_code = error_code or "SCENES_TECHNICAL_LEAKING"
+        technical_leaks = _collect_free_text_technical_leaks(raw_row)
+        if technical_leaks:
+            technical_leaks_detected += len(technical_leaks)
+            scene_plan_technical_leak_fields.update(
+                str(item.get("field") or "") for item in technical_leaks if str(item.get("field") or "")
+            )
+            scene_plan_technical_leak_tokens.update(
+                str(item.get("token") or "") for item in technical_leaks if str(item.get("token") or "")
+            )
+            sanitized_row, cleaned_locally = _sanitize_free_text_technical_leaks(raw_row)
+            raw_row = sanitized_row if cleaned_locally else raw_row
+            visual_motion = _safe_dict(raw_row.get("visual_motion"))
+            technical_leaks_after_cleanup = _collect_free_text_technical_leaks(raw_row)
+            if technical_leaks_after_cleanup:
+                validation_error = validation_error or "technical_leaking"
+                error_code = error_code or "SCENES_TECHNICAL_LEAKING"
+                first_leak = technical_leaks_after_cleanup[0]
+                scene_plan_technical_leak_field = first_leak.get("field") or ""
+                scene_plan_technical_leak_token = first_leak.get("token") or ""
+                scene_plan_technical_leak_excerpt = first_leak.get("excerpt") or ""
+            elif cleaned_locally:
+                scene_plan_technical_leak_cleaned_locally = True
 
         if raw_row.get("primary_role") is not None or raw_row.get("secondary_roles") is not None or raw_row.get("active_roles") is not None:
             cast_mutation_count += 1
@@ -1753,6 +1841,13 @@ def _normalize_scene_plan(
         "uses_segment_id_canonical": True,
         "prompt_leaks_detected": prompt_leaks_detected,
         "technical_leaks_detected": technical_leaks_detected,
+        "scene_plan_technical_leaks_detected": technical_leaks_detected,
+        "scene_plan_technical_leak_field": scene_plan_technical_leak_field,
+        "scene_plan_technical_leak_token": scene_plan_technical_leak_token,
+        "scene_plan_technical_leak_excerpt": scene_plan_technical_leak_excerpt,
+        "scene_plan_technical_leak_fields": sorted(scene_plan_technical_leak_fields),
+        "scene_plan_technical_leak_tokens": sorted(scene_plan_technical_leak_tokens),
+        "scene_plan_technical_leak_cleaned_locally": scene_plan_technical_leak_cleaned_locally,
         "enum_invalid_count": enum_invalid_count,
         "illegal_route_count": illegal_route_count,
         "cast_mutation_count": cast_mutation_count,
@@ -1889,6 +1984,13 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
                     "ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow"
                 )
             ),
+            "scene_plan_technical_leaks_detected": int(normalization_diag.get("scene_plan_technical_leaks_detected") or 0),
+            "scene_plan_technical_leak_field": str(normalization_diag.get("scene_plan_technical_leak_field") or ""),
+            "scene_plan_technical_leak_token": str(normalization_diag.get("scene_plan_technical_leak_token") or ""),
+            "scene_plan_technical_leak_excerpt": str(normalization_diag.get("scene_plan_technical_leak_excerpt") or ""),
+            "scene_plan_technical_leak_fields": _safe_list(normalization_diag.get("scene_plan_technical_leak_fields")),
+            "scene_plan_technical_leak_tokens": _safe_list(normalization_diag.get("scene_plan_technical_leak_tokens")),
+            "scene_plan_technical_leak_cleaned_locally": bool(normalization_diag.get("scene_plan_technical_leak_cleaned_locally")),
         }
         if include_debug_raw:
             payload["scene_plan_debug"] = {
