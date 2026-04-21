@@ -5955,7 +5955,7 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     audio_evidence = str(scene.audio_anchor_evidence or scene.local_phrase or scene.what_from_audio_this_scene_uses or "").strip()
     emotion_direction = "pain/restraint/fragility with inward gaze and softer tension"
     if "open_throated_peak" in emotional_tone or "energetic_hook" in emotional_tone:
-        emotion_direction = "drive/attack/forward intention with stronger jaw-open singing and stronger hand language"
+        emotion_direction = "drive/attack/forward intention with stronger jaw-open singing, stronger facial tension, visible throat effort, and controlled breath"
     elif "bittersweet_release" in emotional_tone:
         emotion_direction = "softer breath, emotional residue, reduced force with still-readable singing"
     elif "intimate_fragile" in emotional_tone:
