@@ -19038,9 +19038,7 @@ onClipSec: (nodeId, value) => {
                   const nextRefs = prevRefs.filter((_, i) => i !== idx);
                   return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refDetailsOpen: false, refHiddenProfile: null, refAnalysisError: "" } };
                 })));
-                if (responseInputSignatureChanged) {
-                  clearClipStoryboardStorageForCurrentAccount("scenario_input_signature_changed");
-                }
+                clearClipStoryboardStorageForCurrentAccount("ref_removed");
               },
               onToggleDetails: (nodeId) => {
                 setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refDetailsOpen: !x?.data?.refDetailsOpen } } : x)));

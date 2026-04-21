@@ -261,8 +261,14 @@ def _clear_downstream_stage_outputs(package: dict[str, Any], from_stage: str, re
         final_payload["scenes"] = []
         pkg["final_storyboard"] = final_payload
         for key in ("storyboard", "scenes", "render_manifest"):
-            if key in pkg and key != "scenes":
-                pkg[key] = [] if key == "render_manifest" else {}
+            if key not in pkg:
+                continue
+            if key == "render_manifest":
+                pkg[key] = []
+            elif key == "scenes":
+                pkg[key] = []
+            else:
+                pkg[key] = {}
 
     if from_stage in {"input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts"}:
         pkg["final_video_prompt"] = STAGE_SECTION_RESETTERS["final_video_prompt"]()
@@ -273,7 +279,9 @@ def _clear_downstream_stage_outputs(package: dict[str, Any], from_stage: str, re
         cleared_payloads.append("render_manifest")
 
     previous_signature = str(diagnostics.get("scenario_input_signature") or "")
-    current_signature = _current_scenario_input_signature(pkg)
+    signatures = _compute_input_signatures(pkg)
+    current_signature = str(signatures.get("scenario_input_signature") or "")
+    diagnostics.update(signatures)
     diagnostics["stale_reason"] = str(reason or f"rerun:{from_stage}")
     diagnostics["downstream_clear"] = {
         "trigger_stage": from_stage,
