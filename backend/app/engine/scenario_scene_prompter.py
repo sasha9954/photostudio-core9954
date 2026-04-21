@@ -1947,24 +1947,24 @@ def _normalize_scene_prompts(
                 positive_video_prompt = _append_prompt_clause(positive_video_prompt or video_prompt, lock_clause)
             negative_prompt = _append_prompt_clause(negative_prompt, _IDENTITY_WARDROBE_NEGATIVE)
             negative_video_prompt = _append_prompt_clause(negative_video_prompt or negative_prompt, _IDENTITY_WARDROBE_NEGATIVE)
-        if carried_active_scene and "close to body" not in video_prompt.lower():
+        if actual_route != "ia2v" and carried_active_scene and "close to body" not in video_prompt.lower():
             video_prompt = (
                 f"{video_prompt} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
                 "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
             ).strip()
-        if held_active_scene and "owner-bound held object" not in video_prompt.lower():
+        if actual_route != "ia2v" and held_active_scene and "owner-bound held object" not in video_prompt.lower():
             video_prompt = (
                 f"{video_prompt} Keep the same owner-bound held object continuous across transit/evasion/release beats, "
                 "with readable handling only; one hand/handling attention remains committed so posture, pace, and route decisions stay constrained, "
                 "and this is not a replaceable random prop even when off center."
             ).strip()
         video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
-        if carried_active_scene and "close to body" not in positive_video_prompt.lower():
+        if actual_route != "ia2v" and carried_active_scene and "close to body" not in positive_video_prompt.lower():
             positive_video_prompt = (
                 f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
                 "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
             ).strip()
-        if held_active_scene and "owner-bound held object" not in positive_video_prompt.lower():
+        if actual_route != "ia2v" and held_active_scene and "owner-bound held object" not in positive_video_prompt.lower():
             positive_video_prompt = (
                 f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound held object continuous across transit/evasion/release beats, "
                 "with readable handling only; one hand/handling attention remains committed so posture, pace, and route decisions stay constrained, "
@@ -2141,24 +2141,24 @@ def _normalize_scene_prompts(
             normalized_notes["template_built"] = True
             i2v_template_rebuilt_count += 1
             i2v_template_override_applied = True
-        if carried_active_scene and "close to body" not in video_prompt.lower():
+        if actual_route != "ia2v" and carried_active_scene and "close to body" not in video_prompt.lower():
             video_prompt = (
                 f"{video_prompt} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
                 "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
             ).strip()
-        if held_active_scene and "owner-bound held object" not in video_prompt.lower():
+        if actual_route != "ia2v" and held_active_scene and "owner-bound held object" not in video_prompt.lower():
             video_prompt = (
                 f"{video_prompt} Keep the same owner-bound held object continuous across transit/evasion/release beats, "
                 "with readable handling only; one hand/handling attention remains committed so posture, pace, and route decisions stay constrained, "
                 "and this is not a replaceable random prop even when off center."
             ).strip()
         video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
-        if carried_active_scene and "close to body" not in positive_video_prompt.lower():
+        if actual_route != "ia2v" and carried_active_scene and "close to body" not in positive_video_prompt.lower():
             positive_video_prompt = (
                 f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
                 "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
             ).strip()
-        if held_active_scene and "owner-bound held object" not in positive_video_prompt.lower():
+        if actual_route != "ia2v" and held_active_scene and "owner-bound held object" not in positive_video_prompt.lower():
             positive_video_prompt = (
                 f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound held object continuous across transit/evasion/release beats, "
                 "with readable handling only; one hand/handling attention remains committed so posture, pace, and route decisions stay constrained, "
@@ -2329,23 +2329,21 @@ def _normalize_scene_prompts(
     ia2v_audio_driven_count = sum(
         1 for row in scenes if str(row.get("route") or "") == "ia2v" and bool(_safe_dict(row.get("prompt_notes")).get("audio_driven"))
     )
-    ia2v_photo_mouth_ready = all(
+    ia2v_rows = [row for row in scenes if str(row.get("route") or "") == "ia2v"]
+    ia2v_photo_mouth_ready = bool(ia2v_rows) and all(
         (
             "mouth" in str(row.get("photo_prompt") or "").lower()
             and ("open" in str(row.get("photo_prompt") or "").lower() or "sing" in str(row.get("photo_prompt") or "").lower())
         )
-        for row in scenes
-        if str(row.get("route") or "") == "ia2v"
+        for row in ia2v_rows
     )
-    ia2v_photo_emotion_readable = all(
+    ia2v_photo_emotion_readable = bool(ia2v_rows) and all(
         "emotion" in str(row.get("photo_prompt") or "").lower() or "emotional" in str(row.get("photo_prompt") or "").lower()
-        for row in scenes
-        if str(row.get("route") or "") == "ia2v"
+        for row in ia2v_rows
     )
-    ia2v_video_prompt_has_singing_mechanics = all(
+    ia2v_video_prompt_has_singing_mechanics = bool(ia2v_rows) and all(
         all(token in str(row.get("video_prompt") or "").lower() for token in ("sing", "lip", "mouth"))
-        for row in scenes
-        if str(row.get("route") or "") == "ia2v"
+        for row in ia2v_rows
     )
     normalization_diag = {
         "rows_source_count": len(scene_rows),

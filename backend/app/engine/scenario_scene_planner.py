@@ -313,6 +313,13 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         route = str(v or "").strip().lower()
         if seg and route in ALLOWED_ROUTES:
             hard_route_assignments_by_segment[seg] = route
+    targets_are_soft = bool(
+        row.get("targets_are_soft")
+        if row.get("targets_are_soft") is not None
+        else (row.get("targetsAreSoft") if row.get("targetsAreSoft") is not None else True)
+    )
+    if hard_route_assignments_by_segment:
+        targets_are_soft = False
 
     return {
         "route_strategy_mode": route_strategy_mode,
@@ -322,7 +329,7 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         "extra_scene_policy": str(row.get("extra_scene_policy") or row.get("extraScenePolicy") or "add_i2v").strip() or "add_i2v",
         "route_targets_per_block": route_targets_per_block,
         "max_consecutive_ia2v": max_consecutive_ia2v,
-        "targets_are_soft": bool(row.get("targets_are_soft") if row.get("targets_are_soft") is not None else (row.get("targetsAreSoft") if row.get("targetsAreSoft") is not None else True)),
+        "targets_are_soft": targets_are_soft,
         "instrumental_policy": str(row.get("instrumental_policy") or row.get("instrumentalPolicy") or "use_i2v_for_non_vocal_or_instrumental_gaps").strip() or "use_i2v_for_non_vocal_or_instrumental_gaps",
         "vocal_policy": str(row.get("vocal_policy") or row.get("vocalPolicy") or "ia2v_only_on_vocal_windows").strip() or "ia2v_only_on_vocal_windows",
         "long_vocal_split_policy": str(row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy") or "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec").strip() or "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec",
@@ -736,7 +743,9 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
                 "route_strategy_mode": str(creative_config.get("route_strategy_mode") or "auto"),
                 "route_strategy_preset": str(creative_config.get("route_strategy_preset") or ""),
                 "hard_route_assignments_by_segment": _safe_dict(creative_config.get("hard_route_assignments_by_segment")),
+                "hardRouteMapApplied": bool(_safe_dict(creative_config.get("hard_route_assignments_by_segment"))),
                 "route_assignment_source": "creative_config.route_assignments_by_segment" if _safe_dict(creative_config.get("hard_route_assignments_by_segment")) else "gemini",
+                "routeAssignmentSource": "creative_config.route_assignments_by_segment" if _safe_dict(creative_config.get("hard_route_assignments_by_segment")) else "gemini",
             },
             "ia2v_definition": "emotion-first performance shot; readable face/mouth; smooth camera; restrained motion",
             "i2v_definition": "baseline clip route for observation, transit, environment and connective montage scenes",
@@ -857,6 +866,14 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
             "PREVIOUS OUTPUT FAILED ROUTE-BUDGET VALIDATION.\n"
             f"Fix exactly: {validation_feedback}\n"
         )
+    hard_route_map = _safe_dict(
+        _safe_dict(_safe_dict(context.get("clip_scene_policy")).get("route_budget_contract")).get("hard_route_assignments_by_segment")
+    )
+    route_assignment_instruction = (
+        "Do not choose routes. Use the provided route for each segment_id exactly.\\n"
+        if hard_route_map
+        else "Choose segment routes according to target_counts and dramaturgy.\\n"
+    )
     return (
         "You are SCENES stage only.\\n"
         "Return STRICT JSON only. No markdown, no prose.\\n"
@@ -897,7 +914,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "If route_budget_contract.hard_route_assignments_by_segment is non-empty, route is STRICT per segment_id and MUST NOT be changed.\\n"
         "If route_budget_contract.targets_are_hard_for_short_clip=true, you MUST satisfy target_counts exactly.\\n"
         "This is not a suggestion; this is the required dramaturgical structure for this scene plan.\\n"
-        "You must choose WHICH segment_id receives WHICH route using audio_map + story_core + role_plan dramaturgy.\\n"
+        f"{route_assignment_instruction}"
         "Do not let backend assign dramaturgy; backend only validates budget compliance.\\n"
         "For ia2v: vocal emotional performance scene, not physical action scene. Prefer strong vocal/speech windows, performance moments, emotional peaks, hooks; "
         "set speaker_role when possible; lip_sync_allowed=true only with valid vocal/speaker evidence; "

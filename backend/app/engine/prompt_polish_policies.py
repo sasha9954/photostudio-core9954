@@ -26,10 +26,10 @@ _IA2V_FOCUS_TOKENS = (
 )
 
 _IA2V_POLICY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (IA2V_READABILITY_POLICY[0], ("face", "upper", "mouth", "jaw", "readable")),
-    (IA2V_READABILITY_POLICY[1], ("visual center", "crowd occlusion", "occlusion")),
-    (IA2V_READABILITY_POLICY[2], ("subtle", "rhythm", "wide choreography")),
-    (IA2V_READABILITY_POLICY[3], ("motion blur", "turn away", "hands covering")),
+    (IA2V_READABILITY_POLICY[0], ("framing", "full body", "singing")),
+    (IA2V_READABILITY_POLICY[1], ("mouth", "open", "singing shape", "emotion")),
+    (IA2V_READABILITY_POLICY[2], ("face", "mouth", "occlusion", "hands", "hair", "props")),
+    (IA2V_READABILITY_POLICY[3], ("background", "story-relevant", "vocal performance")),
 )
 
 NEGATIVE_PROMPT_ARTIFACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (

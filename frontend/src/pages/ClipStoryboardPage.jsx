@@ -269,6 +269,20 @@ function buildLipSyncVideoPromptForLtx(basePrompt) {
   return `${lipSyncLead} ${base}`.trim();
 }
 
+function cleanLipSyncNegativeForLtx(value) {
+  return String(value || "")
+    .replace(/\bclosed mouth\b/gi, "")
+    .replace(/\bsilent face\b/gi, "")
+    .replace(/\bnot singing\b/gi, "")
+    .replace(/\bno lip movement\b/gi, "")
+    .replace(/\bmouth not synchronized\b/gi, "")
+    .replace(/\bno lip[- ]sync\b/gi, "")
+    .replace(/\bnot lip[- ]syncing\b/gi, "")
+    .replace(/\s*,\s*,+/g, ", ")
+    .replace(/^\s*,\s*|\s*,\s*$/g, "")
+    .trim();
+}
+
 function buildLipSyncNegativePromptForLtx(baseNegative) {
   const lipSyncNeg = [
     "hidden mouth",
@@ -286,8 +300,8 @@ function buildLipSyncNegativePromptForLtx(baseNegative) {
     "extreme motion blur",
     "cutaway away from performer"
   ].join(", ");
-  const base = String(baseNegative || "").trim();
-  return base ? `${lipSyncNeg}, ${base}` : lipSyncNeg;
+  const cleanedBase = cleanLipSyncNegativeForLtx(baseNegative);
+  return cleanedBase ? `${lipSyncNeg}, ${cleanedBase}` : lipSyncNeg;
 }
 
 function buildWardrobeLockPromptForHumanScene(basePrompt) {

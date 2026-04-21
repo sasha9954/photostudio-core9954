@@ -83,6 +83,31 @@ DOMESTIC_WORLD_NEGATIVE_TERMS = (
 
 
 _FORBIDDEN_VENUE_TERMS = ("nightclub", "night club", "club", "bar", "dance floor", "dancefloor", "stage", "crowd")
+_ACTION_CONFLICT_WORDS = (
+    "pour",
+    "pouring",
+    "drink",
+    "drinking",
+    "throw",
+    "throwing",
+    "walk",
+    "walking",
+    "run",
+    "running",
+    "open door",
+    "door handle",
+    "pack",
+    "packing",
+    "grab",
+    "grabbing",
+    "hold bottle",
+    "holding bottle",
+    "hands trembling",
+    "sink",
+    "glass",
+    "bag",
+    "suitcase",
+)
 
 
 def _strip_literal_quoted_dialogue(text: str) -> str:
@@ -231,6 +256,22 @@ def _strip_negative_positive_contract_blocks(text: str) -> str:
         text = re.sub(pattern, " ", text)
     text = re.sub(r"\s+", " ", text).strip(" ,.;")
     return text
+
+
+def _contains_action_conflict_words(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(word in lowered for word in _ACTION_CONFLICT_WORDS)
+
+
+def _strip_ia2v_positive_noise(text: str) -> str:
+    cleaned = _strip_positive_contract_blocks(str(text or ""))
+    cleaned = re.sub(r"(?is)\bOUTFIT ANCHOR\b[^.]*\.?", " ", cleaned)
+    cleaned = re.sub(r"(?is)\bOUTFIT NEGATIVES?\b[^.]*\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bdo not raise neckline\b[^.]*\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bdo not close chest coverage\b[^.]*\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\b(do not|no)\s+(?:[^.]*\b(?:neckline|collar|turtleneck|blouse|body proportions?|wardrobe|outfit)\b[^.]*)\.?", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
+    return cleaned
 
 
 def _sanitize_contract_prompts(*, positive_prompt: str, negative_prompt: str, route: str) -> tuple[str, str, dict[str, bool]]:
@@ -609,7 +650,7 @@ def _build_instruction(payload: dict[str, Any]) -> str:
             "GLOBAL HERO IDENTITY CONTRACT for non-ia2v human scenes must be enforced; keep lock clauses in positive and only real negative tokens in negative.",
             "For ia2v, use IA2V_BASE_PROMPT_V1 performer-first canon and avoid wardrobe/body continuity walls in positive prompt.",
             "ALLOWED VARIATION for same hero: vary only pose, camera angle, shot size, location zone, gesture, emotion, movement and lighting accent.",
-            "If segment order index is 2+, add confirmed look anchor clause: Use the confirmed hero look reference from scene_01...",
+            "For non-ia2v human scenes with confirmed hero reference, add confirmed look anchor clause. For ia2v, rely on uploaded image first-frame identity anchor and do not add wardrobe/body/outfit continuity walls into positive prompt.",
             "Do not replace original character references; confirmed look anchor is additional reinforcement only.",
             "WHOLE-STORY CONTINUITY: review all segments as one continuous clip and prevent action/state contradictions between adjacent segments.",
             "For each segment output starts_from_previous_logic, ends_with_state, continuity_with_next, potential_contradiction, fix_if_needed.",
@@ -658,17 +699,32 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
             positive_prompt = _append_clause(positive_prompt, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
         negative_prompt = _append_clause(negative_prompt, IDENTITY_NEGATIVE_GUARD)
 
+    plan_row = _safe_dict(fallback_row.get("plan_row"))
     scene_specific_parts = [
         fallback_photo_prompt,
         fallback_video_prompt,
         str(fallback_prompt_row.get("world_anchor") or fallback_prompt_row.get("worldAnchor") or "").strip(),
         str(fallback_prompt_row.get("action_emotion") or fallback_prompt_row.get("actionEmotion") or "").strip(),
-        str(_safe_dict(fallback_row.get("plan_row")).get("scene_goal") or "").strip(),
-        str(_safe_dict(fallback_row.get("plan_row")).get("scene_summary") or _safe_dict(fallback_row.get("plan_row")).get("scene_description") or "").strip(),
-        str(_safe_dict(fallback_row.get("plan_row")).get("emotional_intent") or "").strip(),
+        str(plan_row.get("scene_goal") or "").strip(),
+        str(plan_row.get("scene_summary") or plan_row.get("scene_description") or "").strip(),
+        str(plan_row.get("emotional_intent") or "").strip(),
     ]
     scene_specific_payload = ". ".join(part for part in scene_specific_parts if part).strip()
-    if scene_specific_payload:
+    if route == "ia2v":
+        ia2v_scene_specific_parts = [
+            str(plan_row.get("emotional_intent") or "").strip(),
+            str(plan_row.get("narrative_function") or "").strip(),
+            str(plan_row.get("scene_goal") or "").strip(),
+        ]
+        ia2v_scene_specific_parts = [
+            part for part in ia2v_scene_specific_parts if part and not _contains_action_conflict_words(part)
+        ]
+        scene_specific_payload = ". ".join(ia2v_scene_specific_parts).strip()
+        if scene_specific_payload:
+            positive_prompt = ". ".join(part for part in [scene_specific_payload, positive_prompt] if part).strip(". ")
+        elif positive_prompt_seed:
+            positive_prompt = positive_prompt_seed
+    elif scene_specific_payload:
         positive_prompt = ". ".join(part for part in [scene_specific_payload, positive_prompt] if part).strip(". ")
     elif positive_prompt_seed:
         positive_prompt = positive_prompt_seed
@@ -676,7 +732,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     scene_specific_chars_after_bootstrap = _scene_specific_char_count(positive_prompt)
     final_prompt_scene_specific_missing = scene_specific_chars_after_bootstrap < 80
     final_prompt_rebuilt_from_scene_prompts = False
-    if final_prompt_scene_specific_missing and scene_specific_payload:
+    if route != "ia2v" and final_prompt_scene_specific_missing and scene_specific_payload:
         rebuild_parts = [
             fallback_photo_prompt,
             fallback_video_prompt,
@@ -708,7 +764,6 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         gesture = str(row.get("gesture") or fallback_prompt_row.get("gesture") or "").strip()
         location_zone = str(row.get("location_zone") or fallback_prompt_row.get("location_zone") or "").strip()
         mouth_readability = str(row.get("mouth_readability") or fallback_prompt_row.get("mouth_readability") or "high").strip().lower() or "high"
-        plan_row = _safe_dict(fallback_row.get("plan_row"))
         role_row = _safe_dict(fallback_row.get("role_row"))
         semantic_context = " ".join(
             [
@@ -762,7 +817,13 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         route=route,
     )
     if route == "ia2v":
-        positive_prompt = re.sub(r"(?i)\b(do not|no|negative[s]?|outfit negatives?)\b[^.]*\.?", " ", positive_prompt)
+        positive_prompt = _strip_ia2v_positive_noise(positive_prompt)
+        if not positive_prompt.startswith(IA2V_BASE_PROMPT_V1):
+            body = _strip_clear_vocal_fragments(positive_prompt)
+            positive_prompt = f"{IA2V_BASE_PROMPT_V1} {body}".strip()
+        else:
+            body = _strip_clear_vocal_fragments(positive_prompt)
+            positive_prompt = f"{IA2V_BASE_PROMPT_V1} {body}".strip()
         positive_prompt = re.sub(r"\s+", " ", positive_prompt).strip(" ,.;")
 
     # apply literal dialogue cleanup after all append/rebuild steps and before venue-term guard.
