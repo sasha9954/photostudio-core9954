@@ -97,6 +97,11 @@ def _strip_literal_quoted_dialogue(text: str) -> str:
         "mouth moving in sync with the provided audio phrase",
         raw,
     )
+    raw = re.sub(
+        r'(?i)mouth\s+moving\s+in\s+sync\s+with(?:\s+the\s+phrase)?\s*[\'"]([^\'"]){1,220}[\'"]',
+        "mouth moving in sync with the provided audio phrase",
+        raw,
+    )
     # remove quoted fragments to avoid subtitle rendering; keep semantic prose only
     raw = re.sub(r'["\'][^"\']{2,180}["\']', " ", raw)
     raw = re.sub(r"\s+", " ", raw).strip()
@@ -639,6 +644,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     confirmed_look_clause_applied = bool(has_human_subject and scene_seq_index >= 2)
     confirmed_look_used = bool(confirmed_look_clause_applied and _has_real_confirmed_hero_image_url(fallback_row))
     positive_contract_duplicates_removed = False
+    positive_prompt_seed = positive_prompt
     if has_human_subject:
         positive_before_cleanup = positive_prompt
         positive_prompt = _strip_positive_contract_blocks(positive_prompt)
@@ -661,7 +667,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     ]
     scene_specific_payload = ". ".join(part for part in scene_specific_parts if part).strip()
     if scene_specific_payload:
-        positive_prompt = f"{scene_specific_payload}. {positive_prompt}".strip(". ")
+        positive_prompt = ". ".join(part for part in [scene_specific_payload, positive_prompt] if part).strip(". ")
+    elif positive_prompt_seed:
+        positive_prompt = positive_prompt_seed
 
     scene_specific_chars_after_bootstrap = _scene_specific_char_count(positive_prompt)
     final_prompt_scene_specific_missing = scene_specific_chars_after_bootstrap < 80
@@ -746,6 +754,15 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         positive_prompt = _append_clause(positive_prompt, f"OUTFIT NEGATIVES: {CHARACTER_1_OUTFIT_NEGATIVES}.")
         negative_prompt = _append_clause(negative_prompt, CHARACTER_1_OUTFIT_NEGATIVES)
 
+    positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
+        positive_prompt=positive_prompt,
+        negative_prompt=negative_prompt,
+        route=route,
+    )
+
+    # apply literal dialogue cleanup after all append/rebuild steps and before venue-term guard.
+    positive_prompt = _strip_literal_quoted_dialogue(positive_prompt)
+
     positive_prompt, negative_prompt, final_prompt_forbidden_venue_terms_removed = _remove_forbidden_venue_terms(
         positive_prompt,
         negative_prompt,
@@ -754,11 +771,6 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     if domestic_scene:
         negative_prompt = _append_clause(negative_prompt, DOMESTIC_WORLD_NEGATIVE_TERMS)
 
-    positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
-        positive_prompt=positive_prompt,
-        negative_prompt=negative_prompt,
-        route=route,
-    )
     negative_prompt = clean_negative_prompt_artifacts(negative_prompt)
 
     first_frame_raw = route_payload.get("first_frame_prompt")
