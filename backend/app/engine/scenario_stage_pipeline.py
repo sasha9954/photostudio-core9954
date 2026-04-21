@@ -386,10 +386,12 @@ def _collect_scene_prompts_dependency_gate_state(
     return payload_ok_by_stage, status_by_stage, false_positive_prevented
 
 
-def _can_run_scene_prompts_from_existing_payload(package: dict[str, Any]) -> bool:
-    dependencies = STAGE_DEPENDENCIES.get("scene_prompts", [])
-    payload_ok_by_stage, _, _ = _collect_scene_prompts_dependency_gate_state(package, dependencies)
-    return all(bool(payload_ok_by_stage.get(dep_stage)) for dep_stage in dependencies)
+def _can_run_scene_prompts_from_existing_payload(
+    package: dict[str, Any], dependencies: list[str] | None = None
+) -> bool:
+    deps = dependencies or resolve_stage_sequence(["scene_prompts"], include_dependencies=True)[:-1]
+    payload_ok_by_stage, _, _ = _collect_scene_prompts_dependency_gate_state(package, deps)
+    return all(bool(payload_ok_by_stage.get(dep_stage)) for dep_stage in deps)
 
 
 def _is_audio_map_dependency_satisfied(package: dict[str, Any]) -> bool:
@@ -8799,13 +8801,13 @@ def run_manual_stage(
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
     scene_prompts_payload_ok_by_stage: dict[str, bool] = {}
     if stage_id == "scene_prompts":
-        deps = STAGE_DEPENDENCIES.get(stage_id, [])
+        deps = list(dep_sequence)
         (
             scene_prompts_payload_ok_by_stage,
             scene_prompts_status_by_stage,
             scene_prompts_false_positive_prevented,
         ) = _collect_scene_prompts_dependency_gate_state(pkg, deps)
-        if _can_run_scene_prompts_from_existing_payload(pkg):
+        if _can_run_scene_prompts_from_existing_payload(pkg, deps):
             reusable_upstream = list(dep_sequence)
             missing_upstream = []
             continuation_mode = "reuse_existing_package"
@@ -8858,7 +8860,7 @@ def run_manual_stage(
     pkg = run_stage(stage_id, pkg, payload)
     executed_stage_ids.append(stage_id)
     if stage_id == "scene_prompts" and str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(stage_id)).get("status") or "").strip().lower() == "done":
-        deps = STAGE_DEPENDENCIES.get(stage_id, [])
+        deps = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
         pkg = _restore_payload_valid_upstream_statuses_for_stage(pkg, stage_id, deps, scene_prompts_payload_ok_by_stage)
     if reusable_upstream:
         statuses = _safe_dict(pkg.get("stage_statuses"))
