@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { resolveScenarioSceneVideoProfile, resolveSceneDisplayTime } from "./scenarioStoryboardDomain";
+import { resolveCanonicalSegmentId, resolveScenarioSceneVideoProfile, resolveSceneDisplayTime } from "./scenarioStoryboardDomain";
 import { resolveAssetUrl } from "./comfyNodeShared";
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const CLIP_TRACE_SCENARIO_EDITOR_DEBUG = false;
@@ -415,9 +415,6 @@ function resolveSceneId(scene = {}, idx = 0) {
 }
 
 function buildSceneUiKey(scene, idx, allScenes = []) {
-  const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
-  if (segmentId) return segmentId;
-
   const raw = String(scene?.sceneKey || scene?.sceneId || scene?.scene_id || scene?.id || "").trim();
   const duplicateCount = allScenes.filter((item) => {
     const candidate = String(item?.sceneKey || item?.sceneId || item?.scene_id || item?.id || "").trim();
@@ -450,7 +447,7 @@ function hasDuplicateRawSceneId(scene = {}, allScenes = []) {
 function resolveSceneDisplayId(scene = {}, idx = 0) {
   const display = String(scene?.display_id || scene?.displayId || "").trim();
   if (display) return display;
-  const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
+  const segmentId = resolveCanonicalSegmentId(scene, idx);
   if (segmentId) return segmentId;
   const sourceSceneId = String(scene?.sourceSceneId || scene?.scene_id || "").trim();
   if (sourceSceneId) return sourceSceneId;
@@ -638,14 +635,17 @@ export default function ScenarioStoryboardEditor({
   const normalizedScenes = useMemo(
     () => safeScenes.map((scene, idx) => {
       const uiKey = buildSceneUiKey(scene, idx, safeScenes);
+      const canonicalSegmentId = resolveCanonicalSegmentId(scene, idx);
       const hasDuplicateRawId = hasDuplicateRawSceneId(scene, safeScenes);
-      const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
-      const displayId = segmentId || (hasDuplicateRawId ? `SEG_${String(idx + 1).padStart(2, "0")}` : resolveSceneDisplayId(scene, idx));
+      const displayId = canonicalSegmentId || (hasDuplicateRawId ? `SEG_${String(idx + 1).padStart(2, "0")}` : resolveSceneDisplayId(scene, idx));
       const normalized = {
         ...(scene || {}),
         uiKey,
         sceneId: uiKey,
         sceneKey: uiKey,
+        segment_id: canonicalSegmentId,
+        segmentId: canonicalSegmentId,
+        canonicalSegmentId,
         display_id: displayId,
         originalSceneId: scene?.sceneId || scene?.scene_id,
       };
