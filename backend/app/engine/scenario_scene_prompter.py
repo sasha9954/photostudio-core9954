@@ -116,6 +116,13 @@ _IA2V_POSITIVE_NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bno action-heavy choreography\b", re.IGNORECASE),
 )
 _IA2V_ANTI_LIPSYNC_NEGATIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bmouth[- ]?sync(?:ing)?\b", re.IGNORECASE),
+    re.compile(r"\blip[- ]?sync(?:ing)?\b", re.IGNORECASE),
+    re.compile(r"\bsinging\b", re.IGNORECASE),
+    re.compile(r"\bsinger\b", re.IGNORECASE),
+    re.compile(r"\bvocal performance\b", re.IGNORECASE),
+    re.compile(r"\blip movement\b", re.IGNORECASE),
+    re.compile(r"\bjaw motion\b", re.IGNORECASE),
     re.compile(r"\bnot singing\b", re.IGNORECASE),
     re.compile(r"\bno lip movement\b", re.IGNORECASE),
     re.compile(r"\bno mouth[- ]?sync(?:ing)?\b", re.IGNORECASE),

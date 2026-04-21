@@ -108,6 +108,25 @@ _ACTION_CONFLICT_WORDS = (
     "bag",
     "suitcase",
 )
+_IA2V_NEGATIVE_KILLER_TOKEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("mouth-syncing", re.compile(r"\bmouth[- ]syncing\b", re.IGNORECASE)),
+    ("mouth syncing", re.compile(r"\bmouth syncing\b", re.IGNORECASE)),
+    ("mouth sync", re.compile(r"\bmouth sync\b", re.IGNORECASE)),
+    ("lip-syncing", re.compile(r"\blip[- ]syncing\b", re.IGNORECASE)),
+    ("lip syncing", re.compile(r"\blip syncing\b", re.IGNORECASE)),
+    ("lip sync", re.compile(r"\blip sync\b", re.IGNORECASE)),
+    ("singing", re.compile(r"\bsinging\b", re.IGNORECASE)),
+    ("singer", re.compile(r"\bsinger\b", re.IGNORECASE)),
+    ("vocal performance", re.compile(r"\bvocal performance\b", re.IGNORECASE)),
+    ("lip movement", re.compile(r"\blip movement\b", re.IGNORECASE)),
+    ("jaw motion", re.compile(r"\bjaw motion\b", re.IGNORECASE)),
+    ("closed mouth", re.compile(r"\bclosed mouth\b", re.IGNORECASE)),
+    ("silent face", re.compile(r"\bsilent face\b", re.IGNORECASE)),
+    ("not singing", re.compile(r"\bnot singing\b", re.IGNORECASE)),
+    ("no lip movement", re.compile(r"\bno lip movement\b", re.IGNORECASE)),
+    ("no mouth-syncing", re.compile(r"\bno mouth[- ]syncing\b", re.IGNORECASE)),
+    ("mouth not synchronized", re.compile(r"\bmouth not synchronized\b", re.IGNORECASE)),
+)
 
 
 def _strip_literal_quoted_dialogue(text: str) -> str:
@@ -132,6 +151,31 @@ def _strip_literal_quoted_dialogue(text: str) -> str:
     raw = re.sub(r'["\'][^"\']{2,180}["\']', " ", raw)
     raw = re.sub(r"\s+", " ", raw).strip()
     return raw
+
+
+def _clean_ia2v_negative_prompt(text: str) -> str:
+    parts = [p.strip() for p in str(text or "").split(",") if p.strip()]
+    kept: list[str] = []
+    for part in parts:
+        if any(pattern.search(part) for _, pattern in _IA2V_NEGATIVE_KILLER_TOKEN_PATTERNS):
+            continue
+        kept.append(part)
+    return ", ".join(kept)
+
+
+def _analyze_ia2v_negative_killer_tokens(text: str) -> tuple[list[str], list[str]]:
+    raw_parts = [p.strip() for p in str(text or "").split(",") if p.strip()]
+    found_tokens: list[str] = []
+    found_segments: list[str] = []
+    for token, pattern in _IA2V_NEGATIVE_KILLER_TOKEN_PATTERNS:
+        if pattern.search(str(text or "")):
+            found_tokens.append(token)
+    for segment in raw_parts:
+        if any(pattern.search(segment) for _, pattern in _IA2V_NEGATIVE_KILLER_TOKEN_PATTERNS):
+            found_segments.append(segment)
+    dedup_tokens = list(dict.fromkeys(found_tokens))
+    dedup_segments = list(dict.fromkeys(found_segments))
+    return dedup_tokens, dedup_segments
 
 
 def _scene_specific_char_count(text: str) -> int:
@@ -839,6 +883,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     if domestic_scene:
         negative_prompt = _append_clause(negative_prompt, DOMESTIC_WORLD_NEGATIVE_TERMS)
 
+    if route == "ia2v":
+        negative_prompt = _clean_ia2v_negative_prompt(negative_prompt)
     negative_prompt = clean_negative_prompt_artifacts(negative_prompt)
 
     first_frame_raw = route_payload.get("first_frame_prompt")
@@ -943,7 +989,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     lower_positive = positive_prompt.lower()
     lower_negative = negative_prompt.lower()
     ia2v_positive_has_wardrobe_noise = any(token in lower_positive for token in ("wardrobe", "outfit", "neckline", "collar", "body proportions"))
-    ia2v_negative_has_singing_killer_tokens = any(token in lower_negative for token in ("not singing", "no lip movement", "mouth not synchronized", "silent face", "closed mouth"))
+    ia2v_negative_killer_tokens_found, ia2v_negative_killer_token_segments = _analyze_ia2v_negative_killer_tokens(negative_prompt if route == "ia2v" else "")
+    ia2v_negative_has_singing_killer_tokens = bool(ia2v_negative_killer_tokens_found)
     ia2v_video_prompt_has_singing_mechanics = all(token in lower_positive for token in ("lip sync", "jaw", "mouth"))
 
     return {
@@ -1032,6 +1079,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         "ia2vVideoPromptHasSingingMechanics": bool(route != "ia2v" or ia2v_video_prompt_has_singing_mechanics),
         "ia2vPositiveHasWardrobeNoise": bool(route == "ia2v" and ia2v_positive_has_wardrobe_noise),
         "ia2vNegativeHasSingingKillerTokens": bool(route == "ia2v" and ia2v_negative_has_singing_killer_tokens),
+        "ia2vNegativeKillerTokensFound": ia2v_negative_killer_tokens_found if route == "ia2v" else [],
+        "ia2vNegativeKillerTokenSegments": ia2v_negative_killer_token_segments if route == "ia2v" else [],
     }
 
 
