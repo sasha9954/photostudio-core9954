@@ -76,6 +76,41 @@ DOMESTIC_WORLD_LOCK_BLOCK = (
 )
 
 
+_FORBIDDEN_VENUE_TERMS = ("nightclub", "night club", "club", "bar", "dance floor", "dancefloor", "stage", "crowd")
+
+
+def _strip_literal_quoted_dialogue(text: str) -> str:
+    raw = str(text or "")
+    # remove quoted fragments to avoid subtitle rendering; keep semantic prose only
+    raw = re.sub(r'["\'][^"\']{2,180}["\']', " ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    return raw
+
+
+def _scene_specific_char_count(text: str) -> int:
+    cleaned = _strip_positive_contract_blocks(str(text or ""))
+    cleaned = re.sub(r"(?i)\b(LIP-SYNC PERFORMANCE RULES STRICT|LIP-SYNC EXPRESSIVITY LOW ENERGY|CLEAR VOCAL PERFORMANCE|OUTFIT ANCHOR|OUTFIT NEGATIVES|CONTROLLED MOTION SAFETY|DOMESTIC WORLD LOCK)\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return len(cleaned)
+
+
+def _remove_forbidden_venue_terms(positive: str, negative: str, *, apply_guard: bool) -> tuple[str, str, bool]:
+    if not apply_guard:
+        return positive, negative, False
+    rewritten = str(positive or "")
+    removed = False
+    for term in _FORBIDDEN_VENUE_TERMS:
+        before = rewritten
+        rewritten = re.sub(rf"(?i)\b{re.escape(term)}\b", " ", rewritten)
+        if rewritten != before:
+            removed = True
+    rewritten = re.sub(r"\s+", " ", rewritten).strip(" ,.;")
+    neg = str(negative or "")
+    if removed:
+        neg = _append_clause(neg, ", ".join(["no nightclub", "no club", "no bar", "no dance floor", "no stage", "no crowd"]))
+    return rewritten, neg, removed
+
+
 _CONFIRMED_HERO_URL_KEYS = (
     "confirmed_hero_image_url",
     "confirmedHeroImageUrl",
@@ -581,6 +616,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     fallback_prompt_row = _safe_dict(fallback_row.get("prompt_row"))
     positive_prompt = str(route_payload.get("positive_prompt") or fallback_prompt_row.get("positive_video_prompt") or fallback_prompt_row.get("video_prompt") or "").strip()
     negative_prompt = str(route_payload.get("negative_prompt") or fallback_prompt_row.get("negative_video_prompt") or fallback_prompt_row.get("negative_prompt") or "").strip()
+    fallback_photo_prompt = _strip_literal_quoted_dialogue(str(fallback_prompt_row.get("photo_prompt") or "").strip())
+    fallback_video_prompt = _strip_literal_quoted_dialogue(str(fallback_prompt_row.get("video_prompt") or "").strip())
     scene_seq_index = int(fallback_row.get("sequence_index") or 0)
     has_human_subject = _scene_has_human_subject(fallback_row, route)
     confirmed_look_clause_applied = bool(has_human_subject and scene_seq_index >= 2)
@@ -598,8 +635,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         negative_prompt = _append_clause(negative_prompt, IDENTITY_NEGATIVE_GUARD)
 
     scene_specific_parts = [
-        str(fallback_prompt_row.get("photo_prompt") or "").strip(),
-        str(fallback_prompt_row.get("video_prompt") or "").strip(),
+        fallback_photo_prompt,
+        fallback_video_prompt,
         str(fallback_prompt_row.get("world_anchor") or fallback_prompt_row.get("worldAnchor") or "").strip(),
         str(fallback_prompt_row.get("action_emotion") or fallback_prompt_row.get("actionEmotion") or "").strip(),
         str(_safe_dict(fallback_row.get("plan_row")).get("scene_goal") or "").strip(),
@@ -609,6 +646,22 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     scene_specific_payload = ". ".join(part for part in scene_specific_parts if part).strip()
     if scene_specific_payload:
         positive_prompt = f"{scene_specific_payload}. {positive_prompt}".strip(". ")
+
+    scene_specific_chars_after_bootstrap = _scene_specific_char_count(positive_prompt)
+    identity_only_signature = bool(re.search(r"(?i)GLOBAL HERO IDENTITY LOCK:.*BODY CONTINUITY:.*WARDROBE CONTINUITY:", positive_prompt))
+    final_prompt_scene_specific_missing = scene_specific_chars_after_bootstrap < 80 or identity_only_signature
+    final_prompt_rebuilt_from_scene_prompts = False
+    if final_prompt_scene_specific_missing and scene_specific_payload:
+        rebuild_parts = [
+            fallback_photo_prompt,
+            fallback_video_prompt,
+            str(fallback_prompt_row.get("world_anchor") or fallback_prompt_row.get("worldAnchor") or "").strip(),
+            str(_safe_dict(fallback_row.get("plan_row")).get("emotional_intent") or "").strip(),
+            positive_prompt,
+        ]
+        positive_prompt = ". ".join(part for part in rebuild_parts if part).strip(". ")
+        final_prompt_rebuilt_from_scene_prompts = True
+        final_prompt_scene_specific_missing = _scene_specific_char_count(positive_prompt) < 80
 
     lower_scene_semantics = " ".join(scene_specific_parts + [positive_prompt]).lower()
     domestic_scene = any(
@@ -665,8 +718,6 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     if route == "i2v":
         route_behavior_template = CONTROLLED_MOTION_SAFETY_BLOCK
         positive_prompt = _append_clause(positive_prompt, route_behavior_template)
-        for banned in ("nightclub", "club-energy", "crowd energy", "dance floor", "bar / dancefloor edge", "club", "bar", "dancefloor edge"):
-            positive_prompt = re.sub(re.escape(banned), "", positive_prompt, flags=re.IGNORECASE)
         if domestic_scene:
             route_template_source = "i2v_domestic_safety_template"
             positive_prompt = _append_clause(positive_prompt, DOMESTIC_WORLD_LOCK_BLOCK)
@@ -679,6 +730,12 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         positive_prompt = _append_clause(positive_prompt, f"OUTFIT ANCHOR (character_1): {CHARACTER_1_OUTFIT_ANCHOR}.")
         positive_prompt = _append_clause(positive_prompt, f"OUTFIT NEGATIVES: {CHARACTER_1_OUTFIT_NEGATIVES}.")
         negative_prompt = _append_clause(negative_prompt, CHARACTER_1_OUTFIT_NEGATIVES)
+
+    positive_prompt, negative_prompt, final_prompt_forbidden_venue_terms_removed = _remove_forbidden_venue_terms(
+        positive_prompt,
+        negative_prompt,
+        apply_guard=domestic_scene,
+    )
 
     positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
         positive_prompt=positive_prompt,
@@ -770,6 +827,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     requires_audio = route == "ia2v"
     alias_audio_sync_mode = "lip_sync" if route == "ia2v" and lip_sync_allowed else "none"
     alias_frame_strategy = "first_last" if route == "first_last" else "single_image"
+    image_prompt = ". ".join(part for part in [fallback_photo_prompt, GLOBAL_HERO_IDENTITY_LOCK if has_human_subject else "", BODY_CONTINUITY_LOCK if has_human_subject else "", WARDROBE_CONTINUITY_LOCK if has_human_subject else ""] if str(part or "").strip()).strip()
+    image_prompt = _append_clause(image_prompt, DOMESTIC_WORLD_LOCK_BLOCK if domestic_scene else "")
+    image_prompt = _strip_literal_quoted_dialogue(image_prompt)
     scene_chars = len(scene_specific_payload)
     route_chars = len(route_behavior_template)
     ratio = round(scene_chars / route_chars, 4) if route_chars > 0 else None
@@ -781,10 +841,12 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         "route": route,
         "route_payload": {
             "route": route,
-            "positive_prompt": positive_prompt,
+            "positive_prompt": _strip_literal_quoted_dialogue(positive_prompt),
             "negative_prompt": negative_prompt,
             "first_frame_prompt": first_frame if first_frame else None,
             "last_frame_prompt": last_frame if last_frame else None,
+            "image_prompt": image_prompt,
+            "video_prompt": _strip_literal_quoted_dialogue(positive_prompt),
         },
         "requires_first_frame": route == "first_last",
         "requires_last_frame": route == "first_last",
@@ -850,6 +912,12 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         "duplicate_prompt_segments": [],
         "route_template_source": route_template_source,
         "scene_specific_payload_source": "scene_prompts.prompt_row+scene_plan",
+        "final_prompt_scene_specific_missing": bool(final_prompt_scene_specific_missing),
+        "final_prompt_rebuilt_from_scene_prompts": bool(final_prompt_rebuilt_from_scene_prompts),
+        "final_prompt_forbidden_venue_terms_removed": bool(final_prompt_forbidden_venue_terms_removed),
+        "final_image_prompt_chars": len(image_prompt),
+        "final_video_prompt_chars": len(str(_safe_dict({"p":positive_prompt}).get("p") or "")),
+        "final_scene_specific_chars": _scene_specific_char_count(positive_prompt),
     }
 
 

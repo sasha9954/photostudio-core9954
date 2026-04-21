@@ -506,6 +506,9 @@ function buildScenarioVideoVisualGlueText(scene = {}) {
 
 
 function resolveScenarioSceneVideoMetadata(scene = {}) {
+  const finalPayload = scene?.final_payload && typeof scene.final_payload === "object"
+    ? scene.final_payload
+    : (scene?.finalPayload && typeof scene.finalPayload === "object" ? scene.finalPayload : {});
   const routePayload = scene?.route_payload && typeof scene.route_payload === "object"
     ? scene.route_payload
     : (scene?.routePayload && typeof scene.routePayload === "object" ? scene.routePayload : {});
@@ -522,7 +525,8 @@ function resolveScenarioSceneVideoMetadata(scene = {}) {
     ? renderManifestRow.video_metadata
     : (renderManifestRow?.videoMetadata && typeof renderManifestRow.videoMetadata === "object" ? renderManifestRow.videoMetadata : {});
   const routeType = String(
-    scene?.route
+    finalPayload?.route
+    ?? scene?.route
     ?? renderManifestRow?.route
     ?? metadata?.route_type
     ?? metadata?.routeType
@@ -530,7 +534,7 @@ function resolveScenarioSceneVideoMetadata(scene = {}) {
     ?? renderManifestMetadata?.routeType
     ?? ""
   ).trim();
-  const promptSource = String(scene?.prompt_source ?? scene?.promptSource ?? "").trim();
+  const promptSource = String(finalPayload?.prompt_source ?? scene?.prompt_source ?? scene?.promptSource ?? "").trim();
   const isGeminiFinalVideoPrompt = promptSource === "gemini_final_video_prompt_v11"
     || promptSource.includes("final_video_prompt");
   const rendererFamily = String(
@@ -543,7 +547,9 @@ function resolveScenarioSceneVideoMetadata(scene = {}) {
   const hasVideoRouteOrLtxHints = Boolean(routeType) || rendererFamily === "ltx";
   const canUseTopLevelFinalAliases = isGeminiFinalVideoPrompt || hasVideoRouteOrLtxHints;
   const resolvedPositivePrompt = String(
-    routePayload?.positive_prompt
+    finalPayload?.video_prompt
+    ?? routePayload?.video_prompt
+    ?? routePayload?.positive_prompt
     ?? routePayload?.positivePrompt
     ?? scene?.finalVideoPrompt?.positivePrompt
     ?? scene?.final_video_prompt?.positive_prompt
@@ -553,7 +559,8 @@ function resolveScenarioSceneVideoMetadata(scene = {}) {
     ?? ""
   ).trim();
   const resolvedNegativePrompt = String(
-    routePayload?.negative_prompt
+    finalPayload?.negative_prompt
+    ?? routePayload?.negative_prompt
     ?? routePayload?.negativePrompt
     ?? scene?.finalVideoPrompt?.negativePrompt
     ?? scene?.final_video_prompt?.negative_prompt
@@ -592,6 +599,7 @@ function resolveScenarioSceneVideoMetadata(scene = {}) {
     engineHints,
     videoMetadata: metadata,
     raw: {
+      final_payload: finalPayload,
       route_payload: routePayload,
       engine_hints: engineHints,
       video_metadata: metadata,
@@ -1753,13 +1761,11 @@ function resolveStoryboardSceneBySegmentId(segmentId = "", ...sources) {
 
 const SCENARIO_IMAGE_RULE_ONLY_KEYWORDS = [
   "RULES STRICT",
-  "DANCE MOTION SAFETY",
   "Forbidden:",
   "CAMERA ORBIT SAFETY",
   "Performance framing guidance",
 ];
 const SCENARIO_IMAGE_WORLD_ANCHOR_NEUTRAL_FALLBACK = "grounded realistic environment matching the current scene description, coherent lighting, no random unrelated location";
-const SCENARIO_IMAGE_WORLD_ANCHOR_NIGHTCLUB = "realistic nightclub world, dimly lit corridor, bar / dancefloor edge, soft haze, deep shadows, reflective glass/mirrors";
 
 function resolveScenarioImageWorldAnchor(scene = {}, scenarioPackage = {}) {
   const normalized = resolveScenarioImageWorldAnchorMeta(scene, scenarioPackage);
@@ -1785,17 +1791,7 @@ function resolveScenarioImageWorldAnchorMeta(scene = {}, scenarioPackage = {}) {
     return text && locationSignal.test(text);
   }) || candidates.find((item) => String(item?.value || "").trim());
   const selectedText = String(selected?.value || "").trim();
-  const hasExplicitNightclubSignal = /(nightclub|night club|club|bar|dancefloor)/i.test(selectedText);
-  const hasClubCorridorSignal = /corridor/i.test(selectedText) && /(nightclub|night club|club|bar|dancefloor)/i.test(selectedText);
-  const hasNightclubWorld = hasExplicitNightclubSignal || hasClubCorridorSignal;
-  if (hasNightclubWorld) {
-    return {
-      anchor: SCENARIO_IMAGE_WORLD_ANCHOR_NIGHTCLUB,
-      source: selected?.source || "detected.nightclub",
-      hasWorldAnchor: true,
-      isHardcodedFallback: false,
-    };
-  }
+
   if (!selectedText) {
     return {
       anchor: SCENARIO_IMAGE_WORLD_ANCHOR_NEUTRAL_FALLBACK,
@@ -1886,6 +1882,11 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
       isImageOrPhotoPrompt: true,
     }] : []),
     {
+      source: "scene.final_payload.image_prompt",
+      value: readFirstNonEmpty(scene?.final_payload?.image_prompt, scene?.finalPayload?.image_prompt),
+      isImageOrPhotoPrompt: true,
+    },
+    {
       source: "scene.imagePromptEnRu",
       value: readFirstNonEmpty(scene?.imagePromptEn, scene?.imagePromptRu),
       isImageOrPhotoPrompt: true,
@@ -1926,6 +1927,7 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
   const rawSelectedPrompt = String(selectedCandidate?.value || "").trim();
   const usedDanceMotionSafetyOnly = isRuleOnlyImagePrompt(rawSelectedPrompt);
   const imagePromptResolved = usedDanceMotionSafetyOnly ? rawSelectedPrompt : appendWorldAnchor(rawSelectedPrompt);
+  const promptSource = String(scene?.final_payload?.prompt_source || scene?.finalPayload?.prompt_source || (selectedCandidate?.source === "scene.final_payload.image_prompt" ? "final_payload" : "fallback_not_final_payload")).trim();
   const negativeEnvironment = resolveScenarioImageNegativeEnvironment(scene, worldAnchor);
   const negativePrompt = [resolveScenarioSceneNegativePrompt(scene), negativeEnvironment]
     .map((item) => String(item || "").trim())
@@ -2286,9 +2288,9 @@ function normalizeStoryboardOutScene(scene, index) {
     location: String(source.location || "").trim(),
     props: Array.isArray(source.props) ? source.props : [],
     emotion: String(source.emotion || "").trim(),
-    imagePrompt: String(source.image_prompt || "").trim(),
-    framePrompt: String(source.image_prompt || "").trim(),
-    videoPrompt: String(source.video_prompt || "").trim(),
+    imagePrompt: String(source?.final_payload?.image_prompt || source.image_prompt || "").trim(),
+    framePrompt: String(source?.final_payload?.image_prompt || source.image_prompt || "").trim(),
+    videoPrompt: String(source?.final_payload?.video_prompt || source.video_prompt || "").trim(),
     actionInFrame: String(source.action_in_frame || "").trim(),
     cameraIdea: String(source.camera || "").trim(),
     ltxMode,
@@ -14507,8 +14509,12 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const framePrompt = (isTwoFrameScene && wardrobeLockForImagePayload)
         ? buildWardrobeLockPromptForHumanScene(framePromptRaw)
         : framePromptRaw;
+      const sceneFinalPayload = targetScene?.final_payload && typeof targetScene.final_payload === "object"
+        ? targetScene.final_payload
+        : (targetScene?.finalPayload && typeof targetScene.finalPayload === "object" ? targetScene.finalPayload : null);
       let imagePromptEffective = String(
         (isTwoFrameScene ? framePrompt : "")
+        || sceneFinalPayload?.image_prompt
         || promptContext?.imagePrompt
         || targetScene?.image_prompt
         || targetScene?.scene_prompt
@@ -14528,7 +14534,8 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         imagePromptEffective = `${imagePromptEffective}\n\nREFERENCE PROFILE FALLBACK: ${character1ProfileFallbackText}`.trim();
       }
       const videoPromptEffective = String(
-        promptContext?.videoPrompt
+        sceneFinalPayload?.video_prompt
+        || promptContext?.videoPrompt
         || targetScene?.video_prompt
         || targetScene?.first_frame_prompt
         || targetScene?.last_frame_prompt
@@ -14574,6 +14581,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       }
       const sceneContractForRequest = {
         ...scenarioContractPayloadSanitized,
+        ...(sceneFinalPayload ? { final_payload: sceneFinalPayload } : {}),
         refsByRole: refsByRoleEffective,
         refsUsedByRole: refsUsedByRoleEffective,
         connectedInputs: connectedInputsEffective,
@@ -14582,7 +14590,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         sceneGoal: sceneGoalEffective,
         sceneNarrativeStep: sceneNarrativeStepEffective,
         sceneText,
-        promptSource: promptSourceEffective,
+        promptSource: sceneFinalPayload ? (sceneFinalPayload?.prompt_source || "final_payload") : promptSourceEffective,
         image_prompt: imagePromptEffective,
         video_prompt: videoPromptEffective,
         negative_prompt: imageNegativePromptEffective,
@@ -14658,6 +14666,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       ).trim();
       const finalRequestBody = {
         ...scenarioContractPayload,
+        ...(sceneFinalPayload ? { finalPayload: sceneFinalPayload, final_payload: sceneFinalPayload } : {}),
         sceneId,
         segment_id: sceneId,
         route: isTwoFrameScene ? "first_last" : (sceneRouteRaw || canonicalRoute || imageStrategy || ""),
@@ -14687,7 +14696,7 @@ Aspect ratio: ${imageFormat}`,
         slot: normalizedSlot,
         sceneContract: sceneContractForRequest,
         promptDebug: {
-          promptSource: promptSourceEffective,
+          promptSource: sceneFinalPayload ? (sceneFinalPayload?.prompt_source || "final_payload") : promptSourceEffective,
           frameKind,
           frameRole,
           targetField,
@@ -14721,7 +14730,7 @@ Aspect ratio: ${imageFormat}`,
         heroEntityId: shouldUseCharacter1 ? "character_1" : heroEntityIdEffective,
         sceneGoal: sceneGoalEffective,
         sceneNarrativeStep: sceneNarrativeStepEffective,
-        promptSource: promptSourceEffective,
+        promptSource: sceneFinalPayload ? (sceneFinalPayload?.prompt_source || "final_payload") : promptSourceEffective,
         image_prompt: imagePromptEffective,
         video_prompt: videoPromptEffective,
         prompt_notes: promptNotesEffective,

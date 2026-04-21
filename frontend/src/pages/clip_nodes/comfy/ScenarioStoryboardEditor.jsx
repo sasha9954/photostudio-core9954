@@ -176,7 +176,8 @@ function resolveScenePreviewSources(scene = {}) {
 
 function deriveFirstLastFramePrompts(scene = {}) {
   const startExplicit = String(
-    scene?.route_payload?.first_frame_prompt
+    scene?.final_payload?.first_frame_prompt
+    || scene?.route_payload?.first_frame_prompt
     || scene?.first_frame_prompt
     || scene?.finalVideoPrompt?.firstFramePrompt
     || scene?.scene_prompt?.first_frame_prompt
@@ -188,7 +189,8 @@ function deriveFirstLastFramePrompts(scene = {}) {
     || ""
   ).trim();
   const endExplicit = String(
-    scene?.route_payload?.last_frame_prompt
+    scene?.final_payload?.last_frame_prompt
+    || scene?.route_payload?.last_frame_prompt
     || scene?.last_frame_prompt
     || scene?.finalVideoPrompt?.lastFramePrompt
     || scene?.scene_prompt?.last_frame_prompt
@@ -205,8 +207,8 @@ function deriveFirstLastFramePrompts(scene = {}) {
 
   const sceneGoal = String(scene?.sceneGoal || "").trim();
   const frameDescription = String(scene?.frameDescription || "").trim();
-  const imagePrompt = String(scene?.imagePromptRu || scene?.imagePromptEn || scene?.imagePrompt || "").trim();
-  const videoPrompt = String(scene?.videoPromptRu || scene?.videoPromptEn || scene?.videoPrompt || "").trim();
+  const imagePrompt = String(scene?.final_payload?.image_prompt || scene?.imagePromptRu || scene?.imagePromptEn || scene?.imagePrompt || "").trim();
+  const videoPrompt = String(scene?.final_payload?.video_prompt || scene?.videoPromptRu || scene?.videoPromptEn || scene?.videoPrompt || "").trim();
   const transitionType = String(scene?.transitionType || "state shift").trim().replaceAll("_", " ");
   const transitionSemantics = videoPrompt || `First→last transition with ${transitionType}.`;
 
@@ -238,6 +240,7 @@ function resolveSceneImagePromptForDisplay(scene = {}) {
     return "";
   };
   return readFirstNonEmpty([
+    scene?.final_payload?.image_prompt,
     scene?.imagePromptEn,
     scene?.imagePromptRu,
     scene?.scene_prompt?.photo_prompt,
