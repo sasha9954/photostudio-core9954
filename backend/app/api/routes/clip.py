@@ -319,6 +319,12 @@ class ClipImageIn(BaseModel):
     model_config = ConfigDict(extra="allow")
     sceneId: str
     prompt: str | None = None
+    imagePrompt: str | None = None
+    image_prompt: str | None = None
+    negativePrompt: str | None = None
+    negative_prompt: str | None = None
+    finalPayload: dict | None = None
+    final_payload: dict | None = None
     sceneDelta: str | None = None
     style: str | None = "default"
     width: int | None = 1024
@@ -1978,6 +1984,8 @@ def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = Non
         "mustBeVisible",
         "may_be_offscreen",
         "mayBeOffscreen",
+        "finalPayload",
+        "final_payload",
     ]
     for key in passthrough_keys:
         if key not in contract and payload_map.get(key) is not None:
@@ -12184,8 +12192,6 @@ def clip_image(payload: ClipImageIn):
     api_started_at = time.monotonic()
     gemini_started = False
     scene_id = (payload.sceneId or "").strip()
-    prompt = (payload.prompt or "").strip()
-    scene_delta = (payload.sceneDelta or prompt).strip()
     style = (payload.style or "default").strip()
     route_value = str(getattr(payload, "route", "") or "").strip()
     workflow_key = str(
@@ -12193,6 +12199,40 @@ def clip_image(payload: ClipImageIn):
         or getattr(payload, "workflowKey", None)
         or ""
     ).strip()
+    payload_map = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else {}
+    payload_map = payload_map if isinstance(payload_map, dict) else {}
+    request_final_payload = (
+        payload.finalPayload if isinstance(getattr(payload, "finalPayload", None), dict)
+        else payload.final_payload if isinstance(getattr(payload, "final_payload", None), dict)
+        else payload_map.get("finalPayload") if isinstance(payload_map.get("finalPayload"), dict)
+        else payload_map.get("final_payload") if isinstance(payload_map.get("final_payload"), dict)
+        else {}
+    )
+    scene_contract_candidate = payload.sceneContract if isinstance(getattr(payload, "sceneContract", None), dict) else {}
+    contract_final_payload = scene_contract_candidate.get("final_payload") if isinstance(scene_contract_candidate.get("final_payload"), dict) else (
+        scene_contract_candidate.get("finalPayload") if isinstance(scene_contract_candidate.get("finalPayload"), dict) else {}
+    )
+    authoritative_final_payload = request_final_payload or contract_final_payload
+    prioritized_image_prompt = str(
+        authoritative_final_payload.get("image_prompt")
+        or getattr(payload, "imagePrompt", None)
+        or getattr(payload, "image_prompt", None)
+        or payload.prompt
+        or scene_contract_candidate.get("image_prompt")
+        or scene_contract_candidate.get("photo_prompt")
+        or ""
+    ).strip()
+    prioritized_negative_prompt = str(
+        authoritative_final_payload.get("negative_prompt")
+        or getattr(payload, "negativePrompt", None)
+        or getattr(payload, "negative_prompt", None)
+        or scene_contract_candidate.get("negative_prompt")
+        or scene_contract_candidate.get("negative_video_prompt")
+        or ""
+    ).strip()
+    prompt = prioritized_image_prompt
+    scene_delta = (payload.sceneDelta or prioritized_image_prompt or payload.prompt or "").strip()
+    prompt_source = "final_payload" if authoritative_final_payload else ("request_image_prompt" if prioritized_image_prompt else "legacy_scene_delta")
 
     if not scene_id:
         return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "sceneId_required"})
@@ -12204,6 +12244,7 @@ def clip_image(payload: ClipImageIn):
         "workflowKey": workflow_key,
         "sceneDeltaLength": len(scene_delta),
         "promptLength": len(prompt),
+        "promptSource": prompt_source,
         "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
     }, ensure_ascii=False))
 
@@ -12221,6 +12262,8 @@ def clip_image(payload: ClipImageIn):
     session_style_anchor = str(getattr(refs_obj, "sessionStyleAnchor", "") or "").strip()
     session_baseline = getattr(refs_obj, "sessionBaseline", None)
     raw_scene_contract = _extract_clip_image_scene_contract(payload, refs_obj=refs_obj)
+    if authoritative_final_payload and "final_payload" not in raw_scene_contract:
+        raw_scene_contract["final_payload"] = authoritative_final_payload
     print("[CLIP IMAGE PROMPT SUMMARY] " + json.dumps({
         "sceneId": scene_id,
         "route": route_value,
@@ -12229,6 +12272,7 @@ def clip_image(payload: ClipImageIn):
         "sceneDeltaLength": len(scene_delta),
         "imagePromptLength": len(str(getattr(payload, "image_prompt", "") or "")),
         "videoPromptLength": len(str(getattr(payload, "video_prompt", "") or "")),
+        "promptSource": prompt_source,
         "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
     }, ensure_ascii=False))
     hero_contract_debug = raw_scene_contract.get("heroAppearanceContract")
@@ -12346,7 +12390,6 @@ def clip_image(payload: ClipImageIn):
     raw_refs_used_by_role_incoming = getattr(refs_obj, "refsUsedByRole", None) or getattr(refs_obj, "refs_used_by_role", None)
     raw_scene_contract_refs_by_role = raw_scene_contract.get("refsByRole") if isinstance(raw_scene_contract, dict) else {}
     raw_scene_contract_refs_used_by_role = raw_scene_contract.get("refsUsedByRole") if isinstance(raw_scene_contract, dict) else {}
-    payload_map = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else {}
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole=" + json.dumps(raw_refs_by_role_incoming, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsUsedByRole=" + json.dumps(raw_refs_used_by_role_incoming, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] incoming sceneContract.raw.refsByRole=" + json.dumps(raw_scene_contract_refs_by_role, ensure_ascii=False))
@@ -12445,6 +12488,7 @@ def clip_image(payload: ClipImageIn):
         "canonicalRefCountByRole": canonical_ref_diagnostics.get("canonicalRefCountByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
         "attachedCountsByRole": {role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES},
         "connectedInputsCount": len((getattr(refs_obj, "connectedInputs", None) or {}) if isinstance(getattr(refs_obj, "connectedInputs", None), dict) else {}),
+        "promptSource": prompt_source,
         "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
     }, ensure_ascii=False))
     reference_profiles = build_reference_profiles({
@@ -12504,6 +12548,12 @@ def clip_image(payload: ClipImageIn):
             if raw_scene_contract.get("identityLock") is not None
             else raw_scene_contract.get("identity_lock")
         )
+    if authoritative_final_payload:
+        scene_contract["final_payload"] = authoritative_final_payload
+        scene_contract["prompt_source"] = "final_payload"
+    if prioritized_negative_prompt and not str(scene_contract.get("negative_prompt") or "").strip():
+        scene_contract["negative_prompt"] = prioritized_negative_prompt
+
     if incoming_identity_lock is not None:
         scene_contract["identityLock"] = bool(incoming_identity_lock)
         scene_contract["identityLockApplied"] = bool(incoming_identity_lock)
@@ -13944,7 +13994,8 @@ def clip_image(payload: ClipImageIn):
             "route": route_value,
             "workflowKey": workflow_key,
             "model": str(model),
-            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+            "promptSource": prompt_source,
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
         }, ensure_ascii=False))
         print("[CLIP IMAGE GEMINI] request model=" + str(model))
         print("[CLIP IMAGE GEMINI] request config=" + json.dumps(body.get("generationConfig") or {}, ensure_ascii=False))
@@ -13979,7 +14030,8 @@ def clip_image(payload: ClipImageIn):
             "httpError": bool(response_summary.get("httpError")),
             "imagePartCount": response_summary.get("imagePartCount"),
             "decodedImageFound": image_found,
-            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+            "promptSource": prompt_source,
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
         }, ensure_ascii=False))
         fallback_debug = {
             "httpStatus": response_summary.get("status"),
@@ -14031,7 +14083,8 @@ def clip_image(payload: ClipImageIn):
                 "model": str(model),
                 "geminiStarted": gemini_started,
                 "imageBytesReturned": True,
-                "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+                "promptSource": prompt_source,
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
             }, ensure_ascii=False))
             return {
                 "ok": True,
@@ -14068,7 +14121,8 @@ def clip_image(payload: ClipImageIn):
             "model": str(model),
             "geminiStarted": gemini_started,
             "imageBytesReturned": False,
-            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+            "promptSource": prompt_source,
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
         }, ensure_ascii=False))
         return {
             "ok": True,
@@ -14090,7 +14144,8 @@ def clip_image(payload: ClipImageIn):
             "sceneId": scene_id,
             "error": str(e)[:300],
             "geminiStarted": gemini_started,
-            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+            "promptSource": prompt_source,
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
         }, ensure_ascii=False))
         return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": str(e)[:300]})
     except Exception as e:
@@ -14098,7 +14153,8 @@ def clip_image(payload: ClipImageIn):
             "sceneId": scene_id,
             "error": str(e)[:500],
             "geminiStarted": gemini_started,
-            "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+            "promptSource": prompt_source,
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
         }, ensure_ascii=False))
         logger.exception(
             "[SCENARIO IMAGE EXCEPTION] sceneId=%s error=%s modelUsed=%s generationMode=%s",
@@ -14129,7 +14185,8 @@ def clip_image(payload: ClipImageIn):
                 "model": str(model if 'model' in locals() else ""),
                 "geminiStarted": gemini_started,
                 "imageBytesReturned": False,
-                "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+                "promptSource": prompt_source,
+        "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
             }, ensure_ascii=False))
             return {
                 "ok": True,

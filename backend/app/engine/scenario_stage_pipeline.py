@@ -4922,6 +4922,31 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             t1 = t0
         duration_sec = _to_float(plan_row.get("duration_sec"), max(0.0, t1 - t0))
 
+        final_image_prompt = str(
+            route_payload.get("image_prompt")
+            or prompts_row.get("photo_prompt")
+            or route_payload.get("positive_prompt")
+            or ""
+        ).strip()
+        final_video_prompt_text = str(
+            route_payload.get("video_prompt")
+            or route_payload.get("positive_prompt")
+            or prompts_row.get("video_prompt")
+            or ""
+        ).strip()
+        final_negative_prompt = str(route_payload.get("negative_prompt") or prompts_row.get("negative_prompt") or "").strip()
+        final_prompt_source = str(segment.get("prompt_source") or FINAL_VIDEO_PROMPT_STAGE_VERSION).strip() or FINAL_VIDEO_PROMPT_STAGE_VERSION
+        final_payload = {
+            "image_prompt": final_image_prompt,
+            "video_prompt": final_video_prompt_text,
+            "negative_prompt": final_negative_prompt,
+            "route": route,
+            "linked_assets": deepcopy(linked_assets),
+            "audio_url": str(linked_assets.get("audio_url") or "").strip(),
+            "source_image_refs": list(_safe_list(linked_assets.get("source_image_refs"))),
+            "prompt_source": final_prompt_source,
+        }
+
         manifest_row = {
             "segment_id": segment_id,
             "scene_id": scene_id,
@@ -4932,8 +4957,10 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             },
             "route": route,
             "route_payload": {
-                "positive_prompt": str(route_payload.get("positive_prompt") or "").strip(),
-                "negative_prompt": str(route_payload.get("negative_prompt") or "").strip(),
+                "positive_prompt": final_video_prompt_text,
+                "negative_prompt": final_negative_prompt,
+                "image_prompt": final_image_prompt,
+                "video_prompt": final_video_prompt_text,
                 "first_frame_prompt": route_payload.get("first_frame_prompt"),
                 "last_frame_prompt": route_payload.get("last_frame_prompt"),
             },
@@ -4941,7 +4968,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "video_metadata": video_metadata,
             "linked_assets": linked_assets,
             "audio_behavior_hints": str(segment.get("audio_behavior_hints") or "").strip(),
-            "prompt_source": str(segment.get("prompt_source") or "").strip(),
+            "prompt_source": final_prompt_source,
         }
         render_manifest.append(manifest_row)
         active_warning_roles = list(role_keys)
@@ -4972,8 +4999,10 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 "scene_id": scene_id,
                 "segment_id": segment_id,
                 "route": route,
-                "video_prompt": manifest_row["route_payload"]["positive_prompt"],
-                "negative_video_prompt": manifest_row["route_payload"]["negative_prompt"],
+                "final_payload": final_payload,
+                "image_prompt": final_payload["image_prompt"],
+                "video_prompt": final_payload["video_prompt"],
+                "negative_video_prompt": final_payload["negative_prompt"],
                 "first_frame_prompt": manifest_row["route_payload"].get("first_frame_prompt"),
                 "last_frame_prompt": manifest_row["route_payload"].get("last_frame_prompt"),
                 "video_metadata": video_metadata,
