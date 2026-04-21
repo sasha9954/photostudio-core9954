@@ -20,6 +20,12 @@ function fmtSec(value) {
   return num.toFixed(1);
 }
 
+function fmtTime(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "na";
+  return String(num).replace(".", "_");
+}
+
 function safeSceneDuration(scene = {}) {
   const explicit = Number(scene?.audioSliceExpectedDurationSec ?? scene?.durationSec);
   if (Number.isFinite(explicit) && explicit >= 0) return explicit;
@@ -393,6 +399,8 @@ function selectedDurationText(scene = {}) {
 }
 
 function resolveSceneId(scene = {}, idx = 0) {
+  const uiKey = String(scene?.uiKey || "").trim();
+  if (uiKey) return uiKey;
   const sceneKey = String(scene?.sceneKey || "").trim();
   if (sceneKey) return sceneKey;
   const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
@@ -406,6 +414,39 @@ function resolveSceneId(scene = {}, idx = 0) {
   return `scene_${idx + 1}`;
 }
 
+function buildSceneUiKey(scene, idx, allScenes = []) {
+  const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
+  if (segmentId) return segmentId;
+
+  const raw = String(scene?.sceneKey || scene?.sceneId || scene?.scene_id || scene?.id || "").trim();
+  const duplicateCount = allScenes.filter((item) => {
+    const candidate = String(item?.sceneKey || item?.sceneId || item?.scene_id || item?.id || "").trim();
+    return candidate && candidate === raw;
+  }).length;
+
+  if (raw && duplicateCount <= 1) return raw;
+
+  const t0 = Number(scene?.t0 ?? scene?.startSec ?? scene?.start);
+  const t1 = Number(scene?.t1 ?? scene?.endSec ?? scene?.end);
+  if (Number.isFinite(t0) && Number.isFinite(t1)) {
+    return `seg_${String(idx + 1).padStart(2, "0")}_${fmtTime(t0)}_${fmtTime(t1)}`;
+  }
+
+  return `seg_${String(idx + 1).padStart(2, "0")}`;
+}
+
+function hasDuplicateRawSceneId(scene = {}, allScenes = []) {
+  const raw = String(scene?.sceneKey || scene?.sceneId || scene?.scene_id || scene?.id || "").trim();
+  if (!raw) return false;
+  let count = 0;
+  for (const item of allScenes) {
+    const candidate = String(item?.sceneKey || item?.sceneId || item?.scene_id || item?.id || "").trim();
+    if (candidate && candidate === raw) count += 1;
+    if (count > 1) return true;
+  }
+  return false;
+}
+
 function resolveSceneDisplayId(scene = {}, idx = 0) {
   const display = String(scene?.display_id || scene?.displayId || "").trim();
   if (display) return display;
@@ -414,6 +455,10 @@ function resolveSceneDisplayId(scene = {}, idx = 0) {
   const sourceSceneId = String(scene?.sourceSceneId || scene?.scene_id || "").trim();
   if (sourceSceneId) return sourceSceneId;
   return resolveSceneId(scene, idx);
+}
+
+function resolveSceneSelectionKey(scene = {}, idx = 0) {
+  return String(scene?.uiKey || scene?.sceneKey || scene?.sceneId || resolveSceneId(scene, idx)).trim();
 }
 
 function resolveScenarioModeBadge(modeValue = "") {
@@ -484,14 +529,16 @@ function resolveStoryboardEditorDisplayMode({
 }
 
 function resolveSceneRuntimeForEditor(scene, runtime, scenarioNodeData = {}) {
-  const sceneId = String(scene?.sceneId || scene?.sceneKey || scene?.segment_id || scene?.scene_id || "").trim();
+  const sceneId = String(scene?.uiKey || scene?.sceneKey || scene?.sceneId || scene?.segment_id || scene?.scene_id || "").trim();
   const runtimeMap = scenarioNodeData?.sceneGeneration && typeof scenarioNodeData.sceneGeneration === "object"
     ? scenarioNodeData.sceneGeneration
     : {};
   const sceneAliases = [
+    String(scene?.uiKey || "").trim(),
     sceneId,
     String(scene?.sceneKey || "").trim(),
     String(scene?.segment_id || scene?.segmentId || "").trim(),
+    String(scene?.sceneId || "").trim(),
     String(scene?.scene_id || scene?.sourceSceneId || "").trim(),
   ].filter(Boolean);
   const nodeRuntime = sceneAliases.map((alias) => runtimeMap?.[alias]).find((item) => item && typeof item === "object") || {};
@@ -590,16 +637,26 @@ export default function ScenarioStoryboardEditor({
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
   const normalizedScenes = useMemo(
     () => safeScenes.map((scene, idx) => {
-      const normalizedSceneId = resolveSceneId(scene, idx);
+      const uiKey = buildSceneUiKey(scene, idx, safeScenes);
+      const hasDuplicateRawId = hasDuplicateRawSceneId(scene, safeScenes);
+      const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
+      const displayId = segmentId || (hasDuplicateRawId ? `SEG_${String(idx + 1).padStart(2, "0")}` : resolveSceneDisplayId(scene, idx));
       const normalized = {
         ...(scene || {}),
-        sceneId: normalizedSceneId,
-        sceneKey: normalizedSceneId,
-        display_id: resolveSceneDisplayId(scene, idx),
+        uiKey,
+        sceneId: uiKey,
+        sceneKey: uiKey,
+        display_id: displayId,
+        originalSceneId: scene?.sceneId || scene?.scene_id,
       };
-      const runtime = safeGeneration[String(normalized?.sceneId || "").trim()]
-        || safeGeneration[String(normalized?.segment_id || normalized?.segmentId || "").trim()]
-        || safeGeneration[String(normalized?.scene_id || "").trim()];
+      const runtimeAliases = [
+        String(uiKey || "").trim(),
+        String(scene?.sceneKey || "").trim(),
+        String(scene?.segment_id || scene?.segmentId || "").trim(),
+        String(scene?.sceneId || "").trim(),
+        String(scene?.scene_id || "").trim(),
+      ].filter(Boolean);
+      const runtime = runtimeAliases.map((alias) => safeGeneration[alias]).find((value) => value && typeof value === "object");
       return hydrateSceneWithRuntime(normalized, runtime);
     }),
     [safeGeneration, safeScenes]
@@ -641,8 +698,8 @@ export default function ScenarioStoryboardEditor({
 
   useEffect(() => {
     if (!open) return;
-    const firstSceneId = String(normalizedScenes?.[0]?.sceneId || "").trim();
-    const selectedSceneStillExists = normalizedScenes.some((scene) => String(scene?.sceneId || "").trim() === String(activeSelectionId || "").trim());
+    const firstSceneId = String(resolveSceneSelectionKey(normalizedScenes?.[0] || {}, 0) || "").trim();
+    const selectedSceneStillExists = normalizedScenes.some((scene, idx) => resolveSceneSelectionKey(scene, idx) === String(activeSelectionId || "").trim());
     if (activeSelectionType === "bg_audio" && hasBgAudioAvailable) {
       setActiveSelectionId(BG_AUDIO_ITEM_ID);
       return;
@@ -664,8 +721,8 @@ export default function ScenarioStoryboardEditor({
     const previousRevision = String(prevStoryboardRevisionRef.current || "");
     const nextRevision = String(storyboardRevision || "");
     const revisionChanged = Boolean(nextRevision) && previousRevision !== nextRevision;
-    const firstSceneId = String(normalizedScenes?.[0]?.sceneId || "").trim();
-    const hasSelectedScene = normalizedScenes.some((scene) => String(scene?.sceneId || "").trim() === String(activeSelectionId || "").trim());
+    const firstSceneId = String(resolveSceneSelectionKey(normalizedScenes?.[0] || {}, 0) || "").trim();
+    const hasSelectedScene = normalizedScenes.some((scene, idx) => resolveSceneSelectionKey(scene, idx) === String(activeSelectionId || "").trim());
     const isBgAudioSelectedNow = activeSelectionType === "bg_audio";
     if (revisionChanged) {
       if (isBgAudioSelectedNow && hasBgAudioAvailable) {
@@ -697,12 +754,12 @@ export default function ScenarioStoryboardEditor({
 
   useEffect(() => {
     if (!open) return;
-    const firstSceneId = String(normalizedScenes?.[0]?.sceneId || "").trim();
+    const firstSceneId = String(resolveSceneSelectionKey(normalizedScenes?.[0] || {}, 0) || "").trim();
     const isBgAudioSelectedNow = activeSelectionType === "bg_audio";
     if (isBgAudioSelectedNow && hasBgAudioAvailable) {
       return;
     }
-    const hasSelectedScene = Array.isArray(normalizedScenes) && normalizedScenes.some((scene) => String(scene?.sceneId || "") === activeSelectionId);
+    const hasSelectedScene = Array.isArray(normalizedScenes) && normalizedScenes.some((scene, idx) => resolveSceneSelectionKey(scene, idx) === activeSelectionId);
     if (!hasSelectedScene && !isBgAudioSelectedNow && firstSceneId) {
       setActiveSelectionType("scene");
       setActiveSelectionId(firstSceneId);
@@ -793,7 +850,7 @@ export default function ScenarioStoryboardEditor({
   const phrases = useMemo(() => {
     if (Array.isArray(safeAudioData?.phrases) && safeAudioData.phrases.length) return safeAudioData.phrases;
     return normalizedScenes.map((scene, idx) => ({
-      sceneId: String(scene?.sceneId || resolveSceneId(scene, idx)),
+      sceneId: String(resolveSceneSelectionKey(scene, idx) || resolveSceneId(scene, idx)),
       startSec: resolveSceneDisplayTime(scene).startSec,
       endSec: resolveSceneDisplayTime(scene).endSec,
       text: String(scene?.localPhrase || scene?.summaryRu || "").trim(),
@@ -806,15 +863,20 @@ export default function ScenarioStoryboardEditor({
     return phrases.filter((phrase) => !isShortMusicIntroPhrase(phrase));
   }, [phrases]);
 
-  const safeIndex = normalizedScenes.findIndex((scene) => String(scene?.sceneId || "") === activeSelectionId);
+  const safeIndex = normalizedScenes.findIndex((scene, idx) => resolveSceneSelectionKey(scene, idx) === activeSelectionId);
   const selectedScene = safeIndex >= 0 ? normalizedScenes[safeIndex] : null;
   const selectedDisplayTime = resolveSceneDisplayTime(selectedScene);
-  const selectedSceneId = String(selectedScene?.sceneId || "").trim();
+  const selectedSceneId = String(resolveSceneSelectionKey(selectedScene || {}, safeIndex >= 0 ? safeIndex : 0) || "").trim();
   const selectedSceneDisplayId = String(resolveSceneDisplayId(selectedScene || {}, safeIndex >= 0 ? safeIndex : 0) || selectedSceneId).toUpperCase();
-  const selectedRuntime = safeGeneration[selectedSceneId]
-    || safeGeneration[String(selectedScene?.segment_id || selectedScene?.segmentId || "").trim()]
-    || safeGeneration[String(selectedScene?.scene_id || selectedScene?.sourceSceneId || "").trim()]
-    || {};
+  const selectedRuntimeAliases = [
+    selectedSceneId,
+    String(selectedScene?.sceneKey || "").trim(),
+    String(selectedScene?.uiKey || "").trim(),
+    String(selectedScene?.segment_id || selectedScene?.segmentId || "").trim(),
+    String(selectedScene?.sceneId || "").trim(),
+    String(selectedScene?.scene_id || selectedScene?.sourceSceneId || "").trim(),
+  ].filter(Boolean);
+  const selectedRuntime = selectedRuntimeAliases.map((alias) => safeGeneration[alias]).find((value) => value && typeof value === "object") || {};
   const effectiveRuntime = useMemo(
     () => resolveSceneRuntimeForEditor(selectedScene, selectedRuntime, scenarioNodeData),
     [scenarioNodeData, selectedRuntime, selectedScene]
@@ -823,7 +885,7 @@ export default function ScenarioStoryboardEditor({
     () => buildStoryboardSceneDisplayModel(selectedScene || {}, effectiveRuntime || {}),
     [effectiveRuntime, selectedScene]
   );
-  const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || normalizedScenes[idx]?.sceneId || "").trim();
+  const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || resolveSceneSelectionKey(normalizedScenes[idx] || {}, idx) || "").trim();
   const selectedPhraseIndex = phrasesForUi.findIndex((phrase, idx) => resolvePhraseSceneId(phrase, idx) === selectedSceneId);
   const generateMeta = {
     activeTab,
@@ -1603,22 +1665,26 @@ export default function ScenarioStoryboardEditor({
             </button>
 
             {normalizedScenes.map((scene, idx) => {
-              const sceneId = String(scene?.sceneId || `scene_${idx + 1}`);
-              const sceneDisplayId = String(resolveSceneDisplayId(scene, idx) || sceneId).toUpperCase();
+              const sceneKey = resolveSceneSelectionKey(scene, idx) || `scene_${idx + 1}`;
+              const sceneDisplayId = String(resolveSceneDisplayId(scene, idx) || sceneKey).toUpperCase();
               const displayTime = resolveSceneDisplayTime(scene);
-              const runtime = safeGeneration[sceneId]
-                || safeGeneration[String(scene?.segment_id || scene?.segmentId || "").trim()]
-                || safeGeneration[String(scene?.scene_id || "").trim()]
-                || {};
+              const runtimeAliases = [
+                String(scene?.uiKey || "").trim(),
+                String(scene?.sceneKey || "").trim(),
+                String(scene?.segment_id || scene?.segmentId || "").trim(),
+                String(scene?.sceneId || "").trim(),
+                String(scene?.scene_id || "").trim(),
+              ].filter(Boolean);
+              const runtime = runtimeAliases.map((alias) => safeGeneration[alias]).find((value) => value && typeof value === "object") || {};
               const status = resolveBlockStatus({ runtimeStatus: runtime?.status || runtime?.videoStatus || runtime?.imageStatus, assetUrl: scene?.videoUrl || scene?.imageUrl });
               return (
                 <button
-                  key={sceneId}
-                  className={`clipSB_scenarioItem ${activeSelectionType === "scene" && sceneId === activeSelectionId ? "isActive" : ""}`}
+                  key={`scene-card-${scene?.uiKey || idx}`}
+                  className={`clipSB_scenarioItem ${activeSelectionType === "scene" && sceneKey === activeSelectionId ? "isActive" : ""}`}
                   type="button"
                   onClick={() => {
                     setActiveSelectionType("scene");
-                    setActiveSelectionId(sceneId);
+                    setActiveSelectionId(sceneKey);
                   }}
                 >
                   <div className="clipSB_scenarioItemTop">
@@ -1626,7 +1692,7 @@ export default function ScenarioStoryboardEditor({
                   </div>
                   <div className="clipSB_scenarioItemText">{scene?.summaryRu || scene?.localPhrase || "—"}</div>
                   <div className="clipSB_scenarioEditorBadgeRow">
-                    {sceneBadges(scene).map((badge) => <span key={`${sceneId}-${badge}`} className="clipSB_tag">{badge}</span>)}
+                    {sceneBadges(scene).map((badge) => <span key={`${sceneKey}-${badge}`} className="clipSB_tag">{badge}</span>)}
                     <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${status}`}>{status}</span>
                   </div>
                 </button>
