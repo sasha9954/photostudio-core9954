@@ -2047,14 +2047,29 @@ export function normalizeScenarioStoryboardPackage({
   directorOutput = null,
   allowDirectorSceneFallback = true,
 } = {}) {
+  const packageDiagnostics = storyboardOut?.diagnostics && typeof storyboardOut.diagnostics === "object"
+    ? storyboardOut.diagnostics
+    : {};
+  const currentSignature = String(
+    packageDiagnostics?.scenario_input_signature
+    || storyboardOut?.scenario_input_signature
+    || storyboardOut?.meta?.scenario_input_signature
+    || ""
+  ).trim();
+  const finalPromptSignature = String(storyboardOut?.final_video_prompt?.created_for_signature || "").trim();
+  const finalStoryboardSignature = String(storyboardOut?.final_storyboard?.created_for_signature || "").trim();
+  const finalSignatureMismatch = Boolean(
+    currentSignature
+    && ((finalPromptSignature && finalPromptSignature !== currentSignature) || (finalStoryboardSignature && finalStoryboardSignature !== currentSignature))
+  );
   const storyboardInputKeys = storyboardOut && typeof storyboardOut === "object" ? Object.keys(storyboardOut) : [];
   const inputScenesFromStoryboardOut = Array.isArray(storyboardOut?.scenes)
     ? storyboardOut.scenes
     : [];
-  const inputScenesFromFinalStoryboard = Array.isArray(storyboardOut?.final_storyboard?.scenes)
+  const inputScenesFromFinalStoryboard = !finalSignatureMismatch && Array.isArray(storyboardOut?.final_storyboard?.scenes)
     ? storyboardOut.final_storyboard.scenes
     : [];
-  const finalStoryboardRenderManifestRows = Array.isArray(storyboardOut?.final_storyboard?.render_manifest)
+  const finalStoryboardRenderManifestRows = !finalSignatureMismatch && Array.isArray(storyboardOut?.final_storyboard?.render_manifest)
     ? storyboardOut.final_storyboard.render_manifest
     : [];
   const finalStoryboardManifestById = finalStoryboardRenderManifestRows.reduce((acc, row) => {
