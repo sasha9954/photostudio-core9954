@@ -35,6 +35,17 @@ _GLOBAL_NEGATIVE_PROMPT = (
 _LIP_SYNC_NEGATIVE_PROMPT = (
     "unreadable mouth, broken face motion, frantic dance, flailing arms, unstable anatomy, balance loss, chaotic camera, identity drift, outfit drift, surreal deformation"
 )
+_IA2V_LIP_SYNC_NEGATIVE_CANON = (
+    "hidden mouth, obstructed lips, unreadable mouth, face turned away, profile-only face, hands covering mouth, hair covering mouth, distorted lips, distorted jaw, face deformation, duplicate performer, duplicate woman, second copy of protagonist, identity drift, teleporting, sudden running, object-to-head bottle motion, extreme motion blur, cutaway away from performer"
+)
+_IA2V_VIDEO_PROMPT_CANON = (
+    "Use the uploaded image as the exact first frame and identity anchor. "
+    "A performance shot of the same performer singing an emotional line. "
+    "Clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, soft facial trembling, and small emotional eyebrow movement. "
+    "Emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement. "
+    "The face and mouth remain readable and important. "
+    "Cinematic realism. Steady camera, very slow push-in."
+)
 
 _FIRST_LAST_NEGATIVE_PROMPT = (
     "camera drift, zoom spikes, chaotic reframing, body-axis jump, step, crouch, bow, torso dip, large arm action, spin, added actors, layout change, temporal instability, identity drift, outfit drift, finger choreography near face, wearable-touch micro choreography"
@@ -82,6 +93,34 @@ _EXPLICIT_NEGATIVE_MARKERS = (
     "negative:",
     "avoid:",
     "do not show:",
+)
+_IA2V_POSITIVE_NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bsilent internal scream\b", re.IGNORECASE),
+    re.compile(r"\bsilent scream\b", re.IGNORECASE),
+    re.compile(r"\bsilent pain\b", re.IGNORECASE),
+    re.compile(r"\bsilent emotional beat\b", re.IGNORECASE),
+    re.compile(r"\bno mouth[- ]?sync(?:ing)?\b", re.IGNORECASE),
+    re.compile(r"\bwithout mouth[- ]?sync\b", re.IGNORECASE),
+    re.compile(r"\bno lip movement\b", re.IGNORECASE),
+    re.compile(r"\bnot singing\b", re.IGNORECASE),
+    re.compile(r"\bmouth closed\b", re.IGNORECASE),
+    re.compile(r"\bclosed mouth\b", re.IGNORECASE),
+    re.compile(r"\bsilent face\b", re.IGNORECASE),
+    re.compile(r"\binternal anguish without speech\b", re.IGNORECASE),
+    re.compile(r"\bhand choreography\b", re.IGNORECASE),
+    re.compile(r"\btorso pulse\b", re.IGNORECASE),
+    re.compile(r"\bstronger hand language\b", re.IGNORECASE),
+    re.compile(r"\bpouring action as main focus\b", re.IGNORECASE),
+    re.compile(r"\bhands trembling as main mechanic\b", re.IGNORECASE),
+)
+_IA2V_ANTI_LIPSYNC_NEGATIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bnot singing\b", re.IGNORECASE),
+    re.compile(r"\bno lip movement\b", re.IGNORECASE),
+    re.compile(r"\bno mouth[- ]?sync(?:ing)?\b", re.IGNORECASE),
+    re.compile(r"\bno lip[- ]?sync\b", re.IGNORECASE),
+    re.compile(r"\bmouth not synchronized\b", re.IGNORECASE),
+    re.compile(r"\bsilent face\b", re.IGNORECASE),
+    re.compile(r"\bclosed mouth\b", re.IGNORECASE),
 )
 FIRST_LAST_MODES = {
     "push_in_emotional",
@@ -1427,6 +1466,36 @@ def _sanitize_positive_prompt(text: str, negative_text: str) -> tuple[str, bool]
     return clean[:900], changed
 
 
+def _strip_ia2v_positive_noise(text: str) -> str:
+    clean = str(text or "").strip()
+    if not clean:
+        return ""
+    for pattern in _IA2V_POSITIVE_NOISE_PATTERNS:
+        clean = pattern.sub(" ", clean)
+    clean = re.sub(r"\s*[,;:.!?-]\s*[,;:.!?-]\s*", ", ", clean)
+    clean = re.sub(r"\s{2,}", " ", clean).strip(" ,;:.")
+    return clean
+
+
+def _clean_ia2v_negative_prompt(text: str) -> str:
+    parts = [p.strip() for p in str(text or "").split(",") if p.strip()]
+    kept: list[str] = []
+    for part in parts:
+        if any(pattern.search(part) for pattern in _IA2V_ANTI_LIPSYNC_NEGATIVE_PATTERNS):
+            continue
+        kept.append(part)
+    kept.extend([p.strip() for p in _IA2V_LIP_SYNC_NEGATIVE_CANON.split(",") if p.strip()])
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in kept:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return ", ".join(deduped)[:900]
+
+
 def _build_package_anchor_fingerprint(package: dict[str, Any], story_core: dict[str, Any], world_continuity: dict[str, Any]) -> dict[str, Any]:
     refs = _safe_dict(package.get("refs_inventory"))
     hero = _safe_dict(_safe_dict(story_core.get("identity_lock")).get("hero"))
@@ -1713,8 +1782,12 @@ def _build_fallback_scene_prompts(
             f"Use one broad readable action only in {world_anchor}: controlled gaze/head/shoulder shift with minimal hand emphasis, no tiny finger sequencing near face, no wearable-adjustment micro details, no multistep prop manipulation. "
             "Prefer smooth camera settle/push/pull over micro hand actions."
         )
-        video_prompt = simplified
-        positive_video_prompt = simplified
+        if route == "ia2v":
+            video_prompt = f"{video_prompt.rstrip('. ')}. {simplified}".strip()
+            positive_video_prompt = f"{(positive_video_prompt or video_prompt).rstrip('. ')}. {simplified}".strip()
+        else:
+            video_prompt = simplified
+            positive_video_prompt = simplified
 
     fallback_notes = _prompt_notes_template(route)
     fallback_notes["shot_intent"] = scene_function
@@ -2191,12 +2264,12 @@ def _normalize_scene_prompts(
                 video_prompt = f"{video_prompt.rstrip('. ')}.{simplify_suffix}".strip()
                 positive_video_prompt = f"{positive_video_prompt.rstrip('. ')}.{simplify_suffix}".strip()
             else:
-                simplified_video = (
-                    "Single readable motion line only: controlled gaze/head/shoulder shift, minimal hand emphasis, no tiny finger choreography near face, no wearable-adjustment micro detail, no multistep prop manipulation. "
-                    "Prefer camera settle/push/pull with continuity-first behavior."
+                simplify_suffix = (
+                    "Single readable micro-action only: slight forward lean or subtle gaze shift. "
+                    "No multistep prop mechanics and no action-heavy choreography."
                 )
-                video_prompt = simplified_video
-                positive_video_prompt = simplified_video
+                video_prompt = f"{video_prompt.rstrip('. ')}. {simplify_suffix}".strip()
+                positive_video_prompt = f"{positive_video_prompt.rstrip('. ')}. {simplify_suffix}".strip()
             normalized_notes["risk_simplified"] = True
         else:
             normalized_notes["risk_simplified"] = False
@@ -2253,6 +2326,31 @@ def _normalize_scene_prompts(
             photo_prompt = _append_compact_clauses(photo_prompt, still_clauses)
             video_prompt = _append_compact_clauses(video_prompt, motion_clauses)
             positive_video_prompt = _append_compact_clauses((positive_video_prompt or video_prompt), motion_clauses)
+            speaker_role_value = str(scene.get("speaker_role") or "").strip() or "character_1"
+            emotional_tone = str(scene.get("emotional_intent") or "").strip() or "raw emotional release"
+            photo_prompt = (
+                f"Story-grounded singing-ready frame of the same performer ({speaker_role_value}) in the current scene world with {emotional_tone}. "
+                "Mouth open or slightly open in a natural singing shape; emotion and performance intent are clearly readable. "
+                "Face and mouth stay readable and important, with performer-first focus."
+            )
+            video_prompt = _IA2V_VIDEO_PROMPT_CANON
+            positive_video_prompt = _IA2V_VIDEO_PROMPT_CANON
+            tone_clause = _trim_sentence(
+                f"Tone accent: {emotional_tone}; keep it in vocal facial performance only, not action choreography.",
+                max_len=170,
+            )
+            video_prompt = _append_prompt_clause(video_prompt, tone_clause)
+            positive_video_prompt = _append_prompt_clause(positive_video_prompt, tone_clause)
+            spoken_line = str(scene.get("spoken_line") or "").strip()
+            if spoken_line:
+                line_clause = _trim_sentence(f"Vocal phrase anchor: {spoken_line}", max_len=160)
+                video_prompt = _append_prompt_clause(video_prompt, line_clause)
+                positive_video_prompt = _append_prompt_clause(positive_video_prompt, line_clause)
+            photo_prompt = _strip_ia2v_positive_noise(photo_prompt)
+            video_prompt = _strip_ia2v_positive_noise(video_prompt)
+            positive_video_prompt = _strip_ia2v_positive_noise(positive_video_prompt)
+            negative_video_prompt = _clean_ia2v_negative_prompt(negative_video_prompt or negative_prompt)
+            negative_prompt = negative_video_prompt
         if enforce_shared_space_rule:
             missing_roles = [role for role in must_be_visible_roles if not _text_mentions_role(photo_prompt, role)]
             if missing_roles:
@@ -2310,6 +2408,17 @@ def _normalize_scene_prompts(
             "negative_prompt": negative_prompt,
             "prompt_notes": normalized_notes,
         }
+        if actual_route == "ia2v":
+            scene_out["lip_sync_allowed"] = True
+            scene_out["lip_sync_priority"] = "primary"
+            scene_out["mouth_visible_required"] = True
+            scene_out["singing_readiness_required"] = True
+            scene_out["speaker_role"] = str(scene.get("speaker_role") or "character_1").strip() or "character_1"
+            scene_out["spoken_line"] = str(scene.get("spoken_line") or "").strip()
+            scene_out["object_action_allowed"] = False
+            scene_out["foreground_performance_rule"] = (
+                "Performer-first vocal performance priority; keep lips and mouth readable, background action only as soft context."
+            )
         semantics_lock = _scene_plan_semantics_lock(scene)
         scene_out["route"] = semantics_lock["route"] if semantics_lock["route"] in ALLOWED_ROUTES else actual_route
         scene_out["prompt_notes"].update(semantics_lock)
@@ -3259,6 +3368,21 @@ def _apply_storyboard_stage_metadata_passthrough(
         segment["lip_sync_allowed"] = bool(storyboard_row.get("lip_sync_allowed"))
         segment["mouth_visible_required"] = bool(storyboard_row.get("mouth_visible_required"))
         segment["listener_reaction_allowed"] = bool(storyboard_row.get("listener_reaction_allowed"))
+        segment["singing_readiness_required"] = bool(storyboard_row.get("singing_readiness_required"))
+        segment["object_action_allowed"] = bool(storyboard_row.get("object_action_allowed"))
+        segment["foreground_performance_rule"] = str(storyboard_row.get("foreground_performance_rule") or "").strip()
+
+        if route == "ia2v":
+            segment["lip_sync_allowed"] = True
+            segment["lip_sync_priority"] = "primary"
+            segment["mouth_visible_required"] = True
+            segment["singing_readiness_required"] = True
+            segment["speaker_role"] = str(segment.get("speaker_role") or segment.get("primary_role") or "character_1").strip() or "character_1"
+            segment["object_action_allowed"] = False
+            if not str(segment.get("foreground_performance_rule") or "").strip():
+                segment["foreground_performance_rule"] = (
+                    "Performer-first vocal performance priority; keep lips and mouth readable, background action only as soft context."
+                )
 
         role_complete = all(str(segment.get(field) or "").strip() for field in role_fields)
         reaction_required = bool(segment.get("listener_reaction_allowed")) or (
@@ -3320,11 +3444,22 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
                 "mouth_visible_required": bool(
                     seg.get("mouth_visible_required") if "mouth_visible_required" in seg else row.get("mouth_visible_required")
                 ),
+                "singing_readiness_required": bool(
+                    seg.get("singing_readiness_required")
+                    if "singing_readiness_required" in seg
+                    else row.get("singing_readiness_required")
+                ),
                 "listener_reaction_allowed": bool(
                     seg.get("listener_reaction_allowed")
                     if "listener_reaction_allowed" in seg
                     else row.get("listener_reaction_allowed")
                 ),
+                "object_action_allowed": bool(
+                    seg.get("object_action_allowed") if "object_action_allowed" in seg else row.get("object_action_allowed")
+                ),
+                "foreground_performance_rule": str(
+                    seg.get("foreground_performance_rule") or row.get("foreground_performance_rule") or ""
+                ).strip(),
                 "spoken_line": str(seg.get("spoken_line") or row.get("spoken_line") or "").strip(),
                 "speaker_confidence": _coerce_speaker_confidence(
                     seg.get("speaker_confidence") if "speaker_confidence" in seg else row.get("speaker_confidence")
@@ -3340,6 +3475,17 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
                 },
             }
         )
+        if str(route).strip().lower() == "ia2v":
+            scenes[-1]["lip_sync_allowed"] = True
+            scenes[-1]["lip_sync_priority"] = "primary"
+            scenes[-1]["mouth_visible_required"] = True
+            scenes[-1]["singing_readiness_required"] = True
+            scenes[-1]["speaker_role"] = str(scenes[-1].get("speaker_role") or scenes[-1].get("primary_role") or "character_1").strip() or "character_1"
+            scenes[-1]["object_action_allowed"] = False
+            if not str(scenes[-1].get("foreground_performance_rule") or "").strip():
+                scenes[-1]["foreground_performance_rule"] = (
+                    "Performer-first vocal performance priority; keep lips and mouth readable, background action only as soft context."
+                )
     return {
         "plan_version": SCENE_PROMPTS_PROMPT_VERSION,
         "mode": "clip",
