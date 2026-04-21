@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
@@ -29,7 +30,18 @@ ALLOWED_PRESENCE_MODES = {"physical", "voiceover", "shadow", "implied"}
 ALLOWED_PRESENCE_WEIGHTS = {"anchor", "primary", "support", "background"}
 
 _ACTION_LEAK_TOKENS = {"fight", "run", "chase", "jump", "shoot", "explosion"}
-_TECH_LEAK_TOKENS = {"fps", "lens", "focal", "camera", "exposure", "iso", "render", "seed", "sampler"}
+_TECH_LEAK_TOKENS = {"fps", "lens", "camera", "exposure", "iso", "render", "seed", "sampler"}
+_TECH_LEAK_STRICT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("focal length", re.compile(r"\bfocal\s+length\b", re.IGNORECASE)),
+    ("focal distance", re.compile(r"\bfocal\s+distance\b", re.IGNORECASE)),
+    ("lens focal", re.compile(r"\blens\s+focal\b", re.IGNORECASE)),
+)
+_FOCAL_ALLOWED_PHRASE_REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bemotional\s+focal\s+point\b", re.IGNORECASE), "main emotional focus"),
+    (re.compile(r"\bvisual\s+focal\s+point\b", re.IGNORECASE), "main visual focus"),
+    (re.compile(r"\bfocal\s+point\s+of\s+the\s+narrative\b", re.IGNORECASE), "main focus of the narrative"),
+    (re.compile(r"\bfocal\s+point\b", re.IGNORECASE), "main focus"),
+)
 _ROUTE_LEAK_TOKENS = {"route", "i2v", "ia2v", "first_last", "camera_move", "camera motion"}
 _ROLE_PLAN_ALLOWED_KEYS = {"roles_version", "roster", "scene_casting"}
 _ROSTER_ALLOWED_KEYS = {"entity_id", "role_name", "continuity_rules"}
@@ -278,6 +290,8 @@ def _extract_error_from_leakage(roles_payload: dict[str, Any]) -> str:
     serialized = json.dumps(roles_payload, ensure_ascii=False).lower()
     if any(token in serialized for token in _ROUTE_LEAK_TOKENS):
         return ROLES_CREATIVE_ROUTE
+    if any(pattern.search(serialized) for _, pattern in _TECH_LEAK_STRICT_PATTERNS):
+        return ROLES_TECHNICAL_LEAKING
     if any(token in serialized for token in _TECH_LEAK_TOKENS):
         return ROLES_TECHNICAL_LEAKING
     if any(token in serialized for token in _ACTION_LEAK_TOKENS):
@@ -304,6 +318,9 @@ def _extract_leakage_details(roles_payload: dict[str, Any]) -> tuple[str, str, s
             for token in _ROUTE_LEAK_TOKENS:
                 if token in lowered:
                     return ROLES_CREATIVE_ROUTE, path, token
+            for token, pattern in _TECH_LEAK_STRICT_PATTERNS:
+                if pattern.search(lowered):
+                    return ROLES_TECHNICAL_LEAKING, path, token
             for token in _TECH_LEAK_TOKENS:
                 if token in lowered:
                     return ROLES_TECHNICAL_LEAKING, path, token
@@ -406,6 +423,38 @@ def _normalize_scene_casting(raw_scene_casting: Any) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _rewrite_allowed_focal_phrases(roles_payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    payload = deepcopy(_safe_dict(roles_payload))
+    changed = False
+    roster_rows = _safe_list(payload.get("roster"))
+    scene_casting_rows = _safe_list(payload.get("scene_casting"))
+
+    for roster_row in roster_rows:
+        row = _safe_dict(roster_row)
+        normalized_rules: list[str] = []
+        for item in _safe_list(row.get("continuity_rules")):
+            text = str(item or "")
+            rewritten = text
+            for pattern, replacement in _FOCAL_ALLOWED_PHRASE_REWRITES:
+                rewritten = pattern.sub(replacement, rewritten)
+            if rewritten != text:
+                changed = True
+            normalized_rules.append(rewritten)
+        row["continuity_rules"] = normalized_rules
+
+    for casting_row in scene_casting_rows:
+        row = _safe_dict(casting_row)
+        for field in ("continuity_notes", "performance_focus"):
+            text = str(row.get(field) or "")
+            rewritten = text
+            for pattern, replacement in _FOCAL_ALLOWED_PHRASE_REWRITES:
+                rewritten = pattern.sub(replacement, rewritten)
+            if rewritten != text:
+                changed = True
+            row[field] = rewritten
+    return payload, changed
 
 
 def _build_core_subject_map(story_core: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -609,6 +658,9 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "technical_leak_trigger": "",
         "technical_leak_field": "",
         "technical_leak_token": "",
+        "false_positive_technical_leak_allowed": False,
+        "allowed_technical_token": "",
+        "allowed_technical_phrase": "",
         "dropped_non_canonical_fields": [],
         "coverage_expected_segment_ids": expected_segment_ids,
         "coverage_seen_segment_ids": [],
@@ -713,6 +765,11 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 core_subject_map=core_subject_map,
                 allowed_registry=allowed_registry,
             )
+            sanitized, focal_rewrites_applied = _rewrite_allowed_focal_phrases(sanitized)
+            if focal_rewrites_applied:
+                diagnostics["false_positive_technical_leak_allowed"] = True
+                diagnostics["allowed_technical_token"] = "focal"
+                diagnostics["allowed_technical_phrase"] = "focal point"
             diagnostics["dropped_non_canonical_fields"] = dropped_fields[:60]
             normalized_scene_casting, primary_mismatches = _normalize_scene_casting_from_core(
                 scene_casting=[_safe_dict(row) for row in _safe_list(sanitized.get("scene_casting"))],
