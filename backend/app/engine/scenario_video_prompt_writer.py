@@ -269,7 +269,12 @@ def _strip_ia2v_positive_noise(text: str) -> str:
     cleaned = re.sub(r"(?is)\bOUTFIT NEGATIVES?\b[^.]*\.?", " ", cleaned)
     cleaned = re.sub(r"(?i)\bdo not raise neckline\b[^.]*\.?", " ", cleaned)
     cleaned = re.sub(r"(?i)\bdo not close chest coverage\b[^.]*\.?", " ", cleaned)
-    cleaned = re.sub(r"(?i)\b(do not|no)\s+(?:[^.]*\b(?:neckline|collar|turtleneck|blouse|body proportions?|wardrobe|outfit)\b[^.]*)\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bno simultaneous dual-speaker lip movement\b[^.]*\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bno broad gestures\b[^.]*\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bno hand choreography\b[^.]*\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bno foreground action event\b[^.]*\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bdo not\s+[^.]*\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bno\s+[^.]*\.?", " ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
     return cleaned
 
@@ -288,6 +293,7 @@ def _sanitize_contract_prompts(*, positive_prompt: str, negative_prompt: str, ro
     if route == "ia2v":
         body = _strip_clear_vocal_fragments(positive)
         clear_vocal_fragments_removed = body != positive
+        body = _strip_ia2v_positive_noise(body)
         positive = f"{IA2V_BASE_PROMPT_V1} {body}".strip()
         clear_vocal_canonical_applied = True
 
@@ -782,7 +788,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {clause}".strip() if positive_prompt else clause
         positive_prompt = _append_clause(
             positive_prompt,
-            f"Shot variant: {lip_sync_shot_variant}. performance_pose: {performance_pose or 'camera-readable vocal delivery'}. camera_angle: {camera_angle or 'eye-level readable performance view'}. gesture: {gesture or 'controlled subtle hand accent'}. location_zone: {location_zone or 'same venue, different local zone'}. mouth_readability: {mouth_readability}.",
+            f"Shot variant: {lip_sync_shot_variant}. performance_pose: {performance_pose or 'camera-readable vocal delivery'}. camera_angle: {camera_angle or 'eye-level readable performance view'}. gesture: {gesture or 'minimal performance motion'}. location_zone: {location_zone or 'same venue, different local zone'}. mouth_readability: {mouth_readability}.",
         )
         if not positive_prompt.startswith("Use the uploaded image as the exact first frame and identity anchor."):
             positive_prompt = f"{IA2V_BASE_PROMPT_V1} {positive_prompt}".strip()
@@ -817,13 +823,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         route=route,
     )
     if route == "ia2v":
-        positive_prompt = _strip_ia2v_positive_noise(positive_prompt)
-        if not positive_prompt.startswith(IA2V_BASE_PROMPT_V1):
-            body = _strip_clear_vocal_fragments(positive_prompt)
-            positive_prompt = f"{IA2V_BASE_PROMPT_V1} {body}".strip()
-        else:
-            body = _strip_clear_vocal_fragments(positive_prompt)
-            positive_prompt = f"{IA2V_BASE_PROMPT_V1} {body}".strip()
+        body = _strip_clear_vocal_fragments(positive_prompt)
+        body = _strip_ia2v_positive_noise(body)
+        positive_prompt = f"{IA2V_BASE_PROMPT_V1} {body}".strip()
         positive_prompt = re.sub(r"\s+", " ", positive_prompt).strip(" ,.;")
 
     # apply literal dialogue cleanup after all append/rebuild steps and before venue-term guard.

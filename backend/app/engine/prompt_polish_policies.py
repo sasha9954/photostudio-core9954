@@ -23,6 +23,12 @@ _IA2V_FOCUS_TOKENS = (
     "chest-up",
     "waist-up",
     "upper body",
+    "singing",
+    "vocal",
+    "lip-sync",
+    "lip sync",
+    "mouth",
+    "jaw",
 )
 
 _IA2V_POLICY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
