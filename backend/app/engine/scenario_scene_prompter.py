@@ -1498,6 +1498,60 @@ def _clean_ia2v_negative_prompt(text: str) -> str:
     return ", ".join(deduped)[:900]
 
 
+def apply_ia2v_lipsync_canon_to_prompt_row(row: dict[str, Any], source_scene: dict[str, Any] | None = None) -> bool:
+    current = _safe_dict(row)
+    source = _safe_dict(source_scene)
+    route = str(current.get("route") or source.get("route") or "").strip().lower()
+    if route != "ia2v":
+        return False
+
+    emotional_intent = str(current.get("emotional_intent") or source.get("emotional_intent") or "").strip()
+    spoken_line = str(current.get("spoken_line") or source.get("spoken_line") or "").strip()
+    speaker_role = (
+        str(current.get("speaker_role") or "").strip()
+        or str(current.get("primary_role") or "").strip()
+        or str(source.get("speaker_role") or "").strip()
+        or str(source.get("primary_role") or "").strip()
+        or "character_1"
+    )
+
+    canon_prompt = _IA2V_VIDEO_PROMPT_CANON
+    action_heavy_markers = (
+        "pour",
+        "trembling hands",
+        "packing",
+        "walking away",
+        "holding bottle",
+        "sink action",
+    )
+    if emotional_intent and not any(marker in emotional_intent.lower() for marker in action_heavy_markers):
+        canon_prompt = _append_prompt_clause(canon_prompt, _trim_sentence(f"Tone accent: {emotional_intent}", max_len=120))
+    if spoken_line:
+        canon_prompt = _append_prompt_clause(canon_prompt, _trim_sentence(f"Vocal phrase anchor: {spoken_line}", max_len=180))
+    canon_prompt = _strip_ia2v_positive_noise(canon_prompt)
+
+    base_negative = str(current.get("negative_video_prompt") or current.get("negative_prompt") or "").strip()
+    canon_negative = _clean_ia2v_negative_prompt(base_negative)
+
+    current["route"] = "ia2v"
+    current["lip_sync_allowed"] = True
+    current["lip_sync_priority"] = "primary"
+    current["mouth_visible_required"] = True
+    current["singing_readiness_required"] = True
+    current["speaker_role"] = speaker_role
+    current["object_action_allowed"] = False
+    current["foreground_performance_rule"] = (
+        "Performer-first vocal performance priority; keep lips and mouth readable, background action only as soft context."
+    )
+    if spoken_line:
+        current["spoken_line"] = spoken_line
+    current["video_prompt"] = canon_prompt[:900]
+    current["positive_video_prompt"] = canon_prompt[:900]
+    current["negative_prompt"] = canon_negative
+    current["negative_video_prompt"] = canon_negative
+    return True
+
+
 def _build_package_anchor_fingerprint(package: dict[str, Any], story_core: dict[str, Any], world_continuity: dict[str, Any]) -> dict[str, Any]:
     refs = _safe_dict(package.get("refs_inventory"))
     hero = _safe_dict(_safe_dict(story_core.get("identity_lock")).get("hero"))
@@ -2416,20 +2470,7 @@ def _normalize_scene_prompts(
             )
         scene_out["prompt_notes"].update(semantics_lock)
         if final_route == "ia2v":
-            scene_out["lip_sync_allowed"] = True
-            scene_out["lip_sync_priority"] = "primary"
-            scene_out["mouth_visible_required"] = True
-            scene_out["singing_readiness_required"] = True
-            scene_out["speaker_role"] = (
-                str(scene.get("speaker_role") or "").strip()
-                or str(scene.get("primary_role") or "").strip()
-                or "character_1"
-            )
-            scene_out["spoken_line"] = str(scene.get("spoken_line") or "").strip()
-            scene_out["object_action_allowed"] = False
-            scene_out["foreground_performance_rule"] = (
-                "Performer-first vocal performance priority; keep lips and mouth readable, background action only as soft context."
-            )
+            apply_ia2v_lipsync_canon_to_prompt_row(scene_out, source_scene=scene)
         scene_out["prompt_notes"]["row_repaired_from_scene_plan"] = bool(row_repaired_from_current_package)
         if row_repaired_from_current_package:
             repaired_from_current_package_count += 1
@@ -2442,6 +2483,8 @@ def _normalize_scene_prompts(
         "scenes": scenes,
         "global_prompt_rules": _safe_list(raw.get("global_prompt_rules")) or list(_GLOBAL_PROMPT_RULES),
     }
+    for row in _safe_list(normalized.get("scenes")):
+        apply_ia2v_lipsync_canon_to_prompt_row(_safe_dict(row), source_scene=row)
     validation_error = ";".join(dict.fromkeys(validation_errors))
     ia2v_audio_driven_count = sum(
         1 for row in scenes if str(row.get("route") or "") == "ia2v" and bool(_safe_dict(row.get("prompt_notes")).get("audio_driven"))
@@ -3228,6 +3271,7 @@ def _repair_prompts_v11_required_fields(
             valid_scene_ids.append(segment_id)
         else:
             empty_scene_ids.append(segment_id)
+        apply_ia2v_lipsync_canon_to_prompt_row(seg, source_scene=prompt_row)
         segments_out.append(seg)
 
     repaired["segments"] = segments_out
@@ -3381,16 +3425,7 @@ def _apply_storyboard_stage_metadata_passthrough(
         segment["foreground_performance_rule"] = str(storyboard_row.get("foreground_performance_rule") or "").strip()
 
         if route == "ia2v":
-            segment["lip_sync_allowed"] = True
-            segment["lip_sync_priority"] = "primary"
-            segment["mouth_visible_required"] = True
-            segment["singing_readiness_required"] = True
-            segment["speaker_role"] = str(segment.get("speaker_role") or segment.get("primary_role") or "character_1").strip() or "character_1"
-            segment["object_action_allowed"] = False
-            if not str(segment.get("foreground_performance_rule") or "").strip():
-                segment["foreground_performance_rule"] = (
-                    "Performer-first vocal performance priority; keep lips and mouth readable, background action only as soft context."
-                )
+            apply_ia2v_lipsync_canon_to_prompt_row(segment, source_scene=storyboard_row)
 
         role_complete = all(str(segment.get(field) or "").strip() for field in role_fields)
         reaction_required = bool(segment.get("listener_reaction_allowed")) or (
@@ -3484,16 +3519,7 @@ def _build_legacy_bridge_from_v11(prompts_v11: dict[str, Any], prompt_rows: list
             }
         )
         if str(route).strip().lower() == "ia2v":
-            scenes[-1]["lip_sync_allowed"] = True
-            scenes[-1]["lip_sync_priority"] = "primary"
-            scenes[-1]["mouth_visible_required"] = True
-            scenes[-1]["singing_readiness_required"] = True
-            scenes[-1]["speaker_role"] = str(scenes[-1].get("speaker_role") or scenes[-1].get("primary_role") or "character_1").strip() or "character_1"
-            scenes[-1]["object_action_allowed"] = False
-            if not str(scenes[-1].get("foreground_performance_rule") or "").strip():
-                scenes[-1]["foreground_performance_rule"] = (
-                    "Performer-first vocal performance priority; keep lips and mouth readable, background action only as soft context."
-                )
+            apply_ia2v_lipsync_canon_to_prompt_row(scenes[-1], source_scene={**seg, **row})
     return {
         "plan_version": SCENE_PROMPTS_PROMPT_VERSION,
         "mode": "clip",
@@ -3636,6 +3662,37 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
     }
 
 
+def _diagnose_ia2v_canonical_source(
+    *,
+    canonical_source: str,
+    prompts_v11: dict[str, Any],
+    normalized: dict[str, Any],
+) -> dict[str, Any]:
+    if canonical_source == "prompts_v1.1_segments":
+        rows = _safe_list(prompts_v11.get("segments"))
+    else:
+        rows = _safe_list(normalized.get("scenes"))
+    applied_ids: list[str] = []
+    has_lipsync_prompt = True
+    for row in rows:
+        segment = _safe_dict(row)
+        if str(segment.get("route") or "").strip().lower() != "ia2v":
+            continue
+        video_prompt = str(segment.get("video_prompt") or "")
+        segment_id = str(segment.get("segment_id") or segment.get("scene_id") or "").strip()
+        if video_prompt.startswith("Use the uploaded image as the exact first frame and identity anchor."):
+            if segment_id:
+                applied_ids.append(segment_id)
+        else:
+            has_lipsync_prompt = False
+    return {
+        "scene_prompts_ia2v_canon_applied_count": len(applied_ids),
+        "scene_prompts_ia2v_canon_applied_segment_ids": applied_ids,
+        "scene_prompts_ia2v_canonical_source_checked": True,
+        "scene_prompts_ia2v_canonical_source_has_lipsync_prompt": bool(has_lipsync_prompt),
+    }
+
+
 def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validation_feedback: str = "") -> dict[str, Any]:
     prompt_rows, aux = _build_prompt_rows(package)
     story_core = _safe_dict(aux.get("story_core"))
@@ -3691,6 +3748,10 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_lipsync_metadata_present_count": 0,
         "scene_prompts_missing_role_metadata_segments": [],
         "scene_prompts_ia2v_audio_driven_count": 0,
+        "scene_prompts_ia2v_canon_applied_count": 0,
+        "scene_prompts_ia2v_canon_applied_segment_ids": [],
+        "scene_prompts_ia2v_canonical_source_checked": False,
+        "scene_prompts_ia2v_canonical_source_has_lipsync_prompt": False,
         "scene_prompts_shared_space_rule_applied": False,
         "scene_prompts_must_be_visible_roles": [],
         "scene_prompts_shared_space_missing_segments": [],
@@ -3822,6 +3883,13 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scenes": _safe_list(legacy_bridge.get("scenes")),
         "global_prompt_rules": _safe_list(legacy_bridge.get("global_prompt_rules")),
     }
+    diagnostics.update(
+        _diagnose_ia2v_canonical_source(
+            canonical_source=str(diagnostics.get("scene_prompts_canonical_source") or ""),
+            prompts_v11=raw_payload,
+            normalized=scene_prompts,
+        )
+    )
     has_validation_error = bool(validation_error)
     has_error_code = bool(error_code)
     has_transport_error = bool(error)
