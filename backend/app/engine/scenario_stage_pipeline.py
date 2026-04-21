@@ -1721,8 +1721,6 @@ def _scene_plan_payload_supports_scene_prompts_with_reason(package: dict[str, An
     scene_rows = _scene_plan_rows_for_validation(scene_plan)
     if not scene_rows:
         return False, "empty_scene_plan_rows"
-    if len(scene_rows) != 8:
-        return False, "scene_plan_scene_count_not_8"
 
     if not _scene_plan_signature_matches_current(pkg, scene_plan):
         return False, "scene_plan_signature_mismatch"
@@ -1730,8 +1728,11 @@ def _scene_plan_payload_supports_scene_prompts_with_reason(package: dict[str, An
     audio_segments = [row for row in _safe_list(_safe_dict(pkg.get("audio_map")).get("segments")) if isinstance(row, dict)]
     expected_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in audio_segments]
     expected_segment_ids = [segment_id for segment_id in expected_segment_ids if segment_id]
-    if len(expected_segment_ids) != 8:
-        return False, "audio_map_segment_count_not_8"
+    expected_count = len(expected_segment_ids)
+    if expected_count <= 0:
+        return False, "audio_map_segments_missing"
+    if len(scene_rows) != expected_count:
+        return False, "scene_plan_scene_count_mismatch"
 
     scene_segment_ids = [
         str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip() for row in scene_rows
@@ -2394,11 +2395,28 @@ def _validate_scene_plan_route_budget(
 
 
 def _deterministic_route_locks_for_no_first_last_50_50_0(scene_plan: dict[str, Any]) -> dict[str, str]:
+    def _segment_number_from_id(segment_id: str) -> int | None:
+        segment = str(segment_id or "").strip().lower()
+        if not segment:
+            return None
+        match = re.search(r"(\d+)$", segment)
+        if not match:
+            return None
+        try:
+            number = int(match.group(1))
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
     locks: dict[str, str] = {}
     scene_rows = _scene_plan_rows_for_validation(scene_plan)
     for idx, row in enumerate(scene_rows, start=1):
         segment_id = str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or f"seg_{idx:02d}").strip()
         if not segment_id:
+            continue
+        segment_number = _segment_number_from_id(segment_id)
+        if segment_number is not None:
+            locks[segment_id] = "ia2v" if segment_number % 2 == 1 else "i2v"
             continue
         locks[segment_id] = "ia2v" if idx % 2 == 1 else "i2v"
     return locks
