@@ -30,11 +30,12 @@ ALLOWED_PRESENCE_MODES = {"physical", "voiceover", "shadow", "implied"}
 ALLOWED_PRESENCE_WEIGHTS = {"anchor", "primary", "support", "background"}
 
 _ACTION_LEAK_TOKENS = {"run", "chase", "jump", "shoot", "explosion"}
-_TECH_LEAK_TOKENS = {"fps", "lens", "camera", "exposure", "iso", "render", "seed", "sampler"}
+_TECH_LEAK_TOKENS = {"fps", "lens", "camera", "exposure", "render", "seed", "sampler"}
 _TECH_LEAK_STRICT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("focal length", re.compile(r"\bfocal\s+length\b", re.IGNORECASE)),
     ("focal distance", re.compile(r"\bfocal\s+distance\b", re.IGNORECASE)),
     ("lens focal", re.compile(r"\blens\s+focal\b", re.IGNORECASE)),
+    ("iso", re.compile(r"\bISO\s*[-:]?\s*\d{2,6}\b", re.IGNORECASE)),
 )
 _FOCAL_ALLOWED_PHRASE_REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bemotional\s+focal\s+point\b", re.IGNORECASE), "main emotional focus"),
@@ -175,6 +176,13 @@ def _compact_prompt_payload(value: Any) -> Any:
 
 def _normalize_text(value: Any, *, max_len: int = 240) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())[:max_len]
+
+
+def _contains_word_token(text: str, token: str) -> bool:
+    token = str(token or "").strip()
+    if not token:
+        return False
+    return bool(re.search(rf"(?<![a-zA-Z0-9_]){re.escape(token)}(?![a-zA-Z0-9_])", str(text or ""), re.IGNORECASE))
 
 
 def _build_segment_rows(audio_map: dict[str, Any], story_core: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], str, dict[str, Any]]:
@@ -398,16 +406,16 @@ def _sanitize_role_plan_payload_fields(payload: dict[str, Any]) -> tuple[dict[st
 
 
 def _extract_error_from_leakage(roles_payload: dict[str, Any]) -> str:
-    serialized = json.dumps(roles_payload, ensure_ascii=False).lower()
-    if any(token in serialized for token in _ROUTE_LEAK_TOKENS):
+    serialized = json.dumps(roles_payload, ensure_ascii=False)
+    if any(_contains_word_token(serialized, token) for token in _ROUTE_LEAK_TOKENS):
         return ROLES_CREATIVE_ROUTE
     if any(pattern.search(serialized) for _, pattern in _TECH_IDENTITY_LEAK_PATTERNS):
         return ROLES_TECHNICAL_LEAKING
     if any(pattern.search(serialized) for _, pattern in _TECH_LEAK_STRICT_PATTERNS):
         return ROLES_TECHNICAL_LEAKING
-    if any(token in serialized for token in _TECH_LEAK_TOKENS):
+    if any(_contains_word_token(serialized, token) for token in _TECH_LEAK_TOKENS):
         return ROLES_TECHNICAL_LEAKING
-    if any(token in serialized for token in _ACTION_LEAK_TOKENS):
+    if any(_contains_word_token(serialized, token) for token in _ACTION_LEAK_TOKENS):
         return ROLES_ACTION_LEAKING
     return ""
 
@@ -427,21 +435,20 @@ def _extract_leakage_details(roles_payload: dict[str, Any]) -> tuple[str, str, s
                 if code:
                     return code, leak_path, token
         elif isinstance(node, str):
-            lowered = node.lower()
             for token in _ROUTE_LEAK_TOKENS:
-                if token in lowered:
+                if _contains_word_token(node, token):
                     return ROLES_CREATIVE_ROUTE, path, token
             for token, pattern in _TECH_LEAK_STRICT_PATTERNS:
-                if pattern.search(lowered):
+                if pattern.search(node):
                     return ROLES_TECHNICAL_LEAKING, path, token
             for token, pattern in _TECH_IDENTITY_LEAK_PATTERNS:
-                if pattern.search(lowered):
+                if pattern.search(node):
                     return ROLES_TECHNICAL_LEAKING, path, token
             for token in _TECH_LEAK_TOKENS:
-                if token in lowered:
+                if _contains_word_token(node, token):
                     return ROLES_TECHNICAL_LEAKING, path, token
             for token in _ACTION_LEAK_TOKENS:
-                if token in lowered:
+                if _contains_word_token(node, token):
                     return ROLES_ACTION_LEAKING, path, token
         return "", "", ""
 
