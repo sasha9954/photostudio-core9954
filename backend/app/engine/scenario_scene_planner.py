@@ -303,6 +303,17 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         max_consecutive_ia2v = 2
     max_consecutive_ia2v = max(1, min(8, max_consecutive_ia2v))
 
+    hard_map_raw = row.get("route_assignments_by_segment")
+    if hard_map_raw is None:
+        hard_map_raw = row.get("routeAssignmentsBySegment")
+    hard_map_obj = _safe_dict(hard_map_raw)
+    hard_route_assignments_by_segment: dict[str, str] = {}
+    for k, v in hard_map_obj.items():
+        seg = str(k or "").strip()
+        route = str(v or "").strip().lower()
+        if seg and route in ALLOWED_ROUTES:
+            hard_route_assignments_by_segment[seg] = route
+
     return {
         "route_strategy_mode": route_strategy_mode,
         "route_strategy_preset": route_strategy_preset,
@@ -321,6 +332,7 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         "i2v_ratio": round(i2v_ratio, 3),
         "preferred_routes": preferred_routes,
         "max_consecutive_lipsync": max_consecutive_ia2v,
+        "hard_route_assignments_by_segment": hard_route_assignments_by_segment,
     }
 
 
@@ -723,6 +735,8 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
                 "route_strategy_active": route_strategy_active,
                 "route_strategy_mode": str(creative_config.get("route_strategy_mode") or "auto"),
                 "route_strategy_preset": str(creative_config.get("route_strategy_preset") or ""),
+                "hard_route_assignments_by_segment": _safe_dict(creative_config.get("hard_route_assignments_by_segment")),
+                "route_assignment_source": "creative_config.route_assignments_by_segment" if _safe_dict(creative_config.get("hard_route_assignments_by_segment")) else "gemini",
             },
             "ia2v_definition": "emotion-first performance shot; readable face/mouth; smooth camera; restrained motion",
             "i2v_definition": "baseline clip route for observation, transit, environment and connective montage scenes",
@@ -880,22 +894,23 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "- layout: centered|rule_of_thirds|off_balance|symmetrical\\n"
         "- depth_strategy: flat|layered|deep\\n"
         "USER ROUTE STRATEGY IS A HARD CREATIVE CONSTRAINT.\\n"
+        "If route_budget_contract.hard_route_assignments_by_segment is non-empty, route is STRICT per segment_id and MUST NOT be changed.\\n"
         "If route_budget_contract.targets_are_hard_for_short_clip=true, you MUST satisfy target_counts exactly.\\n"
         "This is not a suggestion; this is the required dramaturgical structure for this scene plan.\\n"
         "You must choose WHICH segment_id receives WHICH route using audio_map + story_core + role_plan dramaturgy.\\n"
         "Do not let backend assign dramaturgy; backend only validates budget compliance.\\n"
-        "For ia2v: prefer strong vocal/speech windows, performance moments, emotional peaks, hooks; "
+        "For ia2v: vocal emotional performance scene, not physical action scene. Prefer strong vocal/speech windows, performance moments, emotional peaks, hooks; "
         "set speaker_role when possible; lip_sync_allowed=true only with valid vocal/speaker evidence; "
         "mouth_visible_required=true for real lip-sync scenes.\\n"
-        "For i2v: prefer movement/transit/atmosphere/world continuity/cutaway/wide visual breathing room; "
+        "For i2v: one physical story action as foreground event; prefer movement/transit/atmosphere/world continuity/cutaway/wide visual breathing room; "
         "do not require mouth-visible lip-sync.\\n"
-        "For first_last: use only when route_budget_contract.target_counts.first_last > 0; "
+        "For first_last: state transition Anchor A -> Event -> Anchor B; use only when route_budget_contract.target_counts.first_last > 0; "
         "if first_last target is 0 then first_last is forbidden.\\n"
         f"{feedback_block}"
         "Output contract:\\n"
         "{\\n"
         '  "scenes_version":"1.1",\\n'
-        '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","speaker_role":"","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
+        '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","story_beat_type":"physical_event|vocal_emotion|state_transition","photo_staging_goal":"","ltx_video_goal":"","background_story_evidence":"","foreground_performance_rule":"","object_action_allowed":true,"singing_readiness_required":false,"ia2v_photo_readability_notes":"","speaker_role":"","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
         "}\\n\\n"
         f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )
@@ -911,6 +926,14 @@ def _route_strategy_active(creative_config: dict[str, Any]) -> bool:
 def _route_budget_target_for_plan(total_scenes: int, creative_config: dict[str, Any]) -> tuple[dict[str, int], bool]:
     if total_scenes <= 0:
         return {"i2v": 0, "ia2v": 0, "first_last": 0}, False
+    hard_map = _safe_dict(creative_config.get("hard_route_assignments_by_segment"))
+    if hard_map:
+        budget = {"i2v": 0, "ia2v": 0, "first_last": 0}
+        for route in hard_map.values():
+            clean = str(route or "").strip().lower()
+            if clean in budget:
+                budget[clean] += 1
+        return budget, True
     if not _route_strategy_active(creative_config):
         return _target_route_budget(total_scenes), False
     base_scene_count = max(1, int(creative_config.get("base_scene_count") or 8))
@@ -1592,6 +1615,7 @@ def _normalize_scene_plan(
     max_consecutive_lip_sync_count = 0
     lip_sync_selected_count = 0
     max_consecutive_allowed = int(creative_config.get("max_consecutive_lipsync") or 2)
+    hard_route_map = _safe_dict(creative_config.get("hard_route_assignments_by_segment"))
 
     for idx, source_row in enumerate(scene_segment_rows):
         segment_id = str(source_row.get("segment_id") or "").strip()
@@ -1602,6 +1626,9 @@ def _normalize_scene_plan(
             continue
 
         route = str(raw_row.get("route") or "").strip().lower()
+        hard_route = str(hard_route_map.get(segment_id) or "").strip().lower()
+        if hard_route in ALLOWED_ROUTES:
+            route = hard_route
         if route not in ALLOWED_ROUTES:
             illegal_route_count += 1
             validation_error = validation_error or "illegal_route"
@@ -1824,6 +1851,17 @@ def _normalize_scene_plan(
                 "route_selection_reason": str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip(),
                 "scene_goal": str(raw_row.get("scene_goal") or "").strip(),
                 "narrative_function": str(raw_row.get("narrative_function") or "").strip(),
+                "story_beat_type": str(
+                    raw_row.get("story_beat_type")
+                    or ("vocal_emotion" if route == "ia2v" else ("state_transition" if route == "first_last" else "physical_event"))
+                ).strip(),
+                "photo_staging_goal": str(raw_row.get("photo_staging_goal") or "").strip(),
+                "ltx_video_goal": str(raw_row.get("ltx_video_goal") or "").strip(),
+                "background_story_evidence": str(raw_row.get("background_story_evidence") or "").strip(),
+                "foreground_performance_rule": str(raw_row.get("foreground_performance_rule") or "").strip(),
+                "object_action_allowed": False if route == "ia2v" else bool(raw_row.get("object_action_allowed", True)),
+                "singing_readiness_required": True if route == "ia2v" else False,
+                "ia2v_photo_readability_notes": str(raw_row.get("ia2v_photo_readability_notes") or "").strip(),
                 "visual_motion": {
                     "subject_motion": str(visual_motion.get("subject_motion") or "").strip(),
                     "camera_intent": str(visual_motion.get("camera_intent") or "").strip(),
@@ -1962,6 +2000,9 @@ def _normalize_scene_plan(
         "scene_plan_route_strategy_active": _route_strategy_active(creative_config),
         "scene_plan_route_strategy_preset": str(creative_config.get("route_strategy_preset") or ""),
         "scene_plan_route_targets_per_block": _safe_dict(creative_config.get("route_targets_per_block")),
+        "hardRouteMapApplied": bool(hard_route_map),
+        "routeAssignmentSource": "creative_config.route_assignments_by_segment" if hard_route_map else "gemini",
+        "hard_route_assignments_by_segment": hard_route_map,
         "scene_plan_route_budget_target": route_budget_target,
         "scene_plan_route_budget_actual": route_counts,
         "scene_plan_route_budget_mismatch": route_budget_mismatch,

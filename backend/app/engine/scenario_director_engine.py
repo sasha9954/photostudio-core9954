@@ -5927,9 +5927,8 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     location = str(scene.location or "the same world location").strip()
     if not str(scene.action_in_frame or "").strip():
         scene.action_in_frame = (
-            "Emotional singing performance with face and mouth clearly readable; phrase-driven expressive hand gestures, "
-            "one-hand-to-chest / open-outward lyric phrasing, coordinated head-shoulder-hand accents, controlled upper-body pulse, "
-            "small forward intention with minimal locomotion, and no running or chase action."
+            "Emotional singing performance with face and mouth clearly readable; minimal movement, subtle expression shifts, "
+            "controlled breathing, slight head tension, and no foreground action event."
         )
     if not str(scene.camera or "").strip():
         scene.camera = _lip_sync_safe_camera_line()
@@ -5939,24 +5938,15 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
         )
     if not str(scene.frame_description or "").strip():
         scene.frame_description = (
-            f"Half-body or medium-close singer performance in {location}; environment supports mood in background."
+            f"Singing-ready performer in {location}; background supports story mood while performer remains primary."
         )
     scene.video_prompt = _join_visible_prompt_parts(
         [
-            "Emotional singing performance in tight medium framing with persistent face/mouth readability.",
-            "Allow phrase-driven hand acting and expressive upper-body performance: lyric-marking fingers/hands, one hand to chest, one hand open outward, controlled torso pulse, and coordinated head/shoulder/hand emphasis.",
-            "Performance should feel alive, not frozen: permit small forward intention and subtle weight shift while preserving stable lipsync readability.",
-            "LIP-SYNC PERFORMANCE RULES (STRICT): performer-first, face/mouth readability mandatory, eye line toward camera or near-camera preferred, emotional lyric delivery through face/shoulders/hands/subtle torso rhythm.",
-            "Camera behavior is locked/smooth: static or very slow push-in with minimal drift; if orbit language appears, treat it as a gentle left/right side partial arc, not a flip/inversion/overhead orbit.",
-            "CAMERA ORBIT SAFETY: if orbit is used, keep it as a slow horizontal arc around performer at eye/chest/waist level and keep subject readable.",
-            "Keep horizon and vertical axis stable: camera remains upright and physically readable at all times.",
-            "No upside-down framing, no full frame inversion, no vertical roll/barrel-roll, no top-over flip, no tumbling, no uncontrolled axial rotation.",
-            "No full 360° orbit around performer, no aggressive circular chase camera, no fast rotational move around face/body, no top orbit, no overhead spin, no head-top camera circle, no drone-like loop over subject.",
-            "No top-down rotation, no camera roll, no spinning around head, no aggressive zoom-out, no fast retreating camera, and no wide framing drift into generic dance floor shot.",
-            "Subject may sway/turn for performance, but camera orientation stays controlled and upright.",
-            "Garment continuity remains strict during performance: emotional gestures must not redesign sleeves, bodice, neckline, skirt silhouette, rose layout, lining visibility logic, or footwear identity.",
-            "Optional safe variant: performer may gently rotate while camera stays upright and background shifts behind trajectory, preserving character integrity.",
-            "Environment remains background support; no running/chasing/spinning as primary action, no chaotic background dance, and no crowd stealing focus.",
+            "Use the uploaded image as the exact first frame and identity anchor.",
+            "Same performer singing an emotional line with clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, and soft facial trembling.",
+            "Small emotional eyebrow movement, emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement.",
+            "Face and mouth stay readable and important.",
+            "Steady camera with very slow push-in.",
             build_ltx_video_canon_block(lip_sync=True),
         ]
     )
@@ -5974,15 +5964,13 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
         emotion_direction = "rising longing with increasing intention and readable emotional tension"
     image_lipsync_canon = _join_visible_prompt_parts(
         [
-            "LIP-SYNC IMAGE CANON (STRICT): singer-performance-first still frame, not neutral mannequin portrait.",
+            "LIP-SYNC IMAGE CANON: singer-performance-first still frame, not neutral mannequin portrait.",
             f"Audio emotion direction key: {scene.audio_emotion_direction}.",
             f"Audio-driven emotion direction: {emotion_direction}.",
             f"Audio anchor evidence: {audio_evidence or 'beat/phrase contour from scene timing'}.",
-            "Capture mouth-ready singing moment with expressive eyes/brow tension and visible neck/shoulders/upper torso.",
-            "Include hands when they improve performance readability; keep enough garment context for continuity.",
-            "Prefer tight_medium / medium / three_quarter framing; avoid face-only neutral beauty crop and avoid distant full-body by default.",
-            "Hard forbidden changes: do not change face identity; do not slim down/compress body; do not change hair color/structure; do not replace garment category;",
-            "do not change neckline/silhouette/color/signature details; do not replace accessories/shoes; do not beautify into a different woman; do not convert into generic singer portrait.",
+            "Capture mouth-ready singing moment with readable emotion and visible face/mouth.",
+            "Framing may range from close-up to full body when face/mouth readability is preserved.",
+            "Background can stay story-rich, but performer remains the foreground meaning.",
         ]
     )
     scene.image_prompt = _quality_filter_visible_prompt(

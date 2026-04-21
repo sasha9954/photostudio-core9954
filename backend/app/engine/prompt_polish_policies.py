@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 
 IA2V_READABILITY_POLICY = (
-    "Face and upper-body performance stays clearly readable with mouth and jaw unobstructed.",
-    "Performer remains the visual center; no crowd occlusion between performer and viewer.",
-    "Allow only subtle shoulder, chest, neck, and head rhythm; no wide choreography.",
-    "No aggressive motion blur, no extreme turn away from camera, and no hands covering the face.",
+    "Framing may range from close-up to full body if the performer still clearly reads as singing.",
+    "Start image must show mouth open or slightly open in a natural singing shape with readable emotion.",
+    "Face and mouth remain visually readable; avoid occlusion from hands, hair, props, or profile-only turns.",
+    "Background may be rich and story-relevant, but video prompt focus stays on vocal performance mechanics.",
 )
 
 _IA2V_FOCUS_TOKENS = (
