@@ -254,16 +254,15 @@ const resolveScenarioUiRoute = (scene = {}) => {
 function buildLipSyncVideoPromptForLtx(basePrompt) {
   const base = String(basePrompt || "").trim();
   const lipSyncLead = [
-    "CLEAR VOCAL PERFORMANCE:",
-    "The same woman is singing and lip-syncing to the provided audio.",
-    "Her mouth visibly articulates the lyrics in sync with the voice.",
-    "Face, mouth and lips must stay readable throughout the shot.",
-    "She performs toward camera or near-camera with expressive eyes and subtle emotional delivery.",
-    "Keep the body mostly stable: gentle sway, small head movement, subtle shoulder rhythm, near-chest hand gestures only.",
-    "Do not turn away from camera during vocal phrases.",
+    "Use the uploaded image as the exact first frame and identity anchor.",
+    "A performance shot of the same performer singing an emotional line.",
+    "Clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, soft facial trembling, and small emotional eyebrow movement.",
+    "Emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement.",
+    "The face and mouth remain readable and important.",
+    "Cinematic realism. Steady camera, very slow push-in.",
   ].join(" ");
 
-  if (/^CLEAR VOCAL PERFORMANCE:/i.test(base)) {
+  if (/^Use the uploaded image as the exact first frame and identity anchor\./i.test(base)) {
     return base;
   }
 
@@ -272,20 +271,20 @@ function buildLipSyncVideoPromptForLtx(basePrompt) {
 
 function buildLipSyncNegativePromptForLtx(baseNegative) {
   const lipSyncNeg = [
-    "closed mouth",
-    "silent face",
-    "not singing",
-    "no lip movement",
-    "mouth not synchronized",
-    "unreadable lips",
+    "hidden mouth",
+    "obstructed lips",
+    "unreadable mouth",
     "face turned away",
     "profile-only face",
     "hands covering mouth",
     "hair covering mouth",
+    "distorted lips",
+    "distorted jaw",
+    "face deformation",
+    "duplicate performer",
+    "identity drift",
     "extreme motion blur",
-    "distorted mouth",
-    "distorted face",
-    "extra people blocking performer"
+    "cutaway away from performer"
   ].join(", ");
   const base = String(baseNegative || "").trim();
   return base ? `${lipSyncNeg}, ${base}` : lipSyncNeg;
@@ -16789,7 +16788,8 @@ Aspect ratio: ${imageFormat}`,
       audioSliceUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.audioSliceUrl),
       continuationSourceAssetUrl: normalizeVideoSourceUrl(rawScenarioVideoSourceUrls.continuationSourceAssetUrl),
     };
-    const wardrobeLockForVideoPayload = shouldApplyWardrobeLockForScene(targetScene)
+    const wardrobeLockForVideoPayload = !lipSyncPromptRoute
+      && shouldApplyWardrobeLockForScene(targetScene)
       && Boolean(normalizedScenarioVideoSourceUrls.imageUrl || normalizedScenarioVideoSourceUrls.startImageUrl);
     if (wardrobeLockForVideoPayload) {
       const wardrobePositiveBase = buildWardrobeLockPromptForHumanScene(sceneVideoMetadata.positivePrompt);

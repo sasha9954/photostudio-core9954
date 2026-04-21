@@ -1613,23 +1613,28 @@ def _build_fallback_scene_prompts(
 
     if route == "ia2v":
         photo_prompt = (
-            f"Performance portrait of {speaker_label} in {world_anchor}, {scene_function} beat with {emotional}, framed as medium close-up/close-up to keep speaker face and mouth readable while the vocal phrase carries emotion through eyes, shoulders, and hands."
+            f"Story-grounded singing-ready start frame of {speaker_label} in {world_anchor} for {scene_function} with {emotional}. "
+            "Framing may be close-up, medium, waist-up, three-quarter, or full body, but face and mouth stay readable. "
+            "Mouth is open or slightly open in a natural singing shape; emotion and performance intent are clearly readable."
         )
         if lip_sync_allowed and speaker_role and speaker_role != "unknown":
             video_prompt = (
-                f"The still frame opens into {scene_function} performance intent: {motion_intent}. "
+                "Use the uploaded image as the exact first frame and identity anchor. "
+                "A performance shot of the same performer singing an emotional line. Clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, soft facial trembling, and small emotional eyebrow movement. "
+                "Emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement. "
+                "The face and mouth remain readable and important. Cinematic realism. Steady camera, very slow push-in. "
                 f"Only {speaker_label} delivers the spoken phrase{f' ({spoken_line})' if spoken_line else ''}; no simultaneous dual-speaker lip movement. "
-                "Vocal phrasing leads subtle rhythmic sway, a controlled torso pulse, a gentle head turn, and soft hand phrasing while the face stays readable and emotionally alive. "
                 f"{f'{reaction_role} may stay nearby as silent listener reaction. ' if listener_reaction_allowed and reaction_role else ''}"
                 f"{'Mouth readability is required for the active speaker. ' if mouth_visible_required else ''}"
-                f"Camera motion stays smooth and supportive.{binding_clause} Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
+                f"{binding_clause}"
             )
         else:
             video_prompt = (
-                f"The still frame opens into {scene_function} performance intent: {motion_intent}. "
-                "Performance stays audio-reactive and emotionally readable through gaze, posture, breathing, and upper-body rhythm, without explicit mouth-sync choreography. "
+                "Use the uploaded image as the exact first frame and identity anchor. "
+                "Same performer in emotional vocal performance with readable face and mouth, controlled breathing, subtle jaw and cheek activity, slight head tension, and very small rhythmic movement. "
+                "Steady camera with a very slow push-in; keep performer-first lip readability."
                 f"{f'{reaction_role} may stay nearby as silent listener reaction. ' if listener_reaction_allowed and reaction_role else ''}"
-                f"Camera motion stays smooth and supportive.{binding_clause} Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
+                f"{binding_clause}"
             )
         negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
     elif route == "first_last":
@@ -1935,7 +1940,7 @@ def _normalize_scene_prompts(
             positive_video_prompt = positive_video_prompt or video_prompt
             negative_video_prompt = negative_video_prompt or str(base.get("negative_prompt") or "").strip() or _GLOBAL_NEGATIVE_PROMPT
             negative_prompt = negative_video_prompt
-        if has_human_scene:
+        if has_human_scene and actual_route != "ia2v":
             for lock_clause in (_GLOBAL_HERO_IDENTITY_LOCK, _BODY_CONTINUITY_LOCK, _WARDROBE_CONTINUITY_LOCK):
                 photo_prompt = _append_prompt_clause(photo_prompt, lock_clause)
                 video_prompt = _append_prompt_clause(video_prompt, lock_clause)
@@ -2324,6 +2329,24 @@ def _normalize_scene_prompts(
     ia2v_audio_driven_count = sum(
         1 for row in scenes if str(row.get("route") or "") == "ia2v" and bool(_safe_dict(row.get("prompt_notes")).get("audio_driven"))
     )
+    ia2v_photo_mouth_ready = all(
+        (
+            "mouth" in str(row.get("photo_prompt") or "").lower()
+            and ("open" in str(row.get("photo_prompt") or "").lower() or "sing" in str(row.get("photo_prompt") or "").lower())
+        )
+        for row in scenes
+        if str(row.get("route") or "") == "ia2v"
+    )
+    ia2v_photo_emotion_readable = all(
+        "emotion" in str(row.get("photo_prompt") or "").lower() or "emotional" in str(row.get("photo_prompt") or "").lower()
+        for row in scenes
+        if str(row.get("route") or "") == "ia2v"
+    )
+    ia2v_video_prompt_has_singing_mechanics = all(
+        all(token in str(row.get("video_prompt") or "").lower() for token in ("sing", "lip", "mouth"))
+        for row in scenes
+        if str(row.get("route") or "") == "ia2v"
+    )
     normalization_diag = {
         "rows_source_count": len(scene_rows),
         "rows_model_count": len(_safe_list(raw.get("scenes"))),
@@ -2351,6 +2374,9 @@ def _normalize_scene_prompts(
         "scene_prompts_must_be_visible_roles": must_be_visible_roles,
         "scene_prompts_shared_space_missing_segments": list(dict.fromkeys(shared_space_missing_segments)),
         "scene_prompts_offscreen_violation_segments": list(dict.fromkeys(offscreen_violation_segments)),
+        "ia2vPhotoMouthReady": bool(ia2v_photo_mouth_ready),
+        "ia2vPhotoEmotionReadable": bool(ia2v_photo_emotion_readable),
+        "ia2vVideoPromptHasSingingMechanics": bool(ia2v_video_prompt_has_singing_mechanics),
         "stage_source": "current_package",
     }
     return (

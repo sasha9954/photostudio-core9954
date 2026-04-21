@@ -30,14 +30,12 @@ _ALLOWED_AUDIO_SYNC = {"none", "beat_sensitive", "phrase_sensitive"}
 _ALLOWED_FRAME_STRATEGY = {"single_init", "start_end"}
 _HUMAN_ROLES = {"character_1", "character_2", "character_3", "group", "hero", "support", "antagonist"}
 _LIP_SYNC_VARIANTS = (
-    "close_up_to_camera",
-    "medium_waist_performance",
-    "side_angle_bar_performance",
-    "mirror_reflection_performance",
-    "walking_toward_camera_performance",
-    "over_shoulder_turn_performance",
-    "seated_or_leaning_performance",
-    "dancefloor_edge_performance",
+    "close_singing_performance",
+    "medium_singing_performance",
+    "waist_up_singing_performance",
+    "three_quarter_singing_performance",
+    "full_body_singing_readable",
+    "story_background_singing_performance",
 )
 
 GLOBAL_HERO_IDENTITY_LOCK = (
@@ -52,8 +50,11 @@ WARDROBE_CONTINUITY_LOCK = (
 CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE = (
     "Use the confirmed hero look reference from scene_01 to preserve the same face, body proportions, silhouette, outfit, neckline, jewelry, hairstyle and production look."
 )
-CLEAR_VOCAL_PERFORMANCE = (
-    "CLEAR VOCAL PERFORMANCE: The same woman is singing and lip-syncing to the provided audio. Her mouth visibly articulates the lyrics in sync with the voice. Face, mouth and lips must stay readable throughout the shot. She performs toward camera or near-camera with expressive eyes and subtle emotional delivery."
+IA2V_BASE_PROMPT_V1 = (
+    "Use the uploaded image as the exact first frame and identity anchor. "
+    "A performance shot of the same performer singing an emotional line. Clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, soft facial trembling, and small emotional eyebrow movement. "
+    "Emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement. "
+    "The face and mouth remain readable and important. Cinematic realism. Steady camera, very slow push-in."
 )
 IDENTITY_NEGATIVE_GUARD = (
     "different woman, different face, changed face, changed body type, slimmer body, thinner waist, longer legs, narrower shoulders, changed bust, changed hips, changed silhouette, different outfit, changed neckline, raised neckline, high-neck top, turtleneck, closed collar, added collar, added sleeves, longer shirt, changed jewelry, missing jewelry, different hairstyle, different hair length, age drift, body proportion drift"
@@ -189,9 +190,10 @@ def _has_real_confirmed_hero_image_url(fallback_row: dict[str, Any]) -> bool:
 
 def _strip_clear_vocal_fragments(text: str) -> str:
     text = str(text or "")
-    canonical = re.escape(CLEAR_VOCAL_PERFORMANCE.strip())
+    canonical = re.escape(IA2V_BASE_PROMPT_V1.strip())
     text = re.sub(canonical, " ", text, flags=re.IGNORECASE)
     text = re.sub(r"(?i)\bCLEAR\s+VOCAL\s+PERFORMANCE\s*[:.]?", " ", text)
+    text = re.sub(r"(?i)\bIA2V\s+BASE\s+PROMPT\s*[:.]?", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"^[\s:.,;]+", "", text).strip()
     return text
@@ -245,7 +247,7 @@ def _sanitize_contract_prompts(*, positive_prompt: str, negative_prompt: str, ro
     if route == "ia2v":
         body = _strip_clear_vocal_fragments(positive)
         clear_vocal_fragments_removed = body != positive
-        positive = f"{CLEAR_VOCAL_PERFORMANCE} {body}".strip()
+        positive = f"{IA2V_BASE_PROMPT_V1} {body}".strip()
         clear_vocal_canonical_applied = True
 
     positive = re.sub(r"\s+", " ", positive).strip()
@@ -604,15 +606,15 @@ def _build_instruction(payload: dict[str, Any]) -> str:
             "Do not add wrappers, markdown, or explanations.",
             "Do not invent extra segments and do not drop any provided segment_id.",
             "Use route semantics exactly: i2v, ia2v, first_last.",
-            "GLOBAL HERO IDENTITY CONTRACT for human/performance scenes must be enforced; keep lock clauses in positive and only real negative tokens in negative.",
-            "Use these exact continuity blocks for human/performance scenes: GLOBAL HERO IDENTITY LOCK, BODY CONTINUITY, WARDROBE CONTINUITY.",
+            "GLOBAL HERO IDENTITY CONTRACT for non-ia2v human scenes must be enforced; keep lock clauses in positive and only real negative tokens in negative.",
+            "For ia2v, use IA2V_BASE_PROMPT_V1 performer-first canon and avoid wardrobe/body continuity walls in positive prompt.",
             "ALLOWED VARIATION for same hero: vary only pose, camera angle, shot size, location zone, gesture, emotion, movement and lighting accent.",
             "If segment order index is 2+, add confirmed look anchor clause: Use the confirmed hero look reference from scene_01...",
             "Do not replace original character references; confirmed look anchor is additional reinforcement only.",
             "WHOLE-STORY CONTINUITY: review all segments as one continuous clip and prevent action/state contradictions between adjacent segments.",
             "For each segment output starts_from_previous_logic, ends_with_state, continuity_with_next, potential_contradiction, fix_if_needed.",
             "If contradiction exists, repair the later segment before returning final JSON.",
-            "For ia2v/lip-sync route, positive prompt MUST start with CLEAR VOCAL PERFORMANCE block.",
+            "For ia2v/lip-sync route, positive prompt MUST start with IA2V_BASE_PROMPT_V1 performer-first block.",
             "For ia2v/lip-sync route, output lip_sync_shot_variant, performance_pose, camera_angle, gesture, location_zone, mouth_readability, why_this_lip_sync_shot_is_different.",
             f"For ia2v/lip-sync route, lip_sync_shot_variant must be one of: {', '.join(_LIP_SYNC_VARIANTS)}.",
             "For adjacent ia2v scenes, do not repeat the same lip_sync_shot_variant.",
@@ -645,7 +647,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     confirmed_look_used = bool(confirmed_look_clause_applied and _has_real_confirmed_hero_image_url(fallback_row))
     positive_contract_duplicates_removed = False
     positive_prompt_seed = positive_prompt
-    if has_human_subject:
+    if has_human_subject and route != "ia2v":
         positive_before_cleanup = positive_prompt
         positive_prompt = _strip_positive_contract_blocks(positive_prompt)
         positive_contract_duplicates_removed = positive_prompt != positive_before_cleanup
@@ -727,8 +729,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
             positive_prompt,
             f"Shot variant: {lip_sync_shot_variant}. performance_pose: {performance_pose or 'camera-readable vocal delivery'}. camera_angle: {camera_angle or 'eye-level readable performance view'}. gesture: {gesture or 'controlled subtle hand accent'}. location_zone: {location_zone or 'same venue, different local zone'}. mouth_readability: {mouth_readability}.",
         )
-        if not positive_prompt.startswith("CLEAR VOCAL PERFORMANCE:"):
-            positive_prompt = f"{CLEAR_VOCAL_PERFORMANCE} {positive_prompt}".strip()
+        if not positive_prompt.startswith("Use the uploaded image as the exact first frame and identity anchor."):
+            positive_prompt = f"{IA2V_BASE_PROMPT_V1} {positive_prompt}".strip()
     else:
         lip_sync_shot_variant = ""
         performance_pose = ""
@@ -745,11 +747,11 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
             route_template_source = "i2v_domestic_safety_template"
             positive_prompt = _append_clause(positive_prompt, DOMESTIC_WORLD_LOCK_BLOCK)
     elif route == "ia2v":
-        route_behavior_template = "LIP-SYNC PERFORMANCE RULES STRICT. LIP-SYNC EXPRESSIVITY LOW ENERGY."
+        route_behavior_template = "Performer-first singing mechanics only; minimal movement and steady camera."
         route_template_source = "ia2v_lipsync_template"
         if positive_prompt:
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {route_behavior_template}"
-    if has_character_1 and route in {"i2v", "ia2v"}:
+    if has_character_1 and route == "i2v":
         positive_prompt = _append_clause(positive_prompt, f"OUTFIT ANCHOR (character_1): {CHARACTER_1_OUTFIT_ANCHOR}.")
         positive_prompt = _append_clause(positive_prompt, f"OUTFIT NEGATIVES: {CHARACTER_1_OUTFIT_NEGATIVES}.")
         negative_prompt = _append_clause(negative_prompt, CHARACTER_1_OUTFIT_NEGATIVES)
@@ -759,6 +761,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         negative_prompt=negative_prompt,
         route=route,
     )
+    if route == "ia2v":
+        positive_prompt = re.sub(r"(?i)\b(do not|no|negative[s]?|outfit negatives?)\b[^.]*\.?", " ", positive_prompt)
+        positive_prompt = re.sub(r"\s+", " ", positive_prompt).strip(" ,.;")
 
     # apply literal dialogue cleanup after all append/rebuild steps and before venue-term guard.
     positive_prompt = _strip_literal_quoted_dialogue(positive_prompt)
@@ -856,13 +861,27 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     requires_audio = route == "ia2v"
     alias_audio_sync_mode = "lip_sync" if route == "ia2v" and lip_sync_allowed else "none"
     alias_frame_strategy = "first_last" if route == "first_last" else "single_image"
-    image_prompt = ". ".join(part for part in [fallback_photo_prompt, GLOBAL_HERO_IDENTITY_LOCK if has_human_subject else "", BODY_CONTINUITY_LOCK if has_human_subject else "", WARDROBE_CONTINUITY_LOCK if has_human_subject else ""] if str(part or "").strip()).strip()
+    image_prompt = ". ".join(
+        part
+        for part in [
+            fallback_photo_prompt,
+            GLOBAL_HERO_IDENTITY_LOCK if has_human_subject and route != "ia2v" else "",
+            BODY_CONTINUITY_LOCK if has_human_subject and route != "ia2v" else "",
+            WARDROBE_CONTINUITY_LOCK if has_human_subject and route != "ia2v" else "",
+        ]
+        if str(part or "").strip()
+    ).strip()
     image_prompt = _append_clause(image_prompt, DOMESTIC_WORLD_LOCK_BLOCK if domestic_scene else "")
     image_prompt = _strip_literal_quoted_dialogue(image_prompt)
     scene_chars = len(scene_specific_payload)
     route_chars = len(route_behavior_template)
     ratio = round(scene_chars / route_chars, 4) if route_chars > 0 else None
     final_hash = hashlib.sha256(positive_prompt.encode("utf-8")).hexdigest()[:16]
+    lower_positive = positive_prompt.lower()
+    lower_negative = negative_prompt.lower()
+    ia2v_positive_has_wardrobe_noise = any(token in lower_positive for token in ("wardrobe", "outfit", "neckline", "collar", "body proportions"))
+    ia2v_negative_has_singing_killer_tokens = any(token in lower_negative for token in ("not singing", "no lip movement", "mouth not synchronized", "silent face", "closed mouth"))
+    ia2v_video_prompt_has_singing_mechanics = all(token in lower_positive for token in ("lip sync", "jaw", "mouth"))
 
     return {
         "segment_id": segment_id,
@@ -947,6 +966,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         "final_image_prompt_chars": len(image_prompt),
         "final_video_prompt_chars": len(str(_safe_dict({"p":positive_prompt}).get("p") or "")),
         "final_scene_specific_chars": _scene_specific_char_count(positive_prompt),
+        "ia2vVideoPromptHasSingingMechanics": bool(route != "ia2v" or ia2v_video_prompt_has_singing_mechanics),
+        "ia2vPositiveHasWardrobeNoise": bool(route == "ia2v" and ia2v_positive_has_wardrobe_noise),
+        "ia2vNegativeHasSingingKillerTokens": bool(route == "ia2v" and ia2v_negative_has_singing_killer_tokens),
     }
 
 
