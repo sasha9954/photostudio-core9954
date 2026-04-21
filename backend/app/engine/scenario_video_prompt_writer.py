@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from typing import Any
 
@@ -56,6 +57,22 @@ CLEAR_VOCAL_PERFORMANCE = (
 )
 IDENTITY_NEGATIVE_GUARD = (
     "different woman, different face, changed face, changed body type, slimmer body, thinner waist, longer legs, narrower shoulders, changed bust, changed hips, changed silhouette, different outfit, changed neckline, raised neckline, high-neck top, turtleneck, closed collar, added collar, added sleeves, longer shirt, changed jewelry, missing jewelry, different hairstyle, different hair length, age drift, body proportion drift"
+)
+CHARACTER_1_OUTFIT_ANCHOR = (
+    "same beige cropped sleeveless top with the same open neckline / same visible upper-chest coverage / same crop length, "
+    "not high-neck, not turtleneck, not closed collar, not blouse, not full-coverage top"
+)
+CHARACTER_1_OUTFIT_NEGATIVES = (
+    "do not raise neckline; do not close chest coverage; do not convert cropped top into high-neck top; "
+    "do not reinterpret into blouse, sweater, turtleneck, or closed tank"
+)
+CONTROLLED_MOTION_SAFETY_BLOCK = (
+    "CONTROLLED MOTION SAFETY: smooth readable cinematic motion, grounded body movement, moderate step/sway/turn/weight shift, "
+    "stable anatomy-safe motion, no jerky movement, no frantic choreography, no violent spins, no high-frequency shaking."
+)
+DOMESTIC_WORLD_LOCK_BLOCK = (
+    "DOMESTIC WORLD LOCK: grounded domestic realism in the same small apartment / kitchen / hallway with same warm home practical lighting, "
+    "same domestic interior family and same late-night apartment realism. no club. no bar. no dance floor. no stage. no neon nightclub ambience."
 )
 
 
@@ -580,6 +597,26 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
             positive_prompt = _append_clause(positive_prompt, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
         negative_prompt = _append_clause(negative_prompt, IDENTITY_NEGATIVE_GUARD)
 
+    scene_specific_parts = [
+        str(fallback_prompt_row.get("photo_prompt") or "").strip(),
+        str(fallback_prompt_row.get("video_prompt") or "").strip(),
+        str(fallback_prompt_row.get("world_anchor") or fallback_prompt_row.get("worldAnchor") or "").strip(),
+        str(fallback_prompt_row.get("action_emotion") or fallback_prompt_row.get("actionEmotion") or "").strip(),
+        str(_safe_dict(fallback_row.get("plan_row")).get("scene_goal") or "").strip(),
+        str(_safe_dict(fallback_row.get("plan_row")).get("scene_summary") or _safe_dict(fallback_row.get("plan_row")).get("scene_description") or "").strip(),
+        str(_safe_dict(fallback_row.get("plan_row")).get("emotional_intent") or "").strip(),
+    ]
+    scene_specific_payload = ". ".join(part for part in scene_specific_parts if part).strip()
+    if scene_specific_payload:
+        positive_prompt = f"{scene_specific_payload}. {positive_prompt}".strip(". ")
+
+    lower_scene_semantics = " ".join(scene_specific_parts + [positive_prompt]).lower()
+    domestic_scene = any(
+        token in lower_scene_semantics
+        for token in ("domestic", "apartment", "kitchen", "home interior", "argument", "breakup", "hallway", "late-night")
+    )
+    has_character_1 = "character_1" in json.dumps(fallback_row, ensure_ascii=False).lower()
+
     if route == "ia2v":
         lip_sync_shot_variant = str(
             row.get("lip_sync_shot_variant")
@@ -623,6 +660,26 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         gesture = ""
         location_zone = ""
         mouth_readability = ""
+    route_behavior_template = ""
+    route_template_source = "route_default_template"
+    if route == "i2v":
+        route_behavior_template = CONTROLLED_MOTION_SAFETY_BLOCK
+        positive_prompt = _append_clause(positive_prompt, route_behavior_template)
+        for banned in ("nightclub", "club-energy", "crowd energy", "dance floor", "bar / dancefloor edge", "club", "bar", "dancefloor edge"):
+            positive_prompt = re.sub(re.escape(banned), "", positive_prompt, flags=re.IGNORECASE)
+        if domestic_scene:
+            route_template_source = "i2v_domestic_safety_template"
+            positive_prompt = _append_clause(positive_prompt, DOMESTIC_WORLD_LOCK_BLOCK)
+    elif route == "ia2v":
+        route_behavior_template = "LIP-SYNC PERFORMANCE RULES STRICT. LIP-SYNC EXPRESSIVITY LOW ENERGY."
+        route_template_source = "ia2v_lipsync_template"
+        if positive_prompt:
+            positive_prompt = f"{positive_prompt.rstrip('. ')}. {route_behavior_template}"
+    if has_character_1 and route in {"i2v", "ia2v"}:
+        positive_prompt = _append_clause(positive_prompt, f"OUTFIT ANCHOR (character_1): {CHARACTER_1_OUTFIT_ANCHOR}.")
+        positive_prompt = _append_clause(positive_prompt, f"OUTFIT NEGATIVES: {CHARACTER_1_OUTFIT_NEGATIVES}.")
+        negative_prompt = _append_clause(negative_prompt, CHARACTER_1_OUTFIT_NEGATIVES)
+
     positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
         positive_prompt=positive_prompt,
         negative_prompt=negative_prompt,
@@ -713,6 +770,10 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     requires_audio = route == "ia2v"
     alias_audio_sync_mode = "lip_sync" if route == "ia2v" and lip_sync_allowed else "none"
     alias_frame_strategy = "first_last" if route == "first_last" else "single_image"
+    scene_chars = len(scene_specific_payload)
+    route_chars = len(route_behavior_template)
+    ratio = round(scene_chars / route_chars, 4) if route_chars > 0 else None
+    final_hash = hashlib.sha256(positive_prompt.encode("utf-8")).hexdigest()[:16]
 
     return {
         "segment_id": segment_id,
@@ -779,6 +840,16 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         "continuity_warning": str(row.get("continuity_warning") or "").strip() or None,
         "continuity_fix_applied": bool(row.get("continuity_fix_applied") or False),
         "prompt_source": FINAL_VIDEO_PROMPT_STAGE_VERSION,
+        "scene_specific_prompt_present": bool(scene_specific_payload),
+        "scene_specific_prompt_chars": scene_chars,
+        "route_template_chars": route_chars,
+        "scene_prompt_to_route_ratio": ratio,
+        "final_prompt_hash": final_hash,
+        "final_prompt_similarity_flag": False,
+        "duplicate_final_prompt_detected": False,
+        "duplicate_prompt_segments": [],
+        "route_template_source": route_template_source,
+        "scene_specific_payload_source": "scene_prompts.prompt_row+scene_plan",
     }
 
 
@@ -806,6 +877,21 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]]) -> dict[str, 
                 seg["continuity_warning"] = "adjacent_lip_sync_variant_repeated"
             previous_lip_variant = current_variant or previous_lip_variant
         normalized.append(seg)
+
+    duplicate_segments: list[str] = []
+    for idx in range(1, len(normalized)):
+        prev_seg = _safe_dict(normalized[idx - 1])
+        cur_seg = _safe_dict(normalized[idx])
+        if str(prev_seg.get("final_prompt_hash") or "") and str(prev_seg.get("final_prompt_hash")) == str(cur_seg.get("final_prompt_hash")):
+            prev_id = str(prev_seg.get("segment_id") or "")
+            cur_id = str(cur_seg.get("segment_id") or "")
+            duplicate_segments = [prev_id, cur_id]
+            normalized[idx - 1]["final_prompt_similarity_flag"] = True
+            normalized[idx]["final_prompt_similarity_flag"] = True
+            normalized[idx - 1]["duplicate_final_prompt_detected"] = True
+            normalized[idx]["duplicate_final_prompt_detected"] = True
+            normalized[idx - 1]["duplicate_prompt_segments"] = duplicate_segments
+            normalized[idx]["duplicate_prompt_segments"] = duplicate_segments
 
     return {
         "delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION,

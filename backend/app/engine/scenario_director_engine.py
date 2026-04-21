@@ -269,8 +269,8 @@ def _normalize_scene_canon_by_route(
             ).strip(". ")
         if normalized_description and "model-safe choreography" not in normalized_description.lower():
             normalized_description = (
-                f"{normalized_description}. Motion safety canon: smooth dynamic nightclub realism with controlled musical movement, "
-                "phrase-shaped readable accents, moderate amplitude, controlled rotation only, and no jerky dance/flailing limbs/abrupt spins/hair-whip/torso-snapping/crowd turbulence."
+                f"{normalized_description}. CONTROLLED MOTION SAFETY: smooth readable cinematic motion, grounded body movement, moderate step/sway/turn/weight shift, "
+                "stable anatomy-safe motion, no jerky movement, no frantic choreography, no violent spins, no high-frequency shaking."
             ).strip(". ")
         if framing not in NON_LIP_ACTION_FRAMINGS:
             establishing_signal = any(token in descriptor_text for token in ("establish", "venue reveal", "wide reveal", "crowd scale", "panorama"))

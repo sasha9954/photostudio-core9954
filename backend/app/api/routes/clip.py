@@ -112,6 +112,14 @@ IDENTITY_LOCK_ALLOWED_VARIATIONS = [
     "framing",
     "environment placement",
 ]
+CHARACTER_1_EXPLICIT_OUTFIT_ANCHOR = (
+    "same beige cropped sleeveless top with the same open neckline / same visible upper-chest coverage / same crop length, "
+    "not high-neck, not turtleneck, not closed collar, not blouse, not full-coverage top"
+)
+CHARACTER_1_EXPLICIT_OUTFIT_NEGATIVES = (
+    "do not raise neckline; do not close chest coverage; do not convert cropped top into high-neck top; "
+    "do not reinterpret into blouse, sweater, turtleneck, or closed tank"
+)
 
 LTX_I2V_CANON_HINT_POSITIVE = """
 Write LTX i2v prompts as short, physically readable motion instructions, not as abstract cinematic prose.
@@ -2994,6 +3002,14 @@ def _compose_video_effective_prompt(
         shot_type,
         scene_human_visual_anchors=scene_human_visual_anchors,
     )
+    has_character_1_human_anchor = any("character_1" in str(anchor or "").lower() for anchor in (scene_human_visual_anchors or []))
+    explicit_outfit_anchor_block = ""
+    if has_humans and has_character_1_human_anchor:
+        explicit_outfit_anchor_block = (
+            "CHARACTER_1 OUTFIT ANCHOR (STRICT): "
+            f"{CHARACTER_1_EXPLICIT_OUTFIT_ANCHOR}. "
+            f"{CHARACTER_1_EXPLICIT_OUTFIT_NEGATIVES}."
+        )
     contract = scene_contract if isinstance(scene_contract, dict) else {}
     identity_lock_block = _build_hard_identity_lock_block(scene_human_visual_anchors=scene_human_visual_anchors) if has_humans else ""
     opening_shot = not bool(contract.get("previousContinuityMemory"))
@@ -3042,6 +3058,7 @@ def _compose_video_effective_prompt(
             hard_continuity_contract_block,
             ltx_video_canon_block,
             identity_lock_block,
+            explicit_outfit_anchor_block,
             genre_hardening_block,
             duet_hardening_block,
         ]
@@ -11754,6 +11771,13 @@ def _build_comfy_image_prompt_assembly(
         ])
     strict_reference_identity_block = ""
     has_character_1_ref = bool((refs_by_role.get("character_1") or []))
+    explicit_character_1_outfit_anchor_block = ""
+    if has_character_1_ref:
+        explicit_character_1_outfit_anchor_block = "\n".join([
+            "CHARACTER_1 EXPLICIT OUTFIT ANCHOR (STRICT):",
+            f"- {CHARACTER_1_EXPLICIT_OUTFIT_ANCHOR}",
+            f"- {CHARACTER_1_EXPLICIT_OUTFIT_NEGATIVES}",
+        ])
     if has_character_1_ref and bool(contract.get("identityLockApplied", contract.get("identityLock"))):
         reference_profile = profiles.get("character_1") if isinstance(profiles.get("character_1"), dict) else {}
         profile_invariants = [str(x or "").strip() for x in (reference_profile.get("invariants") or []) if str(x or "").strip()][:4]
@@ -11960,6 +11984,7 @@ def _build_comfy_image_prompt_assembly(
             lip_sync_audio_emotion_block,
             non_lip_identity_first_block,
             strict_reference_identity_block,
+            explicit_character_1_outfit_anchor_block,
             scene_meaning_block,
             forbidden_changes_block,
             "CHARACTER ANCHOR:\n" + f"- {effective_character_anchor or 'coherent single-character identity across all scenes'}",
@@ -11972,6 +11997,7 @@ def _build_comfy_image_prompt_assembly(
             location_continuity_lock_block,
             non_lip_identity_first_block,
             strict_reference_identity_block,
+            explicit_character_1_outfit_anchor_block,
             opening_shot_realism_block,
             framing_and_staging_block,
             identity_layer_block,
