@@ -6,6 +6,39 @@ const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const SCENARIO_ROLE_TRACE_SCENE_ID = "TRACE_SCENE_2P_001";
 
+export function extractBaseSegmentId(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const exact = raw.match(/^(seg_\d+)$/i);
+  if (exact) return String(exact[1] || "").toLowerCase();
+  const embedded = raw.match(/(seg_\d+)/i);
+  if (embedded) return String(embedded[1] || "").toLowerCase();
+  return "";
+}
+
+export function resolveCanonicalSegmentId(scene = {}, idx = 0) {
+  const directSegment = String(scene?.segment_id || scene?.segmentId || "").trim();
+  if (directSegment) return directSegment;
+
+  const candidates = [
+    scene?.canonicalSegmentId,
+    scene?.sourceSegmentId,
+    scene?.originalSegmentId,
+    scene?.scene_id,
+    scene?.sourceSceneId,
+    scene?.sceneId,
+    scene?.sceneKey,
+    scene?.uiKey,
+    scene?.id,
+  ];
+
+  for (const value of candidates) {
+    const canonical = extractBaseSegmentId(value);
+    if (canonical) return canonical;
+  }
+  return `seg_${String(idx + 1).padStart(2, "0")}`;
+}
+
 function shouldTraceScenarioRoleScene(sceneId = "") {
   const needle = normalizeText(SCENARIO_ROLE_TRACE_SCENE_ID);
   if (!needle) return false;
@@ -1511,17 +1544,20 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const mergedSceneContractSource = { ...nestedSceneContract, ...source };
   const sourceSegmentId = normalizeText(source.segment_id ?? source.segmentId);
   const sourceSceneId = normalizeText(source.sceneId ?? source.scene_id);
-  const sceneKey = sourceSegmentId || sourceSceneId || `scene_${index + 1}`;
-  const displayId = sourceSegmentId || sourceSceneId || sceneKey;
+  const canonicalSegmentId = resolveCanonicalSegmentId(source, index);
+  const sceneUiKey = sourceSceneId || source.sceneKey || source.uiKey || sourceSegmentId || canonicalSegmentId || `scene_${index + 1}`;
+  const displayId = canonicalSegmentId || sourceSceneId || sceneUiKey;
   const normalizedScene = {
-    sceneKey,
-    segment_id: sourceSegmentId,
-    segmentId: sourceSegmentId,
+    uiKey: sceneUiKey,
+    sceneKey: sceneUiKey,
+    sceneId: sceneUiKey,
+    segment_id: canonicalSegmentId,
+    segmentId: canonicalSegmentId,
+    canonicalSegmentId,
     sourceSceneId: sourceSceneId,
     display_id: displayId,
     displayId,
-    sceneId: sceneKey,
-    scene_id: sourceSceneId || sceneKey,
+    scene_id: sourceSceneId || sceneUiKey,
     sceneIndex: normalizedSceneIndex,
     scene_index: normalizedSceneIndex,
     index: normalizedSceneIndex,

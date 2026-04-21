@@ -51,7 +51,9 @@ import {
   buildScenarioPreviewInput,
   detectScenarioAssetType,
   deriveScenarioImageStrategy,
+  extractBaseSegmentId,
   normalizeScenarioStoryboardPackage,
+  resolveCanonicalSegmentId,
   resolveScenarioSceneVideoProfile,
   resolveSceneDisplayTime,
   resolveScenarioExplicitModelKey,
@@ -1735,13 +1737,19 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
 }
 
 function resolveStoryboardSceneBySegmentId(segmentId = "", ...sources) {
-  const normalizedSegmentId = String(segmentId || "").trim();
+  const normalizedSegmentId = String(extractBaseSegmentId(segmentId) || segmentId || "").trim().toLowerCase();
   if (!normalizedSegmentId) return null;
-  const idAliases = ["sceneId", "scene_id", "segment_id", "segmentId", "id"];
   const readSceneId = (item = {}) => {
-    for (const key of idAliases) {
-      const value = String(item?.[key] || "").trim();
-      if (value) return value;
+    const candidates = [
+      item?.segment_id,
+      item?.segmentId,
+      extractBaseSegmentId(item?.sceneId),
+      extractBaseSegmentId(item?.scene_id),
+      item?.id,
+    ];
+    for (const value of candidates) {
+      const canonical = String(extractBaseSegmentId(value) || value || "").trim().toLowerCase();
+      if (canonical) return canonical;
     }
     return "";
   };
@@ -1860,6 +1868,17 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     );
     return hasAnchor || !worldAnchor ? text : `${text}\n\nWORLD ANCHOR: ${worldAnchor}`.trim();
   };
+  const segmentId = resolveCanonicalSegmentId(scene, scene?.sceneIndex || 0);
+  const finalStoryboardScene = resolveStoryboardSceneBySegmentId(
+    segmentId,
+    scenarioPackage,
+    scenarioPackage?.final_storyboard,
+    scenarioPackage?.scene_prompts,
+    scenarioPackage?.final_video_prompt
+  ) || null;
+  const scenePromptsScene = resolveStoryboardSceneBySegmentId(segmentId, scenarioPackage?.scene_prompts, scenarioPackage) || null;
+  const finalVideoPromptScene = resolveStoryboardSceneBySegmentId(segmentId, scenarioPackage?.final_video_prompt, scenarioPackage) || null;
+  const scenePlanScene = resolveStoryboardSceneBySegmentId(segmentId, scenarioPackage?.scene_plan, scenarioPackage) || null;
   const sceneSummaryFallback = readFirstNonEmpty(
     scene?.sceneText,
     scene?.scene_text,
@@ -1903,8 +1922,44 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     },
     {
       source: "scene.route_payload.positive_prompt",
-      value: readFirstNonEmpty(scene?.route_payload?.positive_prompt),
+      value: readFirstNonEmpty(
+        scene?.route_payload?.positive_prompt,
+        scene?.routePayload?.positive_prompt
+      ),
       isImageOrPhotoPrompt: false,
+    },
+    {
+      source: "scene.route_payload.image_prompt",
+      value: readFirstNonEmpty(
+        scene?.route_payload?.image_prompt,
+        scene?.routePayload?.image_prompt
+      ),
+      isImageOrPhotoPrompt: true,
+    },
+    {
+      source: "scene.finalVideoPrompt.positivePrompt",
+      value: readFirstNonEmpty(scene?.finalVideoPrompt?.positivePrompt),
+      isImageOrPhotoPrompt: true,
+    },
+    {
+      source: "finalStoryboardScene.final_payload.image_prompt",
+      value: readFirstNonEmpty(finalStoryboardScene?.final_payload?.image_prompt, finalStoryboardScene?.finalPayload?.image_prompt),
+      isImageOrPhotoPrompt: true,
+    },
+    {
+      source: "finalStoryboardScene.route_payload.positive_prompt",
+      value: readFirstNonEmpty(finalStoryboardScene?.route_payload?.positive_prompt, finalStoryboardScene?.routePayload?.positive_prompt),
+      isImageOrPhotoPrompt: true,
+    },
+    {
+      source: "scenePromptsScene.imagePrompt",
+      value: readFirstNonEmpty(scenePromptsScene?.imagePromptEn, scenePromptsScene?.imagePromptRu, scenePromptsScene?.image_prompt),
+      isImageOrPhotoPrompt: true,
+    },
+    {
+      source: "finalVideoPromptScene.positivePrompt",
+      value: readFirstNonEmpty(finalVideoPromptScene?.finalVideoPrompt?.positivePrompt, finalVideoPromptScene?.positivePrompt),
+      isImageOrPhotoPrompt: true,
     },
     {
       source: "scene.summary_goal_fallback",
@@ -1924,9 +1979,21 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
   const nonRuleCandidates = filteredCandidates.filter((item) => !isRuleOnlyImagePrompt(item?.value));
   const ruleOnlyCandidates = filteredCandidates.filter((item) => isRuleOnlyImagePrompt(item?.value));
   const selectedCandidate = nonRuleCandidates[0] || ruleOnlyCandidates[0] || { source: "none", value: "" };
+  const emergencyVisualPrompt = readFirstNonEmpty(
+    scene?.route_payload?.image_prompt,
+    scene?.routePayload?.image_prompt,
+    scene?.route_payload?.positive_prompt,
+    scene?.routePayload?.positive_prompt,
+    scene?.finalVideoPrompt?.positivePrompt,
+    scene?.imagePromptEn,
+    scene?.imagePromptRu
+  );
   const rawSelectedPrompt = String(selectedCandidate?.value || "").trim();
-  const usedDanceMotionSafetyOnly = isRuleOnlyImagePrompt(rawSelectedPrompt);
-  const imagePromptResolved = usedDanceMotionSafetyOnly ? rawSelectedPrompt : appendWorldAnchor(rawSelectedPrompt);
+  const selectedPromptForImage = isRuleOnlyImagePrompt(rawSelectedPrompt) && emergencyVisualPrompt && !isRuleOnlyImagePrompt(emergencyVisualPrompt)
+    ? emergencyVisualPrompt
+    : rawSelectedPrompt;
+  const usedDanceMotionSafetyOnly = isRuleOnlyImagePrompt(selectedPromptForImage);
+  const imagePromptResolved = usedDanceMotionSafetyOnly ? selectedPromptForImage : appendWorldAnchor(selectedPromptForImage);
   const promptSource = String(scene?.final_payload?.prompt_source || scene?.finalPayload?.prompt_source || (selectedCandidate?.source === "scene.final_payload.image_prompt" ? "final_payload" : "fallback_not_final_payload")).trim();
   const negativeEnvironment = resolveScenarioImageNegativeEnvironment(scene, worldAnchor);
   const negativePrompt = [resolveScenarioSceneNegativePrompt(scene), negativeEnvironment]
@@ -1939,7 +2006,7 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     videoPrompt: String(scene?.videoPromptRu || scene?.videoPromptEn || scene?.videoPrompt || "").trim(),
     sceneText: String(sceneSummaryFallback || "").trim(),
     visualPrompt: rawSelectedPrompt,
-    ruleOnlyPrompt: usedDanceMotionSafetyOnly ? rawSelectedPrompt : "",
+    ruleOnlyPrompt: usedDanceMotionSafetyOnly ? selectedPromptForImage : "",
     negativePrompt,
     negativeEnvironment,
     usedDanceMotionSafetyOnly,
@@ -1949,10 +2016,11 @@ function resolveScenarioImagePromptContext({ scene = {}, scenarioPackage = {}, s
     worldAnchorPreview: worldAnchor,
     hasWorldAnchor: Boolean(worldAnchorMeta?.hasWorldAnchor),
     isHardcodedFallback: Boolean(worldAnchorMeta?.isHardcodedFallback),
-    finalStoryboardScene: null,
-    scenePromptsScene: null,
-    finalVideoPromptScene: null,
-    scenePlanScene: null,
+    canonicalSegmentId: segmentId,
+    finalStoryboardScene,
+    scenePromptsScene,
+    finalVideoPromptScene,
+    scenePlanScene,
   };
 }
 
@@ -3166,8 +3234,6 @@ function getScenarioSceneStableKey(scene, idx) {
 }
 
 function buildCanonicalSceneId(scene, idx, prefix = "scene") {
-  const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
-  if (segmentId) return segmentId;
   const explicit = String(scene?.sceneId || "").trim();
   if (explicit) return explicit;
   const snakeCase = String(scene?.scene_id || "").trim();
@@ -3180,9 +3246,13 @@ function buildCanonicalSceneId(scene, idx, prefix = "scene") {
 function normalizeSceneCollectionWithSceneId(scenes, prefix = "scene") {
   return (Array.isArray(scenes) ? scenes : []).map((scene, idx) => ({
     ...(scene && typeof scene === "object" ? scene : {}),
+    uiKey: buildCanonicalSceneId(scene, idx, prefix),
     sceneKey: buildCanonicalSceneId(scene, idx, prefix),
     sceneId: buildCanonicalSceneId(scene, idx, prefix),
-    display_id: String(scene?.display_id || scene?.displayId || scene?.segment_id || scene?.scene_id || buildCanonicalSceneId(scene, idx, prefix)).trim(),
+    segment_id: resolveCanonicalSegmentId(scene, idx),
+    segmentId: resolveCanonicalSegmentId(scene, idx),
+    canonicalSegmentId: resolveCanonicalSegmentId(scene, idx),
+    display_id: String(scene?.display_id || scene?.displayId || resolveCanonicalSegmentId(scene, idx) || scene?.scene_id || buildCanonicalSceneId(scene, idx, prefix)).trim(),
   }));
 }
 
@@ -13307,14 +13377,23 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     if (!normalizedTarget) return -1;
     const sourceScenes = Array.isArray(scenesInput) ? scenesInput : scenarioScenes;
     const loweredTarget = normalizedTarget.toLowerCase();
+    const targetCanonicalSegmentId = extractBaseSegmentId(normalizedTarget);
     return sourceScenes.findIndex((sceneItem, idx) => {
       const candidates = [
+        sceneItem?.uiKey,
+        sceneItem?.sceneKey,
         sceneItem?.sceneId,
         sceneItem?.scene_id,
+        sceneItem?.segment_id,
+        sceneItem?.segmentId,
         sceneItem?.id,
         `S${idx + 1}`,
       ].map((value) => String(value || "").trim()).filter(Boolean);
-      return candidates.includes(normalizedTarget) || candidates.some((value) => value.toLowerCase() === loweredTarget);
+      return (
+        candidates.includes(normalizedTarget)
+        || candidates.some((value) => value.toLowerCase() === loweredTarget)
+        || (targetCanonicalSegmentId && candidates.some((value) => extractBaseSegmentId(value) === targetCanonicalSegmentId))
+      );
     });
   }, [scenarioScenes]);
 
@@ -13405,6 +13484,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       ? resolvedSceneIndex
       : (requestedSceneIndex >= 0 ? requestedSceneIndex : -1);
     const targetScene = targetScenes[targetSceneIndex] || null;
+    const canonicalSegmentId = targetScene ? resolveCanonicalSegmentId(targetScene, targetSceneIndex >= 0 ? targetSceneIndex : 0) : "";
     const requestSceneId = String(targetScene?.sceneId || requestedSceneId || "").trim();
     if (!targetNodeId || !targetNode) {
       console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] missing_target_node", {
@@ -13589,8 +13669,16 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const scenarioPackageForImage = targetNode?.data?.scenarioPackage && typeof targetNode.data.scenarioPackage === "object"
       ? targetNode.data.scenarioPackage
       : {};
+    const targetSceneForPrompt = targetScene
+      ? {
+        ...(targetScene || {}),
+        segment_id: canonicalSegmentId || targetScene?.segment_id,
+        segmentId: canonicalSegmentId || targetScene?.segmentId,
+        canonicalSegmentId: canonicalSegmentId || targetScene?.canonicalSegmentId,
+      }
+      : {};
     const promptContext = resolveScenarioImagePromptContext({
-      scene: targetScene,
+      scene: targetSceneForPrompt,
       scenarioPackage: scenarioPackageForImage,
       slot: normalizedSlot,
     });
@@ -13646,6 +13734,13 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
             : (promptContext?.imagePrompt ? "prompt_context.imagePrompt" : "")
         )
     ).trim() || "unknown";
+    console.debug("[SCENARIO IMAGE PROMPT ID MAP]", {
+      uiKey: String(targetScene?.uiKey || "").trim(),
+      sceneId: String(sceneId || "").trim(),
+      canonicalSegmentId: String(canonicalSegmentId || promptContext?.canonicalSegmentId || "").trim(),
+      promptSource: promptContextSource,
+      imagePromptPreview: String(promptContext?.imagePrompt || "").slice(0, 220),
+    });
     const sceneRouteRaw = String(
       targetScene?.route
       || targetScene?.video_generation_route
