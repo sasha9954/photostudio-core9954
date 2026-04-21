@@ -397,12 +397,16 @@ const META_BANNED_PHRASES = [
   "scene purpose",
 ];
 
-const LEGACY_DANCE_ARTIFACT_PATTERNS = [
+const LEGACY_PROMPT_GLOBAL_ARTIFACT_PATTERNS = [
   /DANCE MOTION SAFETY:[\s\S]*?(?=(?:CAMERA ORBIT SAFETY:|LIP-SYNC|$))/ig,
   /smooth dynamic nightclub realism/ig,
   /elegant club-energy/ig,
   /club background with moving lights/ig,
-  /nightclub realism/ig,
+];
+
+const LEGACY_DOMESTIC_POSITIVE_VENUE_PATTERNS = [
+  /\bnightclub\b/ig,
+  /\bclub\b/ig,
   /\bdance floor\b/ig,
   /\bbar\b/ig,
   /\bstage\b/ig,
@@ -433,18 +437,36 @@ function isDomesticScene(scene = {}) {
   return /\bdomestic\b|\bapartment\b|\bkitchen\b|\bhallway\b|квартир|кухн|коридор|домашн/.test(blob);
 }
 
-function sanitizeLegacyPromptArtifacts(value = "", { injectControlledMotion = false } = {}) {
+function sanitizeLegacyPositivePromptArtifacts(
+  value = "",
+  { injectControlledMotion = false, domestic = false } = {}
+) {
   let text = normalizeText(value);
   if (!text) return "";
-  LEGACY_DANCE_ARTIFACT_PATTERNS.forEach((pattern) => {
+  LEGACY_PROMPT_GLOBAL_ARTIFACT_PATTERNS.forEach((pattern) => {
     text = text.replace(pattern, " ");
   });
+  if (domestic) {
+    LEGACY_DOMESTIC_POSITIVE_VENUE_PATTERNS.forEach((pattern) => {
+      text = text.replace(pattern, " ");
+    });
+  }
   text = text.replace(/\s+/g, " ").trim();
   if (!text) return injectControlledMotion ? CONTROLLED_MOTION_SAFETY_BLOCK : "";
   if (injectControlledMotion && !/CONTROLLED MOTION SAFETY:/i.test(text)) {
     text = `${text}. ${CONTROLLED_MOTION_SAFETY_BLOCK}`;
   }
   return text.replace(/\s+/g, " ").trim();
+}
+
+function sanitizeLegacyNegativePromptArtifacts(value = "") {
+  let text = normalizeText(value);
+  if (!text) return "";
+  LEGACY_PROMPT_GLOBAL_ARTIFACT_PATTERNS.forEach((pattern) => {
+    text = text.replace(pattern, " ");
+  });
+  text = text.replace(/\s+/g, " ").trim();
+  return text || "";
 }
 
 function sanitizeVisiblePromptText(value = "") {
@@ -459,7 +481,7 @@ function sanitizeVisiblePromptText(value = "") {
     .replace(/\b[A-Za-zА-Яа-яЁё]\s*[→➜]\s*[A-Za-zА-Яа-яЁё]\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  text = sanitizeLegacyPromptArtifacts(text);
+  text = sanitizeLegacyPositivePromptArtifacts(text);
   if (!text) return "";
 
   const sentences = text.split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
@@ -1390,8 +1412,11 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const resolvedWorkflowKeyRaw = explicitWorkflowKey || resolveScenarioWorkflowKey(source);
   const resolvedWorkflowKey = (requiresContinuationRaw && !requiresTwoFrames) ? "i2v" : resolvedWorkflowKeyRaw;
   const shouldInjectDomesticControlledMotion = isDomesticScene(source) && resolvedWorkflowKey === "i2v";
-  const sanitizedPositiveForScene = sanitizeLegacyPromptArtifacts(canonicalPositiveForScene, { injectControlledMotion: shouldInjectDomesticControlledMotion });
-  const sanitizedNegativeForScene = sanitizeLegacyPromptArtifacts(canonicalNegativeForScene);
+  const sanitizedPositiveForScene = sanitizeLegacyPositivePromptArtifacts(canonicalPositiveForScene, {
+    injectControlledMotion: shouldInjectDomesticControlledMotion,
+    domestic: isDomesticScene(source),
+  });
+  const sanitizedNegativeForScene = sanitizeLegacyNegativePromptArtifacts(canonicalNegativeForScene);
   const normalizedFinalRoutePayload = {
     ...sourceRoutePayload,
     positive_prompt: sanitizedPositiveForScene,
@@ -1507,8 +1532,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     },
     routePayload: normalizedFinalRoutePayload,
     finalVideoPrompt: {
-      positivePrompt: canonicalPositiveForScene,
-      negativePrompt: canonicalNegativeForScene,
+      positivePrompt: sanitizedPositiveForScene,
+      negativePrompt: sanitizedNegativeForScene,
       firstFramePrompt: canonicalFirstFramePrompt,
       lastFramePrompt: canonicalLastFramePrompt,
       promptSource: canonicalPromptSource,
@@ -1844,9 +1869,14 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     normalizedScene.imagePromptEn = sanitizeVisiblePromptText(`${normalizedScene.imagePromptEn}. ${lipSyncCanonSuffix}. ${lipSyncExpressivePolicy}`);
   } else if (isDomesticI2vScene) {
     normalizedScene.videoPromptEn = sanitizeVisiblePromptText(
-      sanitizeLegacyPromptArtifacts(`${normalizedScene.videoPromptEn}. ${CONTROLLED_MOTION_SAFETY_BLOCK}. ${orbitCanonSuffix}`, { injectControlledMotion: true })
+      sanitizeLegacyPositivePromptArtifacts(
+        `${normalizedScene.videoPromptEn}. ${CONTROLLED_MOTION_SAFETY_BLOCK}. ${orbitCanonSuffix}`,
+        { injectControlledMotion: true, domestic: true }
+      )
     );
-    normalizedScene.imagePromptEn = sanitizeVisiblePromptText(sanitizeLegacyPromptArtifacts(normalizedScene.imagePromptEn));
+    normalizedScene.imagePromptEn = sanitizeVisiblePromptText(
+      sanitizeLegacyPositivePromptArtifacts(normalizedScene.imagePromptEn, { domestic: true })
+    );
   } else {
     normalizedScene.videoPromptEn = sanitizeVisiblePromptText(`${normalizedScene.videoPromptEn}. ${danceCanonSuffix}. ${orbitCanonSuffix}`);
     normalizedScene.imagePromptEn = sanitizeVisiblePromptText(`${normalizedScene.imagePromptEn}. ${danceCanonSuffix}`);
@@ -1857,10 +1887,18 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   normalizedScene.endFramePromptRu = sanitizeVisiblePromptText(normalizedScene.endFramePromptRu || distinctPrompts.endFramePrompt);
   normalizedScene.endFramePromptEn = sanitizeVisiblePromptText(normalizedScene.endFramePromptEn || normalizedScene.endFramePromptRu);
   if (isDomesticScene(normalizedScene)) {
-    normalizedScene.startFramePromptRu = sanitizeVisiblePromptText(sanitizeLegacyPromptArtifacts(normalizedScene.startFramePromptRu || DOMESTIC_FRAME_FALLBACK));
-    normalizedScene.startFramePromptEn = sanitizeVisiblePromptText(sanitizeLegacyPromptArtifacts(normalizedScene.startFramePromptEn || DOMESTIC_FRAME_FALLBACK));
-    normalizedScene.endFramePromptRu = sanitizeVisiblePromptText(sanitizeLegacyPromptArtifacts(normalizedScene.endFramePromptRu || DOMESTIC_FRAME_FALLBACK));
-    normalizedScene.endFramePromptEn = sanitizeVisiblePromptText(sanitizeLegacyPromptArtifacts(normalizedScene.endFramePromptEn || DOMESTIC_FRAME_FALLBACK));
+    normalizedScene.startFramePromptRu = sanitizeVisiblePromptText(
+      sanitizeLegacyPositivePromptArtifacts(normalizedScene.startFramePromptRu || DOMESTIC_FRAME_FALLBACK, { domestic: true })
+    );
+    normalizedScene.startFramePromptEn = sanitizeVisiblePromptText(
+      sanitizeLegacyPositivePromptArtifacts(normalizedScene.startFramePromptEn || DOMESTIC_FRAME_FALLBACK, { domestic: true })
+    );
+    normalizedScene.endFramePromptRu = sanitizeVisiblePromptText(
+      sanitizeLegacyPositivePromptArtifacts(normalizedScene.endFramePromptRu || DOMESTIC_FRAME_FALLBACK, { domestic: true })
+    );
+    normalizedScene.endFramePromptEn = sanitizeVisiblePromptText(
+      sanitizeLegacyPositivePromptArtifacts(normalizedScene.endFramePromptEn || DOMESTIC_FRAME_FALLBACK, { domestic: true })
+    );
   }
   const videoProfile = resolveScenarioSceneVideoProfile(normalizedScene);
   const finalWorkflow = videoProfile.canonicalRoute || normalizedScene.resolvedWorkflowKey || "i2v";
