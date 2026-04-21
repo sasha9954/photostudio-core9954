@@ -1509,8 +1509,19 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ? source.sceneContract
     : {};
   const mergedSceneContractSource = { ...nestedSceneContract, ...source };
+  const sourceSegmentId = normalizeText(source.segment_id ?? source.segmentId);
+  const sourceSceneId = normalizeText(source.sceneId ?? source.scene_id);
+  const sceneKey = sourceSegmentId || sourceSceneId || `scene_${index + 1}`;
+  const displayId = sourceSegmentId || sourceSceneId || sceneKey;
   const normalizedScene = {
-    sceneId: normalizeText(source.sceneId ?? source.scene_id) || `S${index + 1}`,
+    sceneKey,
+    segment_id: sourceSegmentId,
+    segmentId: sourceSegmentId,
+    sourceSceneId: sourceSceneId,
+    display_id: displayId,
+    displayId,
+    sceneId: sceneKey,
+    scene_id: sourceSceneId || sceneKey,
     sceneIndex: normalizedSceneIndex,
     scene_index: normalizedSceneIndex,
     index: normalizedSceneIndex,
