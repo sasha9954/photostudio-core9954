@@ -923,6 +923,8 @@ def _restore_payload_valid_upstream_statuses_for_stage(
 
 
 def _is_stage_dependency_satisfied(package: dict[str, Any], stage_id: str, dependency_stage_id: str) -> bool:
+    if stage_id == "scene_plan":
+        return _scene_plan_dependency_payload_ok(package, dependency_stage_id)
     if stage_id == "scene_prompts":
         return _scene_prompts_dependency_payload_ok(package, dependency_stage_id)
     if stage_id == "final_video_prompt":
@@ -9081,6 +9083,8 @@ def run_manual_stage(
         first_missing_idx = dep_sequence.index(missing_upstream[0])
         dep_sequence = dep_sequence[first_missing_idx:]
     else:
+        dep_sequence = []
+    if stage_id == "scene_plan" and scene_plan_payload_gate_accepted:
         dep_sequence = []
     preserve_audio_map_for_story_core = stage_id == "story_core" and _is_usable_audio_map(_safe_dict(pkg.get("audio_map")))
     if preserve_audio_map_for_story_core:
