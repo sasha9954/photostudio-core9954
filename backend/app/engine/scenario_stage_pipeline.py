@@ -319,6 +319,79 @@ def _can_run_scene_prompts_from_existing_scene_plan(package: dict[str, Any]) -> 
     return True
 
 
+def _scene_plan_payload_supports_scene_prompts(package: dict[str, Any]) -> bool:
+    pkg = _safe_dict(package)
+    scene_plan = _safe_dict(pkg.get("scene_plan"))
+    if not _has_valid_scene_plan_payload(scene_plan):
+        return False
+
+    scene_rows = _scene_plan_rows_for_validation(scene_plan)
+    if not scene_rows:
+        return False
+
+    supported_routes = {"i2v", "ia2v", "first_last"}
+    route_rows = 0
+    for row in scene_rows:
+        route = str(_safe_dict(row).get("route") or "").strip().lower()
+        if route in supported_routes:
+            route_rows += 1
+    if route_rows <= 0:
+        return False
+
+    audio_segments = [row for row in _safe_list(_safe_dict(pkg.get("audio_map")).get("segments")) if isinstance(row, dict)]
+    expected_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in audio_segments]
+    expected_segment_ids = [segment_id for segment_id in expected_segment_ids if segment_id]
+    if not expected_segment_ids:
+        return False
+
+    scene_segment_ids = [
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip() for row in scene_rows
+    ]
+    scene_segment_ids = [segment_id for segment_id in scene_segment_ids if segment_id]
+    if len(scene_segment_ids) != len(expected_segment_ids):
+        return False
+    return set(scene_segment_ids) == set(expected_segment_ids)
+
+
+def _scene_prompts_dependency_payload_ok(package: dict[str, Any], dependency_stage_id: str) -> bool:
+    pkg = _safe_dict(package)
+    if dependency_stage_id == "input_package":
+        return bool(_safe_dict(pkg.get("input")))
+    if dependency_stage_id == "audio_map":
+        return _is_audio_map_dependency_satisfied(pkg)
+    if dependency_stage_id == "story_core":
+        return _has_valid_story_core_payload(_safe_dict(pkg.get("story_core")))
+    if dependency_stage_id == "role_plan":
+        return _has_valid_role_plan_payload(_safe_dict(pkg.get("role_plan")))
+    if dependency_stage_id == "scene_plan":
+        return _scene_plan_payload_supports_scene_prompts(pkg)
+    return _can_reuse_stage_output(pkg, dependency_stage_id)
+
+
+def _collect_scene_prompts_dependency_gate_state(
+    package: dict[str, Any], dependencies: list[str]
+) -> tuple[dict[str, bool], dict[str, str], bool]:
+    pkg = _safe_dict(package)
+    statuses = _safe_dict(pkg.get("stage_statuses"))
+    payload_ok_by_stage: dict[str, bool] = {}
+    status_by_stage: dict[str, str] = {}
+    false_positive_prevented = False
+    for dep_stage in dependencies:
+        payload_ok = _scene_prompts_dependency_payload_ok(pkg, dep_stage)
+        payload_ok_by_stage[dep_stage] = payload_ok
+        dep_status = str(_safe_dict(statuses.get(dep_stage)).get("status") or "").strip().lower()
+        status_by_stage[dep_stage] = dep_status
+        if payload_ok and _stage_is_marked_stale_or_invalid(pkg, dep_stage):
+            false_positive_prevented = True
+    return payload_ok_by_stage, status_by_stage, false_positive_prevented
+
+
+def _can_run_scene_prompts_from_existing_payload(package: dict[str, Any]) -> bool:
+    dependencies = STAGE_DEPENDENCIES.get("scene_prompts", [])
+    payload_ok_by_stage, _, _ = _collect_scene_prompts_dependency_gate_state(package, dependencies)
+    return all(bool(payload_ok_by_stage.get(dep_stage)) for dep_stage in dependencies)
+
+
 def _is_audio_map_dependency_satisfied(package: dict[str, Any]) -> bool:
     audio_map = _safe_dict(_safe_dict(package).get("audio_map"))
     if not _safe_list(audio_map.get("segments")):
@@ -580,12 +653,16 @@ def _restore_payload_valid_upstream_statuses_for_stage(
     diagnostics["finalize_reused_upstream_statuses_restored"] = False
     diagnostics["finalize_reused_upstream_statuses_restored_stages"] = []
     diagnostics["finalize_reused_upstream_status_restore_reason"] = restore_reason
-    if stage_id not in {"final_video_prompt", "finalize"}:
+    diagnostics["scene_prompts_reused_upstream_statuses_restored"] = False
+    diagnostics["scene_prompts_reused_upstream_statuses_restored_stages"] = []
+    diagnostics["scene_prompts_reused_upstream_status_restore_reason"] = restore_reason
+    if stage_id not in {"scene_prompts", "final_video_prompt", "finalize"}:
         package["diagnostics"] = diagnostics
         return package
 
     statuses = _safe_dict(package.get("stage_statuses"))
     allowed_deps = {
+        "scene_prompts": {"input_package", "audio_map", "story_core", "role_plan", "scene_plan"},
         "final_video_prompt": {"input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts"},
         "finalize": {"story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt"},
     }.get(stage_id, set())
@@ -618,6 +695,10 @@ def _restore_payload_valid_upstream_statuses_for_stage(
         restored_stages.append(dep_stage)
 
     package["stage_statuses"] = statuses
+    if stage_id == "scene_prompts":
+        diagnostics["scene_prompts_reused_upstream_statuses_restored"] = bool(restored_stages)
+        diagnostics["scene_prompts_reused_upstream_statuses_restored_stages"] = restored_stages
+        diagnostics["scene_prompts_reused_upstream_status_restore_reason"] = restore_reason
     if stage_id == "final_video_prompt":
         diagnostics["final_video_prompt_reused_upstream_statuses_restored"] = bool(restored_stages)
         diagnostics["final_video_prompt_reused_upstream_statuses_restored_stages"] = restored_stages
@@ -8716,12 +8797,33 @@ def run_manual_stage(
         executed_stage_ids.append(stage_id)
         return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
-    if stage_id == "scene_prompts" and _can_run_scene_prompts_from_existing_scene_plan(pkg):
-        reusable_upstream = list(dep_sequence)
+    scene_prompts_payload_ok_by_stage: dict[str, bool] = {}
+    if stage_id == "scene_prompts":
+        deps = STAGE_DEPENDENCIES.get(stage_id, [])
+        (
+            scene_prompts_payload_ok_by_stage,
+            scene_prompts_status_by_stage,
+            scene_prompts_false_positive_prevented,
+        ) = _collect_scene_prompts_dependency_gate_state(pkg, deps)
+        if _can_run_scene_prompts_from_existing_payload(pkg):
+            reusable_upstream = list(dep_sequence)
+            missing_upstream = []
+            continuation_mode = "reuse_existing_package"
+        else:
+            reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
+            missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
+            continuation_mode = "reuse_existing_package" if not missing_upstream else "recompute_missing_upstream"
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics["scene_prompts_dependency_gate_mode"] = "payload_validity"
+        diagnostics["scene_prompts_dependency_status_by_stage"] = scene_prompts_status_by_stage
+        diagnostics["scene_prompts_dependency_payload_ok_by_stage"] = scene_prompts_payload_ok_by_stage
+        diagnostics["scene_prompts_dependency_gate_false_positive_prevented"] = bool(scene_prompts_false_positive_prevented)
+        diagnostics["scene_prompts_reused_upstream_statuses_restored"] = False
+        pkg["diagnostics"] = diagnostics
     else:
         reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
-    missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
-    continuation_mode = "reuse_existing_package" if not missing_upstream else "recompute_missing_upstream"
+        missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
+        continuation_mode = "reuse_existing_package" if not missing_upstream else "recompute_missing_upstream"
     if missing_upstream:
         first_missing_idx = dep_sequence.index(missing_upstream[0])
         dep_sequence = dep_sequence[first_missing_idx:]
@@ -8755,6 +8857,9 @@ def run_manual_stage(
     pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
     pkg = run_stage(stage_id, pkg, payload)
     executed_stage_ids.append(stage_id)
+    if stage_id == "scene_prompts" and str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(stage_id)).get("status") or "").strip().lower() == "done":
+        deps = STAGE_DEPENDENCIES.get(stage_id, [])
+        pkg = _restore_payload_valid_upstream_statuses_for_stage(pkg, stage_id, deps, scene_prompts_payload_ok_by_stage)
     if reusable_upstream:
         statuses = _safe_dict(pkg.get("stage_statuses"))
         guard_restored: list[str] = []
