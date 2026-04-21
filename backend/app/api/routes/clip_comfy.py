@@ -22,6 +22,7 @@ from app.engine.clip_storyboard_pipeline import (
 from app.engine.scenario_stage_pipeline import (
     _clear_downstream_stage_outputs,
     _normalize_creative_config,
+    _route_strategy_signature_for_package,
     build_runtime_diagnostics_summary,
     build_stage_payload_health_summary,
     create_storyboard_package,
@@ -859,11 +860,33 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
         )
         mark_stale_from = str(req.get("markStaleFrom") or "").strip()
         if mark_stale_from:
-            package = _clear_downstream_stage_outputs(
-                package,
-                mark_stale_from,
-                reason=str(req.get("staleReason") or "mark_stale_from"),
-            )
+            stale_reason = str(req.get("staleReason") or "mark_stale_from")
+            if stale_reason.strip().lower() == "route_strategy_changed":
+                diagnostics = package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {}
+                previous_signature = str(
+                    diagnostics.get("scene_plan_route_strategy_signature")
+                    or diagnostics.get("route_strategy_signature")
+                    or ""
+                ).strip()
+                current_signature = str(_route_strategy_signature_for_package(package) or "").strip()
+                if previous_signature and current_signature and previous_signature == current_signature:
+                    diagnostics["route_strategy_change_ignored"] = True
+                    diagnostics["route_strategy_change_ignored_reason"] = "signature_unchanged"
+                    diagnostics["route_strategy_change_previous_signature"] = previous_signature
+                    diagnostics["route_strategy_change_current_signature"] = current_signature
+                    package["diagnostics"] = diagnostics
+                else:
+                    package = _clear_downstream_stage_outputs(
+                        package,
+                        mark_stale_from,
+                        reason=stale_reason,
+                    )
+            else:
+                package = _clear_downstream_stage_outputs(
+                    package,
+                    mark_stale_from,
+                    reason=stale_reason,
+                )
         stage_ids = req.get("stageIds") if isinstance(req.get("stageIds"), list) else []
         auto_run = bool(req.get("autoRun"))
         if stage_id:

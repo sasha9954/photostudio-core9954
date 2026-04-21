@@ -1236,6 +1236,31 @@ def _clamp_ratio(value: Any, default: float) -> float:
         return float(default)
 
 
+def _build_route_strategy_signature_payload(creative_config: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_creative_config(creative_config)
+    return {
+        "route_strategy_mode": str(normalized.get("route_strategy_mode") or "auto"),
+        "route_strategy_preset": str(normalized.get("route_strategy_preset") or ""),
+        "route_targets_per_block": _safe_dict(normalized.get("route_targets_per_block")),
+        "route_strategy_normalized_targets": _safe_dict(normalized.get("route_strategy_normalized_targets")),
+        "lipsync_ratio": float(normalized.get("lipsync_ratio") or 0.0),
+        "i2v_ratio": float(normalized.get("i2v_ratio") or 0.0),
+        "first_last_ratio": float(normalized.get("first_last_ratio") or 0.0),
+        "max_consecutive_ia2v": int(normalized.get("max_consecutive_ia2v") or 0),
+        "max_consecutive_lipsync": int(normalized.get("max_consecutive_lipsync") or 0),
+    }
+
+
+def _route_strategy_signature_from_input(input_pkg: dict[str, Any]) -> str:
+    creative_config = _safe_dict(_safe_dict(input_pkg).get("creative_config"))
+    signature_payload = _build_route_strategy_signature_payload(creative_config)
+    return _stable_hash_payload(signature_payload)
+
+
+def _route_strategy_signature_for_package(package: dict[str, Any]) -> str:
+    return _route_strategy_signature_from_input(_safe_dict(_safe_dict(package).get("input")))
+
+
 def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
     row = _safe_dict(raw_config)
     new_route_strategy_keys = {
@@ -1347,6 +1372,7 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
 def _inject_route_strategy_diagnostics(package: dict[str, Any]) -> None:
     input_pkg = _safe_dict(package.get("input"))
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    route_strategy_signature = _route_strategy_signature_from_input(input_pkg)
     diagnostics = _safe_dict(package.get("diagnostics"))
     route_strategy_present = bool(creative_config.get("route_strategy_present"))
     route_strategy_active = bool(creative_config.get("route_strategy_active"))
@@ -1371,6 +1397,7 @@ def _inject_route_strategy_diagnostics(package: dict[str, Any]) -> None:
     diagnostics["scene_plan_route_strategy_mode"] = route_strategy_mode
     diagnostics["scene_plan_route_strategy_preset"] = str(creative_config.get("route_strategy_preset") or "")
     diagnostics["scene_plan_route_strategy_normalized_targets"] = normalized_targets
+    diagnostics["scene_plan_route_strategy_signature"] = route_strategy_signature
     diagnostics["scene_plan_route_targets_per_block"] = _safe_dict(creative_config.get("route_targets_per_block"))
     diagnostics["scene_plan_extra_scene_policy"] = str(creative_config.get("extra_scene_policy") or "add_i2v")
     diagnostics["scene_plan_targets_are_soft"] = bool(creative_config.get("targets_are_soft"))
@@ -1389,6 +1416,7 @@ def _inject_route_strategy_diagnostics(package: dict[str, Any]) -> None:
     diagnostics["final_route_strategy_mode"] = route_strategy_mode
     diagnostics["final_route_strategy_active"] = route_strategy_active
     diagnostics["final_route_strategy_normalized_targets"] = normalized_targets
+    diagnostics["route_strategy_signature"] = route_strategy_signature
     package["diagnostics"] = diagnostics
 
 def _build_route_mix_doctrine_for_scenes(creative_config: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -1687,6 +1715,20 @@ def _scene_plan_signature_matches_current(package: dict[str, Any], scene_plan: d
     return True
 
 
+def _scene_plan_route_strategy_signature_matches_current(package: dict[str, Any], scene_plan: dict[str, Any]) -> bool:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    current_signature = _route_strategy_signature_for_package(package)
+    payload_signature = str(
+        scene_plan.get("route_strategy_signature")
+        or diagnostics.get("scene_plan_route_strategy_signature")
+        or diagnostics.get("route_strategy_signature")
+        or ""
+    ).strip()
+    if current_signature and payload_signature and payload_signature != current_signature:
+        return False
+    return True
+
+
 def _scene_plan_route_locks_by_segment_valid(scene_plan: dict[str, Any]) -> bool:
     locks_raw = _safe_dict(scene_plan.get("route_locks_by_segment"))
     if not locks_raw:
@@ -1724,6 +1766,8 @@ def _scene_plan_payload_supports_scene_prompts_with_reason(package: dict[str, An
 
     if not _scene_plan_signature_matches_current(pkg, scene_plan):
         return False, "scene_plan_signature_mismatch"
+    if not _scene_plan_route_strategy_signature_matches_current(pkg, scene_plan):
+        return False, "scene_plan_route_strategy_signature_mismatch"
 
     audio_segments = [row for row in _safe_list(_safe_dict(pkg.get("audio_map")).get("segments")) if isinstance(row, dict)]
     expected_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in audio_segments]
@@ -8646,11 +8690,17 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(hard_fail_error)
 
     current_signature = _current_scenario_input_signature(package)
+    current_route_strategy_signature = _route_strategy_signature_for_package(package)
     if current_signature:
         scene_plan["created_for_signature"] = current_signature
+    scene_plan["created_for_signature"] = str(scene_plan.get("created_for_signature") or current_signature or "")
+    scene_plan["route_strategy_signature"] = current_route_strategy_signature
+    scene_plan["route_locks_by_segment"] = _safe_dict(scene_plan.get("route_locks_by_segment") or route_locks_by_segment)
     package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_plan_created_for_signature"] = str(_safe_dict(package.get("scene_plan")).get("created_for_signature") or "")
+    diagnostics["scene_plan_route_strategy_signature"] = current_route_strategy_signature
+    diagnostics["scene_plan_created_for_signature"] = str(current_signature or diagnostics.get("scene_plan_created_for_signature") or "")
     diagnostics["scene_plan_snapshot_restored"] = False
     diagnostics["scene_plan_failure_reason"] = ""
     diagnostics["scene_plan_candidate_failed_but_snapshot_restored"] = False

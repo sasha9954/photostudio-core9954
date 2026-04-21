@@ -20669,6 +20669,8 @@ onClipSec: (nodeId, value) => {
                       lastRequestedStageId: stageId,
                       rawScenarioResponseSummary: compactResponseSummary,
                       normalizedStageOutputs: compactNormalizedOutputs,
+                      markStaleFrom: "",
+                      staleReason: "",
                     },
                   };
                 }).map((nodeItem) => {
@@ -20713,6 +20715,14 @@ onClipSec: (nodeId, value) => {
                     ...nodeItem,
                     data: {
                       ...nodeItem.data,
+                      storyboardPackage: nextStoryboardPackage,
+                      debugStoryboardPackage: responseDebugMode ? nextStoryboardPackage : (nodeItem?.data?.debugStoryboardPackage || {}),
+                      stageStatuses: nextStoryboardPackage?.stage_statuses && typeof nextStoryboardPackage.stage_statuses === "object"
+                        ? nextStoryboardPackage.stage_statuses
+                        : (nodeItem?.data?.stageStatuses || {}),
+                      diagnostics: nextStoryboardPackage?.diagnostics && typeof nextStoryboardPackage.diagnostics === "object"
+                        ? nextStoryboardPackage.diagnostics
+                        : (nodeItem?.data?.diagnostics || {}),
                       pendingOutputs: normalizedPending,
                       pendingRawResponseSummary: compactResponseSummary,
                       pendingStoryboardOut: null,
@@ -20722,6 +20732,8 @@ onClipSec: (nodeId, value) => {
                       pendingScenarioRequestToken: "",
                       activeScenarioRequestToken: scenarioRequestToken,
                       lastRequestedStageId: stageId,
+                      markStaleFrom: "",
+                      staleReason: "",
                     },
                   };
                 })));
@@ -20902,7 +20914,25 @@ onClipSec: (nodeId, value) => {
                       "extraScenePolicy", "targetsAreSoft", "instrumentalPolicy", "vocalPolicy", "longVocalSplitPolicy",
                       "maxConsecutiveIa2v", "maxConsecutiveLipsync", "routeMixMode", "lipsyncRatio", "firstLastRatio",
                     ]);
-                    const routeStrategyChanged = Object.keys(nextPatch).some((key) => routeStrategyKeys.has(String(key)));
+                    const routeStrategyChanged = Object.keys(nextPatch).some((key) => {
+                      const normalizedKey = String(key);
+                      if (!routeStrategyKeys.has(normalizedKey)) return false;
+                      const prevValue = x?.data?.[normalizedKey];
+                      const nextValue = nextPatch?.[normalizedKey];
+                      if (
+                        prevValue
+                        && nextValue
+                        && typeof prevValue === "object"
+                        && typeof nextValue === "object"
+                      ) {
+                        try {
+                          return JSON.stringify(prevValue) !== JSON.stringify(nextValue);
+                        } catch (_error) {
+                          return true;
+                        }
+                      }
+                      return prevValue !== nextValue;
+                    });
                     return {
                       ...x,
                       data: {
