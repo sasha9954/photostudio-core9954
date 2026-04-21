@@ -863,8 +863,10 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
             stale_reason = str(req.get("staleReason") or "mark_stale_from")
             if stale_reason.strip().lower() == "route_strategy_changed":
                 diagnostics = package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {}
+                scene_plan = package.get("scene_plan") if isinstance(package.get("scene_plan"), dict) else {}
                 previous_signature = str(
-                    diagnostics.get("scene_plan_route_strategy_signature")
+                    scene_plan.get("route_strategy_signature")
+                    or diagnostics.get("scene_plan_route_strategy_signature")
                     or diagnostics.get("route_strategy_signature")
                     or ""
                 ).strip()
