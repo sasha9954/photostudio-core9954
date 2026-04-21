@@ -167,6 +167,28 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _strip_literal_quoted_dialogue(text: str) -> str:
+    raw = str(text or "")
+    raw = re.sub(
+        r'(?i)mouth\s+moving\s+in\s+sync\s+with\s+the\s+words\s*[\'"]([^\'"]){1,220}[\'"]',
+        "mouth moving in sync with the provided audio phrase",
+        raw,
+    )
+    raw = re.sub(
+        r'(?i)mouth\s+moving\s+in\s+sync\s+with\s*[\'"]([^\'"]){1,220}[\'"]',
+        "mouth moving in sync with the provided audio phrase",
+        raw,
+    )
+    raw = re.sub(
+        r'(?i)mouth\s+moving\s+in\s+sync\s+with(?:\s+the\s+phrase)?\s*[\'"]([^\'"]){1,220}[\'"]',
+        "mouth moving in sync with the provided audio phrase",
+        raw,
+    )
+    raw = re.sub(r'["\'][^"\']{2,180}["\']', " ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    return raw
+
+
 def _stage_output_field(stage_id: str) -> str:
     return STAGE_PACKAGE_FIELD_BY_STAGE.get(stage_id, stage_id)
 
@@ -4934,7 +4956,11 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             or prompts_row.get("video_prompt")
             or ""
         ).strip()
+        final_video_prompt_text = _strip_literal_quoted_dialogue(final_video_prompt_text)
         final_negative_prompt = str(route_payload.get("negative_prompt") or prompts_row.get("negative_prompt") or "").strip()
+        final_route_positive_prompt = _strip_literal_quoted_dialogue(
+            str(route_payload.get("positive_prompt") or final_video_prompt_text or "").strip()
+        )
         final_prompt_source = str(segment.get("prompt_source") or FINAL_VIDEO_PROMPT_STAGE_VERSION).strip() or FINAL_VIDEO_PROMPT_STAGE_VERSION
         final_payload = {
             "image_prompt": final_image_prompt,
@@ -4957,7 +4983,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             },
             "route": route,
             "route_payload": {
-                "positive_prompt": final_video_prompt_text,
+                "positive_prompt": final_route_positive_prompt,
                 "negative_prompt": final_negative_prompt,
                 "image_prompt": final_image_prompt,
                 "video_prompt": final_video_prompt_text,
