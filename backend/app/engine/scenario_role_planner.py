@@ -54,6 +54,35 @@ _SCENE_CASTING_ALLOWED_KEYS = {
     "performance_focus",
     "continuity_notes",
 }
+_ROLE_PLAN_TECHNICAL_BANNED_TERMS: tuple[str, ...] = (
+    "reference image",
+    "visual reference",
+    "connected character",
+    "canonical source of truth",
+    "refspresentbyrole",
+    "connected_context_summary",
+    "body proportions",
+    "auxiliary only",
+    "technical contract",
+    "input package",
+    "source of truth",
+)
+_ROLE_PLAN_TECHNICAL_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bconnected\s+character_1\s+image\s+reference\b", re.IGNORECASE), "the established heroine"),
+    (re.compile(r"\breference\s+image\b", re.IGNORECASE), "same character"),
+    (re.compile(r"\bvisual\s+reference\b", re.IGNORECASE), "same character look"),
+    (re.compile(r"\bcanonical\s+source\s+of\s+truth\b", re.IGNORECASE), ""),
+    (re.compile(r"\bsource\s+of\s+truth\b", re.IGNORECASE), ""),
+    (re.compile(r"\bbody\s+proportions\b", re.IGNORECASE), "overall look"),
+    (re.compile(r"\bauxiliary\s+only\b", re.IGNORECASE), ""),
+    (re.compile(r"\brefspresentbyrole\b", re.IGNORECASE), ""),
+    (re.compile(r"\bconnected_context_summary\b", re.IGNORECASE), ""),
+    (re.compile(r"\btechnical\s+contract\b", re.IGNORECASE), ""),
+    (re.compile(r"\binput\s+package\b", re.IGNORECASE), ""),
+)
+_TECH_IDENTITY_LEAK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (term, re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)) for term in _ROLE_PLAN_TECHNICAL_BANNED_TERMS
+)
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -275,6 +304,11 @@ def _build_roles_prompt(context: dict[str, Any]) -> str:
         "Do not use scene_candidate_windows as source of truth.\n"
         "Forbidden leakage: action choreography, route planning, camera/motion directives, prompt-language authoring, technical/render details.\n"
         "Forbidden hallucination: NEVER introduce entities outside allowed_entity_registry.\n"
+        "ROLES output must be story-facing only.\n"
+        "Do not copy technical identity/reference/source wording from CORE.\n"
+        "Use technical identity locks only internally, never in output text.\n"
+        "Do not output terms: reference image, visual reference, connected character, canonical source of truth, refsPresentByRole, connected_context_summary, body proportions, auxiliary only, technical contract, input package, source of truth.\n"
+        "Write continuity in plain story language (example: 'The same woman remains the central character throughout the clip.').\n"
         "Output EXACT schema:"
         "{"
         '"roles_version":"1.1",'
@@ -286,10 +320,88 @@ def _build_roles_prompt(context: dict[str, Any]) -> str:
     )
 
 
+def sanitize_role_plan_technical_leaks(text: Any) -> str:
+    normalized = str(text or "")
+    if not normalized:
+        return ""
+    sanitized = normalized
+    for pattern, replacement in _ROLE_PLAN_TECHNICAL_REPLACEMENTS:
+        sanitized = pattern.sub(replacement, sanitized)
+    sanitized = re.sub(r"\s{2,}", " ", sanitized).strip(" ,;:-")
+    return re.sub(r"\s+", " ", sanitized).strip()
+
+
+def _sanitize_role_plan_payload_fields(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    out = deepcopy(_safe_dict(payload))
+    changed = False
+
+    for roster_row_raw in _safe_list(out.get("roster")):
+        roster_row = _safe_dict(roster_row_raw)
+        continuity_rules = []
+        for item in _safe_list(roster_row.get("continuity_rules")):
+            original = str(item or "")
+            rewritten = sanitize_role_plan_technical_leaks(original)
+            if rewritten != original:
+                changed = True
+            if rewritten:
+                continuity_rules.append(rewritten)
+        roster_row["continuity_rules"] = continuity_rules
+        visual_constraints = _safe_list(roster_row.get("visual_constraints"))
+        if visual_constraints:
+            sanitized_constraints = []
+            for item in visual_constraints:
+                original = str(item or "")
+                rewritten = sanitize_role_plan_technical_leaks(original)
+                if rewritten != original:
+                    changed = True
+                if rewritten:
+                    sanitized_constraints.append(rewritten)
+            roster_row["visual_constraints"] = sanitized_constraints
+
+    for casting_row_raw in _safe_list(out.get("scene_casting")):
+        casting_row = _safe_dict(casting_row_raw)
+        original_reason = str(casting_row.get("reason") or "")
+        if original_reason:
+            rewritten_reason = sanitize_role_plan_technical_leaks(original_reason)
+            if rewritten_reason != original_reason:
+                changed = True
+            casting_row["reason"] = rewritten_reason
+
+    for scene_role_raw in _safe_list(out.get("scene_roles")):
+        scene_role = _safe_dict(scene_role_raw)
+        original_reason = str(scene_role.get("reason") or "")
+        rewritten_reason = sanitize_role_plan_technical_leaks(original_reason)
+        if rewritten_reason != original_reason:
+            changed = True
+        scene_role["reason"] = rewritten_reason
+        continuity_notes = _safe_list(scene_role.get("continuity_notes"))
+        if continuity_notes:
+            rewritten_notes = []
+            for note in continuity_notes:
+                original = str(note or "")
+                rewritten = sanitize_role_plan_technical_leaks(original)
+                if rewritten != original:
+                    changed = True
+                if rewritten:
+                    rewritten_notes.append(rewritten)
+            scene_role["continuity_notes"] = rewritten_notes
+
+    role_arc_summary = out.get("role_arc_summary")
+    if isinstance(role_arc_summary, str):
+        rewritten_summary = sanitize_role_plan_technical_leaks(role_arc_summary)
+        if rewritten_summary != role_arc_summary:
+            changed = True
+        out["role_arc_summary"] = rewritten_summary
+
+    return out, changed
+
+
 def _extract_error_from_leakage(roles_payload: dict[str, Any]) -> str:
     serialized = json.dumps(roles_payload, ensure_ascii=False).lower()
     if any(token in serialized for token in _ROUTE_LEAK_TOKENS):
         return ROLES_CREATIVE_ROUTE
+    if any(pattern.search(serialized) for _, pattern in _TECH_IDENTITY_LEAK_PATTERNS):
+        return ROLES_TECHNICAL_LEAKING
     if any(pattern.search(serialized) for _, pattern in _TECH_LEAK_STRICT_PATTERNS):
         return ROLES_TECHNICAL_LEAKING
     if any(token in serialized for token in _TECH_LEAK_TOKENS):
@@ -319,6 +431,9 @@ def _extract_leakage_details(roles_payload: dict[str, Any]) -> tuple[str, str, s
                 if token in lowered:
                     return ROLES_CREATIVE_ROUTE, path, token
             for token, pattern in _TECH_LEAK_STRICT_PATTERNS:
+                if pattern.search(lowered):
+                    return ROLES_TECHNICAL_LEAKING, path, token
+            for token, pattern in _TECH_IDENTITY_LEAK_PATTERNS:
                 if pattern.search(lowered):
                     return ROLES_TECHNICAL_LEAKING, path, token
             for token in _TECH_LEAK_TOKENS:
@@ -765,11 +880,16 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 core_subject_map=core_subject_map,
                 allowed_registry=allowed_registry,
             )
+            sanitized, technical_leaks_sanitized = _sanitize_role_plan_payload_fields(sanitized)
             sanitized, focal_rewrites_applied = _rewrite_allowed_focal_phrases(sanitized)
             if focal_rewrites_applied:
                 diagnostics["false_positive_technical_leak_allowed"] = True
                 diagnostics["allowed_technical_token"] = "focal"
                 diagnostics["allowed_technical_phrase"] = "focal point"
+            if technical_leaks_sanitized:
+                diagnostics["false_positive_technical_leak_allowed"] = True
+                diagnostics["allowed_technical_token"] = "identity_reference_wording"
+                diagnostics["allowed_technical_phrase"] = "story_facing_sanitized"
             diagnostics["dropped_non_canonical_fields"] = dropped_fields[:60]
             normalized_scene_casting, primary_mismatches = _normalize_scene_casting_from_core(
                 scene_casting=[_safe_dict(row) for row in _safe_list(sanitized.get("scene_casting"))],
@@ -811,10 +931,18 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                     diagnostics["technical_leak_field"] = leak_path
                     diagnostics["technical_leak_token"] = leak_token
                 if attempt < attempts - 1:
-                    prompt = (
-                        f"{prompt}\n\nPREVIOUS_VALIDATION_ERROR={validation_error}. "
-                        "You must fix exactly this and return valid schema JSON only."
-                    )
+                    if validation_error == ROLES_TECHNICAL_LEAKING:
+                        prompt = (
+                            f"{prompt}\n\nPREVIOUS_VALIDATION_ERROR={validation_error}. "
+                            "Your previous output leaked technical reference/source wording. "
+                            "Rewrite the same role_plan in story-facing language only, preserve all segment_ids exactly, "
+                            "and avoid reference/source/API/package terms."
+                        )
+                    else:
+                        prompt = (
+                            f"{prompt}\n\nPREVIOUS_VALIDATION_ERROR={validation_error}. "
+                            "You must fix exactly this and return valid schema JSON only."
+                        )
                     continue
                 break
 
