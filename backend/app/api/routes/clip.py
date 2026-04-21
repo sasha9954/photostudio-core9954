@@ -12231,7 +12231,10 @@ def clip_image(payload: ClipImageIn):
         or ""
     ).strip()
     prompt = prioritized_image_prompt
-    scene_delta = (payload.sceneDelta or prioritized_image_prompt or payload.prompt or "").strip()
+    if authoritative_final_payload:
+        scene_delta = prioritized_image_prompt
+    else:
+        scene_delta = (payload.sceneDelta or prioritized_image_prompt or payload.prompt or "").strip()
     prompt_source = "final_payload" if authoritative_final_payload else ("request_image_prompt" if prioritized_image_prompt else "legacy_scene_delta")
 
     if not scene_id:
