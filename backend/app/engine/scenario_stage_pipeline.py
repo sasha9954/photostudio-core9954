@@ -459,37 +459,8 @@ def _can_run_scene_prompts_from_existing_scene_plan(package: dict[str, Any]) -> 
 
 
 def _scene_plan_payload_supports_scene_prompts(package: dict[str, Any]) -> bool:
-    pkg = _safe_dict(package)
-    scene_plan = _safe_dict(pkg.get("scene_plan"))
-    if not _has_valid_scene_plan_payload(scene_plan):
-        return False
-
-    scene_rows = _scene_plan_rows_for_validation(scene_plan)
-    if not scene_rows:
-        return False
-
-    supported_routes = {"i2v", "ia2v", "first_last"}
-    route_rows = 0
-    for row in scene_rows:
-        route = str(_safe_dict(row).get("route") or "").strip().lower()
-        if route in supported_routes:
-            route_rows += 1
-    if route_rows <= 0:
-        return False
-
-    audio_segments = [row for row in _safe_list(_safe_dict(pkg.get("audio_map")).get("segments")) if isinstance(row, dict)]
-    expected_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in audio_segments]
-    expected_segment_ids = [segment_id for segment_id in expected_segment_ids if segment_id]
-    if not expected_segment_ids:
-        return False
-
-    scene_segment_ids = [
-        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip() for row in scene_rows
-    ]
-    scene_segment_ids = [segment_id for segment_id in scene_segment_ids if segment_id]
-    if len(scene_segment_ids) != len(expected_segment_ids):
-        return False
-    return set(scene_segment_ids) == set(expected_segment_ids)
+    ok, _ = _scene_plan_payload_supports_scene_prompts_with_reason(package)
+    return ok
 
 
 def _scene_prompts_dependency_payload_ok(package: dict[str, Any], dependency_stage_id: str) -> bool:
@@ -1694,6 +1665,91 @@ def _scene_plan_rows_for_validation(scene_plan: dict[str, Any]) -> list[dict[str
     return [row for row in _safe_list(scene_plan.get("storyboard")) if isinstance(row, dict)]
 
 
+def _scene_plan_route_counts(scene_plan: dict[str, Any]) -> dict[str, int]:
+    counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
+    for row in _scene_plan_rows_for_validation(scene_plan):
+        route = str(_safe_dict(row).get("route") or "").strip().lower()
+        if route in counts:
+            counts[route] += 1
+    return counts
+
+
+def _scene_plan_signature_matches_current(package: dict[str, Any], scene_plan: dict[str, Any]) -> bool:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    current_signature = _current_scenario_input_signature(package)
+    payload_signature = str(
+        scene_plan.get("created_for_signature")
+        or diagnostics.get("scene_plan_created_for_signature")
+        or ""
+    ).strip()
+    if current_signature and payload_signature and payload_signature != current_signature:
+        return False
+    return True
+
+
+def _scene_plan_route_locks_by_segment_valid(scene_plan: dict[str, Any]) -> bool:
+    locks_raw = _safe_dict(scene_plan.get("route_locks_by_segment"))
+    if not locks_raw:
+        return False
+    scene_rows = _scene_plan_rows_for_validation(scene_plan)
+    if not scene_rows:
+        return False
+    supported_routes = {"i2v", "ia2v", "first_last"}
+    expected_segment_ids: list[str] = []
+    for idx, row in enumerate(scene_rows, start=1):
+        segment_id = str(
+            _safe_dict(row).get("segment_id")
+            or _safe_dict(row).get("scene_id")
+            or f"seg_{idx:02d}"
+        ).strip()
+        if not segment_id:
+            return False
+        expected_segment_ids.append(segment_id)
+    for segment_id in expected_segment_ids:
+        route = str(locks_raw.get(segment_id) or "").strip().lower()
+        if route not in supported_routes:
+            return False
+    return True
+
+
+def _scene_plan_payload_supports_scene_prompts_with_reason(package: dict[str, Any]) -> tuple[bool, str]:
+    pkg = _safe_dict(package)
+    scene_plan = _safe_dict(pkg.get("scene_plan"))
+    if not _has_valid_scene_plan_payload(scene_plan):
+        return False, "missing_scene_plan_payload"
+
+    scene_rows = _scene_plan_rows_for_validation(scene_plan)
+    if not scene_rows:
+        return False, "empty_scene_plan_rows"
+    if len(scene_rows) != 8:
+        return False, "scene_plan_scene_count_not_8"
+
+    if not _scene_plan_signature_matches_current(pkg, scene_plan):
+        return False, "scene_plan_signature_mismatch"
+
+    audio_segments = [row for row in _safe_list(_safe_dict(pkg.get("audio_map")).get("segments")) if isinstance(row, dict)]
+    expected_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in audio_segments]
+    expected_segment_ids = [segment_id for segment_id in expected_segment_ids if segment_id]
+    if len(expected_segment_ids) != 8:
+        return False, "audio_map_segment_count_not_8"
+
+    scene_segment_ids = [
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip() for row in scene_rows
+    ]
+    scene_segment_ids = [segment_id for segment_id in scene_segment_ids if segment_id]
+    if len(scene_segment_ids) != len(expected_segment_ids):
+        return False, "scene_plan_segment_count_mismatch"
+    if set(scene_segment_ids) != set(expected_segment_ids):
+        return False, "scene_plan_segment_coverage_mismatch"
+
+    route_counts = _scene_plan_route_counts(scene_plan)
+    route_locks_valid = _scene_plan_route_locks_by_segment_valid(scene_plan)
+    route_budget_ok = bool(_safe_dict(pkg.get("diagnostics")).get("scene_plan_route_budget_ok"))
+    if not route_budget_ok and not route_locks_valid:
+        return False, "scene_plan_route_budget_or_locks_invalid"
+    return True, ""
+
+
 def _build_scene_plan_retry_feedback(validation_error: str, error_code: str, scene_diag: dict[str, Any]) -> str:
     base = (
         f"Previous output invalid: validation_error={validation_error}; "
@@ -2335,6 +2391,60 @@ def _validate_scene_plan_route_budget(
         "strict_preset_enforced": strict_no_first_last_50_50_0,
     }
     return (len(errors) == 0), feedback, details
+
+
+def _deterministic_route_locks_for_no_first_last_50_50_0(scene_plan: dict[str, Any]) -> dict[str, str]:
+    locks: dict[str, str] = {}
+    scene_rows = _scene_plan_rows_for_validation(scene_plan)
+    for idx, row in enumerate(scene_rows, start=1):
+        segment_id = str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or f"seg_{idx:02d}").strip()
+        if not segment_id:
+            continue
+        locks[segment_id] = "ia2v" if idx % 2 == 1 else "i2v"
+    return locks
+
+
+def _resolve_scene_plan_route_locks(
+    *,
+    package: dict[str, Any],
+    scene_plan: dict[str, Any],
+    previous_scene_plan: dict[str, Any],
+) -> tuple[dict[str, str], str]:
+    input_pkg = _safe_dict(package.get("input"))
+    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    existing_locks = _safe_dict(previous_scene_plan.get("route_locks_by_segment"))
+    scene_rows = _scene_plan_rows_for_validation(scene_plan)
+    if existing_locks and scene_rows:
+        return {str(k): str(v).strip().lower() for k, v in existing_locks.items() if str(k).strip()}, "existing_scene_plan_lock"
+    if preset_name == "no_first_last_50_50_0" and len(scene_rows) == 8:
+        return _deterministic_route_locks_for_no_first_last_50_50_0(scene_plan), "deterministic_backend_schedule"
+    computed_locks: dict[str, str] = {}
+    for idx, row in enumerate(scene_rows, start=1):
+        segment_id = str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or f"seg_{idx:02d}").strip()
+        route = str(_safe_dict(row).get("route") or "").strip().lower()
+        if segment_id and route in {"i2v", "ia2v", "first_last"}:
+            computed_locks[segment_id] = route
+    return computed_locks, "scene_plan_routes"
+
+
+def _apply_scene_plan_route_locks(scene_plan: dict[str, Any], route_locks: dict[str, str]) -> tuple[dict[str, Any], dict[str, int]]:
+    normalized = deepcopy(_safe_dict(scene_plan))
+    locks = {str(k).strip(): str(v).strip().lower() for k, v in _safe_dict(route_locks).items() if str(k).strip()}
+    for field in ("scenes", "storyboard"):
+        rows = [deepcopy(_safe_dict(row)) for row in _safe_list(normalized.get(field)) if isinstance(row, dict)]
+        rewritten_rows: list[dict[str, Any]] = []
+        for idx, row in enumerate(rows, start=1):
+            segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx:02d}").strip()
+            locked_route = str(locks.get(segment_id) or "").strip().lower()
+            if locked_route in {"i2v", "ia2v", "first_last"}:
+                row["route"] = locked_route
+            rewritten_rows.append(row)
+        if rewritten_rows:
+            normalized[field] = rewritten_rows
+    normalized["route_locks_by_segment"] = locks
+    normalized["route_mix_summary"] = _scene_plan_route_counts(normalized)
+    return normalized, _scene_plan_route_counts(normalized)
 
 
 def _resolve_audio_semantic_source_type(input_pkg: dict[str, Any]) -> str:
@@ -8320,6 +8430,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_failure_reason"] = ""
     diagnostics["scene_plan_candidate_failed_but_snapshot_restored"] = False
     diagnostics["scene_plan_last_failed_candidate_error"] = ""
+    diagnostics["scene_plan_created_for_signature"] = str(_safe_dict(previous_scene_plan).get("created_for_signature") or "")
     diagnostics["scene_plan_configured_timeout_sec"] = get_scenario_stage_timeout("scene_plan")
     diagnostics["scene_plan_timeout_stage_policy_name"] = scenario_timeout_policy_name("scene_plan")
     diagnostics["scene_plan_timed_out"] = False
@@ -8358,6 +8469,18 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_plan_validation_failed")
 
     scene_plan = _safe_dict(result.get("scene_plan"))
+    route_locks_by_segment: dict[str, str] = {}
+    route_lock_source = ""
+    if scene_plan:
+        route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
+            package=package,
+            scene_plan=scene_plan,
+            previous_scene_plan=previous_scene_plan,
+        )
+        scene_plan, locked_route_counts = _apply_scene_plan_route_locks(scene_plan, route_locks_by_segment)
+        result["scene_plan"] = scene_plan
+    else:
+        locked_route_counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
     route_budget_ok = True
     route_budget_feedback = ""
     route_budget_meta: dict[str, Any] = {}
@@ -8457,6 +8580,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_lipsync_streak_guard_relaxed"] = bool(route_budget_meta.get("lipsync_streak_guard_relaxed"))
     diagnostics["scene_plan_route_budget_validation_mode"] = str(route_budget_meta.get("route_budget_validation_mode") or "mixed")
     diagnostics["scene_plan_lipsync_streak_warning"] = str(route_budget_meta.get("lipsync_streak_warning") or "")
+    diagnostics["scene_plan_route_locks_by_segment"] = _safe_dict(route_locks_by_segment)
+    diagnostics["scene_plan_route_lock_applied"] = bool(route_locks_by_segment)
+    diagnostics["scene_plan_route_lock_source"] = str(route_lock_source or "")
+    diagnostics["scene_plan_route_budget_after_lock"] = dict(locked_route_counts)
     diagnostics["scenes_vocal_owner_role_used"] = str(scene_diag.get("vocal_owner_role") or "unknown")
     if not route_budget_ok:
         diagnostics["scene_plan_validation_error"] = route_budget_feedback or diagnostics["scene_plan_validation_error"]
@@ -8500,8 +8627,12 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         _append_diag_event(package, f"scene_plan hard fail after retry: {hard_fail_error}", stage_id="scene_plan")
         raise RuntimeError(hard_fail_error)
 
+    current_signature = _current_scenario_input_signature(package)
+    if current_signature:
+        scene_plan["created_for_signature"] = current_signature
     package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
     diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_plan_created_for_signature"] = str(_safe_dict(package.get("scene_plan")).get("created_for_signature") or "")
     diagnostics["scene_plan_snapshot_restored"] = False
     diagnostics["scene_plan_failure_reason"] = ""
     diagnostics["scene_plan_candidate_failed_but_snapshot_restored"] = False
@@ -9056,14 +9187,18 @@ def run_manual_stage(
             scene_prompts_false_positive_prevented,
         ) = _collect_scene_prompts_dependency_gate_state(pkg, deps)
         scene_prompts_payload_gate_accepted = _can_run_scene_prompts_from_existing_payload(pkg, deps)
+        scene_plan_ok_for_prompts, scene_plan_block_reason = _scene_plan_payload_supports_scene_prompts_with_reason(pkg)
+        scene_prompts_payload_gate_accepted = bool(scene_prompts_payload_gate_accepted and scene_plan_ok_for_prompts)
         if scene_prompts_payload_gate_accepted:
-            reusable_upstream = list(dep_sequence)
+            reusable_upstream = []
             missing_upstream = []
-            continuation_mode = "reuse_existing_package"
+            continuation_mode = "downstream_only_scene_prompts"
+            dep_sequence = []
         else:
             reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
             missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
-            continuation_mode = "reuse_existing_package" if not missing_upstream else "recompute_missing_upstream"
+            continuation_mode = "blocked_scene_plan_invalid"
+            dep_sequence = []
         diagnostics = _safe_dict(pkg.get("diagnostics"))
         diagnostics["scene_prompts_dependency_gate_mode"] = "payload_validity"
         diagnostics["scene_prompts_dependency_status_by_stage"] = scene_prompts_status_by_stage
@@ -9073,8 +9208,21 @@ def run_manual_stage(
         diagnostics["scene_prompts_reused_upstream_statuses_restored"] = False
         diagnostics["scene_prompts_upstream_statuses_restored_before_run"] = False
         diagnostics["scene_prompts_upstream_statuses_restored_before_run_stages"] = []
+        diagnostics["scene_prompts_downstream_only"] = True
+        diagnostics["scene_prompts_used_existing_scene_plan"] = bool(scene_prompts_payload_gate_accepted)
+        diagnostics["scene_prompts_blocked_auto_scene_plan_rebuild"] = True
         diagnostics["scene_prompts_downstream_only_invalidation"] = bool(scene_prompts_payload_gate_accepted)
+        diagnostics["scene_prompts_scene_plan_gate_reason"] = str(scene_plan_block_reason or "")
         pkg["diagnostics"] = diagnostics
+        if not scene_prompts_payload_gate_accepted:
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
+            diagnostics["scene_prompts_error_code"] = "PROMPTS_BLOCKED_SCENE_PLAN_INVALID"
+            diagnostics["scene_prompts_error_hint"] = "Run SCENES manually first"
+            pkg["diagnostics"] = diagnostics
+            _set_stage_status(pkg, stage_id, "error", error="PROMPTS_BLOCKED_SCENE_PLAN_INVALID")
+            _append_diag_event(pkg, "PROMPTS_BLOCKED_SCENE_PLAN_INVALID", stage_id=stage_id)
+            _append_diag_event(pkg, "Run SCENES manually first", stage_id=stage_id)
+            return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     else:
         reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
         missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
