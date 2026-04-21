@@ -29,7 +29,7 @@ ROLE_PRIMARY_MISMATCH = "ROLE_PRIMARY_MISMATCH"
 ALLOWED_PRESENCE_MODES = {"physical", "voiceover", "shadow", "implied"}
 ALLOWED_PRESENCE_WEIGHTS = {"anchor", "primary", "support", "background"}
 
-_ACTION_LEAK_TOKENS = {"fight", "run", "chase", "jump", "shoot", "explosion"}
+_ACTION_LEAK_TOKENS = {"run", "chase", "jump", "shoot", "explosion"}
 _TECH_LEAK_TOKENS = {"fps", "lens", "camera", "exposure", "iso", "render", "seed", "sampler"}
 _TECH_LEAK_STRICT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("focal length", re.compile(r"\bfocal\s+length\b", re.IGNORECASE)),
@@ -70,6 +70,7 @@ _ROLE_PLAN_TECHNICAL_BANNED_TERMS: tuple[str, ...] = (
 _ROLE_PLAN_TECHNICAL_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bconnected\s+character_1\s+image\s+reference\b", re.IGNORECASE), "the established heroine"),
     (re.compile(r"\breference\s+image\b", re.IGNORECASE), "same character"),
+    (re.compile(r"\bconnected\s+character\b", re.IGNORECASE), "established character"),
     (re.compile(r"\bvisual\s+reference\b", re.IGNORECASE), "same character look"),
     (re.compile(r"\bcanonical\s+source\s+of\s+truth\b", re.IGNORECASE), ""),
     (re.compile(r"\bsource\s+of\s+truth\b", re.IGNORECASE), ""),
