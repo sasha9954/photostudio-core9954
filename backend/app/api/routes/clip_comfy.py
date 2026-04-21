@@ -25,7 +25,6 @@ from app.engine.scenario_stage_pipeline import (
     build_runtime_diagnostics_summary,
     build_stage_payload_health_summary,
     create_storyboard_package,
-    mark_stale_downstream,
     resolve_stage_sequence,
     run_manual_stage,
     run_pipeline,
@@ -860,7 +859,11 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
         )
         mark_stale_from = str(req.get("markStaleFrom") or "").strip()
         if mark_stale_from:
-            package = mark_stale_downstream(package, mark_stale_from, reason=str(req.get("staleReason") or ""))
+            package = _clear_downstream_stage_outputs(
+                package,
+                mark_stale_from,
+                reason=str(req.get("staleReason") or "mark_stale_from"),
+            )
         stage_ids = req.get("stageIds") if isinstance(req.get("stageIds"), list) else []
         auto_run = bool(req.get("autoRun"))
         if stage_id:
