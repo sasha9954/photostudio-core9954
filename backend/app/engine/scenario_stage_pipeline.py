@@ -714,6 +714,8 @@ def _restore_payload_valid_upstream_statuses_for_stage(
 
 
 def _is_stage_dependency_satisfied(package: dict[str, Any], stage_id: str, dependency_stage_id: str) -> bool:
+    if stage_id == "scene_prompts":
+        return _scene_prompts_dependency_payload_ok(package, dependency_stage_id)
     if stage_id == "final_video_prompt":
         return _final_video_prompt_dependency_payload_ok(package, dependency_stage_id)
     if stage_id == "finalize":
@@ -8800,6 +8802,7 @@ def run_manual_stage(
         return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
     scene_prompts_payload_ok_by_stage: dict[str, bool] = {}
+    scene_prompts_payload_gate_accepted = False
     if stage_id == "scene_prompts":
         deps = list(dep_sequence)
         (
@@ -8807,7 +8810,8 @@ def run_manual_stage(
             scene_prompts_status_by_stage,
             scene_prompts_false_positive_prevented,
         ) = _collect_scene_prompts_dependency_gate_state(pkg, deps)
-        if _can_run_scene_prompts_from_existing_payload(pkg, deps):
+        scene_prompts_payload_gate_accepted = _can_run_scene_prompts_from_existing_payload(pkg, deps)
+        if scene_prompts_payload_gate_accepted:
             reusable_upstream = list(dep_sequence)
             missing_upstream = []
             continuation_mode = "reuse_existing_package"
@@ -8820,7 +8824,11 @@ def run_manual_stage(
         diagnostics["scene_prompts_dependency_status_by_stage"] = scene_prompts_status_by_stage
         diagnostics["scene_prompts_dependency_payload_ok_by_stage"] = scene_prompts_payload_ok_by_stage
         diagnostics["scene_prompts_dependency_gate_false_positive_prevented"] = bool(scene_prompts_false_positive_prevented)
+        diagnostics["scene_prompts_dependency_gate_accepted"] = bool(scene_prompts_payload_gate_accepted)
         diagnostics["scene_prompts_reused_upstream_statuses_restored"] = False
+        diagnostics["scene_prompts_upstream_statuses_restored_before_run"] = False
+        diagnostics["scene_prompts_upstream_statuses_restored_before_run_stages"] = []
+        diagnostics["scene_prompts_downstream_only_invalidation"] = bool(scene_prompts_payload_gate_accepted)
         pkg["diagnostics"] = diagnostics
     else:
         reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
@@ -8856,7 +8864,45 @@ def run_manual_stage(
         executed_stage_ids.append(dep_stage)
         if str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(dep_stage)).get("status") or "") == "error":
             return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
+    scene_prompts_preserved_upstream_statuses: dict[str, dict[str, Any]] = {}
+    if stage_id == "scene_prompts" and scene_prompts_payload_gate_accepted:
+        statuses_before_invalidate = _safe_dict(pkg.get("stage_statuses"))
+        for upstream_stage in ("input_package", "audio_map", "story_core", "role_plan", "scene_plan"):
+            if not bool(scene_prompts_payload_ok_by_stage.get(upstream_stage)):
+                continue
+            scene_prompts_preserved_upstream_statuses[upstream_stage] = deepcopy(_safe_dict(statuses_before_invalidate.get(upstream_stage)))
     pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
+    if stage_id == "scene_prompts" and scene_prompts_payload_gate_accepted:
+        statuses = _safe_dict(pkg.get("stage_statuses"))
+        restored_before_run: list[str] = []
+        for upstream_stage, preserved_state in scene_prompts_preserved_upstream_statuses.items():
+            stage_state = deepcopy(_safe_dict(preserved_state))
+            stage_state["status"] = "done"
+            stage_state["error"] = ""
+            stage_state["updated_at"] = _utc_iso()
+            for key in (
+                "invalidated",
+                "invalid",
+                "dirty",
+                "stale",
+                "staleReason",
+                "stale_reason",
+                "reason",
+                "statusReason",
+                "invalidateReason",
+                "invalidatedReason",
+            ):
+                stage_state.pop(key, None)
+            statuses[upstream_stage] = stage_state
+            restored_before_run.append(upstream_stage)
+        pkg["stage_statuses"] = statuses
+        restore_deps = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
+        pkg = _restore_payload_valid_upstream_statuses_for_stage(pkg, stage_id, restore_deps, scene_prompts_payload_ok_by_stage)
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics["scene_prompts_upstream_statuses_restored_before_run"] = bool(restored_before_run)
+        diagnostics["scene_prompts_upstream_statuses_restored_before_run_stages"] = restored_before_run
+        diagnostics["scene_prompts_downstream_only_invalidation"] = True
+        pkg["diagnostics"] = diagnostics
     pkg = run_stage(stage_id, pkg, payload)
     executed_stage_ids.append(stage_id)
     if stage_id == "scene_prompts" and str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(stage_id)).get("status") or "").strip().lower() == "done":
