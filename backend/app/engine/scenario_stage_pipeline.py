@@ -1717,14 +1717,30 @@ def _scene_plan_signature_matches_current(package: dict[str, Any], scene_plan: d
 
 def _scene_plan_route_strategy_signature_matches_current(package: dict[str, Any], scene_plan: dict[str, Any]) -> bool:
     diagnostics = _safe_dict(package.get("diagnostics"))
-    current_signature = _route_strategy_signature_for_package(package)
-    payload_signature = str(
-        scene_plan.get("route_strategy_signature")
-        or diagnostics.get("scene_plan_route_strategy_signature")
+    current_signature = str(_route_strategy_signature_for_package(package) or "").strip()
+
+    scene_plan_signature = str(scene_plan.get("route_strategy_signature") or "").strip()
+    if scene_plan_signature:
+        return not (current_signature and scene_plan_signature != current_signature)
+
+    # Legacy fallback: old scene_plan payloads may not contain route_strategy_signature.
+    # In this case we can compare diagnostics signature, but only when there are explicit
+    # legacy markers indicating the package predates scene_plan.route_strategy_signature.
+    legacy_package = bool(
+        diagnostics.get("scene_plan_uses_legacy_scene_candidate_windows_bridge")
+        or diagnostics.get("scene_plan_uses_legacy_compiled_contract_bridge")
+        or diagnostics.get("scene_prompts_uses_legacy_bridge")
+        or diagnostics.get("scene_prompts_legacy_bridge_present")
+    )
+    if not legacy_package:
+        return True
+
+    diagnostics_signature = str(
+        diagnostics.get("scene_plan_route_strategy_signature")
         or diagnostics.get("route_strategy_signature")
         or ""
     ).strip()
-    if current_signature and payload_signature and payload_signature != current_signature:
+    if current_signature and diagnostics_signature and diagnostics_signature != current_signature:
         return False
     return True
 
