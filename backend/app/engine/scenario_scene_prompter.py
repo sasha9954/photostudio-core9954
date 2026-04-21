@@ -112,6 +112,8 @@ _IA2V_POSITIVE_NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bstronger hand language\b", re.IGNORECASE),
     re.compile(r"\bpouring action as main focus\b", re.IGNORECASE),
     re.compile(r"\bhands trembling as main mechanic\b", re.IGNORECASE),
+    re.compile(r"\bno multistep prop mechanics\b", re.IGNORECASE),
+    re.compile(r"\bno action-heavy choreography\b", re.IGNORECASE),
 )
 _IA2V_ANTI_LIPSYNC_NEGATIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bnot singing\b", re.IGNORECASE),
@@ -2265,8 +2267,8 @@ def _normalize_scene_prompts(
                 positive_video_prompt = f"{positive_video_prompt.rstrip('. ')}.{simplify_suffix}".strip()
             else:
                 simplify_suffix = (
-                    "Single readable micro-action only: slight forward lean or subtle gaze shift. "
-                    "No multistep prop mechanics and no action-heavy choreography."
+                    "Keep only one tiny micro-action: slight forward lean or subtle gaze shift. "
+                    "Keep props and background passive as soft story context."
                 )
                 video_prompt = f"{video_prompt.rstrip('. ')}. {simplify_suffix}".strip()
                 positive_video_prompt = f"{positive_video_prompt.rstrip('. ')}. {simplify_suffix}".strip()
@@ -2388,40 +2390,46 @@ def _normalize_scene_prompts(
             "scene_id": scene_id,
             "route": actual_route,
             "photo_prompt": _enrich_prompt_with_anchor(photo_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
-            "video_prompt": (
-                video_prompt[:900]
-                if actual_route == "first_last"
-                else _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"])
-            ),
-            "positive_video_prompt": (
-                (positive_video_prompt or video_prompt)[:900]
-                if actual_route == "first_last"
-                else _enrich_prompt_with_anchor(
-                    positive_video_prompt or video_prompt,
-                    anchors["identity_anchor"],
-                    anchors["world_anchor"],
-                )
-            ),
+            "video_prompt": "",
+            "positive_video_prompt": "",
             "negative_video_prompt": negative_video_prompt,
             "start_image_prompt": (start_image_prompt[:900] if actual_route == "first_last" else ""),
             "end_image_prompt": (end_image_prompt[:900] if actual_route == "first_last" else ""),
             "negative_prompt": negative_prompt,
             "prompt_notes": normalized_notes,
         }
-        if actual_route == "ia2v":
+        semantics_lock = _scene_plan_semantics_lock(scene)
+        final_route = semantics_lock["route"] if semantics_lock["route"] in ALLOWED_ROUTES else actual_route
+        scene_out["route"] = final_route
+        if final_route == "first_last":
+            scene_out["video_prompt"] = video_prompt[:900]
+            scene_out["positive_video_prompt"] = (positive_video_prompt or video_prompt)[:900]
+        elif final_route == "ia2v":
+            scene_out["video_prompt"] = video_prompt[:900]
+            scene_out["positive_video_prompt"] = (positive_video_prompt or video_prompt)[:900]
+        else:
+            scene_out["video_prompt"] = _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"])
+            scene_out["positive_video_prompt"] = _enrich_prompt_with_anchor(
+                positive_video_prompt or video_prompt,
+                anchors["identity_anchor"],
+                anchors["world_anchor"],
+            )
+        scene_out["prompt_notes"].update(semantics_lock)
+        if final_route == "ia2v":
             scene_out["lip_sync_allowed"] = True
             scene_out["lip_sync_priority"] = "primary"
             scene_out["mouth_visible_required"] = True
             scene_out["singing_readiness_required"] = True
-            scene_out["speaker_role"] = str(scene.get("speaker_role") or "character_1").strip() or "character_1"
+            scene_out["speaker_role"] = (
+                str(scene.get("speaker_role") or "").strip()
+                or str(scene.get("primary_role") or "").strip()
+                or "character_1"
+            )
             scene_out["spoken_line"] = str(scene.get("spoken_line") or "").strip()
             scene_out["object_action_allowed"] = False
             scene_out["foreground_performance_rule"] = (
                 "Performer-first vocal performance priority; keep lips and mouth readable, background action only as soft context."
             )
-        semantics_lock = _scene_plan_semantics_lock(scene)
-        scene_out["route"] = semantics_lock["route"] if semantics_lock["route"] in ALLOWED_ROUTES else actual_route
-        scene_out["prompt_notes"].update(semantics_lock)
         scene_out["prompt_notes"]["row_repaired_from_scene_plan"] = bool(row_repaired_from_current_package)
         if row_repaired_from_current_package:
             repaired_from_current_package_count += 1
