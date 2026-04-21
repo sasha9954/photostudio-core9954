@@ -71,8 +71,13 @@ CONTROLLED_MOTION_SAFETY_BLOCK = (
     "stable anatomy-safe motion, no jerky movement, no frantic choreography, no violent spins, no high-frequency shaking."
 )
 DOMESTIC_WORLD_LOCK_BLOCK = (
-    "DOMESTIC WORLD LOCK: grounded domestic realism in the same small apartment / kitchen / hallway with same warm home practical lighting, "
-    "same domestic interior family and same late-night apartment realism. no club. no bar. no dance floor. no stage. no neon nightclub ambience."
+    "DOMESTIC WORLD LOCK: grounded domestic realism in the same small late-night apartment kitchen and hallway, "
+    "same warm home practical lighting, same domestic interior family, same late-night apartment realism, "
+    "tense private home atmosphere, realistic kitchen counter/table, bottle or glass as mundane conflict detail."
+)
+
+DOMESTIC_WORLD_NEGATIVE_TERMS = (
+    "nightclub, club, bar, dance floor, stage, neon club ambience, crowd, concert lighting, nightlife venue"
 )
 
 
@@ -81,6 +86,17 @@ _FORBIDDEN_VENUE_TERMS = ("nightclub", "night club", "club", "bar", "dance floor
 
 def _strip_literal_quoted_dialogue(text: str) -> str:
     raw = str(text or "")
+    # normalize explicit quoted lip-sync fragments so alignment intent remains without literal subtitle text
+    raw = re.sub(
+        r'(?i)mouth\s+moving\s+in\s+sync\s+with\s+the\s+words\s*[\'"]([^\'"]){1,220}[\'"]',
+        "mouth moving in sync with the provided audio phrase",
+        raw,
+    )
+    raw = re.sub(
+        r'(?i)mouth\s+moving\s+in\s+sync\s+with\s*[\'"]([^\'"]){1,220}[\'"]',
+        "mouth moving in sync with the provided audio phrase",
+        raw,
+    )
     # remove quoted fragments to avoid subtitle rendering; keep semantic prose only
     raw = re.sub(r'["\'][^"\']{2,180}["\']', " ", raw)
     raw = re.sub(r"\s+", " ", raw).strip()
@@ -648,8 +664,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         positive_prompt = f"{scene_specific_payload}. {positive_prompt}".strip(". ")
 
     scene_specific_chars_after_bootstrap = _scene_specific_char_count(positive_prompt)
-    identity_only_signature = bool(re.search(r"(?i)GLOBAL HERO IDENTITY LOCK:.*BODY CONTINUITY:.*WARDROBE CONTINUITY:", positive_prompt))
-    final_prompt_scene_specific_missing = scene_specific_chars_after_bootstrap < 80 or identity_only_signature
+    final_prompt_scene_specific_missing = scene_specific_chars_after_bootstrap < 80
     final_prompt_rebuilt_from_scene_prompts = False
     if final_prompt_scene_specific_missing and scene_specific_payload:
         rebuild_parts = [
@@ -736,6 +751,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         negative_prompt,
         apply_guard=domestic_scene,
     )
+    if domestic_scene:
+        negative_prompt = _append_clause(negative_prompt, DOMESTIC_WORLD_NEGATIVE_TERMS)
 
     positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
         positive_prompt=positive_prompt,
