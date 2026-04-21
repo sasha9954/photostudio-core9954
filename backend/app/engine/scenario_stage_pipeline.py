@@ -2454,32 +2454,47 @@ def _validate_scene_plan_route_budget(
     return (len(errors) == 0), feedback, details
 
 
-def _deterministic_route_locks_for_no_first_last_50_50_0(scene_plan: dict[str, Any]) -> dict[str, str]:
-    def _segment_number_from_id(segment_id: str) -> int | None:
-        segment = str(segment_id or "").strip().lower()
-        if not segment:
-            return None
-        match = re.search(r"(\d+)$", segment)
-        if not match:
-            return None
-        try:
-            number = int(match.group(1))
-        except (TypeError, ValueError):
-            return None
-        return number if number > 0 else None
+def _extract_user_hard_route_map(input_pkg: dict[str, Any]) -> dict[str, str]:
+    creative_config = _safe_dict(input_pkg.get("creative_config"))
+    hard_map_raw = _safe_dict(
+        creative_config.get("route_assignments_by_segment")
+        or creative_config.get("routeAssignmentsBySegment")
+    )
+    return {
+        str(segment_id).strip(): str(route).strip().lower()
+        for segment_id, route in hard_map_raw.items()
+        if str(segment_id).strip() and str(route).strip().lower() in {"i2v", "ia2v", "first_last"}
+    }
 
-    locks: dict[str, str] = {}
-    scene_rows = _scene_plan_rows_for_validation(scene_plan)
-    for idx, row in enumerate(scene_rows, start=1):
-        segment_id = str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or f"seg_{idx:02d}").strip()
+
+def _scene_plan_routes_by_segment(scene_plan: dict[str, Any]) -> dict[str, str]:
+    routes: dict[str, str] = {}
+    for idx, row in enumerate(_scene_plan_rows_for_validation(scene_plan), start=1):
+        route_row = _safe_dict(row)
+        segment_id = str(route_row.get("segment_id") or route_row.get("scene_id") or f"seg_{idx:02d}").strip()
+        route = str(route_row.get("route") or "").strip().lower()
+        if segment_id and route in {"i2v", "ia2v", "first_last"}:
+            routes[segment_id] = route
+    return routes
+
+
+def _fallback_scene_plan_route_fill(scene_plan: dict[str, Any]) -> dict[str, str]:
+    fallback_map: dict[str, str] = {}
+    for idx, row in enumerate(_scene_plan_rows_for_validation(scene_plan), start=1):
+        route_row = _safe_dict(row)
+        segment_id = str(route_row.get("segment_id") or route_row.get("scene_id") or f"seg_{idx:02d}").strip()
         if not segment_id:
             continue
-        segment_number = _segment_number_from_id(segment_id)
-        if segment_number is not None:
-            locks[segment_id] = "ia2v" if segment_number % 2 == 1 else "i2v"
+        route = str(route_row.get("route") or "").strip().lower()
+        if route in {"i2v", "ia2v", "first_last"}:
             continue
-        locks[segment_id] = "ia2v" if idx % 2 == 1 else "i2v"
-    return locks
+        story_beat_type = str(route_row.get("story_beat_type") or "").strip().lower()
+        singing_required = bool(route_row.get("singing_readiness_required"))
+        if story_beat_type == "vocal_emotion" or singing_required:
+            fallback_map[segment_id] = "ia2v"
+        else:
+            fallback_map[segment_id] = "i2v"
+    return fallback_map
 
 
 def _resolve_scene_plan_route_locks(
@@ -2489,24 +2504,29 @@ def _resolve_scene_plan_route_locks(
     previous_scene_plan: dict[str, Any],
 ) -> tuple[dict[str, str], str]:
     input_pkg = _safe_dict(package.get("input"))
-    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
-    preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
-    existing_locks = _safe_dict(previous_scene_plan.get("route_locks_by_segment"))
     scene_rows = _scene_plan_rows_for_validation(scene_plan)
-    if existing_locks and scene_rows:
-        return {str(k): str(v).strip().lower() for k, v in existing_locks.items() if str(k).strip()}, "existing_scene_plan_lock"
-    if preset_name == "no_first_last_50_50_0" and len(scene_rows) == 8:
-        return _deterministic_route_locks_for_no_first_last_50_50_0(scene_plan), "deterministic_backend_schedule"
-    computed_locks: dict[str, str] = {}
-    for idx, row in enumerate(scene_rows, start=1):
-        segment_id = str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or f"seg_{idx:02d}").strip()
-        route = str(_safe_dict(row).get("route") or "").strip().lower()
-        if segment_id and route in {"i2v", "ia2v", "first_last"}:
-            computed_locks[segment_id] = route
-    return computed_locks, "scene_plan_routes"
+    if not scene_rows:
+        return {}, ""
+    hard_map = _extract_user_hard_route_map(input_pkg)
+    if hard_map:
+        return hard_map, "creative_config.route_assignments_by_segment"
+    gemini_routes = _scene_plan_routes_by_segment(scene_plan)
+    if len(gemini_routes) == len(scene_rows):
+        return gemini_routes, "gemini_semantic_route_selection"
+    if gemini_routes:
+        fallback_map = _fallback_scene_plan_route_fill(scene_plan)
+        merged = dict(gemini_routes)
+        merged.update(fallback_map)
+        return merged, "fallback_backend_route_fill"
+    return _fallback_scene_plan_route_fill(scene_plan), "fallback_backend_route_fill"
 
 
-def _apply_scene_plan_route_locks(scene_plan: dict[str, Any], route_locks: dict[str, str]) -> tuple[dict[str, Any], dict[str, int]]:
+def _apply_scene_plan_route_locks(
+    scene_plan: dict[str, Any],
+    route_locks: dict[str, str],
+    *,
+    overwrite_existing: bool = True,
+) -> tuple[dict[str, Any], dict[str, int]]:
     normalized = deepcopy(_safe_dict(scene_plan))
     locks = {str(k).strip(): str(v).strip().lower() for k, v in _safe_dict(route_locks).items() if str(k).strip()}
     for field in ("scenes", "storyboard"):
@@ -2515,7 +2535,9 @@ def _apply_scene_plan_route_locks(scene_plan: dict[str, Any], route_locks: dict[
         for idx, row in enumerate(rows, start=1):
             segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx:02d}").strip()
             locked_route = str(locks.get(segment_id) or "").strip().lower()
-            if locked_route in {"i2v", "ia2v", "first_last"}:
+            current_route = str(row.get("route") or "").strip().lower()
+            should_apply_lock = overwrite_existing or current_route not in {"i2v", "ia2v", "first_last"}
+            if locked_route in {"i2v", "ia2v", "first_last"} and should_apply_lock:
                 row["route"] = locked_route
             rewritten_rows.append(row)
         if rewritten_rows:
@@ -2523,6 +2545,34 @@ def _apply_scene_plan_route_locks(scene_plan: dict[str, Any], route_locks: dict[
     normalized["route_locks_by_segment"] = locks
     normalized["route_mix_summary"] = _scene_plan_route_counts(normalized)
     return normalized, _scene_plan_route_counts(normalized)
+
+
+def _collect_scene_plan_route_semantic_mismatches(scene_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    mismatches: list[dict[str, Any]] = []
+    for idx, row in enumerate(_scene_plan_rows_for_validation(scene_plan), start=1):
+        route_row = _safe_dict(row)
+        segment_id = str(route_row.get("segment_id") or route_row.get("scene_id") or f"seg_{idx:02d}").strip()
+        route = str(route_row.get("route") or "").strip().lower()
+        story_beat_type = str(route_row.get("story_beat_type") or "").strip().lower()
+        object_action_allowed = bool(route_row.get("object_action_allowed"))
+        singing_required = bool(route_row.get("singing_readiness_required"))
+        if route == "ia2v" and story_beat_type == "physical_event":
+            mismatches.append(
+                {"segment_id": segment_id, "route": route, "story_beat_type": story_beat_type, "reason": "ia2v_for_physical_event"}
+            )
+        if route == "ia2v" and object_action_allowed and not singing_required:
+            mismatches.append(
+                {"segment_id": segment_id, "route": route, "story_beat_type": story_beat_type, "reason": "ia2v_with_object_action_and_no_singing_readiness"}
+            )
+        if route == "i2v" and story_beat_type == "vocal_emotion":
+            mismatches.append(
+                {"segment_id": segment_id, "route": route, "story_beat_type": story_beat_type, "reason": "i2v_for_vocal_emotion"}
+            )
+        if route == "i2v" and singing_required:
+            mismatches.append(
+                {"segment_id": segment_id, "route": route, "story_beat_type": story_beat_type, "reason": "i2v_with_singing_readiness_required"}
+            )
+    return mismatches
 
 
 def _resolve_audio_semantic_source_type(input_pkg: dict[str, Any]) -> str:
@@ -8549,13 +8599,56 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     scene_plan = _safe_dict(result.get("scene_plan"))
     route_locks_by_segment: dict[str, str] = {}
     route_lock_source = ""
+    route_assignment_source = ""
+    route_semantic_mismatches: list[dict[str, Any]] = []
+    semantic_retry_used = False
+    user_hard_route_map = _extract_user_hard_route_map(_safe_dict(package.get("input")))
     if scene_plan:
         route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
             package=package,
             scene_plan=scene_plan,
             previous_scene_plan=previous_scene_plan,
         )
-        scene_plan, locked_route_counts = _apply_scene_plan_route_locks(scene_plan, route_locks_by_segment)
+        route_assignment_source = str(route_lock_source or "")
+        scene_plan, locked_route_counts = _apply_scene_plan_route_locks(
+            scene_plan,
+            route_locks_by_segment,
+            overwrite_existing=(route_lock_source != "fallback_backend_route_fill"),
+        )
+        route_semantic_mismatches = _collect_scene_plan_route_semantic_mismatches(scene_plan)
+        if route_semantic_mismatches and not user_hard_route_map:
+            semantic_retry_used = True
+            targeted_feedback = (
+                "Some routes do not match story beat types. Reassign routes semantically while respecting "
+                "route_targets_per_block as much as possible. I2V=physical story action, IA2V=vocal emotional performance. "
+                "Preserve all segment_ids and scene meanings."
+            )
+            _append_diag_event(package, "scene_plan semantic mismatch detected, retrying once", stage_id="scene_plan")
+            semantic_retry_result = build_gemini_scene_plan(
+                api_key=gemini_api_key,
+                package=scene_plan_prompt_package,
+                validation_feedback=targeted_feedback,
+            )
+            retry_scene_plan = _safe_dict(semantic_retry_result.get("scene_plan"))
+            if retry_scene_plan:
+                route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
+                    package=package,
+                    scene_plan=retry_scene_plan,
+                    previous_scene_plan=previous_scene_plan,
+                )
+                route_assignment_source = str(route_lock_source or route_assignment_source or "")
+                retry_scene_plan, locked_route_counts = _apply_scene_plan_route_locks(
+                    retry_scene_plan,
+                    route_locks_by_segment,
+                    overwrite_existing=(route_lock_source != "fallback_backend_route_fill"),
+                )
+                route_semantic_mismatches = _collect_scene_plan_route_semantic_mismatches(retry_scene_plan)
+                semantic_retry_result["scene_plan"] = retry_scene_plan
+                result = semantic_retry_result
+                scene_plan = retry_scene_plan
+            else:
+                result = semantic_retry_result
+                scene_plan = retry_scene_plan
         result["scene_plan"] = scene_plan
     else:
         locked_route_counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
@@ -8661,6 +8754,13 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_locks_by_segment"] = _safe_dict(route_locks_by_segment)
     diagnostics["scene_plan_route_lock_applied"] = bool(route_locks_by_segment)
     diagnostics["scene_plan_route_lock_source"] = str(route_lock_source or "")
+    diagnostics["scene_plan_route_assignment_source"] = str(
+        "user_hard_route_map"
+        if route_lock_source == "creative_config.route_assignments_by_segment"
+        else (route_assignment_source or ("user_hard_route_map" if user_hard_route_map else ""))
+    )
+    diagnostics["scene_plan_route_semantic_mismatches"] = list(route_semantic_mismatches)
+    diagnostics["scene_plan_route_semantic_retry_used"] = bool(semantic_retry_used)
     diagnostics["scene_plan_route_budget_after_lock"] = dict(locked_route_counts)
     diagnostics["scenes_vocal_owner_role_used"] = str(scene_diag.get("vocal_owner_role") or "unknown")
     if not route_budget_ok:
