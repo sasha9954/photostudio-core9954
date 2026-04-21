@@ -1623,7 +1623,7 @@ def _build_fallback_scene_prompts(
                 "A performance shot of the same performer singing an emotional line. Clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, soft facial trembling, and small emotional eyebrow movement. "
                 "Emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement. "
                 "The face and mouth remain readable and important. Cinematic realism. Steady camera, very slow push-in. "
-                f"Only {speaker_label} delivers the spoken phrase{f' ({spoken_line})' if spoken_line else ''}; no simultaneous dual-speaker lip movement. "
+                f"{speaker_label} is the only active vocal performer for this phrase{f' ({spoken_line})' if spoken_line else ''}. "
                 f"{f'{reaction_role} may stay nearby as silent listener reaction. ' if listener_reaction_allowed and reaction_role else ''}"
                 f"{'Mouth readability is required for the active speaker. ' if mouth_visible_required else ''}"
                 f"{binding_clause}"

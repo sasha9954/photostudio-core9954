@@ -674,6 +674,8 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     vocal_gender = _resolve_vocal_gender(audio_map, input_pkg)
     vocal_owner_role = _resolve_vocal_owner_role(vocal_gender, role_identity_gender_map)
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    hard_route_assignments = _safe_dict(creative_config.get("hard_route_assignments_by_segment"))
+    hard_route_map_applied = bool(hard_route_assignments)
     route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(len(scene_segment_rows), creative_config)
     route_strategy_active = _route_strategy_active(creative_config)
     story_guidance = story_guidance_route_mix_doctrine(story_core.get("story_guidance"))
@@ -737,15 +739,15 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
                 "first_last_forbidden": int(route_budget_target.get("first_last") or 0) == 0,
                 "ia2v_requires_vocal_or_speech_window": True,
                 "targets_are_hard_for_short_clip": bool(hard_short_clip_target),
-                "gemini_must_choose_segment_assignment": True,
+                "gemini_must_choose_segment_assignment": not hard_route_map_applied,
                 "backend_must_not_choose_dramaturgy": True,
                 "route_strategy_active": route_strategy_active,
                 "route_strategy_mode": str(creative_config.get("route_strategy_mode") or "auto"),
                 "route_strategy_preset": str(creative_config.get("route_strategy_preset") or ""),
-                "hard_route_assignments_by_segment": _safe_dict(creative_config.get("hard_route_assignments_by_segment")),
-                "hardRouteMapApplied": bool(_safe_dict(creative_config.get("hard_route_assignments_by_segment"))),
-                "route_assignment_source": "creative_config.route_assignments_by_segment" if _safe_dict(creative_config.get("hard_route_assignments_by_segment")) else "gemini",
-                "routeAssignmentSource": "creative_config.route_assignments_by_segment" if _safe_dict(creative_config.get("hard_route_assignments_by_segment")) else "gemini",
+                "hard_route_assignments_by_segment": hard_route_assignments,
+                "hardRouteMapApplied": hard_route_map_applied,
+                "route_assignment_source": "creative_config.route_assignments_by_segment" if hard_route_map_applied else "gemini",
+                "routeAssignmentSource": "creative_config.route_assignments_by_segment" if hard_route_map_applied else "gemini",
             },
             "ia2v_definition": "emotion-first performance shot; readable face/mouth; smooth camera; restrained motion",
             "i2v_definition": "baseline clip route for observation, transit, environment and connective montage scenes",
