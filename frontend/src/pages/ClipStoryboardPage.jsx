@@ -2354,9 +2354,16 @@ function sanitizeStaleScenarioImageRuntime(runtime = {}) {
 function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
   const prev = previousMap && typeof previousMap === "object" ? previousMap : {};
   return (Array.isArray(scenes) ? scenes : []).reduce((acc, scene) => {
-    const sceneKey = String(scene?.sceneId || scene?.id || "");
+    const sceneKey = String(scene?.sceneKey || scene?.segment_id || scene?.sceneId || scene?.scene_id || scene?.id || "");
     if (!sceneKey) return acc;
-    const prevValueRaw = prev[sceneKey] && typeof prev[sceneKey] === "object" ? prev[sceneKey] : {};
+    const sceneAliases = [
+      sceneKey,
+      String(scene?.sceneId || "").trim(),
+      String(scene?.segment_id || scene?.segmentId || "").trim(),
+      String(scene?.scene_id || scene?.sourceSceneId || "").trim(),
+      String(scene?.id || "").trim(),
+    ].filter(Boolean);
+    const prevValueRaw = sceneAliases.map((alias) => prev[alias]).find((item) => item && typeof item === "object") || {};
     const prevValue = sanitizeStaleScenarioImageRuntime(prevValueRaw);
     acc[sceneKey] = {
       status: normalizeStoryboardGenerationStatus(prevValue.status),
@@ -2403,7 +2410,7 @@ function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
 
 function collectSceneIds(scenes = []) {
   return (Array.isArray(scenes) ? scenes : [])
-    .map((scene, idx) => String(scene?.sceneId || scene?.id || `S${idx + 1}`))
+    .map((scene, idx) => String(scene?.sceneKey || scene?.segment_id || scene?.sceneId || scene?.scene_id || scene?.id || `scene_${idx + 1}`))
     .filter(Boolean);
 }
 
@@ -3159,6 +3166,8 @@ function getScenarioSceneStableKey(scene, idx) {
 }
 
 function buildCanonicalSceneId(scene, idx, prefix = "scene") {
+  const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
+  if (segmentId) return segmentId;
   const explicit = String(scene?.sceneId || "").trim();
   if (explicit) return explicit;
   const snakeCase = String(scene?.scene_id || "").trim();
@@ -3171,7 +3180,9 @@ function buildCanonicalSceneId(scene, idx, prefix = "scene") {
 function normalizeSceneCollectionWithSceneId(scenes, prefix = "scene") {
   return (Array.isArray(scenes) ? scenes : []).map((scene, idx) => ({
     ...(scene && typeof scene === "object" ? scene : {}),
+    sceneKey: buildCanonicalSceneId(scene, idx, prefix),
     sceneId: buildCanonicalSceneId(scene, idx, prefix),
+    display_id: String(scene?.display_id || scene?.displayId || scene?.segment_id || scene?.scene_id || buildCanonicalSceneId(scene, idx, prefix)).trim(),
   }));
 }
 

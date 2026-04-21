@@ -5382,7 +5382,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     for idx, segment in enumerate(final_segments, start=1):
         segment_id = str(segment.get("segment_id") or segment.get("scene_id") or f"seg_{idx}").strip()
-        scene_id = str(segment.get("scene_id") or segment_id).strip()
+        scene_id = str(segment_id or segment.get("scene_id") or "").strip()
         plan_row = _safe_dict(plan_by_id.get(segment_id) or plan_by_id.get(scene_id))
         prompts_row = _safe_dict(prompts_by_id.get(segment_id) or prompts_by_id.get(scene_id))
         role_casting_row = _safe_dict(role_casting_by_id.get(segment_id) or role_casting_by_id.get(scene_id))

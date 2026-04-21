@@ -393,13 +393,27 @@ function selectedDurationText(scene = {}) {
 }
 
 function resolveSceneId(scene = {}, idx = 0) {
+  const sceneKey = String(scene?.sceneKey || "").trim();
+  if (sceneKey) return sceneKey;
+  const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
+  if (segmentId) return segmentId;
   const direct = String(scene?.sceneId || "").trim();
   if (direct) return direct;
   const snakeCase = String(scene?.scene_id || "").trim();
   if (snakeCase) return snakeCase;
   const legacy = String(scene?.id || "").trim();
   if (legacy) return legacy;
-  return `S${idx + 1}`;
+  return `scene_${idx + 1}`;
+}
+
+function resolveSceneDisplayId(scene = {}, idx = 0) {
+  const display = String(scene?.display_id || scene?.displayId || "").trim();
+  if (display) return display;
+  const segmentId = String(scene?.segment_id || scene?.segmentId || "").trim();
+  if (segmentId) return segmentId;
+  const sourceSceneId = String(scene?.sourceSceneId || scene?.scene_id || "").trim();
+  if (sourceSceneId) return sourceSceneId;
+  return resolveSceneId(scene, idx);
 }
 
 function resolveScenarioModeBadge(modeValue = "") {
@@ -470,12 +484,21 @@ function resolveStoryboardEditorDisplayMode({
 }
 
 function resolveSceneRuntimeForEditor(scene, runtime, scenarioNodeData = {}) {
-  const sceneId = String(scene?.sceneId || scene?.scene_id || "").trim();
-  const nodeRuntime = scenarioNodeData?.sceneGeneration?.[sceneId] || {};
+  const sceneId = String(scene?.sceneId || scene?.sceneKey || scene?.segment_id || scene?.scene_id || "").trim();
+  const runtimeMap = scenarioNodeData?.sceneGeneration && typeof scenarioNodeData.sceneGeneration === "object"
+    ? scenarioNodeData.sceneGeneration
+    : {};
+  const sceneAliases = [
+    sceneId,
+    String(scene?.sceneKey || "").trim(),
+    String(scene?.segment_id || scene?.segmentId || "").trim(),
+    String(scene?.scene_id || scene?.sourceSceneId || "").trim(),
+  ].filter(Boolean);
+  const nodeRuntime = sceneAliases.map((alias) => runtimeMap?.[alias]).find((item) => item && typeof item === "object") || {};
   const nodeScenes = Array.isArray(scenarioNodeData?.scenes) ? scenarioNodeData.scenes : [];
   const nodeScene = nodeScenes.find((candidate, idx) => {
-    const candidateSceneId = String(candidate?.sceneId || candidate?.scene_id || `S${idx + 1}`).trim();
-    return candidateSceneId && candidateSceneId === sceneId;
+    const candidateSceneId = resolveSceneId(candidate, idx);
+    return candidateSceneId && sceneAliases.includes(candidateSceneId);
   }) || {};
   return {
     ...(runtime || {}),
@@ -567,8 +590,16 @@ export default function ScenarioStoryboardEditor({
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
   const normalizedScenes = useMemo(
     () => safeScenes.map((scene, idx) => {
-      const normalized = { ...(scene || {}), sceneId: resolveSceneId(scene, idx) };
-      const runtime = safeGeneration[String(normalized?.sceneId || "").trim()];
+      const normalizedSceneId = resolveSceneId(scene, idx);
+      const normalized = {
+        ...(scene || {}),
+        sceneId: normalizedSceneId,
+        sceneKey: normalizedSceneId,
+        display_id: resolveSceneDisplayId(scene, idx),
+      };
+      const runtime = safeGeneration[String(normalized?.sceneId || "").trim()]
+        || safeGeneration[String(normalized?.segment_id || normalized?.segmentId || "").trim()]
+        || safeGeneration[String(normalized?.scene_id || "").trim()];
       return hydrateSceneWithRuntime(normalized, runtime);
     }),
     [safeGeneration, safeScenes]
@@ -779,7 +810,11 @@ export default function ScenarioStoryboardEditor({
   const selectedScene = safeIndex >= 0 ? normalizedScenes[safeIndex] : null;
   const selectedDisplayTime = resolveSceneDisplayTime(selectedScene);
   const selectedSceneId = String(selectedScene?.sceneId || "").trim();
-  const selectedRuntime = safeGeneration[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object" ? safeGeneration[selectedSceneId] : {};
+  const selectedSceneDisplayId = String(resolveSceneDisplayId(selectedScene || {}, safeIndex >= 0 ? safeIndex : 0) || selectedSceneId).toUpperCase();
+  const selectedRuntime = safeGeneration[selectedSceneId]
+    || safeGeneration[String(selectedScene?.segment_id || selectedScene?.segmentId || "").trim()]
+    || safeGeneration[String(selectedScene?.scene_id || selectedScene?.sourceSceneId || "").trim()]
+    || {};
   const effectiveRuntime = useMemo(
     () => resolveSceneRuntimeForEditor(selectedScene, selectedRuntime, scenarioNodeData),
     [scenarioNodeData, selectedRuntime, selectedScene]
@@ -1268,7 +1303,7 @@ export default function ScenarioStoryboardEditor({
   const formatAllScenesForCopy = () => normalizedScenes.map((scene, idx) => formatSceneForCopy(scene, idx)).join("\n\n");
 
   const formatPromptsForCopy = () => normalizedScenes.map((scene, idx) => {
-    const sceneId = String(scene?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
+    const sceneId = String(resolveSceneDisplayId(scene, idx) || scene?.sceneId || `scene_${idx + 1}`).trim() || `scene_${idx + 1}`;
     return [
       `SCENE ${sceneId}`,
       `imagePromptRu: ${toPrintable(scene?.imagePromptRu || scene?.imagePromptEn)}`,
@@ -1312,7 +1347,8 @@ export default function ScenarioStoryboardEditor({
           </div>
           <div className="clipSB_storyboardKv"><span>Сцен</span><strong>{normalizedScenes.length}</strong></div>
           {normalizedScenes.map((scene, idx) => {
-            const sceneId = String(scene?.sceneId || `S${idx + 1}`);
+            const sceneId = String(scene?.sceneId || `scene_${idx + 1}`);
+            const sceneDisplayId = String(resolveSceneDisplayId(scene, idx) || sceneId).toUpperCase();
             const displayTime = resolveSceneDisplayTime(scene);
             return (
               <details key={`contract-${sceneId}-${idx}`} style={{ marginBottom: 10 }}>
@@ -1321,9 +1357,9 @@ export default function ScenarioStoryboardEditor({
                   onMouseDown={stopNodeDragEvent}
                   onPointerDown={stopNodeDragEvent}
                 >
-                  {sceneId} · {fmtSec(displayTime.startSec)}–{fmtSec(displayTime.endSec)}
+                  {sceneDisplayId} · {fmtSec(displayTime.startSec)}–{fmtSec(displayTime.endSec)}
                 </summary>
-                <ContractField label="sceneId" value={sceneId} />
+                <ContractField label="sceneId" value={sceneDisplayId} />
                 <ContractField label="t0/t1" value={`${fmtSec(displayTime.startSec)} / ${fmtSec(displayTime.endSec)}`} />
                 {isLongText(scene?.localPhrase || scene?.lyricText)
                   ? <ScenarioReadonlyTextField label="lyric text" value={scene?.localPhrase || scene?.lyricText} minRows={2} />
@@ -1567,9 +1603,13 @@ export default function ScenarioStoryboardEditor({
             </button>
 
             {normalizedScenes.map((scene, idx) => {
-              const sceneId = String(scene?.sceneId || `S${idx + 1}`);
+              const sceneId = String(scene?.sceneId || `scene_${idx + 1}`);
+              const sceneDisplayId = String(resolveSceneDisplayId(scene, idx) || sceneId).toUpperCase();
               const displayTime = resolveSceneDisplayTime(scene);
-              const runtime = safeGeneration[sceneId] && typeof safeGeneration[sceneId] === "object" ? safeGeneration[sceneId] : {};
+              const runtime = safeGeneration[sceneId]
+                || safeGeneration[String(scene?.segment_id || scene?.segmentId || "").trim()]
+                || safeGeneration[String(scene?.scene_id || "").trim()]
+                || {};
               const status = resolveBlockStatus({ runtimeStatus: runtime?.status || runtime?.videoStatus || runtime?.imageStatus, assetUrl: scene?.videoUrl || scene?.imageUrl });
               return (
                 <button
@@ -1582,7 +1622,7 @@ export default function ScenarioStoryboardEditor({
                   }}
                 >
                   <div className="clipSB_scenarioItemTop">
-                    <div className="clipSB_storyboardSceneId">[ {sceneId} · {fmtSec(displayTime.startSec)}–{fmtSec(displayTime.endSec)} ]</div>
+                    <div className="clipSB_storyboardSceneId">[ {sceneDisplayId} · {fmtSec(displayTime.startSec)}–{fmtSec(displayTime.endSec)} ]</div>
                   </div>
                   <div className="clipSB_scenarioItemText">{scene?.summaryRu || scene?.localPhrase || "—"}</div>
                   <div className="clipSB_scenarioEditorBadgeRow">
@@ -1704,7 +1744,7 @@ export default function ScenarioStoryboardEditor({
               </div>
             ) : (
               <>
-                <div className="clipSB_scenarioEditorSceneTitle">Сцена {selectedSceneId}</div>
+                <div className="clipSB_scenarioEditorSceneTitle">Сцена {selectedSceneDisplayId || selectedSceneId}</div>
 
                 <div className="clipSB_scenarioEditorBlock">
                   <div className="clipSB_scenarioEditorBlockHead">
