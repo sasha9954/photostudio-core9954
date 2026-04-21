@@ -3534,6 +3534,38 @@ function getScenarioStageDepth(stageId = "") {
   return Number(SCENARIO_STAGE_DEPTH_BY_ID?.[normalized] ?? -1);
 }
 
+function getScenarioInputSignatureFromPackage(storyboardPackage = {}) {
+  const pkg = storyboardPackage && typeof storyboardPackage === "object" && !Array.isArray(storyboardPackage)
+    ? storyboardPackage
+    : {};
+  const diagnostics = pkg?.diagnostics && typeof pkg.diagnostics === "object" ? pkg.diagnostics : {};
+  return String(
+    diagnostics?.scenario_input_signature
+    || pkg?.scenario_input_signature
+    || pkg?.meta?.scenario_input_signature
+    || ""
+  ).trim();
+}
+
+function isScenarioStageSignatureCompatible(stageId = "", storyboardPackage = {}) {
+  const pkg = storyboardPackage && typeof storyboardPackage === "object" && !Array.isArray(storyboardPackage)
+    ? storyboardPackage
+    : {};
+  const currentSignature = getScenarioInputSignatureFromPackage(pkg);
+  if (!currentSignature) return true;
+  if (stageId === "final_video_prompt") {
+    const payload = pkg?.final_video_prompt && typeof pkg.final_video_prompt === "object" ? pkg.final_video_prompt : {};
+    const createdFor = String(payload?.created_for_signature || "").trim();
+    return !createdFor || createdFor === currentSignature;
+  }
+  if (stageId === "finalize") {
+    const payload = pkg?.final_storyboard && typeof pkg.final_storyboard === "object" ? pkg.final_storyboard : {};
+    const createdFor = String(payload?.created_for_signature || "").trim();
+    return !createdFor || createdFor === currentSignature;
+  }
+  return true;
+}
+
 function hasScenarioStagePayload(stageId = "", storyboardPackage = {}) {
   const pkg = storyboardPackage && typeof storyboardPackage === "object" && !Array.isArray(storyboardPackage)
     ? storyboardPackage
@@ -3578,12 +3610,14 @@ function hasScenarioStagePayload(stageId = "", storyboardPackage = {}) {
     return Object.keys(stage).length > 0;
   }
   if (normalized === "final_video_prompt") {
+    if (!isScenarioStageSignatureCompatible("final_video_prompt", pkg)) return false;
     const stage = pkg?.final_video_prompt && typeof pkg.final_video_prompt === "object" ? pkg.final_video_prompt : {};
     if (Array.isArray(stage?.segments) && stage.segments.length > 0) return true;
     if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
     return Object.keys(stage).length > 0;
   }
   if (normalized === "finalize") {
+    if (!isScenarioStageSignatureCompatible("finalize", pkg)) return false;
     const stage = pkg?.final_storyboard && typeof pkg.final_storyboard === "object" ? pkg.final_storyboard : {};
     if (Array.isArray(stage?.scenes) && stage.scenes.length > 0) return true;
     return Object.keys(stage).length > 0;
@@ -3743,6 +3777,12 @@ function mergeScenarioPackagePreservingAudioMap({
   const responseSafe = responsePackage && typeof responsePackage === "object" && !Array.isArray(responsePackage)
     ? responsePackage
     : {};
+  const previousSignature = getScenarioInputSignatureFromPackage(previousSafe);
+  const currentSignature = getScenarioInputSignatureFromPackage(responseSafe);
+  const signatureChanged = !!(previousSignature && currentSignature && previousSignature !== currentSignature);
+  if (signatureChanged) {
+    return { ...responseSafe };
+  }
   const resolveIncomingStageId = () => {
     const orderedExecuted = getScenarioPipelineStageOrder()
       .filter((stageId) => executedSet.has(stageId))
@@ -18998,6 +19038,9 @@ onClipSec: (nodeId, value) => {
                   const nextRefs = prevRefs.filter((_, i) => i !== idx);
                   return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refDetailsOpen: false, refHiddenProfile: null, refAnalysisError: "" } };
                 })));
+                if (responseInputSignatureChanged) {
+                  clearClipStoryboardStorageForCurrentAccount("scenario_input_signature_changed");
+                }
               },
               onToggleDetails: (nodeId) => {
                 setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, refDetailsOpen: !x?.data?.refDetailsOpen } } : x)));
@@ -20490,6 +20533,19 @@ onClipSec: (nodeId, value) => {
                 const responseStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
                   ? response.storyboardPackage
                   : {};
+                const previousStoryboardPackageForSignature = debugNode?.data?.storyboardPackage && typeof debugNode.data.storyboardPackage === "object"
+                  ? debugNode.data.storyboardPackage
+                  : {};
+                const responseInputSignatureChanged = Boolean(
+                  responseStoryboardPackage?.diagnostics?.input_signature_changed
+                  || responseStoryboardPackage?.diagnostics?.downstream_cleared_due_to_input_change
+                  || responseStoryboardPackage?.diagnostics?.downstream_clear?.input_signature_changed
+                  || (
+                    getScenarioInputSignatureFromPackage(previousStoryboardPackageForSignature)
+                    && getScenarioInputSignatureFromPackage(responseStoryboardPackage)
+                    && getScenarioInputSignatureFromPackage(previousStoryboardPackageForSignature) !== getScenarioInputSignatureFromPackage(responseStoryboardPackage)
+                  )
+                );
                 const responseFinalStoryboard = responseStoryboardPackage?.final_storyboard && typeof responseStoryboardPackage.final_storyboard === "object"
                   ? responseStoryboardPackage.final_storyboard
                   : {};
@@ -20576,7 +20632,7 @@ onClipSec: (nodeId, value) => {
                     stageId,
                   });
                   const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
-                    storyboardOut: effectiveStoryboardOut,
+                    storyboardOut: responseInputSignatureChanged ? {} : effectiveStoryboardOut,
                     directorOutput: nextDirectorOutput || {},
                     allowDirectorSceneFallback: false,
                   });
@@ -20598,7 +20654,7 @@ onClipSec: (nodeId, value) => {
                       ...nodeItem.data,
                       storyboardPackage: nextStoryboardPackage,
                       debugStoryboardPackage: responseDebugMode ? nextStoryboardPackage : {},
-                      storyboardOut: normalizedStoryboardOut,
+                      storyboardOut: responseInputSignatureChanged ? {} : normalizedStoryboardOut,
                       scenarioRevision: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                       directorOutput: {
                         ...nextDirectorOutput,
@@ -20644,14 +20700,14 @@ onClipSec: (nodeId, value) => {
                   const compactNormalizedOutputs = stripRawScenarioPayload(normalizedOutputs);
                   const normalizedPending = {
                     ...(compactNormalizedOutputs && typeof compactNormalizedOutputs === "object" ? compactNormalizedOutputs : {}),
-                    storyboardOut: isFinalizeStage ? (responseFinalStoryboard || null) : null,
-                    runtimeStoryboard: isFinalizeStage ? (responseFinalStoryboard || null) : null,
+                    storyboardOut: (!responseInputSignatureChanged && isFinalizeStage) ? (responseFinalStoryboard || null) : null,
+                    runtimeStoryboard: (!responseInputSignatureChanged && isFinalizeStage) ? (responseFinalStoryboard || null) : null,
                     directorOutput: {
                       ...(compactNormalizedOutputs?.directorOutput && typeof compactNormalizedOutputs.directorOutput === "object" ? compactNormalizedOutputs.directorOutput : {}),
                       pipeline: "scenario_stage_v1",
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                     },
-                    scenarioPackage: isFinalizeStage ? (responseFinalStoryboard || null) : null,
+                    scenarioPackage: (!responseInputSignatureChanged && isFinalizeStage) ? (responseFinalStoryboard || null) : null,
                     requestedStageId: stageId,
                     ...(responseDebugMode ? { debugStoryboardPackage: nextStoryboardPackage } : {}),
                   };

@@ -167,6 +167,129 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _stable_hash_payload(value: Any) -> str:
+    try:
+        raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:
+        raw = str(value or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _compute_input_signatures(package: dict[str, Any]) -> dict[str, str]:
+    pkg = _safe_dict(package)
+    input_pkg = _safe_dict(pkg.get("input"))
+    refs_inventory = _safe_dict(pkg.get("refs_inventory"))
+    text_payload = {
+        "text": str(input_pkg.get("text") or "").strip(),
+        "story_text": str(input_pkg.get("story_text") or "").strip(),
+        "note": str(input_pkg.get("note") or "").strip(),
+        "director_note": str(input_pkg.get("director_note") or "").strip(),
+    }
+    audio_payload = {
+        "audio_url": str(input_pkg.get("audio_url") or "").strip(),
+    }
+    creative_payload = _safe_dict(input_pkg.get("creative_config"))
+    refs_payload = {
+        "refs_inventory": refs_inventory,
+        "refs_by_role": _safe_dict(input_pkg.get("refs_by_role")),
+        "selected_refs": _safe_dict(input_pkg.get("selected_refs")),
+        "assigned_roles": _safe_dict(pkg.get("assigned_roles")),
+    }
+    input_text_signature = _stable_hash_payload(text_payload)
+    audio_url_signature = _stable_hash_payload(audio_payload)
+    refs_signature = _stable_hash_payload(refs_payload)
+    creative_config_signature = _stable_hash_payload(creative_payload)
+    scenario_input_signature = _stable_hash_payload(
+        {
+            "text": text_payload,
+            "audio": audio_payload,
+            "refs": refs_payload,
+            "creative_config": creative_payload,
+        }
+    )
+    return {
+        "input_text_signature": input_text_signature,
+        "audio_url_signature": audio_url_signature,
+        "refs_signature": refs_signature,
+        "creative_config_signature": creative_config_signature,
+        "scenario_input_signature": scenario_input_signature,
+    }
+
+
+def _current_scenario_input_signature(package: dict[str, Any]) -> str:
+    diagnostics = _safe_dict(_safe_dict(package).get("diagnostics"))
+    signature = str(diagnostics.get("scenario_input_signature") or "").strip()
+    if signature:
+        return signature
+    return str(_compute_input_signatures(package).get("scenario_input_signature") or "").strip()
+
+
+def _payload_key_for_stage(stage_id: str) -> str:
+    return "final_storyboard" if stage_id == "finalize" else stage_id
+
+
+def _clear_downstream_stage_outputs(package: dict[str, Any], from_stage: str, reason: str) -> dict[str, Any]:
+    pkg = deepcopy(_safe_dict(package))
+    if from_stage not in STAGE_IDS:
+        return pkg
+    from_idx = STAGE_IDS.index(from_stage)
+    downstream = [stage_id for stage_id in STAGE_IDS[from_idx + 1 :]]
+    statuses = _safe_dict(pkg.get("stage_statuses"))
+    diagnostics = _safe_dict(pkg.get("diagnostics"))
+    cleared_payloads: list[str] = []
+    for stage_id in downstream:
+        payload_key = _payload_key_for_stage(stage_id)
+        resetter = STAGE_SECTION_RESETTERS.get(stage_id)
+        if resetter:
+            pkg[payload_key] = resetter()
+            cleared_payloads.append(payload_key)
+        stage_state = _safe_dict(statuses.get(stage_id))
+        stage_state["status"] = "stale"
+        stage_state["updated_at"] = _utc_iso()
+        stage_state["error"] = ""
+        stage_state["stale_reason"] = str(reason or "")
+        statuses[stage_id] = stage_state
+        diagnostics = _clear_stage_diagnostics(diagnostics, stage_id)
+
+    # Hard cleanup for finalize compatibility fields / stale payload mirrors.
+    if from_stage in {"input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt"}:
+        pkg["final_storyboard"] = STAGE_SECTION_RESETTERS["finalize"]()
+        if "final_storyboard" not in cleared_payloads:
+            cleared_payloads.append("final_storyboard")
+        final_payload = _safe_dict(pkg.get("final_storyboard"))
+        final_payload["render_manifest"] = []
+        final_payload["scenes"] = []
+        pkg["final_storyboard"] = final_payload
+        for key in ("storyboard", "scenes", "render_manifest"):
+            if key in pkg and key != "scenes":
+                pkg[key] = [] if key == "render_manifest" else {}
+
+    if from_stage in {"input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts"}:
+        pkg["final_video_prompt"] = STAGE_SECTION_RESETTERS["final_video_prompt"]()
+        if "final_video_prompt" not in cleared_payloads:
+            cleared_payloads.append("final_video_prompt")
+
+    if "render_manifest" not in cleared_payloads:
+        cleared_payloads.append("render_manifest")
+
+    previous_signature = str(diagnostics.get("scenario_input_signature") or "")
+    current_signature = _current_scenario_input_signature(pkg)
+    diagnostics["stale_reason"] = str(reason or f"rerun:{from_stage}")
+    diagnostics["downstream_clear"] = {
+        "trigger_stage": from_stage,
+        "reason": str(reason or ""),
+        "cleared_stages": downstream,
+        "cleared_payloads": cleared_payloads,
+        "previous_signature": previous_signature,
+        "current_signature": current_signature,
+        "input_signature_changed": bool(previous_signature and current_signature and previous_signature != current_signature),
+    }
+    pkg["diagnostics"] = diagnostics
+    pkg["stage_statuses"] = statuses
+    pkg["updated_at"] = _utc_iso()
+    return pkg
+
+
 def _strip_literal_quoted_dialogue(text: str) -> str:
     raw = str(text or "")
     raw = re.sub(
@@ -281,7 +404,15 @@ def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
 def _can_reuse_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     statuses = _safe_dict(_safe_dict(package).get("stage_statuses"))
     status = str(_safe_dict(statuses.get(stage_id)).get("status") or "").strip().lower()
-    return status == "done" and _has_stage_output(package, stage_id)
+    if not (status == "done" and _has_stage_output(package, stage_id)):
+        return False
+    if stage_id in {"scene_prompts", "final_video_prompt", "finalize"}:
+        current_signature = _current_scenario_input_signature(package)
+        payload = _safe_dict(_safe_dict(package).get(_payload_key_for_stage(stage_id)))
+        payload_signature = str(payload.get("created_for_signature") or "").strip()
+        if current_signature and payload_signature and payload_signature != current_signature:
+            return False
+    return True
 
 
 def _stage_is_marked_stale_or_invalid(package: dict[str, Any], stage_id: str) -> bool:
@@ -4533,33 +4664,7 @@ def _clear_stage_diagnostics(diagnostics: dict[str, Any], stage_id: str) -> dict
 
 
 def invalidate_downstream_stages(package: dict[str, Any], from_stage_id: str, reason: str = "") -> dict[str, Any]:
-    pkg = deepcopy(_safe_dict(package))
-    downstream = MANUAL_RESET_DOWNSTREAM.get(from_stage_id, [])
-    if from_stage_id in STAGE_IDS:
-        origin_idx = STAGE_IDS.index(from_stage_id)
-        downstream = [
-            stage_id
-            for stage_id in downstream
-            if stage_id in STAGE_IDS and STAGE_IDS.index(stage_id) > origin_idx and stage_id != from_stage_id
-        ]
-    statuses = _safe_dict(pkg.get("stage_statuses"))
-    diagnostics = _safe_dict(pkg.get("diagnostics"))
-    preserved_snapshot_stages = {"final_video_prompt", "finalize"}
-    for stage_id in downstream:
-        if stage_id not in preserved_snapshot_stages and stage_id in STAGE_SECTION_RESETTERS:
-            section_name = "final_storyboard" if stage_id == "finalize" else stage_id
-            pkg[section_name] = STAGE_SECTION_RESETTERS[stage_id]()
-        stage_state = _safe_dict(statuses.get(stage_id))
-        stage_state["status"] = "stale"
-        stage_state["updated_at"] = _utc_iso()
-        stage_state["error"] = ""
-        statuses[stage_id] = stage_state
-        diagnostics = _clear_stage_diagnostics(diagnostics, stage_id)
-    pkg["stage_statuses"] = statuses
-    diagnostics["stale_reason"] = str(reason or f"rerun:{from_stage_id}")
-    pkg["diagnostics"] = diagnostics
-    pkg["updated_at"] = _utc_iso()
-    return pkg
+    return _clear_downstream_stage_outputs(package, from_stage_id, reason or f"rerun:{from_stage_id}")
 
 
 def _set_stage_status(package: dict[str, Any], stage_id: str, status: str, *, error: str = "") -> None:
@@ -5154,6 +5259,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     final_storyboard = {
         "final_storyboard_version": "1.1",
+        "created_for_signature": _current_scenario_input_signature(package),
         "project_metadata": project_metadata,
         "render_manifest": render_manifest,
         "integrity_hash": integrity_hash,
@@ -5546,7 +5652,20 @@ def _run_input_package_stage(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg["creative_config"] = _normalize_creative_config(input_pkg.get("creative_config"))
     package["input"] = input_pkg
     diagnostics = _safe_dict(package.get("diagnostics"))
+    previous_signature = str(diagnostics.get("scenario_input_signature") or "")
+    signatures = _compute_input_signatures(package)
+    current_signature = str(signatures.get("scenario_input_signature") or "")
+    if previous_signature and current_signature and previous_signature != current_signature:
+        package = _clear_downstream_stage_outputs(package, "input_package", "input_signature_changed")
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["input_signature_changed"] = True
+        diagnostics["downstream_cleared_due_to_input_change"] = True
+    else:
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["input_signature_changed"] = False
+        diagnostics["downstream_cleared_due_to_input_change"] = False
     diagnostics["input_creative_config_active"] = _safe_dict(input_pkg.get("creative_config"))
+    diagnostics.update(signatures)
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "input_package normalized", stage_id="input_package")
     return package
@@ -8589,6 +8708,7 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="final_video_prompt")
 
     previous_payload = _safe_dict(package.get("final_video_prompt"))
+    current_signature = _current_scenario_input_signature(package)
     result = generate_ltx_video_prompt_metadata(
         api_key=gemini_api_key,
         package=package,
@@ -8618,6 +8738,7 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     final_video_prompt = _safe_dict(result.get("final_video_prompt"))
     if _safe_list(final_video_prompt.get("segments")):
+        final_video_prompt["created_for_signature"] = current_signature
         package["final_video_prompt"] = final_video_prompt
         diagnostics = _safe_dict(package.get("diagnostics"))
         diagnostics["final_video_prompt_snapshot_restored"] = False
@@ -8625,9 +8746,14 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
         _append_diag_event(package, "final_video_prompt generated", stage_id="final_video_prompt")
         return package
 
-    package["final_video_prompt"] = previous_payload if previous_payload else package.get("final_video_prompt", {})
+    previous_signature = str(previous_payload.get("created_for_signature") or "").strip()
+    can_restore_snapshot = bool(previous_payload) and (not current_signature or not previous_signature or previous_signature == current_signature)
+    package["final_video_prompt"] = previous_payload if can_restore_snapshot else package.get("final_video_prompt", {})
     diagnostics = _safe_dict(package.get("diagnostics"))
-    diagnostics["final_video_prompt_snapshot_restored"] = bool(previous_payload)
+    diagnostics["final_video_prompt_snapshot_restored"] = bool(can_restore_snapshot)
+    diagnostics["final_video_prompt_snapshot_restore_blocked_by_signature"] = bool(
+        previous_payload and not can_restore_snapshot
+    )
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "final_video_prompt empty", stage_id="final_video_prompt")
     raise RuntimeError(str(result.get("error") or "final_video_prompt_empty"))
