@@ -37,7 +37,7 @@ _LIP_SYNC_NEGATIVE_PROMPT = (
     "unreadable mouth, broken face motion, frantic dance, flailing arms, unstable anatomy, balance loss, chaotic camera, identity drift, outfit drift, surreal deformation"
 )
 _IA2V_LIP_SYNC_NEGATIVE_CANON = (
-    "hidden mouth, obstructed lips, unreadable mouth, face turned away, profile-only face, hands covering mouth, hair covering mouth, distorted lips, distorted jaw, face deformation, duplicate performer, duplicate woman, second copy of protagonist, identity drift, teleporting, sudden running, object-to-head bottle motion, extreme motion blur, cutaway away from performer"
+    "hidden mouth, obstructed lips, unreadable mouth, face turned away, profile-only face, hands covering mouth, hair covering mouth, distorted lips, distorted jaw, face deformation, duplicate performer, second copy of protagonist, identity drift, teleporting, sudden running, object-to-head bottle motion, extreme motion blur, cutaway away from performer"
 )
 _IA2V_VIDEO_PROMPT_CANON = (
     "Use the uploaded image as the exact first frame and identity anchor. "
@@ -90,6 +90,36 @@ _IDENTITY_REFERENCE_LEAK_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bprovided character_1 reference\b"),
     re.compile(r"(?i)\bsame (woman|man) as the provided\b"),
 )
+_MALE_CONFLICT_STALE_TERMS: tuple[str, ...] = (
+    "same woman",
+    "light linen dress",
+    "beige cropped sleeveless top",
+    "cropped top",
+    "crop top",
+    "open neckline",
+    "crop length",
+    "bust/hips",
+    "woman",
+    "female",
+    "girl",
+    "lady",
+    "dress",
+    "bust",
+    "hips",
+)
+_STALE_IDENTITY_TERMS = {"same woman", "woman", "female", "girl", "lady"}
+_STALE_WARDROBE_TERMS = {
+    "light linen dress",
+    "dress",
+    "beige cropped sleeveless top",
+    "cropped top",
+    "crop top",
+    "open neckline",
+    "crop length",
+    "bust/hips",
+    "bust",
+    "hips",
+}
 
 _NEGATIVE_LEAK_TOKENS = (
     "low quality",
@@ -2984,6 +3014,39 @@ def _character_1_identity_diag(package: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _get_character_1_gender_hint(package: dict[str, Any]) -> str:
+    input_pkg = _safe_dict(package.get("input"))
+    connected = _safe_dict(input_pkg.get("connected_context_summary")) or _safe_dict(package.get("connected_context_summary"))
+    role_map = _safe_dict(connected.get("role_identity_mapping"))
+    by_role = _safe_dict(connected.get("character_identity_by_role"))
+    role_char = _safe_dict(role_map.get("character_1"))
+    by_role_char = _safe_dict(by_role.get("character_1"))
+    return str(role_char.get("gender_hint") or by_role_char.get("gender_hint") or "").strip().lower()
+
+
+def _remove_stale_term_set(text: str, terms: tuple[str, ...]) -> tuple[str, set[str]]:
+    original = str(text or "")
+    if not original:
+        return "", set()
+    out = original
+    removed: set[str] = set()
+    for term in terms:
+        token = str(term or "").strip()
+        if not token:
+            continue
+        pattern = re.compile(rf"(?i)(?<!\w){re.escape(token)}(?!\w)")
+        if pattern.search(out):
+            out = pattern.sub(" ", out)
+            removed.add(token.lower())
+    out = re.sub(r"\s+", " ", out)
+    out = re.sub(r"\s+([,.;:])", r"\1", out)
+    out = re.sub(r"([,.;:])\1+", r"\1", out)
+    out = re.sub(r"(?:,\s*){2,}", ", ", out)
+    out = re.sub(r"(?:\.\s*){2,}", ". ", out)
+    out = out.strip(" ,;:.")
+    return out, removed
+
+
 def _build_prompts_v11_prompt(
     *,
     prompt_rows: list[dict[str, Any]],
@@ -3597,12 +3660,16 @@ def _apply_storyboard_stage_metadata_passthrough(
             segment["visual_focus_role"] = "environment"
             segment["subject_priority"] = "environment"
 
-        role_complete = all(str(segment.get(field) or "").strip() for field in role_fields)
-        reaction_required = bool(segment.get("listener_reaction_allowed")) or (
-            str(segment.get("visual_focus_role") or "").strip() != str(segment.get("speaker_role") or "").strip()
-        )
-        if reaction_required and not str(segment.get("reaction_role") or "").strip():
-            role_complete = False
+        if lip_sync_only_policy_applied and route == "i2v":
+            role_complete = True
+            reaction_required = False
+        else:
+            role_complete = all(str(segment.get(field) or "").strip() for field in role_fields)
+            reaction_required = bool(segment.get("listener_reaction_allowed")) or (
+                str(segment.get("visual_focus_role") or "").strip() != str(segment.get("speaker_role") or "").strip()
+            )
+            if reaction_required and not str(segment.get("reaction_role") or "").strip():
+                role_complete = False
         lipsync_complete = all(field in segment for field in lipsync_fields)
         if role_complete:
             role_present_count += 1
@@ -3850,7 +3917,21 @@ def _sanitize_identity_and_visibility_conflicts(
     repaired_segments: list[str] = []
     i2v_visual_removed = 0
     lip_sync_only_i2v_segments: list[str] = []
+    gender_conflict_segments: list[str] = []
+    gender_terms_removed: set[str] = set()
+    stale_identity_removed_by_gender = 0
+    stale_wardrobe_removed_by_gender = 0
+    character_1_gender_hint = _get_character_1_gender_hint(package)
+    apply_male_stale_cleanup = character_1_gender_hint == "male"
     global_anchor, anchor_changed = _sanitize_global_style_anchor(str(out.get("global_style_anchor") or ""), story_core)
+    if apply_male_stale_cleanup:
+        sanitized_anchor, removed_anchor_terms = _remove_stale_term_set(global_anchor, _MALE_CONFLICT_STALE_TERMS)
+        if removed_anchor_terms:
+            global_anchor = sanitized_anchor
+            gender_terms_removed.update(removed_anchor_terms)
+            stale_identity_removed_by_gender += len([t for t in removed_anchor_terms if t in _STALE_IDENTITY_TERMS])
+            stale_wardrobe_removed_by_gender += len([t for t in removed_anchor_terms if t in _STALE_WARDROBE_TERMS])
+            gender_conflict_segments.append("global_style_anchor")
     out["global_style_anchor"] = global_anchor
     segments_out: list[dict[str, Any]] = []
     for raw in _safe_list(out.get("segments")):
@@ -3917,15 +3998,43 @@ def _sanitize_identity_and_visibility_conflicts(
                     seg[field] = str(seg.get("video_prompt") or seg.get("photo_prompt") or "")
                 else:
                     seg[field] = re.sub(r"(?i)\bshow the same (woman|man|person)[^.]*\.?", " ", value).strip()
+        if apply_male_stale_cleanup:
+            removed_in_segment: set[str] = set()
+            for field in (
+                "photo_prompt",
+                "video_prompt",
+                "positive_video_prompt",
+                "first_frame_prompt",
+                "last_frame_prompt",
+                "negative_prompt",
+            ):
+                clean_value, removed_terms = _remove_stale_term_set(str(seg.get(field) or ""), _MALE_CONFLICT_STALE_TERMS)
+                if removed_terms:
+                    seg[field] = clean_value
+                    removed_in_segment.update(removed_terms)
+                    mutated = True
+            if removed_in_segment:
+                gender_terms_removed.update(removed_in_segment)
+                stale_identity_removed_by_gender += len([t for t in removed_in_segment if t in _STALE_IDENTITY_TERMS])
+                stale_wardrobe_removed_by_gender += len([t for t in removed_in_segment if t in _STALE_WARDROBE_TERMS])
+                if segment_id:
+                    gender_conflict_segments.append(segment_id)
         if mutated and segment_id:
             repaired_segments.append(segment_id)
         segments_out.append(seg)
     out["segments"] = segments_out
+    gender_conflict_detected = bool(gender_terms_removed)
+    stale_identity_removed_total = stale_identity_removed + stale_identity_removed_by_gender
     return out, {
         "scene_prompts_identity_conflict_repaired": bool(repaired_segments or anchor_changed),
         "scene_prompts_identity_conflict_repaired_segments": list(dict.fromkeys(repaired_segments)),
-        "stale_identity_clause_removed_count": stale_identity_removed,
-        "stale_wardrobe_clause_removed_count": 0,
+        "scene_prompts_identity_gender_conflict_detected": gender_conflict_detected,
+        "scene_prompts_identity_gender_conflict_terms_removed": sorted(gender_terms_removed),
+        "scene_prompts_identity_gender_conflict_segments": list(dict.fromkeys([seg for seg in gender_conflict_segments if seg])),
+        "scene_prompts_stale_identity_clause_removed_count": stale_identity_removed_total,
+        "scene_prompts_stale_wardrobe_clause_removed_count": stale_wardrobe_removed_by_gender,
+        "stale_identity_clause_removed_count": stale_identity_removed_total,
+        "stale_wardrobe_clause_removed_count": stale_wardrobe_removed_by_gender,
         "lip_sync_only_i2v_hero_visual_removed_count": i2v_visual_removed,
         "lip_sync_only_i2v_segments": list(dict.fromkeys([seg for seg in lip_sync_only_i2v_segments if seg])),
         "lip_sync_only_policy_applied": bool(lip_sync_only),
