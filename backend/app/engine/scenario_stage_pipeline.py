@@ -9408,6 +9408,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
             api_key=gemini_api_key,
             package=package,
             validation_feedback=validation_feedback,
+            compact_retry=True,
         )
         result = retry_result
         normalized_scene_prompts, normalized_validation_error, normalized_diag = _enforce_scene_prompts_identity_and_presence(
@@ -9422,9 +9423,35 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         result = _postprocess_scene_prompts_technical_tagging(result)
         if str(result.get("validation_error") or "").strip():
-            result["ok"] = False
-            result["error"] = str(result.get("error") or result.get("validation_error") or "scene_prompts_validation_failed")
-            hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_prompts_validation_failed")
+            retry_diag = _safe_dict(result.get("diagnostics"))
+            timeout_still = bool(retry_diag.get("scene_prompts_timed_out"))
+            empty_after_timeout = bool(retry_diag.get("scene_prompts_response_was_empty_after_timeout"))
+            if timeout_still and empty_after_timeout:
+                _append_diag_event(
+                    package,
+                    "scene_prompts timeout/empty after compact retry, rebuilding from current scene_plan",
+                    stage_id="scene_prompts",
+                )
+                result = build_gemini_scene_prompts(
+                    api_key=gemini_api_key,
+                    package=package,
+                    force_rebuild_from_scene_plan=True,
+                )
+                normalized_scene_prompts, normalized_validation_error, normalized_diag = _enforce_scene_prompts_identity_and_presence(
+                    package,
+                    _safe_dict(result.get("scene_prompts")),
+                )
+                result = _apply_scene_prompts_enforcement_result(
+                    result,
+                    normalized_scene_prompts,
+                    normalized_validation_error,
+                    normalized_diag,
+                )
+                result = _postprocess_scene_prompts_technical_tagging(result)
+            if str(result.get("validation_error") or "").strip():
+                result["ok"] = False
+                result["error"] = str(result.get("error") or result.get("validation_error") or "scene_prompts_validation_failed")
+                hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_prompts_validation_failed")
 
     scene_prompts = _safe_dict(result.get("scene_prompts"))
     package["scene_prompts"] = _attach_downstream_mode_metadata(scene_prompts, package)
