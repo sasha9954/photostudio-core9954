@@ -715,7 +715,15 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     hard_route_assignments = _safe_dict(creative_config.get("hard_route_assignments_by_segment"))
     hard_route_map_applied = bool(hard_route_assignments)
-    route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(len(scene_segment_rows), creative_config)
+    resolved_scene_count = len(scene_segment_rows)
+    route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(resolved_scene_count, creative_config)
+    route_budget_original_targets = {
+        "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
+        "ia2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("ia2v") or 0)),
+        "first_last": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("first_last") or 0)),
+    }
+    route_budget_preset = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    route_budget_resolved_from = "audio_map_segments_count" if route_budget_preset == "no_first_last_50_50_0" else "creative_config"
     route_strategy_active = _route_strategy_active(creative_config)
     story_guidance = story_guidance_route_mix_doctrine(story_core.get("story_guidance"))
     world_summary, world_summary_used = _build_scene_world_summary(role_plan, story_core)
@@ -774,8 +782,11 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "target_route_mix_is_soft_heuristic_only": True,
             "creative_config": creative_config,
             "route_budget_contract": {
-                "target_total_scenes": len(scene_segment_rows),
+                "target_total_scenes": resolved_scene_count,
                 "target_counts": route_budget_target,
+                "original_target_counts": route_budget_original_targets,
+                "resolved_scene_count": resolved_scene_count,
+                "resolved_from": route_budget_resolved_from,
                 "first_last_forbidden": int(route_budget_target.get("first_last") or 0) == 0,
                 "ia2v_requires_vocal_or_speech_window": True,
                 "targets_are_hard_for_short_clip": bool(hard_short_clip_target),
@@ -783,7 +794,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
                 "backend_must_not_choose_dramaturgy": True,
                 "route_strategy_active": route_strategy_active,
                 "route_strategy_mode": str(creative_config.get("route_strategy_mode") or "auto"),
-                "route_strategy_preset": str(creative_config.get("route_strategy_preset") or ""),
+                "route_strategy_preset": route_budget_preset,
                 "hard_route_assignments_by_segment": hard_route_assignments,
                 "hardRouteMapApplied": hard_route_map_applied,
                 "route_assignment_source": "creative_config.route_assignments_by_segment" if hard_route_map_applied else "gemini",
@@ -987,6 +998,15 @@ def _route_strategy_active(creative_config: dict[str, Any]) -> bool:
     return mode in {"preset", "custom_counts"} and total_target > 0
 
 
+def compute_no_first_last_50_50_targets(scene_count: int) -> dict[str, int]:
+    n = max(0, int(scene_count or 0))
+    return {
+        "i2v": n // 2,
+        "ia2v": (n + 1) // 2,
+        "first_last": 0,
+    }
+
+
 def _route_budget_target_for_plan(total_scenes: int, creative_config: dict[str, Any]) -> tuple[dict[str, int], bool]:
     if total_scenes <= 0:
         return {"i2v": 0, "ia2v": 0, "first_last": 0}, False
@@ -998,6 +1018,9 @@ def _route_budget_target_for_plan(total_scenes: int, creative_config: dict[str, 
             if clean in budget:
                 budget[clean] += 1
         return budget, True
+    preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    if preset_name == "no_first_last_50_50_0":
+        return compute_no_first_last_50_50_targets(total_scenes), True
     if not _route_strategy_active(creative_config):
         return _target_route_budget(total_scenes), False
     base_scene_count = max(1, int(creative_config.get("base_scene_count") or 8))
@@ -1999,6 +2022,13 @@ def _normalize_scene_plan(
 
     route_counts = {route_name: sum(1 for row in normalized_storyboard if row.get("route") == route_name) for route_name in ("i2v", "ia2v", "first_last")}
     route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(len(normalized_storyboard), creative_config)
+    route_budget_original_targets = {
+        "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
+        "ia2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("ia2v") or 0)),
+        "first_last": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("first_last") or 0)),
+    }
+    route_budget_preset = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    route_budget_resolved_from = "audio_map_segments_count" if route_budget_preset == "no_first_last_50_50_0" else "creative_config"
     route_budget_mismatch = bool(hard_short_clip_target and route_counts != route_budget_target)
     if route_budget_mismatch:
         validation_error = validation_error or "route_budget_mismatch"
@@ -2103,8 +2133,13 @@ def _normalize_scene_plan(
         "target_route_mix": route_budget_target,
         "actual_route_mix": route_counts,
         "scene_plan_route_strategy_active": _route_strategy_active(creative_config),
-        "scene_plan_route_strategy_preset": str(creative_config.get("route_strategy_preset") or ""),
+        "scene_plan_route_strategy_preset": route_budget_preset,
         "scene_plan_route_targets_per_block": _safe_dict(creative_config.get("route_targets_per_block")),
+        "route_budget_original_targets": route_budget_original_targets,
+        "route_budget_resolved_scene_count": len(scene_segment_rows),
+        "route_budget_resolved_targets": route_budget_target,
+        "route_budget_resolved_from": route_budget_resolved_from,
+        "route_budget_preset": route_budget_preset,
         "hardRouteMapApplied": bool(hard_route_map),
         "routeAssignmentSource": "creative_config.route_assignments_by_segment" if hard_route_map else "gemini",
         "hard_route_assignments_by_segment": hard_route_map,
@@ -2244,6 +2279,11 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "scene_plan_route_strategy_active": bool(normalization_diag.get("scene_plan_route_strategy_active")),
             "scene_plan_route_strategy_preset": str(normalization_diag.get("scene_plan_route_strategy_preset") or ""),
             "scene_plan_route_targets_per_block": _safe_dict(normalization_diag.get("scene_plan_route_targets_per_block")),
+            "route_budget_original_targets": _safe_dict(normalization_diag.get("route_budget_original_targets")),
+            "route_budget_resolved_scene_count": int(normalization_diag.get("route_budget_resolved_scene_count") or 0),
+            "route_budget_resolved_targets": _safe_dict(normalization_diag.get("route_budget_resolved_targets")),
+            "route_budget_resolved_from": str(normalization_diag.get("route_budget_resolved_from") or ""),
+            "route_budget_preset": str(normalization_diag.get("route_budget_preset") or ""),
             "scene_plan_route_budget_target": _safe_dict(normalization_diag.get("scene_plan_route_budget_target")),
             "scene_plan_route_budget_actual": _safe_dict(normalization_diag.get("scene_plan_route_budget_actual")),
             "scene_plan_route_budget_mismatch": bool(normalization_diag.get("scene_plan_route_budget_mismatch")),
