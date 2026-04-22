@@ -3121,6 +3121,10 @@ def _is_bad_prompt_cleanup(text: str) -> bool:
     bad_fragments = ("the 's", "a in ", "with ,", "wearing a .", "wearing .")
     if any(fragment in lower for fragment in bad_fragments):
         return True
+    if re.search(r"\bwearing\s+(a|the)?\s*$", lower):
+        return True
+    if re.search(r"\bwith\s*$", lower):
+        return True
     return lower.startswith("in her") or lower.startswith("her ") or lower.startswith("she ")
 
 
@@ -4110,7 +4114,7 @@ def _sanitize_identity_and_visibility_conflicts(
                 if not removed_terms:
                     continue
                 seg[field] = clean_value
-                if field in {"photo_prompt", "video_prompt"} and _is_bad_prompt_cleanup(clean_value):
+                if field in {"photo_prompt", "video_prompt", "positive_video_prompt"} and _is_bad_prompt_cleanup(clean_value):
                     scene_goal = str(prompt_row.get("scene_goal") or "").strip()
                     background_evidence = str(prompt_row.get("background_story_evidence") or "").strip()
                     ltx_video_goal = str(prompt_row.get("ltx_video_goal") or "").strip()
@@ -4128,7 +4132,7 @@ def _sanitize_identity_and_visibility_conflicts(
                                 f"Environment-focused still frame: {still_focus}. Grounded realistic world, "
                                 "no main performer visible, singer remains voiceover only."
                             )
-                        else:
+                        elif field in {"video_prompt", "positive_video_prompt"}:
                             motion_focus = ltx_video_goal or scene_goal or "grounded environment continuity"
                             seg[field] = (
                                 f"Environment-focused motion shot: {motion_focus}. Subtle city/world atmosphere motion only. "
@@ -4140,7 +4144,7 @@ def _sanitize_identity_and_visibility_conflicts(
                                 "Current performer from the connected character_1 reference, face clearly visible, "
                                 "grounded realistic lighting, stable identity."
                             )
-                        else:
+                        elif field in {"video_prompt", "positive_video_prompt"}:
                             ia2v_video = _IA2V_VIDEO_PROMPT_CANON
                             if scene_goal:
                                 ia2v_video = _append_prompt_clause(ia2v_video, f"Scene goal: {scene_goal}.")
