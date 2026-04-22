@@ -751,6 +751,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "opening_anchor": str(story_core.get("opening_anchor") or "")[:600],
             "ending_callback_rule": str(story_core.get("ending_callback_rule") or "")[:600],
             "global_arc": str(story_core.get("global_arc") or "")[:600],
+            "narrative_segments": _safe_list(story_core.get("narrative_segments")),
             "identity_lock": _safe_dict(story_core.get("identity_lock")),
             "world_lock": _safe_dict(story_core.get("world_lock")),
             "style_lock": _safe_dict(story_core.get("style_lock")),
@@ -933,24 +934,37 @@ def _build_compact_route_budget_retry_context(context: dict[str, Any]) -> dict[s
             }
         )
     narrative_segments: list[dict[str, Any]] = []
-    for row in _safe_list(_safe_dict(context.get("audio_map")).get("segments")):
+    story_core_obj = _safe_dict(context.get("story_core"))
+    for row in _safe_list(story_core_obj.get("narrative_segments")):
         segment = _safe_dict(row)
         narrative_segments.append(
             {
                 "segment_id": str(segment.get("segment_id") or "").strip(),
                 "beat_purpose": str(segment.get("beat_purpose") or "").strip(),
                 "emotional_key": str(segment.get("emotional_key") or "").strip(),
+                "arc_role": str(segment.get("arc_role") or "").strip(),
             }
         )
+    if not narrative_segments:
+        for row in _safe_list(_safe_dict(context.get("audio_map")).get("segments")):
+            segment = _safe_dict(row)
+            narrative_segments.append(
+                {
+                    "segment_id": str(segment.get("segment_id") or "").strip(),
+                    "transcript_slice": str(segment.get("transcript_slice") or "").strip(),
+                }
+            )
     route_budget_contract = _safe_dict(_safe_dict(context.get("clip_scene_policy")).get("route_budget_contract"))
+    target_total_scenes = int(route_budget_contract.get("target_total_scenes") or len(audio_segments))
+    target_counts = _safe_dict(route_budget_contract.get("target_counts"))
     return {
         "audio_map": {"segments": audio_segments, "vocal_owner_role": str(_safe_dict(context.get("audio_map")).get("vocal_owner_role") or "")},
         "story_core": {"narrative_segments": narrative_segments},
         "role_plan": {"scene_casting": _safe_list(_safe_dict(context.get("role_plan")).get("scene_casting"))},
         "character_appearance_modes_by_role": _safe_dict(context.get("character_appearance_modes_by_role")),
         "route_budget_contract": {
-            "target_total_scenes": int(route_budget_contract.get("target_total_scenes") or len(audio_segments)),
-            "target_counts": _safe_dict(route_budget_contract.get("target_counts")),
+            "target_total_scenes": target_total_scenes,
+            "target_counts": target_counts,
             "first_last_forbidden": bool(route_budget_contract.get("first_last_forbidden")),
             "preset": str(route_budget_contract.get("route_strategy_preset") or ""),
         },
@@ -974,16 +988,29 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
     )
     if prompt_mode == "compact_route_budget_retry":
         compact_context = _build_compact_route_budget_retry_context(context)
+        compact_budget = _safe_dict(compact_context.get("route_budget_contract"))
+        compact_target_counts = _safe_dict(compact_budget.get("target_counts"))
+        compact_target_total_scenes = int(compact_budget.get("target_total_scenes") or 0)
+        ia2v_target = int(compact_target_counts.get("ia2v") or 0)
+        i2v_target = int(compact_target_counts.get("i2v") or 0)
+        first_last_target = int(compact_target_counts.get("first_last") or 0)
+        first_last_forbidden = bool(compact_budget.get("first_last_forbidden"))
+        first_last_line = "No first_last scenes allowed.\n" if first_last_forbidden else ""
         return (
             "You are SCENES stage only.\n"
             "Return STRICT JSON only. No markdown, no prose.\n"
             "Return exactly one storyboard row per segment_id from audio_map.segments.\n"
             "Do not invent/remove segment_id and do not return empty storyboard.\n"
             "Route budget contract is HARD and must be matched exactly.\n"
-            "No first_last allowed when target first_last is 0.\n"
+            f"Return exactly {compact_target_total_scenes} storyboard rows.\n"
+            "Required route budget:\n"
+            f"ia2v: {ia2v_target}\n"
+            f"i2v: {i2v_target}\n"
+            f"first_last: {first_last_target}\n"
+            f"{first_last_line}"
             "If character_1 appearanceMode is lip_sync_only:\n"
             "- ia2v rows: character_1 is physical speaker; speaker_role=character_1; lip_sync_allowed=true; mouth_visible_required=true.\n"
-            "- i2v rows: character_1 must not be primary physical subject; speaker_role=\"\"; lip_sync_allowed=false; use environment/city/street/port/courtyard/people/atmosphere as visual subject.\n"
+            "- i2v rows: character_1 must not be primary physical subject; speaker_role=\"\"; lip_sync_allowed=false; visual subject should be environment/city/street/port/courtyard/people/atmosphere.\n"
             f"Fix exactly: {validation_feedback}\n"
             "Output contract:\n"
             "{\n"

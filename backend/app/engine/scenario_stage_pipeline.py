@@ -8676,7 +8676,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     if initial_validation_error:
         diagnostics["scene_plan_first_attempt_error"] = initial_validation_error
         diagnostics["scene_plan_retry_reason"] = initial_validation_error
-        diagnostics["scene_plan_retry_prompt_mode"] = "default"
+        retry_prompt_mode = "compact_route_budget_retry" if initial_validation_error == "route_budget_mismatch" else "default"
+        diagnostics["scene_plan_retry_prompt_mode"] = retry_prompt_mode
         validation_error_code = str(result.get("error_code") or "").strip()
         validation_feedback = _build_scene_plan_retry_feedback(
             initial_validation_error,
@@ -8688,6 +8689,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             api_key=gemini_api_key,
             package=scene_plan_prompt_package,
             validation_feedback=validation_feedback,
+            prompt_mode=retry_prompt_mode,
         )
         result = retry_result
         if str(result.get("validation_error") or "").strip():
