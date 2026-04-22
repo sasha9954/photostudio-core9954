@@ -119,6 +119,48 @@ _IA2V_NEGATIVE_KILLER_TOKEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = 
 )
 
 
+def _is_negated_lipsync_phrase(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    negated_markers = (
+        "no lip-sync",
+        "no lip sync",
+        "not lip-sync",
+        "not lip sync",
+        "without lip sync",
+        "without lip-sync",
+        "voiceover only",
+        "voice-over only",
+        "offscreen voiceover only",
+        "offscreen voice-over only",
+        "singer remains offscreen",
+        "no main performer visible",
+        "no visible singing face",
+        "no visible singing mouth",
+        "no visible singing face or mouth",
+        "no visible mouth performance",
+    )
+    return any(marker in lowered for marker in negated_markers)
+
+
+def _strip_positive_lipsync_instructions(text: str) -> str:
+    cleaned = str(text or "")
+    patterns = (
+        r"(?i)\bclear lip[- ]?sync\b",
+        r"(?i)\blip[- ]?sync(?:ing)?\b",
+        r"(?i)\bperformer singing\b",
+        r"(?i)\bsame performer singing\b",
+        r"(?i)\bmouth close[- ]?up\b",
+        r"(?i)\bvisible mouth\b",
+        r"(?i)\bface and mouth clearly visible\b",
+    )
+    for pattern in patterns:
+        cleaned = re.sub(pattern, " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
+    return cleaned
+
+
 def _strip_literal_quoted_dialogue(text: str) -> str:
     raw = str(text or "")
     # normalize explicit quoted lip-sync fragments so alignment intent remains without literal subtitle text
@@ -936,11 +978,11 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         env_motion_focus = str(fallback_prompt_row.get("ltx_video_goal") or plan_row.get("scene_goal") or fallback_video_prompt or "grounded world continuity").strip()
         positive_prompt = (
             f"Environment-focused motion shot: {env_motion_focus}. "
-            "Subtle atmosphere/city/people/world motion only. No main performer visible. No lip-sync. Singer remains voiceover only."
+            "Subtle atmosphere/city/people/world motion only. No main performer visible. The vocalist is offscreen voiceover only. No visible singing face or mouth performance."
         )
         fallback_photo_prompt = (
             f"Environment-focused still frame: {env_still_focus}. "
-            "Grounded realistic world, no main performer visible, singer remains voiceover only."
+            "Grounded realistic world, no main performer visible, vocalist offscreen voiceover only."
         )
 
     lower_scene_semantics = " ".join(scene_specific_parts + [positive_prompt]).lower()
@@ -1121,6 +1163,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         vocal_owner_role = ""
         lip_sync_allowed = False
         requires_audio = False
+        audio_sync_mode = "none"
     alias_audio_sync_mode = "lip_sync" if route == "ia2v" and lip_sync_allowed else "none"
     alias_frame_strategy = "first_last" if route == "first_last" else "single_image"
     image_prompt = ". ".join(
@@ -1143,6 +1186,22 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     video_prompt_output, video_prompt_diag = _sanitize_prompt_text_for_current_identity(
         _strip_literal_quoted_dialogue(positive_prompt), identity_ctx, route, "route_payload.video_prompt"
     )
+    if lip_sync_only_i2v:
+        positive_prompt = _strip_positive_lipsync_instructions(positive_prompt)
+        video_prompt_output = _strip_positive_lipsync_instructions(video_prompt_output)
+        image_prompt = _strip_positive_lipsync_instructions(image_prompt)
+        if not positive_prompt:
+            positive_prompt = (
+                "Environment-focused motion shot in the same grounded world. "
+                "The vocalist is offscreen voiceover only. No visible singing face or mouth performance."
+            )
+        if not video_prompt_output:
+            video_prompt_output = positive_prompt
+        if not image_prompt:
+            image_prompt = (
+                "Environment-focused still frame in the same grounded world. "
+                "No main performer visible; vocalist remains offscreen voiceover only."
+            )
     prompt_rebuilt_after_bad_cleanup = False
     if str(identity_ctx.get("gender_hint") or "").strip().lower() == "male":
         if _is_bad_prompt_cleanup(positive_prompt):
@@ -1154,7 +1213,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             elif lip_sync_only_i2v:
                 positive_prompt = (
                     "Environment-focused motion shot in the same grounded world. "
-                    "No main performer visible. Singer remains voiceover only. No lip-sync."
+                    "The vocalist is offscreen voiceover only. No visible singing face or mouth performance."
                 )
             prompt_rebuilt_after_bad_cleanup = True
         if _is_bad_prompt_cleanup(video_prompt_output):
@@ -1166,7 +1225,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             elif lip_sync_only_i2v:
                 video_prompt_output = (
                     "Environment-focused motion shot in the same grounded world. "
-                    "No main performer visible. Singer remains voiceover only. No lip-sync."
+                    "The vocalist is offscreen voiceover only. No visible singing face or mouth performance."
                 )
             prompt_rebuilt_after_bad_cleanup = True
         if _is_bad_prompt_cleanup(image_prompt):
@@ -1178,7 +1237,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             elif lip_sync_only_i2v:
                 image_prompt = (
                     "Environment-focused motion shot in the same grounded world. "
-                    "No main performer visible. Singer remains voiceover only. No lip-sync."
+                    "The vocalist is offscreen voiceover only. No visible singing face or mouth performance."
                 )
             prompt_rebuilt_after_bad_cleanup = True
     scene_chars = len(scene_specific_payload)
@@ -1389,6 +1448,7 @@ def _validate_final_video_prompt_identity_clean(
     stale_segments: list[str] = []
     stale_fields: list[str] = []
     lip_sync_only_i2v_violation_segments: list[str] = []
+    lip_sync_only_i2v_violation_fields: list[str] = []
     gender_hint = str(identity_ctx.get("gender_hint") or "").strip().lower()
     for seg_raw in segments:
         seg = _safe_dict(seg_raw)
@@ -1420,16 +1480,38 @@ def _validate_final_video_prompt_identity_clean(
                 continue
             seg_id = str(seg.get("segment_id") or "").strip()
             route_payload = _safe_dict(seg.get("route_payload"))
-            blob = " ".join(
-                [
-                    str(route_payload.get("positive_prompt") or ""),
-                    str(route_payload.get("video_prompt") or ""),
-                    str(seg.get("video_prompt") or ""),
-                    str(seg.get("speaker_role") or ""),
-                    str(seg.get("vocal_owner_role") or ""),
-                ]
+            violation_detected = False
+            violation_checks = {
+                "route_payload.positive_prompt": str(route_payload.get("positive_prompt") or ""),
+                "route_payload.video_prompt": str(route_payload.get("video_prompt") or ""),
+                "route_payload.image_prompt": str(route_payload.get("image_prompt") or ""),
+                "top_level.video_prompt": str(seg.get("video_prompt") or ""),
+            }
+            hard_violation_pattern = re.compile(
+                r"(?i)\b("
+                r"character_1 as main subject|"
+                r"same performer singing|"
+                r"performer singing|"
+                r"mouth close[- ]?up|"
+                r"clear lip[- ]?sync|"
+                r"visible mouth|"
+                r"face and mouth clearly visible"
+                r")\b"
             )
-            if re.search(r"(?i)\b(character_1 as main subject|same performer|lip[- ]?sync|mouth close[- ]?up)\b", blob):
+            for field_name, field_text in violation_checks.items():
+                text = str(field_text or "")
+                if not text:
+                    continue
+                if hard_violation_pattern.search(text) and not _is_negated_lipsync_phrase(text):
+                    violation_detected = True
+                    lip_sync_only_i2v_violation_fields.append(f"{seg_id}:{field_name}")
+            if str(seg.get("speaker_role") or "").strip():
+                violation_detected = True
+                lip_sync_only_i2v_violation_fields.append(f"{seg_id}:speaker_role")
+            if str(seg.get("vocal_owner_role") or "").strip():
+                violation_detected = True
+                lip_sync_only_i2v_violation_fields.append(f"{seg_id}:vocal_owner_role")
+            if violation_detected:
                 lip_sync_only_i2v_violation_segments.append(seg_id)
     if stale_terms:
         return "stale_identity_leak_after_sanitizer", {
@@ -1446,11 +1528,15 @@ def _validate_final_video_prompt_identity_clean(
             "lip_sync_only_i2v_visibility_violation_segments": list(
                 dict.fromkeys([s for s in lip_sync_only_i2v_violation_segments if s])
             ),
+            "final_video_prompt_lip_sync_only_i2v_violation_fields": list(
+                dict.fromkeys([f for f in lip_sync_only_i2v_violation_fields if f])
+            ),
             "final_video_prompt_validation_checked_after_sanitizer": True,
         }
     return "", {
         "final_video_prompt_validation_checked_after_sanitizer": True,
         "final_video_prompt_stale_identity_remaining_segments": [],
+        "final_video_prompt_lip_sync_only_i2v_violation_fields": [],
     }
 
 
