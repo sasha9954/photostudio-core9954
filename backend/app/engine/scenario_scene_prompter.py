@@ -4269,7 +4269,7 @@ def _sanitize_identity_and_visibility_conflicts(
             seg["video_prompt"] = (
                 f"Environment-focused motion shot in the current grounded world. {world_context}. "
                 "Subtle world/space/atmosphere movement only. No main performer visible. "
-                "No lip-sync. Singer remains voiceover only. Preserve the current story environment and style continuity."
+                "No visible vocal performance. Singer remains voiceover only. Preserve the current story environment and style continuity."
             )
             seg["positive_video_prompt"] = seg["video_prompt"]
             seg["first_frame_prompt"] = "Environment-focused cutaway in the current grounded world. No main performer visible."
@@ -4305,7 +4305,7 @@ def _sanitize_identity_and_visibility_conflicts(
                     return (
                         f"Environment-focused motion shot in the current grounded world. {world_context}. "
                         "Subtle world/space/atmosphere movement only. No main performer visible. "
-                        "No lip-sync. Singer remains voiceover only. Preserve the current story environment and style continuity."
+                        "No visible vocal performance. Singer remains voiceover only. Preserve the current story environment and style continuity."
                     )
                 if field_name == "first_frame_prompt":
                     return "Environment-focused cutaway in the current grounded world. No main performer visible."
