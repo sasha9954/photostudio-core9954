@@ -319,18 +319,14 @@ function buildWardrobeLockNegativePrompt(baseNegative) {
   const base = String(baseNegative || "").trim();
   const lockNeg = [
     "changed outfit",
-    "changed neckline",
-    "raised neckline",
-    "high-neck top",
-    "turtleneck",
-    "closed collar",
-    "added collar",
-    "added sleeves",
-    "longer shirt",
-    "different top",
-    "fabric covering neck",
-    "missing jewelry",
-    "changed jewelry"
+    "different garment family",
+    "changed garment construction",
+    "changed silhouette",
+    "changed fit",
+    "changed fabric or material",
+    "changed accessories",
+    "missing accessories",
+    "unrelated wardrobe substitution"
   ].join(", ");
   return base ? `${lockNeg}, ${base}` : lockNeg;
 }

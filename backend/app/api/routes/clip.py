@@ -5050,7 +5050,7 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "- do not omit any participant",
         "- do not add extra humans",
         "- do not replace participants with lookalikes",
-        "- do not merge two women into one heroine",
+        "- do not merge two participants into one performer/person",
         "- do not turn the cast package into a generic crowd scene",
         "ROLE SEPARATION LOCK:",
     ]
@@ -8032,7 +8032,7 @@ def _scene_semantic_guardrail(
     prop_anchor_label: str,
 ) -> tuple[dict, bool]:
     banned_terms = [
-        "mchp", "mchp_units", "chip_set", "motherboard", "circuit", "pcb", "silicon",
+        "microchip", "microchips", "chipset", "motherboard", "circuit", "pcb", "silicon",
         "server rack", "datacenter", "data center", "cyberpunk computer", "quantum processor",
     ]
     token_space = " ".join([
@@ -8544,7 +8544,7 @@ Reject ungrounded elements.
 
 SEMANTIC CONSISTENCY CHECK (PER SCENE):
 Before finalizing each scene, verify scene objects and environment stay within the extracted semantic domain.
-Invalid example: sky/night/love lyrics + mchp_units/server racks/cyberpunk computers with no grounding source.
+Invalid example: sky/night/love lyrics + microchips/server racks/cyberpunk computers with no grounding source.
 Valid example: sky, clouds, night city lights, open field, mountain horizon, stage under open sky.
 
 HALLUCINATION PREVENTION / FALLBACK RULE:
@@ -11312,11 +11312,11 @@ def _build_high_identity_risk_rescue_block(rescue: dict[str, Any]) -> str:
     stable_image_url = str(rescue.get("stableAnchorImageUrl") or "").strip()
     lines = [
         "HIGH IDENTITY-RISK SCENE RESCUE (UNIVERSAL, STRICT):",
-        "- scene is high risk for identity drift: preserve the SAME woman from confirmed stable anchor, not a reimagined portrait",
+        "- scene is high risk for identity drift: preserve the same current performer/person from confirmed stable anchor, not a reimagined portrait",
         "- lower stylistic reinterpretation freedom for face, hair, upper-body garment, and neckline silhouette",
-        "- if previous confirmed stable scene image is attached inline, treat it as continuity anchor for the SAME person/look (face/hair/outfit), never as a second actress",
+        "- if previous confirmed stable scene image is attached inline, treat it as continuity anchor for the SAME person/look (face/hair/outfit), never as a second performer/person",
         "- continuity stable image anchor reinforces identity continuity and does not replace primary character role references",
-        "- no portrait-beauty reinvention, no different actress effect, no face drift, no age drift, no perceived body/fullness drift",
+        "- no portrait-beauty reinvention, no different performer/person effect, no face drift, no age drift, no perceived body/fullness drift",
         "- preserve hair silhouette and base identity while allowing only beat-level expression changes",
         "- preserve same hair color family, length read, parting read, wave/curl tightness read, root-to-end contrast",
         "- preserve garment category, coverage identity, construction identity, silhouette identity, and visible signature details",
@@ -12015,7 +12015,7 @@ def _build_comfy_image_prompt_assembly(
         strict_reference_identity_lines.extend([
             "- do not replace outfit with a different garment family",
             "- do not change collar line, shoulder coverage, garment length, fabric read, color family, footwear, or accessories when known",
-            "- do not glamorize into a different actress/model",
+            "- do not glamorize into a different performer/person model-archetype",
         ])
         if profile_invariants or summary_invariants:
             strict_reference_identity_lines.append(
