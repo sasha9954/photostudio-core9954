@@ -9064,9 +9064,22 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_validation_errors"] = _safe_list(scene_diag.get("scene_plan_validation_errors"))
     diagnostics["scene_plan_error_codes"] = _safe_list(scene_diag.get("scene_plan_error_codes"))
     diagnostics["scene_plan_scenes_version"] = str(_safe_dict(scene_plan).get("scenes_version") or scene_diag.get("scene_plan_scenes_version") or "")
-    diagnostics["scene_plan_segment_count_expected"] = int(scene_diag.get("segment_count_expected") or 0)
-    diagnostics["scene_plan_segment_count_actual"] = int(scene_diag.get("segment_count_actual") or 0)
-    diagnostics["scene_plan_segment_coverage_ok"] = bool(scene_diag.get("segment_coverage_ok"))
+    audio_segments = _safe_list(_safe_dict(package.get("audio_map")).get("segments"))
+    expected_segment_ids = [
+        str(_safe_dict(segment).get("segment_id") or "").strip()
+        for segment in audio_segments
+        if str(_safe_dict(segment).get("segment_id") or "").strip()
+    ]
+    final_rows = _scene_plan_rows_for_validation(scene_plan)
+    actual_segment_ids = [
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+        for row in final_rows
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    ]
+    final_segment_coverage_ok = bool(expected_segment_ids and expected_segment_ids == actual_segment_ids)
+    diagnostics["scene_plan_segment_count_expected"] = len(expected_segment_ids)
+    diagnostics["scene_plan_segment_count_actual"] = len(actual_segment_ids)
+    diagnostics["scene_plan_segment_coverage_ok"] = final_segment_coverage_ok
     diagnostics["scene_plan_uses_segment_id_canonical"] = bool(scene_diag.get("uses_segment_id_canonical"))
     diagnostics["scene_plan_uses_legacy_scene_candidate_windows_bridge"] = bool(scene_diag.get("scene_candidate_windows_bridge"))
     diagnostics["scene_plan_uses_legacy_compiled_contract_bridge"] = bool(scene_diag.get("compiled_contract_bridge"))
@@ -9163,7 +9176,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["scene_plan_validation_error"] = "scene_plan_timeout_empty_response"
         diagnostics["scene_plan_error_code"] = "SCENES_TIMEOUT_EMPTY_RESPONSE"
         diagnostics["scene_plan_failure_reason"] = "scene_plan_timeout_empty_response"
-    segment_coverage_ok = bool(diagnostics.get("scene_plan_segment_coverage_ok"))
+    segment_coverage_ok = final_segment_coverage_ok
     enum_unrepaired_count = int(diagnostics.get("scene_plan_enum_unrepaired_count") or 0)
     scene_plan_empty = not bool(scene_plan and _safe_list(scene_plan.get("storyboard")))
     has_real_error = bool(timeout_empty or enum_unrepaired_count > 0 or scene_plan_empty or (not segment_coverage_ok))
@@ -9189,6 +9202,14 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["scene_plan_error"] = ""
         diagnostics["scene_plan_failure_reason"] = ""
         diagnostics["scene_plan_last_failed_candidate_error"] = ""
+        diagnostics["scene_plan_validation_errors"] = [
+            error for error in _safe_list(diagnostics.get("scene_plan_validation_errors"))
+            if str(error or "").strip() != "route_budget_mismatch"
+        ]
+        diagnostics["scene_plan_error_codes"] = [
+            code for code in _safe_list(diagnostics.get("scene_plan_error_codes"))
+            if str(code or "").strip() != "SCENES_ROUTE_BUDGET_MISMATCH"
+        ]
         if str(hard_fail_error).strip().lower() in {"route_budget_mismatch", "route_budget_mismatch_after_compact_retry"}:
             hard_fail_error = ""
     diagnostics["validation_error"] = str(diagnostics.get("scene_plan_validation_error") or "")
