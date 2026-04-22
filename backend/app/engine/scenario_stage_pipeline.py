@@ -8872,16 +8872,21 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     user_hard_route_map = _extract_user_hard_route_map(_safe_dict(package.get("input")))
     effective_hard_route_map = dict(backend_hard_route_map or user_hard_route_map)
     if scene_plan:
-        route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
-            package=package,
-            scene_plan=scene_plan,
-            previous_scene_plan=previous_scene_plan,
-        )
-        route_assignment_source = str(route_lock_source or "")
+        if backend_hard_route_map:
+            route_locks_by_segment = dict(backend_hard_route_map)
+            route_lock_source = "backend_strict_preset_no_first_last_50_50_0"
+            route_assignment_source = "hard_route_map"
+        else:
+            route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
+                package=package,
+                scene_plan=scene_plan,
+                previous_scene_plan=previous_scene_plan,
+            )
+            route_assignment_source = str(route_lock_source or "")
         scene_plan, locked_route_counts = _apply_scene_plan_route_locks(
             scene_plan,
             route_locks_by_segment,
-            overwrite_existing=(route_lock_source != "fallback_backend_route_fill"),
+            overwrite_existing=True if backend_hard_route_map else (route_lock_source != "fallback_backend_route_fill"),
         )
         route_semantic_mismatches = _collect_scene_plan_route_semantic_mismatches(scene_plan)
         if route_semantic_mismatches and not effective_hard_route_map:
@@ -8899,16 +8904,21 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             )
             retry_scene_plan = _safe_dict(semantic_retry_result.get("scene_plan"))
             if retry_scene_plan:
-                route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
-                    package=package,
-                    scene_plan=retry_scene_plan,
-                    previous_scene_plan=previous_scene_plan,
-                )
-                route_assignment_source = str(route_lock_source or route_assignment_source or "")
+                if backend_hard_route_map:
+                    route_locks_by_segment = dict(backend_hard_route_map)
+                    route_lock_source = "backend_strict_preset_no_first_last_50_50_0"
+                    route_assignment_source = "hard_route_map"
+                else:
+                    route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
+                        package=package,
+                        scene_plan=retry_scene_plan,
+                        previous_scene_plan=previous_scene_plan,
+                    )
+                    route_assignment_source = str(route_lock_source or route_assignment_source or "")
                 retry_scene_plan, locked_route_counts = _apply_scene_plan_route_locks(
                     retry_scene_plan,
                     route_locks_by_segment,
-                    overwrite_existing=(route_lock_source != "fallback_backend_route_fill"),
+                    overwrite_existing=True if backend_hard_route_map else (route_lock_source != "fallback_backend_route_fill"),
                 )
                 route_semantic_mismatches = _collect_scene_plan_route_semantic_mismatches(retry_scene_plan)
                 semantic_retry_result["scene_plan"] = retry_scene_plan
@@ -8954,6 +8964,25 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 prompt_mode="compact_route_budget_retry",
             )
             retry_scene_plan = _safe_dict(retry_result.get("scene_plan"))
+            retry_locked_route_counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
+            if retry_scene_plan:
+                if backend_hard_route_map:
+                    route_locks_by_segment = dict(backend_hard_route_map)
+                    route_lock_source = "backend_strict_preset_no_first_last_50_50_0"
+                    route_assignment_source = "hard_route_map"
+                else:
+                    route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
+                        package=package,
+                        scene_plan=retry_scene_plan,
+                        previous_scene_plan=previous_scene_plan,
+                    )
+                    route_assignment_source = str(route_lock_source or route_assignment_source or "")
+                retry_scene_plan, retry_locked_route_counts = _apply_scene_plan_route_locks(
+                    retry_scene_plan,
+                    route_locks_by_segment,
+                    overwrite_existing=True if backend_hard_route_map else (route_lock_source != "fallback_backend_route_fill"),
+                )
+                retry_result["scene_plan"] = retry_scene_plan
             retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
                 package=package,
                 scene_plan=retry_scene_plan,
@@ -8967,6 +8996,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             )
             result = retry_result
             scene_plan = retry_scene_plan
+            locked_route_counts = dict(retry_locked_route_counts)
             route_budget_ok = retry_ok
             route_budget_feedback = retry_feedback
             route_budget_meta = retry_meta
