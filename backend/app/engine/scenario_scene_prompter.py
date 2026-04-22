@@ -852,6 +852,50 @@ def _trim_sentence(text: str, *, max_len: int = 220) -> str:
     return clean[:max_len]
 
 
+def _build_current_world_context_for_fallback(
+    package: dict[str, Any],
+    story_core: dict[str, Any],
+    prompt_row: dict[str, Any],
+    global_style_anchor: str,
+) -> str:
+    row = _safe_dict(prompt_row)
+    core = _safe_dict(story_core) or _safe_dict(package.get("story_core"))
+    identity_doctrine = _safe_dict(core.get("identity_doctrine"))
+    world_lock = _safe_dict(core.get("world_lock"))
+    style_lock = _safe_dict(core.get("style_lock"))
+
+    raw_candidates = [
+        str(row.get("scene_goal") or ""),
+        str(row.get("background_story_evidence") or ""),
+        str(row.get("narrative_function") or ""),
+        str(row.get("photo_staging_goal") or ""),
+        str(row.get("ltx_video_goal") or ""),
+        str(identity_doctrine.get("world_doctrine") or ""),
+        str(identity_doctrine.get("style_doctrine") or ""),
+        str(world_lock.get("rule") or ""),
+        str(style_lock.get("rule") or ""),
+        str(global_style_anchor or ""),
+    ]
+
+    compact_parts: list[str] = []
+    seen_normalized: set[str] = set()
+    for candidate in raw_candidates:
+        trimmed = _trim_sentence(candidate, max_len=120)
+        if not trimmed:
+            continue
+        normalized = trimmed.lower()
+        if normalized in seen_normalized:
+            continue
+        seen_normalized.add(normalized)
+        compact_parts.append(trimmed.rstrip("."))
+        if len(compact_parts) >= 2:
+            break
+
+    if not compact_parts:
+        return "current grounded story world, coherent realistic atmosphere"
+    return "; ".join(compact_parts)[:260]
+
+
 def _lighting_anchor_from_contract(world_continuity: dict[str, Any]) -> str:
     lighting = _safe_dict(world_continuity.get("lighting_continuity"))
     tod = str(lighting.get("time_of_day_base") or "").replace("_", " ").strip()
@@ -4085,8 +4129,11 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
                 [
                     str(row.get("photo_prompt") or ""),
                     str(row.get("video_prompt") or ""),
-                    str(row.get("negative_prompt") or ""),
+                    str(row.get("positive_video_prompt") or ""),
+                    str(row.get("first_frame_prompt") or ""),
+                    str(row.get("last_frame_prompt") or ""),
                     str(row.get("primary_role") or ""),
+                    str(row.get("visual_focus_role") or ""),
                     str(row.get("speaker_role") or ""),
                     str(row.get("vocal_owner_role") or ""),
                 ]
@@ -4206,18 +4253,26 @@ def _sanitize_identity_and_visibility_conflicts(
         segment_id = str(seg.get("segment_id") or "").strip()
         route = str(seg.get("route") or "").strip().lower()
         prompt_row = _safe_dict(rows_by_id.get(segment_id))
+        world_context = _build_current_world_context_for_fallback(
+            package=package,
+            story_core=story_core,
+            prompt_row=prompt_row,
+            global_style_anchor=str(out.get("global_style_anchor") or ""),
+        )
         mutated = False
         if lip_sync_only and route == "i2v":
             seg["photo_prompt"] = (
-                "Environment-focused Odessa story cutaway. No main performer visible. Singer remains voiceover only. "
-                "Grounded realistic city atmosphere."
+                f"Environment-focused story cutaway in the current grounded world. {world_context}. "
+                "No main performer visible. Singer remains voiceover only. "
+                "Preserve the current world, style, lighting, and atmosphere from the package."
             )
             seg["video_prompt"] = (
-                "Environment-focused motion shot in Odessa: subtle street/courtyard/port atmosphere movement, no main "
-                "performer visible, no lip-sync, singer remains voiceover only."
+                f"Environment-focused motion shot in the current grounded world. {world_context}. "
+                "Subtle world/space/atmosphere movement only. No main performer visible. "
+                "No lip-sync. Singer remains voiceover only. Preserve the current story environment and style continuity."
             )
             seg["positive_video_prompt"] = seg["video_prompt"]
-            seg["first_frame_prompt"] = "Environment-focused Odessa cutaway, no main performer visible."
+            seg["first_frame_prompt"] = "Environment-focused cutaway in the current grounded world. No main performer visible."
             if route != "first_last":
                 seg["last_frame_prompt"] = ""
             seg["primary_role"] = ""
@@ -4242,36 +4297,46 @@ def _sanitize_identity_and_visibility_conflicts(
             if lip_sync_only and route == "i2v":
                 if field_name == "photo_prompt":
                     return (
-                        "Environment-focused Odessa story cutaway. No main performer visible. "
-                        "Singer remains voiceover only. Grounded realistic city atmosphere."
+                        f"Environment-focused story cutaway in the current grounded world. {world_context}. "
+                        "No main performer visible. Singer remains voiceover only. "
+                        "Preserve the current world, style, lighting, and atmosphere from the package."
                     )
                 if field_name in {"video_prompt", "positive_video_prompt"}:
                     return (
-                        "Environment-focused motion shot in Odessa: subtle street/courtyard/port atmosphere movement, "
-                        "no main performer visible, no lip-sync, singer remains voiceover only."
+                        f"Environment-focused motion shot in the current grounded world. {world_context}. "
+                        "Subtle world/space/atmosphere movement only. No main performer visible. "
+                        "No lip-sync. Singer remains voiceover only. Preserve the current story environment and style continuity."
                     )
                 if field_name == "first_frame_prompt":
-                    return "Environment-focused Odessa cutaway, no main performer visible."
+                    return "Environment-focused cutaway in the current grounded world. No main performer visible."
                 if field_name == "last_frame_prompt":
-                    return "" if route != "first_last" else "Environment-focused Odessa cutaway, no main performer visible."
+                    return (
+                        ""
+                        if route != "first_last"
+                        else "Environment-focused cutaway in the current grounded world. No main performer visible."
+                    )
             if route == "ia2v":
                 if field_name == "photo_prompt":
                     return (
-                        "Current character_1 from connected reference, face and upper body readable, grounded realistic "
-                        "Odessa atmosphere, performer-first still frame for lip-sync."
+                        "Current character_1 from connected reference, face and upper body readable, "
+                        "grounded realistic current-world atmosphere, performer-first still frame for lip-sync. "
+                        f"{world_context}."
                     )
                 if field_name in {"video_prompt", "positive_video_prompt"}:
                     return (
                         "Current character_1 from connected reference, face and mouth clearly visible, performer-first "
-                        "lip-sync, natural jaw motion, restrained head movement, steady camera, grounded realistic Odessa atmosphere."
+                        "lip-sync, natural jaw motion, restrained head movement, steady camera, "
+                        f"grounded realistic current-world atmosphere. {world_context}."
                     )
                 if field_name == "first_frame_prompt":
                     return (
-                        "Current character_1 from connected reference, face and mouth visible, grounded realistic Odessa atmosphere."
+                        "Current character_1 from connected reference, face and mouth visible, "
+                        f"grounded realistic current-world atmosphere. {world_context}."
                     )
                 if field_name == "last_frame_prompt":
                     return "" if route != "first_last" else (
-                        "Current character_1 from connected reference, face and mouth visible, grounded realistic Odessa atmosphere."
+                        "Current character_1 from connected reference, face and mouth visible, "
+                        f"grounded realistic current-world atmosphere. {world_context}."
                     )
             return "Grounded realistic frame, current package identity and world continuity preserved."
         for field in ("photo_prompt", "video_prompt", "positive_video_prompt", "first_frame_prompt", "last_frame_prompt"):
